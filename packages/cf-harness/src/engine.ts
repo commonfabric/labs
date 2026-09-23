@@ -1606,10 +1606,10 @@ export class CfHarnessEngine {
    * the table before either recorded; folding each result in, rather than
    * replacing the table with it, keeps both their additions.
    *
-   * @throws Error when `table`, or the table it folds into, is not a
-   * well-formed version-1 handle table — which is how two overlapping mints
-   * that drew the same token for different addresses surface — or when the
-   * two tables cannot merge.
+   * @throws Error when `table`, or the merged table, is not a well-formed
+   * version-1 handle table — which is how two overlapping mints that drew the
+   * same token for different addresses surface — or when the two tables
+   * cannot merge.
    */
   async recordHandleTable(table: HarnessHandleTable): Promise<void> {
     assertValidHarnessHandleTable(table);

@@ -203,6 +203,57 @@ Deno.test("CfHarnessEngine refuses to record a table where two addresses drew on
   assertEquals(engine.handleTable?.entries.length, 1);
 });
 
+Deno.test("CfHarnessEngine lands the newest run state last when two writes overlap", async () => {
+  // The first write is held until the second has been asked for, so the
+  // store would finish the second first; the state it is left holding must
+  // still be the newer one.
+  const completed: HarnessRunState[] = [];
+  let hold: PromiseWithResolvers<void> | undefined;
+  const runRoot = "/tmp/cf-harness-artifacts/run-write-order";
+  const artifactStore: HarnessArtifactStore = {
+    artifactRoot: "/tmp/cf-harness-artifacts",
+    runRoot,
+    async persistRunState(state) {
+      const snapshot = structuredClone(state);
+      const held = hold;
+      hold = undefined;
+      await held?.promise;
+      completed.push(snapshot);
+      return `${runRoot}/run-state.json`;
+    },
+    persistTranscript: () => Promise.resolve(`${runRoot}/transcript.json`),
+    persistCapabilitySnapshot: () =>
+      Promise.resolve(`${runRoot}/capabilities.json`),
+    persistCfcPolicySnapshot: () =>
+      Promise.resolve(`${runRoot}/policy-snapshot.json`),
+    persistPolicyTrace: () => Promise.resolve(`${runRoot}/policy-trace.json`),
+    persistRunReport: () => Promise.resolve(`${runRoot}/run-report.json`),
+    persistToolOutput: () => Promise.resolve(`${runRoot}/tool-output.json`),
+  };
+  const engine = new CfHarnessEngine({
+    artifactStore,
+    sandboxRuntime: new FakeSandboxRuntime(),
+    runId: "run-write-order",
+  });
+
+  const released = Promise.withResolvers<void>();
+  hold = released;
+  const first = engine.persistRunState();
+  const second = engine.recordPolicyEvent({
+    severity: "warning",
+    mode: "observe",
+    toolId: "bash",
+    detail: "the newer state",
+  });
+  released.resolve();
+  await Promise.all([first, second]);
+
+  assertEquals(
+    completed.at(-1)?.policyEvents.map((event) => event.detail),
+    ["the newer state"],
+  );
+});
+
 Deno.test("CfHarnessEngine builds a default docker-runsc sandbox when given a workspace path", () => {
   const engine = new CfHarnessEngine({
     workspaceHostPath: "/host/project",

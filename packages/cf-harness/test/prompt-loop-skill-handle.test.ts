@@ -473,6 +473,118 @@ describe("prompt-loop delegate_task skillHandle", () => {
     });
   });
 
+  it("judges a delegation's skill custody against the runs recorded when its turn began", async () => {
+    // The turn is a delegation carrying the skill handle, a shell call held
+    // until that child's first model request is out, and a delegation
+    // carrying neither the handle nor `withoutSkillHandle`. The first child
+    // is recorded as running before its request goes out, so by the time the
+    // second delegation is judged the live run state holds the handle as
+    // outstanding; judged against the turn's start, nothing is. The first
+    // child answers only once the second child has started, so it is still
+    // running whichever way the second delegation is judged.
+    await withSkillCell(async ({ pieces, ref }) => {
+      const runId = "run-skill-custody-siblings";
+      const minted = await mintAddressHandle(
+        createHarnessHandleTable(runId),
+        ref,
+      );
+      const firstChildOut = Promise.withResolvers<void>();
+      const secondChildOut = Promise.withResolvers<void>();
+      const sandbox = new FakeSandboxRuntime();
+      sandbox.runShell = async (request) => {
+        if (request.command.includes("printf hold")) {
+          await firstChildOut.promise;
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      };
+      const engine = new CfHarnessEngine({
+        sandboxRuntime: sandbox,
+        runId,
+        model: "gpt-5.4",
+        cfcEnforcementMode: "observe",
+        fabricSessionFactory: () => Promise.resolve({ pieces }),
+      });
+      await engine.recordHandleTable(minted.table);
+      let parentRequests = 0;
+      const loop = new CfHarnessPromptLoop({
+        apiKey: "test-key",
+        engine,
+        fetchFn: async (_input, init) => {
+          const body = String(init?.body);
+          let turn: unknown;
+          if (body.includes("Delegate both plans.")) {
+            parentRequests += 1;
+            turn = parentRequests === 1
+              ? {
+                choices: [{
+                  index: 0,
+                  message: {
+                    role: "assistant",
+                    content: "",
+                    tool_calls: [
+                      {
+                        id: "call-with-skill",
+                        type: "function",
+                        function: {
+                          name: "delegate_task",
+                          arguments: JSON.stringify({
+                            goal: "Plan the first trip with the skill.",
+                            skillHandle: minted.token,
+                          }),
+                        },
+                      },
+                      {
+                        id: "call-hold",
+                        type: "function",
+                        function: {
+                          name: "bash",
+                          arguments: JSON.stringify({ command: "printf hold" }),
+                        },
+                      },
+                      {
+                        id: "call-without-skill",
+                        type: "function",
+                        function: {
+                          name: "delegate_task",
+                          arguments: JSON.stringify({
+                            goal: "Plan the second trip.",
+                          }),
+                        },
+                      },
+                    ],
+                  },
+                }],
+              }
+              : assistantTurn("Both planned.");
+          } else if (body.includes("Plan the first trip")) {
+            firstChildOut.resolve();
+            await secondChildOut.promise;
+            turn = assistantTurn("First trip planned.");
+          } else {
+            secondChildOut.resolve();
+            turn = assistantTurn("Second trip planned.");
+          }
+          return new Response(
+            JSON.stringify(responsesBodyFromChatFixture(turn)),
+            { status: 200 },
+          );
+        },
+      });
+
+      const result = await loop.runPrompt({
+        prompt: "Delegate both plans.",
+        promptSlotBinding: directPromptSlotBinding,
+      });
+
+      expect(result.finalAssistantText).toBe("Both planned.");
+      const withoutSkill = result.transcript.find((message) =>
+        message.role === "tool" && message.toolCallId === "call-without-skill"
+      );
+      expect(withoutSkill?.content).not.toContain("skillHandle");
+      expect(result.runState.subagentRuns?.length).toBe(2);
+    });
+  });
+
   it("refuses a skillHandle this run does not hold, before any child exists", async () => {
     // A fabric session exists and the run HOLDS a table — just not this
     // token — so the refusal under test is table membership itself, not the

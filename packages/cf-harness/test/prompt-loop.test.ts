@@ -3595,6 +3595,73 @@ Deno.test("CfHarnessPromptLoop holds the calls after a browser delegation until 
   assertEquals(shellCommands().some((c) => c.includes("printf after")), true);
 });
 
+Deno.test("CfHarnessPromptLoop starts no further call of a turn once the owner aborts", async () => {
+  // The first shell call aborts the owner as it runs. The second call of the
+  // turn must not start: it records no policy decision and reaches no
+  // sandbox.
+  const controller = new AbortController();
+  const sandbox = new FakeSandboxRuntime([
+    { stdout: "first", stderr: "", exitCode: 0 },
+    { stdout: "second", stderr: "", exitCode: 0 },
+  ]);
+  const runShell = sandbox.runShell.bind(sandbox);
+  sandbox.runShell = (request) => {
+    if (request.command.includes("printf first")) {
+      controller.abort(new Error("owner stopped the run"));
+    }
+    return runShell(request);
+  };
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: sandbox,
+    runId: "run-owner-abort-between-calls",
+    model: "test-model",
+    cfcEnforcementMode: "observe",
+  });
+  const modelClient: HarnessModelClient = {
+    providerId: "test-provider",
+    complete: () =>
+      Promise.resolve({
+        assistant: {
+          role: "assistant",
+          content: "",
+          toolCalls: ["first", "second"].map((word) => ({
+            id: `call-${word}`,
+            type: "function" as const,
+            function: {
+              name: "bash",
+              arguments: JSON.stringify({ command: `printf ${word}` }),
+            },
+          })),
+        },
+      }),
+  };
+  const loop = new CfHarnessPromptLoop({
+    modelClient,
+    allowedToolIds: ["bash"],
+    engine,
+  });
+
+  await assertRejects(() =>
+    loop.runPrompt({
+      prompt: "Run two shell commands.",
+      promptSlotBinding: directPromptSlotBinding,
+      signal: controller.signal,
+    })
+  );
+  assertEquals(
+    (engine.getRunState().policyDecisions ?? []).map((decision) =>
+      decision.toolCallId
+    ),
+    ["call-first"],
+  );
+  assertEquals(
+    sandbox.shellRequests.some((request) =>
+      request.command.includes("printf second")
+    ),
+    false,
+  );
+});
+
 Deno.test("CfHarnessPromptLoop forwards abort signals to delegate_task child loops", async () => {
   const controller = new AbortController();
   const seenSignals: Array<RequestInit["signal"]> = [];

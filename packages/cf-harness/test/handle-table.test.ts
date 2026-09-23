@@ -111,17 +111,65 @@ describe("handle-table", () => {
       ).toEqual({ type: "number" });
     });
 
+    it("takes an entry's schema source from the side whose schema it keeps", () => {
+      const entry = {
+        token: "cfh:a:22222",
+        kind: "address" as const,
+        ref: `/of:fid1:${HASH_A}`,
+        addressKey: "key-a",
+      };
+      const held: HarnessHandleTable = {
+        ...createHarnessHandleTable("run-1"),
+        entries: [{ ...entry, schema: { type: "number" } }],
+      };
+      const incoming: HarnessHandleTable = {
+        ...createHarnessHandleTable("run-1"),
+        entries: [{
+          ...entry,
+          schema: { type: "string" },
+          schemaSource: "harness",
+        }],
+      };
+
+      const [merged] = mergeHarnessHandleTables(held, incoming).entries;
+
+      expect(merged.schema).toEqual({ type: "number" });
+      expect(merged.schemaSource).toBeUndefined();
+    });
+
+    it("refuses one address recorded under two different tokens", () => {
+      const entry = {
+        kind: "address" as const,
+        ref: `/of:fid1:${HASH_A}`,
+        addressKey: "key-a",
+      };
+      const held: HarnessHandleTable = {
+        ...createHarnessHandleTable("run-1"),
+        entries: [{ ...entry, token: "cfh:a:22222" }],
+      };
+      const incoming: HarnessHandleTable = {
+        ...createHarnessHandleTable("run-1"),
+        entries: [{ ...entry, token: "cfh:a:33333" }],
+      };
+
+      expect(() => mergeHarnessHandleTables(held, incoming)).toThrow(
+        "two different tokens",
+      );
+    });
+
     it("refuses one token minted for two different referents", async () => {
       const constant: HandleTokenHasher = () =>
         Promise.resolve(new Uint8Array(32));
       const base = createHarnessHandleTable("run-1");
       const first = await mintReferentHandle(base, {
+        kind: "document",
         source: "loom:rows",
         value: "first row",
         label: { confidentiality: [] },
         labelSource: "row",
       }, { hasher: constant });
       const second = await mintReferentHandle(base, {
+        kind: "document",
         source: "loom:rows",
         value: "second row",
         label: { confidentiality: [] },
