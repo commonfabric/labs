@@ -1622,7 +1622,7 @@ class TransformObjectCreator
           // gave — would be lost. The handle keeps it.
           if (
             isNontrivialSchema(cellMatch.schema) &&
-            compoundHasBareAsCellBranch(schema)
+            compoundMintsBareHandlesOnly(schema)
           ) {
             return cellMatch as any;
           }
@@ -1955,28 +1955,43 @@ function removeAsCellFromSchema(schema: JSONSchema): JSONSchema {
 }
 
 /**
+ * What the handles a schema can mint carry: `"none"` where it mints none,
+ * `"bare"` where every one adopted the schema of the link it was minted over,
+ * `"shaped"` where one may carry a shape of its own. A branch declaring
+ * `asCell` is bare where it is a true schema once its marker is removed — a
+ * reader that admits a handle over any value at all. A choice, `anyOf` or
+ * `oneOf`, is what its minting branches are, at any depth, since a merge
+ * cannot see which of them minted the handle it holds. An `allOf` is bare
+ * where its parts are all true once their markers are removed, an `allOf` of
+ * true parts being its bare part; a part that constrains something, a nested
+ * combinator among them, is a constraint the handle must keep. A reference
+ * that does not resolve is taken as shaped.
+ */
+function handleProvenance(
+  schema: JSONSchema,
+  defs: JSONSchemaObj["$defs"],
+): "none" | "bare" | "shaped" {
+  const resolved = resolveSchema(cfcSchemaWithInheritedDefs(schema, defs));
+  if (resolved === false) return "shaped";
+  if (!isObjectOrArray(resolved)) return "none";
+  const isTrue = (part: JSONSchema): boolean =>
+    ContextualFlowControl.isTrueSchema(removeAsCellFromSchema(part));
+  if (ContextualFlowControl.getAsCellValues(resolved).length > 0) {
+    return isTrue(resolved) ? "bare" : "shaped";
+  }
+  const parts = resolved.allOf ?? [];
+  const kinds = [...(resolved.anyOf ?? []), ...(resolved.oneOf ?? []), ...parts]
+    .map((branch) => handleProvenance(branch, resolved.$defs ?? defs));
+  if (kinds.includes("shaped")) return "shaped";
+  if (!kinds.includes("bare")) return "none";
+  return parts.every(isTrue) ? "bare" : "shaped";
+}
+
+/**
  * Whether every handle a compound can mint adopted the schema of the link it
  * was minted over, so that keeping a matched handle's schema is keeping what
- * the reader allowed. A merge cannot see which branch minted the handle it
- * holds, so this holds only where it would be true of any of them: every
- * branch declaring `asCell` is bare — a true schema once its marker is
- * removed, a reader that admits a handle over any value at all. One shaped
- * `asCell` branch beside a bare one may have minted the handle with its own
- * shape, and the compound must stay so the other branches' projection
- * survives. An `allOf` qualifies where its other branches are true as well,
- * since an `allOf` of true branches is its bare branch; a branch that
- * constrains something is a constraint the handle must keep. A `oneOf` never
- * reaches a merge with two matches.
+ * the reader allowed. A `oneOf` never reaches a merge with two matches.
  */
-function compoundHasBareAsCellBranch(schema: JSONSchemaObj): boolean {
-  const declaresAsCell = (branch: JSONSchema): boolean =>
-    isObjectOrArray(branch) &&
-    ContextualFlowControl.getAsCellValues(branch).length > 0;
-  const isTrue = (branch: JSONSchema): boolean =>
-    ContextualFlowControl.isTrueSchema(removeAsCellFromSchema(branch));
-  const branches = schema.anyOf ?? [];
-  const handles = branches.filter(declaresAsCell);
-  if (handles.length > 0 && handles.every(isTrue)) return true;
-  const parts = schema.allOf ?? [];
-  return parts.some(declaresAsCell) && parts.every(isTrue);
+function compoundMintsBareHandlesOnly(schema: JSONSchemaObj): boolean {
+  return handleProvenance(schema, schema.$defs) === "bare";
 }

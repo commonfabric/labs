@@ -902,6 +902,78 @@ describe("Schema - Basic Types and References", () => {
       expect(handle.get()).toEqual({ id: 1, name: "one", hidden: true });
     });
 
+    it("keeps the compound on a handle where a shaped `asCell` branch sits inside a nested `anyOf` beside a bare one", () => {
+      // The shaped branch mints a typed handle from one level down, and the
+      // merge can no more see that it did than it can for a direct branch.
+      const holder = runtime.getCell<any>(
+        space,
+        "shaped-nested-anyof-beside-bare",
+        {
+          type: "object",
+          properties: {
+            h: {
+              anyOf: [
+                {
+                  anyOf: [{
+                    type: "object",
+                    properties: { id: { type: "number" } },
+                    asCell: ["cell"],
+                  }],
+                },
+                { asCell: ["cell"] },
+                {
+                  type: "object",
+                  properties: { name: { type: "string" } },
+                  required: ["name"],
+                },
+              ],
+            },
+          },
+        } as const satisfies JSONSchema,
+        tx,
+      );
+      holder.set({ h: { id: 1, name: "one", hidden: true } });
+      const handle = holder.get().h;
+      expect(isCell(handle)).toBe(true);
+      expect(handle.get()).toEqual({ id: 1, name: "one", hidden: true });
+    });
+
+    it("keeps the compound on a handle where a shaped `asCell` branch sits inside a nested `allOf` beside a bare one", () => {
+      // The shaped branch mints a typed handle from one level down, and the
+      // merge can no more see that it did than it can for a direct branch.
+      const holder = runtime.getCell<any>(
+        space,
+        "shaped-nested-allof-beside-bare",
+        {
+          type: "object",
+          properties: {
+            h: {
+              anyOf: [
+                {
+                  allOf: [{
+                    type: "object",
+                    properties: { id: { type: "number" } },
+                    asCell: ["cell"],
+                  }],
+                },
+                { asCell: ["cell"] },
+                {
+                  type: "object",
+                  properties: { name: { type: "string" } },
+                  required: ["name"],
+                },
+              ],
+            },
+          },
+        } as const satisfies JSONSchema,
+        tx,
+      );
+      holder.set({ h: { id: 1, name: "one", hidden: true } });
+      const handle = holder.get().h;
+      expect(isCell(handle)).toBe(true);
+      expect(handle.get()).toEqual({ id: 1, name: "one", hidden: true });
+    });
+
     it("keeps the link's schema on a handle minted from an `allOf` of a bare `asCell` branch and a true one", () => {
       // An `allOf` whose other branches constrain nothing is its bare `asCell`
       // branch, and admits a handle over anything just as an `anyOf` does.
