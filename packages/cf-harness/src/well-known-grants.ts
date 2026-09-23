@@ -163,8 +163,15 @@ const connectorGrantDescription = (grant: HarnessConnectorGrantSpec): string =>
  * module already pairs with the token in the grant context, so nothing new
  * crosses to a model given one.
  */
-export const wellKnownGrantLabel = (grant: HarnessWellKnownGrant): string =>
-  grant.source === undefined ? grant.name : connectorGrantLabel(grant);
+export const wellKnownGrantLabel = (grant: HarnessWellKnownGrant): string => {
+  if (grant.source === undefined) {
+    return grant.name;
+  }
+  // Checked here as every other model-facing use of a connector grant checks
+  // it: the record may be run state this process did not write.
+  checkConnectorGrantSpec(grant);
+  return connectorGrantLabel(grant);
+};
 
 /**
  * Holds one connector grant to the rule its handle is minted under: a name

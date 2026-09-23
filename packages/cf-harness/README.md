@@ -1114,13 +1114,14 @@ declared a schema for, whose value carries the table schemas the database was
 created under. The rows are in the database file, which nothing here opens. So
 where no schema was declared and the value is a database handle, the reply
 carries `database` instead of `schema`: `tables`, one property per table whose
-own properties are that table's columns with their types, and `labels`, one
-entry per column that declares an `ifc`, addressed by table name and column
-name. The tables go through the same reduction every disclosed schema does, so
-the table- and column-name channels are bounded exactly as a property-name
-channel is and the columns' annotations, prose and defaults do not ride out on
-the schema. The read is conditional on nothing being declared, so a referent
-that states its own shape is never opened.
+own properties are that table's columns with their types, and `labels`, the
+distinct labels those columns declare through `ifc`, each reported once however
+many columns carry it and none naming a column. The tables go through the same
+reduction every disclosed schema does, so the table- and column-name channels
+are bounded exactly as a property-name channel is and the columns' annotations,
+prose and defaults do not ride out on the schema; only columns that reduction
+kept contribute a label. The read is conditional on nothing being declared, so a
+referent that states its own shape is never opened.
 
 **How full each of those tables is answers beside the contract, under `fill`.**
 One entry per disclosed table: `rows`, every row the table holds, and `nonNull`,
