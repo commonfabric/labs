@@ -944,17 +944,19 @@ describe("Schema: CFC authoring aliases", () => {
     // Each parameter reads as its argument's type, not as the declaration's
     // own reference with the parameter unbound.
 
-    const ALIASES = `
+    const BASE_ALIASES = `
       type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type RepresentsCurrentUser<T> = Cfc<T, { addIntegrity: readonly [{ kind: "represents-principal"; subject: { __ctCurrentPrincipal: true } }] }>;
-      type AnyOf<X extends readonly unknown[]> = { readonly __ct_cfc_any_of__?: X };
       type Sec<T> = Confidential<T, readonly ["a"]>;
       interface Book { title: string }
     `;
+    const ALIASES = BASE_ALIASES + `
+      type AnyOf<X extends readonly unknown[]> = { readonly __ct_cfc_any_of__?: X };
+    `;
 
-    const generate = async (code: string) => {
-      const { checker, sourceFile } = await createTestProgram(ALIASES + code);
+    const generate = async (code: string, aliases = ALIASES) => {
+      const { checker, sourceFile } = await createTestProgram(aliases + code);
       const holder = checker.getSymbolsInScope(
         sourceFile,
         ts.SymbolFlags.Interface,
@@ -1022,6 +1024,32 @@ describe("Schema: CFC authoring aliases", () => {
       expect(schema.ifc).toEqual({
         confidentiality: ["x", { anyOf: ["y", "z"] }],
       });
+    });
+
+    it("reads an authored type named `AnyOf` in a label as its own", async () => {
+      const { schema } = await generate(
+        `
+        type AnyOf<T> = { label: "ordinary choice" };
+        type Labeled<L extends readonly unknown[]> = Confidential<string, L>;
+        interface Holder { value: Labeled<readonly [AnyOf<["reader"]>]> }
+      `,
+        BASE_ALIASES,
+      );
+      expect(schema.ifc).toEqual({
+        confidentiality: [{ label: "ordinary choice" }],
+      });
+    });
+
+    it("reads a namespace member named `AnyOf` in a label as its own", async () => {
+      const { schema } = await generate(`
+        namespace Ordinary {
+          export type AnyOf<X> = { label: "ordinary" };
+        }
+        interface Holder {
+          value: Confidential<string, [Ordinary.AnyOf<["a", "b"]>]>;
+        }
+      `);
+      expect(schema.ifc).toEqual({ confidentiality: [{ label: "ordinary" }] });
     });
 
     it("lowers a label holding a parameter", async () => {

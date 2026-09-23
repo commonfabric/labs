@@ -50,6 +50,27 @@ import { combineIfcLabels } from "../ifc-labels.ts";
 
 type WrapperKind = CellWrapperKind;
 const CFC_ALIAS_NAMES: ReadonlySet<string> = new Set(CFC_CANONICAL_ALIAS_NAMES);
+
+/** The property `AnyOf<X>` is as a type (`@commonfabric/api/cfc`). */
+const CFC_ANY_OF_BRAND = "__ct_cfc_any_of__";
+
+/**
+ * The type of the value `member` holds, given `type`, its type: `type` less
+ * the `undefined` that an optional member's `?` adds.
+ */
+function memberValueType(
+  member: ts.Symbol,
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): ts.Type {
+  if ((member.flags & ts.SymbolFlags.Optional) === 0 || !type.isUnion()) {
+    return type;
+  }
+  // `getNonNullableType` also removes a `null`, which `?` does not add.
+  return type.types.some((part) => (part.flags & ts.TypeFlags.Null) !== 0)
+    ? type
+    : checker.getNonNullableType(type);
+}
 const SCOPE_WRAPPER_SCOPES: Readonly<Record<string, SchemaScope>> = {
   PerSpace: "space",
   PerUser: "user",
@@ -2137,14 +2158,14 @@ export class CommonFabricFormatter implements TypeFormatter {
       return typeText.slice(1, -1);
     }
 
-    // With no node to read, `AnyOf<X>` is still its alias.
-    const alias = (type as TypeWithInternals).aliasSymbol;
-    if (
-      alias &&
-      resolveAliasedSymbol(alias, context.typeChecker).name === "AnyOf"
-    ) {
+    // `AnyOf<X>` is `{ readonly __ct_cfc_any_of__?: X }` as a type. That brand
+    // is how the library writes the metadata into the type, so a type read
+    // without a node is recognized by it, not by an alias name an author may
+    // also use.
+    const anyOfPayload = this.#anyOfBrandPayload(type, context);
+    if (anyOfPayload) {
       const alternatives = this.#extractLiteralLikeValue(
-        (type as TypeWithInternals).aliasTypeArguments?.[0],
+        anyOfPayload,
         undefined,
         context,
       );
@@ -2191,6 +2212,25 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     return undefined;
+  }
+
+  /**
+   * `X`, for a type that is the brand `AnyOf<X>` is, `{ readonly
+   * __ct_cfc_any_of__?: X }`, and `undefined` for any other type.
+   */
+  #anyOfBrandPayload(
+    type: ts.Type,
+    context: GenerationContext,
+  ): ts.Type | undefined {
+    if ((type.flags & ts.TypeFlags.Object) === 0) return undefined;
+    const properties = context.typeChecker.getPropertiesOfType(type);
+    const brand = properties.length === 1 ? properties[0]! : undefined;
+    if (!brand || brand.getName() !== CFC_ANY_OF_BRAND) return undefined;
+    return memberValueType(
+      brand,
+      context.typeChecker.getTypeOfSymbol(brand),
+      context.typeChecker,
+    );
   }
 
   #resolveTypeReferenceName(
