@@ -1,11 +1,13 @@
 import { isPlainObject } from "@commonfabric/utils/types";
 
+import { codecOf } from "@/codec-common";
 import { isDeepFrozen } from "@/deep-freeze.ts";
-import type {
-  FabricArray,
-  FabricPlainObject,
-  FabricSpecialObject,
-  FabricValue,
+import {
+  type FabricArray,
+  FabricInstance,
+  type FabricPlainObject,
+  type FabricSpecialObject,
+  type FabricValue,
 } from "@/interface.ts";
 import { isFabricSpecialObject } from "@/types";
 import { debugStr } from "@/value-debug";
@@ -121,9 +123,17 @@ export function valueEqual(a: FabricValue, b: FabricValue): boolean {
     }
 
     case "special": {
-      if (a.constructor !== b.constructor) {
-        // `FabricSpecialObject`s (instances in general, really) can't possibly
-        // be equal if they are of different concrete classes.
+      if (a instanceof FabricInstance && b instanceof FabricInstance) {
+        // A `FabricInstance` is hashed by its codec's tag and state, so two of
+        // different concrete classes can be equal (e.g. an `UnknownValue`
+        // preserving another instance's tag and state). Different tags,
+        // though, can't possibly be equal.
+        if (codecOf(a).tagForValue(a) !== codecOf(b).tagForValue(b)) {
+          return false;
+        }
+      } else if (a.constructor !== b.constructor) {
+        // Any other `FabricSpecialObject`s can't possibly be equal if they are
+        // of different concrete classes.
         return false;
       }
       break;
