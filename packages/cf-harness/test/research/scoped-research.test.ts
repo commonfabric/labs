@@ -124,20 +124,25 @@ const record = (id: string): HarnessResearchRunSummary => ({
 });
 
 describe("scoped research", () => {
-  it("gives research the author's compiler guidance without requiring code for factual orientation", async () => {
-    const trial = run([(request) => {
-      expect(request.transcript[0].content).toContain(
-        PATTERN_AUTHORING_GUIDANCE,
-      );
-      expect(request.transcript[0].content).toContain(
-        PATTERN_COMPOSITION_GUIDANCE,
-      );
-      return final({ ...brief(), leads: [], questions: [] });
-    }]);
-    const reply = await trial.result;
-    expect(reply.kit.status).toBe("complete");
-    expect(reply.kit.example).toBeUndefined();
-  });
+  for (const purpose of ["orient", "answer"] as const) {
+    it(`gives ${purpose} research no authoring rules, so a published part is chosen on its contract rather than its source's style`, async () => {
+      const trial = run([(request) => {
+        expect(request.transcript[0].content).not.toContain(
+          PATTERN_AUTHORING_GUIDANCE,
+        );
+        expect(request.transcript[0].content).toContain(
+          PATTERN_COMPOSITION_GUIDANCE,
+        );
+        return final(
+          purpose === "orient"
+            ? { ...brief(), leads: [], questions: [] }
+            : { ...brief(), selectedPatternIds: [] },
+        );
+      }], { purpose });
+      const reply = await trial.result;
+      expect(reply.kit.example).toBeUndefined();
+    });
+  }
 
   it("inspects indexed source during orientation and returns a usable invocation", async () => {
     await ensureCompilerStack();
