@@ -1653,7 +1653,9 @@ light identity path is recorded as deferred rather than misreported as verified.
 An identity mismatch is always refused.
 
 Each exact documentation, source-file, or metadata read is limited to 32,000
-characters. Metadata uses the rendered argument and result types; redundant raw
+characters. Metadata uses the rendered argument and result types, each followed
+by a `type Name = …` line for every definition it refers to by name, so a row
+type such as `LedgerTransaction[]` arrives with its fields; redundant raw
 schemas remain in the retained pattern record. Metadata larger than the limit is
 refused before its pattern is admitted; documentation and source-file reads
 support continuation windows.

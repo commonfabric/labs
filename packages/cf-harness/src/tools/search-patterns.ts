@@ -199,6 +199,12 @@ const errorMessage = (error: unknown): string =>
  * pattern declares none. A schema that cannot be rendered is reported as
  * absent: the search answers with what is known, and a shape it cannot write
  * down is not known.
+ *
+ * A definition the rendering refers to by name — the formatter names any
+ * definition too long to inline, `rows: LedgerTransaction[]` — is written out
+ * after it as `type Name = …`, and so is every definition those refer to, so
+ * the fields a composing author needs are in the type rather than behind a
+ * name nothing here defines.
  */
 export const patternIndexDeclaredType = (
   schema: JSONSchema | undefined,
@@ -207,11 +213,44 @@ export const patternIndexDeclaredType = (
     return undefined;
   }
   try {
-    return schemaToTypeString(schema);
+    const defs = declaredDefinitions(schema);
+    const lines = [schemaToTypeString(schema, { defs })];
+    const written = new Set<string>();
+    for (let index = 0; index < lines.length; index++) {
+      for (const name of Object.keys(defs)) {
+        if (!written.has(name) && namesType(lines[index], name)) {
+          written.add(name);
+          lines.push(
+            `type ${name} = ${schemaToTypeString(defs[name], { defs })}`,
+          );
+        }
+      }
+    }
+    return lines.join("\n");
   } catch {
     return undefined;
   }
 };
+
+/** The `$defs` a schema declares, empty when it declares none. */
+const declaredDefinitions = (
+  schema: JSONSchema,
+): Record<string, JSONSchema> => {
+  const defs = typeof schema === "object" && schema !== null
+    ? (schema as { $defs?: unknown }).$defs
+    : undefined;
+  return typeof defs === "object" && defs !== null && !Array.isArray(defs)
+    ? defs as Record<string, JSONSchema>
+    : {};
+};
+
+/** Whether `rendered` uses `name` as a whole identifier. */
+const namesType = (rendered: string, name: string): boolean =>
+  new RegExp(
+    `(^|[^A-Za-z0-9_$])${
+      name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    }(?![A-Za-z0-9_$])`,
+  ).test(rendered);
 
 export const searchPatternsTool: HarnessToolDefinition<
   SearchPatternsToolInput,
