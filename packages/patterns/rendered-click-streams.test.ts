@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { decodeJsonPointer } from "@commonfabric/utils/json-pointer";
 
 const ROOT = join(import.meta.dirname!, "..", "..");
 
@@ -71,10 +72,11 @@ function refChainTarget(
     // A `$ref` that resolves to nothing must fail here, not pass below: an
     // unresolved reference would read as "no `additionalProperties`" and turn
     // this guard off silently.
-    expect(ref, `${ref} is not a local \`$defs\` reference`).toMatch(
-      /^#\/\$defs\//,
-    );
-    const target = schema.$defs?.[ref.slice("#/$defs/".length)];
+    expect(ref, `${ref} is not a local reference`).toMatch(/^#\//);
+    const [root, defs, name, ...rest] = decodeJsonPointer(ref.slice(1));
+    expect([root, defs, rest], `${ref} does not name one \`$defs\` entry`)
+      .toEqual(["", "$defs", []]);
+    const target = schema.$defs?.[name];
     expect(target, `${ref} does not resolve in $defs`).toBeInstanceOf(Object);
     current = target;
   }
