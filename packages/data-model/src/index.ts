@@ -43,6 +43,6 @@ export {
   toStructuredDebugValue,
 } from "@/value-debug/index.ts";
 
-export { hashOf, hashStringOf, taggedHashStringOf } from "@/value-hash";
+export * from "@/value-hash";
 
 export * from "@/types";
