@@ -54,12 +54,19 @@ function hex(hash: Uint8Array): string {
   return Array.from(hash).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** Returns the raw hash bytes from `hashOf()`, for comparison. */
+function hashBytesOf(value: FabricValue): Uint8Array {
+  return hashOf(value).bytes;
+}
+
 /**
- * Returns the raw hash bytes from `hashOf()`, for comparison. Takes `unknown`,
- * as `hashOf()` itself does: the JS-instance cases below hash a JS
- * `Date` / `RegExp` / `Uint8Array`, none of which is a `FabricValue`.
+ * Like `hashBytesOf()`, except for a JS `Date`, `RegExp` or `Uint8Array`,
+ * none of which is a `FabricValue`. `hashOf()` converts each to its fabric
+ * counterpart on the way in, which is what the "JS instances" cases pin.
  */
-function hashBytesOf(value: unknown): Uint8Array {
+function hashBytesOfJsInstance(value: Date | RegExp | Uint8Array): Uint8Array {
+  // @ts-expect-error: `hashOf()` is typed for `FabricValue`s, and converts
+  // these on the way in.
   return hashOf(value).bytes;
 }
 
@@ -1242,14 +1249,14 @@ describe("value-hash", () => {
     describe("Date", () => {
       it("hashes a JS `Date` without throwing", () => {
         const date = new Date("2024-01-01T00:00:00Z");
-        const hash = hashBytesOf(date);
+        const hash = hashBytesOfJsInstance(date);
         expect(hash.length).toBe(32);
       });
 
       it("produces the same hash for a JS `Date` as for an equivalent `FabricEpochNsec`", () => {
         const date = new Date("2024-01-01T00:00:00Z");
         const nsec = BigInt(date.getTime()) * 1_000_000n;
-        const dateHash = hex(hashBytesOf(date));
+        const dateHash = hex(hashBytesOfJsInstance(date));
         const epochHash = hex(hashBytesOf(new FabricEpochNsec(nsec)));
         expect(dateHash).toBe(epochHash);
       });
@@ -1257,19 +1264,21 @@ describe("value-hash", () => {
       it("produces different hashes for different Dates", () => {
         const d1 = new Date("2024-01-01T00:00:00Z");
         const d2 = new Date("2025-06-15T12:00:00Z");
-        expect(hex(hashBytesOf(d1))).not.toBe(hex(hashBytesOf(d2)));
+        expect(hex(hashBytesOfJsInstance(d1))).not.toBe(
+          hex(hashBytesOfJsInstance(d2)),
+        );
       });
     });
     describe("RegExp", () => {
       it("hashes a JS `RegExp` without throwing", () => {
         const re = /hello/gi;
-        const hash = hashBytesOf(re);
+        const hash = hashBytesOfJsInstance(re);
         expect(hash.length).toBe(32);
       });
 
       it("produces the same hash for a JS `RegExp` as for an equivalent `FabricRegExp`", () => {
         const re = /hello/gi;
-        const nativeHash = hex(hashBytesOf(re));
+        const nativeHash = hex(hashBytesOfJsInstance(re));
         const fabricHash = hex(hashBytesOf(new FabricRegExp(re)));
         expect(nativeHash).toBe(fabricHash);
       });
@@ -1277,19 +1286,21 @@ describe("value-hash", () => {
       it("produces different hashes for different RegExps", () => {
         const r1 = /foo/;
         const r2 = /bar/;
-        expect(hex(hashBytesOf(r1))).not.toBe(hex(hashBytesOf(r2)));
+        expect(hex(hashBytesOfJsInstance(r1))).not.toBe(
+          hex(hashBytesOfJsInstance(r2)),
+        );
       });
     });
     describe("Uint8Array", () => {
       it("hashes a JS `Uint8Array` without throwing", () => {
         const buf = new Uint8Array([1, 2, 3]);
-        const hash = hashBytesOf(buf);
+        const hash = hashBytesOfJsInstance(buf);
         expect(hash.length).toBe(32);
       });
 
       it("produces the same hash for a JS `Uint8Array` as for a `FabricBytes` with the same bytes", () => {
         const bytes = new Uint8Array([10, 20, 30]);
-        const nativeHash = hex(hashBytesOf(bytes));
+        const nativeHash = hex(hashBytesOfJsInstance(bytes));
         const fabricHash = hex(hashBytesOf(new FabricBytes(bytes)));
         expect(nativeHash).toBe(fabricHash);
       });
@@ -1297,23 +1308,28 @@ describe("value-hash", () => {
       it("produces different hashes for different Uint8Arrays", () => {
         const b1 = new Uint8Array([1, 2, 3]);
         const b2 = new Uint8Array([4, 5, 6]);
-        expect(hex(hashBytesOf(b1))).not.toBe(hex(hashBytesOf(b2)));
+        expect(hex(hashBytesOfJsInstance(b1))).not.toBe(
+          hex(hashBytesOfJsInstance(b2)),
+        );
       });
     });
     describe("Deferred types (not yet handled — these document known gaps)", () => {
       it("throws for `Map` (deferred — needs recursive translation)", () => {
+        // @ts-expect-error: a `Map` is not a `FabricValue`.
         expect(() => hashOf(new Map([["a", 1]]))).toThrow(
           "unsupported object type",
         );
       });
 
       it("throws for `Set` (deferred — needs recursive translation)", () => {
+        // @ts-expect-error: a `Set` is not a `FabricValue`.
         expect(() => hashOf(new Set([1, 2, 3]))).toThrow(
           "unsupported object type",
         );
       });
 
       it("throws for `Error` (deferred — needs recursive translation)", () => {
+        // @ts-expect-error: an `Error` is not a `FabricValue`.
         expect(() => hashOf(new Error("test"))).toThrow(
           "unsupported object type",
         );
@@ -1323,6 +1339,7 @@ describe("value-hash", () => {
         // `toJSON` gets no special reading here either: it is a function-valued
         // member, and functions have no hash.
         const obj = { toJSON: () => "hello" };
+        // @ts-expect-error: a function-valued member is not a `FabricValue`.
         expect(() => hashOf(obj)).toThrow("unsupported type `function`");
       });
     });
