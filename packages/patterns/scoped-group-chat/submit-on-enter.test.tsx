@@ -1,5 +1,5 @@
 import { action, assert, pattern, TESTS, UI } from "commonfabric";
-import { findNodeByProp, fireEvent } from "../test/vnode-helpers.ts";
+import { findNodeByProp, fireEvent, propValue } from "../test/vnode-helpers.ts";
 import ScopedGroupChatPlainInputs from "./main-plain-inputs.tsx";
 import ScopedGroupChatWritableInputs from "./main-with-writable-inputs.tsx";
 
@@ -23,6 +23,20 @@ export default pattern(() => {
     draft: "Hello",
   });
   const chats = [plain, writable];
+
+  // Enter acts on what the field has written to its cell, so the field must
+  // write each keystroke at once: under a delayed write, the text lands after
+  // the handler has cleared the field, and puts it back.
+  const assert_fields_write_immediately = assert(() =>
+    chats.every((chat) =>
+      ["Room name", "Message"].every((label) =>
+        propValue(
+          findNodeByProp(chat[UI], "aria-label", label),
+          "timingStrategy",
+        ) === "immediate"
+      )
+    )
+  );
 
   const assert_no_rooms_yet = assert(() =>
     chats.every((chat) => chat.roomCount === 0)
@@ -54,6 +68,7 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      { assertion: assert_fields_write_immediately },
       { assertion: assert_no_rooms_yet },
       { action: action_press_enter_in_room_name },
       { assertion: assert_enter_added_the_room },
