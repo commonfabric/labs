@@ -222,6 +222,69 @@ export const schemaIfcOverlapsPath = (
   return visit(schema, basePath);
 };
 
+// Exported for unit testing. Not part of the public surface. Whether a
+// `writeAuthorizedBy` claim in `schema` (rooted at `basePath`) covers
+// `targetPath` for every value that can land there. Only the keywords every
+// value is held to are followed — properties, items, tuple slots,
+// additionalProperties and `allOf` — because a claim inside an `anyOf`,
+// `oneOf` or `not` branch applies to some values and not others, and the
+// written value is not known here.
+export const writeAuthorizationCoversPath = (
+  schema: JSONSchema | undefined,
+  basePath: readonly string[],
+  targetPath: readonly string[],
+): boolean => {
+  const visit = (
+    current: JSONSchema | undefined,
+    path: readonly string[],
+  ): boolean => {
+    if (current === undefined || typeof current === "boolean") {
+      return false;
+    }
+    if (
+      isObjectOrArray(current.ifc) &&
+      current.ifc.writeAuthorizedBy !== undefined &&
+      pathPrefixMatches(path, targetPath)
+    ) {
+      return true;
+    }
+    return forEachSubschema(current, (child, keyword, key, index) => {
+      switch (keyword) {
+        case "properties":
+          return visit(child, [...path, key!]);
+        case "prefixItems":
+          return visit(child, [...path, String(index!)]);
+        case "items":
+        case "additionalProperties":
+          return visit(child, [...path, "*"]);
+        case "allOf":
+          return visit(child, path);
+        default:
+          return false;
+      }
+    });
+  };
+  return visit(schema, basePath);
+};
+
+// Whether a write-authorization claim arriving with this transaction covers the
+// target. A stored claim is found by `storedCfcMetadataAppliesToPath`; this
+// finds one that no commit has stored yet, as on the write that creates a
+// protected list.
+const hasPendingWriteAuthorization = (
+  tx: IExtendedStorageTransaction,
+  target: NormalizedFullLink,
+): boolean => {
+  const targetPath = canonicalizeLogicalPath(target.path);
+  return tx.getCfcSchemaPolicyInputs(target.space, target.id).some((input) =>
+    writeAuthorizationCoversPath(
+      input.schema,
+      canonicalizeLogicalPath(input.target.path),
+      targetPath,
+    )
+  );
+};
+
 const hasPendingSchemaPolicyInput = (
   tx: IExtendedStorageTransaction,
   source: NormalizedFullLink,
@@ -272,8 +335,15 @@ const recordLinkWritePolicyInput = (
     sourceMetadata !== undefined || sourceEnvelopeUninterpretable ||
     hasPendingSchemaPolicyInput(tx, source) ||
     cfcLabelViewHasValues(carriedCfcLabelView);
+  // A link stored below a document's root under a write authorization that
+  // arrives with this write is held to the same source check as one stored
+  // under the claim once a commit has persisted it: otherwise the write that
+  // creates a protected list admits a first entry every later one is refused.
+  // A link AT the root is excluded — the document then aliases its source and
+  // stores no entry of its own.
   const targetRelevant = storedCfcMetadataAppliesToPath(tx, target) ||
-    hasPendingSchemaPolicyInput(tx, target);
+    hasPendingSchemaPolicyInput(tx, target) ||
+    (target.path.length > 0 && hasPendingWriteAuthorization(tx, target));
   if (!sourceRelevant && !targetRelevant) {
     return;
   }
