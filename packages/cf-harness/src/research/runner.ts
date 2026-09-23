@@ -22,7 +22,6 @@ import type {
   HarnessResearchPatternRecord,
   HarnessResearchPurpose,
   HarnessResearchResult,
-  HarnessResearchRunSummary,
   HarnessResearchSourceRead,
 } from "../contracts/research.ts";
 import {
@@ -72,7 +71,6 @@ import {
   unreadSourceIds,
 } from "./admission.ts";
 import { objectValue, stringValue, unique } from "./model-value.ts";
-import { researchStartingContext, selectResearchContext } from "./context.ts";
 
 /** Cheap gateway model used by the bounded research loop. */
 export const RESEARCH_MODEL = "gemini-3.5-flash" as const;
@@ -165,13 +163,12 @@ export interface HarnessResearchRequest {
   /** Existing CFC label on the task and accumulated model context. */
   taskCfcLabel?: IFCLabel;
 
-  /** Prior research retained by this run, newest last. */
-  priorResearchRuns?: readonly HarnessResearchRunSummary[];
-
   /**
-   * Findings an earlier call admitted, handed in as a research handle. When
-   * present it is the whole of the prior context: the caller chose it by
-   * naming the token, so no selection over retained runs happens here.
+   * Findings an earlier call admitted, handed in as a research handle: the
+   * whole of the prior context, chosen by the caller naming the token. Its
+   * still-held bindings count as described, its confirmed patterns as
+   * confirmed, and each of its sources is read again and counts as cited
+   * only where the bytes still match the digest it was read under.
    */
   priorResearch?: HarnessResearchHandleValue;
 
@@ -578,18 +575,44 @@ const canonicalGuideSections = (request: HarnessResearchRequest) => {
   );
 };
 
+/**
+ * What a prior research handle contributed to this call's evidence, as the
+ * prompt states it: which of its bindings this run still holds, which it does
+ * not, and which of its sources read back unchanged.
+ */
+interface CarriedResearch {
+  /** Tokens the prior kit described that are general handles here. */
+  bindings: string[];
+
+  /** Tokens the prior kit described that this run does not hold. */
+  unavailable: string[];
+
+  /** Source ids whose bytes still match, citable as they stand. */
+  verified: string[];
+
+  /** Locations whose bytes changed or could not be read; reopened anew. */
+  stale: string[];
+}
+
+/** The prior kit's findings for a new question, with its recipe omitted. */
+const priorFindings = (prior: HarnessResearchHandleValue) => ({
+  researchRunId: prior.researchRunId,
+  task: prior.kit.task,
+  summary: prior.kit.summary,
+  patterns: prior.kit.patterns.map((
+    { patternId, importHint, argumentType, resultType },
+  ) => ({ patternId, importHint, argumentType, resultType })),
+  ...(prior.kit.purpose === "orient"
+    ? { leads: prior.kit.leads, questions: prior.kit.questions }
+    : {}),
+  rules: prior.kit.rules,
+  missing: prior.kit.missing,
+});
+
 const userPrompt = (
   request: HarnessResearchRequest,
+  carried: CarriedResearch | undefined,
 ): string => {
-  const retained = request.priorResearchRuns ?? [];
-  const prior = request.priorResearch !== undefined
-    ? [request.priorResearch]
-    : request.followUpTo === undefined
-    ? selectResearchContext(retained)
-    : retained.filter((run) =>
-      run.researchRunId === request.followUpTo ||
-      run.outputId === request.followUpTo
-    );
   const attachedPatterns = request.attachedPatterns ?? [];
   const canonicalGuides = canonicalGuideSections(request).map((
     { section },
@@ -633,15 +656,147 @@ const userPrompt = (
         "These records are trusted search leads, not source inspection. Call inspect_pattern before selecting one, then open every source file the current answer relies on.",
       ]
       : []),
-    ...(prior.length > 0
-      ? [
-        "",
-        "Selected prior findings and reopenable sources:",
-        JSON.stringify(prior.map(researchStartingContext)),
-        "These findings omit old recipes and handle bindings. Only the current inventory above is authoritative. Treat these as starting context and research only unresolved items. Their sourceIds are not citations for this fresh research call: reopen every source the current answer relies on, using a section-N value from a documentation source location as open_doc_section.sectionId, and cite only the newly returned sourceId.",
-      ]
-      : []),
+    ...(request.priorResearch === undefined || carried === undefined ? [] : [
+      "",
+      "Prior research carried in by handle:",
+      JSON.stringify(priorFindings(request.priorResearch)),
+      `Bindings it described that this run still holds, already described for this call: ${
+        JSON.stringify(carried.bindings)
+      }. Bindings it described that this run does not hold, which cannot be bound: ${
+        JSON.stringify(carried.unavailable)
+      }.`,
+      `Its sources read back unchanged and are citable by these sourceIds: ${
+        JSON.stringify(carried.verified)
+      }. These sources changed since they were read, or could not be read, and their old ids are not citable — the current read, where one succeeded, is in the catalog under a new id: ${
+        JSON.stringify(carried.stale)
+      }.`,
+      "Research only what these findings leave unresolved. Only the current inventory above is authoritative for bindings.",
+    ]),
   ].join("\n");
+};
+
+/**
+ * Seeds `state` from a prior research handle and reports what carried:
+ * described handles this run still holds, every confirmed pattern, and each
+ * source read again through the same host path it was first read through —
+ * a read whose bytes still match yields the same source id and stands as
+ * cited; one whose bytes changed, or that cannot be read, is reported stale,
+ * with the fresh read left in the catalog under its own id. The reads are the
+ * host's, not the model's, so they charge neither its read nor its call
+ * budget.
+ */
+const carryPriorResearch = async (
+  request: HarnessResearchRequest,
+  state: ResearchState,
+  prior: HarnessResearchHandleValue,
+): Promise<CarriedResearch> => {
+  const carried: CarriedResearch = {
+    bindings: [],
+    unavailable: [],
+    verified: [],
+    stale: [],
+  };
+  for (const record of prior.describedHandles) {
+    if (request.handleTokens.includes(record.token)) {
+      state.describedHandles.set(record.token, structuredClone(record));
+      carried.bindings.push(record.token);
+    } else {
+      carried.unavailable.push(record.token);
+    }
+  }
+  for (const pattern of prior.confirmedPatterns) {
+    state.confirmedPatterns.set(pattern.patternId, structuredClone(pattern));
+  }
+  const readChars = state.readChars;
+  const toolCalls = state.toolCalls;
+  state.readLimit = Number.POSITIVE_INFINITY;
+  try {
+    for (const source of prior.kit.sources) {
+      if (runWasAborted(request.signal)) throw abortError(request.signal);
+      let reread: HarnessResearchSourceRead | undefined;
+      try {
+        reread = await rereadSource(request, state, source);
+      } catch {
+        reread = undefined;
+      }
+      if (reread?.sourceId === source.sourceId) {
+        carried.verified.push(source.sourceId);
+      } else {
+        carried.stale.push(source.location);
+      }
+    }
+  } finally {
+    state.readLimit = RESEARCH_BUDGETS[request.purpose ?? "orient"].readChars;
+    state.readChars = readChars;
+    state.toolCalls = toolCalls;
+  }
+  return carried;
+};
+
+/**
+ * Reads the bytes `source` describes through the path that first read them,
+ * recording the read as this call's, and returns it.
+ *
+ * @throws Error when the location cannot be read in this call.
+ */
+const rereadSource = async (
+  request: HarnessResearchRequest,
+  state: ResearchState,
+  source: HarnessResearchSourceRead,
+): Promise<HarnessResearchSourceRead> => {
+  const chars = source.end - source.offset;
+  if (source.kind === "documentation") {
+    const match = /\(section-(\d+)\)$/.exec(source.location);
+    const section = match === null
+      ? undefined
+      : request.corpus?.sections[Number(match[1])];
+    if (
+      section === undefined ||
+      !section.integrity.some(isOperatorProvisionedReferenceAtom)
+    ) {
+      throw new Error(`unknown documentation section in ${source.location}`);
+    }
+    // The selector is positional, so it is held to the path and heading the
+    // location records: a corpus that moved sections puts another one at that
+    // index, and reading it would catalog unrelated text as the replacement.
+    if (documentationLocation(request, section) !== source.location) {
+      throw new Error(`documentation section moved from ${source.location}`);
+    }
+    const range = checkedReadRange(section.text, source.offset, chars);
+    readDocSection(request, state, section, range);
+    return state.sourceReads.find((read) =>
+      read.kind === "documentation" && read.location === source.location &&
+      read.offset === range.offset && read.end === range.end
+    )!;
+  }
+  if (request.getPatternIndex === undefined) {
+    throw new Error("this run has no configured pattern index");
+  }
+  const index = await request.getPatternIndex();
+  const patternMatch = /^cf:pattern:([^:]+)(?::(.+))?$/.exec(source.location);
+  if (patternMatch === null) {
+    throw new Error(`unreadable pattern location ${source.location}`);
+  }
+  const [, patternId, path] = patternMatch;
+  const inspected = await inspectPattern(state, index, patternId);
+  if (source.kind === "pattern-metadata") {
+    return state.sourceReads.find((read) =>
+      read.sourceId === inspected.sourceId
+    )!;
+  }
+  const program = state.programs.get(patternId);
+  const file = program?.files.find((candidate) => candidate.name === path);
+  if (file === undefined) {
+    throw new Error(`pattern ${patternId} has no file ${path}`);
+  }
+  const range = checkedReadRange(file.contents, source.offset, chars);
+  return addRead(state, {
+    kind: "pattern-source",
+    location: source.location,
+    offset: range.offset,
+    end: range.end,
+    totalChars: file.contents.length,
+  }, range.content);
 };
 
 const toolResultMessage = (
@@ -873,6 +1028,14 @@ const docSectionMetadata = (
   chars: section.text.length,
 });
 
+/** The location a documentation read of `section` is cited under. */
+const documentationLocation = (
+  request: HarnessResearchRequest,
+  section: HarnessDocsCorpusSection,
+): string =>
+  section.path + "#" + (section.headingPath?.join(" > ") ?? section.heading) +
+  " (" + docSectionMetadata(request, section).sectionId + ")";
+
 /** Records and returns the exact section text observed through search or read. */
 const readDocSection = (
   request: HarnessResearchRequest,
@@ -887,9 +1050,7 @@ const readDocSection = (
   addSourceLabel(state, cfcLabel);
   const read = addRead(state, {
     kind: "documentation",
-    location: section.path + "#" +
-      (section.headingPath?.join(" > ") ?? section.heading) + " (" +
-      metadata.sectionId + ")",
+    location: documentationLocation(request, section),
     offset: range.offset,
     end: range.end,
     totalChars: section.text.length,
@@ -1172,10 +1333,6 @@ async (request) => {
   const model = researchModel(options.modelClient.providerId);
   const budget = RESEARCH_BUDGETS[request.purpose ?? "orient"];
   const tools = RESEARCH_TOOLS;
-  const transcript: HarnessTranscriptMessage[] = [
-    { role: "system", content: systemPrompt(request.purpose) },
-    { role: "user", content: userPrompt(request) },
-  ];
   const state: ResearchState = {
     readLimit: budget.readChars,
     handleTokens: request.handleTokens,
@@ -1199,26 +1356,19 @@ async (request) => {
       integrity: structuredClone([...section.integrity]),
     });
   }
-  // An explicit handle is the whole prior context, so only its label and gaps
-  // fold in; the retained runs fold in when nothing was named.
-  for (
-    const prior of request.priorResearch === undefined
-      ? request.priorResearchRuns ?? []
-      : [request.priorResearch]
-  ) {
-    if (prior.cfc === undefined) {
-      addMissingLabel(
-        state,
-        "prior-research",
-        `prior research run ${prior.researchRunId} summary did not retain CFC metadata`,
-      );
-      continue;
-    }
-    addSourceLabel(state, prior.cfc.outputLabel);
-    for (const missing of prior.cfc.missingLabels) {
+  if (request.priorResearch !== undefined) {
+    addSourceLabel(state, request.priorResearch.cfc.outputLabel);
+    for (const missing of request.priorResearch.cfc.missingLabels) {
       addMissingLabel(state, missing.source, missing.detail);
     }
   }
+  const carried = request.priorResearch === undefined
+    ? undefined
+    : await carryPriorResearch(request, state, request.priorResearch);
+  const transcript: HarnessTranscriptMessage[] = [
+    { role: "system", content: systemPrompt(request.purpose) },
+    { role: "user", content: userPrompt(request, carried) },
+  ];
   for (const pattern of request.attachedPatterns ?? []) {
     addMissingLabel(
       state,

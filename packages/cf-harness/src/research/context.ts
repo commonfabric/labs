@@ -32,25 +32,6 @@ export const selectResearchContext = (
   return runs.filter((run) => selected.has(run));
 };
 
-/** Small prior findings for a new question, with recipes and old bindings omitted. */
-export const researchStartingContext = (
-  run: Pick<HarnessResearchRunSummary, "researchRunId" | "kit">,
-) => ({
-  researchRunId: run.researchRunId,
-  purpose: researchPurposeOf(run.kit),
-  task: run.kit.task,
-  summary: run.kit.summary,
-  patterns: run.kit.patterns.map((
-    { patternId, importHint, argumentType, resultType },
-  ) => ({ patternId, importHint, argumentType, resultType })),
-  ...(run.kit.purpose === "orient"
-    ? { leads: run.kit.leads, questions: run.kit.questions }
-    : {}),
-  rules: run.kit.rules,
-  sources: run.kit.sources,
-  missing: run.kit.missing,
-});
-
 /** Host-observed identities, keeping search leads separate from source verification. */
 export const researchPatternRecords = (
   kit: HarnessResearchResult,

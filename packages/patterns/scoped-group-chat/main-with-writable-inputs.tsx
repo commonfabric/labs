@@ -254,7 +254,7 @@ export default pattern<ScopedGroupChatInput, ScopedGroupChatOutput>(
                     $value={name}
                     placeholder="Ada Lovelace"
                     aria-label="Your name"
-                    timing-strategy="immediate"
+                    timingStrategy="immediate"
                   />
                 </cf-vstack>
               </cf-hstack>
@@ -279,7 +279,8 @@ export default pattern<ScopedGroupChatInput, ScopedGroupChatOutput>(
                       $value={newRoomName}
                       placeholder="Room name"
                       aria-label="Room name"
-                      timing-strategy="immediate"
+                      timingStrategy="immediate"
+                      oncf-submit={boundAddRoom}
                     />
                     <cf-button onClick={boundAddRoom}>
                       Add
@@ -366,7 +367,8 @@ export default pattern<ScopedGroupChatInput, ScopedGroupChatOutput>(
                   $value={draft}
                   placeholder={`Message ${displayedRoomLabel}`}
                   aria-label="Message"
-                  timing-strategy="immediate"
+                  timingStrategy="immediate"
+                  oncf-submit={send}
                 />
               </cf-vstack>
               <cf-button onClick={send}>

@@ -5,9 +5,10 @@ in a browser, on labs `a77e958513` and again on `edd1f71108` — with two
 exceptions, whose wording has changed since. Demo 2's prompt names its two parts
 where the browser-checked runs pasted their ids; three runs of the wording below
 reach the same two parts, read from the source each submitted, but none of the
-three was clicked through. Demo 4's prompt no longer lists the fields to pair
-on; the wording below has not yet been run. Treat those two demos' page behavior
-as carried over rather than re-checked.
+three was clicked through. Demo 4's prompt names none of its parts; six runs of
+the wording below composed all three published parts, read the same way, and
+none was clicked through. Treat those two demos' pages as unverified until
+someone clicks through them.
 
 Everything else — the counts, the findings behind them, the demos that are not
 on this page and why — is in [DEMOS-EVIDENCE.md](DEMOS-EVIDENCE.md). Read this
@@ -102,16 +103,16 @@ The count may render as a phrase rather than a number — "7 Transactions in
 ## 4. Bills this month, from mail and bank together
 
 ```text
-Compose these three library patterns into one page: cf:pattern:-xx1hxtvAbY7AL6FeYuQWuEzbC0nOpUOHgXseIac2_w (this month's email headers from my Gmail), cf:pattern:v6_KSFHs9AmTg9PKwMmPdZyEHxZ9Oykhno4HBOfUo5s (this month's transactions from my bank) and cf:pattern:d_z9mtdCBUwBpG0A6nBwOy5_2fxqySuk2zNxeIdXAYA (pairs email bills with the bank payments that settled them). Show the bills I need to deal with: pair an email bill with the bank payment that settled it; list unpaid email bills and unmatched bank payments separately. Do not send my mail or my transactions to an AI model.
+Show me the bills I need to deal with this month, using both my email and my bank transactions. Pair up the ones that are the same bill so I can see what is already paid. Don't send my mail or my transactions to an AI model.
 ```
 
-**What appears:** paid bills paired with the payments that settled them, with
-unpaid bills and unmatched payments listed separately.
+**What appears:** bills from your mail paired with the bank payments that
+settled them, built from three published parts: a mail reader, a bank reader and
+a matcher.
 
 **Stop when:** every pairing on the page is one a person would make.
 
-**Rough time:** six to eleven minutes. It varies widely on identical text, so
-leave room for the long end rather than expecting the short one.
+**Rough time:** three to seven minutes.
 
 **If the detail text is hard to read,** that is the dark surface, not the page —
 the amounts are correct. This is the demo the light-surface step exists for.

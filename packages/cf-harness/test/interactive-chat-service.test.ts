@@ -33,6 +33,7 @@ import {
 } from "../src/interactive-chat-service.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
+import type { HarnessFabricSession } from "../src/fabric-session.ts";
 import type {
   SandboxCommandResult,
   SandboxRuntime,
@@ -970,6 +971,121 @@ Deno.test("interactive service closes sessions and filters status", async () => 
     startTurn.ok === false ? startTurn.error.code : "",
     "session_closed",
   );
+});
+
+Deno.test("interactive service releases a late runtime after a closed turn unwinds", async () => {
+  const constructing = Promise.withResolvers<void>();
+  const constructed = Promise.withResolvers<void>();
+  const acquired = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  let disposed = 0;
+  const fabric = {
+    pieces: {
+      runtime: {
+        dispose: () => {
+          disposed++;
+          return Promise.resolve();
+        },
+      },
+    },
+  } as unknown as HarnessFabricSession;
+  const service = new HarnessInteractiveChatService({
+    basePromptLoopOptions: {
+      fabricSessionFactory: async () => {
+        constructing.resolve();
+        await constructed.promise;
+        return fabric;
+      },
+    },
+    createPromptLoop: (options) => {
+      const engine = new CfHarnessEngine(options);
+      return {
+        runTranscript: async (runOptions) => {
+          await engine.fabricSessionFactory!();
+          acquired.resolve();
+          await finish.promise;
+          return makeResult(runOptions, "Done.");
+        },
+      };
+    },
+  });
+  expect(
+    (await service.startSession("open", {
+      sessionId: "closing",
+      workspace: { hostPath: "/workspace" },
+    })).ok,
+  ).toBe(true);
+  expect(
+    (await service.startTurn("start", {
+      sessionId: "closing",
+      input: { text: "Start" },
+    })).ok,
+  ).toBe(true);
+  await Promise.race([
+    constructing.promise,
+    service.waitForIdle().then(() => {
+      throw new Error(JSON.stringify(service.events("closing")));
+    }),
+  ]);
+  try {
+    expect((await service.closeSession("close", "closing")).ok).toBe(true);
+    constructed.resolve();
+    await acquired.promise;
+    expect(disposed).toBe(0);
+  } finally {
+    constructed.resolve();
+    finish.resolve();
+    await service.waitForIdle();
+  }
+  expect(disposed).toBe(1);
+});
+
+Deno.test("interactive service releases runtimes when closed-event delivery fails", async () => {
+  let disposed = 0;
+  const fabric = {
+    pieces: {
+      runtime: {
+        dispose: () => {
+          disposed++;
+          return Promise.resolve();
+        },
+      },
+    },
+  } as unknown as HarnessFabricSession;
+  const service = new HarnessInteractiveChatService({
+    basePromptLoopOptions: {
+      fabricSessionFactory: () => Promise.resolve(fabric),
+    },
+    createPromptLoop: (options) => {
+      const engine = new CfHarnessEngine(options);
+      return {
+        runTranscript: async (runOptions) => {
+          await engine.fabricSessionFactory!();
+          return makeResult(runOptions, "Done.");
+        },
+      };
+    },
+    onEvent: ({ event }) => {
+      if (event.kind === "session_closed") throw new Error("Peer disconnected");
+    },
+    onEventDeliveryError: () => {},
+  });
+  await service.startSession("open", {
+    sessionId: "closing",
+    workspace: { hostPath: "/workspace" },
+  });
+  await service.startTurn("start", {
+    sessionId: "closing",
+    input: { text: "Start" },
+  });
+  await service.waitForIdle();
+  expect(service.listTurns({ sessionId: "closing" }).turns[0].turn.status)
+    .toBe("completed");
+  await expect(service.closeSession("close", "closing")).rejects.toThrow(
+    "Peer disconnected",
+  );
+  expect(service.status("closing").sessions[0].status).toBe("closed");
+  expect(disposed).toBe(1);
 });
 
 Deno.test("interactive service rejects duplicate session ids", async () => {

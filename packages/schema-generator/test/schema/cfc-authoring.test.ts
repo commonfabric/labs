@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
+import type { SchemaGenerationDiagnostic } from "../../src/interface.ts";
 import { SchemaGenerator } from "../../src/schema-generator.ts";
 import {
   asObjectSchema,
@@ -934,6 +935,174 @@ describe("Schema: CFC authoring aliases", () => {
           ifc: { addIntegrity: ["member"], requiredIntegrity: ["admin"] },
         });
       });
+    });
+  });
+
+  describe("an alias chain entered without argument nodes", () => {
+    // A type whose print expands its alias, as a lift's or a capture's input
+    // does, reaches the lowering with the alias's type arguments and no nodes.
+    // Each parameter reads as its argument's type, not as the declaration's
+    // own reference with the parameter unbound.
+
+    const BASE_ALIASES = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type RepresentsCurrentUser<T> = Cfc<T, { addIntegrity: readonly [{ kind: "represents-principal"; subject: { __ctCurrentPrincipal: true } }] }>;
+      type Sec<T> = Confidential<T, readonly ["a"]>;
+      interface Book { title: string }
+    `;
+    const ALIASES = BASE_ALIASES + `
+      type AnyOf<X extends readonly unknown[]> = { readonly __ct_cfc_any_of__?: X };
+    `;
+
+    const generate = async (code: string, aliases = ALIASES) => {
+      const { checker, sourceFile } = await createTestProgram(aliases + code);
+      const holder = checker.getSymbolsInScope(
+        sourceFile,
+        ts.SymbolFlags.Interface,
+      ).find((candidate) => candidate.name === "Holder")!;
+      const value = checker.getDeclaredTypeOfSymbol(holder).getProperty(
+        "value",
+      )!;
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      const schema = asObjectSchema(
+        new SchemaGenerator().generateSchema(
+          checker.getTypeOfSymbolAtLocation(value, sourceFile),
+          checker,
+          undefined,
+          { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
+        ),
+      );
+      return { schema, diagnostics };
+    };
+
+    it("keeps the type of a generic alias's payload", async () => {
+      const { schema } = await generate(`
+        interface Holder { value: Sec<Book[]> }
+      `);
+      expect(schema.type).toBe("array");
+      expect(schema.items).toEqual({ $ref: "#/$defs/Book" });
+      expect(schema.ifc).toEqual({ confidentiality: ["a"] });
+    });
+
+    it("keeps the type of a payload passed down a chain of generic aliases", async () => {
+      const { schema } = await generate(`
+        type Sec2<U> = Sec<U>;
+        interface Holder { value: Sec2<number> }
+      `);
+      expect(schema).toEqual({
+        type: "number",
+        ifc: { confidentiality: ["a"] },
+      });
+    });
+
+    it("keeps the type of a payload a parameter reaches through a nested alias", async () => {
+      const { schema } = await generate(`
+        type Owned<T> = RepresentsCurrentUser<Cfc<Sec<T>, { ownerPrincipal: "me" }>>;
+        interface Holder { value: Owned<string> }
+      `);
+      expect(schema).toEqual({
+        type: "string",
+        ifc: {
+          confidentiality: ["a"],
+          ownerPrincipal: "me",
+          addIntegrity: [{
+            kind: "represents-principal",
+            subject: { __ctCurrentPrincipal: true },
+          }],
+        },
+      });
+    });
+
+    it("lowers a label passed as an argument, an `AnyOf` clause included", async () => {
+      const { schema } = await generate(`
+        type Labeled<L extends readonly unknown[]> = Confidential<string, L>;
+        interface Holder {
+          value: Labeled<readonly ["x", AnyOf<readonly ["y", "z"]>]>;
+        }
+      `);
+      expect(schema.ifc).toEqual({
+        confidentiality: ["x", { anyOf: ["y", "z"] }],
+      });
+    });
+
+    it("reads an authored type named `AnyOf` in a label as its own", async () => {
+      const { schema } = await generate(
+        `
+        type AnyOf<T> = { label: "ordinary choice" };
+        type Labeled<L extends readonly unknown[]> = Confidential<string, L>;
+        interface Holder { value: Labeled<readonly [AnyOf<["reader"]>]> }
+      `,
+        BASE_ALIASES,
+      );
+      expect(schema.ifc).toEqual({
+        confidentiality: [{ label: "ordinary choice" }],
+      });
+    });
+
+    it("reads a namespace member named `AnyOf` in a label as its own", async () => {
+      const { schema } = await generate(`
+        namespace Ordinary {
+          export type AnyOf<X> = { label: "ordinary" };
+        }
+        interface Holder {
+          value: Confidential<string, [Ordinary.AnyOf<["a", "b"]>]>;
+        }
+      `);
+      expect(schema.ifc).toEqual({ confidentiality: [{ label: "ordinary" }] });
+    });
+
+    it("lowers a label holding a parameter", async () => {
+      const { schema } = await generate(`
+        type Tagged<X> = Confidential<string, readonly [X]>;
+        interface Holder { value: Tagged<"x"> }
+      `);
+      expect(schema.ifc).toEqual({ confidentiality: ["x"] });
+    });
+
+    it("reports a payload holding a parameter it cannot read, and keeps its structure", async () => {
+      const { schema, diagnostics } = await generate(`
+        type Many<T> = Confidential<T[], readonly ["a"]>;
+        interface Holder { value: Many<string> }
+      `);
+      expect(schema).toEqual({
+        type: "array",
+        items: {},
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
+        "schema-type:unread",
+      ]);
+      expect(diagnostics[0]!.message).toContain("`T[]`");
+    });
+
+    it("keeps the labels beside a parameter it cannot read", async () => {
+      const { schema } = await generate(`
+        type Outer<T> = Confidential<{
+          data: T;
+          secret: Confidential<string, readonly ["secret"]>;
+        }, readonly ["outer"]>;
+        interface Holder { value: Outer<number> }
+      `);
+      expect(schema.properties?.secret).toEqual({
+        type: "string",
+        ifc: { confidentiality: ["secret"] },
+      });
+      expect(schema.ifc).toEqual({ confidentiality: ["outer"] });
+    });
+
+    it("lowers an empty label passed as an argument, or as a default", async () => {
+      const passed = await generate(`
+        type Labeled<L extends readonly unknown[]> = Confidential<string, L>;
+        interface Holder { value: Labeled<readonly []> }
+      `);
+      const defaulted = await generate(`
+        type Labeled<L extends readonly unknown[] = readonly []> =
+          Confidential<string, L>;
+        interface Holder { value: Labeled }
+      `);
+      expect(passed.schema.ifc).toEqual({ confidentiality: [] });
+      expect(defaulted.schema.ifc).toEqual({ confidentiality: [] });
     });
   });
 });

@@ -42,10 +42,7 @@ export interface ResearchToolInput {
   /** Orient to the user goal or investigate a follow-up question. */
   purpose?: HarnessResearchPurpose;
 
-  /**
-   * Earlier admitted research to follow up on: the research handle its call
-   * returned, or the researchRunId of a run this run retains.
-   */
+  /** The research handle of earlier admitted research to build on. */
   followUpTo?: string;
 }
 
@@ -134,7 +131,7 @@ export const researchToolDescriptor: HarnessToolDescriptor = {
         minLength: 1,
         maxLength: 500,
         description:
-          "A research handle (cfh:v: token) or researchRunId to use as starting context. Only unresolved facts need new research.",
+          "A research handle (cfh:v: token) whose findings this call starts from: its still-held bindings count as described, and its sources count as cited where they read back unchanged. Only unresolved facts need new research.",
       },
     },
     required: ["task"],
@@ -246,9 +243,8 @@ export const researchTool: HarnessToolDefinition<
     if (context.runResearch === undefined) {
       return errorOutput("research requires the host research runner");
     }
-    // A follow-up names either a research handle this run holds or a run it
-    // retains; a token this table does not hold, or holds as something other
-    // than research, is the same answer as an unknown id.
+    // A follow-up names a research handle this run holds; a token this table
+    // does not hold, or holds as something other than research, is refused.
     const priorReferent = input.followUpTo === undefined ||
         context.handleTable === undefined
       ? undefined
@@ -257,15 +253,9 @@ export const researchTool: HarnessToolDefinition<
         isHarnessResearchHandleValue(priorReferent.value)
       ? priorReferent.value
       : undefined;
-    if (
-      input.followUpTo !== undefined && priorResearch === undefined &&
-      !(context.researchRuns ?? []).some((run) =>
-        run.researchRunId === input.followUpTo ||
-        run.outputId === input.followUpTo
-      )
-    ) {
+    if (input.followUpTo !== undefined && priorResearch === undefined) {
       return errorOutput(
-        "followUpTo must name an admitted research result available to this run",
+        "followUpTo must name a research handle this run holds",
       );
     }
     // Only the research itself is a research failure. Retaining the kit and
@@ -306,7 +296,6 @@ export const researchTool: HarnessToolDefinition<
         ...(context.researchTaskCfcLabel !== undefined
           ? { taskCfcLabel: context.researchTaskCfcLabel }
           : {}),
-        priorResearchRuns: context.researchRuns ?? [],
         ...(priorResearch !== undefined ? { priorResearch } : {}),
         attachedPatterns: (context.patternRefs ?? []).map((ref) => ref.record),
         ...(context.signal !== undefined ? { signal: context.signal } : {}),

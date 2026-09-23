@@ -153,6 +153,7 @@ Every environment variable has a flag, and the flag wins:
 | `--pattern-index-url`     | `CF_HARNESS_PATTERN_INDEX_URL`       | unset                                 |
 | `--skills-registry-url`   | `CF_HARNESS_SKILLS_REGISTRY_URL`     | unset                                 |
 | `--model`                 | `CF_HARNESS_MODEL`                   | the CLI's default model               |
+| `--reasoning-effort`      | `CF_HARNESS_REASONING_EFFORT`        | the provider's default                |
 | `--workspace`             | `CF_HARNESS_CONSOLE_WORKSPACE`       | `.cf-harness-console/workspace`       |
 | `--artifact-root`         | `CF_HARNESS_ARTIFACT_ROOT`           | `.cf-harness-console/runs`            |
 | `--session-db`            | `CF_HARNESS_CONSOLE_SESSION_DB`      | `.cf-harness-console/sessions.sqlite` |

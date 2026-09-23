@@ -24,15 +24,15 @@ being true rather than annotated with what it used to say.
 
 ## What is on the run page, and what is not
 
-[DEMOS.md](DEMOS.md) carries four demos. They are the ones proven on
-`a77e958513` with a page checked in a browser every time:
+[DEMOS.md](DEMOS.md) carries four demos. Each was checked in a browser, except
+where the run page says its wording has changed since:
 
 | Run page | Here | Why it is on the page                             |
 | -------- | ---- | ------------------------------------------------- |
 | 1        | §1   | proven, needs no connectors, finishes in a minute |
 | 2        | §2a  | proven, needs no connectors, every control works  |
 | 3        | §3   | proven, needs a finance grant                     |
-| 4        | §5c  | 4 correct in 4, needs finance and email grants    |
+| 4        | §5d  | composes all three parts 6 of 6, needs two grants |
 
 Everything else here is deliberately off that page:
 
@@ -40,7 +40,8 @@ Everything else here is deliberately off that page:
   corrected parts instead of discovering the older ones.
 - **§4 bills by discovery** and **§5, §5a, §5b bills with the matcher left to
   the run** — the pairing is a property of the code the run writes on the day.
-  §5c is the same job with the matcher published, and it is the one to run.
+- **§5c bills with the parts named by id** — the same page as §5d, reached by
+  pasting ids a person would not have; §5d reaches it by asking.
 - **§6 skill script** — has never reached a named piece inside its cap.
 - **§7 revise in place** — blocked on CT-2344 from the command pill.
 
@@ -1123,6 +1124,32 @@ bill-like payments before matching, so a fuel stop, a grocery shop and a coffee
 roaster are never candidates. Earlier runs showed three unmatched because they
 authored their own filters and kept everything.
 
+## 5d. The same page, asked for the way a person would
+
+The §5c page with no ids and no rules in the prompt: the request as someone
+would type it.
+
+**Preflight:** as §5c.
+
+**Prompt:**
+
+```text
+Show me the bills I need to deal with this month, using both my email and my bank transactions. Pair up the ones that are the same bill so I can see what is already paid. Don't send my mail or my transactions to an AI model.
+```
+
+**Done when:** every pairing on the page is one a person would make.
+
+**Typical wall time:** three to seven minutes. The six runs took 183 to 395
+seconds, with two sessions sharing the console throughout.
+
+**Proof status: composes all three published parts, 6 of 6** — three runs on
+`b70de3a53a` and three on the same build with #7947, the source each submitted
+read every time: the mail reader, the bank reader and the matcher, each imported
+by id. None was clicked through, so the page this wording produces is
+unverified: the same three parts do not make the same page, and §5c's own runs
+built two different pages from them. On `edd1f71108` the same text reached the
+matcher one run in three.
+
 ## 6. A skill's script, run in the sandbox, folded into a piece
 
 The [WEAVER §7](WEAVER.md) task, unchanged but for the slug sentence.
@@ -1201,7 +1228,9 @@ there.
 ## Every demo re-run on `edd1f71108`
 
 The four demos on [DEMOS.md](DEMOS.md) were run again on labs `edd1f71108`,
-which `loom-stable-2026-09-22-7` vendors, from the page's own prompt text.
+which `loom-stable-2026-09-22-7` vendors, from the prompt text the page carried
+then. Demo 4's prompt has changed since; §5d holds the evidence for its current
+wording.
 
 | Demo                          | Result on `edd1f71108`   |
 | ----------------------------- | ------------------------ |
@@ -1245,12 +1274,12 @@ prompt that asks for a sortable table reaches a published sortable part, and one
 that avoids the word never looks for it. That is a word to keep, not a hint to
 delete.
 
-**One hint is load-bearing, and it is not the one in the dinner demo.** Told to
-compose this month's bills from mail and bank with no ids, a run finds both
-readers every time and the **bills matcher** one run in three; the other two
-author their own pairing logic rather than composing the published part. Demo 4
-names its three ids for that reason, and the gap is in discovery rather than in
-the wording.
+**Demo 4's ids no longer cover a discovery gap.** Told to compose this month's
+bills from mail and bank with no ids, a run composes both readers and the
+**bills matcher**: six runs in six, three on `b70de3a53a` and three on the same
+build with #7947, the source read each time. On `edd1f71108` the same text
+reached the matcher one run in three, the other two authoring their own pairing
+logic, and that is what the ids in demo 4's prompt used to stand in for.
 
 **A correction published under a different identity does not displace what it
 corrects, and starts below it.** Successor substitution redirects discovery only
@@ -1293,10 +1322,8 @@ prompt that names neither and only describes the page it wants. The ids in that
 prompt were standing in for the curation: with the superseded pair hidden,
 ranking never sees it, so there is nothing left for the ids to steer past.
 
-**Demo 4 keeps its three ids**, because the bills matcher is the one part
-discovery does not reliably reach — see above. That is a hint over a real gap,
-not over the wording, and it comes out when the gap closes rather than when the
-prompt is rephrased.
+**Demo 4 names none of its parts.** Its prompt is the request a person would
+type, and it reaches all three published parts by itself; see above.
 
 **Demo 4 no longer names the fields to pair on.** Its prompt asked for pairing
 "using plain text rules on subject, sender and merchant name only", but the

@@ -37,6 +37,7 @@ cf.key.*
 local-dev-toolshed.log
 local-dev-shell.log
 local-dev-console.log
+local-dev-console.log.previous
 .playwright-mcp/
 .worktrees
 tmp/
