@@ -1,5 +1,6 @@
 import type { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { normalizeInviteHost } from "@commonfabric/memory/space-invites";
 import app from "@/app.ts";
 import {
   backgroundLogFile,
@@ -110,8 +111,12 @@ function startServer(onListening?: () => void) {
   announceCloneIfServed({ memoryDir: env.MEMORY_DIR, dbPath: env.DB_PATH });
   // The signed routes check every first-party proof against this origin rather
   // than the host the client dialed, so a wrong API_URL refuses every
-  // correctly signed client. Say it before anyone signs anything.
-  console.log("Configured first-party authority:", env.API_URL);
+  // correctly signed client. Say it before anyone signs anything, normalized
+  // the way those routes normalize it.
+  console.log(
+    "Configured first-party authority:",
+    normalizeInviteHost(env.API_URL),
+  );
   initializeRuntime();
   // Server-execution v2 (stage F): under EXPERIMENTAL_SERVER_EXECUTION
   // this process hosts the serving loop; OFF (the default) this is a

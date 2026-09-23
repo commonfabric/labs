@@ -377,12 +377,23 @@ describe("inbox HTTP and SDK", () => {
       const refused = await fetch(url, { method: "POST", headers, body: "{}" });
       expect(refused.status).toBe(401);
       await refused.body?.cancel();
-      expect(f.diagnostics.at(-1)).toMatchObject({
+      expect(f.diagnostics).toHaveLength(1);
+      expect(f.diagnostics[0]).toMatchObject({
         path: "/api/inbox/enable",
         method: "POST",
         authority: "https://public.example",
         msg: "Rejected unauthenticated first-party HTTP request",
       });
+      const logged = JSON.stringify(f.diagnostics);
+      const signed = [...headers].filter(([name]) =>
+        name.startsWith("cf-request-")
+      );
+      expect(signed.map(([name]) => name).sort()).toEqual([
+        "cf-request-auth",
+        "cf-request-body-sha256",
+        "cf-request-proof",
+      ]);
+      for (const [, value] of signed) expect(logged).not.toContain(value);
     } finally {
       await f.close();
     }

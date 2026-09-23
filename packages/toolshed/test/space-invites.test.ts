@@ -570,16 +570,40 @@ describe("space-invites", () => {
         access: "READ",
         ttlSeconds: 60,
       });
-      const refused = await f.raw("revoke", { inviteId: invite.inviteId });
+      // Signed for the dialed host, which the pinned audience refuses.
+      const url = new URL(`/api/spaces/${f.space}/invites/redeem`, f.host);
+      const body = JSON.stringify({
+        inviteId: invite.inviteId,
+        code: invite.code,
+      });
+      const headers = await signFirstPartyHttpRequest({
+        url,
+        method: "POST",
+        body,
+        signer: f.guest,
+      });
+      const refused = await fetch(url, { method: "POST", headers, body });
       expect(refused.status).toBe(401);
       await refused.body?.cancel();
-      expect(f.diagnostics.at(-1)).toMatchObject({
-        path: `/api/spaces/${f.space}/invites/revoke`,
+      expect(f.diagnostics).toHaveLength(1);
+      expect(f.diagnostics[0]).toMatchObject({
+        path: `/api/spaces/${f.space}/invites/redeem`,
         method: "POST",
         authority: "https://public.example",
         msg: "Rejected unauthenticated first-party HTTP request",
       });
-      expect(JSON.stringify(f.diagnostics)).not.toContain(invite.code);
+      const logged = JSON.stringify(f.diagnostics);
+      expect(logged).not.toContain(invite.code);
+      expect(logged).not.toContain(invite.inviteId);
+      const signed = [...headers].filter(([name]) =>
+        name.startsWith("cf-request-")
+      );
+      expect(signed.map(([name]) => name).sort()).toEqual([
+        "cf-request-auth",
+        "cf-request-body-sha256",
+        "cf-request-proof",
+      ]);
+      for (const [, value] of signed) expect(logged).not.toContain(value);
     } finally {
       await f.close();
     }
