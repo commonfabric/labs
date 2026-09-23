@@ -65,17 +65,8 @@ const BASELINE = "baseline-entities.json";
 const MARKER = ".cf-clone";
 const PRISTINE_DIR = "pristine";
 
-export interface CloneManifest {
-  /**
-   * Schema version of this file, so a reader that does not know it refuses.
-   *
-   * Version 2 records `fingerprint.scheme`. A tool that understands only 1
-   * refuses a version-2 clone before touching it, which is what keeps an older
-   * checkout from resetting or verifying a clone whose baseline it would
-   * fingerprint differently, or with defects since fixed.
-   */
-  version: 1 | 2;
-
+/** What every manifest version records about a clone. */
+interface CloneManifestFields {
   /** Space DID — the clone keeps it (see the design doc's identity section). */
   space: string;
 
@@ -109,30 +100,44 @@ export interface CloneManifest {
     entities: number;
     maxSeq: number;
   };
+}
 
-  /**
-   * Content fingerprint at clone time, generated cells excluded.
-   *
-   * `unhashable` and `ambiguous` record what the baseline fingerprint could NOT
-   * speak for. Both are absent from the roll-up by construction, so a verdict
-   * computed from the hash alone rests on however much evidence happened to
-   * exist — and without recording the number here, nobody could tell whether
-   * that was all of it. Optional: clones taken before these were recorded
-   * report them as unknown rather than as zero.
-   */
-  fingerprint: {
-    hash: string;
-    entities: number;
-    excludedGenerated: number;
-    unhashable?: number;
-    ambiguous?: number;
-
-    /**
-     * The {@link FINGERPRINT_SCHEME} the baseline was computed under. Absent on
-     * version-1 clones, whose scheme was never recorded.
-     */
-    scheme?: number;
+/**
+ * A clone's manifest, as written by {@link createClone} and read by
+ * {@link readManifest}.
+ *
+ * Version 2 records `fingerprint.scheme`, and a version-2 manifest without one
+ * is refused as damaged rather than read as a version-1 clone. A tool that
+ * understands only 1 refuses a version-2 clone before touching it, which is
+ * what keeps an older checkout from resetting or verifying a clone whose
+ * baseline it would fingerprint differently, or with defects since fixed.
+ */
+export type CloneManifest =
+  | CloneManifestFields & { version: 1; fingerprint: ManifestFingerprint }
+  | CloneManifestFields & {
+    version: 2;
+    fingerprint: ManifestFingerprint & {
+      /** The {@link FINGERPRINT_SCHEME} the baseline was computed under. */
+      scheme: number;
+    };
   };
+
+/**
+ * Content fingerprint at clone time, generated cells excluded.
+ *
+ * `unhashable` and `ambiguous` record what the baseline fingerprint could NOT
+ * speak for. Both are absent from the roll-up by construction, so a verdict
+ * computed from the hash alone rests on however much evidence happened to
+ * exist — and without recording the number here, nobody could tell whether
+ * that was all of it. Optional: clones taken before these were recorded
+ * report them as unknown rather than as zero.
+ */
+interface ManifestFingerprint {
+  hash: string;
+  entities: number;
+  excludedGenerated: number;
+  unhashable?: number;
+  ambiguous?: number;
 }
 
 export interface CreateCloneOptions {
@@ -729,7 +734,7 @@ export async function verifyClone(dir: string): Promise<VerifyResult> {
         working: fingerprint.ambiguous.length,
       },
       scheme: {
-        manifest: manifest.fingerprint.scheme ?? null,
+        manifest: manifest.version === 2 ? manifest.fingerprint.scheme : null,
         working: FINGERPRINT_SCHEME,
       },
     },
@@ -748,24 +753,38 @@ export async function readManifest(dir: string): Promise<CloneManifest> {
     }
     throw error;
   }
-  const parsed = JSON.parse(text) as CloneManifest;
+  const parsed = JSON.parse(text) as {
+    version?: unknown;
+    fingerprint?: { scheme?: unknown };
+  };
   if (parsed.version !== 1 && parsed.version !== 2) {
     throw new Error(
       `${path} has manifest version ${parsed.version}; this tool understands ` +
         `1 and 2.`,
     );
   }
-  return parsed;
+  // Version 2 is the version that records the scheme, so one without it is a
+  // damaged manifest. Reading it as a version-1 clone would let a verify
+  // proceed under a scheme nobody can name, which is what the record is for.
+  if (parsed.version === 2 && typeof parsed.fingerprint?.scheme !== "number") {
+    throw new Error(
+      `${path} has manifest version 2 but records no fingerprint scheme, so ` +
+        `the manifest is damaged; clone the snapshot again.`,
+    );
+  }
+  return parsed as CloneManifest;
 }
 
 /**
  * Refuse a clone whose baseline was fingerprinted under a scheme other than
- * this tool's, before anything is read or restored. A clone that never recorded
- * its scheme passes, and its verify reports the scheme as unknown.
+ * this tool's, before anything is read or restored. A version-1 clone, which
+ * never recorded its scheme, passes, and its verify reports the scheme as
+ * unknown.
  */
 function assertComparableScheme(dir: string, manifest: CloneManifest): void {
+  if (manifest.version === 1) return;
   const scheme = manifest.fingerprint.scheme;
-  if (scheme === undefined || scheme === FINGERPRINT_SCHEME) return;
+  if (scheme === FINGERPRINT_SCHEME) return;
   throw new Error(
     `${dir}'s baseline was fingerprinted under scheme ${scheme}, and this ` +
       `tool fingerprints under scheme ${FINGERPRINT_SCHEME}, so the two cannot ` +
