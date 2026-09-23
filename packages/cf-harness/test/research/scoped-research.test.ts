@@ -683,6 +683,178 @@ describe("scoped research", () => {
     expect(reply.record.sourceReads[0].location).toBe(priorLocation);
   });
 
+  for (
+    const [served, expected] of [
+      ["the index serves the same program", "verified"],
+      ["the index serves a changed program", "stale"],
+      ["no index is configured", "stale"],
+    ] as const
+  ) {
+    it(`reports a prior pattern's metadata and source as ${expected} when ${served}`, async () => {
+      await ensureCompilerStack();
+      const program = {
+        main: "/counter.ts",
+        files: [{
+          name: "/counter.ts",
+          contents: "export default { count: 0 };",
+        }],
+      };
+      const patternId = computeEntryIdentity(program.main, program.files);
+      const indexServing = (served: typeof program) => () =>
+        Promise.resolve({
+          searchPatterns: () => Promise.resolve({ results: [] }),
+          getPattern: () =>
+            Promise.resolve({
+              patternId,
+              description: "Counter",
+              hashtags: [],
+              dependencies: [],
+              ownerDid: "did:key:publisher",
+              createdAt: "2026-09-16",
+              program: served,
+            }),
+        });
+      const earlier = await run([
+        () => calls(["inspect_pattern", { patternId }]),
+        () => calls(["open_pattern_file", { patternId, path: program.main }]),
+        (request) =>
+          final({
+            ...brief(),
+            summary: "The counter starts at zero.",
+            selectedPatternIds: [],
+            rules: [{
+              rule: "The counter's default count is zero.",
+              sourceIds: [
+                output(request, "inspect_pattern")[0].sourceId,
+                output(request, "open_pattern_file")[0].sourceId,
+              ],
+            }],
+          }),
+      ], {
+        purpose: "answer",
+        task: "Where does the counter start?",
+        getPatternIndex: indexServing(program),
+      }).result;
+      const priorIds = earlier.kit.sources.map((source) => source.sourceId);
+      expect(priorIds).toHaveLength(2);
+
+      const trial = run([
+        (request) => {
+          const prompt = request.transcript[1].content;
+          if (expected === "verified") {
+            for (const id of priorIds) expect(prompt).toContain(id);
+            expect(prompt).toContain(
+              "under a new id: []",
+            );
+          } else {
+            expect(prompt).toContain("citable by these sourceIds: []");
+          }
+          return final({ ...brief(), selectedPatternIds: [] });
+        },
+      ], {
+        purpose: "answer",
+        task: "Does the counter reset?",
+        followUpTo: "cfh:v:earlier",
+        priorResearch: handleFrom(earlier),
+        ...(served === "no index is configured" ? {} : {
+          getPatternIndex: indexServing(
+            served === "the index serves the same program" ? program : {
+              ...program,
+              files: [{
+                name: "/counter.ts",
+                contents: "export default { count: 1 };",
+              }],
+            },
+          ),
+        }),
+      });
+      await trial.result;
+      expect(trial.requests).toHaveLength(1);
+    });
+  }
+
+  it("reports a prior source it cannot locate as stale without reading anything", async () => {
+    await ensureCompilerStack();
+    const program = {
+      main: "/counter.ts",
+      files: [{ name: "/counter.ts", contents: "export default {};" }],
+    };
+    const patternId = computeEntryIdentity(program.main, program.files);
+    const earlier = await earlierRead();
+    const unlocatable = [
+      "common/iframe-react-guide.md#Typed renderer (section-99)",
+      "not-a-pattern-location",
+      `cf:pattern:${patternId}:/missing.ts`,
+    ];
+    const prior = handleFrom({
+      kit: {
+        ...earlier.kit,
+        sources: unlocatable.map((location, index) => ({
+          ...earlier.kit.sources[0],
+          sourceId: `carried-${index}`,
+          kind: index === 0 ? "documentation" : "pattern-source",
+          location,
+        })),
+      },
+    });
+    const trial = run([
+      (request) => {
+        expect(request.transcript[1].content).toContain(
+          `under a new id: ${JSON.stringify(unlocatable)}`,
+        );
+        return final({ ...brief(), selectedPatternIds: [] });
+      },
+    ], {
+      purpose: "answer",
+      task: "Does this renderer require SQLite?",
+      followUpTo: "cfh:v:earlier",
+      priorResearch: prior,
+      corpus: corpus(TYPED_RENDERER),
+      getPatternIndex: () =>
+        Promise.resolve({
+          searchPatterns: () => Promise.resolve({ results: [] }),
+          getPattern: () =>
+            Promise.resolve({
+              patternId,
+              description: "Counter",
+              hashtags: [],
+              dependencies: [],
+              ownerDid: "did:key:publisher",
+              createdAt: "2026-09-16",
+              program,
+            }),
+        }),
+    });
+    const reply = await trial.result;
+    expect(
+      reply.record.sourceReads.filter((read) =>
+        read.kind !== "pattern-metadata"
+      ),
+    ).toEqual([]);
+  });
+
+  it("stops a follow-up that is cancelled before its prior sources are read again", async () => {
+    const earlier = await earlierRead();
+    const abort = new AbortController();
+    abort.abort("stop before carrying");
+    const trial = run([], {
+      purpose: "answer",
+      task: "Does this renderer require SQLite?",
+      followUpTo: "cfh:v:earlier",
+      priorResearch: handleFrom(earlier),
+      corpus: corpus(TYPED_RENDERER),
+      signal: abort.signal,
+    });
+    let failure: unknown;
+    try {
+      await trial.result;
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBe("stop before carrying");
+    expect(trial.requests).toHaveLength(0);
+  });
+
   it("reports a prior source whose section moved as stale without reading the section now at its index", async () => {
     const earlier = await earlierRead();
     const priorLocation = earlier.kit.sources[0].location;
@@ -730,7 +902,11 @@ describe("scoped research", () => {
       purpose: "answer",
       task: "Which reader fits?",
       followUpTo: "cfh:v:earlier",
-      priorResearch: handleFrom(earlier, [], [confirmed]),
+      priorResearch: handleFrom(
+        { kit: { ...earlier.kit, patterns: [confirmed] } },
+        [],
+        [confirmed],
+      ),
       corpus: corpus(TYPED_RENDERER),
     });
     const reply = await trial.result;
