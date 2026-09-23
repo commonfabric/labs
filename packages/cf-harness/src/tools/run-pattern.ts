@@ -209,8 +209,8 @@ export interface RunPatternToolSuccessOutput {
   rawCauseMessage?: string;
 
   /**
-   * Declared read failures, pending reads, and settled reads with no rows.
-   * Pending concerns are omitted when policy refuses the same result read.
+   * Best-effort concerns from declared top-level outputs of readable retained
+   * instances. Policy refusals suppress pending concerns; absence is inconclusive.
    */
   outputConcerns?: readonly RunPatternOutputConcern[];
 }
