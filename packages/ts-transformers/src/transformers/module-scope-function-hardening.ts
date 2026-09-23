@@ -6,7 +6,7 @@ import {
 } from "@commonfabric/utils/sandbox-contract";
 import { TransformationContext, Transformer } from "../core/mod.ts";
 import { resolveWriterBinding } from "@commonfabric/schema-generator/writer-binding";
-import { isCommonFabricModuleName } from "@commonfabric/schema-generator/common-fabric-symbols";
+import { isImportedFromCommonFabric } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { unwrapExpression } from "../utils/expression.ts";
 import { normalizeWriterIdentityFile } from "../utils/writer-identity-file.ts";
 
@@ -673,8 +673,8 @@ function collectTrustedBindingsByFile(
         : undefined;
       if (
         LIBRARY_BINDING_POSITIONS.has(canonical) &&
-        (isImportedFromLibrary(symbol, checker) ||
-          isImportedFromLibrary(qualifier, checker))
+        (isImportedFromCommonFabric(symbol, checker) ||
+          isImportedFromCommonFabric(qualifier, checker))
       ) {
         return canonical;
       }
@@ -702,59 +702,6 @@ function collectTrustedBindingsByFile(
   }
   trustedBindingsByProgram.set(program, byFile);
   return byFile;
-}
-
-/**
- * Whether `symbol`, followed one import or re-export at a time, is brought in
- * from a Common Fabric module: a hop that imports from one by name, or a hop
- * declared in a declaration file, which authored code never is — that is how
- * a namespace-qualified `cf.WriteAuthorizedBy` resolves, straight to the
- * library's own re-export. The first hop out of authored code is what
- * decides it: the library's own files are roots of the compile too, and its
- * `WriteAuthorizedBy` is declared in a companion module the path-based
- * provenance check does not recognize, so neither the roots nor the final
- * declaration can say whose type this is.
- */
-function isImportedFromLibrary(
-  symbol: ts.Symbol | undefined,
-  checker: ts.TypeChecker,
-): boolean {
-  const seen = new Set<ts.Symbol>();
-  let current = symbol;
-  while (
-    current && current.flags & ts.SymbolFlags.Alias && !seen.has(current)
-  ) {
-    seen.add(current);
-    for (const declaration of current.declarations ?? []) {
-      if (declaration.getSourceFile().isDeclarationFile) return true;
-      const specifier = importModuleSpecifier(declaration);
-      if (
-        specifier !== undefined &&
-        (isCommonFabricModuleName(specifier) ||
-          specifier.startsWith("commonfabric/"))
-      ) {
-        return true;
-      }
-    }
-    current = checker.getImmediateAliasedSymbol(current);
-  }
-  return false;
-}
-
-/** The module an import or re-export declaration names, if it names one. */
-function importModuleSpecifier(
-  declaration: ts.Declaration,
-): string | undefined {
-  let node: ts.Node | undefined = declaration;
-  while (
-    node && !ts.isImportDeclaration(node) && !ts.isExportDeclaration(node)
-  ) {
-    node = node.parent;
-  }
-  const specifier = node?.moduleSpecifier;
-  return specifier && ts.isStringLiteral(specifier)
-    ? specifier.text
-    : undefined;
 }
 
 /**

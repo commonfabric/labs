@@ -2296,7 +2296,12 @@ Special path:
   aliases lower to `ifc.*` metadata through the schema generator;
   `AnyOf<...>` becomes an IFC `anyOf` atom, and `PolicyOf<typeof policy>`
   becomes a policy-reference marker that `SchemaGeneratorTransformer`
-  resolves to module identity, symbol, and digest. `WriteAuthorizedBy`
+  resolves to module identity, symbol, and digest. Qualified references to
+  these metadata types follow Common Fabric import and re-export provenance,
+  including the `commonfabric/cfc` companion module, renamed exports, and
+  namespace re-exports. Authored types sharing their names retain their own
+  declarations. `test/qualified-cfc-metadata.test.ts` pins both input and output
+  schemas against the shipped library types. `WriteAuthorizedBy`
   rehydrates as `ifc.writeAuthorizedBy.__ctWriterIdentityOf = { file, path }`
   (plus a mint-time `moduleIdentity` stamp when the compiler was given
   `moduleIdentities` — see §17.3 file normalization),

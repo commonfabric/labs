@@ -23,7 +23,10 @@ import {
   resolveWrapperNode,
   type TypeWithInternals,
 } from "../type-utils.ts";
-import { isCommonFabricSymbol } from "../typescript/common-fabric-symbols.ts";
+import {
+  isCommonFabricSymbol,
+  isImportedFromCommonFabric,
+} from "../typescript/common-fabric-symbols.ts";
 import {
   extractLiteralValueOfSymbol,
   resolveAliasedSymbol,
@@ -2075,11 +2078,17 @@ export class CommonFabricFormatter implements TypeFormatter {
       (ts.isIdentifier(typeName) ? typeName.text : typeName.right.text);
     // Qualified metadata receives canonical lowering only for library symbols;
     // an authored namespace member is read from its own declaration instead.
-    if (
-      ts.isQualifiedName(typeName) &&
-      (!resolved || !isCommonFabricSymbol(resolved))
-    ) {
-      return undefined;
+    if (ts.isQualifiedName(typeName)) {
+      // In `outer.cf.AnyOf`, `outer.cf` may re-export the library namespace.
+      const qualifier = context.typeChecker.getSymbolAtLocation(typeName.left);
+      if (
+        !resolved ||
+        (!isCommonFabricSymbol(resolved) &&
+          !isImportedFromCommonFabric(symbol, context.typeChecker) &&
+          !isImportedFromCommonFabric(qualifier, context.typeChecker))
+      ) {
+        return undefined;
+      }
     }
     return name;
   }

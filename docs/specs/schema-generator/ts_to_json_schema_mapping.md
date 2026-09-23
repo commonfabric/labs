@@ -860,9 +860,11 @@ Mechanics:
   name also lowers; unlike `Default`, there is no declaring-package guard
   (§7), so name collisions remain an untested foot-gun.
 - Qualified metadata references to `AnyOf` and `PolicyOf` receive their special
-  lowering only when the resolved symbol comes from Common Fabric. Renamed
-  re-exports preserve that provenance; an unrelated namespace member with the
-  same name is read from its own declaration as ordinary metadata.
+  lowering only when the resolved symbol comes from Common Fabric. Provenance
+  follows import and re-export hops, including `commonfabric/cfc`, renamed
+  exports, and namespace re-exports, so companion declarations need no special
+  file path. An unrelated namespace member with the same name is read from its
+  own declaration as ordinary metadata.
   An authored wrapper around a library alias is also read from its declaration,
   preserving any binding fixed inside the wrapper.
 - User alias chains are followed with type-parameter node substitution until a
