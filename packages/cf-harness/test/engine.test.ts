@@ -1053,8 +1053,13 @@ Deno.test("CfHarnessEngine rejects direct subagent resume but permits new child 
       parentRunId: lineage.parentRunId,
       parentToolCallId: lineage.parentToolCallId,
     },
+    structuredResult: {
+      path: "/tmp/result.json",
+      schema: { type: "object" },
+    },
   });
   assertEquals(resumedChild.getRunState().runId, resumedState.runId);
+  assertEquals(resumedChild.structuredResultAvailable, false);
 
   const newChild = new CfHarnessEngine({
     sandboxRuntime: new FakeSandboxRuntime(),
@@ -1422,37 +1427,40 @@ Deno.test("CfHarnessEngine derives prompt-slot labels for model-authored sandbox
   assertEquals(
     engine.getRunState().cfcInvocationContexts?.map((context) => ({
       toolId: context.toolId,
-      labels: context.cfcInputLabels,
+      inputLabels: context.cfcInputLabels,
+      influenceLabels: context.promptSlotInfluenceLabels,
     })),
     [
       {
         toolId: "bash",
-        labels: {
+        inputLabels: undefined,
+        influenceLabels: {
           version: 1,
           entries: [
             {
               path: ["command"],
-              label: { confidentiality: [expectedAtom] },
+              label: { integrity: [expectedAtom] },
             },
             {
               path: ["cwd"],
-              label: { confidentiality: [expectedAtom] },
+              label: { integrity: [expectedAtom] },
             },
           ],
         },
       },
       {
         toolId: "write_file",
-        labels: {
+        inputLabels: undefined,
+        influenceLabels: {
           version: 1,
           entries: [
             {
               path: ["args"],
-              label: { confidentiality: [expectedAtom] },
+              label: { integrity: [expectedAtom] },
             },
             {
               path: ["stdin"],
-              label: { confidentiality: [expectedAtom] },
+              label: { integrity: [expectedAtom] },
             },
           ],
         },

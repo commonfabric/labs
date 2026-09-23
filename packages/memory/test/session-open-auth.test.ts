@@ -44,7 +44,12 @@ const verifyOptions = (
 const buildOpen = async (
   extra: { aud?: string; challenge?: string; iat?: number; exp?: number } = {},
   identity = alice,
-  session: { sessionId?: string; seenSeq?: number; sessionToken?: string } = {},
+  session: {
+    sessionId?: string;
+    seenSeq?: number;
+    sessionToken?: string;
+    genesisRoot?: FabricValue;
+  } = {},
 ) => {
   const sub = space.did();
   const invocation: Record<string, FabricValue> = {
@@ -92,6 +97,32 @@ describe("wireAuthorizationOf", () => {
 });
 
 describe("verifySessionOpenAuthorization", () => {
+  it("binds the complete custom-root expectation to the signed descriptor", async () => {
+    const root = {
+      source: "system:loom/main.tsx",
+      cause: "signed-intent",
+      argument: { title: "Expected" },
+    };
+    const message = await buildOpen(signedFields(), alice, {
+      genesisRoot: root,
+    });
+    assertEquals(
+      await verifySessionOpenAuthorization(message, verifyOptions()),
+      alice.did(),
+    );
+    await assertRejects(() =>
+      verifySessionOpenAuthorization(
+        { ...message, session: {} },
+        verifyOptions(),
+      )
+    );
+    await assertRejects(() =>
+      verifySessionOpenAuthorization({
+        ...message,
+        session: { genesisRoot: { ...root, argument: { title: "Changed" } } },
+      }, verifyOptions())
+    );
+  });
   it("accepts a valid signed open and returns the issuer principal", async () => {
     assertEquals(
       await verifySessionOpenAuthorization(

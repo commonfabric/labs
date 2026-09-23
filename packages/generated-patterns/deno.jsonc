@@ -2,7 +2,7 @@
   // Dependency guide: ../../docs/development/DEPENDENCIES.md
   "name": "@commonfabric/generated-patterns",
   "tasks": {
-    "integration": "LOG_LEVEL=warn deno test --trace-leaks -A --parallel $INTEGRATION_TEST_FLAGS ./integration/patterns/*.test.ts",
+    "integration": "LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) --trace-leaks -A --parallel $INTEGRATION_TEST_FLAGS ./integration/patterns/*.test.ts",
     "test": "echo 'No tests defined.'"
   },
   "lint": {

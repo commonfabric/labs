@@ -2843,8 +2843,8 @@ describe("place", () => {
 
         it("refuses `.#argument` for a move, a place being result-rooted", () => {
           // The table's row for `cd`; `ls` refuses in its own words
-          // (`shuttle-verbs.test.ts`). Kills a head reading that carries the
-          // selection into a move.
+          // (`shuttle-verbs.serial.test.ts`). Kills a head reading that carries
+          // the selection into a move.
 
           expect(moved(atPiece(), ".#argument")).toEqual({
             kind: "refused",

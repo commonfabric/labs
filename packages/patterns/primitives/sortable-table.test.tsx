@@ -5,7 +5,7 @@
  * Run: deno task cf test packages/patterns/primitives/sortable-table.test.tsx
  */
 import { action, assert, NAME, pattern, TESTS, UI } from "commonfabric";
-import { findElement } from "../test/vnode-helpers.ts";
+import { findElement, findElementByExactText } from "../test/vnode-helpers.ts";
 import SortableTable from "./sortable-table.tsx";
 
 const COLUMNS = [
@@ -45,6 +45,11 @@ export default pattern(() => {
       { assertion: assert(() => table.ascending === true) },
       { assertion: assert(() => table.rows[0].cells[1] === "86.40") },
       { assertion: assert(() => table.rows[2].cells[1] === "420.00") },
+      {
+        assertion: assert(() =>
+          findElementByExactText(table[UI], "th", "Cost") !== undefined
+        ),
+      },
 
       // The same header again reverses rather than re-sorting ascending.
       { action: byCost },
@@ -57,6 +62,11 @@ export default pattern(() => {
       { assertion: assert(() => table.ascending === true) },
       { assertion: assert(() => table.rows[0].cells[0] === "Food") },
       { assertion: assert(() => table.rows[2].cells[0] === "Travel") },
+      {
+        assertion: assert(() =>
+          findElementByExactText(table[UI], "th", "Category") !== undefined
+        ),
+      },
 
       // A column nobody declared leaves the order and the state alone.
       { action: byNothing },

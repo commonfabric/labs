@@ -13,8 +13,15 @@
     "fetchJson",
     "fetchJsonUnchecked",
     "fetchProgram",
-    "streamData"
+    "streamData",
+    "agent"
   ],
-  "ungatedSinks": ["llm", "llmDialog", "generateText", "generateObject"],
+  "ungatedSinks": [
+    "llm",
+    "llmDialog",
+    "generateText",
+    "generateObject",
+    "sqliteQuery"
+  ],
   "requireDeviationsPublished": true
 }

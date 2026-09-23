@@ -289,6 +289,12 @@ Mac. Then, in Weaver's settings under Services:
 
 ## 7. Demo tasks
 
+[Running the cf-harness demos](DEMOS.md) carries the four demos proven end to
+end, in the order to run them, with the preflight to check first and the slug
+sentence that makes a prompt repeatable across takes.
+[DEMOS-EVIDENCE.md](DEMOS-EVIDENCE.md) carries a proof status for each task
+below, including the ones kept off that page.
+
 Three tasks, typed into the pill as written, exercise the arrangement end to
 end. Each names what has to be true before it is typed and what a passing run
 looks like, so an agent can say whether it will work before it is tried. The
@@ -328,12 +334,14 @@ loom's launch sets; a line reading `not run` means the child's script call is
 refused, so whatever piece the run goes on to build carries no budgets from the
 script and this demo cannot pass. And the pattern index must hold the seeded
 connector readers, which `deno task seed-pattern-index` publishes from
-`packages/patterns/primitives`; an index seeded from a reader that fails closed
-on the bank table's row-label rule yields a digest of zeros with an SQLite error
-in its alert, so a digest of zeros is a failed run, not an empty month. Passes
-when the five budgets from the script's output stand beside non-zero spend for
-the month. The skill id is the full `owner/repo/slug`; a bare slug is ambiguous
-and the run will not guess.
+`packages/patterns/primitives`; follow the
+[seeding guidance](../README.md#seeding-the-pattern-index) for raw readers and
+human-facing pieces. An index seeded from a reader that fails closed on the bank
+table's row-label rule yields a digest of zeros with an SQLite error in its
+alert, so a digest of zeros is a failed run, not an empty month. Passes when the
+five budgets from the script's output stand beside non-zero spend for the month.
+The skill id is the full `owner/repo/slug`; a bare slug is ambiguous and the run
+will not guess.
 
 ### Revise a piece in place
 

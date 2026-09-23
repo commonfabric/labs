@@ -18,6 +18,7 @@ import {
   normalizeRenderDeclassificationPolicy,
   type RenderConfidentialityCeiling,
   type RenderDeclassificationPolicy,
+  type SpaceAccessProvider,
   WorkerReconciler,
 } from "@commonfabric/html/worker";
 import { DID, Identity, type Session } from "@commonfabric/identity";
@@ -26,6 +27,7 @@ import type { Program } from "@commonfabric/js-compiler";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { setLLMUrl } from "@commonfabric/llm";
 import { type ACL, isACLUser, isCapability } from "@commonfabric/memory/acl";
+import type { MemorySpace } from "@commonfabric/memory/interface";
 import {
   dbNeedsColumnProvenance,
   eventAttentionEntryKey,
@@ -89,11 +91,17 @@ import {
   cfcLabelViewForCell,
   createRenderConfidentialityResolver,
   createRuntimeSpaceMembershipProvider,
+  markRendererTrustedEvent,
   redactCaveatSourcesForDisplay,
   type RenderConfidentialityResolver,
   type SpaceMembershipProvider,
   stripSigilCfcLabelViews,
 } from "@commonfabric/runner/cfc";
+import {
+  commitSnapshotShare,
+  prepareSnapshotShare,
+  type SnapshotShareConsent,
+} from "@commonfabric/runner/cfc/share-snapshot";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
 import {
   NameSchema,
@@ -119,6 +127,7 @@ import {
 } from "@commonfabric/utils/types";
 
 import { postToClient } from "./post-to-client.ts";
+import { preloadProfiles } from "./preload-profiles.ts";
 import {
   postContextualRuntimeError,
   runtimeErrorPost,
@@ -146,6 +155,7 @@ import {
   type CellInitializeRequest,
   type CellPullRequest,
   type CellPushRequest,
+  type CellRef,
   type CellResolveAsCellRequest,
   CellResponse,
   type CellSendRequest,
@@ -159,6 +169,7 @@ import {
   type EnsureHomePatternRunningRequest,
   type EventAttentionListResponse,
   type EventAttentionResolveResponse,
+  type EventIntentOutcomeNotification,
   type EventNeedsAttentionNotification,
   type GetActionRunTraceRequest,
   type GetCellRequest,
@@ -232,6 +243,9 @@ import {
   type SlugReferenceResponse,
   type SlugResolveRequest,
   type SlugResponse,
+  type SnapshotShareCommitRequest,
+  type SnapshotSharePrepareRequest,
+  type SnapshotSharePreview,
   type SpaceAclResponse,
   type SpaceGetAclRequest,
   type SpaceRemoveAclEntryRequest,
@@ -260,14 +274,26 @@ import {
 } from "@/shared/security-context.ts";
 import { cellRefToKey, describeFailure } from "@/shared/utils.ts";
 
-/** Subscribe the worker bridge to complete terminal-attention outcomes. Keeping
+/** Subscribe the worker bridge to attention and refused-admission outcomes. Keeping
  * the filter and wire projection here makes the host boundary independently
  * testable without booting a worker runtime. */
 export function subscribeEventAttentionNotifications(
   runtime: Pick<Runtime, "subscribeEventIntentOutcomes">,
   post: (notification: EventNeedsAttentionNotification) => void = postToClient,
+  postRefusal: (notification: EventIntentOutcomeNotification) => void =
+    postToClient,
 ): Cancel {
   return runtime.subscribeEventIntentOutcomes((outcome: EventIntentOutcome) => {
+    if (outcome.kind === "refused") {
+      postRefusal({
+        type: NotificationType.EventIntentOutcome,
+        space: outcome.space,
+        eventId: outcome.eventId,
+        kind: "refused",
+        reason: "admission-refused",
+      });
+      return;
+    }
     if (
       outcome.kind !== "needs-attention" ||
       outcome.sidecarId === undefined ||
@@ -669,6 +695,23 @@ export const hasExplicitSubscriptionSchema = (schema: unknown): boolean =>
     isObjectOrArray(schema) &&
     Object.keys(schema).length > 0);
 
+/** Connects render boundaries to authoritative access verdict changes. */
+export function renderSpaceAccessProviderFor(
+  runtime: Pick<Runtime, "storageManager">,
+): SpaceAccessProvider {
+  const storage = runtime.storageManager;
+  return {
+    error: (space) => storage.spaceAccessError?.(space as MemorySpace),
+    subscribe: (space, onChange) => {
+      const changed = (changedSpace: MemorySpace) => {
+        if (changedSpace === space) onChange();
+      };
+      return storage.subscribeSpaceAccessChange?.(changed) ??
+        storage.subscribeSpaceAccessLoss?.(changed) ?? (() => {});
+    },
+  };
+}
+
 /**
  * Where a mount's render errors go: the client that mounted it, and no other.
  *
@@ -778,6 +821,8 @@ export class RuntimeProcessor {
     string,
     { token: string; prepared: PreparedPieceSourceChange }
   >();
+  #snapshotShares = new Map<string, SnapshotShareConsent>();
+  #snapshotShareDetachedClients = new WeakSet<WorkerClient>();
   #telemetry: RuntimeTelemetry;
 
   /**
@@ -789,6 +834,7 @@ export class RuntimeProcessor {
 
   #telemetryEnabled = false;
   #intentOutcomeCancel: Cancel | undefined;
+  #profilePreloadCancel: Cancel | undefined;
 
   /**
    * VDOM mounts, by the mounting client's scoped mount id. A mount id comes
@@ -829,6 +875,7 @@ export class RuntimeProcessor {
    * ceiling is in force.
    */
   #renderMembershipProvider?: SpaceMembershipProvider;
+  #cancelSpaceAccessLoss?: Cancel;
 
   private constructor(
     runtime: Runtime,
@@ -837,6 +884,7 @@ export class RuntimeProcessor {
     identity: Identity,
     telemetry: RuntimeTelemetry,
     securityContext: RuntimeSecurityContext,
+    clients: () => Iterable<WorkerClient> = () => [ownerClient],
   ) {
     this.#runtime = runtime;
     this.#cc = cc;
@@ -845,6 +893,12 @@ export class RuntimeProcessor {
     this.#telemetry = telemetry;
     this.#telemetry.addEventListener("telemetry", this.#onTelemetry);
     this.#securityContext = securityContext;
+    this.#cancelSpaceAccessLoss = runtime.storageManager
+      ?.subscribeSpaceAccessLoss?.((space) => {
+        for (const client of clients()) {
+          client.post({ type: NotificationType.SpaceAccessLost, space });
+        }
+      });
   }
 
   /**
@@ -1093,7 +1147,11 @@ export class RuntimeProcessor {
       this.#telemetry.removeEventListener("telemetry", this.#onTelemetry);
       try {
         this.#intentOutcomeCancel?.();
+        this.#cancelSpaceAccessLoss?.();
+        this.#cancelSpaceAccessLoss = undefined;
         this.#intentOutcomeCancel = undefined;
+        this.#profilePreloadCancel?.();
+        this.#profilePreloadCancel = undefined;
         this.#siteTableCancel?.();
         this.#siteTableCancel = undefined;
         for (const cancel of this.#subscriptions.values()) {
@@ -1107,6 +1165,7 @@ export class RuntimeProcessor {
         this.#operationSubscriptions.clear();
         this.#operationSessions.clear();
         this.#pieceSourceConfirmations.clear();
+        this.#snapshotShares.clear();
 
         // Clean up VDOM mounts
         for (const { reconciler, cancel } of this.#vdomMounts.values()) {
@@ -1176,6 +1235,10 @@ export class RuntimeProcessor {
    */
   disposeClient(client: WorkerClient): void {
     const prefix = clientKeyPrefix(client);
+    this.#snapshotShareDetachedClients.add(client);
+    for (const key of this.#snapshotShares.keys()) {
+      if (key.startsWith(prefix)) this.#snapshotShares.delete(key);
+    }
 
     for (const [key, cancel] of [...this.#subscriptions]) {
       if (!key.startsWith(prefix)) continue;
@@ -1206,6 +1269,16 @@ export class RuntimeProcessor {
       if (session.clientId !== client.id) continue;
       this.#operationSessions.delete(sessionId);
     }
+  }
+
+  #snapshotShareCell(ref: CellRef): Cell<unknown> {
+    // The host selects an address; stored policy owns its schema and label.
+    return getCell(this.#runtime, {
+      space: ref.space,
+      id: ref.id,
+      path: ref.path,
+      scope: ref.scope,
+    });
   }
 
   /**
@@ -1804,6 +1877,72 @@ export class RuntimeProcessor {
     return {
       cell: ref,
     };
+  }
+
+  /** Keeps release authority in this backend while the host shows a preview. */
+  async handleSnapshotSharePrepare(
+    request: SnapshotSharePrepareRequest,
+    client: WorkerClient = ownerClient,
+  ): Promise<SnapshotSharePreview> {
+    if (this.#isDisposed || this.#snapshotShareDetachedClients.has(client)) {
+      throw new Error("Snapshot sharing is unavailable");
+    }
+    const source = this.#snapshotShareCell(request.source);
+    const audience = request.audience;
+    if (
+      !isObjectNotArray(audience) ||
+      ("user" in audience) === ("space" in audience)
+    ) throw new Error("Snapshot sharing requires one audience");
+    const audienceCell = this.#snapshotShareCell(
+      "user" in audience ? audience.user : audience.space,
+    );
+    const appendBooksTo = request.appendBooksTo && {
+      recommended: this.#snapshotShareCell(
+        request.appendBooksTo.recommended,
+      ),
+      received: this.#snapshotShareCell(request.appendBooksTo.received),
+    };
+    await Promise.all([
+      source.sync(),
+      audienceCell.sync(),
+      appendBooksTo?.recommended.sync(),
+      appendBooksTo?.received.sync(),
+    ]);
+    if (this.#isDisposed || this.#snapshotShareDetachedClients.has(client)) {
+      throw new Error("Snapshot sharing is unavailable");
+    }
+    const prepared = prepareSnapshotShare(
+      source,
+      "user" in audience ? { user: audienceCell } : { space: audienceCell },
+      appendBooksTo,
+    );
+    const id = crypto.randomUUID();
+    this.#snapshotShares.set(clientScopedKey(client, id), prepared.consent);
+    return { id, value: prepared.value, audience: prepared.audience };
+  }
+
+  /** Consumes one preview through the dedicated trusted host transport. */
+  async handleSnapshotShareCommit(
+    request: SnapshotShareCommitRequest,
+    client: WorkerClient = ownerClient,
+  ): Promise<CellResponse> {
+    const key = clientScopedKey(client, request.id);
+    const consent = this.#snapshotShares.get(key);
+    this.#snapshotShares.delete(key);
+    if (consent === undefined) {
+      throw new Error("Snapshot share confirmation is unavailable");
+    }
+    const event = {
+      type: "click",
+      provenance: {
+        origin: "dom",
+        trusted: true,
+        ui: { pattern: "ShareSnapshot" },
+      },
+    };
+    markRendererTrustedEvent(event);
+    const shared = await commitSnapshotShare(consent, event);
+    return { cell: createCellRef(shared) };
   }
 
   handleCellGetCfcLabel(
@@ -2914,6 +3053,13 @@ export class RuntimeProcessor {
         return this.handleCellResolveAsCell(request);
       case RequestType.CellGetCfcLabel:
         return await this.handleCellGetCfcLabel(request);
+      case RequestType.SnapshotSharePrepare:
+        return await this.handleSnapshotSharePrepare(request, client);
+      case RequestType.SnapshotShareCommit:
+        return await this.handleSnapshotShareCommit(request, client);
+      case RequestType.SnapshotShareCancel:
+        this.#snapshotShares.delete(clientScopedKey(client, request.id));
+        return;
       case RequestType.OperationQuery:
         return await this.handleOperationQuery(request, client);
       case RequestType.OperationCapabilities:
@@ -3135,6 +3281,7 @@ export class RuntimeProcessor {
       renderConfidentialityCeiling: this.#renderConfidentialityCeiling,
       resolveRenderConfidentiality: this.#renderConfidentialityResolver,
       membershipProvider: this.#renderMembershipProvider,
+      spaceAccess: renderSpaceAccessProviderFor(this.#runtime),
       onOps: (ops: VDomOp[]) => {
         const batchId = this.#vdomBatchIdCounter++;
         // `mountId` as the client sent it: the scoping is this worker's
@@ -3265,9 +3412,13 @@ export class RuntimeProcessor {
    * Rejects when the runtime's server-execution posture diverges from what
    * the host declared, or when the API host fails its health check. The
    * returned processor handles requests at once; a caller that needs storage
-   * and pieces to have converged waits on `synced()`.
+   * and pieces to have converged waits on `synced()`. `clients` resolves the
+   * current authorized recipients of runtime-wide access-loss notifications.
    */
-  static async initialize(data: InitializationData): Promise<RuntimeProcessor> {
+  static async initialize(
+    data: InitializationData,
+    clients: () => Iterable<WorkerClient> = () => [ownerClient],
+  ): Promise<RuntimeProcessor> {
     const apiUrlObj = new URL(data.apiUrl);
     const identity = await Identity.fromKeyPair(
       data.identity,
@@ -3385,6 +3536,7 @@ export class RuntimeProcessor {
       identity,
       telemetry,
       securityContextFrom(data, identity.did()),
+      clients,
     );
     // InitializationData crosses postMessage with no runtime validation, so a
     // typo'd host config or version-skewed peer must fail CLOSED, not open:
@@ -3407,12 +3559,21 @@ export class RuntimeProcessor {
     );
     processor.#intentOutcomeCancel = subscribeEventAttentionNotifications(
       runtime,
+      undefined,
+      (notification) => {
+        for (const client of clients()) client.post(notification);
+      },
     );
     // The home-space site table carries space-to-host hints, which the
     // runtime reads as its live host lookup. A seeded route or earlier hint
     // can reject an entry. A default-host provider is provisional. Failures
     // here must not block worker boot.
     processor.watchSiteTable();
+    try {
+      processor.#profilePreloadCancel = preloadProfiles(runtime);
+    } catch (error) {
+      console.warn("[RuntimeProcessor] Could not preload profiles:", error);
+    }
     return processor;
   }
 }

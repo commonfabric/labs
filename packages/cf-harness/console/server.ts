@@ -58,6 +58,7 @@ import {
   resolveHarnessModelProviderPreference,
 } from "../src/auth/provider-settings.ts";
 import { harnessFabricSessionPostureBanner } from "../src/cfc-posture.ts";
+import { parseHarnessForeignSpaces } from "../src/foreign-spaces.ts";
 import type {
   HarnessFabricCfcEnforcementMode,
   HarnessFabricCfcFlowLabelsMode,
@@ -267,9 +268,9 @@ const CONSOLE_CREDENTIAL_OWNER = {
  * `includeSource`, which is why a pattern's source cannot arrive at the page
  * whatever the page sends.
  *
- * The console's one write to the index is `/api/index/feedback`, which takes a
- * pattern id and a verdict and composes the event itself. Widening this
- * allowlist is not how a second write is added.
+ * Index writes have dedicated routes: `/api/index/feedback` composes a vote,
+ * and `/api/index/retract` submits an owner retraction. Each composes its own
+ * request under the console's signer; neither widens this read allowlist.
  */
 const INDEX_FUNCTIONS = [
   "searchPatterns",
@@ -562,6 +563,7 @@ export const resolveConsoleConfig = async (
       "fabric-api-url",
       "fabric-identity",
       "fabric-space",
+      "fabric-foreign-spaces",
       "pattern-index-url",
       "skills-registry-url",
       "skills-root",
@@ -677,6 +679,10 @@ export const resolveConsoleConfig = async (
     ),
     identityKeyPath: resolve(cwd, identityKeyPath),
     space,
+    foreignSpaces: parseHarnessForeignSpaces(
+      flag("fabric-foreign-spaces") ??
+        nonEmpty(env.CF_HARNESS_FABRIC_FOREIGN_SPACES),
+    ),
     ...(posture === "none"
       ? {}
       : { cfcPosture: (posture ?? DEFAULT_FABRIC_CFC_POSTURE) as CfcPosture }),
@@ -1291,9 +1297,8 @@ export class ConsoleServer {
   ): Promise<ConsoleTurnResult | undefined> {
     const [session] = this.#service.status(sessionId).sessions;
     const turns = await this.#service.listTurnsForReplay({ sessionId });
-    const originLoomId = turns.turns.find((entry) =>
-      entry.turn.turnId === turnId
-    )?.input.loomId;
+    const turn = turns.turns.find((entry) => entry.turn.turnId === turnId);
+    const originLoomId = turn?.input.loomId;
     return await readConsoleTurnResult({
       sessionId,
       continuable: this.#sessionContinuable(sessionId),
@@ -1301,6 +1306,7 @@ export class ConsoleServer {
       artifactRoot: session?.artifactRoot ?? this.#config.artifactRoot,
       turnId,
       spaceName: this.#config.fabricSession.space,
+      timing: turn?.turn,
     });
   }
 
@@ -1377,6 +1383,9 @@ export class ConsoleServer {
     }
     if (request.method === "POST" && url.pathname === "/api/index/feedback") {
       return await this.#indexFeedback(request);
+    }
+    if (request.method === "POST" && url.pathname === "/api/index/retract") {
+      return await this.#indexRetract(request);
     }
     if (request.method === "POST" && url.pathname === "/api/cancel") {
       return await this.#cancel(request);
@@ -1702,7 +1711,9 @@ export class ConsoleServer {
         text,
         ...(typeof body.loomId === "string" ? { loomId: body.loomId } : {}),
       },
-      ...(inputCells.length > 0 ? { inputCells } : {}),
+      ...(body.inputCells !== undefined && body.inputCells !== null
+        ? { inputCells }
+        : {}),
       ...(patternRefs.length > 0 ? { patternRefs } : {}),
     });
     if (!turn.ok) {
@@ -1784,10 +1795,7 @@ export class ConsoleServer {
    * the `record_feedback` tool records through, so the two surfaces cannot
    * come to vote differently.
    *
-   * Separate from `#indexCall` rather than another name in its allowlist.
-   * That route is reads, composed from what a caller asked for; this one is
-   * the console's only write to the index, and keeping it a route of its own
-   * is what leaves the allowlist meaning what it says.
+   * This dedicated write route leaves `#indexCall`'s allowlist read-only.
    */
   async #indexFeedback(request: Request): Promise<Response> {
     const factory = this.#patternIndexClientFactory;
@@ -1826,6 +1834,60 @@ export class ConsoleServer {
         : Response.json({ error: recorded.message }, { status: 502 });
     } catch (error) {
       return this.#indexFailure(error, "index feedback");
+    }
+  }
+
+  /**
+   * Retracts one owned generation through the index's existing authorization
+   * and successor checks. Identity and timestamps come from the signed call
+   * and index receipt, while the caller supplies only the two ids and reason.
+   */
+  async #indexRetract(request: Request): Promise<Response> {
+    const factory = this.#patternIndexClientFactory;
+    if (factory === undefined) {
+      return Response.json({ error: NO_PATTERN_INDEX }, { status: 503 });
+    }
+    let parsed: unknown;
+    try {
+      parsed = await request.json();
+    } catch {
+      return Response.json({ error: "request body is not JSON" }, {
+        status: 400,
+      });
+    }
+    const { patternId, successorPatternId, reason } =
+      (isObjectOrArray(parsed) ? parsed : {}) as {
+        patternId?: unknown;
+        successorPatternId?: unknown;
+        reason?: unknown;
+      };
+    if (typeof patternId !== "string" || patternId.trim() === "") {
+      return Response.json({ error: "patternId is required" }, { status: 400 });
+    }
+    if (
+      typeof successorPatternId !== "string" || successorPatternId.trim() === ""
+    ) {
+      return Response.json({
+        error:
+          "successorPatternId is required: retraction needs an existing same-owner direct successor; standalone deletion is not supported",
+      }, {
+        status: 400,
+      });
+    }
+    if (typeof reason !== "string" || reason.trim() === "") {
+      return Response.json({ error: "reason is required" }, { status: 400 });
+    }
+    try {
+      const client = await factory();
+      return Response.json(
+        await client.retractPattern({
+          patternId,
+          successorPatternId,
+          reason,
+        }),
+      );
+    } catch (error) {
+      return this.#indexFailure(error, "index retraction");
     }
   }
 

@@ -294,12 +294,6 @@ function unionWithEnclosingScopeFreeIdentifiers(
   const addedNames = new Set<string>();
 
   const visit = (node: ts.Node): void => {
-    // Don't descend into nested functions — their parameters and locals
-    // are not enclosing-scope captures of the expression.
-    if (node !== expression && ts.isFunctionLike(node)) {
-      return;
-    }
-
     if (ts.isIdentifier(node) && isReferenceSite(node)) {
       if (
         !alreadyCoveredNames.has(node.text) && !addedNames.has(node.text)
@@ -313,6 +307,7 @@ function unionWithEnclosingScopeFreeIdentifiers(
         if (
           symbol &&
           (symbol.flags & ts.SymbolFlags.Value) !== 0 &&
+          !isNestedFunctionLocalCapture(node, expression, checker) &&
           isEnclosingScopeDeclaration(symbol)
         ) {
           addedNames.add(node.text);

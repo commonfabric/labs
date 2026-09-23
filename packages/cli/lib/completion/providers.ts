@@ -192,14 +192,18 @@ export function resolvePieceContext(line: CompletionLine): PieceConfig | null {
 async function pieceCandidates(line: CompletionLine): Promise<ProviderResult> {
   const config = resolveSpaceContext(line);
   if (!config) return NOTHING;
-  const { listPieces, listSpaceSlugs } = await import("../piece.ts");
+  const { listPieces, listSpaceSlugs, loadPieces } = await import(
+    "../piece.ts"
+  );
+  const controller = await loadPieces(config);
+  const deps = { loadPieces: () => Promise.resolve(controller) };
   const [pieces, slugs] = await Promise.all([
-    listPieces(config),
-    listSpaceSlugs(config),
+    listPieces(config, deps),
+    listSpaceSlugs(config, deps),
   ]);
   return values([
     ...shapeSlugCandidates(slugs, pieces),
-    ...shapePieceCandidates(pieces),
+    ...shapePieceCandidates(pieces, controller.getSpace()),
   ]);
 }
 
@@ -218,6 +222,7 @@ async function slugCandidates(line: CompletionLine): Promise<ProviderResult> {
 /** Listing shape used by `shapePieceCandidates`, structural so tests need no runtime. */
 export interface PieceListingLike {
   readonly id: string;
+  readonly reference?: string;
   readonly name?: string;
   readonly patternRef?: { readonly symbol?: string } | null;
 }
@@ -232,15 +237,28 @@ export interface SlugListingLike {
  * Label pieces for the annotation column: the piece's own name reads best, and
  * the pattern symbol is the fallback for a piece never given one. A piece that
  * failed to load still lists — its id is exactly what an operator reaches for
- * completion to recover.
+ * completion to recover. A root in the resolved listing space can use its
+ * short ID; foreign spaces, scopes, and paths retain their full reference.
  */
 export function shapePieceCandidates(
   pieces: readonly PieceListingLike[],
+  listingSpace?: string,
 ): Candidate[] {
-  return pieces.map((piece) => ({
-    value: piece.id,
-    description: piece.name ?? piece.patternRef?.symbol ?? undefined,
-  }));
+  return pieces.map((piece) => {
+    let value = piece.reference ?? piece.id;
+    if (piece.reference && listingSpace) {
+      const target = normalizeLLMFriendlyRef(piece.reference);
+      if (
+        target?.embeddedSpace === listingSpace &&
+        (target.scope === undefined || target.scope === "space") &&
+        target.path.length === 0 && !target.input && !target.pin
+      ) value = piece.id;
+    }
+    return {
+      value,
+      description: piece.name ?? piece.patternRef?.symbol ?? undefined,
+    };
+  });
 }
 
 /**
@@ -626,28 +644,48 @@ export function shapeProjectionCandidates(
 async function pieceWithPathCandidates(
   line: CompletionLine,
 ): Promise<ProviderResult> {
-  const typed = line.word;
-  const cut = typed.indexOf("/");
-  if (cut === -1) {
+  const target = splitPiecePathPrefix(line.word);
+  if (!target) {
     const pieces = await pieceCandidates(line);
-    // A link endpoint continues with `/`, so hold the cursor in place.
     return { candidates: pieces.candidates, directives: [{ kind: "nospace" }] };
   }
 
-  const config = resolveSpaceContext(line);
+  const config = resolvePieceContext({
+    ...line,
+    options: new Map([...line.options, ["cell", target.reference]]),
+  });
   if (!config) return NOTHING;
-  const pieceId = typed.slice(0, cut);
-  const { parentPath } = splitPathPrefix(typed.slice(cut + 1));
-
   const { listCellKeys } = await import("../cell-listing.ts");
-  const keys = await listCellKeys({ ...config, piece: pieceId }, parentPath);
+  const keys = await listCellKeys(config, target.parentPath ?? "");
   if (keys.length === 0) return NOTHING;
-
-  const prefix = pieceWithPathPrefix(pieceId, parentPath);
+  const prefix = target.prefix;
   return {
     candidates: keys.map((key) => ({ value: `${prefix}${key}` })),
     directives: [{ kind: "nospace" }],
   };
+}
+
+/** Separate an endpoint's partial final key from its complete target reference. */
+export function splitPiecePathPrefix(
+  typed: string,
+): { reference: string; prefix: string; parentPath?: string } | undefined {
+  const parsed = normalizeLLMFriendlyRef(typed);
+  if (parsed && parsed.path.length === 0 && !typed.endsWith("/")) {
+    return undefined;
+  }
+  if (!parsed) {
+    const first = typed.indexOf("/");
+    if (first < 0) return undefined;
+    const { parentPath } = splitPathPrefix(typed.slice(first + 1));
+    return {
+      reference: typed.slice(0, first),
+      prefix: pieceWithPathPrefix(typed.slice(0, first), parentPath),
+      parentPath,
+    };
+  }
+  const cut = typed.lastIndexOf("/");
+  if (cut < 0) return undefined;
+  return { reference: typed.slice(0, cut), prefix: typed.slice(0, cut + 1) };
 }
 
 /**
@@ -708,37 +746,96 @@ async function entityCandidates(
   if (namesRemote(line)) return NOTHING;
   const token = line.positionals[0];
   if (!token) return NOTHING;
-  const { listEntityModels, listScopes, openSpace, resolveSpace } =
-    await import("@commonfabric/state-inspector");
+  const {
+    DEFAULT_SCAN_LIMIT,
+    listEntityModels,
+    openSpace,
+    resolveSpace,
+    scopesOfRows,
+    visibleEntityRowsByScope,
+  } = await import("@commonfabric/state-inspector");
   const space = openSpace(await resolveSpace(token));
   try {
     const view = entityListingView(line);
-    const scopes = view.allScopes
-      ? listScopes(space, { branch: view.branch }).map((scope) => scope.raw)
-      : [view.scope];
     // No limit of its own: the set is what `cf inspect entities` would list
     // with no `--limit`, so a completed id is one that command names too. The
     // listing reports its own extent, and a capped one is still every
     // candidate this slot can honestly offer.
+    if (!view.allScopes) {
+      return values(shapeEntityCandidates(
+        listEntityModels(space, { branch: view.branch, scope: view.scope })
+          .entities,
+      ));
+    }
+    // Every scope at once, from one unscoped row pass: a query filtered on a
+    // scope cannot seek and walks the whole branch, so one per scope is the
+    // cost of the listing rather than a part of it.
     //
-    // `listScopes` sorts the space scope first, so an entity written in more
-    // than one scope keeps the label its space-scope value reconstructs to.
+    // The pass already holds every id, and an id is what the slot takes, so
+    // every entity whose id matches what is typed is offered. What the scan
+    // cap bounds is reconstruction, which only labels a candidate: it is spent
+    // across scopes in order, and an entity past it is offered unlabeled. A
+    // cap spent per scope would reconstruct the whole space on a store of many
+    // scopes; one that bounded the ids would hide every per-user and
+    // per-session entity behind a large space scope — the entities this
+    // command exists to show.
+    //
+    // Scopes sort with the space scope first, and a row already offered from
+    // an earlier scope is dropped before it is reconstructed, so an entity
+    // written in more than one scope keeps the label its space-scope value
+    // reconstructs to.
+    const typed = typedValue(line);
+    const rowsByScope = visibleEntityRowsByScope(space, {
+      branch: view.branch,
+    });
     const seen = new Set<string>();
     const entities: EntityListingLike[] = [];
-    for (const scope of scopes) {
-      for (
-        const entity of listEntityModels(space, { branch: view.branch, scope })
-          .entities
-      ) {
-        if (seen.has(entity.id)) continue;
-        seen.add(entity.id);
-        entities.push(entity);
+    let reconstructed = 0;
+    for (const scope of scopesOfRows(rowsByScope)) {
+      const rows = (rowsByScope.get(scope.raw) ?? []).filter((row) =>
+        row.id.startsWith(typed) && !seen.has(row.id)
+      );
+      if (rows.length === 0) continue;
+      for (const row of rows) seen.add(row.id);
+      const budget = DEFAULT_SCAN_LIMIT - reconstructed;
+      const labeled = new Set<string>();
+      if (budget > 0) {
+        for (
+          const entity of listEntityModels(space, {
+            branch: view.branch,
+            scope: scope.raw,
+            limit: budget,
+            rows,
+          }).entities
+        ) {
+          labeled.add(entity.id);
+          entities.push(entity);
+        }
+        reconstructed += labeled.size;
+      }
+      for (const row of rows) {
+        if (!labeled.has(row.id)) entities.push({ id: row.id });
       }
     }
     return values(shapeEntityCandidates(entities));
   } finally {
     space.close();
   }
+}
+
+/**
+ * What the line has typed of the value itself: the word under the cursor,
+ * less the `--name=` it carries when an option's value is written inline.
+ */
+function typedValue(line: CompletionLine): string {
+  const slot = line.slot;
+  const inline = slot && (slot.kind === "option-value" ||
+      slot.kind === "global-option-value")
+    ? slot.inlinePrefix
+    : undefined;
+  return inline && line.word.startsWith(inline)
+    ? line.word.slice(inline.length)
+    : line.word;
 }
 
 /**
@@ -901,6 +998,21 @@ function rootCandidates(line: CompletionLine): Promise<ProviderResult> {
     : Promise.resolve(directive({ kind: "dirs" }));
 }
 
+/** Agent runs named by stable record id, discovered through the home wish. */
+async function agentRunCandidates(
+  line: CompletionLine,
+): Promise<ProviderResult> {
+  const identity = line.options.get("identity") ?? Deno.env.get("CF_IDENTITY");
+  const apiUrl = line.options.get("api-url") ?? Deno.env.get("CF_API_URL");
+  if (!identity || !apiUrl) return NOTHING;
+  const { readAgentRuns } = await import("../agent-inspection.ts");
+  const runs = await readAgentRuns({ identity: absPath(identity), apiUrl });
+  return values(runs.map((run) => ({
+    value: run.id,
+    description: `${run.state}: ${run.task}`,
+  })));
+}
+
 /** API URLs worth offering: the environment's, plus the local dev server. */
 function apiUrlCandidates(): ProviderResult {
   const candidates: Candidate[] = [];
@@ -939,6 +1051,12 @@ const OPTION_VALUE_PROVIDERS: Readonly<Record<string, OptionProvider>> = {
   // `--remote` takes what `--api-url` takes: the toolshed to read from.
   remote: () => Promise.resolve(apiUrlCandidates()),
   identity: () => Promise.resolve(directive({ kind: "files", glob: "*.key" })),
+  // `cf agent runner`: the toolshed it sits beside, the host-owned Loom tool
+  // configuration it reads, and the directory its runs' workspaces go under.
+  "local-api-url": () => Promise.resolve(apiUrlCandidates()),
+  "loom-retrieval-config": () =>
+    Promise.resolve(directive({ kind: "files", glob: "*.json" })),
+  "work-root": () => Promise.resolve(directive({ kind: "dirs" })),
   // A source directory on the commands that compile one, and an entity on
   // `inspect graph`.
   root: onlyOn(ROOT_COMMANDS, rootCandidates),
@@ -1028,6 +1146,8 @@ const INSPECT_ENTITY_COMMANDS: readonly string[] = [
 const ARGUMENT_PROVIDERS: Readonly<
   Record<string, (line: CompletionLine) => Promise<ProviderResult>>
 > = {
+  "agent show:run": agentRunCandidates,
+  "agent cancel:run": agentRunCandidates,
   "cell get-label:path": cellPathCandidates,
   "piece get-label:path": cellPathCandidates,
   "cell set-label:path": cellPathCandidates,

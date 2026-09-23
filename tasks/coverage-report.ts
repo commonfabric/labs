@@ -21,7 +21,9 @@
 import * as path from "@std/path";
 import { walk } from "@std/fs/walk";
 import {
+  type CompileCacheState,
   coverageMetricForGroup,
+  LANE_COMPILE_CACHE,
   measuredSetCoverageMetric,
   PERF_METRICS_FILE,
   writeCoverageBaselineFile,
@@ -45,7 +47,11 @@ import {
   measuredSetName,
   measuredSets,
 } from "./test-selection/coverage.ts";
-import { COVERAGE_FAILURE_MARKER, measuredSetOfReport } from "./ci-lane.ts";
+import {
+  COMPILE_CACHE_STATE_FILE,
+  COVERAGE_FAILURE_MARKER,
+  measuredSetOfReport,
+} from "./ci-lane.ts";
 
 /** What the command line asked for. */
 export interface ReportOptions {
@@ -135,11 +141,19 @@ export interface LaneReports {
 
   /** Workspace members some lane selected and never launched. */
   unlaunchedMembers: string[];
+
+  /**
+   * Whether the lanes that opened the pattern compile byte cache found it
+   * restored: cold where any of them did not, and absent where none of
+   * them opened it.
+   */
+  compileCache?: CompileCacheState;
 }
 
 /**
- * Every LCOV report under a directory, and the record each lane left of
- * what it selected and never launched.
+ * Every LCOV report under a directory, the record each lane left of what
+ * it selected and never launched, and the record each lane that opened
+ * the compile byte cache left of whether it found the cache restored.
  *
  * The record travels with the report it qualifies, and
  * `tasks/unlaunched-members.ts` puts the obligation to read it back on
@@ -150,10 +164,13 @@ export interface LaneReports {
 export async function collectReports(at: string): Promise<LaneReports> {
   const lcov: string[] = [];
   const unlaunchedMembers = new Set<string>();
+  const cacheStates = new Set<string>();
   try {
     for await (const entry of walk(at, { includeDirs: false })) {
       if (path.extname(entry.path) === ".lcov") {
         lcov.push(await Deno.readTextFile(entry.path));
+      } else if (path.basename(entry.path) === COMPILE_CACHE_STATE_FILE) {
+        cacheStates.add((await Deno.readTextFile(entry.path)).trim());
       } else if (path.basename(entry.path) === UNLAUNCHED_MEMBERS_FILE) {
         for (
           const member of parseUnlaunchedMembers(
@@ -169,7 +186,19 @@ export async function collectReports(at: string): Promise<LaneReports> {
     // reported nothing rather than as a run that covered nothing.
     if (!(error instanceof Deno.errors.NotFound)) throw error;
   }
-  return { lcov, unlaunchedMembers: [...unlaunchedMembers].sort() };
+  // A state this reader does not know is read as cold, so that a record
+  // it cannot read withholds the figure from a trend rather than letting a
+  // cold run's figure through.
+  const compileCache: CompileCacheState | undefined = cacheStates.size === 0
+    ? undefined
+    : [...cacheStates].every((state) => state === "warm")
+    ? "warm"
+    : "cold";
+  return {
+    lcov,
+    unlaunchedMembers: [...unlaunchedMembers].sort(),
+    ...(compileCache === undefined ? {} : { compileCache }),
+  };
 }
 
 /**
@@ -359,6 +388,9 @@ export async function report(options: ReportOptions): Promise<string> {
       createdAt: options.createdAt,
       uncoveredLines: figure.uncoveredLines,
     }])),
+    reports.compileCache === undefined
+      ? undefined
+      : { [LANE_COMPILE_CACHE]: reports.compileCache },
   );
   return summarize(figures, reports.unlaunchedMembers);
 }

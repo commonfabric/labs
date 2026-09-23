@@ -44,6 +44,46 @@ declare type PerAny<T> = T & { readonly [SCOPE_BRAND]?: "any" };
 `;
 
 /**
+ * The `"commonfabric"` module of a test program: each prelude type exported
+ * under its own name, for a test that imports its wrappers rather than using
+ * the global declarations.
+ */
+const COMMONFABRIC_MODULE_PRELUDE = `
+declare module "commonfabric" {
+  export type BrandedCell<T, Brand extends string = "cell"> =
+    globalThis.BrandedCell<T, Brand>;
+  export type OpaqueCell<T> = globalThis.OpaqueCell<T>;
+  export type Reactive<T> = globalThis.Reactive<T>;
+  export type Cell<T> = globalThis.Cell<T>;
+  export type Writable<T> = globalThis.Writable<T>;
+  export type Stream<E, R = void> = globalThis.Stream<E, R>;
+  export type ComparableCell<T> = globalThis.ComparableCell<T>;
+  export type ReadonlyCell<T> = globalThis.ReadonlyCell<T>;
+  export type WriteonlyCell<T> = globalThis.WriteonlyCell<T>;
+  export type SqliteDatabase = globalThis.SqliteDatabase;
+  export type SqliteDb<T = SqliteDatabase> = globalThis.SqliteDb<T>;
+  export type PerSpace<T> = globalThis.PerSpace<T>;
+  export type PerUser<T> = globalThis.PerUser<T>;
+  export type PerSession<T> = globalThis.PerSession<T>;
+  export type PerAny<T> = globalThis.PerAny<T>;
+}
+`;
+
+/**
+ * The file a test program declares `CELL_BRAND_PRELUDE` in, as global
+ * declarations every other file of the program sees, and the
+ * `"commonfabric"` module in (`COMMONFABRIC_MODULE_PRELUDE`). It carries the
+ * name `isCommonFabricDeclaration()` recognizes, so the prelude's wrappers
+ * stand for `commonfabric`'s own, as a wrapper written in a test means them
+ * to.
+ */
+const CELL_BRAND_PRELUDE_FILE = "commonfabric.d.ts";
+
+/** The text of `CELL_BRAND_PRELUDE_FILE`. */
+const CELL_BRAND_PRELUDE_FILE_TEXT =
+  `${CELL_BRAND_PRELUDE}\n${COMMONFABRIC_MODULE_PRELUDE}`;
+
+/**
  * Load TypeScript environment types (es2023, dom, jsx)
  * Same functionality as js-compiler but implemented independently
  */
@@ -84,11 +124,16 @@ export async function createTestProgram(
 ): Promise<
   { program: ts.Program; checker: ts.TypeChecker; sourceFile: ts.SourceFile }
 > {
-  const fullCode = `${CELL_BRAND_PRELUDE}\n${code}`;
   const fileName = "test.ts";
   const sourceFile = ts.createSourceFile(
     fileName,
-    fullCode,
+    code,
+    ts.ScriptTarget.ES2023,
+    true,
+  );
+  const preludeFile = ts.createSourceFile(
+    CELL_BRAND_PRELUDE_FILE,
+    CELL_BRAND_PRELUDE_FILE_TEXT,
     ts.ScriptTarget.ES2023,
     true,
   );
@@ -100,6 +145,9 @@ export async function createTestProgram(
     getSourceFile: (name) => {
       if (name === fileName) {
         return sourceFile;
+      }
+      if (name === CELL_BRAND_PRELUDE_FILE) {
+        return preludeFile;
       }
 
       // Map lib.d.ts requests to es2023 definitions (same as js-compiler)
@@ -129,7 +177,7 @@ export async function createTestProgram(
     getCurrentDirectory: () => "",
     getDirectories: () => [],
     fileExists: (name) => {
-      if (name === fileName) return true;
+      if (name === fileName || name === CELL_BRAND_PRELUDE_FILE) return true;
       if (name === "lib.d.ts" || name.endsWith("/lib.d.ts")) return true;
 
       // Check library files (case-insensitive)
@@ -139,7 +187,8 @@ export async function createTestProgram(
       return false;
     },
     readFile: (name) => {
-      if (name === fileName) return fullCode;
+      if (name === fileName) return code;
+      if (name === CELL_BRAND_PRELUDE_FILE) return CELL_BRAND_PRELUDE_FILE_TEXT;
       if (name === "lib.d.ts" || name.endsWith("/lib.d.ts")) {
         return typeLibs.es2023;
       }
@@ -156,7 +205,7 @@ export async function createTestProgram(
     getDefaultLibFileName: () => "lib.d.ts",
   };
 
-  const program = ts.createProgram([fileName], {
+  const program = ts.createProgram([fileName, CELL_BRAND_PRELUDE_FILE], {
     target: ts.ScriptTarget.ES2023,
     module: ts.ModuleKind.ESNext,
     // Add proper lib configuration (key difference from broken version)
@@ -181,9 +230,11 @@ export async function createTestProgramFromFiles(
   const normalizePath = (path: string) =>
     path.startsWith("/") ? path : `/${path}`;
   const normalizedEntry = normalizePath(entryFile);
-  const filesWithPrelude: Record<string, string> = {};
+  const filesWithPrelude: Record<string, string> = {
+    [normalizePath(CELL_BRAND_PRELUDE_FILE)]: CELL_BRAND_PRELUDE_FILE_TEXT,
+  };
   for (const [path, code] of Object.entries(files)) {
-    filesWithPrelude[normalizePath(path)] = `${CELL_BRAND_PRELUDE}\n${code}`;
+    filesWithPrelude[normalizePath(path)] = code;
   }
 
   const typeLibs = await getTypeScriptEnvironmentTypes();

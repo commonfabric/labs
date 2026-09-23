@@ -26,7 +26,7 @@
 // `seq` is per-space and is NOT comparable across spaces; divergence is judged
 // by value equality, with per-space write metadata offered as evidence.
 
-import { hashStringOf } from "@commonfabric/data-model";
+import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 
 import { openSpace, type SpaceDb } from "./db.ts";
 import { annotate, linksWithPaths, type LinkWalkBounds } from "./decode.ts";
@@ -142,7 +142,7 @@ const CAVEAT =
  * which throws on BigInt and erases the fabric type — a value-model fork the
  * convergence verdict must not depend on.
  */
-function canonical(v: unknown): string {
+function canonical(v: FabricValue): string {
   return v === undefined ? "undefined" : hashStringOf(v);
 }
 

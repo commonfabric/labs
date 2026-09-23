@@ -28,7 +28,8 @@
  * Known NON-replayable builtins (async and/or externally effectful — must
  * never be added here): `fetchBinary`, `fetchText`, `fetchJson`,
  * `fetchJsonUnchecked`, `fetchProgram`, `streamData`, `llm`, `llmDialog`,
- * `compileAndRun`, `generateObject`, `generateText`, `navigateTo`, `wish`,
+ * `compileAndRun`, `generateObject`, `generateText`, `agent` (stages a sink
+ * request and creates a run record after commit), `navigateTo`, `wish`,
  * `sqliteQuery` (server round-trip, like `llm`),
  * `inspectConfLabel` (reads stored label metadata — ambient CFC state that
  * changes independently of the node's inputs), `cellFromUrl` (resolves a

@@ -142,6 +142,7 @@ describe("memory v2 flags", () => {
     setSyncSchemaTableConfig(false);
 
     assertEquals(getMemoryProtocolFlags(), {
+      genesisRoot: true,
       modernCellRep: false,
       stableExpressionResultIds: true,
       commitPreconditions: false,
@@ -168,6 +169,7 @@ describe("memory v2 flags", () => {
     setSyncSchemaTableConfig(true);
 
     assertEquals(getMemoryProtocolFlags(), {
+      genesisRoot: true,
       modernCellRep: true,
       stableExpressionResultIds: true,
       commitPreconditions: true,
@@ -242,6 +244,14 @@ describe("memory v2 flags", () => {
 });
 
 describe("parseMemoryProtocolFlags", () => {
+  it("requires an explicit custom-root capability", () => {
+    assertEquals(parseMemoryProtocolFlags({})?.genesisRoot, false);
+    assertEquals(
+      parseMemoryProtocolFlags({ genesisRoot: true })?.genesisRoot,
+      true,
+    );
+    assertEquals(parseMemoryProtocolFlags({ genesisRoot: "true" }), null);
+  });
   it("negotiates view replication as an optional server-execution capability", () => {
     try {
       setServerExecutionConfig(false);
@@ -288,6 +298,7 @@ describe("parseMemoryProtocolFlags", () => {
 
   it("accepts the modernCellRep key", () => {
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: true }), {
+      genesisRoot: false,
       modernCellRep: true,
       stableExpressionResultIds: false,
       commitPreconditions: false,
@@ -306,6 +317,7 @@ describe("parseMemoryProtocolFlags", () => {
       sessionReadCeiling: false,
     });
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: false }), {
+      genesisRoot: false,
       modernCellRep: false,
       stableExpressionResultIds: false,
       commitPreconditions: false,
@@ -331,6 +343,7 @@ describe("parseMemoryProtocolFlags", () => {
         commitPreconditions: true,
       }),
       {
+        genesisRoot: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: true,
@@ -375,6 +388,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncSchemaTableV2: true,
       }),
       {
+        genesisRoot: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -399,6 +413,7 @@ describe("parseMemoryProtocolFlags", () => {
     assertEquals(
       parseMemoryProtocolFlags({ messageCompressionV1: true }),
       {
+        genesisRoot: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -425,6 +440,7 @@ describe("parseMemoryProtocolFlags", () => {
         sqliteCommitRowLabelEval: true,
       }),
       {
+        genesisRoot: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -459,6 +475,7 @@ describe("parseMemoryProtocolFlags", () => {
         verdictCatchUpMarkers: true,
       }),
       {
+        genesisRoot: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -486,6 +503,7 @@ describe("parseMemoryProtocolFlags", () => {
         verdictCatchUpMarkers: false,
       }),
       {
+        genesisRoot: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -510,6 +528,7 @@ describe("parseMemoryProtocolFlags", () => {
     assertEquals(
       parseMemoryProtocolFlags({ entityIdListing: true }),
       {
+        genesisRoot: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -540,6 +559,7 @@ describe("parseMemoryProtocolFlags", () => {
         sessionReadCeiling: false,
       }),
       {
+        genesisRoot: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,

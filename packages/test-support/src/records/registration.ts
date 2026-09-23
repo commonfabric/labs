@@ -567,7 +567,7 @@ export function asDefinition(
  * needs no permission, so this answers before anything is attempted and
  * without a warning for a process that was never going to record.
  */
-function writableSpool(spool: string | undefined): boolean {
+export function writableSpool(spool: string | undefined): boolean {
   if (spool === undefined) return false;
   try {
     return Deno.permissions.querySync({ name: "write", path: spool }).state ===

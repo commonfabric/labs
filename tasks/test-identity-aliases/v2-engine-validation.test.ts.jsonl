@@ -1,2 +1,3 @@
 {"date":"2026-09-09","from":{"k":"unit","s":"memory","n":"accepts a string content-addressed document whose string hashes to its id"},"to":{"k":"unit","s":"memory","n":"accepts a content-addressed document whose content hashes to its id"}}
 {"date":"2026-09-09","from":{"k":"unit","s":"memory","n":"rejects a string content-addressed document whose string does not hash to its id"},"to":{"k":"unit","s":"memory","n":"rejects a content-addressed document whose content hashes to neither its id nor its schema id"}}
+{"date":"2026-09-21","from":{"k":"unit","s":"memory","n":"rejects deleting or patching a content-addressed document"},"to":{"k":"unit","s":"memory","n":"admits no operation but `set` against a content-addressed document"}}

@@ -259,7 +259,7 @@ export class ConsoleIndexView extends LitElement {
             <th>when</th>
             <th>event</th>
             <th>pattern</th>
-            <th>identity</th>
+            <th>author</th>
             <th>note</th>
           </tr>
         </thead>
@@ -364,9 +364,16 @@ export class ConsoleIndexView extends LitElement {
                 <td>${pattern.description}</td>
                 <td>${this.#hashtags(pattern.hashtags)}</td>
                 <td>
-                  ${eventBadges(pattern.events).map((badge) =>
+                  ${eventBadges(pattern.events, pattern.eventAuthors).map((
+                    badge,
+                  ) =>
                     html`<span class="badge">
                     ${badge.eventType} ×${badge.count}
+                    · ${
+                      badge.did === undefined
+                        ? "author unavailable"
+                        : this.#idCell(badge.did, 18)
+                    }
                   </span>`
                   )}
                 </td>

@@ -3,14 +3,14 @@
 # and read back what it drew.
 #
 # Shuttle's unit suite drives every module with nothing behind it — no server,
-# no piece, and no terminal. `packages/cli/test/shuttle-terminal.test.ts` says
-# so of itself: "A handler that the runtime never runs, and a `setRaw` that the
-# driver never honours, would both pass here." What no case there can see is
+# no piece, and no terminal. `packages/cli/test/shuttle-terminal.serial.test.ts`
+# says so of itself: "A handler that the runtime never runs, and a `setRaw` that
+# the driver never honours, would both pass here." What no case there can see is
 # the composition: whether a `cd` that a stub accepted lands on a cell the
-# fabric holds, whether the reference a listing printed is the one the next
-# line takes, and whether what a read serves is what storage holds. Each of
-# those is a property of the seams together and of no module, so this is where
-# they are asserted.
+# fabric holds, whether the reference a listing printed is the one the next line
+# takes, and whether what a read serves is what storage holds. Each of those is
+# a property of the seams together and of no module, so this is where they are
+# asserted.
 #
 # The terminal is a real one. `cf sh` refuses to start unless both standard
 # streams are terminals, because it reads keys in raw mode and draws lines back
@@ -213,8 +213,8 @@ cat >"$EDITOR_SCRIPT" <<'EDITS'
 # does not assert the shell came back to its own screen: which screen a byte
 # landed on is not something a transcript of the bytes can say, and a shell
 # that drew its frame over the transcript would write exactly these records.
-# That assertion is `shuttle-terminal.test.ts`'s, where the escape sequences
-# are what is read.
+# That assertion is `shuttle-terminal.serial.test.ts`'s, where the escape
+# sequences are what is read.
 printf '\033[?1049h'
 trap 'printf "\033[?1049l"' EXIT
 case "$(cat "$1")" in

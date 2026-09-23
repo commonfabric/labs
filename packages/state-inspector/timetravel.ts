@@ -10,12 +10,16 @@
 // Values are normalized with `annotate` first, so links/streams compare as
 // stable shapes instead of exploding into nested objects.
 
-import { hashStringOf } from "@commonfabric/data-model";
+import {
+  hashStringOf,
+  isFabricArray,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
 import { applyPatch } from "@commonfabric/memory/v2/patch";
 import type { PatchOp } from "@commonfabric/memory/v2";
 import type { FabricValue } from "@commonfabric/api";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { isObjectOrArray, isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/utils/types";
 
 import type { SpaceDb } from "./db.ts";
 import {
@@ -63,8 +67,8 @@ export interface ValueChange {
   pathSegments?: string[];
 
   kind: ChangeKind;
-  before?: unknown;
-  after?: unknown;
+  before?: FabricValue;
+  after?: FabricValue;
 
   /** Set when `before` is the annotation for a stored `undefined` value. */
   beforeIsUndefined?: true;
@@ -89,7 +93,7 @@ export interface ExactValueChange extends ValueChange {
 
 // The data-model hash defines equality for `FabricValue` leaves, including
 // BigInt, symbols, and `FabricInstance`s.
-function canonical(v: unknown): string {
+function canonical(v: FabricValue): string {
   return v === undefined ? "undefined" : hashStringOf(v);
 }
 
@@ -105,8 +109,8 @@ function storedValueKind(value: unknown): StoredValueKind {
   return typeof value;
 }
 
-function valuesEqual(a: unknown, b: unknown): boolean {
-  const pending: [unknown, unknown][] = [[a, b]];
+function valuesEqual(a: FabricValue, b: FabricValue): boolean {
+  const pending: [FabricValue, FabricValue][] = [[a, b]];
   const compared = new WeakMap<object, WeakSet<object>>();
   const alreadyCompared = (left: object, right: object): boolean => {
     let rights = compared.get(left);
@@ -122,28 +126,26 @@ function valuesEqual(a: unknown, b: unknown): boolean {
   while (pending.length > 0) {
     const [left, right] = pending.pop()!;
     if (Object.is(left, right)) continue;
-    if (Array.isArray(left) || Array.isArray(right)) {
+    if (isFabricArray(left) || isFabricArray(right)) {
       if (
-        !Array.isArray(left) || !Array.isArray(right) ||
+        !isFabricArray(left) || !isFabricArray(right) ||
         left.length !== right.length
       ) {
         return false;
       }
-      const leftKeys = Object.keys(left);
-      const rightKeys = Object.keys(right);
-      if (leftKeys.length !== rightKeys.length) return false;
+      const leftIndexes = Object.keys(left).filter(isArrayIndexPropertyName);
+      const rightIndexes = Object.keys(right).filter(isArrayIndexPropertyName);
+      if (leftIndexes.length !== rightIndexes.length) return false;
       if (alreadyCompared(left, right)) continue;
-      for (const key of leftKeys) {
-        if (!Object.hasOwn(right, key)) return false;
-        pending.push([
-          (left as unknown as Record<string, unknown>)[key],
-          (right as unknown as Record<string, unknown>)[key],
-        ]);
+      for (const key of leftIndexes) {
+        const index = Number(key);
+        if (!Object.hasOwn(right, index)) return false;
+        pending.push([left[index], right[index]]);
       }
       continue;
     }
-    const leftIsObject = isPlainObject(left);
-    const rightIsObject = isPlainObject(right);
+    const leftIsObject = isFabricPlainObject(left);
+    const rightIsObject = isFabricPlainObject(right);
     if (leftIsObject || rightIsObject) {
       if (!leftIsObject || !rightIsObject) return false;
       const leftKeys = Object.keys(left);
@@ -162,7 +164,7 @@ function valuesEqual(a: unknown, b: unknown): boolean {
 }
 
 function beforeOutput(
-  value: unknown,
+  value: FabricValue,
 ): Pick<ValueChange, "before" | "beforeIsUndefined"> {
   return {
     before: annotate(value, COMPARE_DEPTH),
@@ -171,7 +173,7 @@ function beforeOutput(
 }
 
 function afterOutput(
-  value: unknown,
+  value: FabricValue,
 ): Pick<ValueChange, "after" | "afterIsUndefined"> {
   return {
     after: annotate(value, COMPARE_DEPTH),
@@ -180,8 +182,8 @@ function afterOutput(
 }
 
 function changedOutput(
-  before: unknown,
-  after: unknown,
+  before: FabricValue,
+  after: FabricValue,
 ): Pick<
   ValueChange,
   | "before"
@@ -213,7 +215,7 @@ function changedOutput(
 
 interface SelectedDiffValue {
   present: boolean;
-  value: unknown;
+  value: FabricValue;
 }
 
 function diffSelectedValues(
@@ -224,8 +226,8 @@ function diffSelectedValues(
 ): ExactValueChange[] {
   const out: ExactValueChange[] = [];
   const walk = (
-    a: unknown,
-    b: unknown,
+    a: FabricValue,
+    b: FabricValue,
     path: string[],
     depth: number,
     aPresent: boolean,
@@ -250,7 +252,7 @@ function diffSelectedValues(
       });
       return;
     }
-    if (isPlainObject(a) && isPlainObject(b)) {
+    if (isFabricPlainObject(a) && isFabricPlainObject(b)) {
       for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
         const aHasKey = Object.hasOwn(a, key);
         const bHasKey = Object.hasOwn(b, key);
@@ -265,11 +267,9 @@ function diffSelectedValues(
       }
       return;
     }
-    if (Array.isArray(a) && Array.isArray(b)) {
-      const aKeys = Object.keys(a);
-      const bKeys = Object.keys(b);
-      const aIndexes = aKeys.filter(isArrayIndexPropertyName);
-      const bIndexes = bKeys.filter(isArrayIndexPropertyName);
+    if (isFabricArray(a) && isFabricArray(b)) {
+      const aIndexes = Object.keys(a).filter(isArrayIndexPropertyName);
+      const bIndexes = Object.keys(b).filter(isArrayIndexPropertyName);
       if (
         a.length !== b.length &&
         (aIndexes.length !== a.length || bIndexes.length !== b.length)
@@ -281,20 +281,16 @@ function diffSelectedValues(
         });
         return;
       }
-      const keys = [...new Set([...aKeys, ...bKeys])].sort((left, right) => {
-        const leftIsIndex = isArrayIndexPropertyName(left);
-        const rightIsIndex = isArrayIndexPropertyName(right);
-        if (leftIsIndex && rightIsIndex) return Number(left) - Number(right);
-        if (leftIsIndex) return -1;
-        if (rightIsIndex) return 1;
-        return left < right ? -1 : left > right ? 1 : 0;
-      });
+      const keys = [...new Set([...aIndexes, ...bIndexes])].sort(
+        (left, right) => Number(left) - Number(right),
+      );
       for (const key of keys) {
-        const aHasKey = Object.hasOwn(a, key);
-        const bHasKey = Object.hasOwn(b, key);
+        const index = Number(key);
+        const aHasKey = Object.hasOwn(a, index);
+        const bHasKey = Object.hasOwn(b, index);
         walk(
-          aHasKey ? (a as unknown as Record<string, unknown>)[key] : undefined,
-          bHasKey ? (b as unknown as Record<string, unknown>)[key] : undefined,
+          aHasKey ? a[index] : undefined,
+          bHasKey ? b[index] : undefined,
           [...path, key],
           depth - 1,
           aHasKey,
@@ -325,8 +321,8 @@ function diffSelectedValues(
  * Deeper differences collapse to a single `changed` entry at the boundary.
  */
 export function diffValues(
-  before: unknown,
-  after: unknown,
+  before: FabricValue,
+  after: FabricValue,
   basePath: string[] = [],
   maxDepth = DEFAULT_DIFF_DEPTH,
 ): ExactValueChange[] {
@@ -508,7 +504,7 @@ export function entityTimeline(
     } else {
       try {
         if (r.op === "set") {
-          doc = r.data ? (decodeStored(r.data) as FabricValue) : undefined;
+          doc = r.data ? decodeStored(r.data) : undefined;
           stateKnown = true;
         } else if (r.op === "patch") {
           const ops = r.data ? (decodeStored(r.data) as PatchOp[]) : [];
@@ -527,10 +523,10 @@ export function entityTimeline(
       }
     }
     const exists = stateKnown && doc !== undefined;
-    const hasValue = exists && isObjectOrArray(doc) &&
-      Object.hasOwn(doc, "value");
-    const docValue = hasValue ? (doc as { value: unknown }).value : undefined;
-    const value = { present: hasValue, value: docValue };
+    const value: SelectedDiffValue = exists && isFabricPlainObject(doc) &&
+        Object.hasOwn(doc, "value")
+      ? { present: true, value: doc.value }
+      : { present: false, value: undefined };
     const changesKnown = previousStateKnown && stateKnown;
     const changes = changesKnown
       ? diffSelectedValues(
@@ -550,7 +546,7 @@ export function entityTimeline(
       summary: reconstructionError
         ? `«unknown: ${escapeTerminalText(reconstructionError)}»`
         : exists
-        ? summarize(docValue)
+        ? summarize(value.value)
         : "(deleted)",
       exists,
       changes,

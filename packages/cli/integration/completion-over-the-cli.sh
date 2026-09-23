@@ -15,9 +15,9 @@
 # item 16 of the plan records as belonging to commands that declare no options
 # at all. They read no state, so a fabric cannot change what they answer, and
 # they are asserted one by one — kind and glob — in
-# packages/cli/test/completion-providers.test.ts, which is where a constant
-# belongs. Nothing here re-checks them, and `deno task check-completion-slots`
-# is what catches a slot with no entry at all.
+# packages/cli/test/completion-providers.serial.test.ts, which is where a
+# constant belongs. Nothing here re-checks them, and `deno task
+# check-completion-slots` is what catches a slot with no entry at all.
 #
 # The exception is an option name that means two things on two commands —
 # --from, --to, --root, --scope. There the answer turns on which command was
@@ -533,6 +533,9 @@ check "1" "$(complete_at "cf piece link $LINE_ARGS $BOARD/revision ${BOARD%?????
 # The id half offers what the listing holds — registered pieces — while the key
 # half reads whichever id was typed. So the child, which the listing does not
 # name, still completes its own keys once its address is pasted in.
+check "1" "$(complete_at "cf piece link $CONN_ARGS //$SPACE_DID/of:$BOARD@space/settings/den" |
+  grep -Fc "//$SPACE_DID/of:$BOARD@space/settings/density")" \
+  "a full reference retains its space, scope, and parent path while completing keys"
 check "1" "$(complete_at "cf piece link $LINE_ARGS $BOARD/revision $ITEM_ID/rec" |
   grep -c "^$ITEM_ID/recorded\$")" \
   "and a pasted child address completes its keys, which the listing cannot name"

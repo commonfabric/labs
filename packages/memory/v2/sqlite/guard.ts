@@ -176,7 +176,10 @@ export function classifyStatement(sql: string): StatementClassification {
   const multiple = /;/.test(trimmed);
 
   const firstKeyword = (trimmed.match(/[A-Za-z]+/)?.[0] ?? "").toUpperCase();
-  const hasTopLevelWrite = /\b(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(norm);
+  // A function call such as `replace()` is not a write command.
+  const hasWriteKeyword = /\b(INSERT|UPDATE|DELETE|REPLACE)\b(?!\s*\()/i.test(
+    norm,
+  );
 
   let kind: StatementKind;
   if (WRITE_LEADING.has(firstKeyword)) {
@@ -184,7 +187,7 @@ export function classifyStatement(sql: string): StatementClassification {
   } else if (firstKeyword === "SELECT") {
     kind = "select";
   } else if (firstKeyword === "WITH") {
-    kind = hasTopLevelWrite ? "write" : "select";
+    kind = hasWriteKeyword ? "write" : "select";
   } else {
     kind = "other";
   }

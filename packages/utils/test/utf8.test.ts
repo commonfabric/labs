@@ -76,6 +76,32 @@ describe("utf8Compare()", () => {
       }
     });
   });
+
+  describe("strings with lone surrogates", () => {
+    it("sorts a lone surrogate as the code point of the same value", () => {
+      expect(utf8Compare("\ud7ff", "\ud800")).toBeLessThan(0);
+      expect(utf8Compare("\ud800", "\udc00")).toBeLessThan(0);
+      expect(utf8Compare("\udfff", "\ue000")).toBeLessThan(0);
+      expect(utf8Compare("\udfff", "\u{10000}")).toBeLessThan(0);
+    });
+
+    it("sorts a pair after the same high surrogate standing alone", () => {
+      // The strings share their first code unit but not their first code
+      // point: a pair on one side, a lone high surrogate on the other. What
+      // follows the lone one does not matter.
+      const pair = "\ud800\udc00";
+
+      for (const alone of ["\ud800x", "\ud800\ue000", "\ud800\ud801\udc00"]) {
+        expect(utf8Compare(pair, alone)).toBeGreaterThan(0);
+        expect(utf8Compare(alone, pair)).toBeLessThan(0);
+      }
+    });
+
+    it("compares what follows two lone high surrogates that are the same", () => {
+      expect(utf8Compare("\ud800\ud801", "\ud800\ud802")).toBeLessThan(0);
+      expect(utf8Compare("\ud800\ue000", "\ud800x")).toBeGreaterThan(0);
+    });
+  });
 });
 
 describe("utf8SortedKeysOf()", () => {

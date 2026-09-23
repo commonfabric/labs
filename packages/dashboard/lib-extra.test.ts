@@ -1,9 +1,15 @@
 /**
- * Unit tests for the helpers lib.test.ts does not reach: the GitHub API wrapper
- * and the memo cache. No real network — fetch is stubbed and restored.
+ * Unit tests for the helpers lib.test.ts does not reach: the GitHub API
+ * wrapper, the artifact lookup over it, and the memo cache. No real network —
+ * fetch is stubbed and restored, and the lookup is handed a fake caller.
  */
 
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import {
   friendlyError,
   github,
@@ -11,6 +17,7 @@ import {
   githubOperationsInProgress,
   memo,
   performanceGithub,
+  runArtifactId,
 } from "./lib.ts";
 import { performanceGitHubRateLimit } from "./github-rate-limit.ts";
 
@@ -833,4 +840,117 @@ Deno.test("memo: concurrent callers share the one in-flight call", async () => {
   assertEquals(await a, "v");
   assertEquals(await b, "v");
   assertEquals(n, 1);
+});
+
+
+// One run's artifact listing, answering the name it is asked for as GitHub
+// does, and keeping the paths it was asked for.
+function artifactListing(
+  artifacts: { id: number; name: string; expired: boolean }[],
+) {
+  const paths: string[] = [];
+  return {
+    paths,
+    github: {
+      json: <T>(path: string): Promise<T> => {
+        paths.push(path);
+        const asked = new URLSearchParams(path.split("?")[1] ?? "").get("name");
+        return Promise.resolve({
+          artifacts: artifacts.filter((artifact) => artifact.name === asked),
+        } as T);
+      },
+    },
+  };
+}
+
+const uploaded = (id: number, name: string, expired = false) => ({
+  id,
+  name,
+  expired,
+});
+
+Deno.test("runArtifactId: asks the listing for the one name, and returns its id", async () => {
+  // The run's other jobs upload far more than a page of the listing holds, so
+  // an answer covering them all would not reach the one being looked for.
+  const listing = artifactListing([
+    ...Array.from({ length: 200 }, (_, at) => uploaded(1_000 + at, "logs")),
+    uploaded(7, "perf-metrics"),
+  ]);
+  assertEquals(
+    await runArtifactId({
+      github: listing.github,
+      runId: 42,
+      name: "perf-metrics",
+      token: "t",
+    }),
+    7,
+  );
+  assertEquals(listing.paths.length, 1);
+  assertStringIncludes(listing.paths[0], "/runs/42/artifacts?");
+  assertStringIncludes(listing.paths[0], "name=perf-metrics");
+});
+
+Deno.test("runArtifactId: a run with no artifact of the name -> undefined", async () => {
+  const listing = artifactListing([uploaded(7, "logs")]);
+  assertEquals(
+    await runArtifactId({
+      github: listing.github,
+      runId: 42,
+      name: "perf-metrics",
+      token: "t",
+    }),
+    undefined,
+  );
+});
+
+Deno.test("runArtifactId: a re-run job's newer artifact wins over the first attempt's", async () => {
+  const listing = artifactListing([
+    uploaded(9, "perf-metrics"),
+    uploaded(7, "perf-metrics"),
+  ]);
+  assertEquals(
+    await runArtifactId({
+      github: listing.github,
+      runId: 42,
+      name: "perf-metrics",
+      token: "t",
+    }),
+    9,
+  );
+});
+
+Deno.test("runArtifactId: an expired artifact is passed over for an older one that is not", async () => {
+  const listing = artifactListing([
+    uploaded(9, "perf-metrics", true),
+    uploaded(7, "perf-metrics"),
+  ]);
+  assertEquals(
+    await runArtifactId({
+      github: listing.github,
+      runId: 42,
+      name: "perf-metrics",
+      token: "t",
+    }),
+    7,
+  );
+});
+
+Deno.test("runArtifactId: a listing naming no artifacts at all -> undefined", async () => {
+  const paths: string[] = [];
+  const github = {
+    json: <T>(path: string): Promise<T> => {
+      paths.push(path);
+      return Promise.resolve({} as T);
+    },
+  };
+  assertEquals(
+    await runArtifactId({
+      github,
+      runId: 42,
+      name: "perf-metrics",
+      token: "t",
+    }),
+    undefined,
+  );
+  assertEquals(paths.length, 1);
 });

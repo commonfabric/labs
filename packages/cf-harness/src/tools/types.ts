@@ -1,4 +1,6 @@
+import type { JSONSchema } from "@commonfabric/api";
 import type {
+  CfcConfClause,
   CfcEnforcementMode,
   CfcLabelView,
   IFCLabel,
@@ -19,12 +21,20 @@ import type {
   HarnessSkillScriptExecutionTarget,
 } from "../contracts/skill.ts";
 import type { HarnessBrowserAccessLease } from "../contracts/browser-access.ts";
+import type { HarnessAssignedPiece } from "../contracts/assigned-piece.ts";
 import type { HarnessDocsCorpus } from "../docs-corpus/corpus.ts";
-import type { HarnessResearchRunSummary } from "../contracts/research.ts";
+import type {
+  HarnessResearchHandleValue,
+  HarnessResearchRunSummary,
+} from "../contracts/research.ts";
 import type { HarnessPatternRef } from "../contracts/pattern-refs.ts";
 import type { HarnessInputCell } from "../contracts/input-cells.ts";
+import type { HarnessWellKnownGrant } from "../contracts/well-known-grants.ts";
 import type { HarnessResearchRunner } from "../research/runner.ts";
-import type { HarnessHandleTable } from "../contracts/handle-table.ts";
+import type {
+  HarnessDocumentReferentDraft,
+  HarnessHandleTable,
+} from "../contracts/handle-table.ts";
 import type { HarnessFabricSession } from "../fabric-session.ts";
 import type { openProbeRuntime } from "../pattern-index/probe-runtime.ts";
 import type { PatternIndexClient } from "../pattern-index/client.ts";
@@ -34,6 +44,7 @@ import type { SkillsShSearchClient } from "../skills-sh/search-client.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { ToolOutputId } from "../contracts/tool-result.ts";
 import type { HarnessLoomAuthoringConfig } from "../loom-authoring.ts";
+import type { HarnessLoomRetrievalConfig } from "../loom-retrieval.ts";
 import type { ProcessRunner } from "../sandbox/process-runner.ts";
 import type { SandboxRuntime } from "../sandbox/types.ts";
 
@@ -63,6 +74,14 @@ export interface HarnessToolContext {
    * addresses by the prompt loop; restricted tokens remain opaque.
    */
   handleTable?: HarnessHandleTable;
+
+  /**
+   * The references granted to the run, each already a general handle in
+   * {@link handleTable}. A grant pairs its token with a name a model may be
+   * handed, which is what lets a tool say which handle is which without
+   * describing every one.
+   */
+  wellKnownGrants?: readonly HarnessWellKnownGrant[];
 
   /**
    * The run's trusted Fabric session, lazy and cached by the engine.
@@ -116,11 +135,21 @@ export interface HarnessToolContext {
   /** Existing CFC label on a research task and its accumulated model context. */
   researchTaskCfcLabel?: IFCLabel;
 
+  /**
+   * The label of this tool call's input: the prompt slot's influence joined
+   * with everything the run's model context has observed, which is what a
+   * model-authored argument can carry. Absent when neither carries a label.
+   */
+  toolInputCfcLabel?: IFCLabel;
+
   /** Pattern attachments resolved by the host before the first model turn. */
   patternRefs?: readonly HarnessPatternRef[];
 
   /** Explicit input-cell attachments established for the calling run. */
   inputCells?: readonly HarnessInputCell[];
+
+  /** Retains a successful naming receipt for the next session turn. */
+  recordAssignedPiece?(piece: HarnessAssignedPiece): void;
 
   /** Adds one admitted kit and its trusted records to durable run state. */
   recordResearchRun?(run: HarnessResearchRunSummary): void | Promise<void>;
@@ -197,6 +226,46 @@ export interface HarnessToolContext {
 
   /** Host-owned Loom command routing, absent when the run has no grant. */
   loomAuthoring?: HarnessLoomAuthoringConfig;
+
+  /** Host-owned Loom retrieval routing, absent when the run has no grant. */
+  loomRetrieval?: HarnessLoomRetrievalConfig;
+
+  /**
+   * Registers content a tool observed as a referent the run holds, and
+   * returns its token. Absent outside a run that keeps a handle table.
+   */
+  mintReferentHandle?(referent: HarnessDocumentReferentDraft): Promise<string>;
+
+  /**
+   * Registers an admitted research kit's content as the research referent
+   * the run holds, under the kit's label, and returns its token. The research
+   * tool's admission is its caller. Absent outside a run that keeps a handle
+   * table.
+   */
+  mintResearchHandle?(
+    value: HarnessResearchHandleValue,
+    label: IFCLabel,
+  ): Promise<string>;
+
+  /**
+   * Where the run's structured result goes, absent when the run was
+   * configured with no schema. `record` writes a validated value where the
+   * file-based path leaves one, and reports whether it replaced an earlier
+   * one.
+   */
+  structuredResult?: {
+    schema: JSONSchema;
+    record(value: unknown): Promise<{ replaced: boolean }>;
+  };
+
+  /**
+   * The run's observation ceiling: the fabric session's read ceiling, met
+   * with the run manifest's where one names any. A tool that admits values
+   * from outside the fabric — Loom rows — measures their labels against it
+   * before they enter model context. Absent is no ceiling, which admits
+   * every readable label.
+   */
+  cfcReadMaxConfidentiality?: readonly CfcConfClause[];
   currentDir: string;
   workspaceHostPath?: string;
   resolvePath(path: string): string;

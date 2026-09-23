@@ -8,9 +8,13 @@ import {
   SchemaInjectionTransformer,
   transformCfDirective,
 } from "../src/mod.ts";
-import type { CfcPolicyCompilerManifestV1 } from "../src/mod.ts";
+import type {
+  CfcPolicyCompilerManifestV1,
+  TransformationDiagnostic,
+} from "../src/mod.ts";
 import { compileCfcPolicyManifestsForSource } from "../src/transformers/cfc-policy-authoring.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { parseModule, writerIdentityMarkers } from "./transformed-ast.ts";
 import {
   transformFiles,
   transformSource,
@@ -1064,6 +1068,84 @@ Deno.test("WriteAuthorizedBy accepts a local function binding", async () => {
     false,
   );
 });
+
+Deno.test(
+  "a direct-root WriteAuthorizedBy claim names an imported writer's declaring module",
+  async () => {
+    // Renamed, and reached through a re-export. The direct-root path once
+    // stamped the importing file and the import's spelling, so the claim
+    // named a writer that did not exist and the intended one could not
+    // satisfy it; the nested path had resolved the declaration all along.
+    const diagnostics: TransformationDiagnostic[] = [];
+    const outputs = await transformFiles(
+      {
+        "/main.tsx": `/// <cts-enable />
+          import { toSchema, WriteAuthorizedBy } from "commonfabric";
+          import { writer as save } from "./barrel.ts";
+
+          const schema = toSchema<WriteAuthorizedBy<string, typeof save>>();
+
+          export { schema };
+        `,
+        "/barrel.ts": `export * from "./writer.ts";`,
+        "/writer.ts": `import { handler, Writable } from "commonfabric";
+          export const writer = handler<void, { name: Writable<string> }>(
+            (_event, { name }) => { name.set("updated"); },
+          );`,
+      },
+      {
+        types: COMMONFABRIC_TYPES,
+        pipelineDiagnostics: diagnostics,
+        moduleIdentities: new Map([
+          ["/main.tsx", "identity:main"],
+          ["/barrel.ts", "identity:barrel"],
+          ["/writer.ts", "identity:writer"],
+        ]),
+      },
+    );
+    assertEquals(
+      diagnostics.filter((diagnostic) => diagnostic.severity === "error"),
+      [],
+    );
+    assertEquals(writerIdentityMarkers(parseModule(outputs["/main.tsx"]!)), [{
+      file: "/writer.ts",
+      path: ["writer"],
+      moduleIdentity: "identity:writer",
+    }]);
+  },
+);
+
+Deno.test(
+  "a direct-root claim on a declaration file's binding is refused, not minted",
+  async () => {
+    // The minter throws for a defining source with no module identity, and a
+    // declaration file never has one. Resolving the binding must stop short
+    // of it, so the validation pass's diagnostic is what the author sees.
+    const diagnostics: TransformationDiagnostic[] = [];
+    await transformFiles(
+      {
+        "/main.tsx": `/// <cts-enable />
+          import { toSchema, WriteAuthorizedBy } from "commonfabric";
+          import { ambient } from "./ambient.d.ts";
+
+          const schema = toSchema<WriteAuthorizedBy<string, typeof ambient>>();
+
+          export { schema };
+        `,
+        "/ambient.d.ts": "export declare function ambient(): void;",
+      },
+      {
+        types: COMMONFABRIC_TYPES,
+        pipelineDiagnostics: diagnostics,
+        moduleIdentities: new Map([["/main.tsx", "identity:main"]]),
+      },
+    );
+    assertEquals(
+      diagnostics.map((diagnostic) => diagnostic.type),
+      ["cfc-write-authorized-by"],
+    );
+  },
+);
 
 Deno.test(
   "WriteAuthorizedBy preserves the local binding identity through schema emission",

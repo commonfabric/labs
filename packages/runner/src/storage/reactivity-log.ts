@@ -47,6 +47,10 @@ const linkResolutionProbeMarker: unique symbol = Symbol(
   "linkResolutionProbeMarker",
 );
 
+const dereferenceResolutionProbeMarker: unique symbol = Symbol(
+  "dereferenceResolutionProbeMarker",
+);
+
 const mergeableOpReadMarker: unique symbol = Symbol(
   "mergeableOpReadMarker",
 );
@@ -109,6 +113,16 @@ export const linkResolutionProbe: Metadata = {
 };
 
 /**
+ * Marks a link probe issued inside the resolver that follows links on behalf
+ * of a content read. The probe itself is runtime machinery; the target read is
+ * the observation and is checked independently.
+ */
+export const dereferenceResolutionProbe: Metadata = {
+  ...linkResolutionProbe,
+  [dereferenceResolutionProbeMarker]: true,
+};
+
+/**
  * Marks the reads a mergeable write (push / addUnique / increment / the keyed
  * ops) issues as part of building its own write — the value it reads to compute
  * the change. The commit's read-set builder drops these (and the write-target
@@ -124,7 +138,8 @@ export const mergeableOpRead: Metadata = {
 /**
  * Marks the reads the write machinery makes of the region it is about to
  * write: the stream-marker probe that chooses between an event send and a
- * stored write, and the diff's read of each destination path. Each answer
+ * stored write, the diff's read of each destination path, and the append's
+ * destination snapshot that supplies storage positions. Each answer
  * decides how and whether to write, never what is written, and where a
  * stored link sends the write somewhere else the walk reads that slot again
  * without this marker. CFC flow-label derivation excludes these from the
@@ -408,6 +423,10 @@ export function isLinkResolutionProbe(meta?: Metadata): boolean {
   return meta?.[linkResolutionProbeMarker] === true;
 }
 
+export function isDereferenceResolutionProbe(meta?: Metadata): boolean {
+  return meta?.[dereferenceResolutionProbeMarker] === true;
+}
+
 const schedulerDependencyReadMarker: unique symbol = Symbol(
   "schedulerDependencyReadMarker",
 );
@@ -418,7 +437,9 @@ const schedulerDependencyReadMarker: unique symbol = Symbol(
  * dependencies so the reactivity log covers them for subscriptions, but
  * they are scheduling machinery, not handler consumption (§8.10.1:
  * dependency-discovery reads must not count as consumed inputs). Flow-label
- * derivation excludes them; the action body's own reads carry the taint.
+ * derivation and the runtime read ceiling exclude them; their materialized
+ * values never enter the handler. The action body's own reads enforce its
+ * ceiling and carry the taint.
  */
 export const schedulerDependencyRead: Metadata = {
   [schedulerDependencyReadMarker]: true,

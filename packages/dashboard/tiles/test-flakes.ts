@@ -47,7 +47,7 @@ export function makeTestFlakes(
 ): Tile {
   const source = options.source ?? sharedTestSelection;
   return {
-    id: "test-flakes",
+    label: "flaky tests",
     intervalMs: MANIFEST_SHARE_MS,
     collectActivity: publisherRunning,
     collect: (_ctx, publish) =>
@@ -66,7 +66,6 @@ function flakesView(
 ): TileView {
   if (manifest === undefined || manifest.entries.length === 0) {
     return {
-      label: "flaky tests",
       status: "unknown",
       value: "—",
       sub: manifest === undefined
@@ -94,7 +93,6 @@ function flakesView(
     (clock?.() ?? Date.now()) - Date.parse(manifest.generatedAt),
   );
   return {
-    label: "flaky tests",
     status,
     value: headline,
     valueLabel: headline,

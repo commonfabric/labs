@@ -29,26 +29,36 @@ import { valueEqual } from "./valueEqual.ts";
  *
  * So the walk is the frame, and the model decides the values only it can
  * decide. A special object is one of those, whatever it sits inside: two of
- * one class are compared by logical content, and one paired with anything else
- * is unequal.
+ * one class are compared by content hash, and one paired with anything else is
+ * unequal.
  *
- * Containers follow `deepEqual()` so the walk can compare ordinary class
- * instances alongside Fabric values. It stops at identical references but
- * carries no pair tracking: separate cyclic graphs exhaust its stack, and
- * shared acyclic graphs can require repeated work. For known `FabricValue`
- * graphs, `valueEqual()` tracks pairs and reuses available immutable hashes.
+ * The model is not asked about a container. `valueEqual()` decides a record or
+ * an array by hashing it whole, and `hashStringOf()` refuses one kind of value
+ * the `FabricValue` type admits: one holding a class whose codec is still a
+ * stub. That returns here where the walk finds what settles it before
+ * descending that far. Comparing `{ v: aFabricMap }` against `{ v: 5 }`
+ * returns `false`, on the ground that a `FabricMap` is not `5`. A cycle the two
+ * operands reach at one shared reference stops at that reference. This walk
+ * carries no cycle tracking of its own, so two separate cyclic graphs exhaust
+ * the stack here.
+ *
+ * TODO(danfuzz): decide a container through the model as well, once the stub
+ * codecs are written, at which point this becomes a hash comparison with the
+ * walk beneath it rather than the other way round. The order costs rather than
+ * decides: `valueEqual()` compares deep-frozen operands by a content hash
+ * cached on identity, where the walk pays for every level each time.
  *
  * A pair of one class that class cannot yet hash still throws, from
  * `valueEqual()`. `FabricMap` and `FabricSet` carry stub codecs, and a stub
  * naming itself is the answer that names the work.
  *
- * Container semantics remain those of `deepEqual()`: literal strings and
- * property names, constructor identity, and named array properties. In
- * contrast, `valueEqual()` follows canonical Fabric content semantics. It
- * equates null-prototype and ordinary records, normalizes nested text as
- * UTF-8, ignores named array properties, and can equate different instance
- * classes whose codecs preserve the same tag and state. This walk separates
- * special objects of different classes before consulting their codecs.
+ * Where both this and `valueEqual()` return, they return the same result
+ * except in two cases, where this walk keeps a distinction that `valueEqual()`
+ * does not. A null-prototype object holding the same contents as a plain
+ * record: `valueEqual()` calls the two equal, a record being a record in the
+ * value model, and this walk separates them on their constructors. And an
+ * array with non-index properties, which `valueEqual()` ignores, as content
+ * hashing does, and this walk compares.
  *
  * This is the compare-side half of admitting special objects; the walk-side
  * half is `isKeyableObjectOrArray()`, with `isWalkableObjectOrArray()` the

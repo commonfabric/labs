@@ -521,20 +521,17 @@ type CalculatorRequest = {
         },
         "/main.ts",
       );
-      const { $schema: _schema, ...schema } = new SchemaGenerator()
-        .generateSchemaFromSyntheticTypeNode(
-          alias("Readonly", literal([["a", unknownNode()]])),
-          checker,
-          undefined,
-          undefined,
-          sourceFile,
-        ) as Record<string, unknown>;
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        alias("Readonly", literal([["a", unknownNode()]])),
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+      );
       // What is pinned is the routing: the library's rule is not applied, so
-      // the argument's member does not reach the schema. What the general
-      // path makes of the shadow's own surface is that path's matter.
-      expect(schema.type).toBe("object");
-      expect(Object.keys(schema.properties as Record<string, unknown>)).not
-        .toContain("a");
+      // the argument's member does not reach the schema. The general path
+      // leaves the shadow, a generic, unread.
+      expect(schema).toBe(true);
     });
 
     // Named authored types analyze to a reference into the definitions, so
@@ -1146,11 +1143,11 @@ type CalculatorRequest = {
           anyOf: [{ type: ["number", "string"] }, { type: "undefined" }],
         },
       });
-      // A generic alias is not opened; the general path reads its
-      // uninstantiated declaration, as it does for any generic reference.
+      // A generic alias is not opened, and the general path leaves it unread,
+      // as it does any generic reference.
       expect(
-        await schemaOf(alias("Required", alias("Gen", stringNode()))),
-      ).toEqual({ type: "array", items: {} });
+        await generateNamed(alias("Required", alias("Gen", stringNode()))),
+      ).toBe(true);
     });
 
     it("keeps a never-valued signature's key surface", async () => {
@@ -2624,21 +2621,20 @@ type CalculatorRequest = {
     it("believes a supplied program answer over the file name", async () => {
       // The transformer hands down `program.isSourceFileDefaultLibrary`; a
       // program that says the library file is NOT a library sends the alias
-      // to the general path, which resolves the name to the alias's
-      // uninstantiated declared type: an empty object, the member gone.
+      // to the general path, which leaves a generic declared outside the
+      // library unread.
       const { checker, sourceFile } = await createTestProgram(
         "type Dummy = unknown;",
       );
-      const { $schema: _schema, ...schema } = new SchemaGenerator()
-        .generateSchemaFromSyntheticTypeNode(
-          alias("Readonly", literal([["topic", unknownNode()]])),
-          checker,
-          undefined,
-          undefined,
-          sourceFile,
-          { isDefaultLibrarySourceFile: () => false },
-        ) as Record<string, unknown>;
-      expect(schema).toEqual({ type: "object", properties: {} });
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        alias("Readonly", literal([["topic", unknownNode()]])),
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+        { isDefaultLibrarySourceFile: () => false },
+      );
+      expect(schema).toBe(true);
     });
 
     it("leaves an authored alias of a library name to the general path", async () => {
@@ -2647,19 +2643,606 @@ type CalculatorRequest = {
       const { checker, sourceFile } = await createTestProgram(
         "export {};\ntype Record<K extends string, V> = { authored: true };",
       );
-      const { $schema: _schema, ...schema } = new SchemaGenerator()
-        .generateSchemaFromSyntheticTypeNode(
-          alias("Record", stringNode(), unknownNode()),
-          checker,
-          undefined,
-          undefined,
-          sourceFile,
-        ) as Record<string, unknown>;
-      // The authored alias resolves from scope to its own declared type.
-      expect(schema).toEqual({
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        alias("Record", stringNode(), unknownNode()),
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+      );
+      // The authored alias resolves from scope to its own declaration, a
+      // generic, which the general path leaves unread.
+      expect(schema).toBe(true);
+    });
+  });
+
+  describe("synthetic references to a name the module holds", () => {
+    // A synthetic reference carries no binding, so its name is resolved from
+    // the scope of the module the schema is generated for.
+
+    const reference = (name: string) =>
+      ts.factory.createTypeReferenceNode(ts.factory.createIdentifier(name));
+    const CONTACT = { $ref: "#/$defs/Contact" };
+    const CONTACT_DEFS = {
+      Contact: {
         type: "object",
-        properties: { authored: { type: "boolean", enum: [true] } },
-        required: ["authored"],
+        properties: { name: { type: "string" } },
+        required: ["name"],
+      },
+    };
+
+    async function generate(
+      files: Record<string, string>,
+      node: ts.TypeNode,
+    ): Promise<unknown> {
+      const { checker, sourceFile } = await createTestProgramFromFiles(
+        files,
+        "/main.ts",
+      );
+      const result = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        node,
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+      );
+      if (typeof result === "boolean") return result;
+      const { $schema: _schema, ...schema } = result as Record<string, unknown>;
+      return schema;
+    }
+
+    it("reads a name the module declares", async () => {
+      const schema = await generate(
+        { "/main.ts": "interface Contact { name: string }\nexport {};" },
+        reference("Contact"),
+      );
+
+      expect(schema).toEqual({ ...CONTACT, $defs: CONTACT_DEFS });
+    });
+
+    it("reads a name the module declares with `export`", async () => {
+      const schema = await generate(
+        { "/main.ts": "export interface Contact { name: string }" },
+        reference("Contact"),
+      );
+
+      expect(schema).toEqual({ ...CONTACT, $defs: CONTACT_DEFS });
+    });
+
+    it("reads a name the module imports", async () => {
+      const schema = await generate(
+        {
+          "/types.ts": "export interface Contact { name: string }",
+          "/main.ts": "import type { Contact } from './types.ts';\n" +
+            "export type Keep = Contact;",
+        },
+        reference("Contact"),
+      );
+
+      expect(schema).toEqual({ ...CONTACT, $defs: CONTACT_DEFS });
+    });
+
+    it("reads a name the module imports under another name", async () => {
+      const schema = await generate(
+        {
+          "/types.ts": "export interface Contact { name: string }",
+          "/main.ts": "import type { Contact as Person } from './types.ts';\n" +
+            "export type Keep = Person;",
+        },
+        reference("Person"),
+      );
+
+      expect(schema).toEqual({ ...CONTACT, $defs: CONTACT_DEFS });
+    });
+
+    it("keeps every member of a union holding an exported name", async () => {
+      const schema = await generate(
+        {
+          "/main.ts": "export interface Contact { name: string }\n" +
+            "interface Other { other: number }",
+        },
+        ts.factory.createUnionTypeNode([
+          reference("Contact"),
+          reference("Other"),
+        ]),
+      );
+
+      expect(schema).toEqual({
+        anyOf: [CONTACT, { $ref: "#/$defs/Other" }],
+        $defs: {
+          ...CONTACT_DEFS,
+          Other: {
+            type: "object",
+            properties: { other: { type: "number" } },
+            required: ["other"],
+          },
+        },
+      });
+    });
+
+    it("returns `true` for a name the module neither declares nor imports", async () => {
+      const schema = await generate(
+        {
+          "/types.ts": "export interface Contact { name: string }",
+          "/main.ts": "export {};",
+        },
+        reference("Contact"),
+      );
+
+      expect(schema).toBe(true);
+    });
+
+    describe("a generic declaration", () => {
+      // A generic read from its declaration describes its parameters unbound,
+      // which no reading can make stand for the arguments a reference supplies.
+
+      const f = ts.factory;
+      const generic = (name: string, ...args: ts.TypeNode[]) =>
+        f.createTypeReferenceNode(f.createIdentifier(name), args);
+      const keyword = (kind: ts.KeywordTypeSyntaxKind) =>
+        f.createKeywordTypeNode(kind);
+      const literal = (text: string) =>
+        f.createLiteralTypeNode(f.createStringLiteral(text));
+      const objectOf = (members: Record<string, ts.TypeNode>) =>
+        f.createTypeLiteralNode(
+          Object.entries(members).map(([name, type]) =>
+            f.createPropertySignature(undefined, name, undefined, type)
+          ),
+        );
+      const BOX = "export interface Box<T = number> { value: T }";
+
+      it("returns `true` for an argument wider than the parameter's constraint", async () => {
+        // Read by the constraint, `name` would drop `extra` from every read.
+        const schema = await generate(
+          {
+            "/main.ts":
+              "export interface Contact<T extends { label: string }> { name: T }",
+          },
+          generic(
+            "Contact",
+            objectOf({
+              label: keyword(ts.SyntaxKind.StringKeyword),
+              extra: keyword(ts.SyntaxKind.NumberKeyword),
+            }),
+          ),
+        );
+
+        expect(schema).toBe(true);
+      });
+
+      it("returns `true` for a parameter read through `keyof`", async () => {
+        const schema = await generate(
+          { "/main.ts": "export interface Contact<T> { name: keyof T }" },
+          generic(
+            "Contact",
+            objectOf({ foo: keyword(ts.SyntaxKind.StringKeyword) }),
+          ),
+        );
+
+        expect(schema).toBe(true);
+      });
+
+      it("returns `true` for a parameter read through an indexed access", async () => {
+        const schema = await generate(
+          {
+            "/main.ts":
+              "export interface Contact<T extends { name: string }> " +
+              '{ name: T["name"] }',
+          },
+          generic("Contact", objectOf({ name: literal("Ada") })),
+        );
+
+        expect(schema).toBe(true);
+      });
+
+      it("returns `true` for an argument that replaces the default", async () => {
+        const schema = await generate(
+          { "/main.ts": BOX },
+          generic("Box", keyword(ts.SyntaxKind.StringKeyword)),
+        );
+
+        expect(schema).toBe(true);
+      });
+
+      it("returns `true` for an argument equal to the default", async () => {
+        const schema = await generate(
+          { "/main.ts": BOX },
+          generic("Box", keyword(ts.SyntaxKind.NumberKeyword)),
+        );
+
+        expect(schema).toBe(true);
+      });
+
+      describe("an alias whose body is one of its parameters", () => {
+        // `type Reactive<T> = T` denotes its argument, so the reference is
+        // read as that argument rather than left unread as a generic.
+
+        const IDENTITY = "export type Reactive<T> = T;";
+
+        it("reads the reference as its argument", async () => {
+          const schema = await generate(
+            { "/main.ts": IDENTITY },
+            generic(
+              "Reactive",
+              objectOf({ name: keyword(ts.SyntaxKind.StringKeyword) }),
+            ),
+          );
+
+          expect(schema).toEqual({
+            type: "object",
+            properties: { name: { type: "string" } },
+            required: ["name"],
+          });
+        });
+
+        it("reads the argument at the parameter's position", async () => {
+          const schema = await generate(
+            { "/main.ts": "export type Second<A, B> = (B);" },
+            generic(
+              "Second",
+              keyword(ts.SyntaxKind.StringKeyword),
+              keyword(ts.SyntaxKind.NumberKeyword),
+            ),
+          );
+
+          expect(schema).toEqual({ type: "number" });
+        });
+
+        it("returns `true` for a reference that leaves the argument out", async () => {
+          const schema = await generate(
+            { "/main.ts": IDENTITY },
+            reference("Reactive"),
+          );
+
+          expect(schema).toBe(true);
+        });
+      });
+
+      it("returns `true` for a reference with no arguments", async () => {
+        const schema = await generate({ "/main.ts": BOX }, reference("Box"));
+
+        expect(schema).toBe(true);
+      });
+
+      it("returns `true` for a generic the module declares without `export`", async () => {
+        const schema = await generate(
+          {
+            "/main.ts": "interface Box<T = number> { value: T }\nexport {};",
+          },
+          generic("Box", keyword(ts.SyntaxKind.NumberKeyword)),
+        );
+
+        expect(schema).toBe(true);
+      });
+
+      it("returns `true` for a generic the module imports", async () => {
+        const schema = await generate(
+          {
+            "/types.ts": BOX,
+            "/main.ts": "import type { Box } from './types.ts';\n" +
+              "export type Keep = Box;",
+          },
+          generic("Box", keyword(ts.SyntaxKind.NumberKeyword)),
+        );
+
+        expect(schema).toBe(true);
+      });
+
+      it("returns `true` for an argument the registry holds a type for", async () => {
+        // The generic is left unread whatever its argument denotes.
+        const { checker, sourceFile } = await createTestProgramFromFiles(
+          { "/main.ts": BOX },
+          "/main.ts",
+        );
+        const argument = reference("PrintedElsewhere");
+        const typeRegistry = new WeakMap<ts.Node, ts.Type>([
+          [argument, checker.getNumberType()],
+        ]);
+
+        expect(
+          new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+            generic("Box", argument),
+            checker,
+            typeRegistry,
+            undefined,
+            sourceFile,
+          ),
+        ).toBe(true);
+      });
+
+      it("returns `true` for a scope wrapper naming no payload", async () => {
+        const schema = await generate(
+          { "/main.ts": "export type PerUser<T> = T;" },
+          reference("PerUser"),
+        );
+
+        expect(schema).toBe(true);
+      });
+
+      it("leaves a registered scope parameter unread without a payload", async () => {
+        const { type, checker } = await getTypeFromCode(
+          "export type PerUser<T> = T;",
+          "PerUser",
+        );
+        const bare = reference("PerUser");
+        const typeRegistry = new WeakMap<ts.Node, ts.Type>([[bare, type]]);
+        const schema = new SchemaGenerator()
+          .generateSchemaFromSyntheticTypeNode(
+            ts.factory.createArrayTypeNode(bare),
+            checker,
+            typeRegistry,
+          );
+
+        expect(schema).toEqual({ type: "array", items: {} });
+      });
+
+      it("reads a scope wrapper, its payload taken from the argument", async () => {
+        const schema = await generate(
+          { "/main.ts": "export type PerUser<T> = T;" },
+          generic("PerUser", keyword(ts.SyntaxKind.StringKeyword)),
+        );
+
+        expect(schema).toEqual({ type: "string", scope: "user" });
+      });
+
+      it("keeps the supplied scope payload beyond its parameter constraint", async () => {
+        const schema = await generate(
+          {
+            "/main.ts":
+              "export type PerSession<T extends { name: string }> = T;",
+          },
+          generic(
+            "PerSession",
+            objectOf({
+              name: keyword(ts.SyntaxKind.StringKeyword),
+              count: keyword(ts.SyntaxKind.NumberKeyword),
+            }),
+          ),
+        );
+
+        expect(schema).toEqual({
+          type: "object",
+          properties: { name: { type: "string" }, count: { type: "number" } },
+          required: ["name", "count"],
+          scope: "session",
+        });
+      });
+
+      describe("an alias whose CFC lowering substitutes the arguments", () => {
+        // The lowering substitutes a reference's own arguments down the
+        // alias chain to the CFC alias, so no parameter is read unbound.
+
+        const CFC =
+          "type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };\n" +
+          "type Confidential<T, X extends readonly unknown[]> =\n" +
+          "  Cfc<T, { confidentiality: X }>;\n";
+        const readers = (reader: string) =>
+          f.createTypeOperatorNode(
+            ts.SyntaxKind.ReadonlyKeyword,
+            f.createTupleTypeNode([literal(reader)]),
+          );
+
+        it("reads the alias with its labels taken from the arguments", async () => {
+          const schema = await generate(
+            {
+              "/main.ts": CFC +
+                "export type Secret<T, Reader extends string> =\n" +
+                "  Confidential<T, readonly [Reader]>;",
+            },
+            generic(
+              "Secret",
+              keyword(ts.SyntaxKind.StringKeyword),
+              literal("owner"),
+            ),
+          );
+
+          expect(schema).toEqual({
+            type: "string",
+            ifc: { confidentiality: ["owner"] },
+          });
+        });
+
+        it("reads a payload holding a parameter from the argument", async () => {
+          // Read from the declaration, `name` would be the default's number.
+          const schema = await generate(
+            {
+              "/main.ts": CFC +
+                "export type Secret<T = number> =\n" +
+                '  Confidential<{ name: T }, readonly ["owner"]>;',
+            },
+            generic("Secret", keyword(ts.SyntaxKind.StringKeyword)),
+          );
+
+          expect(schema).toEqual({
+            type: "object",
+            properties: { name: { type: "string" } },
+            required: ["name"],
+            ifc: { confidentiality: ["owner"] },
+          });
+        });
+
+        const COMPOUND: [string, string, unknown][] = [
+          ["a union", "T | null", {
+            anyOf: [{ type: "string" }, { type: "null" }],
+          }],
+          ["an intersection", "T & {}", { type: "string" }],
+          ["a named tuple member", "[value: T]", {
+            type: "array",
+            items: { type: "string" },
+          }],
+          ["an optional tuple element", "[T?]", {
+            type: "array",
+            items: { anyOf: [{ type: "string" }, { type: "undefined" }] },
+          }],
+        ];
+        for (const [form, field, expected] of COMPOUND) {
+          it(`reads a parameter under ${form} in the payload from the argument`, async () => {
+            const schema = await generate(
+              {
+                "/main.ts": CFC +
+                  "export type Secret<T = number> =\n" +
+                  `  Confidential<{ name: ${field} }, readonly ["owner"]>;`,
+              },
+              generic("Secret", keyword(ts.SyntaxKind.StringKeyword)),
+            );
+
+            expect(schema).toEqual({
+              type: "object",
+              properties: { name: expected },
+              required: ["name"],
+              ifc: { confidentiality: ["owner"] },
+            });
+          });
+        }
+
+        it("reads a parameter under a rest element in the payload from the argument", async () => {
+          const schema = await generate(
+            {
+              "/main.ts": CFC +
+                "export type Secret<T extends unknown[] = number[]> =\n" +
+                '  Confidential<{ name: [...T] }, readonly ["owner"]>;',
+            },
+            generic(
+              "Secret",
+              f.createArrayTypeNode(keyword(ts.SyntaxKind.StringKeyword)),
+            ),
+          );
+
+          expect(schema).toEqual({
+            type: "object",
+            properties: { name: { type: "array", items: { type: "string" } } },
+            required: ["name"],
+            ifc: { confidentiality: ["owner"] },
+          });
+        });
+
+        it("reads a nongeneric alias whose payload substitution does not reach as its labels alone", async () => {
+          // `Contact` itself is read; the lowering leaves the payload, which
+          // still names `T`, as a guess.
+          const schema = await generate(
+            {
+              "/main.ts": CFC +
+                "type Secret<T extends { name: string }> =\n" +
+                '  Confidential<{ name: T["name"] }, readonly ["owner"]>;\n' +
+                'export type Contact = Secret<{ name: "Ada" }>;',
+            },
+            reference("Contact"),
+          );
+
+          expect(schema).toEqual({
+            $ref: "#/$defs/Contact",
+            $defs: { Contact: { ifc: { confidentiality: ["owner"] } } },
+          });
+        });
+
+        it("returns `true` for a payload holding a parameter where substitution does not reach", async () => {
+          // Substitution does not open an indexed access, so `T` would stay
+          // unbound in the payload.
+          const schema = await generate(
+            {
+              "/main.ts": CFC +
+                "export type Secret<T = number[]> =\n" +
+                '  Confidential<{ size: T["length"] }, readonly ["owner"]>;',
+            },
+            generic(
+              "Secret",
+              f.createArrayTypeNode(keyword(ts.SyntaxKind.StringKeyword)),
+            ),
+          );
+
+          expect(schema).toBe(true);
+        });
+
+        it("leaves a generic the payload names unread, keeping the labels", async () => {
+          const schema = await generate(
+            {
+              "/main.ts": CFC +
+                "export interface Box<T> { value: T }\n" +
+                "export type Secret<T extends { label: string }> =\n" +
+                '  Confidential<Box<T>, readonly ["owner"]>;',
+            },
+            generic(
+              "Secret",
+              objectOf({
+                label: keyword(ts.SyntaxKind.StringKeyword),
+                extra: keyword(ts.SyntaxKind.NumberKeyword),
+              }),
+            ),
+          );
+
+          expect(schema).toEqual({ ifc: { confidentiality: ["owner"] } });
+        });
+
+        it("reads an argument the reference leaves out as its default", async () => {
+          const schema = await generate(
+            {
+              "/main.ts": CFC +
+                'export type Secret<T, Reader extends string = "owner"> =\n' +
+                "  Confidential<T, readonly [Reader]>;",
+            },
+            generic("Secret", keyword(ts.SyntaxKind.StringKeyword)),
+          );
+
+          expect(schema).toEqual({
+            type: "string",
+            ifc: { confidentiality: ["owner"] },
+          });
+        });
+
+        it("reads a default naming an earlier parameter with that parameter's argument", async () => {
+          // `Contact`'s body leaves `U` out, so `U` is its default `T`, which
+          // is `string`, not `T`'s own default.
+          const schema = await generate(
+            {
+              "/main.ts": CFC +
+                "type Secret<T = number, U = T> =\n" +
+                '  Confidential<{ name: U }, readonly ["owner"]>;\n' +
+                "export type Contact = Secret<string>;",
+            },
+            reference("Contact"),
+          );
+
+          expect(schema).toEqual({
+            $ref: "#/$defs/Contact",
+            $defs: {
+              Contact: {
+                type: "object",
+                properties: { name: { type: "string" } },
+                required: ["name"],
+                ifc: { confidentiality: ["owner"] },
+              },
+            },
+          });
+        });
+
+        it("returns `true` for a reference to the CFC alias itself", async () => {
+          const schema = await generate(
+            {
+              "/main.ts": CFC + "export type Keep = Confidential<string, []>;",
+            },
+            generic(
+              "Confidential",
+              keyword(ts.SyntaxKind.StringKeyword),
+              readers("owner"),
+            ),
+          );
+
+          expect(schema).toBe(true);
+        });
+
+        it("returns `true` for an alias holding a CFC alias inside its body", async () => {
+          const schema = await generate(
+            {
+              "/main.ts": CFC +
+                "export type Labeled<T> = {\n" +
+                '  value: Confidential<T, readonly ["owner"]>;\n' +
+                "};",
+            },
+            generic("Labeled", keyword(ts.SyntaxKind.StringKeyword)),
+          );
+
+          expect(schema).toBe(true);
+        });
       });
     });
   });

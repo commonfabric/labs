@@ -1,0 +1,173 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Book": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "author"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Reading history and preferences belong to the active reader.",
+    "properties": {
+      "favoriteAuthors": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "finishedBooks": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Book",
+          "asCell": [
+            "readonly"
+          ]
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "book-recommendations/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Book": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "author"
+        ],
+        "type": "object"
+      },
+      "BookPick": {
+        "properties": {
+          "book": {
+            "$ref": "#/$defs/Book"
+          },
+          "why": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "book",
+          "why"
+        ],
+        "type": "object"
+      },
+      "Recommendations": {
+        "properties": {
+          "picks": {
+            "items": {
+              "$ref": "#/$defs/BookPick"
+            },
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "picks"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Reader-owned cells and the agent's linked result remain live outputs.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "favoriteAuthors": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "finishedBooks": {
+        "items": {
+          "$ref": "#/$defs/Book"
+        },
+        "type": "array"
+      },
+      "recommendation": {
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "requestHash": {
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "undefined"
+              },
+              {
+                "$ref": "#/$defs/Recommendations"
+              }
+            ]
+          },
+          "run": {
+            "additionalProperties": true,
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "pending"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "finishedBooks",
+      "favoriteAuthors",
+      "recommendation",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

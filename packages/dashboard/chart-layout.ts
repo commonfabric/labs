@@ -1,4 +1,5 @@
 import { TRUST_COLS } from "./ci-trust-layout.ts";
+import { statusDotRules } from "./status-dot.ts";
 
 export const LABELED_CELL_GRID_MARGIN_TOP = 9;
 export const CHART_BOTTOM_INSET = 2;
@@ -45,8 +46,7 @@ export function tileContentRules(
   .cells.labeled .cell{width:100%}
   .cells.labeled+span{font-weight:700;text-shadow:-1px -1px 0 var(--surface),1px -1px 0 var(--surface),-1px 1px 0 var(--surface),1px 1px 0 var(--surface),0 0 4px var(--surface);z-index:1}
   .cell{aspect-ratio:1;border-radius:1px}
-  .dot{width:10px;height:10px;display:inline-block;flex:none;position:relative}
-  .dot::before{content:"";position:absolute;inset:0}
+  ${statusDotRules()}
   .swatch{display:inline-block;width:8px;height:8px;border-radius:2px;vertical-align:middle}
   a.tile.link{display:block;text-decoration:none;color:inherit;cursor:pointer;transition:border-color .12s}`;
 }

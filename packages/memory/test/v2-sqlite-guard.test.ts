@@ -91,6 +91,39 @@ describe("assertReadOnly", () => {
     assertReadOnly("SELECT * FROM messages");
   });
 
+  it("allows `replace()` in a plain `SELECT`", () => {
+    expect(() => assertReadOnly("SELECT replace('a-b', '-', ' ')"))
+      .not.toThrow();
+  });
+
+  it("allows `replace()` in a read-only CTE", () => {
+    for (
+      const sql of [
+        "WITH x AS (SELECT replace('a-b', '-', ' ') AS value) SELECT value FROM x",
+        "WITH x AS (SELECT 'a-b' AS value) " +
+        "SELECT replace /* separator */ (value, '-', ' ') FROM x",
+      ]
+    ) {
+      expect(() => assertReadOnly(sql)).not.toThrow();
+      expect(() => assertWriteSafe(sql)).toThrow(GuardError);
+    }
+  });
+
+  it("rejects a CTE ending in `INSERT`, `UPDATE`, `DELETE`, or `REPLACE`", () => {
+    const cte = "WITH x AS (SELECT replace('a-b', '-', ' ') AS value) ";
+    for (
+      const statement of [
+        "INSERT INTO messages (a) SELECT value FROM x",
+        "UPDATE messages SET a = (SELECT value FROM x)",
+        "DELETE FROM messages WHERE a = (SELECT value FROM x)",
+        "REPLACE INTO messages (a) SELECT value FROM x",
+      ]
+    ) {
+      expect(() => assertReadOnly(cte + statement)).toThrow(GuardError);
+      expect(() => assertWriteSafe(cte + statement)).not.toThrow();
+    }
+  });
+
   it("rejects writes, PRAGMA, ATTACH, and multiple statements", () => {
     expect(() => assertReadOnly("INSERT INTO t VALUES (1)")).toThrow(
       GuardError,

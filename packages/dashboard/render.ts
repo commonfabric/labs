@@ -15,7 +15,6 @@ import {
 import {
   escapeHtml,
   SPARKLINE_HEIGHT,
-  STATUS_DOT,
 } from "./lib.ts";
 import {
   STATUS_EDGE,
@@ -27,6 +26,7 @@ import { faviconHref, faviconLink, type FaviconStatus } from "./favicon.ts";
 import { paintStatusFavicon } from "./favicon-client.ts";
 import { liveUpdateStream } from "./stream-client.ts";
 import { paintDashboardMessageInput } from "./dashboard-message-client.ts";
+import { reconcileTiles } from "./tiles-client.ts";
 import {
   DASHBOARD_MESSAGE_FADE_MS,
   DASHBOARD_MESSAGE_MAX_LENGTH,
@@ -52,6 +52,7 @@ const PAINT_STATUS_FAVICON = paintStatusFavicon.toString();
 const LIVE_UPDATE_STREAM = liveUpdateStream.toString();
 const DASHBOARD_MESSAGE_OPACITY = dashboardMessageOpacity.toString();
 const PAINT_DASHBOARD_MESSAGE_INPUT = paintDashboardMessageInput.toString();
+const RECONCILE_TILES = reconcileTiles.toString();
 
 // How long past the refresh interval the freshness indicator stays orange before
 // it turns red. The page treats the same span of silence from the server as a
@@ -152,28 +153,6 @@ const BIG_RULES = STATUSES.map((s) =>
 )
   .join("");
 
-// The header dot's shape, which says the same thing its color does without
-// using color: a circle when all is well, a triangle to warn, a diamond when
-// something needs a person, and a hollow ring when the tile cannot tell. The
-// diamond is drawn a pixel over each edge so it carries the weight the circle
-// does at the same nominal size.
-const DOT_SHAPE: Record<Status, string> = {
-  good: "border-radius:50%",
-  warn: "clip-path:polygon(50% 0,100% 100%,0 100%)",
-  bad: "inset:-1px;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)",
-  unknown: "border-radius:50%",
-};
-
-const DOT_RULES =
-  STATUSES.map((s) =>
-    `.dot.${STATUS_DOT[s]}::before{${DOT_SHAPE[s]};${
-      s === "unknown"
-        ? `border:2px solid var(--status-${s})`
-        : `background:var(--status-${s})`
-    }}`
-  ).join("") +
-  `.dot.run::before{border-radius:50%;background:var(--running)}`;
-
 type ViewerTimeElement = Pick<HTMLTimeElement, "dateTime" | "textContent">;
 
 /** Replace marked absolute timestamps with the viewer's local wall-clock time. */
@@ -258,10 +237,6 @@ ${TILE_RULES}
   ${BIG_RULES}
   a.cell{display:block}
   a.cell:hover{outline:1px solid var(--accent);outline-offset:-1px}
-  /* The dot is drawn by its own layer so each status can take a shape as well
-     as a color. The shape carries the same signal the color does, which is
-     what a viewer who cannot separate the hues reads instead. */
-  ${DOT_RULES}
   a.tile.link:hover{border-color:var(--border-hover)}
   .evscroll{max-height:340px;overflow:auto}
   .ev{display:flex;align-items:center;gap:11px;padding:6px 0;font-size:13px;border-top:1px solid var(--divider)}.ev:first-child{border-top:0}
@@ -310,6 +285,7 @@ ${DASHBOARD_THEME_CLIENT}
   const paintStatusFavicon = ${PAINT_STATUS_FAVICON};
   const dashboardMessageOpacity = ${DASHBOARD_MESSAGE_OPACITY};
   const paintDashboardMessageInput = ${PAINT_DASHBOARD_MESSAGE_INPUT};
+  const reconcileTiles = ${RECONCILE_TILES};
   const liveUpdateStream = ${LIVE_UPDATE_STREAM};
   const badge = document.getElementById('livebadge');
   const dot = document.getElementById('freshdot');
@@ -424,42 +400,11 @@ ${DASHBOARD_THEME_CLIENT}
     );
     paintDashboardMessage(now);
   }
-  function reconcileTiles(container, html) {
+  function updateTiles(container, html) {
     const template = document.createElement('template');
     template.innerHTML = html;
     formatViewerTimes(template.content.querySelectorAll('time[data-viewer-time][datetime]'));
-    const currentById = new Map(Array.from(container.children).map((tile) => [tile.dataset.tileId, tile]));
-    const desired = Array.from(template.content.children).map((next) => {
-      const current = currentById.get(next.dataset.tileId);
-      if (!current) return next;
-      currentById.delete(next.dataset.tileId);
-      if (current.outerHTML === next.outerHTML) return current;
-
-      const scrollTop = current.querySelector('.evscroll')?.scrollTop;
-      const active = document.activeElement;
-      const rootFocused = active === current;
-      const focusedHref = current.contains(active) && active instanceof HTMLAnchorElement ? active.href : null;
-      const focusedKey = current.contains(active) && active instanceof HTMLAnchorElement
-        ? active.dataset.focusKey ?? null
-        : null;
-      current.replaceWith(next);
-      const nextScroller = next.querySelector('.evscroll');
-      if (scrollTop !== undefined && nextScroller) nextScroller.scrollTop = scrollTop;
-      if (rootFocused) next.focus({ preventScroll: true });
-      else if (focusedHref) {
-        const links = Array.from(next.querySelectorAll('a'));
-        const replacement = focusedKey
-          ? links.find((link) => link.dataset.focusKey === focusedKey)
-          : undefined;
-        (replacement ?? links.find((link) => link.href === focusedHref))?.focus({ preventScroll: true });
-      }
-      return next;
-    });
-    for (const obsolete of currentById.values()) obsolete.remove();
-    desired.forEach((tile, index) => {
-      const atIndex = container.children[index];
-      if (atIndex !== tile) container.insertBefore(tile, atIndex ?? null);
-    });
+    reconcileTiles(container, Array.from(template.content.children));
   }
   const updates = liveUpdateStream(RED_AFTER, () => {
     const es = new EventSource('/events');
@@ -473,8 +418,8 @@ ${DASHBOARD_THEME_CLIENT}
       updates.heard(Date.now());
       const update = JSON.parse(e.data);
       if (update.shellVersion !== SHELL_VERSION) { location.reload(); return; }
-      reconcileTiles(grid, update.gridHtml);
-      reconcileTiles(wide, update.wideHtml);
+      updateTiles(grid, update.gridHtml);
+      updateTiles(wide, update.wideHtml);
       base = update.ageSeconds;
       t0 = Date.now();
       faviconServerRedSince = update.faviconRedSince;

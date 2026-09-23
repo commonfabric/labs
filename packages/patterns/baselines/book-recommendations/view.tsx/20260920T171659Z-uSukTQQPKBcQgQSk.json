@@ -1,0 +1,258 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "AgentRunUsage": {
+        "properties": {
+          "cacheWriteTokens": {
+            "type": "number"
+          },
+          "cachedInputTokens": {
+            "type": "number"
+          },
+          "costUsd": {
+            "type": "number"
+          },
+          "estimateWithheldReason": {
+            "type": "string"
+          },
+          "estimatedCostUsd": {
+            "type": "number"
+          },
+          "inputTokens": {
+            "type": "number"
+          },
+          "outputTokens": {
+            "type": "number"
+          },
+          "reasoningTokens": {
+            "type": "number"
+          },
+          "totalTokens": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "Book": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "author"
+        ],
+        "type": "object"
+      },
+      "BookPick": {
+        "properties": {
+          "book": {
+            "$ref": "#/$defs/Book",
+            "asCell": [
+              "readonly"
+            ]
+          },
+          "why": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "book",
+          "why"
+        ],
+        "type": "object"
+      },
+      "RecommendationState": {
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "result": {
+            "$ref": "#/$defs/Recommendations"
+          },
+          "run": {
+            "properties": {
+              "usage": {
+                "$ref": "#/$defs/AgentRunUsage"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "pending"
+        ],
+        "type": "object"
+      },
+      "Recommendations": {
+        "properties": {
+          "picks": {
+            "items": {
+              "$ref": "#/$defs/BookPick"
+            },
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "asCell": [
+                "readonly"
+              ],
+              "type": "unknown"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "picks"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "state": {
+        "$ref": "#/$defs/RecommendationState"
+      }
+    },
+    "required": [
+      "state"
+    ],
+    "type": "object"
+  },
+  "pattern": "book-recommendations/view.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AgentRunUsage": {
+        "properties": {
+          "cacheWriteTokens": {
+            "type": "number"
+          },
+          "cachedInputTokens": {
+            "type": "number"
+          },
+          "costUsd": {
+            "type": "number"
+          },
+          "estimateWithheldReason": {
+            "type": "string"
+          },
+          "estimatedCostUsd": {
+            "type": "number"
+          },
+          "inputTokens": {
+            "type": "number"
+          },
+          "outputTokens": {
+            "type": "number"
+          },
+          "reasoningTokens": {
+            "type": "number"
+          },
+          "totalTokens": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "Book": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "author"
+        ],
+        "type": "object"
+      },
+      "BookPick": {
+        "properties": {
+          "book": {
+            "$ref": "#/$defs/Book"
+          },
+          "why": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "book",
+          "why"
+        ],
+        "type": "object"
+      },
+      "RecommendationState": {
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "result": {
+            "$ref": "#/$defs/Recommendations"
+          },
+          "run": {
+            "properties": {
+              "usage": {
+                "$ref": "#/$defs/AgentRunUsage"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "pending"
+        ],
+        "type": "object"
+      },
+      "Recommendations": {
+        "properties": {
+          "picks": {
+            "items": {
+              "$ref": "#/$defs/BookPick"
+            },
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "picks"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "The display exposes the same linked result it receives.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "state": {
+        "$ref": "#/$defs/RecommendationState"
+      }
+    },
+    "required": [
+      "state",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

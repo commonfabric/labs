@@ -295,3 +295,40 @@ export function assertCaptures(root: ts.SourceFile): AssertCapture[] {
 export function assertCaptureLabels(root: ts.SourceFile): string[] {
   return assertCaptures(root).map((capture) => capture.src);
 }
+
+/**
+ * Every verified-binding identity the hardening stage attached, as the
+ * metadata literal's value (`{ sourceFile, bindingPath }`), in source order.
+ * The helper is minted with a unique name, so it is matched by prefix.
+ */
+export function bindingIdentities(
+  root: ts.Node,
+): { sourceFile: string; bindingPath: string[] }[] {
+  return callsMatching(root, /^__cfBindVerifiedBinding/).map((call) =>
+    literalToValue(call.arguments[1]!) as {
+      sourceFile: string;
+      bindingPath: string[];
+    }
+  );
+}
+
+/**
+ * Every `__ctWriterIdentityOf` marker an emitted claim carries, evaluated to
+ * its value, in source order.
+ */
+export function writerIdentityMarkers(
+  root: ts.Node,
+): { file: string; path: string[]; moduleIdentity?: string }[] {
+  return collect(root, ts.isPropertyAssignment)
+    .filter((property) =>
+      ts.isIdentifier(property.name) &&
+      property.name.text === "__ctWriterIdentityOf"
+    )
+    .map((property) =>
+      literalToValue(property.initializer) as {
+        file: string;
+        path: string[];
+        moduleIdentity?: string;
+      }
+    );
+}

@@ -22,7 +22,7 @@ import { readStatsActive, recordLinkResolution } from "./read-stats.ts";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
-import { toMemorySpaceAddress } from "../src/link-utils.ts";
+import { schemaForSpaceCrossing, toMemorySpaceAddress } from "./link-utils.ts";
 import { opaqueReference, toCell } from "./back-to-cell.ts";
 import { type JSONSchema, type SchemaScope } from "./builder/types.ts";
 import { createCell, isCell } from "./cell.ts";
@@ -34,6 +34,7 @@ import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { CfcLabelViewRebaser } from "./cfc/label-view-rebaser.ts";
 import {
   type CfcLabelView,
+  cfcLabelViewForAddress,
   cfcLabelViewForDereference,
   cfcLabelViewForDereferenceTraces,
   cloneCfcLabelView,
@@ -85,6 +86,7 @@ import {
   combineSchemaForLink,
   createDefaultTraversalContext,
   IObjectCreator,
+  isUnknownCellSchema,
   mergeAnyOfMatches,
   SchemaObjectTraverser,
 } from "./traverse.ts";
@@ -1109,9 +1111,17 @@ export function validateAndTransform(
   // We'll use this for the value, and potentially merge the schema
   // This gets me the result of following all the links, so I can get the value
   const valueTraceStart = tx.getCfcState().dereferenceTraces.length;
-  const resolvedValueLink = resolveLink(runtime, tx, link, "value", {
-    markIfcCrossings: true,
-  });
+  // An unknown-valued handle transfers its address without reading
+  // through the target's access boundary. The handle branch below records the
+  // link crossing and applies its schema before returning the cell.
+  const handleTarget = isUnknownCellSchema(effectiveSchema)
+    ? readMaybeLink(tx, link)
+    : undefined;
+  const resolvedValueLink = handleTarget !== undefined
+    ? link
+    : resolveLink(runtime, tx, link, "value", {
+      markIfcCrossings: true,
+    });
   cfcLabelView = mergeCfcLabelViews([
     cfcLabelView,
     deriveDereferenceLabelView(
@@ -1138,6 +1148,7 @@ export function validateAndTransform(
   // If our link is asCell/asStream, and we don't have any path portions, we
   // can just create the cell and mostly skip reading the value and traversal.
   if (SchemaObjectTraverser.hasAsCell(effectiveSchema)) {
+    const handleSourceSpace = link.space;
     // We check for a link value, since we will follow links one step in get
     // We've already followed all the writeRedirect links above.
     const next = readMaybeLink(tx, link);
@@ -1153,11 +1164,13 @@ export function validateAndTransform(
       // (#5230).
       cfcLabelView = mergeCfcLabelViews([
         cfcLabelView,
-        cfcLabelViewForDereference(
-          tx,
-          cfcAddressFromLink(link),
-          cfcAddressFromLink(next),
-        ),
+        isUnknownCellSchema(effectiveSchema)
+          ? cfcLabelViewForAddress(tx, cfcAddressFromLink(link))
+          : cfcLabelViewForDereference(
+            tx,
+            cfcAddressFromLink(link),
+            cfcAddressFromLink(next),
+          ),
       ]);
       // We leave the asCell/asStream in the schema, so that createObject
       // knows to create a cell
@@ -1184,6 +1197,9 @@ export function validateAndTransform(
       link.schema = SchemaObjectTraverser.hasAsCell(combined)
         ? combined
         : effectiveSchema!;
+    }
+    if (link.space !== handleSourceSpace) {
+      link.schema = schemaForSpaceCrossing(tx, handleSourceSpace, link.schema);
     }
     const handleSchema = resolveSchema(link.schema);
     const handleEntry = ContextualFlowControl.getAsCellValues(handleSchema)[0];

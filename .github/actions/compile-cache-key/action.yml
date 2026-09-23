@@ -1,0 +1,32 @@
+name: "Compile cache key"
+description: >
+  Resolve the compiler-input fingerprint a pattern compile byte cache is keyed
+  on, as the `fingerprint` output. Needs Deno on PATH and the dependencies
+  installed, so it goes after the deno-setup and deno-install actions.
+outputs:
+  fingerprint:
+    description: >
+      The compiler-input fingerprint: base64url, and the part that identifies
+      the compiler in the runtime's own `cf/esm-compile/<fingerprint>` version
+      axis.
+    value: ${{ steps.fingerprint.outputs.value }}
+runs:
+  using: "composite"
+  steps:
+    # `actions/cache` evaluates its key again during the post-job save, so a
+    # `hashFiles()` call written into the key walks the fingerprinted trees
+    # twice. Resolving the value here also makes the CI key the runtime's own
+    # version value rather than a second hash over the same files.
+    - name: 🧮 Resolve the compiler fingerprint
+      id: fingerprint
+      shell: bash
+      run: |
+        set -euo pipefail
+        value="$(deno run --allow-read "$GITHUB_WORKSPACE/tasks/compile-cache-key.ts")"
+        # An empty output would leave every cache key equal to its constant
+        # prefix, so entries compiled from different sources would collide.
+        if [ -z "$value" ]; then
+          echo "::error::tasks/compile-cache-key.ts printed no fingerprint."
+          exit 1
+        fi
+        printf 'value=%s\n' "$value" >> "$GITHUB_OUTPUT"

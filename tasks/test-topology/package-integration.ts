@@ -87,7 +87,7 @@ export async function loadPackageIntegrationSuites(
       env,
       junit,
       files: defaultLane.enabled
-        ? files.filter((file) => !on.whole.has(file))
+        ? files.filter((file) => !on.excluded.has(file))
         : files,
       unavailable: defaultLane.enabled ? on.unavailable : [],
     });
@@ -100,7 +100,7 @@ export async function loadPackageIntegrationSuites(
       },
       junit,
       files: oppositeLane.enabled
-        ? files.filter((file) => !on.whole.has(file))
+        ? files.filter((file) => !on.excluded.has(file))
         : files,
       unavailable: oppositeLane.enabled ? on.unavailable : [],
     });

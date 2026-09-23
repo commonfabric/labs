@@ -25,7 +25,10 @@ import type {
   IExtendedStorageTransaction,
   INotFoundError,
 } from "./storage/interface.ts";
-import { linkResolutionProbe } from "./storage/reactivity-log.ts";
+import {
+  dereferenceResolutionProbe,
+  linkResolutionProbe,
+} from "./storage/reactivity-log.ts";
 import { ContextualFlowControl } from "./cfc.ts";
 import type { Runtime } from "./runtime.ts";
 import type { CfcAddress, CfcDereferenceTrace } from "./cfc/types.ts";
@@ -589,7 +592,7 @@ export function resolveLinkTracingDereferences(
         ...link,
         path: [...position, ...linkProbeSubPath()],
       }),
-      { meta: linkResolutionProbe },
+      { meta: dereferenceResolutionProbe },
     );
     let record: ProbeRecord;
     if (probe.ok) {

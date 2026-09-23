@@ -164,6 +164,7 @@ export {
 } from "./link-resolution.ts";
 export {
   areLinksSame,
+  getDerivedInternalCellLink,
   getMetaLink,
   isCellLink as isLink,
   isWriteRedirectLink,
@@ -414,3 +415,5 @@ export {
   renderCellReference,
   renderReferenceContext,
 } from "./cell-reference.ts";
+
+export { scopeCallerEventId } from "./scheduler/event-identity.ts";

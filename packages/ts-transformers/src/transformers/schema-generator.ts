@@ -5,6 +5,7 @@ import {
 import { numberFromExpression } from "@commonfabric/schema-generator/numeric-expression";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import ts from "typescript";
+import { resolveWriterBinding } from "@commonfabric/schema-generator/writer-binding";
 
 import {
   getNodeText,
@@ -64,6 +65,7 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
         const writeAuthorizedByIdentity = extractWriteAuthorizedByIdentity(
           typeArg,
           sourceFile.fileName,
+          checker,
           writerIdentityForSourceFile,
         );
         let schemaTypeArg: ts.TypeNode = typeArg;
@@ -513,6 +515,7 @@ function attachUiContractToSchemaRecord(
 function extractWriteAuthorizedByIdentity(
   typeNode: ts.TypeNode,
   sourceFileName: string,
+  checker: ts.TypeChecker,
   writerIdentityForSourceFile: (fileName: string) => {
     file: string;
     moduleIdentity?: string;
@@ -528,9 +531,14 @@ function extractWriteAuthorizedByIdentity(
   if (!ts.isIdentifier(bindingNode.exprName)) {
     return undefined;
   }
+  // The same resolution the formatter applies to a nested claim: the writer
+  // is named where it is DECLARED, through import bindings and re-exports,
+  // by its declared name. A binding the checker cannot resolve falls back to
+  // this file and the spelling, as before.
+  const binding = resolveWriterBinding(bindingNode.exprName, checker);
   return {
-    ...writerIdentityForSourceFile(sourceFileName),
-    path: [bindingNode.exprName.text],
+    ...writerIdentityForSourceFile(binding?.fileName ?? sourceFileName),
+    path: [binding?.name ?? bindingNode.exprName.text],
   };
 }
 

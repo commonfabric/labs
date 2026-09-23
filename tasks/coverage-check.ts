@@ -186,7 +186,7 @@ export class CoverageRateLimitedError extends Error {}
  * short still publishes what it measured, stamped with its compile cache
  * states, for a later run to read as a baseline.
  */
-export async function githubApiOrSkip<T>(
+export async function guardRateLimit<T>(
   description: string,
   operation: () => Promise<T>,
   artifact: PerfMetricsArtifact,
@@ -848,7 +848,7 @@ export interface SelectBaselinesOptions {
     baseSha: string,
   ) => Promise<Set<string>>;
 
-  /** Wraps the GitHub calls made here so a rate limit skips the check. */
+  /** Wraps the GitHub calls made here so a rate limit ends the check as one. */
   guard?: <T>(description: string, operation: () => Promise<T>) => Promise<T>;
 
   log?: (message: string) => void;
@@ -1064,6 +1064,56 @@ export async function fetchArtifactsForRunBestEffort(
   }
 }
 
+/**
+ * Lists the artifacts of the run this check belongs to. When GitHub's rate
+ * limit refuses the listing and the coverage profiles were downloaded ahead of
+ * the check into `coverageArtifactsDir`, the downloaded directories stand in
+ * for it. The profiles the check measures are read from those directories
+ * either way, and the listing only names them, so the run still measures its
+ * coverage; the baseline comparison reads the API again afterward, and reports
+ * a limit it reaches there as a run left ungated.
+ *
+ * What stands in holds only what was downloaded, which leaves out the compile
+ * cache states, so the run has none recorded. Any other failure, and a limit
+ * with no downloaded directory to fall back on, is rethrown.
+ */
+export async function fetchCurrentRunArtifacts(
+  runId: number,
+  coverageArtifactsDir: string | undefined,
+): Promise<Artifact[]> {
+  try {
+    return await fetchArtifactsForRun(runId);
+  } catch (error) {
+    if (!coverageArtifactsDir || !isGitHubRateLimitError(error)) throw error;
+    console.warn(
+      `  Warning: GitHub API rate limit while listing this run's artifacts; ` +
+        `reading the ones downloaded to \`${coverageArtifactsDir}\` instead: ` +
+        `${error}`,
+    );
+    return await downloadedArtifacts(coverageArtifactsDir);
+  }
+}
+
+/**
+ * Helper for {@link fetchCurrentRunArtifacts}, which names each artifact
+ * downloaded into `dir` by the directory holding it. The id and the size are
+ * the listing's to report, so each is zero here; what reads a downloaded
+ * artifact, and what copies its files, tells it apart by name.
+ */
+async function downloadedArtifacts(dir: string): Promise<Artifact[]> {
+  const artifacts: Artifact[] = [];
+  for await (const entry of Deno.readDir(dir)) {
+    if (!entry.isDirectory) continue;
+    artifacts.push({
+      id: 0,
+      name: entry.name,
+      size_in_bytes: 0,
+      expired: false,
+    });
+  }
+  return artifacts;
+}
+
 export interface BuildBaselineRunContextOptions {
   run: WorkflowRun;
   fetchArtifactsForRun?: (run: WorkflowRun) => Promise<Artifact[]>;
@@ -1259,6 +1309,11 @@ function sampleForRun(
  * combined report is built from, and reports what it found: how many raw
  * profile files and how many LCOV reports, plus the members the job that
  * uploaded it never launched, read from the record it carries.
+ *
+ * Each copy is named after the artifact it came from. Shards carry files of the
+ * same name, so the name has to tell the artifacts apart, which is what the
+ * artifact's own name does within one run; an artifact's id need not, since the
+ * run's artifacts read from their downloaded directories carry none.
  */
 export async function copyCoverageArtifactFiles(
   artifact: Artifact,
@@ -1325,7 +1380,7 @@ export async function copyCoverageArtifactFiles(
       const destDir = isLcov ? lcovDir : profileDir;
       const dest = path.join(
         destDir,
-        `${artifact.id}-${count}-${path.basename(entry.path)}`,
+        `${artifact.name}-${count}-${path.basename(entry.path)}`,
       );
       await Deno.copyFile(entry.path, dest);
       if (isLcov) lcovFiles++;
@@ -2594,11 +2649,15 @@ export async function main() {
     }
   }
 
+  const coverageArtifactsDir = Deno.env.get("COVERAGE_ARTIFACTS_DIR");
   let currentArtifacts: Artifact[] = [];
   let currentArtifactsError: unknown;
 
   try {
-    currentArtifacts = await fetchArtifactsForRun(runIdNum);
+    currentArtifacts = await fetchCurrentRunArtifacts(
+      runIdNum,
+      coverageArtifactsDir,
+    );
     console.log(
       `Fetched ${currentArtifacts.length} artifacts for current run.`,
     );
@@ -2650,7 +2709,7 @@ export async function main() {
     const coverage = await extractCoverageDebtSamples(
       currentRunInfo,
       currentArtifacts,
-      Deno.env.get("COVERAGE_ARTIFACTS_DIR"),
+      coverageArtifactsDir,
     );
     for (const [name, sample] of coverage.samples) {
       currentMetrics.set(name, sample);
@@ -2796,7 +2855,7 @@ async function ratchetAgainstBaselines(
 
   // 3. Read the workflow's run listing, which is where a `main` run is found by
   // the commit it measured.
-  const listing = await githubApiOrSkip(
+  const listing = await guardRateLimit(
     "reading the workflow's run listing",
     () => readListing({ currentRunId: input.currentRunId }),
     perfArtifact,
@@ -2831,7 +2890,7 @@ async function ratchetAgainstBaselines(
 
   const readBaselineRun = input.readBaselineRun ??
     ((run: WorkflowRun): Promise<BaselineRunReading> =>
-      githubApiOrSkip("reading a baseline run", async () => {
+      guardRateLimit("reading a baseline run", async () => {
         const context = await buildBaselineRunContext({ run });
         visitedContexts.push(context);
 
@@ -2872,7 +2931,7 @@ async function ratchetAgainstBaselines(
     readRun: readBaselineRun,
     isPullRequest: prNumber !== null,
     guard: (description, operation) =>
-      githubApiOrSkip(description, operation, perfArtifact),
+      guardRateLimit(description, operation, perfArtifact),
   }).finally(() => reportBaselineContextResults(visitedContexts));
 
   if (acceptingRuns > 0) {

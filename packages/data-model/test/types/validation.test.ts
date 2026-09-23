@@ -797,18 +797,12 @@ describe("validation", () => {
       // therefore have to be that function's, value for value -- which is what
       // this pins, over the whole corpus rather than over a chosen case.
       //
-      // The agreement is bounded to values whose class can be read at all. A
-      // value whose prototype has a throwing `constructor` accessor cannot be
-      // classified, so conversion fails on it outright, while the vet still
-      // names a reason -- its outcome having been settled before the probe
-      // that fails. The corpus carries no such value, and that bound is why.
-      //
-      // Bounded the same way to a class that reads the SAME each time. Each of
-      // these two reads the constructor for itself, so a `constructor`
-      // accessor answering differently on successive reads can be named
-      // differently by each. Neither contradicts itself -- one refusal reads
-      // once -- and a value that answers differently each time it is asked is
-      // not one this agreement is for.
+      // The agreement is bounded to a class that reads the SAME each time.
+      // Each of these two reads the constructor for itself, so a
+      // `constructor` accessor answering differently on successive reads can
+      // be named differently by each. Neither contradicts itself -- one
+      // refusal reads once -- and a value that answers differently each time
+      // it is asked is not one this agreement is for.
       //
       // The exception is a `FabricConvertibleJsObject`, and it is the whole of
       // the exception: conversion has a say over one, and either mints its
@@ -955,10 +949,10 @@ describe("validation", () => {
         });
 
         it("refuses a value whose class cannot be read, without propagating", () => {
-          // The one shape that defeats the prototype read as well. Both the
-          // reason-picking probe and the name lookup fail on it, and the
-          // refusal has to survive each: an error raised while explaining a
-          // refusal would arrive in place of the refusal.
+          // The one shape whose class cannot be read at all: the prototype's
+          // `constructor` accessor throws. The refusal has to survive that
+          // read, since an error raised while explaining a refusal would
+          // arrive in place of the refusal.
 
           class Unreadable {}
           Object.defineProperty(Unreadable.prototype, "constructor", {

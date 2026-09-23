@@ -1,3 +1,4 @@
+import { debugStr } from "@commonfabric/data-model";
 import { env, Page, waitForCondition } from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
@@ -344,9 +345,8 @@ async function waitForAuthorshipState(
   } catch (cause) {
     probe = await readAuthorshipProbe(page, containerSelector);
     throw new Error(
-      `Timed out waiting for verified authorship row. Last probe: ${
-        JSON.stringify(probe, null, 2)
-      }`,
+      `Timed out waiting for verified authorship row. ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }
@@ -443,9 +443,8 @@ async function waitForInvalidAuthorshipState(
   } catch (cause) {
     probe = await readAuthorshipProbe(page, containerSelector);
     throw new Error(
-      `Timed out waiting for invalid authorship row. Last probe: ${
-        JSON.stringify(probe, null, 2)
-      }`,
+      `Timed out waiting for invalid authorship row. ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }

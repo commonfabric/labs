@@ -98,10 +98,7 @@ import { sqliteQueryNodeFactory } from "./builtins/sqlite/query-node.ts";
 import { checkSqliteRowLabelWrite } from "./builtins/sqlite/row-label-write.ts";
 import { checkSqliteWriteCeiling } from "./builtins/sqlite/write-ceiling.ts";
 import { type Cancel, isCancel, useCancelGroup } from "./cancel.ts";
-import {
-  ContextualFlowControl,
-  resolveExternalRootRefForStructure,
-} from "./cfc.ts";
+import { ContextualFlowControl, declaredSchemaScope } from "./cfc.ts";
 import {
   type CfcLabelView,
   cfcLabelViewForDereferenceTraces,
@@ -2557,10 +2554,11 @@ export class CellImpl<T extends FabricValue>
       resolvedLink,
       resolvedLink.schema ?? this.schema,
     );
-    // Read marked as the op's own incidental read: dropped from the commit's
-    // conflict set so the append merges, while a handler's explicit read is not.
+    // The append's destination snapshot supplies storage positions without
+    // exposing content or length to the caller. It joins neither observed
+    // labels nor conflict preconditions; explicit handler reads retain both.
     let currentValue = this.tx.readValueOrThrow(resolvedLink, {
-      meta: mergeableOpRead,
+      meta: { ...mergeableOpRead, ...writeDestinationRead },
     });
     const cause = this.#frame?.cause;
 
@@ -5018,9 +5016,8 @@ function schemaWithDefaultAndScope<T>(
 export function schemaCellScope(
   schema: JSONSchema | undefined,
 ): CellScope | undefined {
-  if (!isObjectNotArray(schema)) return undefined;
-  schema = resolveExternalRootRefForStructure(schema);
-  return isCellScope(schema.scope) ? schema.scope : undefined;
+  const declared = declaredSchemaScope(schema);
+  return isCellScope(declared) ? declared : undefined;
 }
 
 /**

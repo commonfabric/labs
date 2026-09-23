@@ -1540,6 +1540,18 @@ Deno.test("parseCfHarnessCliArgs rejects malformed structured result validation 
   );
 });
 
+Deno.test("parseCfHarnessCliArgs rejects submit_result without a structured result target", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--allow-tool", "submit_result"],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "--allow-tool submit_result requires --structured-result-path and a schema",
+  );
+});
+
 Deno.test("parseCfHarnessCliArgs supports explicit subagent profile authorization", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
@@ -3910,8 +3922,12 @@ Deno.test("runCfHarnessCli validates a top-level structured result sidecar", asy
   assertEquals(stderr, []);
   assertEquals(
     runPromptOptions?.systemPrompt?.includes(
-      "write a JSON file at /workspace/capture.results.json",
+      "Writing a JSON file at /workspace/capture.results.json",
     ),
+    true,
+  );
+  assertEquals(
+    runPromptOptions?.systemPrompt?.includes("call submit_result"),
     true,
   );
   assertEquals(writes.length, 1);
@@ -4330,6 +4346,24 @@ Deno.test("resolveCfHarnessCliSystemPrompt bypasses operator guidance in batch m
     buildCfHarnessBatchSystemPrompt({
       systemPrompt: "You are a Loom batch worker.",
     }),
+  );
+});
+
+Deno.test("buildCfHarnessBatchSystemPrompt omits submit_result guidance when the tool is not allowed", () => {
+  const config = {
+    structuredResult: {
+      path: "/tmp/project/result.json",
+      sandboxPath: "/workspace/result.json",
+      schema: { type: "object" } as const,
+    },
+    allowedToolIds: ["write_file"] as const,
+  };
+  const prompt = buildCfHarnessBatchSystemPrompt(config);
+
+  assertEquals(prompt.includes("call submit_result"), false);
+  assertStringIncludes(
+    prompt,
+    "Writing a JSON file at /workspace/result.json",
   );
 });
 
@@ -7324,6 +7358,58 @@ Deno.test("parseCfHarnessCliArgs rejects --allow-tool search_skills without a sk
       ),
     Error,
     "missing --skills-registry-url",
+  );
+});
+
+Deno.test("parseCfHarnessCliArgs reads the Loom retrieval configuration from the flag or the environment", async () => {
+  const retrieval = {
+    cliPath: "/trusted/loom",
+    transport: { kind: "broker" as const, queuePath: "/trusted/queue" },
+  };
+  const readTextFile = (path: string) => {
+    assertEquals(path, "/trusted/retrieval.json");
+    return Promise.resolve(JSON.stringify(retrieval));
+  };
+  const flagged = await parseCfHarnessCliArgs(
+    [
+      "--prompt",
+      "hi",
+      "--loom-retrieval-config",
+      "/trusted/retrieval.json",
+      "--allow-tool",
+      "loom_search",
+    ],
+    { cwd: "/tmp/project", env: {}, readTextFile },
+  );
+  if ("help" in flagged) throw new Error("expected config result");
+  assertEquals(flagged.loomRetrieval, retrieval);
+  const fromEnvironment = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    {
+      cwd: "/tmp/project",
+      env: { CF_HARNESS_LOOM_RETRIEVAL_CONFIG: "/trusted/retrieval.json" },
+      readTextFile,
+    },
+  );
+  if ("help" in fromEnvironment) throw new Error("expected config result");
+  assertEquals(fromEnvironment.loomRetrieval, retrieval);
+  const absent = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    { cwd: "/tmp/project", env: {} },
+  );
+  if ("help" in absent) throw new Error("expected config result");
+  assertEquals(absent.loomRetrieval, undefined);
+});
+
+Deno.test("parseCfHarnessCliArgs rejects --allow-tool for a Loom retrieval tool without its configuration", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--allow-tool", "loom_people"],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "--allow-tool loom_people requires a Loom retrieval configuration",
   );
 });
 

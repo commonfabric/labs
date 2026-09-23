@@ -8,6 +8,7 @@
     "marked": "npm:marked@^18.0.6"
   },
   "tasks": {
-    "test": "deno test -A --permit-no-files"
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../tasks/run-member-tests.ts deno-test",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) -A --permit-no-files"
   }
 }

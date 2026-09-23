@@ -660,7 +660,6 @@ const ganttRoutes: Route[] = [
 
 function makeCiDuration(
   opts: {
-    id: string;
     label: string;
     repo: string;
     workflow: string;
@@ -670,7 +669,7 @@ function makeCiDuration(
   },
 ): Tile {
   return {
-    id: opts.id,
+    label: opts.label,
     intervalMs: 30_000,
     runSources: [runSource(opts.repo, opts.workflow)],
     routes: opts.routes,
@@ -681,7 +680,6 @@ function makeCiDuration(
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return {
-          label: opts.label,
           status: "unknown",
           value: "—",
           sub: friendlyError(message),
@@ -738,7 +736,6 @@ function makeCiDuration(
         ? "warn"
         : "bad";
       return {
-        label: opts.label,
         status: s,
         value: window.length === 0 ? "—" : `${medianMins}m`,
         sub: usingTime
@@ -757,7 +754,6 @@ function makeCiDuration(
 }
 
 export const labsCiDuration = makeCiDuration({
-  id: "ci-duration",
   label: "labs ci duration",
   repo: REPO,
   workflow: CI_WORKFLOW,
@@ -766,7 +762,6 @@ export const labsCiDuration = makeCiDuration({
   routes: ganttRoutes,
 });
 export const loomCiDuration = makeCiDuration({
-  id: "loom-ci-duration",
   label: "loom ci duration",
   repo: LOOM_REPO,
   workflow: LOOM_CI_WORKFLOW,

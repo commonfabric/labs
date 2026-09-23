@@ -10180,8 +10180,9 @@ supply; OW29/OW32/OW34 closed):
     effective ceiling per run (`effectiveReadCeiling`: the serving
     runtime's option met with the carried one, `onExceed` meeting
     toward `fail`) and uses it where it used the runtime's option:
-    the session-scoped-result refusal, the request hash
-    (`runtimeReadCeiling`), the row meet and the mode default. The
+    the session-scoped query request hash (`runtimeReadCeiling`),
+    the row meet and the mode default. Ordinary cell reads meet the
+    carried session ceiling with the runtime ceiling as well. The
     constructor refusal is retired; what it refuses now is a manager
     that cannot carry the ceiling. Pinned: wire parse, registry and
     flag in `packages/memory/test/v2-session-read-ceiling.test.ts`;
@@ -10197,21 +10198,20 @@ supply; OW29/OW32/OW34 closed):
     `packages/runner/test/sqlite-runtime-read-ceiling.test.ts`; end
     to end — a bounded and an unbounded client of one space served
     their own session instances of one `PerSession` query from one
-    labeled row set, and the non-session refusal on both runtimes —
+    labeled row set, and a shared materialization whose labeled rows
+    are withheld from the bounded client —
     in `packages/runner/test/executor-sqlite-read-ceiling.test.ts`;
     the controller's forwarding on both arms in
     `packages/piece/test/pieces-controller-connection.test.ts`.
     cf-harness needs nothing: its `--max-confidentiality` bounds the
     session on either arm, and its bounded-as-configured attestation
     over the client runtime's fields stays true because the carried
-    value is those fields. One residual, recorded here rather than
-    hidden: a shared (space- or user-scoped) query result a bounded
-    session reads was computed by whichever run its node probed or
-    narrowed at, and the ceiling never applied to a run that was not
-    the session's — the same seam `RuntimeOptions.cfcReadMaxConfidentiality`'s
-    doc names for the OFF arm, closed the same way (a pattern authored
-    for a bounded run declares its query results per session; a
-    bounded client's own run refuses anything broader). A second
+    value is those fields. Shared query results retain the complete
+    labels of their materialized rows and array shape; each cell read
+    enforces its runtime and carried session ceiling. The cell guard
+    is pinned in `packages/runner/test/cfc-cell-read-ceiling.test.ts`,
+    and shared result shape, aggregate and diagnostic protection in
+    `packages/runner/test/sqlite-shared-read-ceiling.test.ts`. One
     residual, fail-OPEN and therefore owed: the stamp reads the LIVE
     session record, so a run served as a session whose record has
     expired — an event a bounded client fired and then stayed

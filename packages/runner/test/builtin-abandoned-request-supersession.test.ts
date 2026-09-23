@@ -10,9 +10,9 @@
  * which no longer describes the inputs the pattern is asking about.
  *
  * The refusal is arranged the way `builtin-abandoned-request.test.ts` arranges
- * it, with a caveat the result store does not declare. What differs here is
- * that the refused request is not the node's first, so there is committed
- * state for the ending to decide against.
+ * it, with a caveat the sink's declared ceiling does not admit. What differs
+ * here is that the refused request is not the node's first, so there is
+ * committed state for the ending to decide against.
  */
 
 import { expect } from "@std/expect";
@@ -92,6 +92,11 @@ describe("whose cells an abandoned request's ending writes", () => {
         llmDialog: [],
         generateText: [],
         generateObject: [],
+        // The `sqliteQuery` sink is ungated under the bundle for a reason of
+        // its own — the bound a read wants is the database's space, which a
+        // clause list cannot hold — so the query case here declares the
+        // ceiling its refusal comes from, as the llm cases above do.
+        sqliteQuery: [],
       },
     });
     tx = runtime.edit();

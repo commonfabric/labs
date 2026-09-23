@@ -432,6 +432,15 @@ retain at least one concrete OWNER") restated as a checkable entry, because it
 is the invariant a client is most likely to violate without knowing the rule
 exists.
 
+The generic invitation service commits its private admission records and unique
+redemption receipts in the same engine transaction as an ACL-only system commit.
+That internal operation reads current authority under the SQLite write lock and
+publishes cache and watch changes only after durable commit. Its only public
+document operation remains the whole-document ACL `set` described here. Private
+invitation metadata is not part of `ClientCommit` and cannot be submitted through
+`session.transact`. See the
+[invitation service contract](../../../packages/toolshed/README.md#space-invitations).
+
 The clauses are checked in this order, each rejecting with a `ProtocolError`
 carrying a distinct message (so a message identifies the clause):
 

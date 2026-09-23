@@ -6,6 +6,30 @@ server holding one in-process interactive chat service, and two Lit pages
 reading its events over Server-Sent Events: the console itself, and the live
 pane a host embeds to show one session working.
 
+Opening research appears in the live pane as “Orienting: working out what is
+already available,” with elapsed time until it completes, fails, or is canceled.
+
+A completed turn that names a piece keeps its reference for a bare follow-up in
+the same session, including after restart. Explicit attachments select the new
+turn's inputs; `inputCells: []` attaches none and clears the retained target on
+successful completion without naming a piece. Omission or `null` keeps the bare
+follow-up behavior. A `pending: true` output declared by the piece's top-level
+result schema prevents naming it as a ready page, and data-only probes stay
+unnamed. Reread the same piece after its read settles and verify the result.
+
+A successful `run_pattern` result may carry `outputConcerns`: `error-branch`
+reports an observed failure, `pending` marks an unfinished read, and `no-rows`
+marks a settled empty read. Pending counts are placeholders. Reread the same
+piece through a minimal unnamed reader, passing its result reference in `inputs`
+and exposing pending, error, and counts in `resultSchema`. Repair observed
+failures; for a settled empty filtered result, compare the unfiltered count.
+
+An unnamed reader still creates a persisted, detached piece; `assign_slug` adds
+it to the registered list. Source-history revisions are storage-retention roots:
+unnamed pieces are not transient and are neither deleted nor garbage-collected.
+See
+[piece execution and retention](../README.md#running-patterns-against-a-fabric-space).
+
 The server binds `127.0.0.1` and asks one thing of a request: that it names this
 server's own host. A hostile name that resolves to `127.0.0.1` would otherwise
 make these routes same-origin to a browser, and that name is visible on the
@@ -119,23 +143,24 @@ build on its own.
 
 Every environment variable has a flag, and the flag wins:
 
-| Flag                    | Environment                          | Default                               |
-| ----------------------- | ------------------------------------ | ------------------------------------- |
-| `--port`                | `CF_HARNESS_CONSOLE_PORT`            | `8100`                                |
-| `--fabric-api-url`      | `CF_HARNESS_FABRIC_API_URL`          | `http://localhost:8000`               |
-| `--fabric-identity`     | `CF_HARNESS_FABRIC_IDENTITY`         | required                              |
-| `--fabric-space`        | `CF_HARNESS_FABRIC_SPACE`            | required, a name                      |
-| `--pattern-index-url`   | `CF_HARNESS_PATTERN_INDEX_URL`       | unset                                 |
-| `--skills-registry-url` | `CF_HARNESS_SKILLS_REGISTRY_URL`     | unset                                 |
-| `--model`               | `CF_HARNESS_MODEL`                   | the CLI's default model               |
-| `--workspace`           | `CF_HARNESS_CONSOLE_WORKSPACE`       | `.cf-harness-console/workspace`       |
-| `--artifact-root`       | `CF_HARNESS_ARTIFACT_ROOT`           | `.cf-harness-console/runs`            |
-| `--session-db`          | `CF_HARNESS_CONSOLE_SESSION_DB`      | `.cf-harness-console/sessions.sqlite` |
-| `--space-db`            | `CF_HARNESS_SPACE_DB`                | the space's own database, discovered  |
-| `--max-model-turns`     | `CF_HARNESS_CONSOLE_MAX_MODEL_TURNS` | the prompt loop's default             |
-| `--skills-root`         | `CF_HARNESS_CONSOLE_SKILLS_ROOT`     | the repository's `skills/` tree       |
-| `--allow-skill-scripts` | `CF_HARNESS_ALLOW_SKILL_SCRIPTS=1`   | off; scripts do not run               |
-| `--host-mount`          | —                                    | none; repeatable                      |
+| Flag                      | Environment                          | Default                               |
+| ------------------------- | ------------------------------------ | ------------------------------------- |
+| `--port`                  | `CF_HARNESS_CONSOLE_PORT`            | `8100`                                |
+| `--fabric-api-url`        | `CF_HARNESS_FABRIC_API_URL`          | `http://localhost:8000`               |
+| `--fabric-identity`       | `CF_HARNESS_FABRIC_IDENTITY`         | required                              |
+| `--fabric-space`          | `CF_HARNESS_FABRIC_SPACE`            | required, a name                      |
+| `--fabric-foreign-spaces` | `CF_HARNESS_FABRIC_FOREIGN_SPACES`   | no foreign spaces admitted            |
+| `--pattern-index-url`     | `CF_HARNESS_PATTERN_INDEX_URL`       | unset                                 |
+| `--skills-registry-url`   | `CF_HARNESS_SKILLS_REGISTRY_URL`     | unset                                 |
+| `--model`                 | `CF_HARNESS_MODEL`                   | the CLI's default model               |
+| `--workspace`             | `CF_HARNESS_CONSOLE_WORKSPACE`       | `.cf-harness-console/workspace`       |
+| `--artifact-root`         | `CF_HARNESS_ARTIFACT_ROOT`           | `.cf-harness-console/runs`            |
+| `--session-db`            | `CF_HARNESS_CONSOLE_SESSION_DB`      | `.cf-harness-console/sessions.sqlite` |
+| `--space-db`              | `CF_HARNESS_SPACE_DB`                | the space's own database, discovered  |
+| `--max-model-turns`       | `CF_HARNESS_CONSOLE_MAX_MODEL_TURNS` | the prompt loop's default             |
+| `--skills-root`           | `CF_HARNESS_CONSOLE_SKILLS_ROOT`     | the repository's `skills/` tree       |
+| `--allow-skill-scripts`   | `CF_HARNESS_ALLOW_SKILL_SCRIPTS=1`   | off; scripts do not run               |
+| `--host-mount`            | —                                    | none; repeatable                      |
 
 ### Skill scripts
 
@@ -169,7 +194,9 @@ names:
 A pattern a session authors and runs is recorded against the index unless
 publishing is turned off, and is offered to search only when discoverability is
 asked for — which is for deliberate corpus seeding, since discoverability is
-otherwise earned from later evidence.
+otherwise earned from later evidence. The
+[seeding guidance](../README.md#seeding-the-pattern-index) distinguishes raw
+connector readers from pieces built and evaluated with a person.
 
 `--host-mount name=<name>,source=<host path>,target=<sandbox path>[,mode=readonly|writable]`
 takes the same spec the CLI takes, and is repeatable. It is how a reference tree
@@ -220,6 +247,7 @@ one.
 | `GET`  | `/api/runs/<runId>/...`      | Run detail, flow, graph, artifacts, and tool outputs                                    |
 | `POST` | `/api/index/call`            | One allowlisted pattern-index read                                                      |
 | `POST` | `/api/index/feedback`        | Records one up or down vote on a pattern in the index                                   |
+| `POST` | `/api/index/retract`         | Retracts an owned generation in favor of its direct successor                           |
 | `GET`  | `/live/<sessionId>`          | The live pane for one session; takes `?turn=<turnId>` and `?piecesBase=<url-prefix>`    |
 
 Health returns `ok`, `fabricApiUrl`, and `fabricSession`. The last field is
@@ -290,9 +318,18 @@ name for it — never the reference, and never what the cell holds. The referenc
 grammar is `--input-cell`'s, so a spelling the CLI refuses is refused here with
 a 400 before any turn starts: a `ref` has to be a link naming an entity
 (`/of:fid1:…/path`, or `computed:`), not a bare hash. A cell that passes the
-grammar and still cannot be minted — one in another space, say — fails the turn
-rather than starting it without what the caller attached, and that turn is
-terminal like any other failed one.
+grammar and still cannot be minted — one in an unadmitted foreign space, say —
+fails the turn rather than starting it without what the caller attached, and
+that turn is terminal like any other failed one.
+
+The operator can admit foreign references at startup with
+`--fabric-foreign-spaces '{"did:key:zForeign":"https://foreign.example/"}'`. The
+value maps explicit space DIDs to HTTP(S) origins. It registers the routes for
+the session and governs attachment minting, `describe_handle`, and `run_pattern`
+together. `{}` clears an environment default. A task body and a model tool call
+cannot change this setting. Reads use the session identity's existing rights and
+retain the source CFC labels; handles do not declassify. See
+[foreign reference admission](../README.md#running-patterns-against-a-fabric-space).
 
 A `ref` may also name a piece the way a person sees it named, which is what a
 caller showing a rendered piece has to work with:
@@ -374,6 +411,15 @@ a pin change or rollback does not hide a finished turn's result. Its `finalText`
 remains available. Malformed objects remain invalid; new tool calls and writes
 use the closed three-outcome contract.
 
+Optional `usage` contains the run report's cumulative `inputTokens`,
+`outputTokens`, and other reported token/cache/cost fields, including research
+and child calls. Reports without `totalUsage` use their legacy `usage` field.
+Unreported fields remain absent; they are not zero. `costUsd` is provider
+reported and `estimatedCostUsd` is the harness estimate, with neither presented
+as a total when any call lacks the corresponding cost. Optional `elapsedMs`
+measures wall time from the durable turn start to its terminal event; it is
+omitted when the turn timestamps are unavailable or invalid.
+
 `sessionId` identifies the conversation on every result. `continuable` says
 whether it currently accepts another turn: the session must be idle and
 reusable. A reply uses the existing task route with that `sessionId`, so the
@@ -450,6 +496,23 @@ or reason at the event level, and the structured object under `result`. Its turn
 attribution is unchanged. Live streams and replayed durable events have the same
 shape, so a caller can open `result.pieces[0].url` without parsing assistant
 prose. Pollers read the same object from `GET /api/turns/<turnId>/result`.
+
+A completed Fabric task produces a named UI piece. A text answer is rendered by
+a small pattern and named through `assign_slug`; a data-only computation is not
+the user-facing result. Revising an existing piece can confirm its existing
+slug. A plain-text completion without a successful naming receipt is returned to
+the model for correction within its current turn budget.
+
+During the turn, `turn_usage` events carry `{ turnId, usage?, elapsedMs? }`
+after each completed parent, private research, or child model call. `usage` is
+the cumulative root-turn total, so clients replace their displayed total rather
+than adding events together. A child's calls count while it is running and
+remain counted if it fails; the child's return adds no second charge. The
+envelope and event both identify the root turn. Updates use the ordinary durable
+event stream and replay in sequence. Counts do not include tokens still being
+generated in a provider request. The next turn starts its own total, and updates
+stop when a turn is canceled. An older console without `turn_usage` still
+exposes its existing terminal usage when available.
 
 The parent calls `finish_task` alone to ask a question or explain why it cannot
 proceed. This uses the ordinary tool policy and artifact path, then ends the
@@ -719,8 +782,10 @@ A chip holds two label facts, and the card names them apart because they answer
 different questions:
 
 - **cfc** — the atoms the sandbox's invocation context recorded on the arguments
-  of the call this sighting belongs to. What one call saw crossing into it. The
-  count on the chip is this one.
+  of the call this sighting belongs to: confidentiality taint from
+  `cfcInputLabels`, and the prompt slot's influence as integrity from
+  `promptSlotInfluenceLabels`. What one call saw crossing into it. The count on
+  the chip is this one.
 - **space** — the confidentiality and integrity atoms the space stores for the
   cell itself, read from the space the run wrote into, with the labelled paths
   read path by path and the origin of each beside it.
@@ -780,7 +845,8 @@ record of what the run recorded rather than a cell with nothing to hide.
     decided. A policy event appears beside the decision, which is how a call CFC
     _allowed_ but whose _observation_ it refused reads as the two separate facts
     it is. The flow labels the runtime computed for each input position appear
-    here too.
+    here too, and beside them the prompt slot's influence on each input it
+    shaped, as integrity.
   - **disclosure** — how many bytes the result let across as a plain value, how
     many positions it sealed behind a reference, and the longest run of numbers
     it carried. A long numeric run is called out, in the rail as well: the
@@ -790,13 +856,16 @@ record of what the run recorded rather than a cell with nothing to hide.
 
   Then the call's input and model-facing output as formatted JSON, with long
   lines scrolling inside their block rather than widening the page. Beside the
-  output, **withheld from the model** expands to the full artifact positions
-  named by `transcript-omissions.json`, each labeled by its omission rule. CFC
-  denials render a redaction marker. Scrubbed Fabric identifiers are shown with
-  `[fabric-id]` in place of their values when the artifact position is
-  available; that fixed marker stands in alone when it is not. A legacy result
-  with no omission record says so instead of inferring omissions from the full
-  result.
+  output, an omission block expands to the full artifact positions named by
+  `transcript-omissions.json`, each labeled by its omission rule.
+  `artifact-only` reads **kept on the artifact, not sent to the model**;
+  `observation-denied` reads **withheld by policy**, as do release refusals on
+  the CFC line. The block includes a short excerpt of the recorded result the
+  model received. CFC denials render a redaction marker. Scrubbed Fabric
+  identifiers are shown with `[fabric-id]` in place of their values when the
+  artifact position is available; that fixed marker stands in alone when it is
+  not. A legacy result with no omission record says so instead of inferring
+  omissions from the full result.
 
   Superseded `run_pattern` source is an assistant argument rather than a tool
   result, so it is outside the omission record. Where its marker appears, the
@@ -841,29 +910,33 @@ forwarded, so nothing extra survives the crossing. `searchPatterns` uses the
 shared client's
 [successor resolution](../README.md#pattern-generations-in-search); the listing
 and exact-ID reads retain their individual generation records. Event badges
-count only that generation's own events. When the index supplies inherited
-evidence, the score separately identifies its inherited portion, predecessor,
-and publication cutoff. `getPattern` is called without `includeSource`: this
-surface shows metadata, schemas, dependencies and events, and a pattern's source
-is read through the CLI.
+count only that generation's own events, split by author DID when the index
+supplies `eventAuthors`. Each DID can be copied in full. Counts with no known
+author show **author unavailable**; the caller's bounded event stream cannot
+attribute the whole index's totals. When the index supplies inherited evidence,
+the score separately identifies its inherited portion, predecessor, and
+publication cutoff. `getPattern` is called without `includeSource`: this surface
+shows metadata, schemas, dependencies and events, and a pattern's source is read
+through the CLI.
 
 The route sits under `/api/`, so it is behind the same `Host` gate as the rest.
 
-Voting is the console's one write to the index, and it has a route of its own
-rather than a name in that allowlist: `POST /api/index/feedback`, below.
+Voting and owner retraction have dedicated write routes:
+`POST /api/index/feedback` and `POST /api/index/retract`, below. Neither is
+reachable through the read allowlist.
 
 Three panes:
 
 - **Patterns** — everything the index holds, by score. A row carries the pattern
-  id, its description and hashtags, a badge per event type counted against it,
-  the weighted score those counts produce, and when it was created; the weights
+  id, its description and hashtags, badges per event type and known author, the
+  weighted score those counts produce, and when it was created; the weights
   themselves are printed beside the heading. Opening a row reads that pattern's
   argument and result schemas, its dependencies, and the events you recorded
   against it. Every identifier is a button that copies the whole of itself.
 - **Your events** — your own event stream, newest first, with a box that filters
   on any field. The index answers each signer with their own events and nobody
-  else's; the shared reading of what everyone did is the score in the table
-  above.
+  else's; the shared counts and their available author breakdowns are in the
+  table above. Individual notes stay in the author's own stream.
 - **Search** — the query the runtime's `search_patterns` would make, run by
   hand. Tags, free text and a limit compose a request, and the request is shown
   beside the results, because what the pane is for is how the index answers
@@ -881,10 +954,10 @@ a pattern id and a verdict and nothing else:
 ```
 
 An `up` is recorded as a `thumbs_up` and a `down` as a `thumbs_down`, through
-the same verdict mapping the `record_feedback` tool records through, so a vote
-cast here and a vote cast by a run are the same event. The server signs it with
-its fabric identity, so the index attributes the vote to the operator's own
-principal — the one it answers `recordedBy` with:
+the same verdict mapping the `record_feedback` tool records through. The index
+client adds the author as `did` from its signing identity: the console's DID for
+this route, and the run's DID for the harness tool. Neither the browser nor the
+model chooses that field. The server returns the author as `recordedBy`:
 
 ```json
 {
@@ -893,6 +966,11 @@ principal — the one it answers `recordedBy` with:
   "recordedBy": "did:key:z…"
 }
 ```
+
+The console and the runs it launches use the same configured Fabric keyfile.
+Their author DIDs therefore match. A DID identifies the key that recorded a
+vote; it does not certify that a human chose the verdict. Distinguishing those
+actors requires distinct held identities, not a caller-supplied human flag.
 
 The index ranks on these votes, so a pattern that keeps disappointing stops
 being offered first and one that keeps working is offered sooner. That is why
@@ -907,6 +985,74 @@ in any of those cases. Like the read route, it is under `/api/` and behind the
 same `Host` gate, and takes one bare request with no cookie and no preceding
 one.
 
+### Index service contract for authors
+
+The cloud function implementation is outside this checkout. Its matching
+contract is:
+
+- `recordEvent` accepts `{ patternId, eventType, did, note? }`. It verifies
+  `did` against the authenticated CF1 signer and rejects a mismatch. It stores
+  that authenticated DID on the event. Older clients omitting `did` can be
+  attributed from the signer; an unverified body field is never authority.
+- `listEvents` retains its caller-scoped stream and existing `did` field.
+- `listPatterns` may return `eventAuthors` on each pattern, shaped as
+  `{ "thumbs_up": { "did:key:z…": 2 } }`: event type to author DID to count.
+  These are counts on that exact generation, excluding inherited evidence, and
+  each type's author counts sum to at most its `events` total. This makes author
+  counts public alongside the totals, without exposing event notes. Historical
+  events with a stored authenticated DID can contribute; events without one stay
+  unattributed. Neither the pattern owner nor its source is evidence of who
+  voted.
+
+Until the service supplies `eventAuthors`, the inspector shows the aggregate
+counts as author unavailable. The client contract and display support do not
+establish that a cloud deployment implements them.
+
+## Retracting an owned generation
+
+This route consumes the external index service contract described below for
+ownership, successor eligibility, discovery, receipts, and error statuses. The
+console forwards those decisions; verifying the deployed service requires an
+index-side check.
+
+`POST /api/index/retract` retires a pattern in favor of an existing same-owner
+direct successor. It does not delete a standalone entry: a successor is
+required, including for a non-discoverable probe. The request names both index
+identities and a nonempty reason:
+
+```json
+{
+  "patternId": "<recorded pattern identity>",
+  "successorPatternId": "<direct successor identity>",
+  "reason": "Superseded by the corrected reader"
+}
+```
+
+For a harness-authored pattern, use `patternPublication.patternId` from its
+`run_pattern` output, available through
+`GET /api/runs/<runId>/tool-outputs/<filename>.json`. The publishing attempt can
+belong to a child run. Use that recorded index identity, not the piece id, slug,
+or a hash reconstructed from source. A `queued` receipt establishes the intended
+identity, not publication success; the index can still return 404.
+
+The server composes only those three fields and signs with its configured Fabric
+identity. The index verifies ownership; a caller cannot supply another owner or
+elevate the signer through request fields. The successor must directly name the
+retired pattern in `priorPatternId` and must not itself be retracted. The index
+removes the retired generation from search and list results while retaining
+source and events; exact-ID reads and existing imports continue to work.
+
+HTTP 200 carries the index receipt: `patternId`, `status: "retracted"`,
+`successorPatternId`, `retractionReason`, `retractedBy`, `retractedAt`,
+`discoverable: false`, and `changed`. An identical repeat returns
+`changed: false` with the original timestamp. The route returns 400 for missing
+fields or malformed JSON and 503 without an index configuration. It preserves
+the index's 4xx status: 403 for a non-owner, 404 for a missing generation, 400
+for an unrelated successor, and 409 for a conflicting retraction. Upstream or
+host failures return 502. Error responses retain stable messages without
+exposing index response bodies or host details. The console's ordinary Host and
+JSON-content-type gates apply.
+
 ## How the configuration reaches the run
 
 This server resolves its flags and environment into a `HarnessSessionConfig` —
@@ -916,10 +1062,10 @@ configure is configurable here under the same name, and the two surfaces cannot
 drift apart over what a session is.
 
 The tools a session offers are derived from what it can back rather than listed
-here: the default surface plus `run_pattern` and `assign_slug` for a fabric
-session, `search_patterns` and `record_feedback` for an index, `search_skills`
-for a registry, and `acquire_skill` for a run holding both. A tool whose backing
-is absent is not offered, rather than offered and failing.
+here: the default surface plus `run_pattern`, `assign_slug`, and `resolve_piece`
+for a fabric session, `search_patterns` and `record_feedback` for an index,
+`search_skills` for a registry, and `acquire_skill` for a run holding both. A
+tool whose backing is absent is not offered, rather than offered and failing.
 
 Each turn is its own run, so what that run holds is established per turn and
 announced in the messages it opens with: the skills registry scanned from the
@@ -935,9 +1081,10 @@ caller attaching anything: a request that names no `inputCells` at all still
 opens holding them.
 
 A grant is named by its Loom connection, with `#companion_key` appended for a
-second store on that connection. Its declared CFC class is separate metadata:
+second store on that connection. All declared CFC classes are separate metadata:
 the prompt describes `gmail-work (email)` or `readwise (document)`, and a
-companion as `gmail-work / calendar (calendar)`. Connections sharing a class
+companion as `gmail-work / calendar (calendar)`. A store declaring both
+`message` and `call` is granted with both classes. Connections sharing a class
 remain separately reachable. Two of the instance's records decide that, and the
 launcher reads both. `sqlite-injection/handles.json` — the receipt loom's daemon
 writes, and what `loom connector handles` prints — says which handles exist and
@@ -945,10 +1092,43 @@ what each one's reference is, and records no class. `pieces.json` declares each
 connector piece's `sqlite_sources`, whose table contract carries the per-column
 `ifc` the daemon seeded, and that is where the class is written down. They join
 on the piece, connection, and optional companion key Loom names in both.
-Repeated receipts for the same connection/store, reference, and class yield one
-grant. Conflicting references or classes for that store are reported and
-withheld. Persisted grants without a separate `cfcClass` retain their legacy
-class-as-name interpretation.
+Repeated receipts for the same connection/store, reference, and class set yield
+one grant. Conflicting references or classes for that store are reported and
+withheld. Grants carry the class list as `cfcClasses`; persisted grants with a
+singular `cfcClass` or a class as their name remain readable.
+
+The session description carries the receipt's account identity, physical row
+count, and newest record observation time. Counts come from linked `sources`
+rows joined by piece, connection, and companion key. They include metadata and
+history across the declared tables, so they are not a count of current events or
+query-visible rows. Missing, invalid, or conflicting counts remain unknown; zero
+means the count succeeded and found no rows.
+
+Account metadata comes from the source row's `viewer` object: `kind`,
+`source_id`, `email`, `label`, and `absent_reason`. An `account` identity
+prefers the provider's viewer ID, then its login address, then its display
+label; a null email means that account has no email address. The internal
+`account_id` is not included in the description. A `none` identity says "no
+account" with its reason; only an explicit `unknown` identity says "unknown". A
+null or absent viewer says the identity was not recorded in the receipt. When
+there is no source row, the launcher reads the handle's `viewer` object. It
+reads no connection configuration or authentication file.
+
+Repeated source or handle receipts must agree on each metadata field. A count
+disagreement leaves the count unknown; an account disagreement is described as
+conflicting receipts, distinct from an unrecorded or explicitly unknown
+identity. An observation disagreement reports `conflicting-receipts` rather than
+choosing one timestamp. Fields the receipts agree on remain available.
+
+The source row's `newest_observed_at` is when Loom observed the newest record,
+not the content's timestamp or the receipt's `written_at`. When no observation
+time is available, `newest_observed_at_reason` distinguishes `no-rows` (an empty
+store) from an unavailable measurement such as `no-observed-at-column`,
+`row-count-unsupported`, `query-failed`, or `not-linked`. Receipts without these
+additive fields describe the observation time as unknown. Timestamps require an
+ISO8601 date and time with an explicit zone and are displayed in UTC. This
+metadata survives launcher serialization, grant minting, and session
+restoration.
 
 What a grant does not do is decide anything a reference does not already decide.
 It discloses a token and a harness-authored sentence; the address stays
@@ -958,8 +1138,8 @@ does for every other flow.
 
 Three cases the launch printout states rather than resolving silently:
 
-- A handle whose declared contract carries no CFC class, or more than one, is
-  printed as `grant <connection>  (none: <reason>)` and is not granted.
+- A handle whose declared contract carries no CFC class is printed as
+  `grant <connection>  (none: <reason>)` and is not granted.
 - An ambiguous store identity or invalid connection name, companion key, or
   class is reported with the deciding record and a remedy.
 - A receipt that does not parse refuses the launch. A console that came up

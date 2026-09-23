@@ -15,24 +15,30 @@ import { attachUiContract, getUiContractHint } from "./ui-contract.ts";
 import { PrimitiveFormatter } from "./formatters/primitive-formatter.ts";
 import { ObjectFormatter } from "./formatters/object-formatter.ts";
 import { ArrayFormatter } from "./formatters/array-formatter.ts";
-import { CommonFabricFormatter } from "./formatters/common-fabric-formatter.ts";
+import {
+  CommonFabricFormatter,
+  lowersFromReferenceArguments,
+  resolveScopeWrapperNode,
+} from "./formatters/common-fabric-formatter.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import { UnionFormatter } from "./formatters/union-formatter.ts";
 import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
+import { unwrapTypeParentheses } from "./typescript/type-node.ts";
 import {
   detectWrapperViaNode,
   getNamedTypeKey,
   getPropertyNameText,
-  isDefaultTypeRef,
   safeGetIndexTypeOfType,
   safeGetNodeText,
   safeGetTypeOfSymbolAtLocation,
 } from "./type-utils.ts";
 import { attachDocTags, extractDocFromType } from "./doc-utils.ts";
 import { unionFoldedFrom } from "./schema-origins.ts";
+import { reportUnreadTypes } from "./unread-type-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
+import { stateReferencedIfcLabels } from "./ifc-labels.ts";
 
 /**
  * The default library's generic aliases the node-based analyzer applies
@@ -456,17 +462,17 @@ function withoutTypes(
 }
 
 /**
- * `node` with parentheses and `readonly` operators stripped from the outside;
- * neither changes what a type denotes to these rules.
+ * `node` with parentheses and `readonly` operators stripped from the outside.
+ * Parentheses never change the type a node denotes; `readonly` does, but not
+ * to these rules, which have no counterpart for it in a schema.
  */
 function unwrapTypeNode(node: ts.TypeNode): ts.TypeNode {
-  let current = node;
+  let current = unwrapTypeParentheses(node);
   while (
-    ts.isParenthesizedTypeNode(current) ||
-    (ts.isTypeOperatorNode(current) &&
-      current.operator === ts.SyntaxKind.ReadonlyKeyword)
+    ts.isTypeOperatorNode(current) &&
+    current.operator === ts.SyntaxKind.ReadonlyKeyword
   ) {
-    current = current.type;
+    current = unwrapTypeParentheses(current.type);
   }
   return current;
 }
@@ -877,6 +883,16 @@ function unionOfSchemas(
     : unionFoldedFrom(folded, kept, unique.length, context);
 }
 
+/** Whether `symbol`'s declaration introduces type parameters. */
+function declaresTypeParameters(symbol: ts.Symbol): boolean {
+  return symbol.declarations?.some((declaration) =>
+    (ts.isInterfaceDeclaration(declaration) ||
+      ts.isTypeAliasDeclaration(declaration) ||
+      ts.isClassDeclaration(declaration)) &&
+    declaration.typeParameters !== undefined
+  ) ?? false;
+}
+
 /**
  * Main schema generator that uses a chain of formatters
  */
@@ -964,6 +980,11 @@ export class SchemaGenerator {
   ): MutableJSONSchema {
     // Create unified context with all state
     const cycles = this.#getCycles(type, checker);
+
+    // A guess a wrapper recovers never reaches this list, so what arrives here
+    // is what the finished schema accepts without having read it.
+    const unread: ts.TypeNode[] = [];
+
     const context: GenerationContext = {
       // Immutable context
       typeChecker: checker,
@@ -974,6 +995,7 @@ export class SchemaGenerator {
       definitions: {},
       emittedRefs: new Set(),
       schemaOrigins: new WeakMap(),
+      uninterpretedTypeNodes: unread,
 
       // Stack state
       definitionStack: new Set(),
@@ -1025,6 +1047,9 @@ export class SchemaGenerator {
       result = this.#buildFinalSchema(schema, type, context, typeNode);
     }
 
+    if (unread.length > 0) reportUnreadTypes(context, unread);
+
+    stateReferencedIfcLabels(result);
     assertScopeDeclarationsAreReachable(result);
     return result;
   }
@@ -1110,43 +1135,27 @@ export class SchemaGenerator {
     typeNode?: ts.TypeNode,
     checker?: ts.TypeChecker,
   ): string | ts.Type {
-    if (typeNode && ts.isTypeReferenceNode(typeNode)) {
-      // Handle Default types (both direct and aliased) with enhanced keys to
-      // avoid false cycles
-      const isDirectDefault = ts.isIdentifier(typeNode.typeName) &&
-        typeNode.typeName.text === "Default";
-      const isAliasedDefault = checker && isDefaultTypeRef(typeNode, checker);
-
-      if (isDirectDefault || isAliasedDefault) {
-        // Create a more specific key that includes type argument info to
-        // avoid false cycles
-        const argTexts = typeNode.typeArguments
-          ? typeNode.typeArguments.map((arg) => safeGetNodeText(arg)).join(",")
+    const reference = typeNode && unwrapTypeParentheses(typeNode);
+    if (reference && checker && ts.isTypeReferenceNode(reference)) {
+      // A wrapper reference — `Default` or a cell-like wrapper (Cell,
+      // Writable, Stream, OpaqueCell), written in place, in parentheses, or
+      // reached through an alias — shares its ts.Type identity with the same
+      // instantiation at other positions. When a recursive type like TodoItem
+      // contains `Writable<TodoItem[]>`, TypeScript reuses the same
+      // Cell<TodoItem[]> type object, causing the cycle to be detected in
+      // wrapper context where it can't be properly stored. Give each wrapper
+      // occurrence a unique stack key, from its type arguments and its source
+      // location, so the cycle is instead detected at the inner type level
+      // where it can be handled.
+      const wrapperKind = detectWrapperViaNode(reference, checker);
+      if (wrapperKind) {
+        const argTexts = reference.typeArguments
+          ? reference.typeArguments.map((arg) => safeGetNodeText(arg))
+            .join(",")
           : "";
-        // Include a source location hash to further distinguish instances
-        const locationHash = typeNode.getSourceFile?.()?.fileName || "";
-        const position = typeNode.pos || 0;
-        return `Default_${type.flags}_${argTexts}_${locationHash}_${position}`;
-      }
-
-      // Cell-like wrappers (Cell, Writable, Stream, OpaqueCell) share their
-      // ts.Type identity with the same wrapper instantiation at other positions.
-      // When a recursive type like TodoItem contains `Writable<TodoItem[]>`,
-      // TypeScript reuses the same Cell<TodoItem[]> type object, causing the
-      // cycle to be detected in wrapper context where it can't be properly
-      // stored. Give each wrapper occurrence a unique stack key so the cycle
-      // is instead detected at the inner type level where it can be handled.
-      if (checker) {
-        const wrapperKind = detectWrapperViaNode(typeNode, checker);
-        if (wrapperKind) {
-          const argTexts = typeNode.typeArguments
-            ? typeNode.typeArguments.map((arg) => safeGetNodeText(arg))
-              .join(",")
-            : "";
-          const locationHash = typeNode.getSourceFile?.()?.fileName || "";
-          const position = typeNode.pos || 0;
-          return `${wrapperKind}_${type.flags}_${argTexts}_${locationHash}_${position}`;
-        }
+        const locationHash = reference.getSourceFile?.()?.fileName || "";
+        const position = reference.pos || 0;
+        return `${wrapperKind}_${type.flags}_${argTexts}_${locationHash}_${position}`;
       }
     }
     return type;
@@ -1170,7 +1179,12 @@ export class SchemaGenerator {
     context: GenerationContext,
     isRootType: boolean = false,
   ): MutableJSONSchema {
-    if ((type.flags & ts.TypeFlags.TypeParameter) !== 0) {
+    // A scope wrapper reads its payload from the reference's argument, even
+    // when its declaration erases to an unbound type parameter.
+    if (
+      (type.flags & ts.TypeFlags.TypeParameter) !== 0 &&
+      !resolveScopeWrapperNode(context.typeNode)?.node.typeArguments?.length
+    ) {
       const checker = context.typeChecker;
       const baseConstraint = checker.getBaseConstraintOfType(type);
       if (baseConstraint && baseConstraint !== type) {
@@ -1650,7 +1664,11 @@ export class SchemaGenerator {
 
     // A parenthesized node carries exactly the shape it wraps.
     if (ts.isParenthesizedTypeNode(typeNode)) {
-      return this.#analyzeTypeNodeStructure(typeNode.type, checker, context);
+      return this.#analyzeTypeNodeStructure(
+        unwrapTypeParentheses(typeNode),
+        checker,
+        context,
+      );
     }
 
     // A tuple lowers the way the type-based path lowers one: an array whose
@@ -1672,12 +1690,18 @@ export class SchemaGenerator {
     // way IntersectionFormatter merges one (`intersectionOf`), each
     // constituent read through its reference.
     if (ts.isIntersectionTypeNode(typeNode)) {
-      return intersectionOf(
+      const unread = context.uninterpretedTypeNodes;
+      const unreadBefore = unread?.length ?? 0;
+      const schema = intersectionOf(
         typeNode.types.map((member) =>
           this.#analyzeChildNode(member, checker, context)
         ),
         context,
       );
+      // An intersection accepting nothing does so whatever a constituent
+      // accepts, so a constituent's guess leaves nothing in its schema.
+      if (schema === false) unread?.splice(unreadBefore);
+      return schema;
     }
 
     // Handle ArrayTypeNode (e.g., number[], string[])
@@ -1750,11 +1774,16 @@ export class SchemaGenerator {
       );
       if (applied !== undefined) return applied;
 
+      const argument = this.#identityAliasArgument(typeNode, checker, context);
+      if (argument) return this.#analyzeChildNode(argument, checker, context);
+
       const resolved = this.#resolveTypeReferenceFromScope(
         typeNode,
         checker,
         context,
       );
+      // A name declared as `any` reads as `any` does, accepting any value.
+      if (resolved === checker.getAnyType()) return true;
       if (resolved) {
         return this.formatChildType(resolved, context, typeNode);
       }
@@ -1818,6 +1847,45 @@ export class SchemaGenerator {
     const type = context.typeRegistry?.get(node) ??
       checker.getTypeFromTypeNode(node);
     return this.formatChildType(type, context, node);
+  }
+
+  /**
+   * The argument `reference` supplies to an alias whose whole body is one of
+   * its own type parameters, such as `type Reactive<T> = T`: the reference
+   * denotes exactly that argument. `undefined` for any other reference, for
+   * one that leaves the argument out, and for a scope wrapper, whose scope
+   * `CommonFabricFormatter` reads from the reference's name.
+   */
+  #identityAliasArgument(
+    reference: ts.TypeReferenceNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+  ): ts.TypeNode | undefined {
+    if (
+      !ts.isIdentifier(reference.typeName) ||
+      resolveScopeWrapperNode(reference)
+    ) {
+      return undefined;
+    }
+    const declaration = this.#resolveTypeName(
+      reference,
+      reference.typeName,
+      checker,
+      context,
+    )?.declarations?.find(ts.isTypeAliasDeclaration);
+    const body = declaration && unwrapTypeParentheses(declaration.type);
+    if (
+      !body || !ts.isTypeReferenceNode(body) || body.typeArguments ||
+      !ts.isIdentifier(body.typeName)
+    ) {
+      return undefined;
+    }
+    const name = body.typeName.text;
+    const index =
+      declaration.typeParameters?.findIndex((parameter) =>
+        parameter.name.text === name
+      ) ?? -1;
+    return index >= 0 ? reference.typeArguments?.[index] : undefined;
   }
 
   /**
@@ -2094,8 +2162,6 @@ export class SchemaGenerator {
    * followed to what it imports: bound through the node when the checker can
    * bind it, else resolved lexically, so an authored or imported declaration
    * of the same name shadows a global's the way it does for the checker.
-   * (`getSymbolsInScope` lists every visible symbol, globals included, in no
-   * order that honors shadowing.)
    */
   #resolveTypeName(
     typeNode: ts.TypeReferenceNode,
@@ -2248,6 +2314,14 @@ export class SchemaGenerator {
     return undefined;
   }
 
+  /**
+   * The declared type a reference's name denotes as seen from the reference's
+   * scope, which holds what the module declares, exported or not, and what it
+   * imports. Returns `undefined` for a qualified name, for a name that
+   * resolves to nothing the checker can type, and for a generic declared
+   * outside the default library, unless `CommonFabricFormatter` lowers the
+   * reference from its own arguments.
+   */
   #resolveTypeReferenceFromScope(
     typeNode: ts.TypeReferenceNode,
     checker: ts.TypeChecker,
@@ -2256,29 +2330,38 @@ export class SchemaGenerator {
     if (!ts.isIdentifier(typeNode.typeName)) {
       return undefined;
     }
-    const typeName = typeNode.typeName.text;
-    const symbolAtNode = checker.getSymbolAtLocation(typeNode.typeName);
-    if (symbolAtNode) {
-      const declared = checker.getDeclaredTypeOfSymbol(symbolAtNode);
-      if (declared && !(declared.flags & ts.TypeFlags.Any)) {
-        return declared;
-      }
-    }
-
-    const scopeNode = this.#scopeSourceFile(typeNode, checker, context);
-    if (!scopeNode) return undefined;
-
-    const candidates = checker.getSymbolsInScope(
-      scopeNode,
-      ts.SymbolFlags.Type,
+    const symbol = this.#resolveTypeName(
+      typeNode,
+      typeNode.typeName,
+      checker,
+      context,
     );
-    const symbol = candidates.find((candidate) => candidate.name === typeName);
     if (!symbol) return undefined;
-    const declared = checker.getDeclaredTypeOfSymbol(symbol);
-    if (!declared || (declared.flags & ts.TypeFlags.Any)) {
+
+    // A generic declaration's declared type leaves its parameters unbound, and
+    // no reading of an unbound parameter stands in for the argument a
+    // reference supplies: its constraint drops the members an argument adds,
+    // its default is free to contradict one, and an operator over it (`keyof
+    // T`, `T["name"]`) has no schema at all. Such a reference is left unread,
+    // for the caller to treat as the guess it would be, unless
+    // `CommonFabricFormatter` lowers the reference from its own arguments.
+    if (
+      declaresTypeParameters(symbol) &&
+      !symbol.declarations?.some((declaration) =>
+        isDefaultLibrarySourceFile(declaration.getSourceFile(), context)
+      ) &&
+      !lowersFromReferenceArguments(typeNode, symbol, checker)
+    ) {
       return undefined;
     }
-    return declared;
+
+    // A declared type that is the checker's intrinsic `any` was declared as
+    // `any`; any other type flagged `Any` stands for a name it could not type.
+    const declared = checker.getDeclaredTypeOfSymbol(symbol);
+    return !(declared.flags & ts.TypeFlags.Any) ||
+        declared === checker.getAnyType()
+      ? declared
+      : undefined;
   }
 
   /**

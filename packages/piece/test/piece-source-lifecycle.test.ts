@@ -1652,14 +1652,15 @@ describe("piece source lifecycle", () => {
       )!;
     const argument = pieces.getArgument(piece.getCell());
     const getArgument = pieces.getArgument;
-    const getRaw = argument.getRaw;
+    const getRawUntyped = argument.getRawUntyped;
     pieces.getArgument = (() => argument) as typeof pieces.getArgument;
-    argument.getRaw = (() => {
+    // `getRaw()` reads through `getRawUntyped()`, so this reaches both.
+    argument.getRawUntyped = (() => {
       return {
         value: 4,
         mode: linkRefFrom({ path: "not an array" } as never),
       };
-    }) as typeof argument.getRaw;
+    }) as typeof argument.getRawUntyped;
     webSources["/api/patterns/malformed-link.tsx"] = optionalModeProgram(2);
 
     try {
@@ -1672,7 +1673,7 @@ describe("piece source lifecycle", () => {
         expect(result.prepared.review?.argumentEvidence).toBeDefined();
       }
     } finally {
-      argument.getRaw = getRaw;
+      argument.getRawUntyped = getRawUntyped;
       pieces.getArgument = getArgument;
     }
   });

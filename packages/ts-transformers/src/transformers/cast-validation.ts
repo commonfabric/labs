@@ -8,14 +8,14 @@
  */
 
 import ts from "typescript";
-import { spellingsWhere } from "@commonfabric/schema-generator/wrapper-names";
 import {
   getImportTypeModuleName,
-  HelpersOnlyTransformer,
   isCommonFabricDeclaration,
   isCommonFabricModuleName,
-  TransformationContext,
-} from "../core/mod.ts";
+} from "@commonfabric/schema-generator/common-fabric-symbols";
+import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
+import { spellingsWhere } from "@commonfabric/schema-generator/wrapper-names";
+import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
 
 /**
  * Cell-like types that should trigger an error when cast to.
@@ -252,16 +252,15 @@ export class CastValidationTransformer extends HelpersOnlyTransformer {
     const names = new Set<string>();
 
     const visit = (node: ts.TypeNode): void => {
-      if (ts.isParenthesizedTypeNode(node)) {
-        visit(node.type);
-        return;
-      }
-      if (ts.isUnionTypeNode(node) || ts.isIntersectionTypeNode(node)) {
-        for (const child of node.types) visit(child);
+      const unwrapped = unwrapTypeParentheses(node);
+      if (
+        ts.isUnionTypeNode(unwrapped) || ts.isIntersectionTypeNode(unwrapped)
+      ) {
+        for (const child of unwrapped.types) visit(child);
         return;
       }
       const name = this.#extractTypeReferenceName(
-        node,
+        unwrapped,
         context,
         seenSymbols,
       );

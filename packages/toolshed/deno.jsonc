@@ -2,8 +2,9 @@
   "tasks": {
     "dev": "deno run --unstable-otel -A --watch --env-file=.env index.ts",
     "production": "deno run --unstable-otel -A --env-file=.env index.ts",
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
     // --no-check: this package is type-checked by `deno task check` (tasks/check.sh).
-    "test": "ENV=test deno test --no-check -A --env-file=.env.test",
+    "deno-test": "ENV=test deno test --shuffle=$(deno task -q test-seed) --no-check -A --env-file=.env.test",
     "llm-exercise": "deno run --allow-env --allow-net ./scripts/llm-exercise.ts",
     "provision-ingest-channel": "deno run -A --env-file=.env scripts/provision-ingest-channel.ts",
     "audit-ingest-channels": "deno run -A --env-file=.env scripts/audit-ingest-channels.ts",

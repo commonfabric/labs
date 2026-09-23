@@ -53,6 +53,21 @@ describe("composeLocalContext() flap coverage", () => {
     expect(dirty.branch).toBe("probe-branch");
   });
 
+  it("carries the seed the run shuffles by, and none where it has none", () => {
+    const seeded = composeLocalContext({
+      commit: "e".repeat(40),
+      status: "",
+      shuffleSeed: 20260922,
+    }, () => undefined);
+    expect(seeded.shuffleSeed).toBe(20260922);
+
+    const unseeded = composeLocalContext(
+      { commit: "e".repeat(40) },
+      () => undefined,
+    );
+    expect(Object.hasOwn(unseeded, "shuffleSeed")).toBe(false);
+  });
+
   it("carries the agent label the environment names", () => {
     const context = composeLocalContext(
       { commit: "d".repeat(40), branch: "probe-branch", status: "" },

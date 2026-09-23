@@ -36,8 +36,8 @@ const WIDE_NUMERIC_RUN = 32;
 
 /**
  * The short names of a label's clauses. An atom's `type` is a CFC atom URL
- * whose last segment identifies it — `PromptSlotInfluence` for the atom
- * marking a value the user's own typed command influenced. A clause is
+ * whose last segment identifies it — `ExternalIngest` for the atom marking
+ * a value that arrived from outside the fabric. A clause is
  * arbitrary CFC JSON, so one that is not a typed atom is reported by its shape
  * rather than dropped: a clause the page cannot name is still one the label
  * carries.
@@ -70,15 +70,32 @@ const truncate = (text: string, limit: number): string =>
 const stepLabel = (step: ConsoleStep): string =>
   step.kind === "tool" ? step.toolName ?? "tool" : step.kind;
 
+const omissionLabels = {
+  "artifact-only": "kept on the artifact, not sent to the model",
+  "observation-denied": "withheld by policy",
+  "bare-fabric-identifier-scrub": "bare-fabric-identifier-scrub",
+  "model-context-truncation": "model-context-truncation",
+  "superseded-run-pattern-diagnostic-collapse":
+    "superseded-run-pattern-diagnostic-collapse",
+};
+
 /** The expandable omission block's label for one tool result. */
 export const withheldSummary = (step: ConsoleStep): string =>
   step.withheld.status === "unrecorded"
-    ? "withheld from the model · no record"
+    ? "model omissions · no record"
     : step.withheld.status === "record-unreadable"
-    ? "withheld from the model · record unreadable"
+    ? "model omissions · record unreadable"
     : step.withheld.status === "record-entry-missing"
-    ? "withheld from the model · entry missing"
-    : `withheld from the model · ${step.withheld.locations.length}`;
+    ? "model omissions · entry missing"
+    : `${
+      [
+        ...new Set(
+          step.withheld.locations.map((location) =>
+            omissionLabels[location.rule]
+          ),
+        ),
+      ].join("; ") || "model omissions"
+    } · ${step.withheld.locations.length}`;
 
 /** What the full tool artifact records beside the model-facing result. */
 export const withheldView = (step: ConsoleStep): TemplateResult => {
@@ -123,13 +140,19 @@ export const withheldView = (step: ConsoleStep): TemplateResult => {
       </details>
     `;
   }
+  const modelResult = step.output !== undefined
+    ? json(step.output)
+    : step.outputText;
   return html`
     <details class="pane withheld-pane">
       <summary>${withheldSummary(step)}</summary>
+      ${modelResult === undefined ? nothing : html`
+        <p class="pane-note">Model received: ${truncate(modelResult, 200)}</p>
+      `}
       ${step.withheld.locations.map((location) =>
         html`
           <div class="withheld-location">
-            <div class="withheld-rule">${location.rule}</div>
+            <div class="withheld-rule">${omissionLabels[location.rule]}</div>
             <div class="withheld-pointer">
               ${location.artifactPath}${location.jsonPointer}
             </div>
@@ -148,15 +171,16 @@ export const withheldView = (step: ConsoleStep): TemplateResult => {
   `;
 };
 
-/**
- * What CFC decided about one call, and any event it raised. A withheld
- * release carries the retrospective's count of the positions it held back,
- * which is what says the call itself succeeded.
- */
+/** What CFC decided about one call, and any event it raised. */
 export const stepPolicyView = (
   step: ConsoleStep,
 ): TemplateResult | typeof nothing => {
-  const labelEntries = step.invocation?.cfcInputLabels?.entries ?? [];
+  // Taint and the prompt slot's influence are separate views of the same
+  // inputs; both are listed, one row per entry, each on its own axis.
+  const labelEntries = [
+    ...step.invocation?.cfcInputLabels?.entries ?? [],
+    ...step.invocation?.promptSlotInfluenceLabels?.entries ?? [],
+  ];
   if (
     step.policy === undefined && step.policyEvents.length === 0 &&
     labelEntries.length === 0
@@ -184,7 +208,7 @@ export const stepPolicyView = (
           </span>
           ${step.policy.decision === "withheld"
             ? html`
-              <span class="cfc-withheld">${withheldSummary(step)}</span>
+              <span class="cfc-withheld">withheld by policy</span>
             `
             : nothing}
         </div>
@@ -209,7 +233,8 @@ export const stepPolicyView = (
                       : entry.path.join(".")}
                   </td>
                   <td class="label-atoms">
-                    ${atomNames(entry.label?.confidentiality).length === 0
+                    ${atomNames(entry.label?.confidentiality).length === 0 &&
+                        atomNames(entry.label?.integrity).length === 0
                       ? html`
                         <span class="muted">no confidentiality atom</span>
                       `
@@ -425,6 +450,10 @@ export class ConsoleSteps extends LitElement {
                 ${argument.confidentiality.map((name) =>
                   html`
                     <span class="atom conf">${name}</span>
+                  `
+                )} ${argument.integrity.map((name) =>
+                  html`
+                    <span class="atom integ">${name}</span>
                   `
                 )}
               </div>

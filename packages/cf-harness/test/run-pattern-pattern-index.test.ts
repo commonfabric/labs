@@ -15,6 +15,9 @@ import type {
 } from "@commonfabric/runner/toolshed-http-auth";
 import { CfHarnessEngine } from "../src/engine.ts";
 import type { HarnessFetch } from "../src/contracts/http-fetch.ts";
+import type { HarnessResearchRunSummary } from "../src/contracts/research.ts";
+import { REUSE_RESEARCH_RUNS } from "./fixtures/research-reuse.ts";
+import { PATTERN_COMPOSITION_EXAMPLE } from "../src/pattern-authoring.ts";
 import type { FabricPatternInstantiations } from "../src/fabric-instantiations.ts";
 import { comparableEntityHash } from "../src/fabric-observations.ts";
 import {
@@ -461,6 +464,7 @@ describe("run-pattern over the pattern index", () => {
       publish?: false;
       publishDiscoverable?: true;
       taskText?: string;
+      researchRuns?: readonly HarnessResearchRunSummary[];
       startFailure?: string;
       pieces?: PiecesController;
       instantiations?: FabricPatternInstantiations;
@@ -470,6 +474,7 @@ describe("run-pattern over the pattern index", () => {
     new CfHarnessEngine({
       sandboxRuntime: new FakeSandboxRuntime(),
       runId: `run-pattern-index-test-${crypto.randomUUID()}`,
+      inheritedResearchRuns: options.researchRuns,
       fabricSessionFactory: () =>
         Promise.resolve({
           pieces: options.startFailure === undefined
@@ -586,7 +591,9 @@ describe("run-pattern over the pattern index", () => {
   describe("runPatternTool", () => {
     it("runs an indexed pattern and returns its result", async () => {
       const index = stubIndex({ "pat-doubler": INDEXED_PATTERN });
-      const result = await createEngine(index).invokeBuiltinTool(
+      const result = await createEngine(index, {
+        researchRuns: REUSE_RESEARCH_RUNS,
+      }).invokeBuiltinTool(
         "run_pattern",
         {
           patternId: "pat-doubler",
@@ -831,7 +838,7 @@ describe("run-pattern over the pattern index", () => {
 
     it("publishes under the compiled pattern's content-addressed identity", async () => {
       const index = stubIndex({}, { publish: { created: true } });
-      await runAndFlush(createEngine(index), publishInput);
+      const result = await runAndFlush(createEngine(index), publishInput);
 
       const publish = index.calls.find((call) => call.fn === "publishPattern");
       // The identity the compile itself recorded for the entry, which is what
@@ -839,6 +846,11 @@ describe("run-pattern over the pattern index", () => {
       expect(publish?.body.patternId).toBe(
         await entryIdentityOf(DOUBLING_PATTERN_SOURCE),
       );
+      expect((result.output as RunPatternToolSuccessOutput).patternPublication)
+        .toMatchObject({
+          patternId: await entryIdentityOf(DOUBLING_PATTERN_SOURCE),
+          status: "queued",
+        });
     });
 
     it("describes the pattern to the index in its own words when the run has no task text", async () => {
@@ -1081,6 +1093,23 @@ describe("run-pattern over the pattern index", () => {
   });
 
   describe("composing published patterns", () => {
+    it("compiles the authoring template against the mailbox reader it describes", async () => {
+      const reader = await Deno.readTextFile(
+        new URL(
+          "../../patterns/primitives/mailbox-month-headers.tsx",
+          import.meta.url,
+        ),
+      );
+      const readerId = await entryIdentityOf(reader);
+      const source = PATTERN_COMPOSITION_EXAMPLE.replace(
+        "INSPECTED_READER_ID",
+        readerId,
+      );
+      expect(await composedIdentityOf(source, [reader])).toMatch(
+        /^[A-Za-z0-9_-]{43}$/,
+      );
+    });
+
     /**
      * An index record for `source`, stored under the identity that source
      * compiles to — which is what a `cf:pattern:` import addresses, so a
@@ -1126,7 +1155,23 @@ describe("run-pattern over the pattern index", () => {
       const index = stubIndex({
         [doublerId]: indexRecord(doublerId, DOUBLER_SOURCE),
       });
-      const result = await createEngine(index).invokeBuiltinTool(
+      const result = await createEngine(index, {
+        researchRuns: [{
+          ...REUSE_RESEARCH_RUNS[0],
+          kit: {
+            ...REUSE_RESEARCH_RUNS[0].kit,
+            task: "Quadruple a number",
+            summary: "Compose the indexed doubler.",
+            patterns: [{
+              patternId: doublerId,
+              description: "Doubles a number",
+              hashtags: ["math"],
+              importHint: `import Doubler from "cf:pattern:${doublerId}"`,
+              sourceIdentityVerified: true,
+            }],
+          },
+        }],
+      }).invokeBuiltinTool(
         "run_pattern",
         {
           sourceText: quadruplerSource(doublerId),
@@ -1336,6 +1381,10 @@ describe("run-pattern over the pattern index", () => {
       // pattern's id nor anything the source alone determines.
       expect(publish?.body.patternId).not.toBe(doublerId);
       expect(publish?.body.patternId).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(
+        (result.output as RunPatternToolSuccessOutput).patternPublication
+          ?.patternId,
+      ).toBe(publish?.body.patternId);
     });
 
     it("discloses a composed pattern's failure the composing source never passed on", async () => {

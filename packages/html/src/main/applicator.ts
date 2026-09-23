@@ -330,7 +330,7 @@ export class DomApplicator {
       this.#removeEvent(nodeId, key.slice(2).toLowerCase());
     } else if (key.startsWith("$") && key.length > 1) {
       (node as any)[key.slice(1)] = undefined;
-    } else if (key.startsWith("data-")) {
+    } else if (key.startsWith("data-") || key.startsWith("aria-")) {
       node.removeAttribute(key);
     } else if (key === "style") {
       node.removeAttribute("style");

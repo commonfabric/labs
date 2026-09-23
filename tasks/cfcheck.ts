@@ -7,35 +7,25 @@
  *   deno task cfcheck --only home            # restrict to matching paths
  *
  * `--only` takes one pattern per flag and may be repeated, and a run given
- * none checks everything. `CFCHECK_SHARD="i/n"` (1-based) splits what is
- * left across parallel processes.
+ * none checks everything.
  */
 
 import type { RuntimeProgram } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { FragmentWriter } from "@commonfabric/test-support/records";
 import { createRuntime } from "../packages/cli/lib/dev.ts";
-import { formatError, selectionFor, shardLabel, USAGE } from "./cfcheck-lib.ts";
+import { formatError, selectionFor, USAGE } from "./cfcheck-lib.ts";
 import { collectAllPatternFiles } from "./pattern-files.ts";
 
-let selected: ReturnType<typeof selectionFor>;
+let filesToCheck: string[];
 try {
-  selected = selectionFor(
-    await collectAllPatternFiles(),
-    Deno.args,
-    Deno.env.get("CFCHECK_SHARD"),
-  );
+  filesToCheck = selectionFor(await collectAllPatternFiles(), Deno.args);
 } catch (error) {
   console.error(formatError(error));
   console.error(USAGE);
   Deno.exit(2);
 }
-const filesToCheck = selected.files;
-console.log(
-  `Common Fabric checking ${filesToCheck.length} pattern files${
-    shardLabel(selected.shard)
-  }.`,
-);
+console.log(`Common Fabric checking ${filesToCheck.length} pattern files.`);
 
 const failures: Array<{ file: string; error: string }> = [];
 const cwd = Deno.cwd();
@@ -60,7 +50,7 @@ for (const file of filesToCheck) {
 }
 
 // Type-check + transform + SES-verify ALL patterns in ONE TypeScript program,
-// so the lib/API parse and bind is paid once for the whole shard rather than
+// so the lib/API parse and bind is paid once for the whole run rather than
 // once per pattern. Diagnostics come back attributed per file, and so does
 // the time each file took.
 const result = await runtime.harness.typeCheckBatch(
@@ -74,7 +64,7 @@ for (const diagnostic of result.diagnostics) {
   failures.push({ file, error: diagnostic.message });
 }
 
-// One typecheck-kind record per file in this shard, named "cfcheck <file>",
+// One typecheck-kind record per file checked, named "cfcheck <file>",
 // carrying what the batch spent on that pattern's own files. A file the
 // resolve step rejected never reached the batch and carries no time. A
 // diagnostic attributed to "(batch)" fails the run without belonging to a

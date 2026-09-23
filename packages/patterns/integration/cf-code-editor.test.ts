@@ -17,6 +17,7 @@
  * wall-clock debounce window, or a settling period after which a canceled
  * write must NOT have fired); they are the scenario, not a wait for a result.
  */
+import { debugStr } from "@commonfabric/data-model";
 import {
   awaitViewSettled,
   env,
@@ -38,7 +39,6 @@ import {
 } from "./pieces-controller.ts";
 import { waitForRuntimeSynced } from "./cfc-browser-helpers.ts";
 import { defer, type Deferred } from "@commonfabric/utils/defer";
-import { debugStr } from "@commonfabric/data-model";
 
 const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
 
@@ -163,7 +163,7 @@ async function expectExternalWriteSuppressed(
   assertEquals(
     await getEditorContent(page),
     pending,
-    `External write ${JSON.stringify(externalValue)} must not repaint the ` +
+    debugStr`External write $quote,long${externalValue} must not repaint the ` +
       `editor while the local edit is pending`,
   );
 }

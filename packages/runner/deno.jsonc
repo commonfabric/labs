@@ -1,6 +1,7 @@
 {
   "name": "@commonfabric/runner",
   "tasks": {
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
     // --preload runs test/clock-preload.ts before the test modules; it replaces
     // the clock so the runtime's own timers auto-advance and test sleeps freeze.
     // See that file and docs/development/waiting-in-tests.md. --no-check: the
@@ -11,12 +12,12 @@
     // silent-backstop-guard.test.ts spawns the Deno running the task
     // (`Deno.execPath()`, which a bare `deno` entry does not permit — Deno
     // resolves the allowlist through PATH) to run a fixture under this preload.
-    "test": "ENV=test deno test --no-check --preload=test/clock-preload.ts --allow-ffi --allow-env --allow-read --allow-write=/tmp,/var/folders --allow-run=git,deno,\"$(deno eval \"console.log(Deno.execPath())\")\" test/**/*.test.ts test/**/*.test.tsx",
+    "deno-test": "ENV=test deno test --shuffle=$(deno task -q test-seed) --no-check --preload=test/clock-preload.ts --allow-ffi --allow-env --allow-read --allow-write=/tmp,/var/folders --allow-run=git,deno,\"$(deno eval \"console.log(Deno.execPath())\")\" test/**/*.test.ts test/**/*.test.tsx",
     "bench": {
       "description": "Run Cell benchmarks for performance analysis",
       "command": "deno bench --allow-read --allow-write --allow-net --allow-ffi --allow-env --no-check test/*.bench.ts"
     },
-    "integration": "LOG_LEVEL=warn deno test -A $INTEGRATION_TEST_FLAGS \"./integration/*.test.ts\""
+    "integration": "LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) -A $INTEGRATION_TEST_FLAGS \"./integration/*.test.ts\""
   },
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md
@@ -31,17 +32,22 @@
     "ws": "npm:ws@^8.21.3"
   },
   "exports": {
+    "./inbox": "./src/inbox.ts",
+    "./space-invites": "./src/space-invites.ts",
     ".": "./src/index.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts",
     "./jsx-dev-runtime": "./src/jsx-dev-runtime.ts",
     "./shared": "./src/shared.ts",
+    "./agent-run": "./src/agent-run.ts",
     "./entity-kind": "./src/entity-kind.ts",
     "./fabric-special-object-brand": "./src/fabric-special-object-brand.ts",
     "./experimental-posture": "./src/experimental-posture.ts",
+    "./space-host": "./src/space-host.ts",
     "./fabric-url": "./src/fabric-url.ts",
     "./meta-seam": "./src/meta-seam.ts",
     "./slugs": "./src/slugs.ts",
     "./schemas": "./src/schemas.ts",
+    "./scope": "./src/scope.ts",
     "./component-read-contract": "./src/component-read-contract.ts",
     "./telemetry-otel-bridge": "./src/telemetry-otel-bridge.ts",
     "./storage/write-stack-trace": "./src/storage/write-stack-trace.ts",
@@ -54,6 +60,8 @@
     "./patterns-route.deno": "./src/harness/patterns-route.deno.ts",
     "./toolshed-http-auth": "./src/toolshed-http-auth.ts",
     "./cfc": "./src/cfc/mod.ts",
+    "./cfc/share-snapshot": "./src/cfc/share-snapshot.ts",
+    "./cfc/owner-adoption": "./src/cfc/owner-adoption.ts",
     "./cfc/clause": "./src/cfc/clause.ts",
     "./cfc/label-view-core": "./src/cfc/label-view-core.ts",
     "./executor/host": "./src/executor/host.ts",

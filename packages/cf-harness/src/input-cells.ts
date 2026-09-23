@@ -1,10 +1,10 @@
 /**
- * Operator input cells: cells the operator passes into a run by reference
- * with `--input-cell`, populated in the fabric before the run exists. Each
- * becomes a handle-table entry at run start — the handle is only how the
- * harness names a cell to a model that cannot hold addresses — so the run's
+ * Input cells: references supplied by the operator or retained from a
+ * completed session turn that named a piece. They exist in the fabric before
+ * the run starts. Each becomes a handle-table entry at run start. The handle
+ * names a cell to a model that cannot hold addresses, so the run's
  * inputs reach the model as tokens from its first turn. The values stay in
- * their cells; what the model receives is a token and the operator's own
+ * their cells; what the model receives is a token and the host-supplied
  * name for it. This is the calling convention the CT-2066 demonstration
  * rests on — a prompt that never holds a literal value cannot inline one by
  * accident, and cannot pass one on by accident either.
@@ -12,9 +12,10 @@
  * Like a well-known grant, an input cell discloses nothing by itself: the
  * address stays trusted-side in the handle table, `describe_handle` answers
  * shape, and reading anything behind the token means running a pattern over
- * it. Unlike a grant, an input cell is explicit operator configuration, so
+ * it. An input cell names a task target, so
  * one that cannot be minted — an unparseable reference, or one targeting
- * another space — fails the run out loud rather than proceeding without it.
+ * an unadmitted space — fails the run out loud rather than proceeding without
+ * it.
  *
  * A cell may also be named the way a person sees it named — a piece's slug,
  * alone or qualified by its space — and the session resolves that name to an
@@ -25,6 +26,11 @@
  */
 
 import { type MemorySpace, validateSlug } from "@commonfabric/runner";
+import { AGENT_INPUT_NAME_PATTERN } from "@commonfabric/runner/agent-run";
+import {
+  admitsFabricReference,
+  type HarnessForeignSpaces,
+} from "./foreign-spaces.ts";
 import {
   createHarnessHandleTable,
   mintAddressHandle,
@@ -47,7 +53,7 @@ export type {
  * hyphens. Connector connection identities have their own name grammar in
  * `well-known-grants.ts`.
  */
-export const HANDLE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+export const HANDLE_NAME_PATTERN = AGENT_INPUT_NAME_PATTERN;
 
 /** A parsed `--input-cell` argument. */
 export interface ParsedInputCellArgument {
@@ -70,8 +76,7 @@ export interface ParsedInputCellArgument {
 export interface NamedPieceAddress {
   /**
    * The space the address names, absent when the address named none. A named
-   * space is checked against the session's own: an address is resolved in one
-   * space, and the session's authority ends there.
+   * space is checked against the session's own: named addresses resolve there.
    */
   spaceName?: string;
 
@@ -123,9 +128,8 @@ export const parseNamedPieceAddress = (
 /**
  * Holds a named address to the space it may name: the session's own, or none
  * at all. A surface cannot see which space a console runs against, so naming
- * another one is a mistake to report rather than a request to honour — and
- * honouring it is not this side's to do anyway, since a session's authority
- * ends at its own space, exactly as it does for a reference.
+ * another one is a mistake to report. Foreign attachments need a reference
+ * carrying an operator-admitted DID.
  *
  * `spaceName` is the space's NAME, which is what an address carries; the
  * `MemorySpace` a mint checks a reference against is its DID, and the two are
@@ -153,7 +157,7 @@ export const checkNamedPieceAddressSpace = (
  * model-facing text of a fixed shape, and the reference is either a link
  * naming an entity (`of:` or `computed:`) or a named piece address
  * (`pattern:<space>/<slug>`, or a bare slug) — and, when the session's
- * `space` or `spaceName` is known, not one in another space. The grammar and
+ * `space` or `spaceName` is known, admitted by the session. The grammar and
  * the mint both run this, so a reference the mint would refuse is refused
  * wherever it first arrives, before a run exists to spend on it. Both spaces
  * are known only at the mint, from the live session; a surface parsing
@@ -170,6 +174,7 @@ export const checkInputCellSpec = (
   spec: HarnessInputCellSpec,
   space?: MemorySpace,
   spaceName?: string,
+  foreignSpaces?: HarnessForeignSpaces,
 ): void => {
   if (!HANDLE_NAME_PATTERN.test(spec.name)) {
     throw new Error(
@@ -212,9 +217,12 @@ export const checkInputCellSpec = (
       }`,
     );
   }
-  if (space !== undefined && link.space !== undefined && link.space !== space) {
+  if (
+    space !== undefined &&
+    !admitsFabricReference(link.space, space, foreignSpaces)
+  ) {
     throw new Error(
-      `--input-cell \`${spec.name}\` reference targets another space; only references into the session space are allowed`,
+      `--input-cell \`${spec.name}\` reference targets another space; the operator must admit its DID and host with --fabric-foreign-spaces`,
     );
   }
 };
@@ -255,12 +263,13 @@ export const parseInputCellArgument = (
 };
 
 /**
- * What the live session contributes to a mint: the name of the space it runs
- * in, and the resolution of a named piece address within it. Both are absent
- * for a caller minting plain references, which needs no session at all — a
- * named address is the only spelling that has to ask the fabric anything.
+ * The session's foreign-space admission, local space name, and resolver for
+ * named piece attachments. Plain references need no named-piece resolution.
  */
 export interface InputCellSessionResolution {
+  /** Operator admission snapshot from the Fabric session. */
+  foreignSpaces?: HarnessForeignSpaces;
+
   /** The session's space, by name. */
   spaceName?: string;
 
@@ -326,9 +335,8 @@ const resolvedInputCellRef = async (
 /**
  * Mints a handle for each input cell into `table` (or a fresh table salted
  * with `runId`), returning the extended table and the records for run state.
- * Every cell is held to {@link checkInputCellSpec} against `space` — the
- * session's authority ends at its own space, and an input cell pointing
- * elsewhere is refused before anything is recorded.
+ * Every cell is held to {@link checkInputCellSpec} against `space` and the
+ * operator's foreign-space admission map before anything is recorded.
  *
  * A cell spelled as a named piece address is resolved through `session`
  * first, so what is minted is always an entity URI: the handle table holds one
@@ -336,7 +344,7 @@ const resolvedInputCellRef = async (
  * an input cell is the address it actually names.
  *
  * @throws Error naming the failing input cell on a duplicate name, an
- * unparseable reference, a reference into another space, or a named piece
+ * unparseable reference, a reference into an unadmitted space, or a named piece
  * address this space does not hold.
  */
 export const mintInputCellHandles = async (
@@ -352,7 +360,7 @@ export const mintInputCellHandles = async (
   for (const spec of specs) {
     // Checked here, not only at parse: a library caller reaches this mint
     // without the CLI grammar, and only the live session knows the space.
-    checkInputCellSpec(spec, space, session.spaceName);
+    checkInputCellSpec(spec, space, session.spaceName, session.foreignSpaces);
     if (names.has(spec.name)) {
       throw new Error(`--input-cell names \`${spec.name}\` twice`);
     }
@@ -372,9 +380,9 @@ export const mintInputCellHandles = async (
 
 /**
  * The context message announcing `inputCells` to the model: one line per
- * input cell, pairing the token with the operator's name for it. An empty
- * list explicitly records that this run has no input-cell attachments; conversation
- * history may still identify a target.
+ * input cell, pairing the token with its host-supplied attachment name or
+ * session-confirmed slug. An empty list explicitly records that this run has
+ * no input-cell attachments; conversation history may still identify a target.
  */
 export const inputCellsContextMessage = (
   inputCells: readonly HarnessInputCell[],
@@ -383,7 +391,7 @@ export const inputCellsContextMessage = (
     return "No input cells are attached for this run. A piece unambiguously selected in the conversation can still be the target; granted registry or connector references are not attachments.";
   }
   return [
-    "Input cells for this run, named by the operator:",
+    "Input cells for this run:",
     ...inputCells.map((cell) => `- ${cell.token} — ${cell.name}`),
     "You cannot read what an input cell holds. Wire it into run_pattern `inputs` to compute over it, or into any other tool input that accepts a handle; use describe_handle to see its shape.",
   ].join("\n");

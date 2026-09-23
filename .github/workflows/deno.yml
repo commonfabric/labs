@@ -7,6 +7,17 @@ on:
   pull_request:
     branches:
       - main
+  # The run of the suites in the next day's order calls this workflow with that
+  # day's seed; see .github/workflows/test-order-tomorrow.yml. A called run
+  # runs the tests and nothing else. The jobs that gate the commit on coverage
+  # and topology, and the jobs that attest and deploy it, run only for a push
+  # or a pull request, whose own run already covers the commit.
+  workflow_call:
+    inputs:
+      shuffle-seed:
+        description: The seed every test runner in the run shuffles by.
+        type: string
+        required: true
 
 # Runs of a pull request are grouped by the pull request, and a new push to the
 # branch cancels the run already going. Runs of a push to main are grouped by
@@ -33,6 +44,9 @@ env:
   # GitHub's Ubuntu image includes Chrome. Astral uses it directly instead of
   # downloading another browser when the first browser test starts.
   ASTRAL_BIN_PATH: /usr/bin/google-chrome
+  # Empty unless a caller names a seed, and an empty value leaves every runner
+  # on the seed of the commit under test.
+  CF_TEST_SHUFFLE_SEED: ${{ inputs.shuffle-seed }}
   WORK_TIMEOUT_MINUTES: &work-timeout 30
   JOB_TIMEOUT_MINUTES: &job-timeout 40
   CLI_WORK_TIMEOUT_MINUTES: &cli-work-timeout 10
@@ -126,6 +140,12 @@ jobs:
           deno task run-recorded gate repo check-skill-facts --
           deno task check-skill-facts
 
+      - name: 🧭 Check address examples
+        timeout-minutes: *work-timeout
+        run: >-
+          deno task run-recorded gate repo check-address-examples --
+          deno task check-address-examples
+
       - name: 🚧 Check tripwires
         timeout-minutes: *work-timeout
         run: >-
@@ -161,6 +181,12 @@ jobs:
         run: >-
           deno task run-recorded gate repo check-conflict-markers --
           deno task check-conflict-markers
+
+      - name: 🚧 Guard every test runner to shuffle its order
+        timeout-minutes: *work-timeout
+        run: >-
+          deno task run-recorded gate repo check-test-shuffle --
+          deno task check-test-shuffle
 
       - name: 🩹 Check for literal control characters in source
         timeout-minutes: *work-timeout
@@ -533,7 +559,7 @@ jobs:
           # These permissions mirror the `test` task in
           # packages/runner/deno.jsonc; a test that needs a new one needs it
           # in both places, because this shard runs deno test directly.
-          ENV=test deno test \
+          ENV=test deno test --shuffle=$(deno task -q test-seed) \
             --no-check \
             --preload=test/clock-preload.ts \
             --preload=../../packages/test-support/src/records/preload.ts \
@@ -745,14 +771,18 @@ jobs:
       - name: 🔍 Verify lock file & install dependencies
         uses: ./.github/actions/deno-install
 
+      - name: 🧮 Resolve the compiler fingerprint
+        id: compile-cache-key
+        uses: ./.github/actions/compile-cache-key
+
       - name: ♻️ Restore/save generated pattern compile byte cache
         id: compile-cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ github.workspace }}/.compile-cache/generated-patterns-${{ matrix.shard }}.json
-          key: cc-generated-patterns-${{ hashFiles('packages/ts-transformers/**', 'packages/js-compiler/**', 'packages/runner/src/harness/**', 'packages/runner/src/pattern-coverage.ts', 'packages/runner/src/sandbox/**', 'packages/schema-generator/**', 'packages/api/**', 'packages/static/assets/types/**', 'deno.jsonc', 'deno.lock') }}-${{ matrix.total }}-${{ matrix.shard }}-${{ hashFiles('packages/generated-patterns/**/*.ts', 'tasks/select-generated-pattern-files.ts') }}
+          key: cc-generated-patterns-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ matrix.total }}-${{ matrix.shard }}-${{ hashFiles('packages/generated-patterns/**/*.ts', 'tasks/select-generated-pattern-files.ts') }}
           restore-keys: |
-            cc-generated-patterns-${{ hashFiles('packages/ts-transformers/**', 'packages/js-compiler/**', 'packages/runner/src/harness/**', 'packages/runner/src/pattern-coverage.ts', 'packages/runner/src/sandbox/**', 'packages/schema-generator/**', 'packages/api/**', 'packages/static/assets/types/**', 'deno.jsonc', 'deno.lock') }}-${{ matrix.total }}-${{ matrix.shard }}-
+            cc-generated-patterns-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ matrix.total }}-${{ matrix.shard }}-
 
       - name: 🧾 Record compile cache state for the Coverage Check
         uses: ./.github/actions/record-compile-cache-state
@@ -777,7 +807,7 @@ jobs:
           printf 'Generated patterns shard ${{ matrix.shard }}/${{ matrix.total }} files:\n'
           printf '  %s\n' $TEST_FILES
           mkdir -p ../../test-results
-          LOG_LEVEL=warn deno test --trace-leaks -A --parallel \
+          LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) --trace-leaks -A --parallel \
             --junit-path=../../test-results/generated-patterns-${{ matrix.shard }}.xml \
             $TEST_FILES
 
@@ -1235,7 +1265,7 @@ jobs:
           TOOLSHED_PORT: ${{ matrix.toolshed_port }}
         run: |
           mkdir -p ../../test-results
-          API_URL="http://localhost:${TOOLSHED_PORT}" deno test --no-check \
+          API_URL="http://localhost:${TOOLSHED_PORT}" deno test --shuffle=$(deno task -q test-seed) --no-check \
             --junit-path=../../test-results/cli-piece-integration.xml \
             --allow-net --allow-ffi --allow-read --allow-write --allow-env \
             --allow-run test/piece-integration.test.ts
@@ -1332,34 +1362,29 @@ jobs:
         timeout-minutes: *posture-probe-timeout
         run: deno run tasks/server-execution-ci-command.ts env default >> "$GITHUB_ENV"
 
+      - name: 🧮 Resolve the compiler fingerprint
+        id: compile-cache-key
+        uses: ./.github/actions/compile-cache-key
+
       # Cross-run compile cache: persist the per-shard compiled-module-byte cache
       # so unchanged patterns reuse last run's emitted bytes (skip the
-      # type-check + transform + emit). The key folds in a hash of everything
-      # that shapes emitted bytes or cached coverage spans — the js-compiler,
-      # the CF transformer, the schema-generator it bakes schemas from, runner
-      # code that prepares and verifies compiled module records, static type
-      # assets loaded by the in-memory compiler, the api types lowered into
-      # schemas, the root deno.jsonc compiler options (jsx/jsxImportSource), and
-      # the lockfile — so any change to what emits or trusts the bytes
-      # invalidates the whole file even when it leaves module identity and the
-      # runtime-version tag untouched.
-      # This input list mirrors COMPILE_FINGERPRINT_INPUTS in
-      # packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts, which
-      # fingerprints the same set for the durable runtime cache; the
-      # compiler-fingerprint test fails if the two drift. The pattern-source and
-      # integration harness and shard selector roll the key. `restore-keys`
-      # still seeds from the most recent prior cache. The total shard count and selector
-      # source separate cache namespaces when the file assignment topology
-      # changes. Hash both TypeScript extensions. An exact actions/cache entry
-      # is immutable; newly compiled bytes are saved under a rotated key.
+      # type-check + transform + emit). The fingerprint resolved above rolls the
+      # key whenever anything that shapes emitted bytes or cached coverage spans
+      # changes, so it rolls even where module identity and the runtime-version
+      # tag are untouched. The pattern sources, the integration harness, and the
+      # shard selector roll it as well; `restore-keys` still seeds from the most
+      # recent prior cache. The total shard count and selector source separate
+      # cache namespaces when the file assignment topology changes. Hash both
+      # TypeScript extensions. An exact actions/cache entry is immutable; newly
+      # compiled bytes are saved under a rotated key.
       - name: ♻️ Restore/save compile byte cache
         id: compile-cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ github.workspace }}/.compile-cache/pattern-integration-${{ matrix.shard }}.json
-          key: cc-${{ hashFiles('packages/ts-transformers/**', 'packages/js-compiler/**', 'packages/runner/src/harness/**', 'packages/runner/src/pattern-coverage.ts', 'packages/runner/src/sandbox/**', 'packages/schema-generator/**', 'packages/api/**', 'packages/static/assets/types/**', 'deno.jsonc', 'deno.lock') }}-${{ matrix.total }}-${{ matrix.shard }}-${{ hashFiles('packages/patterns/**/*.ts', 'packages/patterns/**/*.tsx', 'tasks/select-pattern-integration-files.ts', 'tasks/weighted-shards.ts') }}
+          key: cc-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ matrix.total }}-${{ matrix.shard }}-${{ hashFiles('packages/patterns/**/*.ts', 'packages/patterns/**/*.tsx', 'tasks/select-pattern-integration-files.ts', 'tasks/weighted-shards.ts') }}
           restore-keys: |
-            cc-${{ hashFiles('packages/ts-transformers/**', 'packages/js-compiler/**', 'packages/runner/src/harness/**', 'packages/runner/src/pattern-coverage.ts', 'packages/runner/src/sandbox/**', 'packages/schema-generator/**', 'packages/api/**', 'packages/static/assets/types/**', 'deno.jsonc', 'deno.lock') }}-${{ matrix.total }}-${{ matrix.shard }}-
+            cc-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ matrix.total }}-${{ matrix.shard }}-
 
       - name: 🧾 Record compile cache state for the Coverage Check
         uses: ./.github/actions/record-compile-cache-state
@@ -1446,7 +1471,7 @@ jobs:
           PATTERN_INTEGRATION_SHARD="${{ matrix.shard }}/${{ matrix.total }}" \
           CF_COMPILE_CACHE_FILE="${{ github.workspace }}/.compile-cache/pattern-integration-${{ matrix.shard }}.json" \
           DENO_COVERAGE_DIR=../../coverage/raw/pattern-integration-${{ matrix.shard }} \
-          deno test --no-check --v8-flags=--max-old-space-size=4096 --trace-leaks -A \
+          deno test --shuffle=$(deno task -q test-seed) --no-check --v8-flags=--max-old-space-size=4096 --trace-leaks -A \
             --junit-path=../../test-results/patterns-${{ matrix.shard }}.xml \
             "${TEST_FILES[@]}"
 
@@ -1523,6 +1548,10 @@ jobs:
         timeout-minutes: *posture-probe-timeout
         run: deno run tasks/server-execution-ci-command.ts env opposite >> "$GITHUB_ENV"
 
+      - name: 🧮 Resolve the compiler fingerprint
+        id: compile-cache-key
+        uses: ./.github/actions/compile-cache-key
+
       # Read-only seed from the default lane's compile byte cache (same key
       # family): compiled module bytes are a function of sources, not of the
       # runtime flag, so reuse is sound; only the default lane saves. The key
@@ -1532,9 +1561,9 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ github.workspace }}/.compile-cache/pattern-integration-${{ matrix.shard }}.json
-          key: cc-${{ hashFiles('packages/ts-transformers/**', 'packages/js-compiler/**', 'packages/runner/src/harness/**', 'packages/runner/src/pattern-coverage.ts', 'packages/runner/src/sandbox/**', 'packages/schema-generator/**', 'packages/api/**', 'packages/static/assets/types/**', 'deno.jsonc', 'deno.lock') }}-${{ matrix.total }}-${{ matrix.shard }}-${{ hashFiles('packages/patterns/**/*.ts', 'packages/patterns/**/*.tsx', 'tasks/select-pattern-integration-files.ts', 'tasks/weighted-shards.ts') }}
+          key: cc-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ matrix.total }}-${{ matrix.shard }}-${{ hashFiles('packages/patterns/**/*.ts', 'packages/patterns/**/*.tsx', 'tasks/select-pattern-integration-files.ts', 'tasks/weighted-shards.ts') }}
           restore-keys: |
-            cc-${{ hashFiles('packages/ts-transformers/**', 'packages/js-compiler/**', 'packages/runner/src/harness/**', 'packages/runner/src/pattern-coverage.ts', 'packages/runner/src/sandbox/**', 'packages/schema-generator/**', 'packages/api/**', 'packages/static/assets/types/**', 'deno.jsonc', 'deno.lock') }}-${{ matrix.total }}-${{ matrix.shard }}-
+            cc-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ matrix.total }}-${{ matrix.shard }}-
 
       - name: 📥 Download toolshed binary (opposite shell)
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -1607,7 +1636,7 @@ jobs:
           API_URL=http://localhost:8000/ \
           PATTERN_INTEGRATION_SHARD="${{ matrix.shard }}/${{ matrix.total }}" \
           CF_COMPILE_CACHE_FILE="${{ github.workspace }}/.compile-cache/pattern-integration-${{ matrix.shard }}.json" \
-          deno test --no-check --v8-flags=--max-old-space-size=4096 --trace-leaks -A \
+          deno test --shuffle=$(deno task -q test-seed) --no-check --v8-flags=--max-old-space-size=4096 --trace-leaks -A \
             --junit-path=../../test-results/patterns-server-execution-opposite-${{ matrix.shard }}.xml \
             "${TEST_FILES[@]}"
 
@@ -1743,14 +1772,18 @@ jobs:
       - name: 🔍 Verify lock file & install dependencies
         uses: ./.github/actions/deno-install
 
+      - name: 🧮 Resolve the compiler fingerprint
+        id: compile-cache-key
+        uses: ./.github/actions/compile-cache-key
+
       - name: ♻️ Restore/save pattern unit compile byte cache
         id: compile-cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ github.workspace }}/.compile-cache/pattern-unit-coverage-${{ matrix.chunk }}.json
-          key: cc-pattern-unit-coverage-${{ hashFiles('packages/ts-transformers/**', 'packages/js-compiler/**', 'packages/runner/src/harness/**', 'packages/runner/src/pattern-coverage.ts', 'packages/runner/src/sandbox/**', 'packages/schema-generator/**', 'packages/api/**', 'packages/static/assets/types/**', 'deno.jsonc', 'deno.lock') }}-${{ matrix.total }}-${{ matrix.chunk }}-${{ hashFiles('packages/patterns/**/*.ts', 'packages/patterns/**/*.tsx', 'packages/connectors/agents/debug-view/**/*.ts', 'packages/connectors/agents/debug-view/**/*.tsx', 'packages/connectors/github/activity-view/**/*.ts', 'packages/connectors/github/activity-view/**/*.tsx', 'packages/connectors/pattern-sources.ts', 'tasks/integration.ts', 'tasks/pattern-files.ts') }}
+          key: cc-pattern-unit-coverage-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ matrix.total }}-${{ matrix.chunk }}-${{ hashFiles('packages/patterns/**/*.ts', 'packages/patterns/**/*.tsx', 'packages/connectors/agents/debug-view/**/*.ts', 'packages/connectors/agents/debug-view/**/*.tsx', 'packages/connectors/github/activity-view/**/*.ts', 'packages/connectors/github/activity-view/**/*.tsx', 'packages/connectors/pattern-sources.ts', 'tasks/integration.ts', 'tasks/pattern-files.ts') }}
           restore-keys: |
-            cc-pattern-unit-coverage-${{ hashFiles('packages/ts-transformers/**', 'packages/js-compiler/**', 'packages/runner/src/harness/**', 'packages/runner/src/pattern-coverage.ts', 'packages/runner/src/sandbox/**', 'packages/schema-generator/**', 'packages/api/**', 'packages/static/assets/types/**', 'deno.jsonc', 'deno.lock') }}-${{ matrix.total }}-${{ matrix.chunk }}-
+            cc-pattern-unit-coverage-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ matrix.total }}-${{ matrix.chunk }}-
 
       - name: 🧾 Record compile cache state for the Coverage Check
         uses: ./.github/actions/record-compile-cache-state
@@ -1870,7 +1903,7 @@ jobs:
           BG_PIECE_SERVICE_BIN: ${{ github.workspace }}/common-binaries/bg-piece-service
         run: |
           mkdir -p ../../test-results
-          deno test --no-check \
+          deno test --shuffle=$(deno task -q test-seed) --no-check \
             --junit-path=../../test-results/bg-piece-service-posture-gate.xml \
             --allow-env --allow-run --allow-net \
             integration/posture-gate.test.ts
@@ -1882,7 +1915,7 @@ jobs:
           API_URL: http://localhost:8000
         run: |
           mkdir -p ../../test-results
-          deno test --no-check \
+          deno test --shuffle=$(deno task -q test-seed) --no-check \
             --junit-path=../../test-results/cf-harness-posture-gate.xml \
             -A \
             integration/fabric-session-posture-gate.test.ts
@@ -1913,7 +1946,7 @@ jobs:
 
   coverage-check:
     name: "Coverage Check"
-    if: (github.event_name == 'pull_request') || (github.ref_name == 'main')
+    if: (github.event_name == 'pull_request') || (github.event_name == 'push' && github.ref_name == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: *job-timeout
     needs:
@@ -1993,6 +2026,73 @@ jobs:
           retention-days: 90
           if-no-files-found: ignore
 
+  # The store half of the test-topology drift guard. The tree half fails a
+  # surface in the working tree that no suite claims; this fails one that is
+  # registered and whose records do not map back to the topology, which
+  # would leave those tests running in the full run and never selectable on
+  # a pull request. It judges a tree by the records that tree produced, so
+  # it waits for every job that ships them and holds them to this run's
+  # commit. A gate inside a lane could not do it: a lane's records have not
+  # shipped when its gates run.
+  #
+  # It runs on a pull request as well as on the default branch, because the
+  # change that introduces this drift is the change to a suite, a runner,
+  # or a test's name, and that change has a run of its own. What reaches
+  # the default branch is then the pair of changes that were each claimed
+  # separately and are not together, which no single pull request can see.
+  test-topology-store-check:
+    name: "Test Topology Store Check"
+    if: (github.event_name == 'pull_request') || (github.event_name == 'push' && github.ref_name == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: *job-timeout
+    needs:
+      - check
+      - cfcheck
+      - pattern-compat
+      - pattern-vintage
+      - test
+      - runner-test
+      - generated-patterns-integration-test
+      - package-integration-test
+      - package-integration-test-server-execution-opposite
+      - cli-integration-test
+      - pattern-integration-test
+      - pattern-integration-test-server-execution-opposite
+      - pattern-reload-integration-test
+      - pattern-unit-test
+      - deployed-topology-gate
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: 🦕 Setup Deno
+        uses: ./.github/actions/deno-setup
+
+      - name: 🔍 Verify lock file & install dependencies
+        uses: ./.github/actions/deno-install
+
+      - name: 📥 Download test records
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: test-records-*
+          path: test-records-artifacts
+          merge-multiple: false
+          digest-mismatch: error
+
+      # The guard reads the record artifacts of every job in this run, so no
+      # lane can be asked to run it and this job writes no test records.
+      # `docs/specs/test-records.md` under "Recording" holds the criterion.
+      # It is handed the directory rather than a list of files, so a run
+      # whose artifacts it cannot find fails rather than checking nothing.
+      - name: 🔎 Check the topology against this run's records
+        timeout-minutes: *work-timeout
+        run: >-
+          deno task check-test-topology --commit "$GITHUB_SHA"
+          --records test-records-artifacts
+
   status:
     name: "Status"
     if: ${{ always() && github.event_name == 'pull_request' }}
@@ -2017,6 +2117,7 @@ jobs:
       - pattern-unit-test
       - deployed-topology-gate
       - coverage-check
+      - test-topology-store-check
     permissions: {}
     runs-on: ubuntu-latest
     timeout-minutes: *job-timeout
@@ -2039,7 +2140,7 @@ jobs:
 
   attest-binaries:
     name: "Attest and Upload Binaries"
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: *job-timeout
     # A release artifact must not outlive a failed pattern-migration gate.
@@ -2317,7 +2418,7 @@ jobs:
   # Automatic deployment to staging (rapids)
   deploy-rapids:
     name: "Deploy to Rapids (Staging)"
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: ["attest-binaries"]
     runs-on: ubuntu-latest
     environment: toolshed
@@ -2341,7 +2442,7 @@ jobs:
   # Deploy shell static assets to staging GCS bucket
   deploy-shell-staging:
     name: "Deploy Shell to Staging"
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs:
       [
         "test",

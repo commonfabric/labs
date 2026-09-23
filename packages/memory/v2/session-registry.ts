@@ -21,6 +21,8 @@ export type SessionState = {
   /** The read ceiling this session declared at its LAST open
    * (`SessionDescriptor.readCeiling`); fresh per open, never inherited. */
   readCeiling?: SessionReadCeiling;
+  /** Immutable root intent authenticated by this session's latest open. */
+  genesisRoot?: SessionDescriptor["genesisRoot"];
   seenSeq: number;
   lastSyncedSeq: number;
   watches: WatchSpec[];
@@ -218,6 +220,9 @@ export class SessionRegistry {
       // is a session that reads unbounded.
       ...(session.readCeiling !== undefined
         ? { readCeiling: session.readCeiling }
+        : {}),
+      ...(session.genesisRoot !== undefined
+        ? { genesisRoot: session.genesisRoot }
         : {}),
       // Fresh per open (never inherited): the binding reflects THIS
       // open's resolution against the current ACL; an open without the

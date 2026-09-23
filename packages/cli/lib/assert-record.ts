@@ -7,7 +7,7 @@
  */
 
 import type { AssertPart, AssertRecord } from "@commonfabric/api";
-import { toCompactDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /**
@@ -79,6 +79,6 @@ export function assertionOutcome(
   }
   return {
     passed: false,
-    error: `Expected true, got ${toCompactDebugString(value)}`,
+    error: debugStr`Expected true, got $quote,long${value}`,
   };
 }

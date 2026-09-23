@@ -24,8 +24,12 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { idStringForEntityAddress } from "@commonfabric/runner";
 import type { PiecesController } from "@commonfabric/piece/ops";
-import { linkPathSegmentToCellPathSegment } from "@commonfabric/runner/shared";
+import {
+  createLLMFriendlyLink,
+  linkPathSegmentToCellPathSegment,
+} from "@commonfabric/runner/shared";
 
 import type { SlugSummary, SpaceConfig } from "../lib/piece.ts";
 import { HeldConnection } from "../lib/shuttle/connection.ts";
@@ -117,9 +121,22 @@ function slugIndex(rows: SlugSummary[]): ListingDeps {
 
 /** Helper for the cases below, which stands `rows` in for the space's pieces. */
 function spacePieces(
-  rows: { id: string; name?: string; error?: string }[],
+  rows: { id: string; reference?: string; name?: string; error?: string }[],
 ): ListingDeps {
-  return { ...READS_NOTHING, listPieces: () => Promise.resolve(rows) };
+  return {
+    ...READS_NOTHING,
+    listPieces: () =>
+      Promise.resolve(rows.map((row) => ({
+        ...row,
+        reference: row.reference ??
+          createLLMFriendlyLink({
+            space: SPACE,
+            id: idStringForEntityAddress(row.id) as `${string}:${string}`,
+            scope: "space",
+            path: [],
+          }),
+      }))),
+  };
 }
 
 /**
@@ -271,6 +288,57 @@ describe("listing", () => {
     });
 
     describe("`pieces/`", () => {
+      it("retains distinct registered target references with equal document IDs", async () => {
+        const references = [
+          createLLMFriendlyLink({
+            space: SPACE,
+            id: HANDLE,
+            scope: "space",
+            path: [],
+          }),
+          createLLMFriendlyLink({
+            space: "did:key:z6MkForeignSpace",
+            id: HANDLE,
+            scope: "user",
+            path: ["embedded", "0"],
+          }),
+          createLLMFriendlyLink({
+            space: SPACE,
+            id: HANDLE,
+            scope: "user",
+            path: ["embedded", "0"],
+          }),
+        ];
+        const listing = await list(
+          inFacet("pieces"),
+          spacePieces(
+            references.map((reference) => ({ id: HANDLE, reference })),
+          ),
+        );
+        expect(listing.rows.map((row) => row.operand)).toEqual([
+          HANDLE,
+          ...references.slice(1),
+        ]);
+        expect(listing.rows.map((row) => row.name)).toEqual([
+          HANDLE,
+          HANDLE,
+          HANDLE,
+        ]);
+        const local = inFacet("pieces");
+        expect(moved(local, listing.rows[2].operand!).kind).toBe("moved");
+        expect(local.place.scope).toBe("user");
+        expect(local.place.position).toEqual({
+          kind: "piece",
+          space: SPACE,
+          piece: HANDLE,
+          path: ["embedded", 0],
+        });
+        const foreign = inFacet("pieces");
+        const before = foreign.place;
+        expect(moved(foreign, listing.rows[1].operand!).kind).toBe("refused");
+        expect(foreign.place).toEqual(before);
+      });
+
       it("returns one row per piece", async () => {
         const listing = await list(
           inFacet("pieces"),

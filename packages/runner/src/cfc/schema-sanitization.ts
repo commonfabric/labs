@@ -3,7 +3,11 @@ import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import {
   deepFrozenCloneAndInternSchema,
 } from "@commonfabric/data-model-schema";
-import { isSubschema } from "@commonfabric/data-model-schema/schema-walk";
+import {
+  isSubschema,
+  SINGLE_SUBSCHEMA_KEYS,
+  UNUSED_SINGLE_SUBSCHEMA_KEYS,
+} from "@commonfabric/data-model-schema/schema-walk";
 import {
   cloneIfNecessary,
   fabricAwareEqual,
@@ -728,6 +732,7 @@ const schemaTypeDefinitionIssue = (type: unknown): string | undefined => {
 
 const strictConstraintDefinitionIssue = (
   schema: Exclude<JSONSchema, boolean>,
+  formatAnnotations = false,
 ): string | undefined => {
   const record = schema as Record<string, unknown>;
   for (
@@ -785,7 +790,7 @@ const strictConstraintDefinitionIssue = (
   if (Object.hasOwn(record, "format")) {
     if (
       typeof record.format !== "string" ||
-      !SUPPORTED_SCHEMA_FORMATS.has(record.format)
+      (!formatAnnotations && !SUPPORTED_SCHEMA_FORMATS.has(record.format))
     ) {
       return `schema has unsupported format ${String(record.format)}`;
     }
@@ -801,6 +806,9 @@ const strictConstraintDefinitionIssue = (
 };
 
 interface SchemaDefinitionContext {
+  /** Whether formats are annotations and all structural positions are checked. */
+  structuredResult: boolean;
+
   activeByRoot: WeakMap<object, WeakSet<object>>;
   activeRefsByRoot: WeakMap<object, Set<string>>;
 
@@ -837,10 +845,17 @@ interface SchemaDefinitionContext {
   provenLog: Array<{ rootKey: object; schema: object }>;
 }
 
-/** Validate the schema language understood by strict Fabric migration checks. */
+/**
+ * Validates a Fabric schema definition. Migration mode restricts formats to
+ * those the migration value checker enforces. Structured-result mode admits
+ * string format annotations and checks unevaluated schema positions too.
+ * Diagnostics may contain schema content; callers crossing a disclosure
+ * boundary replace them with a fixed message.
+ */
 export const validateSchemaDefinition = (
   schema: JSONSchema,
   fullSchema: JSONSchema = schema,
+  mode: "migration" | "structured-result" = "migration",
 ): string | undefined => {
   // Compatibility later interns schemas for root-aware identity tracking.
   // Prove that normalization is safe up front so malformed literal payloads,
@@ -853,6 +868,7 @@ export const validateSchemaDefinition = (
     return `$: schema cannot be normalized: ${message}`;
   }
   return validateSchemaDefinitionInternal(schema, fullSchema, "$", {
+    structuredResult: mode === "structured-result",
     activeByRoot: new WeakMap(),
     activeRefsByRoot: new WeakMap(),
     walkedDefinitionsByRoot: new WeakMap(),
@@ -1054,7 +1070,10 @@ const validateSchemaDefinitionInternal = (
       }
     }
 
-    const constraintIssue = strictConstraintDefinitionIssue(schema);
+    const constraintIssue = strictConstraintDefinitionIssue(
+      schema,
+      context.structuredResult,
+    );
     if (constraintIssue !== undefined) return `${path}: ${constraintIssue}`;
 
     if (schema.required !== undefined) {
@@ -1150,17 +1169,19 @@ const validateSchemaDefinitionInternal = (
     }
 
     for (
-      const key of [
-        "additionalProperties",
-        "contains",
-        "contentSchema",
-        "else",
-        "if",
-        "items",
-        "not",
-        "propertyNames",
-        "then",
-      ] as const
+      const key of context.structuredResult
+        ? [...SINGLE_SUBSCHEMA_KEYS, ...UNUSED_SINGLE_SUBSCHEMA_KEYS]
+        : [
+          "additionalProperties",
+          "contains",
+          "contentSchema",
+          "else",
+          "if",
+          "items",
+          "not",
+          "propertyNames",
+          "then",
+        ] as const
     ) {
       const child = schema[key];
       if (child === undefined) continue;

@@ -83,7 +83,9 @@ is an error.
 
 Every one of those paths writes an output file, so the artifact upload always has
 one to collect and the outcome is read from the conversion step rather than from
-a missing file.
+a missing file. What reads the report decides what an empty one means: the pull
+request coverage gate fails a measured set the change forced whose reports name
+no line of its member, as [Test selection](test-selection.md) describes.
 
 ### Authored pattern code is measured by transformer instrumentation
 
@@ -755,6 +757,28 @@ the absent answer a directory outside a repository produces. Nothing in that
 file runs a subprocess or reads the surrounding checkout, so every arm runs on
 every machine.
 
+### Modules a subprocess loads from V8's code cache
+
+A Deno process that a test starts inherits `DENO_COVERAGE_DIR` and writes a
+profile of its own. When that process loads a module from V8's code cache,
+which Deno keeps in its cache directory, V8 reports the module's top-level code
+as one range with a single count. Every line of that code then reads as
+covered, including a branch that never ran. `tasks/build-binaries.ts` ends with
+`if (import.meta.main) { await runBuildBinaries(Deno.args); }`. The test that
+runs the script expects that call to throw, so the closing brace is never
+reached. The brace counts as covered only when the script was loaded from the
+code cache.
+
+`deno run` writes a module into the code cache the first time it compiles it,
+so within one job a process that runs a module after another process has run it
+reads it from there. Which process that is can depend on which of two tests
+running at the same time starts first. A code cache carried over from an earlier
+run adds a dependence on history as well, because it holds only modules
+unchanged since it was saved: a pull request that edits a module loses coverage
+of its top-level branches that `main` was reporting. The `📦 Cache Deno dependencies` step in
+`.github/actions/deno-setup/action.yml` leaves the code cache out of what it
+saves, and `tasks/deno-setup-action.test.ts` holds it to that.
+
 ### What the check says when the regression is not the pull request's
 
 The gate compares whole-group counts, so a flapping line fails whichever pull
@@ -901,9 +925,10 @@ from. The dashboard's coverage debt tile
 (`packages/dashboard/coverage-debt-history.ts`) reads the
 `coverage-debt: workspace uncovered lines` record out of one `main` run a day,
 shows the newest of those figures, and charts the run of them. It skips a run
-whose compile cache states say it was cold, for the reason the ratchet does. So
-the metric name, the `durationSeconds` key and the `compileCacheStates` tag have
-a reader outside the gate, and a change to any of them is a change to the tile.
+any of whose compile cache states is cold, for the reason the ratchet does;
+"Compile cache state and cold runs" below says what records those states. So the
+metric name, the `durationSeconds` key and the `compileCacheStates` tag have a
+reader outside the gate, and a change to any of them is a change to the tile.
 
 A later PR run reads its ratchet baseline from the `perf-metrics` artifact of the
 `main` run for the base-branch commit it merged, or of the nearest ancestor of
@@ -927,13 +952,27 @@ script separately checks the expected artifact names
 coverage files. A manual run without the environment variable uses the GitHub API
 download path instead.
 
+The names the script checks come from the run's artifact listing, which is read
+through the GitHub API. When GitHub's rate limit refuses that listing, the
+subdirectories of `COVERAGE_ARTIFACTS_DIR` name the artifacts instead, so the run
+still measures its coverage; the files it measures are the downloaded ones
+either way. The compile cache states are not among the downloads, so such a run
+has none recorded, as when their artifacts are missing. A pull request's run
+without the environment variable has nothing to fall back on, and fails as it
+does for any other failure to read its own coverage, with the limit named in its
+log.
+
 ### Measuring a before/after locally
 
 The gate reports a group total rather than a per-line diff, so localizing a rise
 means measuring the same group twice: once with the branch's tree, once with the
 tree it will merge onto. Set `DENO_COVERAGE_DIR` for each run and convert with
 `tasks/write-coverage-lcov.ts`, exactly as the CI jobs do, then compare the two
-LCOV reports' zero-hit lines across the files the branch changed.
+LCOV reports' zero-hit lines across the files the branch changed. Point
+`DENO_DIR` at a new empty directory for each run, since each CI job starts
+without V8's code cache. With your usual Deno cache directory, a module that a
+test runs in a subprocess reports its top-level lines as covered or not
+depending on whether something had run it before.
 
 Take both measurements from the same base. Rebasing between them straddles two
 trees and the delta stops meaning anything, so rebase first and measure after.
@@ -987,14 +1026,31 @@ compile fingerprint: `tasks/compile-cache-state.ts` mirrors the `cc-*` key globs
 against the commit whose cache it would have restored — the pull request's own
 changed files, or the previous `main` run for a push. A family with no recorded
 state is filled cold when those paths changed. Recorded states are ground truth
-and always win. The rate-limit skip path writes the same stamped artifact, so a
-run cut short still tells later runs whether it was cold.
+and always win. A run a rate limit ends early writes the same stamped artifact
+before it stops, so it still tells later runs whether it was cold.
 
 Neither source is complete. Fingerprint inference cannot see non-fingerprint
 cold causes (cache eviction, cache-service outages), and a run whose cache-state
 artifacts and fingerprint comparison both failed publishes no stamp at all. A
 run with no recorded state is treated as not-cold and may still be used as a
 baseline.
+
+A CI lane records the state of the compile byte cache it restores
+(`COMPILE_CACHE_FILE` in `tasks/ci-capabilities.ts`) itself. A lane whose
+batches open that cache checks whether the file exists before its first batch
+runs, because the first pattern a batch compiles writes the file whatever the
+cache held. It writes `cold` or `warm` to `compile-cache-state.txt` at the top
+of the directory its coverage artifact holds. A file that exists reads as warm,
+which is sound only while the workflow keys the lanes' cache, and every restore
+key for it, on the compiler fingerprint, as it keys the jobs' caches: a file
+restored from a run of another compiler holds no bytes this one can use, and
+would read as warm all the same. `tasks/coverage-report.ts` reads
+every such record and publishes the run's state under the `compile-cache` key of
+`compileCacheStates`: cold when any record says `cold` or says something it
+does not recognize, warm when every record says `warm`, and absent when no lane
+opened the cache. The dashboard's repository-wide trend leaves a cold run out,
+so a fingerprint change does not show as a drop in debt that the next warm run
+takes back.
 
 ## Which `main` run the ratchet compares against
 
@@ -1136,6 +1192,11 @@ listing that is not current, whose remedy is a re-run that costs about a minute.
 What makes the pass safe to keep is that it is no longer a quiet one — the run
 reports through the same four places above, so a pull request that was never
 gated does not read as one that was.
+
+A limit reached before the comparison, on the listing of the run's own
+artifacts, does not stop the run measuring what it downloaded (see "Ratchet
+baselines and accepting debt"). The comparison then reads the API again, and a
+limit still in force there ends the run as above, naming the groups it measured.
 
 The table header in the job's log is the quick check. `excl` beside a group the
 pull request changed means that group was not compared, and a header reading

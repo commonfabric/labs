@@ -1,9 +1,13 @@
 /**
- * What this package offers to tests alone: examples of every concrete
- * `FabricPrimitive` and `FabricInstance` class, for a test that ranges over
- * the classes to take its values from, so that it holds no table of its own
- * to fall out of step. Each table's type is what holds it complete: a class
- * with no entry, or an entry of some other class, stops this module compiling.
+ * What this package offers to tests alone. There are two kinds of thing here:
+ * examples of every concrete class, and steps internal to the package that a
+ * test calls directly.
+ *
+ * The examples are of every concrete `FabricPrimitive` and `FabricInstance`
+ * class, for a test that ranges over the classes to take its values from, so
+ * that it holds no table of its own to fall out of step. Each table's type is
+ * what holds it complete: a class with no entry, or an entry of some other
+ * class, stops this module compiling.
  *
  * The examples of a class are written once, as makers. Every table of makers
  * here keeps one contract, which a test may rest on:
@@ -14,6 +18,9 @@
  * - No object one maker returns is equal to one another maker of that class
  *   returns, and every class has at least two makers, so a class's first two
  *   makers give a pair that differs.
+ *
+ * An internal step is here when a test of the package's public surface cannot
+ * reach it dependably. Each one's doc comment says why that is.
  *
  * This has its own entry in the package's export map and no place in any
  * barrel, so that loading the classes constructs none of it.
@@ -37,6 +44,7 @@ import {
   FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
+import { float64BytesOf } from "./value-hash.ts";
 
 /** At least two makers of one kind of value. */
 type Makers<Value> = readonly [() => Value, () => Value, ...(() => Value)[]];
@@ -212,6 +220,20 @@ export const FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY: {
     ] as const,
   ),
 });
+
+/**
+ * `float64BytesOf()` from `value-hash.ts`, which returns the eight bytes that
+ * represent a number in a hash. The result is good until the next call.
+ *
+ * It is here because a test of `hashOf()` cannot reach the function's `NaN`
+ * arm dependably. That arm makes a difference for a `NaN` whose bits are not
+ * the canonical ones, and whether such a `NaN` keeps its bits on the way into
+ * `hashOf()` varies by engine and platform. A test of this function can check
+ * instead that the result for a `NaN` is not the buffer which holds the result
+ * for every other number, and that check comes out the same everywhere.
+ */
+export const float64BytesOfForTestingOnly: (value: number) => Uint8Array =
+  float64BytesOf;
 
 /**
  * Helper for `FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY`, which calls every

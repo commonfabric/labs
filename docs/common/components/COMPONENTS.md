@@ -97,7 +97,7 @@ cell means none confirmed — check the component source before assuming.
 |-----|---------|----------------|
 | `cf-accordion` | Container for collapsible content panels | |
 | `cf-accordion-item` | Individual accordion panel | |
-| `cf-alert` | Alert message with variants and dismissible option | |
+| `cf-alert` | Alert message with `status` (`info`, `error`, `warning`, `success`) and dismissible option | |
 | `cf-area-mark` | Filled area mark rendered inside `cf-chart` | `$data` |
 | `cf-aspect-ratio` | Maintains a fixed aspect ratio for its content | |
 | `cf-attachments-bar` | Displays pinned cells as a horizontal list of chips | |
@@ -114,7 +114,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-card` | Content container with header/content/footer (built-in 1rem padding) | |
 | `cf-cell-link` | Renders a link or cell as a clickable, draggable pill | |
 | `cf-cfc-authorship` | Shows trusted authorship state for CFC-labeled content | `$value`, `$author` |
-| `cf-cfc-label` | Renders the CFC label of a bound cell value | `$value` |
+| `cf-cfc-label` | Renders the CFC label of a bound cell value; `variant="badge"` shows a compact pill for whether an integrity atom matches the `atom`/`kind` filter | `$value` |
 | `cf-chart` | SVG charting container for line/area/bar/dot marks (see [cf-chart](#cf-chart)) | `$marks` (marks: `$data`) |
 | `cf-chat` | Chat container handling message flow and tool-call correlation | `$messages` |
 | `cf-chat-message` | Single chat message with markdown support | |
@@ -160,6 +160,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-message-input` | Input + send button combo for chat-style item entry; emits a synthetic (untrusted) `cf-send` event, so use `cf-submit-input` when the submit must authorize an owner-protected write | |
 | `cf-modal` | Accessible modal dialog with bottom-sheet presentation mode | `$open` |
 | `cf-oauth` | Generic OAuth authentication | `$auth` |
+| `cf-owner-view` | Sets a per-user presentation predicate from the runtime's acting principal and a stored creator attestation (see [owner view](#cf-owner-view)) | `$originator`, `$result` |
 | `cf-picker` | Carousel selection over cells with `[UI]` | `$items`, `$selectedIndex` |
 | `cf-piece` | Provides piece context to child components | |
 | `cf-plaid-link` | Plaid banking integration | `$auth` |
@@ -179,6 +180,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-secret-viewer` | Trusted UI for revealing secret strings | `$value` |
 | `cf-select` | Dropdown taking `{ label, value }` items — not `<option>` elements | `$value` |
 | `cf-separator` | Visual divider line between content sections | |
+| `cf-share-snapshot` | Native confirmation of an exact JSON snapshot and runtime-verified audience (see [snapshot sharing](#cf-share-snapshot)) | `$source`, `$recipient`, `$result` |
 | `cf-skeleton` | Animated loading placeholder | |
 | `cf-slider` | Range input slider | |
 | `cf-space-link` | Renders a space as a clickable navigation pill | |
@@ -1033,6 +1035,41 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
   static wrapper. Repro: `packages/patterns/scope-bug-computed-vnode-blank/`.
 
 ---
+
+## cf-owner-view
+
+`cf-owner-view` checks whether the runtime's authenticated principal matches
+the single root `represents-principal` attestation on `$originator`. It writes
+the result to the per-user boolean `$result` cell and renders no content of its
+own. A missing, unreadable, or conflicting attestation leaves the result false.
+The component does not use the selected `#profile`, which may represent a
+different persona. The predicate selects presentation; CFC labels govern reads.
+
+## cf-share-snapshot
+
+`cf-share-snapshot` reviews a copy of a source cell before releasing that copy
+to another user or space. Bind `$source` to the JSON value to review,
+`$recipient` to a live profile or space cell, and `$result` to a writable cell
+that will receive the released cell link. In pattern JSX, set `audienceKind` to
+`user` (the default) or `space`. The native HTML attribute is `audience-kind`.
+
+The authenticated host checks the source against its runtime read ceiling. When
+the host has no runtime-wide ceiling, the source must fit the confirming user's
+own `User` ceiling. This permits the default shell to share the user's private
+draft while refusing a source labeled only for another user.
+
+The host displays the exact snapshot and the audience verified by the runtime in
+a native modal dialog. Its disclosure and preview are fixed host UI. The user
+must confirm with a trusted browser gesture; a scripted click cannot publish.
+The source stays private, and future changes are not included in the copy. JSON
+values containing links are refused.
+
+Changing a binding, dismissing the dialog, or disconnecting the component
+invalidates its preview. The runtime refuses a commit when the source or
+verified audience changed after preparation. Once the released link is stored
+successfully, the component emits `cf-shared` with no payload. A consuming
+handler reads its bound result cell; the event does not carry source values or
+identity claims.
 
 ## CFC Authorship
 

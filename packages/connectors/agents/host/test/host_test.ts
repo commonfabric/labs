@@ -18,6 +18,8 @@ import {
   assertRejects,
   assertThrows,
 } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import {
   AgentsHost,
   type AgentsHostTarget,
@@ -1543,4 +1545,61 @@ Deno.test("AgentsHost retains a session whose published copy matches its invento
   } finally {
     await Deno.remove(directory, { recursive: true });
   }
+});
+
+describe("AgentsHost", () => {
+  describe("instance members", () => {
+    describe("synchronize()", () => {
+      it("publishes a new pairing without a transcript change and retains it when the driver forgets it", async () => {
+        const directory = await Deno.makeTempDir();
+        const target = new FakeTarget();
+        const driver = new FakeDriver("claude");
+        const summary = driver.snapshot.summary;
+        const key = "claude/claude-session";
+        const published: PublishedSessionState = {
+          driver: driver.source.driver,
+          updatedAt: summary.updatedAt,
+          archived: summary.archived,
+          active: summary.active,
+          syncStatus: "complete",
+        };
+        target.published.set(key, published);
+        const host = new AgentsHost({
+          sources: [sourceConfig("claude")],
+          target,
+          targetDescription: TARGET_DESCRIPTION,
+          ledger: await openLedger(directory),
+          createDriver: () => driver,
+          clock: clock(),
+        });
+        try {
+          await host.start({ acceptCommands: false });
+          await host.synchronize("unchanged");
+          expect(driver.readCount).toBe(1);
+
+          summary.startedAs = "desktop-start";
+          await host.synchronize("paired");
+          expect(target.publications.at(-1)?.[0].sessions[0]?.summary.startedAs)
+            .toBe("desktop-start");
+          expect(driver.readCount).toBe(2);
+
+          target.published.set(key, {
+            ...published,
+            startedAs: "desktop-start",
+          });
+          await host.synchronize("pairing-published");
+          expect(driver.readCount).toBe(2);
+
+          // A restarted driver cannot remember the pairing the index preserves.
+          delete summary.startedAs;
+          await host.synchronize("pairing-preserved");
+          expect(driver.readCount).toBe(2);
+          expect(target.publications.at(-1)?.[0].retained).toHaveLength(1);
+        } finally {
+          await host.stop();
+          await Deno.remove(directory, { recursive: true });
+        }
+      });
+    });
+  });
 });

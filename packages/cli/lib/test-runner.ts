@@ -36,6 +36,11 @@ import {
   FragmentWriter,
   repositoryRelativePath,
 } from "@commonfabric/test-support/records";
+import {
+  shuffledPaths,
+  shuffleNotice,
+  shuffleSeed,
+} from "@commonfabric/test-support/shuffle";
 
 import { internSchema } from "@commonfabric/data-model-schema";
 import { debugStr, toDebugKindString } from "@commonfabric/data-model";
@@ -458,6 +463,12 @@ export interface TestRunnerOptions {
     identity: Identity;
     storageManager: RuntimeOptions["storageManager"];
 
+    /** Waits for host-owned work, such as an external agent, before test steps run. */
+    beforeAssertions?: (
+      runtime: Runtime,
+      result: Cell<unknown>,
+    ) => Promise<void>;
+
     /**
      * Cause for the test pattern's result cell, pinning its entity id.
      *
@@ -466,6 +477,12 @@ export interface TestRunnerOptions {
      * differs every run can never be addressed again.
      */
     resultCause?: unknown;
+
+    /** The API origin serving the caller's remote storage and agent runs. */
+    apiUrl?: URL;
+
+    /** Keeps a caller-provisioned home pattern and its registered services. */
+    preserveDefaultPattern?: boolean;
 
     /** Records every pattern the run materializes; see the vintage capture. */
     onPatternInstantiated?: PatternInstantiationObserver;
@@ -1174,7 +1191,7 @@ export async function runTestPattern(
       // `runtimePresets.patternTest` carries the shared first-party posture
       // (CT-1814). Params below are this harness's declared deltas.
       new Runtime(runtimePresets.patternTest({
-        apiUrl: new URL(import.meta.url),
+        apiUrl: options.storageHost?.apiUrl ?? new URL(import.meta.url),
         storageManager,
         experimental: experimentalOptionsFromEnv(Deno.env.get),
         moduleByteCache: options.moduleByteCache ??
@@ -1395,6 +1412,11 @@ export async function runTestPattern(
     // create a minimal equivalent so patterns that use wish("#default") to
     // access the piece registry and related space services work correctly.
     await withPhase(["runTestPattern", "defaultPatternSetup"], async () => {
+      if (options.storageHost?.preserveDefaultPattern === true) {
+        const home = runtime.getHomeSpaceCell();
+        await home.sync();
+        if (home.get()?.defaultPattern !== undefined) return;
+      }
       const setupTx = runtime.edit();
       const spaceCell = runtime.getCell(space, space, undefined, setupTx);
       const defaultPatternCell = runtime.getCell(
@@ -1505,6 +1527,8 @@ export async function runTestPattern(
     });
     await initializationBudgetSettlement;
     initializationBudgetSettlement = undefined;
+
+    await options.storageHost?.beforeAssertions?.(runtime, patternResult);
 
     // 4. Get the tests array from pattern output (the reserved [TESTS] key)
     const testsCell = await withPhase(
@@ -2371,7 +2395,15 @@ export async function runTests(
       durationMs: Math.round(durationMs),
     });
 
-  for (const testPath of paths) {
+  // Files run in the order the seed puts them in, so a file that leans
+  // on another file having run fails rather than passing quietly. The
+  // steps inside a file keep their order: a pattern test states its
+  // expectations as a sequence, each one about the state the step before
+  // it left, so their order is the test rather than an accident of it.
+  const seed = shuffleSeed();
+  console.log(shuffleNotice(seed));
+
+  for (const testPath of shuffledPaths(paths, seed)) {
     console.log(`\n${basename(testPath)}`);
     const failedBefore = totalFailed;
     const fileStarted = performance.now();

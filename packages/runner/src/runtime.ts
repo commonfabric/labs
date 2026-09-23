@@ -1,4 +1,8 @@
-import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
+import {
+  cloneIfNecessary,
+  fabricFromConvertibleJsValue,
+  type FabricValue,
+} from "@commonfabric/data-model";
 import {
   getModernCellRepConfig,
   resetModernCellRepConfig,
@@ -71,6 +75,7 @@ import {
   type CfcTriggerReadGating,
   type CfcTrustConfig,
   type CfcTrustConfigInput,
+  type CfcTxState,
   type CfcWriteFloorMode,
   DEFAULT_SINK_MAX_CONFIDENTIALITY,
   linkCfcLabelView,
@@ -79,6 +84,8 @@ import {
   type SinkMaxConfidentiality,
   type TrustSnapshot,
 } from "./cfc/mod.ts";
+import { assertCfcReadCeiling } from "./cfc/read-ceiling.ts";
+import { meetCfcObservationCeilings } from "./cfc/observation.ts";
 import {
   cfcPolicyManifestDocId,
   type PolicyArtifactManifestV1,
@@ -89,9 +96,12 @@ import {
   RuntimeOwnedStores,
 } from "./cfc/runtime-owned-stores.ts";
 import {
+  type CfcExternalContentObservation,
   type RuntimeWritePolicyAuthorization,
+  runtimeWritePolicyAuthorization,
   runtimeWritePolicyAuthorized,
 } from "./cfc/types.ts";
+import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
 import { waveRunContextOf } from "./executor/wave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
@@ -338,6 +348,15 @@ export interface ExperimentalOptions {
    * unlike v1's SERVER_PRIMARY_EXECUTION so archived docs never alias it.
    */
   serverExecution?: boolean | undefined;
+
+  /**
+   * The `agent` builtin (`docs/common/capabilities/agent.md`): a pattern's
+   * request for an agent run, staged as a sink request and handed to a
+   * runner through an `AgentRun` record. When false, the builtin settles
+   * every request with an error naming this flag and stages nothing. Defaults
+   * to on.
+   */
+  agentBuiltin?: boolean | undefined;
 
   /** Global default for server-selected view replication. Defaults to off. */
   viewScopedReplication?: boolean | undefined;
@@ -697,49 +716,43 @@ export interface RuntimeOptions {
   cfcSinkMaxConfidentiality?: SinkMaxConfidentiality;
 
   /**
-   * Runtime-wide read ceiling: the confidentiality every `db.query` this
-   * runtime issues reads under. A query declaring no ceiling of its own reads
-   * under this one; a query declaring one (the `maxConfidentiality` option or
+   * Runtime-wide read ceiling: the confidentiality every cell payload read
+   * and `db.query` this runtime issues reads under. A session-scoped query
+   * declaring no ceiling of its own reads under this one; a session-scoped
+   * query declaring one (the `maxConfidentiality` option or
    * the Row schema's `MaxConfidentiality`) reads under the meet of the two,
    * so a query tightens this ceiling and never widens it. Placeholder atoms
    * (`{ __ctDbOwner: true }`, `{ __ctCurrentPrincipal: true }`) resolve per
    * query, as they do in a query's own ceiling. Defaults to none: the owner
    * view, every row returned.
    *
-   * Per runtime rather than per pattern because the only carrier a pattern
-   * can read is a cell in the space, shared by every runtime on it; a lens
-   * that differs per device or per run has to ride the runtime. For the same
-   * reason the ceiling applies only to a query whose result is
-   * session-scoped by the pattern's own declaration (`PerSession<>`,
-   * `.asScope("session")`, or a session-scoped db): a space- or user-shared
-   * result is one cell every runtime on the space resolves, and a runtime
-   * cannot narrow it for itself. A query with a broader result is refused
-   * through the runtime's error handlers, and nothing shared is written.
+   * Per runtime rather than per pattern because a pattern's inputs live in
+   * shared cells. Session-scoped queries meet this ceiling into row filtering;
+   * shared queries materialize under their own declared contract, independent
+   * of the observing runtime. A shared result's array shape carries the join
+   * of all row labels, including rows its declared contract skips, so cell
+   * reads withhold row counts and membership as well as protected payloads.
    *
-   * The refusal bounds what THIS runtime queries; it does not reach a
-   * shared cell another runtime already filled. A pattern whose output is
-   * space-scoped and that an unbounded runtime ran first leaves its result
-   * in a cell this runtime resolves like any other shared value, refusal or
-   * not — so a bounded runtime must run its patterns with session-scoped
-   * outputs, and what protects a shared cell is the cell's own label under
-   * the commit-boundary gates, not this option. Carrying the ceiling into
-   * the cell read path (a labeled cell that does not fit reads as withheld)
-   * is the follow-up that closes that seam.
+   * Cell and transaction payload reads measure the stored label at the
+   * requested path, including descendants when returning an object. A value
+   * outside the ceiling throws `CfcReadCeilingError` before returning content;
+   * `cfcReadOnExceed` applies only to SQLite row filtering. Ordinary cells have
+   * no database context for resolving placeholder atoms: use concrete clauses
+   * for cell observation. An unresolved placeholder cannot admit a concrete
+   * label merely because that label names a database owner.
    *
-   * Governs the runtime that performs the query — a client runtime executing
-   * its own patterns, or a serving runtime for every run it serves — and the
-   * sqlite read surface only: every `db.query`, aggregates included. Cell
-   * reads are governed by the commit-boundary gates, and a host's direct
-   * sqlite bridge refuses labeled tables outright. Validated and deep-frozen
-   * at construction; an empty list, which admits nothing, is refused (omit
-   * the option for no ceiling).
+   * Governs client runtimes and served runs; a serving runtime meets its own
+   * ceiling with the carried session ceiling. A host's direct sqlite bridge
+   * refuses labeled tables outright. Validated and deep-frozen at construction;
+   * an empty list, which admits nothing, is refused (omit the option for no
+   * ceiling).
    *
    * A client under server execution executes no query of its own: the
    * space server's runtime serves them. Its ceiling travels with its
    * sessions instead — declared through the storage manager
    * (`setSessionReadCeiling`) into every signed `session.open` descriptor
    * before a session opens — and the serving loop stamps it onto every run
-   * it serves as one of those sessions, whose queries then read under the
+   * it serves as one of those sessions, whose cell reads and queries use the
    * serving runtime's option met with it. Such a client refuses a storage
    * manager that cannot carry the ceiling, and a server that does not
    * record one (`sessionReadCeiling` absent from its protocol flags).
@@ -1005,6 +1018,94 @@ function cellAsLink(value: object | ((...args: never[]) => unknown)): unknown {
   return isCell(value) ? value.toSigilLinkOrNull() : value;
 }
 
+type ExternalObservationReceiptPayload = {
+  runtime: object;
+  sourceTx: IExtendedStorageTransaction;
+  targetTx: IExtendedStorageTransaction;
+  space: MemorySpace;
+  producer: string;
+  trustSnapshot: TrustSnapshot | undefined;
+  trustConfig: CfcTxState["trustConfig"];
+  policySnapshot: { readonly digest: string } | undefined;
+  moduleDelegations: CfcTxState["moduleDelegations"];
+  posture: readonly unknown[];
+  observation: CfcExternalContentObservation;
+  consumed: boolean;
+};
+
+const externalObservationReceipts = new WeakMap<
+  object,
+  ExternalObservationReceiptPayload
+>();
+
+const externalObservationPosture = (
+  state: Readonly<CfcTxState>,
+): readonly unknown[] => [
+  state.enforcementMode,
+  state.flowLabelsMode,
+  state.writeFloorMode,
+  state.triggerReadGating,
+  state.decomposedEnvelopes,
+  state.contentAddressedLabels,
+  state.policyEvaluationMode,
+  state.labelMetadataProtectionMode,
+  state.declaredMonotonicityMode,
+];
+
+const moduleDelegationsEqual = (
+  left: CfcTxState["moduleDelegations"],
+  right: CfcTxState["moduleDelegations"],
+): boolean => {
+  if (left.size !== right.size) {
+    return false;
+  }
+  for (const [space, leftModules] of left) {
+    const rightModules = right.get(space);
+    if (rightModules === undefined || leftModules.size !== rightModules.size) {
+      return false;
+    }
+    for (const [moduleIdentity, delegated] of leftModules) {
+      if (!deepEqual(delegated, rightModules.get(moduleIdentity))) {
+        return false;
+      }
+    }
+  }
+  return true;
+};
+
+const copyModuleDelegations = (
+  source: CfcTxState["moduleDelegations"],
+): CfcTxState["moduleDelegations"] => {
+  const copy = new Map<
+    MemorySpace,
+    ReadonlyMap<string, readonly string[]>
+  >();
+  for (const [space, modules] of source) {
+    copy.set(
+      space,
+      new Map(
+        [...modules].map(([identity, predecessors]) => [
+          identity,
+          [...predecessors],
+        ]),
+      ),
+    );
+  }
+  return copy;
+};
+
+const externalObservationRefusal = (
+  message: string,
+  state?: Readonly<CfcTxState>,
+): Error =>
+  Object.assign(new Error(message), {
+    name: "CfcCommitRefusalError",
+    refusals: [...(state?.refusalDetails ?? [])],
+  });
+
+/** Maximum load waves an external observation traversal may discover. */
+const EXTERNAL_OBSERVATION_LOAD_ROUNDS = 100;
+
 /**
  * Main Runtime class that orchestrates all services in the runner package.
  *
@@ -1028,6 +1129,7 @@ function cellAsLink(value: object | ((...args: never[]) => unknown)): unknown {
 export class Runtime {
   #tearingDownWrites = false;
   readonly #writeTeardown = new AbortController();
+  readonly #transactions = new WeakSet<IExtendedStorageTransaction>();
 
   readonly id: string;
   readonly scheduler: Scheduler;
@@ -1596,14 +1698,13 @@ export class Runtime {
       }
     }
 
-    // Unlike ambient flags, computedCellIds and plainResultReceipts are
-    // consumed from this Runtime instance (the builder frame and the runner's
-    // receipt-only branch respectively). Normalize their local defaults after
-    // override logging so an omitted option does not appear as an explicit
-    // `true` override.
+    // These flags are consumed from this Runtime instance. Normalize their
+    // local defaults after override logging so an omitted option does not
+    // appear as an explicit `true` override.
     this.experimental.computedCellIds ??= true;
     this.experimental.plainResultReceipts ??= true;
     this.experimental.lazyMaterialization ??= true;
+    this.experimental.agentBuiltin ??= true;
 
     // Propagate experimental flags to their ambient control points, then read
     // back the effective state so `experimental.*` reflects what is actually in
@@ -2337,6 +2438,16 @@ export class Runtime {
       (tx as { debugActionId?: string }).debugActionId = debugActionId;
     }
     const wrapped = new ExtendedStorageTransaction(tx, {
+      checkReadCeiling: (readingTx, address, options) => {
+        const carried = waveRunContextOf(readingTx)?.readCeiling;
+        const ceiling = carried === undefined
+          ? this.cfcReadMaxConfidentiality
+          : meetCfcObservationCeilings(
+            this.cfcReadMaxConfidentiality,
+            carried.maxConfidentiality,
+          );
+        assertCfcReadCeiling(readingTx, address, ceiling, options);
+      },
       resolvePolicyManifest: (
         reference,
         tx,
@@ -2446,6 +2557,7 @@ export class Runtime {
       this.#transactionSealDestination ?? this.#speculationDestination(),
     );
     wrapped.configureRuntimeOwnedStores(this.#runtimeOwnedStores);
+    this.#transactions.add(wrapped);
     return wrapped;
   }
 
@@ -2853,6 +2965,9 @@ export class Runtime {
    * @param fn - Function to execute with the transaction.
    * @param maxRetries - Maximum combined number of reconciliation re-runs and
    *   commit-rejection retries after the initial invocation.
+   * @param options - Source-update authorization and an optional owner signal.
+   *   A signal enables cooperative CFC preparation and stops canceled work
+   *   before commit or retry. Callers without one prepare synchronously.
    * @returns `{ ok }` once the transaction commits, carrying whatever `fn`
    *   returned, or `{ error }` when it does not commit: a rejection that is not
    *   retryable, a retryable one whose retries are spent, or `fn` itself
@@ -2861,21 +2976,26 @@ export class Runtime {
   editWithRetry<T = void>(
     fn: (tx: IExtendedStorageTransaction) => T,
     maxRetries: number = DEFAULT_MAX_RETRIES,
-    options: { sourceUpdate?: PreparedSourceUpdate } = {},
+    options: { sourceUpdate?: PreparedSourceUpdate; signal?: AbortSignal } = {},
   ): Promise<
     { ok: T; error?: undefined } | { ok?: undefined; error: CommitError }
   > {
-    const teardownResult = (): {
+    const signal = options.signal === undefined
+      ? this.#writeTeardown.signal
+      : AbortSignal.any([options.signal, this.#writeTeardown.signal]);
+    const stoppedResult = (): {
       ok?: undefined;
       error: CommitError;
     } => ({
       error: {
         name: "StorageTransactionAborted" as const,
-        message: "editWithRetry stopped because the runtime is disposing",
-        reason: new Error("runtime disposing"),
+        message: this.#tearingDownWrites
+          ? "editWithRetry stopped because the runtime is disposing"
+          : "editWithRetry stopped because its owner canceled",
+        reason: signal.reason,
       },
     });
-    if (this.#tearingDownWrites) return Promise.resolve(teardownResult());
+    if (signal.aborted) return Promise.resolve(stoppedResult());
     const tx = this.edit(options);
     this.scheduler.beginReadAttempt(tx, "editWithRetry");
     tx.tx.immediate = true;
@@ -2899,24 +3019,36 @@ export class Runtime {
     const commitPrepared = (): Promise<
       { ok: T; error?: undefined } | { ok?: undefined; error: CommitError }
     > => {
-      if (this.#tearingDownWrites) {
-        tx.abort("editWithRetry stopped because the runtime is disposing");
-        return Promise.resolve(teardownResult());
+      if (signal.aborted) {
+        tx.abort(signal.reason);
+        return Promise.resolve(stoppedResult());
       }
+      let preparation: Promise<void> | void;
       try {
-        this.prepareTxForCommit(tx);
+        preparation = options.signal === undefined
+          ? this.prepareTxForCommit(tx)
+          : tx.prepareForCommitCooperatively(signal);
       } catch (error) {
         if (tx.status().status === "ready") tx.abort(error);
         throw error;
       }
-      return tx.commit().then(async ({ error }) => {
+      const commit = preparation === undefined
+        ? tx.commit()
+        : preparation.then(() => {
+          if (signal.aborted && tx.status().status === "ready") {
+            tx.abort(signal.reason);
+          }
+          return tx.commit();
+        });
+      return commit.then(async ({ error }) => {
         if (error) {
+          if (signal.aborted) return stoppedResult();
           if (maxRetries > 0 && isRetryableCommitRejection(error)) {
             await this.awaitCommitRetryReadiness(
               error,
-              this.#writeTeardown.signal,
+              signal,
             );
-            if (this.#tearingDownWrites) return teardownResult();
+            if (signal.aborted) return stoppedResult();
             return this.editWithRetry<T>(fn, maxRetries - 1, options);
           } else {
             return { error };
@@ -2924,6 +3056,7 @@ export class Runtime {
         }
         return { ok: result };
       }).catch((error) => {
+        if (tx.status().status === "ready") tx.abort(error);
         return {
           error: {
             name: "StorageTransactionAborted" as const,
@@ -2959,9 +3092,9 @@ export class Runtime {
       : 0;
     if (typeof reconciliation === "number") return commitPrepared();
     return reconciliation.then((present) => {
-      if (this.#tearingDownWrites) {
-        tx.abort("editWithRetry stopped because the runtime is disposing");
-        return teardownResult();
+      if (signal.aborted) {
+        tx.abort(signal.reason);
+        return stoppedResult();
       }
       if (present > 0) {
         tx.abort(
@@ -3312,6 +3445,293 @@ export class Runtime {
    */
   prepareTxForCommit(tx: IExtendedStorageTransaction): void {
     tx.prepareForCommit();
+  }
+
+  /**
+   * Admits one host-observed value through the ordinary CFC write boundary
+   * without committing the staged document. The returned object is opaque:
+   * its evidence lives only in this module's WeakMap and is usable once by a
+   * matching transaction on this runtime.
+   */
+  async prepareExternalContentObservation(options: {
+    targetTx: IExtendedStorageTransaction;
+    space: MemorySpace;
+    cause: unknown;
+    schema: JSONSchema;
+    value: unknown;
+    producer: string;
+  }): Promise<object> {
+    const targetState = options.targetTx.getCfcState();
+    if (
+      !this.#transactions.has(options.targetTx) ||
+      options.targetTx.status().status !== "ready" ||
+      targetState.implementationIdentity?.kind !== "builtin" ||
+      targetState.implementationIdentity.builtinId !== options.producer
+    ) {
+      throw externalObservationRefusal(
+        "external content observation target does not match this runtime and producer",
+        targetState,
+      );
+    }
+    const tx = this.edit();
+    const cell = this.getCell<unknown>(
+      options.space,
+      options.cause,
+      options.schema,
+      tx,
+    );
+    try {
+      await cell.sync();
+      cell.set(options.value);
+      this.prepareTxForCommit(tx);
+      const preparedState = tx.getCfcState();
+      const enforcementDisabled = preparedState.enforcementMode === "disabled";
+      if (!enforcementDisabled && preparedState.prepare.status !== "prepared") {
+        throw externalObservationRefusal(
+          "CFC refused the external content observation",
+          preparedState,
+        );
+      }
+      if (
+        preparedState.consultedGrants.length > 0 ||
+        preparedState.consultedPolicyManifests.length > 0
+      ) {
+        throw externalObservationRefusal(
+          "external content observation admission depends on mutable policy evidence",
+          preparedState,
+        );
+      }
+      const policySnapshot = preparedState.policySnapshot === undefined
+        ? undefined
+        : { digest: preparedState.policySnapshot.digest };
+      if (
+        !deepEqual(targetState.trustSnapshot, preparedState.trustSnapshot) ||
+        !deepEqual(targetState.trustConfig, preparedState.trustConfig) ||
+        !deepEqual(
+          targetState.policySnapshot === undefined
+            ? undefined
+            : { digest: targetState.policySnapshot.digest },
+          policySnapshot,
+        ) ||
+        !moduleDelegationsEqual(
+          targetState.moduleDelegations,
+          preparedState.moduleDelegations,
+        ) ||
+        !deepEqual(
+          externalObservationPosture(targetState),
+          externalObservationPosture(preparedState),
+        )
+      ) {
+        throw externalObservationRefusal(
+          "external content observation admission context changed",
+          preparedState,
+        );
+      }
+      const evidence = {
+        trustSnapshot: preparedState.trustSnapshot === undefined
+          ? undefined
+          : { ...preparedState.trustSnapshot },
+        trustConfig: preparedState.trustConfig,
+        policySnapshot,
+        moduleDelegations: copyModuleDelegations(
+          preparedState.moduleDelegations,
+        ),
+        posture: [...externalObservationPosture(preparedState)],
+      };
+
+      // This read runs only after the staged write passed preparation, or in
+      // disabled mode where preparation is intentionally a no-op. Traversal
+      // can discover an unloaded linked document and start its sync, so each
+      // arrival is followed by another read until no link-target load remains.
+      // Each pass drops current-instant read memoization so a value materialized
+      // by the preceding load is traversed rather than answered from its hole.
+      // The storage manager deduplicates every document load for the session;
+      // a finite observed value therefore reaches this fixed point without a
+      // timer or retrying a failed request.
+      let loadRound = 0;
+      for (; loadRound < EXTERNAL_OBSERVATION_LOAD_ROUNDS; loadRound++) {
+        tx.resetCurrentReadMemoization();
+        cell.get({ traverseCells: true });
+        // Link resolution can register its tracked sync in a promise
+        // continuation. Let that continuation run before inspecting the
+        // manager's settled pool, or a just-kicked load looks absent here.
+        await Promise.resolve();
+        if (
+          (this.storageManager.pendingCrossSpacePromiseCount?.() ?? 0) === 0
+        ) {
+          break;
+        }
+        await (this.storageManager.crossSpaceSettled?.() ?? Promise.resolve());
+      }
+      if (loadRound === EXTERNAL_OBSERVATION_LOAD_ROUNDS) {
+        throw externalObservationRefusal(
+          "external content observation traversal did not converge",
+          tx.getCfcState(),
+        );
+      }
+      tx.prepareCfc();
+      const finalPreparedState = tx.getCfcState();
+      if (
+        !enforcementDisabled &&
+        finalPreparedState.prepare.status !== "prepared"
+      ) {
+        throw externalObservationRefusal(
+          "CFC refused the traversed external content observation",
+          finalPreparedState,
+        );
+      }
+      if (
+        finalPreparedState.consultedGrants.length > 0 ||
+        finalPreparedState.consultedPolicyManifests.length > 0
+      ) {
+        throw externalObservationRefusal(
+          "external content observation traversal depends on mutable policy evidence",
+          finalPreparedState,
+        );
+      }
+      if (
+        !deepEqual(
+          finalPreparedState.trustSnapshot,
+          evidence.trustSnapshot,
+        ) ||
+        !deepEqual(finalPreparedState.trustConfig, evidence.trustConfig) ||
+        !deepEqual(
+          finalPreparedState.policySnapshot === undefined
+            ? undefined
+            : { digest: finalPreparedState.policySnapshot.digest },
+          evidence.policySnapshot,
+        ) ||
+        !moduleDelegationsEqual(
+          finalPreparedState.moduleDelegations,
+          evidence.moduleDelegations,
+        ) ||
+        !deepEqual(
+          externalObservationPosture(finalPreparedState),
+          evidence.posture,
+        )
+      ) {
+        throw externalObservationRefusal(
+          "external content observation context changed during traversal",
+          finalPreparedState,
+        );
+      }
+      const flow = deriveFlowJoin(tx, { collectLabeledSpaces: true });
+      const consumed = collectConsumedLabel(tx);
+      const source = cell.getAsNormalizedFullLink();
+      const observation = cloneIfNecessary({
+        source: {
+          space: source.space,
+          id: source.id,
+          scope: source.scope,
+          path: source.path,
+        },
+        flow: {
+          confidentiality: [...flow.confidentiality],
+          integrity: [...flow.integrity],
+        },
+        consumed: {
+          confidentiality: [...consumed.confidentiality],
+          integrity: [...consumed.integrity],
+        },
+        labeledSpaces: [...(flow.labeledSpaces ?? [])],
+        sources: consumed.sources.map((entry) => ({
+          atom: entry.atom,
+          read: entry.read,
+          labelPath: entry.labelPath,
+        })),
+      } as FabricValue) as unknown as CfcExternalContentObservation;
+      const receipt = Object.freeze({});
+      externalObservationReceipts.set(receipt, {
+        runtime: this,
+        sourceTx: tx,
+        targetTx: options.targetTx,
+        space: options.space,
+        producer: options.producer,
+        ...evidence,
+        observation,
+        consumed: false,
+      });
+      return receipt;
+    } finally {
+      if (tx.status().status === "ready") {
+        tx.abort("external content observation recorded");
+      }
+    }
+  }
+
+  /** Records a receipt from {@link prepareExternalContentObservation}. */
+  recordExternalContentObservation(
+    tx: IExtendedStorageTransaction,
+    receipt: object,
+    options: { space: MemorySpace; producer: string },
+  ): void {
+    const payload = externalObservationReceipts.get(receipt);
+    const state = tx.getCfcState();
+    const mismatches = [
+      ["missing", payload === undefined],
+      ["consumed", payload?.consumed === true],
+      ["runtime", payload !== undefined && payload.runtime !== this],
+      ["target", payload !== undefined && payload.targetTx !== tx],
+      ["target-owner", !this.#transactions.has(tx)],
+      ["source-open", payload?.sourceTx.status().status === "ready"],
+      ["space", payload !== undefined && payload.space !== options.space],
+      [
+        "producer",
+        payload !== undefined && payload.producer !== options.producer,
+      ],
+      ["target-closed", tx.status().status !== "ready"],
+      [
+        "trust",
+        payload !== undefined &&
+        !deepEqual(state.trustSnapshot, payload.trustSnapshot),
+      ],
+      [
+        "trust-config",
+        payload !== undefined &&
+        !deepEqual(state.trustConfig, payload.trustConfig),
+      ],
+      [
+        "policy",
+        payload !== undefined && !deepEqual(
+          state.policySnapshot === undefined
+            ? undefined
+            : { digest: state.policySnapshot.digest },
+          payload.policySnapshot,
+        ),
+      ],
+      [
+        "delegations",
+        payload !== undefined &&
+        !moduleDelegationsEqual(
+          state.moduleDelegations,
+          payload.moduleDelegations,
+        ),
+      ],
+      [
+        "posture",
+        payload !== undefined &&
+        !deepEqual(externalObservationPosture(state), payload.posture),
+      ],
+      ["identity-kind", state.implementationIdentity?.kind !== "builtin"],
+      [
+        "identity-producer",
+        state.implementationIdentity?.kind === "builtin" &&
+        state.implementationIdentity.builtinId !== options.producer,
+      ],
+    ].filter(([, mismatch]) => mismatch).map(([name]) => name);
+    if (payload === undefined || mismatches.length > 0) {
+      throw externalObservationRefusal(
+        `external content observation receipt does not match this result write (${
+          mismatches.join(", ")
+        })`,
+        state,
+      );
+    }
+    tx.recordCfcExternalContentObservation(
+      payload.observation,
+      runtimeWritePolicyAuthorization,
+    );
+    payload.consumed = true;
   }
 
   /**

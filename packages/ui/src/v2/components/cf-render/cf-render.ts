@@ -304,6 +304,8 @@ export class CFRender extends BaseElement {
    */
   private _renderGeneration = 0;
 
+  #needsReconnectRender = false;
+
   /**
    * The root piece cell after resolving the (possibly link) `cell`. Reset
    * whenever `cell` changes.
@@ -327,6 +329,28 @@ export class CFRender extends BaseElement {
     }
   }
 
+  /** Exposes the render container, generation, and render entry for focused tests. */
+  get accessForTestingOnly(): {
+    containerRef: Ref<HTMLDivElement>;
+    readonly renderGeneration: number;
+    renderCell(): Promise<void>;
+  } {
+    // deno-lint-ignore no-this-alias
+    const outerThis = this;
+    return {
+      get containerRef() {
+        return outerThis._containerRef;
+      },
+      set containerRef(value) {
+        outerThis._containerRef = value;
+      },
+      get renderGeneration() {
+        return outerThis._renderGeneration;
+      },
+      renderCell: () => this._renderCell(),
+    };
+  }
+
   protected override render() {
     // Chip is inline and resolves to a lightweight default fast — a full-size
     // spinner would reserve the wrong space, so skip it for chip.
@@ -346,6 +370,7 @@ export class CFRender extends BaseElement {
   }
 
   protected override updated(changedProperties: PropertyValues) {
+    if (!this.isConnected) return;
     this._log(
       "updated called, changedProperties:",
       Array.from(changedProperties.keys()),
@@ -354,13 +379,14 @@ export class CFRender extends BaseElement {
     const cellChanged = changedProperties.has("cell");
     const variantChanged = changedProperties.has("variant");
 
-    if (cellChanged || variantChanged) {
-      let shouldRerender = false;
+    if (cellChanged || variantChanged || this.#needsReconnectRender) {
+      let shouldRerender = this.#needsReconnectRender;
+      this.#needsReconnectRender = false;
 
       if (cellChanged) {
         const oldCell = changedProperties.get("cell") as CellHandle | undefined;
-        // Only re-render if the cell actually changed
-        shouldRerender = !oldCell || !this.cell || !oldCell.equals(this.cell);
+        // A reconnect also invalidates the cached target, even for an equal cell.
+        shouldRerender ||= !oldCell || !this.cell || !oldCell.equals(this.cell);
         this._log("cell property changed, should rerender:", shouldRerender);
 
         if (shouldRerender) {
@@ -394,7 +420,10 @@ export class CFRender extends BaseElement {
     const container = this._containerRef.value;
     const cell = this.cell;
     this._cleanupRender();
-    if (!container || !cell) return;
+    if (!container || !cell || cell.runtime().signal.aborted) return;
+    const cancelled = () =>
+      this._renderGeneration !== generation ||
+      cell.runtime().signal.aborted;
 
     const cellId = cell.id();
     this._log(`_renderCell called: ${cellId}`);
@@ -407,14 +436,14 @@ export class CFRender extends BaseElement {
       // the root piece cell. Resolve every variant to the target piece so full
       // nested rendering and its piece menu address the same entity.
       await this._startPromise;
-      if (this._renderGeneration !== generation) return;
+      if (cancelled()) return;
       const resolved = await cell.resolveAsCell();
-      if (this._renderGeneration !== generation) return;
+      if (cancelled()) return;
       const currentTarget = await this._watchLinkTarget(cell, resolved);
-      if (this._renderGeneration !== generation) return;
+      if (cancelled()) return;
       if (currentTarget === undefined) {
         this._resolvedCell = undefined;
-        this._hasRendered = true;
+        this.#showUnavailable();
         return;
       }
       this._resolvedCell = currentTarget;
@@ -422,14 +451,18 @@ export class CFRender extends BaseElement {
       // Full is the universal floor: render the piece's [UI] chain directly.
       if (kind === "full") {
         this._log("rendering full [UI] into container");
-        this._cleanup = render(container, cell as CellHandle<VNode>);
+        this._cleanup = render(
+          container,
+          cell as CellHandle<VNode>,
+          this.#renderErrorOptions(generation),
+        );
         this._hasRendered = true;
         return;
       }
 
       // Chip and tile inspect exported variant keys before falling back.
       await currentTarget.sync();
-      if (this._renderGeneration !== generation) return;
+      if (cancelled()) return;
 
       const variantKey = kind === "chip" ? CHIP_UI : TILE_UI;
       if (this._cellHasKey(currentTarget, variantKey)) {
@@ -438,6 +471,7 @@ export class CFRender extends BaseElement {
           container,
           (currentTarget as CellHandle<Record<string, VNode>>)
             .key(variantKey) as CellHandle<VNode>,
+          this.#renderErrorOptions(generation),
         );
         this._hasRendered = true;
         return;
@@ -450,7 +484,7 @@ export class CFRender extends BaseElement {
       this._hasRendered = true;
     } catch (error) {
       // Only show error if we're still rendering this cell
-      if (this._renderGeneration === generation) {
+      if (!cancelled()) {
         this._handleRenderError(error);
       }
     }
@@ -528,6 +562,7 @@ export class CFRender extends BaseElement {
           this._renderGeneration++;
           this._hasRendered = true;
           this._cleanupRender();
+          this.#showUnavailable();
         } else {
           this._hasRendered = false;
           void this._renderCell();
@@ -596,7 +631,11 @@ export class CFRender extends BaseElement {
     scaler.className = "tile-default";
     clip.appendChild(scaler);
     container.appendChild(clip);
-    const inner = render(scaler, cell as CellHandle<VNode>);
+    const inner = render(
+      scaler,
+      cell as CellHandle<VNode>,
+      this.#renderErrorOptions(this._renderGeneration),
+    );
     const onClick = (e: MouseEvent) => this._navigateToPiece(e);
     clip.addEventListener("click", onClick);
     return () => {
@@ -691,6 +730,9 @@ export class CFRender extends BaseElement {
   override connectedCallback() {
     super.connectedCallback();
     this.addEventListener("contextmenu", this._onContextMenu);
+    // DOM moves reconnect this instance with unchanged properties, after its
+    // previous render and link subscription have been released.
+    if (this.hasUpdated) this.requestUpdate();
   }
 
   /** Navigate to the rendered piece (same behavior as cf-cell-link). */
@@ -699,9 +741,14 @@ export class CFRender extends BaseElement {
     try {
       const target = this._resolvedCell ?? this.cell;
       if (!target) return;
+      const reference = target.ref();
       const view = {
         spaceDid: target.space(),
         pieceId: target.id(),
+        ...(reference.scope === "space" ? {} : { pieceScope: reference.scope }),
+        ...(reference.path.length === 0
+          ? {}
+          : { piecePath: [...reference.path] }),
       };
       // Cmd (Mac) / Ctrl (Win/Linux) opens in a new tab.
       if (e.metaKey || e.ctrlKey) {
@@ -726,6 +773,8 @@ export class CFRender extends BaseElement {
     // A disposal race (runtime swap, logout) cancels an in-flight cell sync;
     // that is cancellation, not a render failure to surface.
     if (this.cell?.runtime().signal.aborted) return;
+    this._cleanupRender();
+    this._hasRendered = true;
     console.error("[cf-render] Error rendering cell:", error);
 
     const container = this._containerRef.value;
@@ -745,12 +794,34 @@ export class CFRender extends BaseElement {
     }
   }
 
+  #renderErrorOptions(generation: number) {
+    return {
+      onError: (error: unknown) => {
+        if (this._renderGeneration === generation) {
+          this._handleRenderError(error);
+        }
+      },
+    };
+  }
+
+  #showUnavailable() {
+    this._hasRendered = true;
+    const container = this._containerRef.value;
+    if (!container) return;
+    container.textContent =
+      "This piece is unavailable or you do not have access.";
+    this._cleanup = () => {
+      container.textContent = "";
+    };
+  }
+
   override disconnectedCallback() {
     this._log("disconnectedCallback called");
     closePieceMenuFor(this);
     this.removeEventListener("contextmenu", this._onContextMenu);
     super.disconnectedCallback();
     this._renderGeneration++;
+    this.#needsReconnectRender = true;
     this._cleanupLinkTargetSubscription();
     this._resolvedCell = undefined;
     this._hasRendered = false;

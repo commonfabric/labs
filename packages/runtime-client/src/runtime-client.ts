@@ -48,6 +48,8 @@ import {
   type EventAttentionListResponse,
   type EventAttentionNotice,
   type EventAttentionResolveResponse,
+  EventIntentOutcomeNotice,
+  EventIntentOutcomeNotification,
   EventNeedsAttentionNotification,
   InitializationData,
   type LoggerCountsData,
@@ -66,6 +68,9 @@ import {
   RequestType,
   type RuntimeSecurityContext,
   type SlugRefusal,
+  type SnapshotShareAudienceRef,
+  type SnapshotSharePreview,
+  type SpaceAccessLostNotification,
   type SpaceAclCapability,
   type SpaceAclView,
   TelemetryNotification,
@@ -119,9 +124,12 @@ export type RuntimeClientEvents = {
   console: [ConsoleMessage];
   navigaterequest: [{ cell: CellHandle }];
   error: [ErrorNotification];
+  spaceaccesslost: [{ space: DID }];
   telemetry: [RuntimeTelemetryMarkerResult];
   pendingwriteschange: [{ pending: boolean }];
   eventneedsattention: [EventAttentionNotice];
+  /** Refused event admission; this does not revoke read access. */
+  eventintentoutcome: [EventIntentOutcomeNotice];
 };
 
 /**
@@ -199,10 +207,17 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     this.#conn.on("console", this.#onConsole);
     this.#conn.on("navigaterequest", this.#onNavigateRequest);
     this.#conn.on("error", this.#onError);
+    this.#conn.on("spaceaccesslost", this.#onSpaceAccessLost);
+    this.#conn.on("eventintentoutcome", this.#onEventIntentOutcome);
     this.#conn.on("telemetry", this.#onTelemetry);
     this.#conn.on("pendingwriteschange", this.#onPendingWritesChange);
     this.#conn.on("operationupdate", this.#onOperationUpdate);
     this.#conn.on("eventneedsattention", this.#onEventNeedsAttention);
+  }
+
+  /** Acting principal established by the runtime connection posture. */
+  actingPrincipalDid(): DID | undefined {
+    return this.#principal;
   }
 
   /** Returns an opaque identity for the scoped document instance in `ref`. */
@@ -227,6 +242,37 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    */
   hasPendingWrites(): boolean {
     return this.#pendingWrites;
+  }
+
+  /** Prepares the snapshot and audience the trusted host asks the user to share. */
+  async prepareSnapshotShare(
+    source: CellRef,
+    audience: SnapshotShareAudienceRef,
+    appendBooksTo?: { recommended: CellRef; received: CellRef },
+  ): Promise<SnapshotSharePreview> {
+    return await this.#conn.request<RequestType.SnapshotSharePrepare>({
+      type: RequestType.SnapshotSharePrepare,
+      source,
+      audience,
+      appendBooksTo,
+    });
+  }
+
+  /** Commits a preview after the trusted host receives the user's confirmation. */
+  async commitSnapshotShare<T = unknown>(id: string): Promise<CellHandle<T>> {
+    const response = await this.#conn.request<RequestType.SnapshotShareCommit>({
+      type: RequestType.SnapshotShareCommit,
+      id,
+    });
+    return new CellHandle<T>(this, response.cell);
+  }
+
+  /** Discards a preview when the host closes or replaces its confirmation. */
+  async cancelSnapshotShare(id: string): Promise<void> {
+    await this.#conn.request<RequestType.SnapshotShareCancel>({
+      type: RequestType.SnapshotShareCancel,
+      id,
+    });
   }
 
   async operationCodecs<T>(
@@ -398,7 +444,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     // port, so that failure has nothing to happen to.
     assertNoKeyMaterial(context);
     const attached = await (new RuntimeConnection(transport)).attach(context);
-    return new RuntimeClient(attached, options.identity);
+    return new RuntimeClient(
+      attached,
+      options.trustSnapshot?.actingPrincipal ?? options.identity,
+    );
   }
 
   static async initialize(
@@ -431,7 +480,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     const initialized = await (new RuntimeConnection(transport)).initialize(
       data,
     );
-    return new RuntimeClient(initialized, options.identity?.did());
+    return new RuntimeClient(
+      initialized,
+      options.trustSnapshot?.actingPrincipal ?? options.identity.did(),
+    );
   }
 
   getCellFromRef<T>(
@@ -538,12 +590,15 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * of a single-file one.
    *
    * `options.argument` is the piece's input, which is a record: a piece is
-   * created with named inputs or with none.
+   * created with named inputs or with none. `options.cause` derives the
+   * piece identity within its space. Reusing a cause reapplies setup to the
+   * same piece and requires the same pattern identity; a different pattern
+   * is rejected. Omitting the cause creates a new identity.
    */
   async createPiece<T = unknown>(
     input: string | URL | Program,
     space: DID,
-    options?: { argument?: FabricPlainObject; run?: boolean },
+    options?: { argument?: FabricPlainObject; run?: boolean; cause?: string },
   ): Promise<PieceHandle<T>> {
     const source = input instanceof URL
       ? { url: input.href }
@@ -567,6 +622,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       source,
       argument: options?.argument,
       run: options?.run,
+      ...(options?.cause === undefined ? {} : { cause: options.cause }),
     });
 
     return new PieceHandle<T>(this, response.piece);
@@ -1225,6 +1281,16 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
 
   #onError = (data: ErrorNotification): void => {
     this.emit("error", data);
+  };
+
+  #onEventIntentOutcome = (
+    { space, eventId, kind, reason }: EventIntentOutcomeNotification,
+  ): void => {
+    this.emit("eventintentoutcome", { space, eventId, kind, reason });
+  };
+
+  #onSpaceAccessLost = ({ space }: SpaceAccessLostNotification): void => {
+    this.emit("spaceaccesslost", { space });
   };
 
   #onTelemetry = (data: TelemetryNotification): void => {

@@ -15,10 +15,13 @@ import {
 import { encodeULEB128 } from "@commonfabric/leb128";
 import { bigintToMinimalTwosComplement } from "@commonfabric/utils/bigint";
 import { LRUCache } from "@commonfabric/utils/cache";
+import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
 import { backtickQuote } from "@commonfabric/utils/markdown";
 import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
+import { encodeWtf8 } from "@commonfabric/utils/wtf8";
 
 import { isDeepFrozen } from "./deep-freeze.ts";
+import type { FabricValue } from "@/interface.ts";
 import { shallowFabricFromConvertibleJsValue } from "./convertible-js.ts";
 import { tagOfConvertibleJsValueElseNull, VALUE_TAGS } from "@/types";
 import { BaseFabricInstance } from "@/fabric-bases";
@@ -38,6 +41,7 @@ import {
 // Meta (0x0N)
 const TAG_END = 0x00;
 const TAG_HOLE = 0x01;
+const TAG_CYCLE = 0x02;
 
 // Compound (0x1N)
 const TAG_ARRAY = 0x10;
@@ -69,6 +73,7 @@ const TAG_STRING_HASH = 0xf0;
 
 const TAG_END_BYTES = new Uint8Array([TAG_END]);
 const TAG_HOLE_BYTES = new Uint8Array([TAG_HOLE]);
+const TAG_CYCLE_BYTES = new Uint8Array([TAG_CYCLE]);
 const TAG_ARRAY_BYTES = new Uint8Array([TAG_ARRAY]);
 const TAG_OBJECT_BYTES = new Uint8Array([TAG_OBJECT]);
 const TAG_INSTANCE_BYTES = new Uint8Array([TAG_INSTANCE]);
@@ -100,9 +105,6 @@ const MAX_DIRECT_STRING_LENGTH = 64;
 
 /** Maximum value (inclusive) of the small-length-number cache. */
 const MAX_CACHED_SMALL_LENGTH = 500;
-
-/** Shared TextEncoder for UTF-8 string encoding. */
-const encoder = new TextEncoder();
 
 /** Reusable 8-byte buffer for float64 encoding. */
 const f64Buf = new ArrayBuffer(8);
@@ -155,20 +157,20 @@ function getStringRep(value: string) {
   const cached = stringRepCache.get(value);
   if (cached !== undefined) return cached;
 
-  const utf8Buf = encoder.encode(value);
-  const utf8Length = utf8Buf.length;
+  const wtf8Buf = encodeWtf8(value);
+  const wtf8Length = wtf8Buf.length;
 
   let result;
 
-  if (utf8Length <= MAX_DIRECT_STRING_LENGTH) {
-    // Contents are: tag + utf8Length + utf8.
-    const totalLength = 2 + utf8Length;
+  if (wtf8Length <= MAX_DIRECT_STRING_LENGTH) {
+    // Contents are: tag + wtf8Length + wtf8.
+    const totalLength = 2 + wtf8Length;
     result = new Uint8Array(totalLength);
     result[0] = TAG_STRING;
-    result[1] = utf8Length; // Always fits in a byte!
-    result.set(utf8Buf, 2); // After the tag and length.
+    result[1] = wtf8Length; // Always fits in a byte!
+    result.set(wtf8Buf, 2); // After the tag and length.
   } else {
-    const hashBuf = sha256(utf8Buf);
+    const hashBuf = sha256(wtf8Buf);
 
     // Contents are: tag + hash.
     const totalLength = 1 + hashBuf.length;
@@ -179,6 +181,26 @@ function getStringRep(value: string) {
 
   stringRepCache.put(value, result);
   return result;
+}
+
+/**
+ * Returns the eight bytes that represent the given number in a hash, which are
+ * its big-endian IEEE 754 form. Every `NaN` gets `CANONICAL_NAN_BYTES`, and
+ * those are not read from the value, so whichever bits an engine holds for a
+ * `NaN` have no effect on a hash.
+ *
+ * The result is good until the next call. For every value other than `NaN`, it
+ * is the one buffer this function writes into each time.
+ *
+ * @internal Exported so that `for-testing-only.ts` can offer it to tests.
+ */
+export function float64BytesOf(value: number): Uint8Array {
+  if (Number.isNaN(value)) {
+    return CANONICAL_NAN_BYTES;
+  }
+
+  f64View.setFloat64(0, value, false); // big-endian
+  return f64Bytes;
 }
 
 /**
@@ -194,10 +216,36 @@ function feedLength(hasher: IncrementalHasher, value: number): void {
 }
 
 /**
- * Feeds a single `FabricValue` into the hasher, using the type-tagged byte
- * format from the byte-level spec.
+ * Feeds a cycle reference into the hasher if the given container is on `path`,
+ * which holds the containers enclosing the position being fed, outermost
+ * first. Returns whether it did.
  */
-function feedValue(hasher: IncrementalHasher, value: unknown): void {
+function feedCycleIfOnPath(
+  hasher: IncrementalHasher,
+  path: IndexTrackingStack<object>,
+  value: object,
+): boolean {
+  const at = path.lastIndexOf(value);
+
+  if (at < 0) {
+    return false;
+  }
+
+  hasher.update(TAG_CYCLE_BYTES);
+  feedLength(hasher, path.depth - at);
+  return true;
+}
+
+/**
+ * Feeds a single `FabricValue` into the hasher, using the type-tagged byte
+ * format from the byte-level spec. `path` holds the containers enclosing the
+ * position being fed, outermost first.
+ */
+function feedValue(
+  hasher: IncrementalHasher,
+  value: unknown,
+  path: IndexTrackingStack<object>,
+): void {
   switch (typeof value) {
     case "boolean":
       hasher.update(value ? TAG_BOOLEAN_TRUE_BYTES : TAG_BOOLEAN_FALSE_BYTES);
@@ -205,12 +253,7 @@ function feedValue(hasher: IncrementalHasher, value: unknown): void {
 
     case "number":
       hasher.update(TAG_NUMBER_BYTES);
-      if (Number.isNaN(value)) {
-        hasher.update(CANONICAL_NAN_BYTES);
-      } else {
-        f64View.setFloat64(0, value, false); // big-endian
-        hasher.update(f64Bytes);
-      }
+      hasher.update(float64BytesOf(value));
       break;
 
     case "string": {
@@ -244,7 +287,7 @@ function feedValue(hasher: IncrementalHasher, value: unknown): void {
       if (value === null) {
         hasher.update(TAG_NULL_BYTES);
       } else {
-        feedObjectValue(hasher, value);
+        feedObjectValue(hasher, value, path);
       }
       break;
 
@@ -264,6 +307,7 @@ function feedValue(hasher: IncrementalHasher, value: unknown): void {
 function feedObjectValue(
   hasher: IncrementalHasher,
   value: object,
+  path: IndexTrackingStack<object>,
 ): void {
   const tag = tagOfConvertibleJsValueElseNull(value);
 
@@ -301,11 +345,11 @@ function feedObjectValue(
     }
 
     case VALUE_TAGS.Array:
-      feedArray(hasher, value as unknown[]);
+      feedArray(hasher, value as unknown[], path);
       return;
 
     case VALUE_TAGS.Object:
-      feedPlainObject(hasher, value as Record<string, unknown>);
+      feedPlainObject(hasher, value as Record<string, unknown>, path);
       return;
 
     case VALUE_TAGS.FabricBytes: {
@@ -317,12 +361,17 @@ function feedObjectValue(
     }
 
     case VALUE_TAGS.FabricInstance: {
+      if (feedCycleIfOnPath(hasher, path, value)) {
+        return;
+      }
       const fabInst = value as BaseFabricInstance;
       hasher.update(TAG_INSTANCE_BYTES);
       const codec = codecOf(fabInst);
       hasher.update(getStringRep(codec.tagForValue(fabInst)));
       const state = codec.encode(fabInst, NULL_LIVE_ENVIRONMENT);
-      feedValue(hasher, state);
+      path.push(fabInst);
+      feedValue(hasher, state, path);
+      path.pop();
       return;
     }
 
@@ -337,27 +386,27 @@ function feedObjectValue(
         );
       }
       hasher.update(TAG_KEY_PAIR_BYTES);
-      feedValue(hasher, fab.algorithm);
-      feedValue(hasher, fab.publicKeyBytes);
-      feedValue(hasher, fab.privateKeyBytes);
+      feedValue(hasher, fab.algorithm, path);
+      feedValue(hasher, fab.publicKeyBytes, path);
+      feedValue(hasher, fab.privateKeyBytes, path);
       return;
     }
 
     case VALUE_TAGS.FabricRegExp: {
       const fab = value as FabricRegExp;
       hasher.update(TAG_REGEXP_BYTES);
-      feedValue(hasher, fab.source);
-      feedValue(hasher, fab.flags);
-      feedValue(hasher, fab.flavor);
+      feedValue(hasher, fab.source, path);
+      feedValue(hasher, fab.flags, path);
+      feedValue(hasher, fab.flavor, path);
       return;
     }
 
     case VALUE_TAGS.FabricUnavailable: {
       const fab = value as FabricUnavailable;
       hasher.update(TAG_UNAVAILABLE_BYTES);
-      feedValue(hasher, fab.reason);
-      feedValue(hasher, fab.errorKind);
-      feedValue(hasher, fab.rawErrorMessage);
+      feedValue(hasher, fab.reason, path);
+      feedValue(hasher, fab.errorKind, path);
+      feedValue(hasher, fab.rawErrorMessage, path);
       return;
     }
 
@@ -367,7 +416,7 @@ function feedObjectValue(
       // Native instances that have a well-defined `FabricValue` conversion.
       // Convert on-the-fly and hash the converted value.
       const converted = shallowFabricFromConvertibleJsValue(value, false);
-      feedValue(hasher, converted);
+      feedValue(hasher, converted, path);
       return;
     }
 
@@ -383,8 +432,19 @@ function feedObjectValue(
   }
 }
 
-/** Feed an array value with sparse hole handling, terminated by `TAG_END`. */
-function feedArray(hasher: IncrementalHasher, value: unknown[]): void {
+/**
+ * Feed an array value with sparse hole handling, terminated by `TAG_END`, or a
+ * cycle reference if the array is on `path`.
+ */
+function feedArray(
+  hasher: IncrementalHasher,
+  value: unknown[],
+  path: IndexTrackingStack<object>,
+): void {
+  if (feedCycleIfOnPath(hasher, path, value)) {
+    return;
+  }
+  path.push(value);
   hasher.update(TAG_ARRAY_BYTES);
   let i = 0;
   while (i < value.length) {
@@ -398,21 +458,29 @@ function feedArray(hasher: IncrementalHasher, value: unknown[]): void {
       hasher.update(TAG_HOLE_BYTES);
       feedLength(hasher, runLen);
     } else {
-      feedValue(hasher, value[i]);
+      feedValue(hasher, value[i], path);
       i++;
     }
   }
   hasher.update(TAG_END_BYTES);
+  path.pop();
 }
 
 /**
- * Feed a plain object value, keys sorted by UTF-8 byte order, terminated
- * by `TAG_END`.
+ * Feed a plain object value, keys sorted by the byte order of their WTF-8
+ * encoding, terminated by `TAG_END`, or a cycle reference if the object is on
+ * `path`.
  */
 function feedPlainObject(
   hasher: IncrementalHasher,
   value: Record<string, unknown>,
+  path: IndexTrackingStack<object>,
 ): void {
+  if (feedCycleIfOnPath(hasher, path, value)) {
+    return;
+  }
+  path.push(value);
+
   // Note: Even though we could conceivably define the key sort order to be
   // something easier to calculate in JS, (a) ultimately we want this
   // implementation to be but one of several that aren't all written in JS, (b)
@@ -426,9 +494,10 @@ function feedPlainObject(
     // Keys are encoded in the same format as strings, and values are hashed
     // recursively.
     hasher.update(getStringRep(key));
-    feedValue(hasher, value[key]);
+    feedValue(hasher, value[key], path);
   }
   hasher.update(TAG_END_BYTES);
+  path.pop();
 }
 
 //
@@ -438,7 +507,7 @@ function feedPlainObject(
 /** Computes the hash of a value without consulting or populating any cache. */
 function computeHash(value: unknown): FabricHash {
   const hasher = createHasher();
-  feedValue(hasher, value);
+  feedValue(hasher, value, new IndexTrackingStack());
   return new FabricHash(hasher.digest(), "fid1", true);
 }
 
@@ -448,7 +517,7 @@ function computeHash(value: unknown): FabricHash {
  */
 function computeHashAsString(value: unknown): string {
   const hasher = createHasher();
-  feedValue(hasher, value);
+  feedValue(hasher, value, new IndexTrackingStack());
   return hasher.digest("base64url");
 }
 
@@ -504,15 +573,6 @@ let frozenObjectHashCacheHits = 0;
 /** Counts `hashOf` and `hashStringOf` calls served by the frozen-object cache. */
 export function getFrozenObjectHashCacheHits(): number {
   return frozenObjectHashCacheHits;
-}
-
-/**
- * Returns an already computed immutable hash without reading the value.
- *
- * @internal Used by equality to reuse hashes without expanding a value graph.
- */
-export function cachedHashStringOf(value: object): string | undefined {
-  return frozenObjectHashCache.get(value)?.hashString;
 }
 
 /**
@@ -614,7 +674,7 @@ function hashOfInternal(
  *
  * Caches results for primitives (LRU) and deep-frozen objects (`WeakMap`).
  */
-export function hashOf(value: unknown): FabricHash {
+export function hashOf(value: FabricValue): FabricHash {
   return hashOfInternal(value, false);
 }
 
@@ -631,6 +691,6 @@ export function hashStringOf(value: unknown): string {
  * Like `hashOf()`, except always returns a plain string of the hash, encoded as
  * base64url, with the `<type>:` prefix.
  */
-export function taggedHashStringOf(value: unknown): string {
+export function taggedHashStringOf(value: FabricValue): string {
   return hashOfInternal(value, false).toString();
 }

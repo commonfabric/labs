@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 import {
   gather,
@@ -57,6 +58,16 @@ describe("test-records-gather", () => {
 
     it("returns undefined for a push payload", () => {
       expect(headCommitOfEvent({ pusher: {} })).toBeUndefined();
+    });
+
+    it("returns undefined for a payload that is not an object", () => {
+      expect(headCommitOfEvent(null)).toBeUndefined();
+      expect(headCommitOfEvent("pull_request")).toBeUndefined();
+    });
+
+    it("returns undefined for a pull request that names no head", () => {
+      expect(headCommitOfEvent({ pull_request: { number: 1 } }))
+        .toBeUndefined();
     });
   });
 
@@ -120,6 +131,7 @@ describe("test-records-gather", () => {
       expect(facts.job).toBe("Test (3/8)");
       expect(facts.shard).toBe("3/8");
       expect(facts.denoVersion).toBe(Deno.version.deno);
+      expect(Number.isSafeInteger(facts.shuffleSeed)).toBe(true);
 
       const lines = (await Deno.readTextFile(join(out, "records.ndjson")))
         .trimEnd().split("\n");
@@ -172,6 +184,7 @@ describe("test-records-gather", () => {
           if (name === "GITHUB_SHA") return "a".repeat(40);
           if (name === "GITHUB_HEAD_REF") return "feature-branch";
           if (name === "GITHUB_EVENT_PATH") return eventPath;
+          if (name === "CF_TEST_SHUFFLE_SEED") return "7";
           return undefined;
         },
       });
@@ -181,6 +194,76 @@ describe("test-records-gather", () => {
       expect(facts.commit).toBe("a".repeat(40));
       expect(facts.branch).toBe("feature-branch");
       expect(facts.headCommit).toBe("f".repeat(40));
+      // The seed a job's runners shuffled by, which an override the job
+      // set decides.
+      expect(facts.shuffleSeed).toBe(7);
+    });
+
+    it("records no head commit where the event payload is not JSON", async () => {
+      // The payload is context the job may lack, so a payload this cannot
+      // read costs the one fact it would have given and nothing else.
+
+      const out = join(dir, "out");
+      const eventPath = join(dir, "event.json");
+      await Deno.writeTextFile(eventPath, "{not json");
+      await gather({
+        out,
+        job: "Check",
+        junit: [],
+        env: (name) => {
+          if (name === "GITHUB_SHA") return "a".repeat(40);
+          if (name === "GITHUB_EVENT_PATH") return eventPath;
+          return undefined;
+        },
+      });
+      const facts = JSON.parse(
+        await Deno.readTextFile(join(out, "job.json")),
+      );
+      expect(facts.commit).toBe("a".repeat(40));
+      expect(facts.headCommit).toBeUndefined();
+    });
+
+    it("ingests the files a JUnit glob matches and skips its directories", async () => {
+      await Deno.writeTextFile(join(dir, "a-good.xml"), JUNIT);
+      await Deno.mkdir(join(dir, "b-directory.xml"));
+      const warned: string[] = [];
+      const warn = console.warn;
+      console.warn = (line: string) => warned.push(line);
+      const out = join(dir, "out");
+      try {
+        await gather({
+          out,
+          job: "Check",
+          junit: [{ kind: "unit", scope: "cli", glob: join(dir, "*.xml") }],
+        });
+      } finally {
+        console.warn = warn;
+      }
+      expect(warned).toEqual([]);
+      const lines = (await Deno.readTextFile(join(out, "records.ndjson")))
+        .trimEnd().split("\n");
+      expect(lines.length).toBe(1);
+    });
+
+    it("warns about a JUnit glob that matched nothing, and still writes", async () => {
+      const glob = join(dir, "reports", "*.xml");
+      const warned: string[] = [];
+      const warn = console.warn;
+      console.warn = (line: string) => warned.push(line);
+      const out = join(dir, "out");
+      try {
+        await gather({
+          out,
+          job: "Check",
+          junit: [{ kind: "unit", scope: "cli", glob }],
+        });
+      } finally {
+        console.warn = warn;
+      }
+      expect(warned).toEqual([
+        `test records: no JUnit files matched ${glob}`,
+      ]);
+      expect(await Deno.readTextFile(join(out, "records.ndjson"))).toBe("");
     });
 
     it("keeps ingesting after one unreadable JUnit file", async () => {
@@ -195,6 +278,60 @@ describe("test-records-gather", () => {
       const lines = (await Deno.readTextFile(join(out, "records.ndjson")))
         .trimEnd().split("\n");
       expect(lines.length).toBe(1);
+    });
+  });
+
+  describe("the command line continuous integration runs", () => {
+    const ROOT = fromFileUrl(new URL("..", import.meta.url));
+    const SCRIPT = fromFileUrl(
+      new URL("./test-records-gather.ts", import.meta.url),
+    );
+    let out: string;
+
+    beforeEach(async () => {
+      out = await Deno.makeTempDir({ prefix: "test-records-gather-cli-" });
+    });
+
+    afterEach(async () => {
+      await Deno.remove(out, { recursive: true });
+    });
+
+    /** Runs the gather step as a job does, with the environment given. */
+    const gatherAsAJob = (args: string[], env: Record<string, string>) =>
+      runDenoCommandWithTemporaryLock({
+        root: ROOT,
+        args: (lock) => [
+          "run",
+          `--lock=${lock}`,
+          "--allow-read",
+          "--allow-write",
+          "--allow-env",
+          "--allow-run=git",
+          SCRIPT,
+          ...args,
+        ],
+        env,
+      });
+
+    it("writes the seed the job's runners shuffled by into the job facts", async () => {
+      const result = await gatherAsAJob(
+        ["--out", join(out, "artifact"), "--job", "Probe"],
+        { CF_TEST_SHUFFLE_SEED: "7", CF_TEST_RECORDS_DIR: "" },
+      );
+      expect(result.success).toBe(true);
+      const facts = JSON.parse(
+        await Deno.readTextFile(join(out, "artifact", "job.json")),
+      );
+      expect(facts.job).toBe("Probe");
+      expect(facts.shuffleSeed).toBe(7);
+    });
+
+    it("refuses a command line that names no output directory", async () => {
+      const result = await gatherAsAJob(["--job", "Probe"], {});
+      expect(result.code).toBe(2);
+      expect(new TextDecoder().decode(result.stderr)).toContain(
+        "usage: test-records-gather.ts",
+      );
     });
   });
 

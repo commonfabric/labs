@@ -87,7 +87,10 @@ export interface RuntimeClientsOptions {
    * caller substituting {@link RuntimeProcessor.initialize} still reaches its
    * substitute.
    */
-  initializeRuntime?: (data: InitializationData) => Promise<RuntimeProcessor>;
+  initializeRuntime?: (
+    data: InitializationData,
+    clients: () => Iterable<WorkerClient>,
+  ) => Promise<RuntimeProcessor>;
 }
 
 /** One connected client, its channel, and whether its attach is settled. */
@@ -108,13 +111,14 @@ export class RuntimeClients {
   readonly #setConsoleBridge: (enabled: boolean) => void;
   readonly #initializeRuntime: (
     data: InitializationData,
+    clients: () => Iterable<WorkerClient>,
   ) => Promise<RuntimeProcessor>;
 
   constructor(options: RuntimeClientsOptions) {
     this.#owner = options.owner ?? ownerClient;
     this.#setConsoleBridge = options.setConsoleBridge;
     this.#initializeRuntime = options.initializeRuntime ??
-      ((data) => RuntimeProcessor.initialize(data));
+      ((data, clients) => RuntimeProcessor.initialize(data, clients));
   }
 
   /** The client that owns the worker and initializes its runtime. */
@@ -274,7 +278,12 @@ export class RuntimeClients {
           throw new Error("Initialization of WorkerRuntime already attempted.");
         }
         this.#setConsoleBridge(request.data.forwardWorkerConsole === true);
-        this.#initialization = this.#initializeRuntime(request.data);
+        this.#initialization = this.#initializeRuntime(request.data, () => [
+          this.#owner,
+          ...[...this.#attachedClients.values()]
+            .filter(({ attached }) => attached)
+            .map(({ client }) => client),
+        ]);
         this.#runtime = await this.#initialization;
         this.#reply({ msgId: message.msgId }, request.type, client);
         return;

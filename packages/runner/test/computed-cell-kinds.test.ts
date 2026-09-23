@@ -920,6 +920,7 @@ describe("computed cell kinds", () => {
         "compileAndRun",
         "generateObject",
         "generateText",
+        "agent",
         "navigateTo",
         "wish",
         "sqliteQuery",

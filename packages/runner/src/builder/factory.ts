@@ -3,6 +3,7 @@
  */
 
 import {
+  debugStr,
   FabricInstance,
   FabricPrimitive,
   toCompactDebugString,
@@ -43,6 +44,7 @@ import {
   type UnsafeHostTrust,
 } from "../unsafe-host-trust.ts";
 import {
+  agent,
   cellFromUrl,
   compileAndRun,
   fetchBinary,
@@ -219,6 +221,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     llmDialog,
     generateObject,
     generateText,
+    agent,
     fetchBinary,
     cellFromUrl,
     renderCellReference,
@@ -346,9 +349,11 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     FabricLink,
     FabricError,
 
-    // Debug stringifiers (helpers exposed for pattern code)
+    // Debug stringifiers, and the tag that composes a message around one
+    // (helpers exposed for pattern code)
     toCompactDebugString,
     toIndentedDebugString,
+    debugStr,
 
     // Value comparison helper exposed for pattern code
     valueEqual,

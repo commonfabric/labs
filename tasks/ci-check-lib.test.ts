@@ -145,6 +145,7 @@ Deno.test("coverage baseline files round-trip compile cache states", () => {
     ],
   ]);
   const states: CompileCacheStates = {
+    "compile-cache": "cold",
     "generated-patterns": "cold",
     "pattern-unit": "warm",
   };
@@ -186,6 +187,61 @@ Deno.test("parseCoverageBaselineDetailed drops invalid compile cache states", ()
   assertEquals(parseCoverageBaselineDetailed(file).compileCacheStates, {
     "pattern-unit": "warm",
   });
+});
+
+/** A coverage baseline metric record carrying every field the file needs. */
+const BASELINE_RECORD = {
+  name: "coverage-debt: packages/runner uncovered lines",
+  runId: 7,
+  sha: "abc123",
+  createdAt: "2026-01-01T00:00:00Z",
+  durationSeconds: 42,
+};
+
+/** A coverage baseline file holding `metrics`, with `fields` over the rest. */
+function baselineFile(
+  metrics: unknown,
+  fields: Record<string, unknown> = {},
+): string {
+  return JSON.stringify({
+    version: 1,
+    generatedAt: "2026-01-01T00:00:00Z",
+    metrics,
+    ...fields,
+  });
+}
+
+Deno.test("parseCoverageBaselineDetailed refuses a file in a format it does not know", () => {
+  assertEquals(
+    parseCoverageBaselineDetailed(baselineFile([BASELINE_RECORD])).metrics
+      .get(BASELINE_RECORD.name)?.uncoveredLines,
+    42,
+  );
+  for (
+    const file of [
+      baselineFile([BASELINE_RECORD], { version: 2 }),
+      baselineFile({ [BASELINE_RECORD.name]: BASELINE_RECORD }),
+    ]
+  ) {
+    assertThrows(
+      () => parseCoverageBaselineDetailed(file),
+      Error,
+      "Unsupported coverage baseline file format.",
+    );
+  }
+});
+
+Deno.test("parseCoverageBaselineDetailed refuses a metric record missing a field", () => {
+  for (const field of Object.keys(BASELINE_RECORD)) {
+    const partial = Object.fromEntries(
+      Object.entries(BASELINE_RECORD).filter(([name]) => name !== field),
+    );
+    assertThrows(
+      () => parseCoverageBaselineDetailed(baselineFile([partial])),
+      Error,
+      "Invalid coverage baseline metric record.",
+    );
+  }
 });
 
 Deno.test("cache state aggregation treats any restore hit as warm", () => {
@@ -1166,8 +1222,8 @@ Deno.test("fetchCurrentPRBody falls back to the event body if the live request f
     assertEquals(result.body, "EVENT BODY");
     assertEquals(result.source, "event-fallback");
     assertEquals(
-      result.errorMessage?.includes("GitHub API GET 429:"),
-      true,
+      result.errorMessage,
+      "GitHub API GET 429 (rate limit): /repos/commonfabric/labs/pulls/3427",
     );
   } finally {
     globalThis.fetch = originalFetch;
@@ -1273,7 +1329,10 @@ Deno.test("githubGet reports a spent request window as a rate limit, not a refus
       () => githubGet("/repos/commonfabric/labs/actions/runs"),
       GitHubRateLimitError,
     );
-    assertStringIncludes(error.message, "GitHub API GET 403 Forbidden");
+    assertEquals(
+      error.message,
+      "GitHub API GET 403 Forbidden (rate limit): /repos/commonfabric/labs/actions/runs",
+    );
   });
 
   // A window that is spent does not refill inside one job, so it is not retried.
@@ -1383,7 +1442,7 @@ Deno.test("githubGet reads a secondary limit out of a refusal that sends no head
       // The body classified the refusal and stayed out of what is reported.
       assertEquals(
         error.message,
-        "GitHub API GET 403 Forbidden: /repos/commonfabric/labs/actions/runs",
+        "GitHub API GET 403 Forbidden (rate limit): /repos/commonfabric/labs/actions/runs",
       );
     },
   );

@@ -189,8 +189,10 @@ it("does not let an author-declared InjectionSafe satisfy a requiredIntegrity ga
 ```
 
 The second case repeats the proof across seven forged evidence atoms.
-Nineteen atom types are runtime-minted; an author-declared one survives
-only when the writer's identity is a builtin
+Nineteen atom types are runtime-minted, along with the compiler
+attestation and the system string atoms listed in `CFC_SYSTEM_STRING_ATOMS`
+(`packages/api/cfc.ts`), among them Loom's verified external identity; an
+author-declared one survives only when the writer's identity is a builtin
 (`packages/runner/src/cfc/prepare.ts`).
 
 The runtime does not trust its own compiler either: the classification

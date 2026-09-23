@@ -53,6 +53,18 @@ import { completionProviderKeys } from "../packages/cli/lib/completion/providers
  * to draw from, and offering a wrong one is worse than offering none.
  */
 export const NO_CANDIDATES = new Map<string, string>([
+  [
+    "space invite redeem:invite-id",
+    "an opaque invitation ID supplied with the code",
+  ],
+  [
+    "space invite revoke:invite-id",
+    "an opaque ID from invitation creation or listing",
+  ],
+  [
+    "space invite receipts:invite-id",
+    "an opaque ID from invitation creation or listing",
+  ],
   // Values a caller brings from outside the CLI.
   ["acl set:did", "a DID being granted access; nothing here enumerates them"],
   ["acl remove:did", "the same DID, and the same absence of a source"],
@@ -91,6 +103,22 @@ export const NO_CANDIDATES = new Map<string, string>([
  * under `<command path>:<long name>`.
  */
 export const NO_OPTION_CANDIDATES = new Map<string, string>([
+  [
+    "profile repair-name-protection:expect",
+    "the receipt from the owner-reviewed inspection",
+  ],
+  ["piece new:request-key", "an opaque caller retry key"],
+  ["space invite create:ttl", "an admission lifetime in seconds"],
+  ["space invite create:max-uses", "a distinct identity count"],
+  ["space invite create:shell", "a caller-selected shell origin"],
+  [
+    "space invite create:request-file",
+    "a private creation request path, supplied explicitly",
+  ],
+  [
+    "space invite redeem:code-file",
+    "a secret input path or stdin marker, supplied explicitly",
+  ],
   // Numbers, durations and bounds. Nothing enumerates a count.
   ["limit", "a row count"],
   ["depth", "a graph depth"],
@@ -107,6 +135,8 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ["wait", "a patience in seconds"],
   ["group-size", "how many pieces one session serves; a count"],
   ["history-limit", "an operation history row count"],
+  ["max-concurrent", "how many agent runs one runner holds; a count"],
+  ["lease-seconds", "a lease length in seconds"],
   ["submission-after-seq", "a revision sequence number"],
   // Identifiers the caller brings from outside, or coins.
   ["did", "a DID, pasted from elsewhere"],
@@ -138,6 +168,11 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ["path-json", "the same path written as a JSON array"],
   ["spaces", "a comma-separated list of the tokens --space takes"],
   ["stats-include", "a comma-separated list of timing categories"],
+  [
+    "tools",
+    "a comma-separated list of the tool names a runner offers, which the " +
+    "harness backing it decides and the CLI does not enumerate",
+  ],
   ["import", "an import specifier"],
   [
     "retarget",
@@ -147,6 +182,7 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ["url", "a browser URL; its parts complete as --api-url, --space, --piece"],
   ["app-url", "a shell origin, which is not the api-url --api-url names"],
   ["repository", "a source repository URL"],
+  ["model", "a model name the harness's configured provider defines"],
   [
     "main-export",
     "an export name inside a pattern file, which needs the file compiled",

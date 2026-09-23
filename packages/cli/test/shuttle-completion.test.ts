@@ -120,7 +120,13 @@ function pieced(...ids: readonly string[]): VerbDeps {
     listing: {
       ...READS_NOTHING.listing,
       listPieces: () =>
-        Promise.resolve(ids.map((id) => ({ id, name: "Thermostat" }))),
+        Promise.resolve(
+          ids.map((id) => ({
+            id,
+            reference: `//${SPACE}/${id}`,
+            name: "Thermostat",
+          })),
+        ),
     },
   };
 }

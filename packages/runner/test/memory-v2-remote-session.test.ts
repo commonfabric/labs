@@ -314,6 +314,7 @@ describe("StorageManager per-space host wiring", () => {
 
     const realWebSocket = globalThis.WebSocket;
     (globalThis as { WebSocket: unknown }).WebSocket = RecordingWebSocket;
+    RecordingWebSocket.dialed.length = 0;
     try {
       const signer = await Identity.fromPassphrase("per-space-host-wiring");
       const spaceA = signer.did();

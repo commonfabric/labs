@@ -8,22 +8,43 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
+import type { FabricValue } from "@commonfabric/data-model";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PieceController, PiecesController } from "@commonfabric/piece/ops";
 import { type Cell, isCell, Runtime } from "@commonfabric/runner";
+import type { CfcConfClause, IFCLabel } from "@commonfabric/runner/cfc";
+import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { join, normalize } from "@std/path/posix";
 import { CfHarnessEngine } from "../src/engine.ts";
 import { createFileSystemHarnessArtifactStore } from "../src/artifacts.ts";
-import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
+import {
+  CfHarnessPromptLoop,
+  seedSubagentHandleTable,
+  transferChildHandleTokens,
+} from "../src/prompt-loop.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "../src/revision-verification.ts";
+import {
+  PATTERN_AUTHORING_GUIDANCE,
+  PATTERN_COMPOSITION_GUIDANCE,
+} from "../src/pattern-authoring.ts";
 import { CAPABILITY_PROBE_SENTINEL } from "../src/diagnostics.ts";
 import {
   createHarnessHandleTable,
   mintAddressHandle,
+  mintReferentHandle,
+  resolveReferentToken,
 } from "../src/handle-table.ts";
-import { HANDLE_TOKEN_PATTERN } from "../src/contracts/handle-table.ts";
-import type { HarnessResearchRunSummary } from "../src/contracts/research.ts";
+import {
+  HANDLE_TOKEN_PATTERN,
+  type HarnessHandleReferentDraft,
+} from "../src/contracts/handle-table.ts";
+import {
+  HARNESS_RESEARCH_HANDLE_TYPE,
+  type HarnessResearchHandleValue,
+  type HarnessResearchInputBinding,
+  type HarnessResearchRunSummary,
+} from "../src/contracts/research.ts";
 import type { HarnessRunState } from "../src/run-state.ts";
 import {
   DEFAULT_SUBAGENT_MAX_MODEL_TURNS,
@@ -150,7 +171,11 @@ const bashCallTurn = (id: string, command: string) => ({
   }],
 });
 
-const delegateCallTurn = (id: string, input: Record<string, unknown>) => ({
+const toolCallTurn = (
+  id: string,
+  name: string,
+  input: Record<string, unknown>,
+) => ({
   choices: [{
     index: 0,
     message: {
@@ -159,13 +184,66 @@ const delegateCallTurn = (id: string, input: Record<string, unknown>) => ({
       tool_calls: [{
         id,
         type: "function",
-        function: {
-          name: "delegate_task",
-          arguments: JSON.stringify(input),
-        },
+        function: { name, arguments: JSON.stringify(input) },
       }],
     },
   }],
+});
+
+const delegateCallTurn = (id: string, input: Record<string, unknown>) =>
+  toolCallTurn(id, "delegate_task", input);
+
+/**
+ * A research referent holding an incomplete kit that binds `inputs`, under
+ * `label`: what the research tool mints for an admitted kit, built here
+ * without running one.
+ */
+const researchReferentOf = (
+  runId: string,
+  inputs: readonly HarnessResearchInputBinding[],
+  label: IFCLabel = {},
+): HarnessHandleReferentDraft => ({
+  kind: "research",
+  source: "research",
+  labelSource: "research",
+  label,
+  value: {
+    type: HARNESS_RESEARCH_HANDLE_TYPE,
+    researchRunId: `${runId}:research:1`,
+    kit: {
+      status: "incomplete",
+      task: "Build a message summary.",
+      summary: "Use the described mail input.",
+      recommendation: {
+        kind: "author",
+        rationale: "No published pattern covers the final transform.",
+      },
+      inputs,
+      patterns: [],
+      steps: ["Wire the input into the authored pattern."],
+      rules: [],
+      verification: ["Type-check and run the result."],
+      sources: [],
+      missing: ["The final filtering rule remains unresolved."],
+    },
+    confirmedPatterns: [],
+    describedHandles: inputs.map((input) => ({
+      token: input.token,
+      description: {
+        outputId: `described-${input.name}`,
+        token: input.token,
+        known: true,
+        hasSchema: false,
+      },
+    })),
+    cfc: {
+      version: 1,
+      sourceLabel: label,
+      outputLabel: label,
+      coverage: "complete",
+      missingLabels: [],
+    },
+  } satisfies HarnessResearchHandleValue as unknown as FabricValue,
 });
 
 const runPatternCallTurn = (id: string, input: Record<string, unknown>) => ({
@@ -261,6 +339,217 @@ const grantResolvingSession = () =>
   }) as any;
 
 describe("prompt-loop cross-agent address handles", () => {
+  const A = { type: "https://commonfabric.org/cfc/atom/User", subject: "A" };
+  const B = { type: "https://commonfabric.org/cfc/atom/User", subject: "B" };
+  const inheritedPolicies: Array<
+    { name: string; label: CfcConfClause[]; ceiling: CfcConfClause[] }
+  > = [
+    {
+      name:
+        "withholds a delegated handle's payload outside the inherited ceiling",
+      label: ["did:key:withheld"],
+      ceiling: ["did:key:allowed"],
+    },
+    ...[[A], [B], [A, B]].map((label) => ({
+      name: `withholds a ${
+        label.map((atom) => atom.subject).join(" and ")
+      }-labeled handle from a child under an anyOf group ceiling`,
+      label,
+      ceiling: [{ anyOf: [A, B] }],
+    })),
+  ];
+  for (const policy of inheritedPolicies) {
+    it(policy.name, async () => {
+      const runId = "run-subagent-bounded-handle";
+      const signer = await Identity.fromPassphrase(runId);
+      const storageManager = StorageManager.emulate({ as: signer });
+      const writer = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager,
+        cfcFlowLabels: "persist",
+      });
+      const bounded = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager,
+        cfcReadMaxConfidentiality: policy.ceiling,
+      });
+      const session = await createSession({
+        identity: signer,
+        spaceName: runId,
+      });
+      const pieces = new PiecesController(session, bounded);
+      await pieces.synced();
+      try {
+        const tx = writer.edit();
+        const secret = writer.getCell(pieces.getSpace(), "private input", {
+          type: "string",
+          ifc: { confidentiality: policy.label },
+        }, tx);
+        secret.set("payload that must never reach the model");
+        expect((await tx.commit()).error).toBeUndefined();
+        const table = await parentTableOf(runId, [
+          createLLMFriendlyLink(
+            secret.getAsNormalizedFullLink(),
+            pieces.getSpace(),
+          ),
+        ]);
+        const token = table.entries[0]!.token;
+        const requestBodies: unknown[] = [];
+        const payloads = [
+          delegateCallTurn("call-delegate", { goal: `Read ${token}.` }),
+          runPatternCallTurn("call-child", {
+            sourceText: [
+              "import { computed, pattern } from 'commonfabric';",
+              "export default pattern<{ src: string }>(",
+              "  ({ src }) => ({ copied: computed(() => String(src)) }),",
+              ");",
+            ].join("\n"),
+            inputs: { src: token },
+          }),
+          finalTurn("Child done."),
+          {
+            choices: [{
+              index: 0,
+              message: {
+                role: "assistant",
+                content: "",
+                tool_calls: [{
+                  id: "call-finish",
+                  type: "function",
+                  function: {
+                    name: "finish_task",
+                    arguments: JSON.stringify({
+                      outcome: "gave-up",
+                      message:
+                        "The source cannot be inspected under this session's access limits.",
+                    }),
+                  },
+                }],
+              },
+            }],
+          },
+        ];
+        const engine = new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          runId,
+          model: "gpt-5.4",
+          fabricSession: {
+            apiUrl: "http://toolshed.test",
+            identityKeyPath: "/unused-key",
+            space: pieces.getSpace(),
+            cfcReadMaxConfidentiality: policy.ceiling,
+          },
+          fabricSessionFactory: () => Promise.resolve({ pieces }),
+        });
+        await engine.recordHandleTable(table);
+        const loop = new CfHarnessPromptLoop({
+          apiKey: "test-key",
+          engine,
+          fetchFn: (_input, init) => {
+            requestBodies.push(JSON.parse(String(init?.body)));
+            const payload = payloads[requestBodies.length - 1];
+            if (payload === undefined) {
+              throw new Error("unexpected model request");
+            }
+            return Promise.resolve(
+              new Response(
+                JSON.stringify(
+                  responsesBodyFromChatFixture(payload),
+                ),
+                { status: 200 },
+              ),
+            );
+          },
+        });
+        const result = await loop.runPrompt({
+          prompt: "Delegate the inspection.",
+          promptSlotBinding: directPromptSlotBinding,
+        });
+        expect(result.taskOutcome?.outcome).toBe("gave-up");
+        const childMessages = chatViewOfRequest(requestBodies[2]).messages;
+        const toolReply = childMessages.findLast((message) =>
+          message.role === "tool"
+        );
+        expect(toolReply?.content).toContain("read ceiling");
+        expect(JSON.stringify(requestBodies)).not.toContain(
+          "payload that must never reach the model",
+        );
+        expect(engine.getRunState().subagentRuns?.[0].manifest).toMatchObject({
+          confidentialityCeiling: { source: "parent", mode: "bounded" },
+        });
+      } finally {
+        await bounded.dispose();
+        await writer.dispose();
+        await storageManager.close();
+      }
+    });
+  }
+  it("delegates explicitly named referents and withholds unnamed ones", async () => {
+    const runId = "run-subagent-referent-handles";
+    const first = await mintReferentHandle(createHarnessHandleTable(runId), {
+      kind: "document",
+      source: "loom_search",
+      value: { title: "Shared" },
+      label: {},
+      labelSource: "query",
+    });
+    const second = await mintReferentHandle(first.table, {
+      kind: "document",
+      source: "loom_search",
+      value: { title: "Withheld" },
+      label: {},
+      labelSource: "query",
+    });
+
+    const child = seedSubagentHandleTable(
+      second.table,
+      `${runId}.subagent.1`,
+      { goal: `Describe ${first.token}.`, profile: "pattern-author" },
+    );
+
+    expect(child?.referents?.map((entry) => entry.token)).toEqual([
+      first.token,
+    ]);
+  });
+
+  it("adopts referents discovered by a child and preserves seeded identities", async () => {
+    const parentRunId = "run-parent-referent-return";
+    const parent = await mintReferentHandle(
+      createHarnessHandleTable(parentRunId),
+      {
+        kind: "document",
+        source: "loom_search",
+        value: { title: "Seeded" },
+        label: {},
+        labelSource: "query",
+      },
+    );
+    const childSeeded = seedSubagentHandleTable(
+      parent.table,
+      `${parentRunId}.subagent.1`,
+      { goal: `Inspect ${parent.token}.`, profile: "pattern-author" },
+    )!;
+    const childOnly = await mintReferentHandle(childSeeded, {
+      kind: "document",
+      source: "loom_search",
+      value: { title: "Discovered by child" },
+      label: { confidentiality: ["private"] },
+      labelSource: "row",
+    });
+
+    const transferred = await transferChildHandleTokens(
+      parent.table,
+      childOnly.table,
+      `${parent.token} ${childOnly.token}`,
+    );
+    const [seededToken, discoveredToken] = transferred.text.split(" ");
+
+    expect(seededToken).toBe(parent.token);
+    expect(discoveredToken).toMatch(/^cfh:v:[2-9a-z]{5}$/);
+    expect(resolveReferentToken(transferred.table, discoveredToken!))
+      .toMatchObject({ value: { title: "Discovered by child" } });
+  });
+
   it("resolves a token named in the delegate_task goal against the child's own table", async () => {
     const runId = "run-subagent-handles-seeded";
     const table = await parentTableOf(runId, [URI_A]);
@@ -470,225 +759,226 @@ describe("prompt-loop cross-agent address handles", () => {
     expect(childMessages).not.toContain(HASH_A);
   });
 
-  for (
-    const binding of [
-      "declared",
-      "note-only",
-      "superseded",
-      "historical",
-    ] as const
-  ) {
-    it(`seeds only selected declared research bindings when a token is ${binding}`, async () => {
-      const runId = "run-subagent-research-kit";
-      const table = await parentTableOf(runId, [URI_A]);
-      const token = table.entries[0]!.token;
-      const researchRun = {
-        ...(binding === "historical" ? { historical: true as const } : {}),
-        type: "cf-harness.research-run",
-        researchRunId: `${runId}:research:1`,
-        outputId: `${runId}:research:1`,
-        kit: {
-          status: "incomplete",
-          task: "Build a message summary.",
-          summary: "Use the described mail input.",
-          recommendation: {
-            kind: "author",
-            rationale: "No published pattern covers the final transform.",
-          },
-          inputs: binding === "note-only"
-            ? []
-            : [{ name: "mail", token, purpose: "Read message metadata" }],
-          patterns: [],
-          steps: ["Wire the inherited input into the authored pattern."],
-          rules: [],
-          verification: ["Type-check and run the result."],
-          sources: [],
-          missing: [
-            `The final filtering rule remains unresolved for ${token}.`,
-          ],
-        },
-        confirmedPatterns: [],
-        describedHandles: [{
-          token,
-          description: {
-            outputId: "described-mail",
+  for (const named of [true, false]) {
+    it(
+      named
+        ? "seeds a research handle named in the goal together with the handles its kit binds"
+        : "withholds a research handle and its bindings when the goal does not name it",
+      async () => {
+        const runId = "run-subagent-research-handle";
+        const table = await parentTableOf(runId, [URI_A]);
+        const token = table.entries[0]!.token;
+        const minted = await mintReferentHandle(
+          table,
+          researchReferentOf(runId, [{
+            name: "mail",
             token,
-            known: true,
-            hasSchema: true,
-            schema: { type: "object" },
-          },
-        }],
-        completedAt: "2026-09-14T00:00:00.000Z",
-      } satisfies HarnessResearchRunSummary;
-      const sandbox = new FakeSandboxRuntime();
-      const engine = new CfHarnessEngine({
-        sandboxRuntime: sandbox,
-        runId,
-        model: "gpt-5.4",
-        inheritedResearchRuns: binding === "superseded"
-          ? [researchRun, {
-            ...researchRun,
-            researchRunId: `${runId}:research:2`,
-            outputId: `${runId}:research:2`,
-            kit: { ...researchRun.kit, inputs: [] },
-          }]
-          : [researchRun],
-      });
-      await engine.recordHandleTable(table);
-      const requestBodies: unknown[] = [];
-      const loop = new CfHarnessPromptLoop({
-        apiKey: "test-key",
-        engine,
-        fetchFn: scriptedFetch([
-          delegateCallTurn("call-delegate", {
-            goal: "Implement the researched recipe.",
-          }),
-          bashCallTurn("call-child", `cf cell get ${token}`),
-          finalTurn("Child done."),
-          finalTurn("Parent done."),
-        ], requestBodies),
-      });
-
-      await loop.runPrompt({
-        prompt: "Delegate the implementation.",
-        promptSlotBinding: directPromptSlotBinding,
-      });
-
-      const childMessages = chatViewOfRequest(requestBodies[1]).messages
-        .map((message) => message.content ?? "")
-        .join("\n");
-      expect(childMessages).toContain("Common Fabric research findings");
-      expect(childMessages).toContain(
-        `${runId}:research:${binding === "superseded" ? 2 : 1}`,
-      );
-      expect(childMessages).toContain(token);
-      expect(childMessages).toContain(
-        "The final filtering rule remains unresolved",
-      );
-      expect(childMessages).not.toContain(HASH_A);
-      if (binding === "historical") {
-        expect(childMessages).toContain(
-          "These bindings belong to an earlier task. Only current granted tokens may be used; describe them before rebinding.",
+            purpose: "Read message metadata",
+          }]),
         );
-      }
-      if (binding === "declared") {
+        const sandbox = new FakeSandboxRuntime();
+        const engine = new CfHarnessEngine({
+          sandboxRuntime: sandbox,
+          runId,
+          model: "gpt-5.4",
+        });
+        await engine.recordHandleTable(minted.table);
+        const requestBodies: unknown[] = [];
+        const loop = new CfHarnessPromptLoop({
+          apiKey: "test-key",
+          engine,
+          fetchFn: scriptedFetch([
+            delegateCallTurn("call-delegate", {
+              goal: named
+                ? `Implement the recipe research found: ${minted.token}.`
+                : "Implement the researched recipe.",
+            }),
+            bashCallTurn("call-child", `cf cell get ${token}`),
+            finalTurn("Child done."),
+            finalTurn("Parent done."),
+          ], requestBodies),
+        });
+
+        await loop.runPrompt({
+          prompt: "Delegate the implementation.",
+          promptSlotBinding: directPromptSlotBinding,
+        });
+
+        const childMessages = chatViewOfRequest(requestBodies[1]).messages
+          .map((message) => message.content ?? "")
+          .join("\n");
+        // The findings themselves reach the child through the handle, not the
+        // prompt: what the prompt carries is the token, or nothing.
+        expect(childMessages).not.toContain("research findings");
+        expect(childMessages).not.toContain(HASH_A);
         const command = dispatchedCommand(sandbox, "cf cell get ");
-        expect(command).toContain(table.entries[0]!.ref);
-        expect(command).not.toContain(token);
-      } else {
-        const command = dispatchedCommand(sandbox, "cf cell get ");
-        expect(command).toContain(token);
-        expect(command).not.toContain(table.entries[0]!.ref);
-      }
-    });
+        if (named) {
+          expect(childMessages).toContain(minted.token);
+          expect(command).toContain(table.entries[0]!.ref);
+          expect(command).not.toContain(token);
+        } else {
+          expect(childMessages).not.toContain(minted.token);
+          expect(command).toContain(token);
+          expect(command).not.toContain(table.entries[0]!.ref);
+        }
+      },
+    );
   }
 
-  it("projects an orientation inventory to the child's bound handles while retaining the parent record", async () => {
-    const runId = "run-subagent-orientation-inventory";
-    const table = await parentTableOf(runId, [URI_A, URI_B]);
-    const [bound, withheld] = table.entries.map((entry) => entry.token);
-    const researchRun: HarnessResearchRunSummary = {
-      type: "cf-harness.research-run",
-      researchRunId: `${runId}:research:1`,
-      outputId: `${runId}:research:1`,
-      completedAt: "2026-09-16T00:00:00.000Z",
-      kit: {
-        purpose: "orient",
-        status: "complete",
-        task: "Identify available resources.",
-        summary: "The mailbox is available.",
-        availableHandleTokens: [bound, withheld],
-        inputs: [{ name: "mail", token: bound, purpose: "Read the mailbox" }],
-        patterns: [],
-        leads: [],
-        questions: [],
-        rules: [],
-        sources: [],
-        missing: [],
-      },
-      confirmedPatterns: [],
-      describedHandles: [],
-    };
+  it("lets a child that holds a research handle read the findings and see which bindings it holds", async () => {
+    const runId = "run-child-reads-research";
+    const table = await parentTableOf(runId, [URI_A]);
+    const held = table.entries[0]!.token;
+    // A binding the parent no longer holds: the kit names it, no table does.
+    const withheld = "cfh:a:gone22";
+    const minted = await mintReferentHandle(
+      table,
+      researchReferentOf(runId, [
+        { name: "mail", token: held, purpose: "Read message metadata" },
+        { name: "calendar", token: withheld, purpose: "Read events" },
+      ]),
+    );
     const engine = new CfHarnessEngine({
       sandboxRuntime: new FakeSandboxRuntime(),
       runId,
       model: "gpt-5.4",
-      inheritedResearchRuns: [researchRun],
     });
-    await engine.recordHandleTable(table);
+    await engine.recordHandleTable(minted.table);
+    const requestBodies: unknown[] = [];
+    const loop = new CfHarnessPromptLoop({
+      apiKey: "test-key",
+      engine,
+      allowedSubagentProfiles: ["pattern-author"],
+      fetchFn: scriptedFetch([
+        delegateCallTurn("call-delegate", {
+          goal: `Build what ${minted.token} describes.`,
+          profile: "pattern-author",
+        }),
+        toolCallTurn("call-describe", "describe_handle", {
+          token: minted.token,
+        }),
+        finalTurn(JSON.stringify({ ok: false, reason: "Read only." })),
+        finalTurn("Parent done."),
+      ], requestBodies),
+    });
+
+    await loop.runPrompt({
+      prompt: "Delegate the researched build.",
+      promptSlotBinding: directPromptSlotBinding,
+    });
+
+    const reply = chatViewOfRequest(requestBodies[2]).messages.findLast((
+      message,
+    ) => message.role === "tool")?.content ?? "";
+    const described = JSON.parse(reply) as {
+      research?: {
+        kit: { summary: string };
+        describedHandles: { token: string; unavailable?: true }[];
+      };
+    };
+    expect(described.research?.kit.summary).toBe(
+      "Use the described mail input.",
+    );
+    expect(described.research?.describedHandles).toEqual([
+      expect.objectContaining({ token: held }),
+      expect.objectContaining({ token: withheld, unavailable: true }),
+    ]);
+    expect(reply).not.toContain(HASH_A);
+  });
+
+  it("records the kit's label when the parent reads a research handle", async () => {
+    const runId = "run-describe-research-handle";
+    const secret = cfcAtom.resource("ResearchFinding", "parent");
+    const minted = await mintReferentHandle(
+      createHarnessHandleTable(runId),
+      researchReferentOf(runId, [], { confidentiality: [secret] }),
+    );
+    const engine = new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runId,
+      model: "gpt-5.4",
+    });
+    await engine.recordHandleTable(minted.table);
     const requestBodies: unknown[] = [];
     const loop = new CfHarnessPromptLoop({
       apiKey: "test-key",
       engine,
       fetchFn: scriptedFetch([
-        delegateCallTurn("call-delegate", {
-          goal: "Use the available mailbox.",
+        toolCallTurn("call-describe", "describe_handle", {
+          token: minted.token,
         }),
-        finalTurn("Child done."),
         finalTurn("Parent done."),
       ], requestBodies),
     });
+
     await loop.runPrompt({
-      prompt: "Delegate the implementation.",
+      prompt: "Read what research found.",
       promptSlotBinding: directPromptSlotBinding,
     });
-    const childMessages = chatViewOfRequest(requestBodies[1]).messages
-      .map((message) => message.content ?? "")
-      .join("\n");
-    expect(childMessages).toContain(bound);
-    expect(childMessages).not.toContain(withheld);
-    expect(engine.getRunState().researchRuns).toEqual([researchRun]);
+
+    const reply = chatViewOfRequest(requestBodies[1]).messages.findLast((
+      message,
+    ) => message.role === "tool")?.content ?? "";
+    expect(reply).toContain('"researchRunId"');
+    expect(reply).toContain("Use the described mail input.");
+    expect(reply).not.toContain('"outputLabel"');
+    const observation = engine.getRunState().cfcModelContext?.observations
+      .find((candidate) => candidate.toolId === "describe_handle");
+    expect(observation?.label.confidentiality).toContainEqual(secret);
   });
 
   for (const hasResearch of [true, false]) {
-    it(`carries parent CFC context into a child with research ${hasResearch ? "present" : "absent"}`, async () => {
-      const root = await Deno.makeTempDir({
-        dir: "/tmp",
-        prefix: "cf-harness-subagent-research-cfc-",
-      });
-      const runId = "run-subagent-research-cfc";
-      const childRunId = `${runId}.subagent.1`;
-      const secret = cfcAtom.resource("InheritedResearchSecret", "parent");
-      const researchRun = {
-        type: "cf-harness.research-run",
-        researchRunId: `${runId}:research:1`,
-        outputId: `${runId}:research:1`,
-        kit: {
-          status: "incomplete",
-          task: "Build from the inherited contract.",
-          summary: "The contract did:key:zChildKit is available to the child.",
-          recommendation: {
-            kind: "author",
-            rationale: "The final wrapper remains local.",
-          },
-          inputs: [],
-          patterns: [],
-          steps: ["Use the inherited contract."],
-          rules: [],
-          verification: ["Run the wrapper."],
-          sources: [],
-          missing: ["Implement the final wrapper."],
-        },
-        confirmedPatterns: [],
-        describedHandles: [],
-        cfc: {
-          version: 1,
-          sourceLabel: { confidentiality: [secret] },
-          outputLabel: { confidentiality: [secret] },
-          coverage: "complete",
-          missingLabels: [],
-        },
-        completedAt: "2026-09-15T00:00:00.000Z",
-      } satisfies HarnessResearchRunSummary;
-      try {
-        const artifactStore = createFileSystemHarnessArtifactStore({
-          artifactRoot: join(root, "artifacts"),
-          runId,
+    it(
+      `carries parent CFC context into a child, and no retained research, with research ${
+        hasResearch ? "present" : "absent"
+      }`,
+      async () => {
+        const root = await Deno.makeTempDir({
+          dir: "/tmp",
+          prefix: "cf-harness-subagent-research-cfc-",
         });
-        const requestBodies: unknown[] = [];
-        const loop = new CfHarnessPromptLoop({
-          apiKey: "test-key",
-          engine: new CfHarnessEngine({
+        const runId = "run-subagent-research-cfc";
+        const childRunId = `${runId}.subagent.1`;
+        const secret = cfcAtom.resource("InheritedResearchSecret", "parent");
+        const researchRun = {
+          type: "cf-harness.research-run",
+          researchRunId: `${runId}:research:1`,
+          outputId: `${runId}:research:1`,
+          kit: {
+            status: "incomplete",
+            task: "Build from the inherited contract.",
+            summary:
+              "The contract did:key:zChildKit is available to the child.",
+            recommendation: {
+              kind: "author",
+              rationale: "The final wrapper remains local.",
+            },
+            inputs: [],
+            patterns: [],
+            steps: ["Use the inherited contract."],
+            rules: [],
+            verification: ["Run the wrapper."],
+            sources: [],
+            missing: ["Implement the final wrapper."],
+          },
+          confirmedPatterns: [],
+          describedHandles: [],
+          cfc: {
+            version: 1,
+            sourceLabel: { confidentiality: [secret] },
+            outputLabel: { confidentiality: [secret] },
+            coverage: "complete",
+            missingLabels: [],
+          },
+          completedAt: "2026-09-15T00:00:00.000Z",
+        } satisfies HarnessResearchRunSummary;
+        try {
+          const artifactStore = createFileSystemHarnessArtifactStore({
+            artifactRoot: join(root, "artifacts"),
+            runId,
+          });
+          const requestBodies: unknown[] = [];
+          const engine = new CfHarnessEngine({
             artifactStore,
             sandboxRuntime: new FakeSandboxRuntime(),
             runId,
@@ -701,56 +991,63 @@ describe("prompt-loop cross-agent address handles", () => {
               label: { confidentiality: [secret] },
               observations: [],
             },
-          }),
-          fetchFn: scriptedFetch([
-            delegateCallTurn("call-delegate", {
-              goal: "Implement the researched recipe.",
-            }),
-            bashCallTurn("call-child", "printf child-ready"),
-            finalTurn("Child done."),
-            finalTurn("Parent done."),
-          ], requestBodies),
-        });
+          });
+          const loop = new CfHarnessPromptLoop({
+            apiKey: "test-key",
+            engine,
+            fetchFn: scriptedFetch([
+              delegateCallTurn("call-delegate", {
+                goal: "Implement the researched recipe.",
+              }),
+              bashCallTurn("call-child", "printf child-ready"),
+              finalTurn("Child done."),
+              finalTurn("Parent done."),
+            ], requestBodies),
+          });
 
-        await loop.runPrompt({
-          prompt: "Delegate the researched recipe.",
-          promptSlotBinding: directPromptSlotBinding,
-        });
+          await loop.runPrompt({
+            prompt: "Delegate the researched recipe.",
+            promptSlotBinding: directPromptSlotBinding,
+          });
 
-        const childState = JSON.parse(
-          await Deno.readTextFile(
-            join(artifactStore.artifactRoot, childRunId, "run-state.json"),
-          ),
-        ) as HarnessRunState;
-        expect(childState.openingResearch).toBeUndefined();
-        expect(childState.researchRuns?.[0]?.kit).toEqual(
-          hasResearch ? researchRun.kit : undefined,
-        );
-        expect(JSON.stringify(requestBodies[1])).not.toContain(
-          "did:key:zChildKit",
-        );
-        expect(childState.researchRuns?.map((run) => run.outputId) ?? [])
-          .toEqual(hasResearch ? [researchRun.outputId] : []);
-        expect(
-          childState.toolOutputs.some((output) => output.toolId === "research"),
-        ).toBe(false);
-        expect(childState.cfcModelContext?.label.confidentiality)
-          .toContainEqual(
-            secret,
+          const childState = JSON.parse(
+            await Deno.readTextFile(
+              join(artifactStore.artifactRoot, childRunId, "run-state.json"),
+            ),
+          ) as HarnessRunState;
+          expect(childState.openingResearch).toBeUndefined();
+          // Research reaches a child only as a handle its brief names; a
+          // retained kit the delegation did not name transfers nothing.
+          expect(childState.researchRuns).toBeUndefined();
+          expect(engine.getRunState().researchRuns).toEqual(
+            hasResearch ? [researchRun] : [],
           );
-        const bashInvocation = childState.cfcInvocationContexts?.find((
-          context,
-        ) => context.toolId === "bash");
-        expect(
-          bashInvocation?.cfcInputLabels?.entries.flatMap((entry) =>
-            entry.label.confidentiality ?? []
-          ),
-        ).toContainEqual(secret);
-        expect(requestBodies).toHaveLength(4);
-      } finally {
-        await Deno.remove(root, { recursive: true });
-      }
-    });
+          expect(JSON.stringify(requestBodies[1])).not.toContain(
+            "did:key:zChildKit",
+          );
+          expect(
+            childState.toolOutputs.some((output) =>
+              output.toolId === "research"
+            ),
+          ).toBe(false);
+          expect(childState.cfcModelContext?.label.confidentiality)
+            .toContainEqual(
+              secret,
+            );
+          const bashInvocation = childState.cfcInvocationContexts?.find((
+            context,
+          ) => context.toolId === "bash");
+          expect(
+            bashInvocation?.cfcInputLabels?.entries.flatMap((entry) =>
+              entry.label.confidentiality ?? []
+            ),
+          ).toContainEqual(secret);
+          expect(requestBodies).toHaveLength(4);
+        } finally {
+          await Deno.remove(root, { recursive: true });
+        }
+      },
+    );
   }
 
   it("returns an address the child discovered to the parent as a parent-resolvable token", async () => {
@@ -1095,6 +1392,8 @@ describe("prompt-loop cross-agent address handles", () => {
       "Return the resultRef of the working piece from run_pattern or revise_piece",
     );
     expect(childSystemPrompt).toContain(REVISION_VERIFICATION_GUIDANCE);
+    expect(childSystemPrompt).toContain(PATTERN_AUTHORING_GUIDANCE);
+    expect(childSystemPrompt).not.toContain(PATTERN_COMPOSITION_GUIDANCE);
     // The deliverable is a reference to something that ran, and source is
     // refused rather than merely discouraged: an encoding is still source.
     expect(childSystemPrompt).toContain("You never return source.");
@@ -1115,45 +1414,59 @@ describe("prompt-loop cross-agent address handles", () => {
     );
   });
 
-  it("tells a pattern author with an inherited kit to research only unresolved items", async () => {
-    const researchRun = {
-      type: "cf-harness.research-run",
-      researchRunId: "run-pattern-author-inherited:research:1",
-      outputId: "run-pattern-author-inherited:research:1",
-      kit: {
-        status: "incomplete",
-        task: "Author the smallest requested UI.",
-        summary: "The component contract is established.",
-        recommendation: {
-          kind: "author",
-          rationale: "A small local wrapper remains.",
-        },
-        inputs: [],
-        patterns: [],
-        steps: ["Author the wrapper."],
-        rules: [],
-        verification: ["Run the wrapper."],
-        sources: [],
-        missing: ["Confirm the one unresolved event name."],
-      },
-      confirmedPatterns: [],
-      describedHandles: [],
-      completedAt: "2026-09-14T00:00:00.000Z",
-    } satisfies HarnessResearchRunSummary;
+  for (const enabled of [true, false]) {
+    it(`includes the indexed reader template when composition guidance is ${enabled}`, async () => {
+      const requests: unknown[] = [];
+      const loop = new CfHarnessPromptLoop({
+        apiKey: "test-key",
+        engine: new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          model: "gpt-5.4",
+          patternIndexClientFactory: () =>
+            Promise.reject(new Error("unexpected index read")),
+        }),
+        allowedSubagentProfiles: ["pattern-author"],
+        subagentCompositionGuidance: enabled,
+        fetchFn: scriptedFetch([
+          delegateCallTurn("delegate-template", {
+            goal: "Author a pattern.",
+            profile: "pattern-author",
+          }),
+          finalTurn("Child done."),
+          finalTurn("Parent done."),
+        ], requests),
+      });
+      await loop.runPrompt({
+        prompt: "Delegate the authoring.",
+        promptSlotBinding: directPromptSlotBinding,
+      });
+      const prompt = chatViewOfRequest(requests[1]).messages[0]!.content ?? "";
+      expect(prompt).toContain(PATTERN_AUTHORING_GUIDANCE);
+      expect(prompt.includes(PATTERN_COMPOSITION_GUIDANCE)).toBe(enabled);
+    });
+  }
+
+  it("tells a pattern author to read a research handle named in its task before researching", async () => {
+    const runId = "run-pattern-author-research-handle";
+    const minted = await mintReferentHandle(
+      createHarnessHandleTable(runId),
+      researchReferentOf(runId, []),
+    );
+    const engine = new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runId,
+      model: "gpt-5.4",
+      taskText: "Track attendance with the existing pieces.",
+    });
+    await engine.recordHandleTable(minted.table);
     const requestBodies: unknown[] = [];
     const loop = new CfHarnessPromptLoop({
       apiKey: "test-key",
-      engine: new CfHarnessEngine({
-        sandboxRuntime: new FakeSandboxRuntime(),
-        runId: "run-pattern-author-inherited",
-        model: "gpt-5.4",
-        taskText: "Track attendance with the existing pieces.",
-        inheritedResearchRuns: [researchRun],
-      }),
+      engine,
       allowedSubagentProfiles: ["pattern-author"],
       fetchFn: scriptedFetch([
         delegateCallTurn("call-delegate", {
-          goal: "Author the researched wrapper.",
+          goal: `Author the wrapper research described in ${minted.token}.`,
           profile: "pattern-author",
         }),
         finalTurn(
@@ -1172,21 +1485,16 @@ describe("prompt-loop cross-agent address handles", () => {
     const childSystemPrompt = childRequest.messages[0]?.content ?? "";
     const childUserPrompt = childRequest.messages[1]?.content ?? "";
     expect(childSystemPrompt).toContain(
-      "Start from the Common Fabric research findings inherited from the parent.",
+      "A research handle (a cfh:v: token) named in your task holds findings the parent already established",
     );
     expect(childSystemPrompt).toContain(
-      "Ask research a useful follow-up question",
+      "Ask what remains unclear rather than commissioning another whole app",
     );
-    expect(childSystemPrompt).not.toContain(
-      "Use research on the whole task before you author anything",
-    );
-    expect(childUserPrompt).toContain(researchRun.researchRunId);
+    expect(childUserPrompt).toContain(minted.token);
     expect(childUserPrompt).toContain(
       "Current user goal:\nTrack attendance with the existing pieces.",
     );
-    expect(childUserPrompt).toContain(
-      "Confirm the one unresolved event name.",
-    );
+    expect(childUserPrompt).not.toContain("Use the described mail input.");
   });
 
   it("runs a `pattern-author` child on the profile's own turn budget rather than the run default", async () => {
@@ -1277,6 +1585,61 @@ describe("prompt-loop cross-agent address handles", () => {
     expect("resultRef" in failure).toBe(false);
     expect(success.ok).toBe(true);
     expect(success.resultRef).toBe(token);
+  });
+
+  it("returns an applied revision with an inert unavailable-inspection marker", async () => {
+    const requests: unknown[] = [];
+    const loop = new CfHarnessPromptLoop({
+      apiKey: "test-key",
+      engine: new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runId: "run-uninspected-revision",
+        model: "gpt-5.4",
+      }),
+      allowedSubagentProfiles: ["pattern-author"],
+      fetchFn: scriptedFetch([
+        delegateCallTurn("call-revise", {
+          goal: "Apply the requested filter; inspection was withheld.",
+          profile: "pattern-author",
+        }),
+        finalTurn(JSON.stringify({
+          ok: true,
+          resultRef: URI_A,
+          verificationRef: URI_B,
+          verification: "not-checked",
+          describes: "Changed the filter; inspect the piece to check it.",
+        })),
+        finalTurn(
+          "Changed the filter. I could not inspect the result; check the piece.",
+        ),
+      ], requests),
+    });
+
+    const result = await loop.runPrompt({
+      prompt: "Change the filter on this piece.",
+      promptSlotBinding: directPromptSlotBinding,
+    });
+    const returned = result.runState.subagentRuns?.[0]?.structuredReturn;
+    expect(returned?.status).toBe("valid");
+    const value = returned?.value as Record<string, unknown>;
+    expect(value).toMatchObject({ ok: true, verification: "not-checked" });
+    expect(value.resultRef).not.toBe(value.verificationRef);
+    const parentContext = chatViewOfRequest(requests[2]).messages;
+    const childReturn = parentContext.find((message) =>
+      message.role === "tool"
+    );
+    expect(childReturn?.content).toContain('"verification":"not-checked"');
+    expect(childReturn?.content).not.toContain("Changed the filter; inspect");
+    const childPrompt = chatViewOfRequest(requests[1]).messages[0]?.content;
+    expect(childPrompt).toContain(
+      'the child returns ok: true with the actual piece resultRef and verification: "not-checked"',
+    );
+    expect(childPrompt).toContain(
+      "never ask the user for a nonexistent permission to release aggregates or change the sink ceiling",
+    );
+    expect(childPrompt).not.toContain(
+      "The piece must include a visible summary",
+    );
   });
 
   for (const ok of [true, false]) {

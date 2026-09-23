@@ -4,29 +4,45 @@
  *
  * Run: deno task cf test packages/patterns/primitives/amount-ledger.test.tsx
  */
-import { action, assert, NAME, pattern, TESTS, UI } from "commonfabric";
 import {
-  findElementByText,
-  propsOf,
+  action,
+  assert,
+  NAME,
+  pattern,
+  TESTS,
+  UI,
+  Writable,
+} from "commonfabric";
+import {
+  clickButton,
+  findNode,
+  fireClick,
+  isButton,
   textContent,
 } from "../test/vnode-helpers.ts";
-
-// Fires the stream bound to a button's onClick, which is how the default UI's
-// own controls are reached: they are inline arrows in JSX rather than exported
-// streams, so a caller-facing test has to go through the rendered tree.
-const clickButton = (root: unknown, text: string) => {
-  const onClick = propsOf(findElementByText(root, "cf-button", text))?.onClick;
-  if (typeof onClick === "function") (onClick as () => void)();
-  else if (onClick && typeof onClick === "object" && "send" in onClick) {
-    (onClick as { send: (e: Record<string, never>) => void }).send({});
-  }
-};
 
 import AmountLedger from "./amount-ledger.tsx";
 
 export default pattern(() => {
   const ledger = AmountLedger({ budget: 500 });
   const free = AmountLedger({});
+  const parentEntries = new Writable.perSpace([
+    { label: "Bread", amount: 4 },
+    { label: "Cheese", amount: 6 },
+  ]);
+  const seeded = AmountLedger({ entries: parentEntries });
+  const external = AmountLedger({
+    entries: new Writable.perSpace([
+      { label: "Bread", amount: 4 },
+      { label: "Cheese", amount: 6 },
+    ]),
+  });
+  const firstDuplicate = new Writable.perSpace({ label: "Milk", amount: 3.5 });
+  const secondDuplicate = new Writable.perSpace({ label: "Milk", amount: 3.5 });
+  const duplicateEntries = new Writable.perSpace<
+    { label: string; amount: number }[]
+  >([]);
+  const duplicates = AmountLedger({ entries: duplicateEntries });
   // A sub-cent amount a host passed directly rather than through `addEntry`,
   // which rounds on the way in. Rows and total are both formatted from the
   // same rounded cents, so 0.015 reads $0.02 in both — never the $0.01 that
@@ -115,6 +131,52 @@ export default pattern(() => {
       // it adds no entry rather than a blank one at zero.
       { action: action(() => clickButton(ledger[UI], "Add")) },
       { assertion: assert(() => ledger.entryCount === 1) },
+
+      // Constructor-seeded rows retain their parent's slot identity.
+      { render: seeded[UI] },
+      { assertion: assert(() => parentEntries.get().length === 2) },
+      { assertion: assert(() => seeded.total === 10) },
+      { action: action(() => clickButton(seeded[UI], "Remove")) },
+      { assertion: assert(() => parentEntries.get().length === 1) },
+      { assertion: assert(() => parentEntries.get()[0].label === "Cheese") },
+      { assertion: assert(() => seeded.entryCount === 1) },
+      { assertion: assert(() => seeded.total === 6) },
+      {
+        action: action(() =>
+          external.removeEntry.send({ entry: external.entries[0] })
+        ),
+      },
+      { assertion: assert(() => external.entries.length === 1) },
+      { assertion: assert(() => external.entries[0].label === "Cheese") },
+      { assertion: assert(() => external.total === 6) },
+
+      {
+        action: action(() =>
+          duplicateEntries.push(firstDuplicate, secondDuplicate)
+        ),
+      },
+      { render: duplicates[UI] },
+      {
+        action: action(() => {
+          let index = 0;
+          fireClick(findNode(
+            duplicates[UI],
+            (node) => isButton("Remove")(node) && index++ === 1,
+          ));
+        }),
+      },
+      { assertion: assert(() => duplicates.entries.length === 1) },
+      { assertion: assert(() => duplicates.total === 3.5) },
+      {
+        assertion: assert(() =>
+          Writable.equals(duplicates.entries[0], firstDuplicate)
+        ),
+      },
+      {
+        assertion: assert(() =>
+          !Writable.equals(duplicates.entries[0], secondDuplicate)
+        ),
+      },
     ],
   };
 });

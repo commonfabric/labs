@@ -24,12 +24,10 @@ import {
   isPattern,
   type JSONSchema,
   type JSONValue,
+  type SchemaScope,
 } from "./builder/types.ts";
 import { type AnyCell, internCellLinkSchema } from "./cell.ts";
-import {
-  ContextualFlowControl,
-  resolveExternalRootRefForStructure,
-} from "./cfc.ts";
+import { ContextualFlowControl } from "./cfc.ts";
 import { diffAndUpdate } from "./data-updating.ts";
 import { readMaybeLink, resolveLink } from "./link-resolution.ts";
 import { toMemorySpaceAddress } from "./link-types.ts";
@@ -48,7 +46,7 @@ import {
   sigilLinkAddressOnly,
 } from "./link-utils.ts";
 import { ignoreReadForScheduling } from "./scheduler.ts";
-import { isCellScope, scopeRank } from "./scope.ts";
+import { isCellScope, narrowerScopeCap, scopeRank } from "./scope.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 import {
   internalVerifierRead,
@@ -80,6 +78,14 @@ type UnwrapOneLevelOptions = {
   sourceSchemas?: {
     argument?: JSONSchema;
   };
+
+  /**
+   * The containing pattern's authored argument schema, read only for the
+   * follow caps an argument binding's path passes through (see
+   * `linkForPath`). Unlike `sourceSchemas`, it does not fold the slot's own
+   * declared scope into the binding.
+   */
+  argumentCapSchema?: JSONSchema;
 };
 
 /**
@@ -97,10 +103,9 @@ type UnwrapOneLevelOptions = {
  * through the link take the scope-narrowing branch and reads get the follow
  * cap, per "scope lives in the schema, realized at read/write".
  *
- * The scope is deliberately NOT stamped onto the link's own `scope`: the link
- * addresses the base-scope slot, where passed-in cell references legitimately
- * live (see "lift can read session-scoped cell passed from pattern input" in
- * pattern-scope.test.ts, and the matching guidance on
+ * The scope is not stamped onto the link's own `scope`, as for every binding
+ * `linkForPath` produces: the link addresses the base-scope slot, where
+ * passed-in cell references live (see the matching guidance on
  * ContextualFlowControl.getSchemaScopeCap).
  *
  * Folding applies exactly when the write-path narrowing branch would fire for
@@ -145,46 +150,66 @@ const foldDeclaredScopeIntoLinkSchema = (
   };
 };
 
-const scopedLinkForPath = (
+/** The narrower of the follow caps `schema` declares on a value or handle. */
+const declaredScopeCap = (
+  schema: JSONSchema | undefined,
+): SchemaScope | undefined =>
+  narrowerScopeCap(
+    ContextualFlowControl.getSchemaScopeCap(schema),
+    ContextualFlowControl.getAsCellFollowScopeCap(schema),
+  );
+
+/**
+ * Returns `link` navigated to `path`, carrying the slot's schema. The link
+ * keeps its own scope: a scope the slot's schema declares is realized when
+ * the link is read (as a follow cap) or written (content narrows into the
+ * scoped instance behind a base-slot redirect). The base slot is where a
+ * passed-in reference is stored and where that redirect lives, so a binding
+ * that addressed the scoped instance directly would miss a passed reference.
+ *
+ * A cap declared on a slot the path passes through governs a link stored at
+ * that slot. A link schema drops cell wrappers and the caps they declare, so
+ * the caps are read from `authoredRootSchema` as well when the caller has it.
+ * The serialized binding has only the leaf schema to carry them, so when the
+ * leaf declares no scope of its own, the narrowest such cap is folded
+ * into the leaf schema's `scope`, which link resolution applies to links found
+ * above the leaf as well.
+ */
+const linkForPath = (
   link: NormalizedFullLink,
   path: readonly string[],
   schemaOverride?: JSONSchema,
+  authoredRootSchema?: JSONSchema,
 ): NormalizedFullLink => {
-  let scope = link.scope;
-  let schema = link.schema;
-  let childSchema: JSONSchema | undefined;
-
-  // The link keeps whatever schema form it carries; only the scope READS
-  // resolve a reference-form schema — a structural use, like the cap
-  // readers in cfc.ts.
-  const declaredScope = (candidate: JSONSchema | undefined) => {
-    if (!isObjectNotArray(candidate)) return undefined;
-    const structural = resolveExternalRootRefForStructure(candidate);
-    return isCellScope(structural.scope) ? structural.scope : undefined;
-  };
-
+  let ancestorCap: SchemaScope | undefined;
+  let walked = link.schema;
+  let authored = authoredRootSchema;
   for (const key of path) {
-    childSchema = ContextualFlowControl.getSchemaAtPath(schema, [key]);
-    scope = declaredScope(childSchema) ?? scope;
-    schema = childSchema;
+    ancestorCap = narrowerScopeCap(
+      ancestorCap,
+      narrowerScopeCap(declaredScopeCap(walked), declaredScopeCap(authored)),
+    );
+    walked = ContextualFlowControl.getSchemaAtPath(walked, [key]);
+    authored = ContextualFlowControl.getSchemaAtPath(authored, [key]);
   }
-
-  const finalSchema = schemaOverride ?? childSchema;
-  const linkSchema = finalSchema;
-  scope = declaredScope(linkSchema) ?? scope;
-
+  let schema = schemaOverride ?? (path.length > 0 ? walked : undefined);
+  if (
+    isObjectNotArray(schema) && isCellScope(ancestorCap) &&
+    declaredScopeCap(schema) === undefined
+  ) {
+    schema = deepFrozenCloneAndInternSchema({ ...schema, scope: ancestorCap });
+  }
   return {
     ...link,
     path: [...path],
-    scope,
-    ...(linkSchema !== undefined && { schema: linkSchema }),
+    ...(schema !== undefined && { schema }),
   };
 };
 
 const sanitizeAliasSchemaForBinding = (schema: JSONSchema): JSONSchema =>
-  // Compiled aliases retain asCell for schema fidelity. Live redirects use link
-  // schemas without cell wrappers so scoped asCell entries do not stamp the
-  // redirect link's own scope and bypass stored argument links.
+  // Compiled aliases retain asCell for schema fidelity. A live redirect carries
+  // a link schema, which keeps only stream wrappers: the redirect addresses
+  // the slot, and a cell wrapper describes what is read through it.
   sanitizeAndInternSchemaForLinks(schema, KeepAsCell.OnlyStream);
 
 /**
@@ -280,7 +305,7 @@ function sendValueToBindingInner<T>(
           options.derivedInternalCells,
         )!;
         binding = createSigilLinkFromParsedLink(
-          scopedLinkForPath(
+          linkForPath(
             getDerivedInternalCellLink(cell as any, descriptor),
             alias.path,
             alias.schema,
@@ -303,7 +328,7 @@ function sendValueToBindingInner<T>(
         }
         const path = alias.path;
         binding = createSigilLinkFromParsedLink(
-          scopedLinkForPath(link, path, alias.schema),
+          linkForPath(link, path, alias.schema),
           { includeSchema: true, overwrite: "redirect" },
         );
       }
@@ -673,7 +698,7 @@ export function unwrapOneLevelAndBindToDoc<T extends FabricExecValue>(
           ? ContextualFlowControl.schemaAtPath(link.schema, path)
           : undefined;
         return createSigilLinkFromParsedLink(
-          scopedLinkForPath(link, path, targetSchema ?? sourceSchema),
+          linkForPath(link, path, targetSchema ?? sourceSchema),
           { includeSchema: true, overwrite: "redirect" },
         );
       } else {
@@ -700,7 +725,14 @@ export function unwrapOneLevelAndBindToDoc<T extends FabricExecValue>(
           : undefined;
         return createSigilLinkFromParsedLink(
           foldDeclaredScopeIntoLinkSchema(
-            scopedLinkForPath(link, path, targetSchema ?? sourceSchema),
+            linkForPath(
+              link,
+              path,
+              targetSchema ?? sourceSchema,
+              alias.cell === "argument"
+                ? authoredRootSchema ?? options?.argumentCapSchema
+                : undefined,
+            ),
             authoredRootSchema,
             path,
           ),

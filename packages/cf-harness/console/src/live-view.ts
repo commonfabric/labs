@@ -53,7 +53,10 @@ export type ConsoleLiveEntry =
     turnId?: string;
     toolCallId: string;
     toolName: string;
-    status: "running" | "completed" | "failed" | "denied";
+    title?: string;
+    startedAt?: string;
+    endedAt?: string;
+    status: "running" | "completed" | "failed" | "denied" | "canceled";
     progress?: string;
     resultSummary?: string;
     subagent?: LiveSubagent;
@@ -337,6 +340,10 @@ export const consoleLiveEntries = (
           ...named,
           toolCallId: event.tool.toolCallId,
           toolName: event.tool.toolId,
+          ...(event.tool.title === undefined ? {} : {
+            title: event.tool.title,
+            startedAt: envelope.emittedAt,
+          }),
           status: "running",
           ...under(event.subagent),
         };
@@ -353,7 +360,7 @@ export const consoleLiveEntries = (
       }
       case "tool_completed": {
         const held = tools.get(event.tool.toolCallId);
-        const entry = held ?? {
+        const entry: Extract<ConsoleLiveEntry, { kind: "tool" }> = held ?? {
           kind: "tool" as const,
           ...named,
           toolCallId: event.tool.toolCallId,
@@ -362,6 +369,8 @@ export const consoleLiveEntries = (
           ...under(event.subagent),
         };
         entry.status = event.status;
+        if (event.tool.title !== undefined) entry.title = event.tool.title;
+        if (entry.startedAt !== undefined) entry.endedAt = envelope.emittedAt;
         if (event.resultSummary !== undefined) {
           entry.resultSummary = event.resultSummary;
         }
@@ -411,6 +420,14 @@ export const consoleLiveEntries = (
         break;
       }
       case "turn_failed": {
+        for (const entry of tools.values()) {
+          if (
+            entry.turnId === event.turnId && entry.startedAt && !entry.endedAt
+          ) {
+            entry.endedAt = envelope.emittedAt;
+            entry.status = "failed";
+          }
+        }
         entries.push({
           kind: "ended",
           key: named.key,
@@ -422,6 +439,14 @@ export const consoleLiveEntries = (
         break;
       }
       case "turn_canceled": {
+        for (const entry of tools.values()) {
+          if (
+            entry.turnId === event.turnId && entry.startedAt && !entry.endedAt
+          ) {
+            entry.endedAt = envelope.emittedAt;
+            entry.status = "canceled";
+          }
+        }
         entries.push({
           kind: "ended",
           key: named.key,
@@ -591,6 +616,7 @@ export class ConsoleLive extends LitElement {
   #lastSequence = 0;
 
   #stream: EventSource | undefined;
+  #elapsedTimer: ReturnType<typeof setInterval> | undefined;
 
   /** Which read of a run is the current one, by run id. */
   #reads = new Map<string, number>();
@@ -615,6 +641,18 @@ export class ConsoleLive extends LitElement {
   }
 
   protected override updated(): void {
+    if (
+      this.#stream !== undefined &&
+      this.entries.some((entry) =>
+        entry.kind === "tool" && entry.startedAt !== undefined &&
+        entry.endedAt === undefined
+      )
+    ) {
+      this.#elapsedTimer ??= setInterval(() => this.requestUpdate(), 1000);
+    } else {
+      clearInterval(this.#elapsedTimer);
+      this.#elapsedTimer = undefined;
+    }
     if (!this.#pinned) {
       return;
     }
@@ -635,11 +673,15 @@ export class ConsoleLive extends LitElement {
       return;
     }
     this.#subscribe(this.sessionId);
+    this.requestUpdate();
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.#stream?.close();
+    this.#stream = undefined;
+    clearInterval(this.#elapsedTimer);
+    this.#elapsedTimer = undefined;
   }
 
   /**
@@ -732,13 +774,25 @@ export class ConsoleLive extends LitElement {
     const record = this.#recordOf(entry.toolCallId);
     const step = record?.step;
     const line = consoleLiveToolLine(entry, record?.detail, step);
+    const elapsed = entry.startedAt === undefined ? undefined : Math.max(
+      0,
+      Math.floor(
+        ((entry.endedAt === undefined
+          ? Date.now()
+          : Date.parse(entry.endedAt)) -
+          Date.parse(entry.startedAt)) / 1000,
+      ),
+    );
     return html`
       <div class="live-entry tool ${entry.subagent === undefined
         ? ""
         : "child"}">
         <div class="live-head">
           <span class="live-dot ${entry.status}"></span>
-          <span class="tool">${entry.toolName}</span>
+          <span class="tool">${entry.title ?? entry.toolName}</span>
+          ${elapsed === undefined ? nothing : html`
+            <span class="muted">${elapsed}s elapsed</span>
+          `}
           ${entry.status === "running" ? nothing : html`
             <span class="badge ${entry.status === "completed"
               ? "ok"

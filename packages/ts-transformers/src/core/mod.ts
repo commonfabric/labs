@@ -229,7 +229,6 @@ export {
   PATTERN_COVERAGE_GLOBAL,
   Transformer,
 } from "./transformers.ts";
-export * from "./common-fabric-symbols.ts";
 export {
   CF_HELPERS_IDENTIFIER,
   CFHelpers,

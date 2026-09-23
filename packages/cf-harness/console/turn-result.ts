@@ -13,9 +13,11 @@ import {
 import { join } from "@std/path";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
-import type {
-  HarnessChatEventEnvelope,
-  HarnessChatStructuredEvent,
+import {
+  type HarnessChatEventEnvelope,
+  type HarnessChatStructuredEvent,
+  harnessChatTurnElapsedMs,
+  type HarnessChatTurnStatus,
 } from "../src/contracts/interactive-chat.ts";
 import {
   type HarnessTaskOutcome,
@@ -26,6 +28,8 @@ import type {
   HarnessToolTranscriptMessage,
   HarnessTranscriptMessage,
 } from "../src/contracts/transcript.ts";
+import type { HarnessModelUsage } from "../src/model/client.ts";
+import { readHarnessModelUsage } from "../src/model/usage.ts";
 
 /** A named piece a completed console turn made openable. */
 export interface ConsoleTurnResultPiece {
@@ -64,6 +68,12 @@ export type ConsoleTurnResult = HarnessTaskOutcome & {
 
   /** Human-readable answer, question, or reason the task cannot proceed. */
   finalText: string;
+
+  /** Reported usage for this turn, including research and delegated calls. */
+  usage?: HarnessModelUsage;
+
+  /** Wall time from the durable turn's start to its terminal event. */
+  elapsedMs?: number;
 };
 
 /** The console's completed SSE event with its external result attached. */
@@ -106,6 +116,9 @@ export interface ReadConsoleTurnResultOptions {
 
   /** Space this console is configured against. */
   spaceName: string;
+
+  /** Durable turn timestamps; absent when only legacy run artifacts are held. */
+  timing?: Pick<HarnessChatTurnStatus, "startedAt" | "endedAt">;
 }
 
 /** Characters the artifact store admits in one run directory name. */
@@ -137,6 +150,7 @@ interface TurnRunArtifacts {
   currentTranscriptIndexes: ReadonlySet<number>;
   finalText: string;
   taskOutcome: HarnessTaskOutcome;
+  usage?: HarnessModelUsage;
 }
 
 /** The first two occurrences suffice to establish uniqueness at any prefix. */
@@ -277,6 +291,13 @@ const readTurnRunArtifacts = async (
       currentTranscriptIndexes,
       finalText: reportValue.finalAssistantText,
       taskOutcome,
+      usage: readHarnessModelUsage(
+        "totalUsage" in reportValue
+          ? reportValue.totalUsage
+          : "usage" in reportValue
+          ? reportValue.usage
+          : undefined,
+      ),
     };
   } catch {
     return undefined;
@@ -324,6 +345,10 @@ export const readConsoleTurnResult = async (
   if (artifacts === undefined) {
     return undefined;
   }
+  const elapsedMs = harnessChatTurnElapsedMs(
+    options.timing?.startedAt,
+    options.timing?.endedAt,
+  );
   const calls = indexCalls(artifacts);
   const membership = new Map<
     string,
@@ -392,5 +417,7 @@ export const readConsoleTurnResult = async (
     }),
     spaceName: options.spaceName,
     finalText: artifacts.finalText,
+    ...(artifacts.usage === undefined ? {} : { usage: artifacts.usage }),
+    ...(elapsedMs === undefined ? {} : { elapsedMs }),
   };
 };

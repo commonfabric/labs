@@ -18,6 +18,7 @@ import {
   repositoryRootOf,
   runDirectory,
   serializeSkipList,
+  writableSpool,
 } from "./registration.ts";
 // Imported for what loading it declares: the shared fixture runner calls
 // `describe` on behalf of the file that asked for a suite, so it declares
@@ -466,6 +467,23 @@ describe("registration", () => {
       const { registrar } = recorder();
       // No spool: flushing is a no-op rather than an error.
       buildCapture({ registrar }).capture.flush();
+    });
+  });
+
+  describe("writableSpool()", () => {
+    it("returns false where the run names no spool", () => {
+      // A process whose environment names no spool has nowhere to leave a
+      // name map, so it is not worth wrapping `Deno.test` for.
+      expect(writableSpool(undefined)).toBe(false);
+    });
+
+    it("returns true for a spool this process may write", async () => {
+      const spool = await Deno.makeTempDir();
+      try {
+        expect(writableSpool(spool)).toBe(true);
+      } finally {
+        await Deno.remove(spool, { recursive: true });
+      }
     });
   });
 

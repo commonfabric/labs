@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import type { CellScope } from "@commonfabric/api";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
@@ -37,6 +38,7 @@ import {
   type Cell,
   CompilerStackLoadError,
   entityIdFrom,
+  type EventIntentOutcome,
   parseLink,
   popFrame,
   pushFrame,
@@ -60,6 +62,7 @@ import {
   type CfcLabelView,
   ClientNotificationType,
   type GetPatternSourcesRequest,
+  type IPCRemotePost,
   NotificationType,
   RequestType,
   RuntimeErrorCode,
@@ -81,7 +84,7 @@ import {
   getCell,
   mapCellRefsToSigilLinks,
 } from "@/backends/utils.ts";
-import type { WorkerClient } from "@/backends/worker-client.ts";
+import { ownerClient, type WorkerClient } from "@/backends/worker-client.ts";
 import { buildProcessor } from "./build-processor.ts";
 import { stubWorkerBoot } from "./stub-worker-boot.ts";
 
@@ -4745,6 +4748,38 @@ describe("runtime-processor", () => {
       recovery: "explicit-retry" as const,
     };
 
+    it("publishes a safe admission refusal without private diagnostic content", () => {
+      let subscriber: ((outcome: never) => void) | undefined;
+      const attention: unknown[] = [];
+      const refusals: unknown[] = [];
+      const cancel = () => {};
+      expect(subscribeEventAttentionNotifications(
+        {
+          subscribeEventIntentOutcomes(callback: (outcome: never) => void) {
+            subscriber = callback;
+            return cancel;
+          },
+        },
+        (notice: unknown) => attention.push(notice),
+        (notice: unknown) => refusals.push(notice),
+      )).toBe(cancel);
+      subscriber!({
+        kind: "refused",
+        space,
+        eventId: "read-only-click",
+        reason: "private server diagnostic",
+        payload: "private event payload",
+      } as never);
+      expect(refusals).toEqual([{
+        type: "callback:event-intent-outcome",
+        space,
+        eventId: "read-only-click",
+        kind: "refused",
+        reason: "admission-refused",
+      }]);
+      expect(attention).toEqual([]);
+    });
+
     it("forwards only complete terminal-attention outcomes", () => {
       let subscriber: ((outcome: never) => void) | undefined;
       const cancel = () => {};
@@ -4803,10 +4838,15 @@ describe("runtime-processor", () => {
       }, server);
       const restoreBoot = stubWorkerBoot(() => storageManager);
       const originalSubscribe = Runtime.prototype.subscribeEventIntentOutcomes;
-      let subscribed = false;
+      let outcome: ((value: EventIntentOutcome) => void) | undefined;
       let cancelled = 0;
-      Runtime.prototype.subscribeEventIntentOutcomes = () => {
-        subscribed = true;
+      const notices: IPCRemotePost[] = [];
+      const post = stub(ownerClient, "post", (notice) => {
+        notices.push(notice);
+        return true;
+      });
+      Runtime.prototype.subscribeEventIntentOutcomes = (observer) => {
+        outcome = observer;
         return () => cancelled++;
       };
       try {
@@ -4815,12 +4855,26 @@ describe("runtime-processor", () => {
           identity: cfcSigner.keyPair,
           spaceDid: space,
         });
-        expect(subscribed).toBe(true);
+        expect(outcome).toBeDefined();
+        outcome!({
+          space,
+          eventId: "standalone-owner-click",
+          kind: "refused",
+          reason: "private diagnostic",
+        });
+        expect(notices).toEqual([{
+          type: NotificationType.EventIntentOutcome,
+          space,
+          eventId: "standalone-owner-click",
+          kind: "refused",
+          reason: "admission-refused",
+        }]);
         await processor.dispose();
         expect(cancelled).toBe(1);
       } finally {
         restoreBoot();
         Runtime.prototype.subscribeEventIntentOutcomes = originalSubscribe;
+        post.restore();
         await storageManager.close();
         await server.close();
       }

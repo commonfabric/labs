@@ -1,3 +1,4 @@
+import { debugStr } from "@commonfabric/data-model";
 import {
   env,
   type Page,
@@ -893,7 +894,7 @@ describe("cf-code-editor collaboration", () => {
     assertEquals(materialized, aliceContent);
     assert(
       aliceContent === "aALICEBOBbc" || aliceContent === "aBOBALICEbc",
-      `unexpected canonical content: ${JSON.stringify(aliceContent)}`,
+      debugStr`unexpected canonical content: $quote,long${aliceContent}`,
     );
     assertEquals(await collaborationErrors(alicePage), []);
     assertEquals(await collaborationErrors(bobPage), []);

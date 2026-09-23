@@ -474,6 +474,8 @@ export enum KeepAsCell {
   All = "All",
 }
 
+const PRESERVE_PATTERN_RESULT_CELL = "__ctPreservePatternResultCell";
+
 // Identity-keyed memo for `sanitizeSchemaForLinks` (see the function body).
 // Values are always deep-frozen OBJECT schemas: boolean/undefined inputs take
 // the early return and never reach the memo, and outputs are frozen before
@@ -760,15 +762,29 @@ function recursiveStripAsCellFromSchema(
   let result;
   // Shallow copy — only top-level keys are deleted/replaced; children are
   // handled by recursive calls that create their own copies.
+  const {
+    [PRESERVE_PATTERN_RESULT_CELL]: preservePatternResultCell,
+    ...schemaWithoutPreserveMarker
+  } = schema as JSONSchemaObj & {
+    readonly __ctPreservePatternResultCell?: boolean;
+  };
   if (context.keepAsCell === KeepAsCell.All) {
-    result = { ...schema };
+    result = { ...schemaWithoutPreserveMarker };
   } else {
-    const { asCell: _c, ...restSchema } = schema;
+    const { asCell: _c, ...restSchema } = schemaWithoutPreserveMarker;
     const asCellValues = ContextualFlowControl.getAsCellValues(schema);
-    // If we're keeping streams and the outermost is a stream, keep it
+    const outer = asCellValues.at(0);
+    const outerKind = ContextualFlowControl.getAsCellKind(outer);
+    // Pattern results ordinarily materialize cells. A schema assembled by
+    // trusted pattern code can retain one explicitly scoped link; the private
+    // marker is consumed here and never reaches the serialized contract.
+    const keepMarkedCell = context.keepAsCell === KeepAsCell.OnlyStream &&
+      preservePatternResultCell === true && outerKind === "cell" &&
+      (schema.scope !== undefined ||
+        (typeof outer === "object" && Object.hasOwn(outer, "scope")));
     if (
-      context.keepAsCell === KeepAsCell.OnlyStream &&
-      ContextualFlowControl.getAsCellKind(asCellValues.at(0)) === "stream"
+      (context.keepAsCell === KeepAsCell.OnlyStream &&
+        outerKind === "stream") || keepMarkedCell
     ) {
       result = { asCell: asCellValues, ...restSchema };
     } else {
@@ -819,7 +835,7 @@ function recursiveStripAsCellFromSchema(
         result[key] = processedDefs;
       } else if (Array.isArray(value)) {
         // Handle arrays
-        result[key] = value.map((item) =>
+        (result as Record<string, unknown>)[key] = value.map((item) =>
           isWalkableObjectOrArray(item)
             ? recursiveStripAsCellFromSchema(
               item,
@@ -830,11 +846,12 @@ function recursiveStripAsCellFromSchema(
         );
       } else {
         // Handle objects
-        result[key] = recursiveStripAsCellFromSchema(
-          value,
-          context,
-          depth + 1,
-        );
+        (result as Record<string, unknown>)[key] =
+          recursiveStripAsCellFromSchema(
+            value,
+            context,
+            depth + 1,
+          );
       }
     }
   }

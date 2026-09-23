@@ -17,6 +17,8 @@
  */
 
 import * as path from "@std/path";
+
+import { type BinaryName, BUILD_HOST_VARIABLES } from "./build-binaries.ts";
 import {
   serverExecutionCiLane,
   type ServerExecutionCiRole,
@@ -48,8 +50,20 @@ export type CapabilityId =
 export type Exec = (
   command: string,
   args: readonly string[],
-  options?: { cwd?: string; env?: Record<string, string> },
+  options?: ExecOptions,
 ) => Promise<string>;
+
+/** Where an `Exec` runs its command, and with what environment. */
+export interface ExecOptions {
+  /** The directory the command runs in. */
+  cwd?: string;
+
+  /** Variables added to the environment the command inherits. */
+  env?: Record<string, string>;
+
+  /** Whether the command inherits no environment, leaving it only `env`. */
+  clearEnv?: boolean;
+}
 
 /** What a capability was given to work with. */
 export interface CapabilityContext {
@@ -100,8 +114,9 @@ export interface OpenCapability {
   /**
    * Files it writes that say what it did, for a lane that failed to
    * report. A capability outside the test process is the half of a
-   * failure the test process cannot describe, and its work directory
-   * goes when the lane ends, so a log nobody names here is gone.
+   * failure the test process cannot describe, and outside a job its work
+   * directory goes when the lane ends, so there a log nobody names here
+   * is gone.
    */
   logs?: readonly string[];
 
@@ -140,6 +155,63 @@ export const BINARY_CACHE_DIR = `${CACHE_DIR}/binaries`;
 /** Where the pattern compile byte cache is kept, inside that directory. */
 export const COMPILE_CACHE_FILE = `${CACHE_DIR}/compile/lane.json`;
 
+/**
+ * The server-execution define a Toolshed at `role` is built and run with: the
+ * value the role names, or nothing where it names none. `defaultEnabled`
+ * stands in for the first-party default where given.
+ */
+function serverExecutionDefine(
+  role: ServerExecutionCiRole,
+  defaultEnabled?: boolean,
+): Record<string, string> {
+  const value = serverExecutionCiLane(role, defaultEnabled).experimentalValue;
+  return value === undefined ? {} : { EXPERIMENTAL_SERVER_EXECUTION: value };
+}
+
+/** The name of a binary a lane keeps in `BINARY_CACHE_DIR`. */
+export type CachedBinaryName =
+  | `toolshed-baked-${ServerExecutionCiRole}`
+  | "bg-piece-service";
+
+/** How a lane builds one binary it keeps in `BINARY_CACHE_DIR`. */
+export interface CachedBinary {
+  /** The binary `deno task build-binaries` is asked for. */
+  build: BinaryName;
+
+  /**
+   * The environment variables the build is given besides the host ones.
+   * Every other variable is unset, whatever the lane's own environment
+   * holds.
+   */
+  bakes: Record<string, string>;
+}
+
+/**
+ * Every binary a lane keeps in `BINARY_CACHE_DIR`, and how each is built. A
+ * binary is made from the variables its build sets as much as from its
+ * sources, so the cache key covers this table as well. The Toolshed builds
+ * follow whether server execution is on by default, which is the first-party
+ * default unless `defaultEnabled` says otherwise.
+ *
+ * None of them sets `COMMIT_SHA`. A cached binary serves every commit whose
+ * sources match those of the commit that built it, so a commit baked into it
+ * would be wrong at all the others, and a key covering the commit would never
+ * be reused.
+ */
+export function cachedBinaries(
+  defaultEnabled?: boolean,
+): Record<CachedBinaryName, CachedBinary> {
+  const toolshed = (role: ServerExecutionCiRole): CachedBinary => ({
+    build: "toolshed",
+    bakes: serverExecutionDefine(role, defaultEnabled),
+  });
+  return {
+    "toolshed-baked-default": toolshed("default"),
+    "toolshed-baked-opposite": toolshed("opposite"),
+    "bg-piece-service": { build: "bg-piece-service", bakes: {} },
+  };
+}
+
 /** Nothing to undo. */
 const NOTHING = () => Promise.resolve();
 
@@ -160,6 +232,7 @@ const run: Exec = async (command, args, options = {}) => {
     stderr: "piped",
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     ...(options.env === undefined ? {} : { env: options.env }),
+    ...(options.clearEnv === undefined ? {} : { clearEnv: options.clearEnv }),
   }).output();
   const stdout = new TextDecoder().decode(result.stdout);
   if (result.success) return stdout;
@@ -398,22 +471,20 @@ const githubApi: Capability = {
 };
 
 /**
- * The environment a Toolshed at `role` builds and runs under: the ambient
- * environment carrying the server-execution define the role names, and
- * carrying none where the role names none.
+ * The environment a Toolshed at `role` runs under: the ambient environment
+ * carrying the server-execution define the role names, and carrying none
+ * where the role names none.
  *
- * An unset define is a third state rather than a synonym for `false`. The
- * shell bakes it in as `null`, which is what the default role's posture
+ * An unset define is a third state rather than a synonym for `false`. It
+ * follows the first-party default, which is what the default role's posture
  * check asks for, so that role removes the name rather than setting it.
  */
 function serverExecutionEnv(
   role: ServerExecutionCiRole,
 ): Record<string, string> {
   const env = Deno.env.toObject();
-  const value = serverExecutionCiLane(role).experimentalValue;
-  if (value === undefined) delete env.EXPERIMENTAL_SERVER_EXECUTION;
-  else env.EXPERIMENTAL_SERVER_EXECUTION = value;
-  return env;
+  delete env.EXPERIMENTAL_SERVER_EXECUTION;
+  return { ...env, ...serverExecutionDefine(role) };
 }
 
 /** How a Toolshed server is started, whichever binary provides it. */
@@ -509,6 +580,9 @@ async function startToolshed(
     `--log-file=${logFile}`,
   ], {
     cwd: options.cwd,
+    // The environment below is the whole of it, so that a name
+    // `serverExecutionEnv()` removed is unset rather than inherited.
+    clearEnv: true,
     env: {
       ...serverExecutionEnv(options.role),
       // The server reaches for a gateway and a model key at startup. A
@@ -587,6 +661,52 @@ const toolshed: Capability = {
     }),
 };
 
+/** The host variables this process's environment holds. */
+function hostEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const name of BUILD_HOST_VARIABLES) {
+    const value = Deno.env.get(name);
+    if (value !== undefined) env[name] = value;
+  }
+  return env;
+}
+
+/**
+ * The path of the cached binary `name`, which is built in place when the
+ * workflow restored none.
+ *
+ * The build inherits nothing from this process's environment but the host
+ * variables, and is handed the variables `cachedBinaries()` names for it,
+ * so a variable the lane's environment happens to hold cannot reach a
+ * binary that the cache key does not describe.
+ */
+async function cachedBinary(
+  context: CapabilityContext,
+  name: CachedBinaryName,
+): Promise<string> {
+  const binary = path.join(context.root, BINARY_CACHE_DIR, name);
+  if (context.dryRun) return binary;
+  let present = true;
+  try {
+    await Deno.stat(binary);
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+    present = false;
+  }
+  if (!present) {
+    const { build, bakes } = cachedBinaries()[name];
+    await execOf(context)(Deno.execPath(), ["task", "build-binaries", build], {
+      cwd: context.root,
+      clearEnv: true,
+      env: { ...hostEnv(), ...bakes },
+    });
+    await Deno.mkdir(path.dirname(binary), { recursive: true });
+    await Deno.copyFile(path.join(context.root, "dist", build), binary);
+  }
+  await Deno.chmod(binary, 0o755);
+  return binary;
+}
+
 /**
  * A Toolshed server from a compiled binary, at a stated server-execution
  * role.
@@ -610,37 +730,8 @@ function bakedToolshed(role: ServerExecutionCiRole): Capability {
       `a Toolshed server with the ${role} posture in its baked shell`,
     needs: ["deno"],
     async open(context) {
-      const binary = path.join(
-        context.root,
-        BINARY_CACHE_DIR,
-        `toolshed-baked-${role}`,
-      );
-      if (!context.dryRun) {
-        let present = true;
-        try {
-          await Deno.stat(binary);
-        } catch {
-          present = false;
-        }
-        if (!present) {
-          await execOf(context)(
-            Deno.execPath(),
-            ["task", "build-binaries", "toolshed"],
-            {
-              cwd: context.root,
-              env: serverExecutionEnv(role),
-            },
-          );
-          await Deno.mkdir(path.dirname(binary), { recursive: true });
-          await Deno.copyFile(
-            path.join(context.root, "dist", "toolshed"),
-            binary,
-          );
-        }
-        await Deno.chmod(binary, 0o755);
-      }
       return await startToolshed(context, {
-        command: [binary],
+        command: [await cachedBinary(context, `toolshed-baked-${role}`)],
         cwd: context.root,
         role,
       });
@@ -661,33 +752,9 @@ const bgPieceServiceBinary: Capability = {
   description: "the compiled background-piece-service binary",
   needs: ["deno"],
   async open(context) {
-    const binary = path.join(
-      context.root,
-      BINARY_CACHE_DIR,
-      "bg-piece-service",
-    );
-    if (!context.dryRun) {
-      let present = true;
-      try {
-        await Deno.stat(binary);
-      } catch {
-        present = false;
-      }
-      if (!present) {
-        await execOf(context)(
-          Deno.execPath(),
-          ["task", "build-binaries", "bg-piece-service"],
-          { cwd: context.root },
-        );
-        await Deno.mkdir(path.dirname(binary), { recursive: true });
-        await Deno.copyFile(
-          path.join(context.root, "dist", "bg-piece-service"),
-          binary,
-        );
-      }
-      await Deno.chmod(binary, 0o755);
-    }
-    return exported({ BG_PIECE_SERVICE_BIN: binary });
+    return exported({
+      BG_PIECE_SERVICE_BIN: await cachedBinary(context, "bg-piece-service"),
+    });
   },
 };
 

@@ -89,8 +89,8 @@ Deno.test("meta routes", async (t) => {
         // The two properties the route exists to carry, stated here because a
         // reader of this file should not have to derive them: an ungated sink
         // is named rather than absent, and it is published as a deviation.
-        assertEquals(json.cfc.sinks.length, 10);
-        assertEquals(json.cfc.deviations.length, 4);
+        assertEquals(json.cfc.sinks.length, 12);
+        assertEquals(json.cfc.deviations.length, 5);
       } finally {
         publishCfcPosture(null);
       }
@@ -141,12 +141,13 @@ Deno.test("meta routes", async (t) => {
         fetch: async (input) =>
           await app.request(new URL(String(input)).pathname),
       });
-      // The published posture declares no readerSchemaPrecedence, so the
-      // client adopts the legacy strict `false` a pre-flag server runs.
+      // The published posture declares neither readerSchemaPrecedence nor
+      // agentBuiltin, so the client adopts both legacy `false` values.
       assertEquals(adopted, {
         modernCellRep: false,
         lazyMaterialization: false,
         readerSchemaPrecedence: false,
+        agentBuiltin: false,
       });
     } finally {
       publishExperimentalPosture(null);

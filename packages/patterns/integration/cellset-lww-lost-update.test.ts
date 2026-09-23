@@ -26,6 +26,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
+import { debugStr } from "@commonfabric/data-model";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
@@ -90,9 +91,8 @@ describe("cellset LWW lost-update (remove-vs-push race)", () => {
     const set = await alice.set(ITEMS, aliceRmw);
     assert(
       set.ok && !isConflict(set.error),
-      `expected the blind set to land clean (LWW); got ${
-        JSON.stringify(set.error)
-      }`,
+      `expected the blind set to land clean (LWW); ` +
+        debugStr`got $quote,long${set.error}`,
     );
     await harness.settle();
 
@@ -132,9 +132,8 @@ describe("cellset LWW lost-update (remove-vs-push race)", () => {
     const conflicts = [p1, p2].filter((r) => !r.ok && isConflict(r.error));
     assert(
       conflicts.length >= 1,
-      `expected at least one CAS conflict from racing pushes; got ${
-        JSON.stringify([p1, p2])
-      }`,
+      `expected at least one CAS conflict from racing pushes; ` +
+        debugStr`got $quote,long${[p1, p2]}`,
     );
   });
 });

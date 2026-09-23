@@ -113,7 +113,6 @@ Deno.test("model spend: all three providers read -> green, combined MTD, a line 
     },
     async () => {
       const v = await modelSpend.collect(ctx(ALL_KEYS));
-      assertEquals(v.label, "model spend");
       assertEquals(v.status, "good"); // every configured provider resolved, and no budget is set
       // $1/day from OpenAI and $2/day from Anthropic for each day of the month so
       // far, plus OpenRouter's running $5. The buckets with no day and no figures

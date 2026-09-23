@@ -29,10 +29,11 @@ import type {
 } from "../../src/contracts/subagent.ts";
 
 import { isDID } from "@commonfabric/identity";
+import { buildCfcReadCeiling, clausesEqual } from "@commonfabric/runner/cfc";
 
 import type { PromptSlotBinding } from "../../src/contracts/prompt-slot.ts";
 import { extendsClause, requiredBy } from "../citations.ts";
-import type { RunEvidence } from "../evidence.ts";
+import type { RunEvidence, RunFamily } from "../evidence.ts";
 import type { CheckEvidence, KnownDefectRegistration } from "../report.ts";
 import {
   activitiesOf,
@@ -75,13 +76,6 @@ export const KNOWN_DEFECT_REGISTRATIONS = {
     why:
       "H2. No mint site populates a `valueDigest`, and the subject is a run-scoping fact — a workspace path or a resume-run id — rather than an authenticated principal. Both halves are additive: the contract already types the fields, and the work is at the two mint sites.",
     issue: "CT-2216",
-  },
-  "AUD-23": {
-    detail: "no confidentiality ceiling",
-    runShape: "any run that delegates",
-    why:
-      "H8. Nothing in the subagent profile represents a ceiling, so a child that inherits a handle to a cell the parent could read can read it, whatever tools it was given. Not harness-local: the reads bottom out in the runner, so the ceiling has to be something the runner's access check can consume.",
-    issue: "CT-2217",
   },
 } as const satisfies Record<string, KnownDefectRegistration>;
 
@@ -409,20 +403,46 @@ const promptSlotBindingEvidence: AuditCheck = {
 // AUD-23 delegation ceiling (H8)
 //
 
-/**
- * The field a delegation would carry its child's confidentiality ceiling in.
- *
- * Read off the record rather than off the type, because the type has no such
- * field: nothing in `HarnessSubagentProfileConfig` represents a ceiling today,
- * which is the defect. An audit reads what a tree holds, so naming the field
- * here is what lets the check turn green the day a delegation starts writing
- * one, without an audit change landing alongside the fix.
- */
+/** The manifest refers to the ceiling recorded on both sides of the boundary. */
 const CEILING_FIELD = "confidentialityCeiling";
 
-const recordsCeiling = (manifest: HarnessSubagentRunManifest): boolean => {
-  const value = (manifest as unknown as Record<string, unknown>)[CEILING_FIELD];
-  return value !== undefined && value !== null;
+const recordsCeiling = (
+  manifest: HarnessSubagentRunManifest,
+  parent: RunEvidence,
+  family: RunFamily,
+): boolean => {
+  const record = manifest.confidentialityCeiling;
+  const child = family.children.find((candidate) =>
+    candidate.runId === manifest.childRunId
+  );
+  if (record?.source !== "parent" || child?.runState.status !== "present") {
+    return false;
+  }
+  const parentState = runStateOf(parent);
+  const parentCeiling = parentState?.fabricSessionCfc?.readMaxConfidentiality;
+  const childCeiling = child.runState.value.fabricSessionCfc
+    ?.readMaxConfidentiality;
+  const parentOnExceed = parentState?.fabricSessionCfc?.readOnExceed;
+  const childOnExceed = child.runState.value.fabricSessionCfc?.readOnExceed;
+  try {
+    buildCfcReadCeiling({
+      cfcReadMaxConfidentiality: parentCeiling,
+      cfcReadOnExceed: parentOnExceed,
+    });
+    buildCfcReadCeiling({
+      cfcReadMaxConfidentiality: childCeiling,
+      cfcReadOnExceed: childOnExceed,
+    });
+  } catch {
+    return false;
+  }
+  if (parentCeiling === undefined || childCeiling === undefined) {
+    return record.mode === "owner-view" && parentCeiling === undefined &&
+      childCeiling === undefined && parentOnExceed === childOnExceed;
+  }
+  return record.mode === "bounded" &&
+    clausesEqual(parentCeiling, childCeiling) &&
+    parentOnExceed === childOnExceed;
 };
 
 /**
@@ -499,8 +519,8 @@ const delegationCeiling: AuditCheck = {
   title: "delegation ceiling",
   citations: requiredBy("AH-CFC-12a"),
   falsifiedBy:
-    "a delegation whose recorded manifest carries no confidentiality ceiling — which is every delegation today, because nothing in the subagent profile represents one — and, as a warning that weakens a clean answer, two artifacts that have each lost a delegation the other kept",
-  inspect(run) {
+    "a delegation without recorded ceiling inheritance, a child runtime whose ceiling disagrees with its parent, or two artifacts that have each lost a delegation the other kept",
+  inspect(run, family) {
     if (run.runState.status !== "present") {
       return notReadable("run-state.json", run.runState);
     }
@@ -521,7 +541,7 @@ const delegationCeiling: AuditCheck = {
       };
     }
     const uncapped = delegations.filter(({ delegation }) =>
-      !recordsCeiling(delegation.manifest)
+      !recordsCeiling(delegation.manifest, run, family)
     );
     if (uncapped.length === 0) {
       // A bare `pass` would claim every delegation bound a ceiling. Where the
@@ -549,14 +569,13 @@ const delegationCeiling: AuditCheck = {
       verdict: "warn",
       message: `${
         count(uncapped.length, "delegation records", "delegations record")
-      } no confidentiality ceiling, so nothing bounds what the child may observe through the handles and arguments it inherits`,
-      knownDefect: KNOWN_DEFECT_REGISTRATIONS["AUD-23"],
+      } no verifiable inherited confidentiality ceiling for resolved handles and arguments`,
       evidence: [
         ...uncapped.map(({ artifact, delegation }) => ({
           artifact,
           pointer: `subagentRuns[${delegation.childRunId}].manifest`,
           detail:
-            `the \`${delegation.manifest.profile}\` profile binds tools, skills and a turn budget, and no \`${CEILING_FIELD}\``,
+            `the \`${delegation.manifest.profile}\` profile has no valid \`${CEILING_FIELD}\` inheritance record matching both runtime records`,
         })),
         ...divergence,
       ],

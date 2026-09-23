@@ -388,19 +388,26 @@ export class Engine extends EventTarget {
   }
 
   /**
-   * Resolve a `ProgramResolver` into a program: the entry, the closure its
-   * imports reach, and the data files its source declares by reading them.
+   * Resolves a `ProgramResolver` into a program: the entry, each supplied
+   * source root and their import closures, and the declared data files.
    *
    * This is how a program is assembled from a source of truth — a directory, a
    * web address, the fabric — so it is where a declaration in the source is
    * acted on. Re-resolving a program the engine already holds goes through
    * `#resolveModules()`, which follows imports and nothing else.
    */
-  async resolve(program: ProgramResolver): Promise<RuntimeProgram> {
-    return await attachDeclaredDataFiles(
-      await this.#resolveModules(program),
-      program,
-    );
+  async resolve(
+    program: ProgramResolver,
+    options: { sourceRoots?: readonly string[] } = {},
+  ): Promise<RuntimeProgram> {
+    const roots = [...new Set(options.sourceRoots ?? [])];
+    const resolved = roots.length === 0
+      ? await this.#resolveModules(program)
+      : {
+        ...await this.#resolveWithSourceRoots(program, roots),
+        sourceRoots: roots,
+      };
+    return await attachDeclaredDataFiles(resolved, program);
   }
 
   /** Resolve the module closure an entry's imports reach. */

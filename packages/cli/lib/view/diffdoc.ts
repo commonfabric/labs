@@ -62,7 +62,7 @@ export interface DiffWorkspace {
   /** Report the UTF-8 BOM state recorded for a successfully read Git blob. */
   blobHasUtf8Bom?(object: string): boolean | undefined;
 
-  /** Read available Git blobs in one local Git operation. */
+  /** Read available Git blobs in bounded local Git batches. */
   readBlobs?(
     objects: readonly string[],
   ): ReadonlyMap<string, string>;
@@ -209,7 +209,12 @@ type GitBatchRunner = (
   options: GitBatchOptions,
 ) => { status: number | null; stdout: Uint8Array | null };
 
-/** Read several locally available Git objects in one batch. */
+// Deno's Node-compatible `spawnSync()` writes all of its input before draining
+// the child's output. One request therefore stays within POSIX's minimum atomic
+// pipe capacity, so Git can accept it when a large first blob fills its output.
+const MAX_GIT_BATCH_REQUEST_BYTES = 512;
+
+/** Read several locally available Git objects in bounded batches. */
 function readGitBlobs(
   repoRoot: string,
   objects: readonly string[],
@@ -220,19 +225,59 @@ function readGitBlobs(
   const blobs = new Map<string, string>();
   if (objects.length === 0) return blobs;
   return tryOrNull(() => {
-    const result = run("git", ["cat-file", "--batch"], {
-      cwd: repoRoot,
-      env: { ...Deno.env.toObject(), GIT_NO_LAZY_FETCH: "1" },
-      input: `${objects.join("\n")}\n`,
-      maxBuffer: Number.MAX_SAFE_INTEGER,
-    });
-    if (result.status !== 0 || !result.stdout) return blobs;
-    return parseGitBatchOutput(
+    const loadedBomStates = new Map<string, boolean>();
+    let batch: string[] = [];
+    let inputBytes = 0;
+    for (const object of objects) {
+      const objectBytes = object.length + 1;
+      if (
+        batch.length > 0 &&
+        inputBytes + objectBytes > MAX_GIT_BATCH_REQUEST_BYTES
+      ) {
+        if (!readGitBlobBatch(repoRoot, batch, blobs, run, loadedBomStates)) {
+          return new Map<string, string>();
+        }
+        batch = [];
+        inputBytes = 0;
+      }
+      batch.push(object);
+      inputBytes += objectBytes;
+    }
+    if (!readGitBlobBatch(repoRoot, batch, blobs, run, loadedBomStates)) {
+      return new Map<string, string>();
+    }
+    for (const [object, hasBom] of loadedBomStates) {
+      bomStates?.set(object, hasBom);
+    }
+    return blobs;
+  }) ?? new Map<string, string>();
+}
+
+/** Read one request small enough to fit in an empty process input pipe. */
+function readGitBlobBatch(
+  repoRoot: string,
+  objects: readonly string[],
+  blobs: Map<string, string>,
+  run: GitBatchRunner,
+  bomStates?: Map<string, boolean>,
+): boolean {
+  const result = run("git", ["cat-file", "--batch"], {
+    cwd: repoRoot,
+    env: { ...Deno.env.toObject(), GIT_NO_LAZY_FETCH: "1" },
+    input: `${objects.join("\n")}\n`,
+    maxBuffer: Number.MAX_SAFE_INTEGER,
+  });
+  if (result.status !== 0 || !result.stdout) return false;
+  for (
+    const [object, blob] of parseGitBatchOutput(
       objects,
       new Uint8Array(result.stdout),
       bomStates,
-    );
-  }) ?? blobs;
+    )
+  ) {
+    blobs.set(object, blob);
+  }
+  return true;
 }
 
 function parseGitBatchOutput(

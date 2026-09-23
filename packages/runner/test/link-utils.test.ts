@@ -1161,6 +1161,53 @@ describe("link-utils", () => {
       expect(result).toEqual(schema);
     });
 
+    it("retains only an explicitly marked scoped pattern-result cell", () => {
+      const schema = {
+        type: "object",
+        properties: {
+          ordinary: {
+            type: "number",
+            asCell: [{ kind: "cell", scope: "user" }],
+          },
+          retained: {
+            type: "number",
+            asCell: ["cell"],
+            scope: "user",
+            __ctPreservePatternResultCell: true,
+          },
+        },
+        required: ["ordinary", "retained"],
+      } as const;
+
+      expect(sanitizeSchemaForLinks(schema, KeepAsCell.OnlyStream)).toEqual({
+        type: "object",
+        properties: {
+          ordinary: { type: "number" },
+          retained: {
+            type: "number",
+            asCell: ["cell"],
+            scope: "user",
+          },
+        },
+        required: ["ordinary", "retained"],
+      });
+      expect(sanitizeSchemaForLinks(schema, KeepAsCell.All)).toEqual({
+        type: "object",
+        properties: {
+          ordinary: {
+            type: "number",
+            asCell: [{ kind: "cell", scope: "user" }],
+          },
+          retained: {
+            type: "number",
+            asCell: ["cell"],
+            scope: "user",
+          },
+        },
+        required: ["ordinary", "retained"],
+      });
+    });
+
     it("respects KeepAsCell modes for mixed cell wrappers", () => {
       const schema = {
         type: "object",

@@ -18,6 +18,7 @@ import {
 } from "./ci-check-lib.ts";
 import type { CoverageDebtMetric } from "./coverage-metrics.ts";
 import {
+  COMPILE_CACHE_STATE_FILE,
   COVERAGE_FAILURE_MARKER,
   COVERAGE_REPORT_DIR,
   COVERAGE_REPORT_FILE,
@@ -210,6 +211,55 @@ describe("coverage-report", () => {
           "./packages/runner",
           "./packages/shell",
         ]);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("returns the cache warm only where every lane found it restored", async () => {
+      // The artifact carries the record at its top, beside `sets`.
+
+      const cold = await directoryOf({
+        [`lane-1/lcov/${COMPILE_CACHE_STATE_FILE}`]: "warm\n",
+        [`lane-2/lcov/${COMPILE_CACHE_STATE_FILE}`]: "cold\n",
+        "lane-3/lcov/sets/workspace-unit/packages_memory/coverage.lcov":
+          "SF:/a.ts\nend_of_record\n",
+      });
+      const warm = await directoryOf({
+        [`lane-1/lcov/${COMPILE_CACHE_STATE_FILE}`]: "warm\n",
+        [`lane-2/lcov/${COMPILE_CACHE_STATE_FILE}`]: "warm\n",
+      });
+      try {
+        expect((await collectReports(cold)).compileCache).toBe("cold");
+        expect((await collectReports(warm)).compileCache).toBe("warm");
+      } finally {
+        await Deno.remove(cold, { recursive: true });
+        await Deno.remove(warm, { recursive: true });
+      }
+    });
+
+    it("returns the cache cold for a record it cannot read", async () => {
+      // Withholding a warm run's figure from a trend costs the trend a
+      // point; letting a cold run's through moves the line.
+
+      const root = await directoryOf({
+        [`lane-1/lcov/${COMPILE_CACHE_STATE_FILE}`]: "warm\n",
+        [`lane-2/lcov/${COMPILE_CACHE_STATE_FILE}`]: "tepid\n",
+      });
+      try {
+        expect((await collectReports(root)).compileCache).toBe("cold");
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("returns no cache state where no lane opened the cache", async () => {
+      const root = await directoryOf({
+        "lane-1/lcov/sets/workspace-unit/packages_memory/coverage.lcov":
+          "SF:/a.ts\nend_of_record\n",
+      });
+      try {
+        expect((await collectReports(root)).compileCache).toBeUndefined();
       } finally {
         await Deno.remove(root, { recursive: true });
       }
@@ -523,6 +573,40 @@ describe("coverage-report", () => {
         expect(summary).toContain("uncovered lines");
       } finally {
         await Deno.remove(reports, { recursive: true });
+        await Deno.remove(out);
+      }
+    });
+
+    it("publishes whether the compile byte cache was cold", async () => {
+      // The dashboard leaves a cold run out of the repository-wide trend,
+      // and reads that from here.
+
+      const out = await Deno.makeTempFile({ prefix: "coverage-report-" });
+      try {
+        for (const state of ["cold", "warm"]) {
+          const reports = await directoryOf({
+            [`lane-1/lcov/${COMPILE_CACHE_STATE_FILE}`]: `${state}\n`,
+          });
+          try {
+            await report(optionsFor(REPOSITORY, reports, out));
+            expect(JSON.parse(await Deno.readTextFile(out)).compileCacheStates)
+              .toEqual({ "compile-cache": state });
+          } finally {
+            await Deno.remove(reports, { recursive: true });
+          }
+        }
+      } finally {
+        await Deno.remove(out);
+      }
+    });
+
+    it("publishes no cache state where no lane opened the cache", async () => {
+      const out = await Deno.makeTempFile({ prefix: "coverage-report-" });
+      try {
+        await report(optionsFor(REPOSITORY, "/nonexistent-artifacts", out));
+        expect(JSON.parse(await Deno.readTextFile(out)).compileCacheStates)
+          .toBeUndefined();
+      } finally {
         await Deno.remove(out);
       }
     });

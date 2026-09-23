@@ -7,10 +7,14 @@
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import { expect } from "@std/expect";
+import { join, toFileUrl } from "@std/path";
 import { normalize } from "@std/path/posix";
 import { createSession, Identity } from "@commonfabric/identity";
+import { table } from "@commonfabric/memory/sqlite/schema";
+import type { SqliteDbRef } from "@commonfabric/memory/v2";
 import {
   assignSlug,
   resolvePieceAddress,
@@ -19,14 +23,34 @@ import {
 } from "@commonfabric/piece";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
+  computeEntryIdentity,
   entityIdFrom,
   getEntityId,
   Runtime,
   slugIdForSpace,
 } from "@commonfabric/runner";
-import { parseLLMFriendlyLink } from "@commonfabric/runner/shared";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { CfHarnessEngine } from "../src/engine.ts";
+import {
+  createLLMFriendlyLink,
+  parseLLMFriendlyLink,
+} from "@commonfabric/runner/shared";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+  StorageManager,
+} from "@commonfabric/runner/storage/cache.deno";
+import { ExecutorHost } from "@commonfabric/runner/executor/host";
+import {
+  CfHarnessEngine,
+  type CreateHarnessEngineOptions,
+} from "../src/engine.ts";
+import { PatternIndexClient } from "../src/pattern-index/client.ts";
+import {
+  HarnessInteractiveChatService,
+  type HarnessInteractivePromptLoopFactory,
+} from "../src/interactive-chat-service.ts";
+import { openSqliteHarnessChatSessionStore } from "../src/sqlite-session-store.ts";
+import { resolveHandleToken } from "../src/handle-table.ts";
+import type { ReadPieceSourceToolSuccessOutput } from "../src/tools/piece-source.ts";
 import {
   type AssignSlugToolErrorOutput,
   type AssignSlugToolSuccessOutput,
@@ -44,11 +68,12 @@ import type {
 const signer = await Identity.fromPassphrase("cf-harness assign-slug tool");
 
 const DOUBLING_PATTERN_SOURCE = [
-  "import { computed, pattern } from 'commonfabric';",
+  "import { computed, pattern, UI } from 'commonfabric';",
   "interface Input { n: number; }",
   "interface Output { doubled: number; }",
   "export default pattern<Input, Output>(({ n }) => ({",
   "  doubled: computed(() => n * 2),",
+  "  [UI]: <div>{n}</div>,",
   "}));",
   "",
 ].join("\n");
@@ -136,13 +161,167 @@ describe("assign-slug", () => {
     globalThis.fetch = originalFetch;
   });
 
-  function createEngine() {
+  function createEngine(options: CreateHarnessEngineOptions = {}) {
     return new CfHarnessEngine({
       sandboxRuntime: new FakeSandboxRuntime(),
       runId: `assign-slug-test-${crypto.randomUUID()}`,
       fabricSessionFactory: () => Promise.resolve({ pieces }),
+      ...options,
     });
   }
+
+  it("marks a pending served read as not-yet-data and names the same page after its reply arrives", async () => {
+    await runtime.dispose();
+    await storageManager.close();
+    const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+    const reply = Promise.withResolvers<{ rows: { n: number }[] }>();
+    const requested = Promise.withResolvers<void>();
+    let queries = 0;
+    const service = await Identity.fromPassphrase("pending-page-service");
+    const host = new ExecutorHost({
+      server,
+      serviceIdentity: service.did(),
+      ensureSpaceRoots: false,
+      createRuntime: (space) => {
+        const manager = EmulatedStorageManager.connectTo(server, {
+          as: service,
+        });
+        const rpc = stub(manager.open(space), "sqliteQuery", () => {
+          queries++;
+          requested.resolve();
+          return reply.promise;
+        });
+        const serving = new Runtime({
+          apiUrl: new URL("http://toolshed.test"),
+          storageManager: manager,
+          servingPosture: true,
+          experimental: { serverExecution: true },
+        });
+        return Promise.resolve({
+          runtime: serving,
+          dispose: async () => {
+            await serving.dispose();
+            rpc.restore();
+            await manager.close();
+          },
+        });
+      },
+    });
+    storageManager = EmulatedStorageManager.connectTo(server, { as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL("http://toolshed.test"),
+      storageManager,
+    });
+    pieces = new PiecesController(
+      await createSession({
+        identity: signer,
+        spaceName: "pending-served-page",
+      }),
+      runtime,
+    );
+    try {
+      const space = pieces.getSpace();
+      const tx = runtime.edit();
+      const mail = runtime.getCell<SqliteDbRef>(
+        space,
+        "pending-mail",
+        undefined,
+        tx,
+      );
+      mail.set({
+        id: "pending-mailbox",
+        tables: { messages: table({ id: "integer primary key" }) },
+      });
+      expect((await tx.commit()).error).toBeUndefined();
+
+      const resultSchema = {
+        type: "object",
+        properties: { n: { type: "number" }, pending: { type: "boolean" } },
+        required: ["n", "pending"],
+      } as const;
+      const runPersistent = pieces.runPersistent.bind(pieces);
+      const creation = stub(pieces, "runPersistent", async (...args) => {
+        const cell = await runPersistent(...args);
+        const pending = Promise.withResolvers<void>();
+        const cancel = pieces.getResult(cell).asSchema(resultSchema).sink(
+          (value) => {
+            if (value?.pending === true) pending.resolve();
+          },
+        );
+        try {
+          await pending.promise;
+        } finally {
+          cancel();
+        }
+        return cell;
+      });
+      const engine = createEngine();
+      const result = await engine.invokeBuiltinTool("run_pattern", {
+        sourceText: `
+        import { computed, pattern, UI, type SqliteDb } from "commonfabric";
+        export default pattern<{ mail: SqliteDb }, { n: number; pending: boolean }>(({ mail }) => {
+          const read = mail.query<{ n: number }>("SELECT count(*) AS n FROM messages", { scope: "session" });
+          const n = computed(() => read.result?.[0]?.n ?? 0);
+          const pending = computed(() => read.pending === true);
+          return { n, pending, [UI]: <div>{pending ? "Loading" : n}</div> };
+        });
+      `,
+        inputs: {
+          mail: createLLMFriendlyLink(mail.getAsNormalizedFullLink(), space),
+        },
+        resultSchema,
+      }).finally(() => creation.restore());
+      const output = result.output as RunPatternToolSuccessOutput;
+      expect(output.status).toBe("ok");
+      expect(output.value).toMatchObject({ n: 0, pending: true });
+      expect(output.outputConcerns).toContainEqual(
+        expect.objectContaining({ concern: "pending" }),
+      );
+      await requested.promise;
+      expect(queries).toBe(1);
+      const naming = { token: output.resultRef, slug: "mailbox-size" };
+      const refused = await engine.invokeBuiltinTool("assign_slug", naming);
+      expect(refused.output).toMatchObject({
+        status: "error",
+        message: expect.stringContaining("pending"),
+      });
+      expect(engine.getRunState().assignedPieces).toBeUndefined();
+
+      const resultCell = runtime.getCellFromLink(
+        parseLLMFriendlyLink(output.resultRef, space),
+      )
+        .asSchema(resultSchema);
+      const settled = Promise.withResolvers<unknown>();
+      const cancel = resultCell.sink((value) => {
+        if (value?.pending === false) settled.resolve(value);
+      });
+      try {
+        reply.resolve({ rows: [{ n: 1739 }] });
+        expect(await settled.promise).toEqual({ n: 1739, pending: false });
+        const accepted = await engine.invokeBuiltinTool("assign_slug", naming);
+        expect(accepted.output).toMatchObject({
+          status: "ok",
+          slug: "mailbox-size",
+        });
+        expect(await resolvePieceAddress(pieces, "mailbox-size")).toBe(
+          output.pieceId,
+        );
+        expect(engine.getRunState().assignedPieces).toEqual([{
+          slug: "mailbox-size",
+          ref: createLLMFriendlyLink(resultCell.getAsNormalizedFullLink()),
+        }]);
+      } finally {
+        cancel();
+        reply.resolve({ rows: [] });
+      }
+    } finally {
+      reply.resolve({ rows: [] });
+      await host.close();
+      await runtime.dispose();
+      await storageManager.close();
+      await server.close();
+    }
+  });
 
   async function linkDefaultPattern() {
     const defaultRoot = await pieces.create(DEFAULT_PATTERN_SOURCE, {
@@ -166,7 +345,262 @@ describe("assign-slug", () => {
     return output;
   }
 
+  it("remints the last named piece after session restart and lets a bare follow-up revise it", async () => {
+    const root = await Deno.makeTempDir();
+    const url = toFileUrl(join(root, "sessions.sqlite"));
+    let store = await openSqliteHarnessChatSessionStore({ url });
+    let created: RunPatternToolSuccessOutput;
+    const inputs: { name: string; token: string; ref: string }[][] = [];
+    const createPromptLoop: HarnessInteractivePromptLoopFactory = (
+      options,
+    ) => ({
+      runTranscript: async (request) => {
+        const engine = options.engine ?? new CfHarnessEngine(options);
+        inputs.push(engine.getRunState().inputCells ?? []);
+        if (
+          options.taskText === "Make a counter" ||
+          options.taskText === "Make another counter"
+        ) {
+          created = await createPiece(engine);
+          const named = await engine.invokeBuiltinTool("assign_slug", {
+            token: created.resultRef,
+            slug: options.taskText === "Make a counter"
+              ? "my-counter"
+              : "next-counter",
+          });
+          expect(named.output.status).toBe("ok");
+          // Unnamed intermediate results do not become next-turn targets.
+          await createPiece(engine, 99);
+        } else if (options.taskText === "Triple it") {
+          const state = engine.getRunState();
+          expect(state.assignedPieces).toBeUndefined();
+          const input = state.inputCells![0];
+          const entry = resolveHandleToken(state.handleTable!, input.token);
+          expect(entry?.ref).toBe(input.ref);
+          const read = await engine.invokeBuiltinTool("read_piece_source", {
+            token: entry!.ref,
+          });
+          const source = read.output as ReadPieceSourceToolSuccessOutput;
+          expect(source.status).toBe("ok");
+          expect(source.files[0].contents).toBe(DOUBLING_PATTERN_SOURCE);
+          const revised = await engine.invokeBuiltinTool("revise_piece", {
+            token: entry!.ref,
+            sourceText: DOUBLING_PATTERN_SOURCE.replace("n * 2", "n * 3"),
+            expectedRevisionId: source.sourceRevisionId,
+          });
+          expect(revised.output.status).toBe("ok");
+        } else if (options.taskText === "Fail after naming") {
+          const other = await createPiece(engine, 3);
+          await engine.invokeBuiltinTool("assign_slug", {
+            token: other.resultRef,
+            slug: "unfinished-counter",
+          });
+          throw new Error("fixture interrupted before session commit");
+        }
+        return {
+          model: "gpt-test",
+          modelTurns: 1,
+          finalAssistantText: "Done",
+          transcript: [...request.transcript, {
+            role: "assistant",
+            content: "Done",
+          }],
+          runState: engine.getRunState(),
+        };
+      },
+    });
+    const serviceOptions = () => ({
+      sessionStore: store,
+      createPromptLoop,
+      basePromptLoopOptions: {
+        sandboxRuntime: new FakeSandboxRuntime(),
+        cfcEnforcementMode: "disabled" as const,
+        fabricSessionFactory: () => Promise.resolve({ pieces }),
+      },
+    });
+    try {
+      let service = new HarnessInteractiveChatService(serviceOptions());
+      await service.startSession("start", {
+        sessionId: "follow-up",
+        model: "gpt-test",
+        workspace: { hostPath: "/workspace" },
+      });
+      await service.startTurn("first", {
+        sessionId: "follow-up",
+        turnId: "first",
+        input: { text: "Make a counter" },
+      });
+      await service.waitForTurn("follow-up", "first");
+      expect(store.getTurn("follow-up", "first")?.turn.status).toBe(
+        "completed",
+      );
+      const checkpoint = store.getSession("follow-up")!.assignedPieces!;
+      expect(checkpoint).toEqual([{
+        slug: "my-counter",
+        ref: createLLMFriendlyLink(
+          parseLLMFriendlyLink(created!.resultRef, pieces.getSpace()),
+        ),
+      }]);
+      expect(inputs[0]).toEqual([]);
+      store.close();
+      store = await openSqliteHarnessChatSessionStore({ url });
+      service = new HarnessInteractiveChatService(serviceOptions());
+      await service.initializeFromStore();
+      await service.startTurn("second", {
+        sessionId: "follow-up",
+        turnId: "second",
+        input: { text: "Triple it" },
+      });
+      await service.waitForTurn("follow-up", "second");
+      expect(store.getTurn("follow-up", "second")?.turn.status).toBe(
+        "completed",
+      );
+      expect(inputs[1]).toEqual([
+        expect.objectContaining({ name: "my-counter", ref: checkpoint[0].ref }),
+      ]);
+      expect(await (await pieces.get(created!.pieceId)).result.get())
+        .toMatchObject({ doubled: 63 });
+      expect(await resolvePieceAddress(pieces, "my-counter")).toBe(
+        created!.pieceId,
+      );
+
+      await service.startTurn("failed", {
+        sessionId: "follow-up",
+        turnId: "failed",
+        input: { text: "Fail after naming" },
+      });
+      await service.waitForTurn("follow-up", "failed");
+      expect(store.getTurn("follow-up", "failed")?.turn.status).toBe("failed");
+      expect(store.getSession("follow-up")?.assignedPieces).toEqual(checkpoint);
+
+      const attached = await createPiece(createEngine(), 5);
+      await service.startTurn("attached", {
+        sessionId: "follow-up",
+        turnId: "attached",
+        input: { text: "Use this counter" },
+        inputCells: [{ name: "attached", ref: attached.resultRef }],
+      });
+      await service.waitForTurn("follow-up", "attached");
+      expect(inputs[3]).toEqual([
+        expect.objectContaining({ name: "attached", ref: attached.resultRef }),
+      ]);
+
+      expect(store.getSession("follow-up")?.assignedPieces).toEqual([]);
+
+      await service.startTurn("named-again", {
+        sessionId: "follow-up",
+        turnId: "named-again",
+        input: { text: "Make another counter" },
+      });
+      await service.waitForTurn("follow-up", "named-again");
+      expect(store.getSession("follow-up")?.assignedPieces).toHaveLength(1);
+      await service.startTurn("empty", {
+        sessionId: "follow-up",
+        turnId: "empty",
+        input: { text: "Start without an attached piece" },
+        inputCells: [],
+      });
+      await service.waitForTurn("follow-up", "empty");
+      expect(inputs[5]).toEqual([]);
+      expect(store.getSession("follow-up")?.assignedPieces).toEqual([]);
+      await service.startTurn("after-empty", {
+        sessionId: "follow-up",
+        turnId: "after-empty",
+        input: { text: "Keep the attachment list empty" },
+      });
+      await service.waitForTurn("follow-up", "after-empty");
+      expect(inputs[6]).toEqual([]);
+    } finally {
+      store.close();
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   describe("assignSlugTool", () => {
+    it("preserves an operational read failure without registering or naming the piece", async () => {
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const created = await createPiece(engine);
+      const unreadable = stub(pieces, "getResult", () => {
+        throw new Error("private result-read diagnostic");
+      });
+      try {
+        await expect(engine.invokeBuiltinTool("assign_slug", {
+          token: created.resultRef,
+          slug: "unverified-report",
+        })).rejects.toThrow("private result-read diagnostic");
+        expect(engine.getRunState().failureRecords).toEqual([
+          expect.objectContaining({
+            source: "run_error",
+            toolId: "assign_slug",
+            detail: "private result-read diagnostic",
+          }),
+        ]);
+        expect(engine.getRunState().assignedPieces).toBeUndefined();
+      } finally {
+        unreadable.restore();
+      }
+      expect(await pieces.getRegisteredPieces()).toEqual([]);
+      await expect(resolvePieceAddress(pieces, "unverified-report"))
+        .rejects.toMatchObject({ code: "missing" });
+    });
+
+    it("refuses a data-only result before registering or naming it", async () => {
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const created = await engine.invokeBuiltinTool("run_pattern", {
+        sourceText: DOUBLING_PATTERN_SOURCE.replace(
+          "  [UI]: <div>{n}</div>,\n",
+          "",
+        ),
+        inputs: { n: 21 },
+      });
+      const result = await engine.invokeBuiltinTool("assign_slug", {
+        token: (created.output as RunPatternToolSuccessOutput).resultRef,
+        slug: "data-only-probe",
+      });
+      expect(result.output).toMatchObject({ status: "error" });
+      expect((result.output as AssignSlugToolErrorOutput).message).toContain(
+        "confirm a UI",
+      );
+      expect(await pieces.getRegisteredPieces()).toEqual([]);
+    });
+
+    it("refuses a pending result and names the same piece after its read settles", async () => {
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const created = await engine.invokeBuiltinTool("run_pattern", {
+        sourceText: [
+          'import { pattern, UI } from "commonfabric";',
+          "export default pattern<{ pending: boolean }>(({ pending }) => ({",
+          "  pending, [UI]: <div>Report</div>,",
+          "}));",
+        ].join("\n"),
+        inputs: { pending: true },
+      });
+      const output = created.output as RunPatternToolSuccessOutput;
+      const assign = () =>
+        engine.invokeBuiltinTool("assign_slug", {
+          token: output.resultRef,
+          slug: "settled-report",
+        });
+      const refused = await assign();
+      expect(refused.output).toMatchObject({ status: "error" });
+      expect((refused.output as AssignSlugToolErrorOutput).message).toContain(
+        "pending",
+      );
+      expect(await pieces.getRegisteredPieces()).toEqual([]);
+      const piece = await pieces.get(output.pieceId);
+      await piece.input.set(false, ["pending"]);
+      await runtime.idle();
+      expect((await assign()).output).toMatchObject({
+        status: "ok",
+        slug: "settled-report",
+      });
+      expect((await pieces.getRegisteredPieces()).map((piece) => piece.id))
+        .toEqual([output.pieceId]);
+    });
+
     it("registers the referenced piece and points the slug at it", async () => {
       await linkDefaultPattern();
       const engine = createEngine();
@@ -179,6 +613,8 @@ describe("assign-slug", () => {
       const output = result.output as AssignSlugToolSuccessOutput;
       expect(output.status).toBe("ok");
       expect(output.slug).toBe("doubling-report");
+      expect(output.pieceId).toBe(created.pieceId);
+      expect(created.patternPublication).toBeUndefined();
       // The URL is the session's API URL, the space name, and the slug.
       expect(output.url).toContain("http://toolshed.test/");
       expect(output.url).toContain("/doubling-report");
@@ -191,12 +627,126 @@ describe("assign-slug", () => {
       );
     });
 
-    it("refuses a slug that already names another piece, leaving the address where it pointed", async () => {
+    it("joins the slug artifact to its published attempt across revision and an unrelated probe", async () => {
+      await linkDefaultPattern();
+      const artifactRoot = await Deno.makeTempDir();
+      const published: string[] = [];
+      const client = new PatternIndexClient({
+        baseUrl: "https://index.test",
+        signer,
+        fetchFn: (url, init) => {
+          const body = JSON.parse(String(init?.body));
+          if (String(url).endsWith("/publishPattern")) {
+            published.push(body.patternId);
+            return Promise.resolve(Response.json({
+              patternId: body.patternId,
+              created: true,
+            }));
+          }
+          return Promise.resolve(Response.json({ ok: true }));
+        },
+      });
+      try {
+        const publishingEngine = createEngine({
+          artifactRoot,
+          patternIndexClientFactory: () => Promise.resolve(client),
+        });
+        const created = await publishingEngine.invokeBuiltinTool(
+          "run_pattern",
+          {
+            sourceText: DOUBLING_PATTERN_SOURCE,
+            inputs: { n: 21 },
+            description: "Doubles a number",
+          },
+        );
+        const createdArtifact = JSON.parse(
+          await Deno.readTextFile(created.resultRef.artifactPath!),
+        ) as RunPatternToolSuccessOutput;
+        expect(createdArtifact.status).toBe("ok");
+        const publishedId = computeEntryIdentity("/main.tsx", [{
+          name: "/main.tsx",
+          contents: DOUBLING_PATTERN_SOURCE,
+        }]);
+        expect(createdArtifact.patternPublication).toMatchObject({
+          patternId: publishedId,
+          status: "queued",
+        });
+        expect(published).toEqual([]);
+        await publishingEngine.flushPatternIndexLedger();
+        expect(published).toEqual([publishedId]);
+
+        // Separate engines share the fabric but not a publication ledger,
+        // as a child that builds a piece and a parent that names it do.
+        const namingEngine = createEngine({
+          artifactRoot,
+          patternIndexClientFactory: () => Promise.resolve(client),
+        });
+        const revisedSource = DOUBLING_PATTERN_SOURCE.replace("n * 2", "n * 3");
+        const revised = await namingEngine.invokeBuiltinTool("revise_piece", {
+          token: createdArtifact.resultRef,
+          sourceText: revisedSource,
+        });
+        expect(revised.output.status).toBe("ok");
+        const source =
+          (await namingEngine.invokeBuiltinTool("read_piece_source", {
+            token: createdArtifact.resultRef,
+          })).output as ReadPieceSourceToolSuccessOutput;
+        expect(source.files.map((file) => file.contents)).toContain(
+          revisedSource,
+        );
+        await namingEngine.flushPatternIndexLedger();
+        expect(published).toEqual([publishedId]);
+
+        const probe = await namingEngine.invokeBuiltinTool("run_pattern", {
+          sourceText: DOUBLING_PATTERN_SOURCE.replace("n * 2", "n * 7"),
+          inputs: { n: 1 },
+          description: "An unrelated probe",
+        });
+        await namingEngine.flushPatternIndexLedger();
+        const probeArtifact = JSON.parse(
+          await Deno.readTextFile(probe.resultRef.artifactPath!),
+        ) as RunPatternToolSuccessOutput;
+        expect(probeArtifact.status).toBe("ok");
+        expect(published).toEqual([
+          publishedId,
+          probeArtifact.patternPublication?.patternId,
+        ]);
+        expect(probeArtifact.patternPublication?.patternId).not.toBe(
+          publishedId,
+        );
+
+        for (const _ of ["first assignment", "same-piece assignment"]) {
+          const named = await namingEngine.invokeBuiltinTool("assign_slug", {
+            token: createdArtifact.resultRef,
+            slug: "doubling-report",
+          });
+          const slugArtifact = JSON.parse(
+            await Deno.readTextFile(named.resultRef.artifactPath!),
+          ) as AssignSlugToolSuccessOutput;
+          expect(slugArtifact.status).toBe("ok");
+          expect(slugArtifact.slug).toBe("doubling-report");
+          const attempts = [createdArtifact, probeArtifact].filter(
+            (attempt) => attempt.pieceId === slugArtifact.pieceId,
+          );
+          expect(attempts.map((attempt) => attempt.outputId)).toEqual([
+            createdArtifact.outputId,
+          ]);
+          expect(attempts[0].patternPublication?.patternId).toBe(publishedId);
+        }
+        expect(
+          JSON.parse(await Deno.readTextFile(created.resultRef.artifactPath!)),
+        )
+          .toEqual(createdArtifact);
+      } finally {
+        await Deno.remove(artifactRoot, { recursive: true });
+      }
+    });
+
+    it("names the piece under the next counter when the slug already names another piece", async () => {
       // A second call naming the same slug would repoint an address a person
-      // already opens. The refusal is a pre-flight one, so the attempt costs
-      // a message and nothing else — and it is the one that names which kind
-      // of address is in the way, where the assignment's own refusal
-      // underneath would only say the name is taken.
+      // already opens. The name is passed over rather than refused: the piece
+      // gets the word with a counter appended, and the receipt says so, which
+      // is where the caller reads the address it got.
       await linkDefaultPattern();
       const engine = createEngine();
       const first = await createPiece(engine, 21);
@@ -211,17 +761,67 @@ describe("assign-slug", () => {
         token: second.resultRef,
         slug: "doubling-report",
       });
-      const output = result.output as AssignSlugToolErrorOutput;
-      expect(output.status).toBe("error");
-      expect(output.message).toContain("doubling-report");
-      // The address still names the piece it named before, so the refusal
-      // protected the name rather than merely reporting on it.
+      const output = result.output as AssignSlugToolSuccessOutput;
+      expect(output.status).toBe("ok");
+      expect(output.slug).toBe("doubling-report-2");
+      // The URL carries the name assigned, not the one asked for.
+      expect(output.url).toContain("http://toolshed.test/");
+      expect(output.url?.endsWith("/doubling-report-2")).toBe(true);
+      // The address still names the piece it named before, so the counter
+      // protected the name rather than taking it.
       expect(await resolvePieceAddress(pieces, "doubling-report")).toBe(
         first.pieceId,
       );
+      expect(await resolvePieceAddress(pieces, "doubling-report-2")).toBe(
+        second.pieceId,
+      );
     });
 
-    it("refuses a slug that names a collection, leaving the address where it pointed", async () => {
+    it("counts past every taken name, and answers ok for a counter already naming this piece", async () => {
+      // Three pieces asking for one word end up at the word, -2 and -3. The
+      // counter is derived from the requested word each time rather than
+      // remembered, so a fourth call from the third piece lands on the name
+      // it already holds and says so, the way the bare word does.
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const pieces3 = [
+        await createPiece(engine, 21),
+        await createPiece(engine, 22),
+        await createPiece(engine, 23),
+      ];
+      const slugs: string[] = [];
+      for (const piece of pieces3) {
+        const result = await engine.invokeBuiltinTool("assign_slug", {
+          token: piece.resultRef,
+          slug: "doubling-report",
+        });
+        slugs.push((result.output as AssignSlugToolSuccessOutput).slug);
+      }
+      expect(slugs).toEqual([
+        "doubling-report",
+        "doubling-report-2",
+        "doubling-report-3",
+      ]);
+      expect(await resolvePieceAddress(pieces, "doubling-report-3")).toBe(
+        pieces3[2].pieceId,
+      );
+
+      const again = await engine.invokeBuiltinTool("assign_slug", {
+        token: pieces3[2].resultRef,
+        slug: "doubling-report",
+      });
+      expect((again.output as AssignSlugToolSuccessOutput).slug).toBe(
+        "doubling-report-3",
+      );
+      await expect(resolvePieceAddress(pieces, "doubling-report-4")).rejects
+        .toThrow();
+      const registered = await pieces.getRegisteredPieces();
+      expect(registered.map((piece) => piece.id)).toEqual(
+        pieces3.map((piece) => piece.pieceId),
+      );
+    });
+
+    it("passes over a slug that names a collection, leaving the address where it pointed", async () => {
       // A slug pointing at a cell inside a piece names a collection, which is
       // an address a person opens as much as a piece is. Reading that as an
       // operational failure would report a positive statement about what the
@@ -241,20 +841,18 @@ describe("assign-slug", () => {
         token: taking.resultRef,
         slug: "doubling-report",
       });
-      const output = result.output as AssignSlugToolErrorOutput;
-      expect(output.status).toBe("error");
-      expect(output.message).toContain("already names a collection");
-      expect(output.message).not.toContain("could not establish");
-      // The refusal names the caller's own slug and nothing behind it, the
-      // way the refusal for a name already taken by a piece does: the address
-      // the name resolves to stays trusted-side.
-      expect(output.message).not.toContain(held.pieceId);
-      // The name still points into the piece it pointed into, so the refusal
-      // protected the address rather than merely reporting on it.
+      const output = result.output as AssignSlugToolSuccessOutput;
+      expect(output.status).toBe("ok");
+      expect(output.slug).toBe("doubling-report-2");
+      // The name still points into the piece it pointed into, so the counter
+      // protected the address rather than taking it.
       expect(await resolveSlugTarget(pieces, "doubling-report")).toEqual({
         piece: held.pieceId,
         pathInside: ["doubled"],
       });
+      expect(await resolvePieceAddress(pieces, "doubling-report-2")).toBe(
+        taking.pieceId,
+      );
     });
 
     it("takes a name whose document points at no piece, which this tool calls free", async () => {
@@ -287,19 +885,20 @@ describe("assign-slug", () => {
       );
     });
 
-    it("gives a free name to the first of two calls and refuses the second", async () => {
+    it("gives a free name to one of two calls and the next counter to the other", async () => {
       // Two calls for one free name, started together and settling one after
       // the other. What this asserts is the outcome — exactly one takes the
-      // name — and nothing about the interleaving: the assertions hold
-      // whether the two overlapped or ran in sequence. Forcing over the read
-      // instead of carrying it into the write would let the loser overwrite
-      // the winner and report success, which is what the assertions catch.
+      // name and the other takes the counter — and nothing about the
+      // interleaving: the assertions hold whether the two overlapped or ran
+      // in sequence. Forcing over the read instead of carrying it into the
+      // write would let the loser overwrite the winner and report success,
+      // which is what the assertions catch.
       //
       // The racing path is the library's, pinned over two sessions where the
       // losing replica is provably behind: `packages/piece/test/slug.test.ts`,
       // under "the read a refusal claims on".
       //
-      // The two tokens name different pieces, so the address the name ends
+      // The two tokens name different pieces, so the address each name ends
       // up holding says which call won rather than being true either way.
       await linkDefaultPattern();
       const engine = createEngine();
@@ -318,20 +917,21 @@ describe("assign-slug", () => {
         }),
       ]);
       const outputs = results.map((result) =>
-        result.output as AssignSlugToolSuccessOutput | AssignSlugToolErrorOutput
+        result.output as AssignSlugToolSuccessOutput
       );
 
-      expect(outputs.filter((output) => output.status === "ok")).toHaveLength(
-        1,
-      );
-      const loser = outputs.find((output) => output.status === "error") as
-        | AssignSlugToolErrorOutput
-        | undefined;
-      expect(loser?.message).toContain("doubling-report");
-      expect(loser?.message).toContain("Choose another slug");
-      const winner = outputs[0].status === "ok" ? first : second;
+      expect(outputs.map((output) => output.status)).toEqual(["ok", "ok"]);
+      expect(outputs.map((output) => output.slug).sort()).toEqual([
+        "doubling-report",
+        "doubling-report-2",
+      ]);
+      const winner = outputs[0].slug === "doubling-report" ? first : second;
+      const loser = winner === first ? second : first;
       expect(await resolvePieceAddress(pieces, "doubling-report")).toBe(
         winner.pieceId,
+      );
+      expect(await resolvePieceAddress(pieces, "doubling-report-2")).toBe(
+        loser.pieceId,
       );
     });
 
@@ -425,11 +1025,44 @@ describe("assign-slug", () => {
       expect(output.message).toContain("space root unavailable");
     });
 
+    it("answers ok on the bare word when the race it lost was to a call naming this same piece", async () => {
+      // Two calls for one piece under one word, one landing between the
+      // other's read and write. The loser's write is refused underneath, and
+      // what refused it is its own piece, so advancing to a counter would
+      // give the piece a second name it never asked for. The refused name is
+      // read again instead, and the read says the request is already true.
+      // The registry join sits between the read and the write, which is
+      // where the winning call is staged.
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const created = await createPiece(engine);
+      const cell = pieces.runtime.getCellFromLink(
+        parseLLMFriendlyLink(created.resultRef, pieces.getSpace()),
+      );
+      await cell.sync();
+      const originalAdd = pieces.add.bind(pieces);
+      pieces.add = async (cells) => {
+        await originalAdd(cells);
+        await setSlugLink(pieces, "doubling-report", cell);
+      };
+      const result = await engine.invokeBuiltinTool("assign_slug", {
+        token: created.resultRef,
+        slug: "doubling-report",
+      });
+      pieces.add = originalAdd;
+
+      const output = result.output as AssignSlugToolSuccessOutput;
+      expect(output.status).toBe("ok");
+      expect(output.slug).toBe("doubling-report");
+      await expect(resolvePieceAddress(pieces, "doubling-report-2")).rejects
+        .toThrow();
+    });
+
     it("reports a name released between the availability read and the write as one to retry", async () => {
       // The tool judges a name free, and the name comes to point nowhere
       // before the write lands. That is not the same outcome as a name
       // somebody else took: nobody holds it, so the answer is to read it
-      // again rather than to choose another name. The registry join sits
+      // again rather than to move on to a counter. The registry join sits
       // between the two, which is where the release is staged.
       await linkDefaultPattern();
       const engine = createEngine();
@@ -473,9 +1106,6 @@ describe("assign-slug", () => {
       // piece is listed rather than that nothing happened.
       expect(output.message).toContain("the piece is listed");
       expect(output.message).not.toContain("Nothing was assigned");
-      // Told to retry rather than to choose another name, which is the
-      // answer a name somebody else holds gets.
-      expect(output.message).not.toContain("Choose another slug");
     });
 
     it("does not list the piece twice when retried after a failed assignment", async () => {
@@ -561,7 +1191,7 @@ describe("assign-slug", () => {
 
       // The slug document's own cell, so only its sync fails and every other
       // cell the call reaches behaves normally.
-      const slugEntity = JSON.stringify(
+      const slugEntity = String(
         entityIdFrom(slugIdForSpace(pieces.getSpace(), "doubling-report")),
       );
       const originalGetCell = runtime.getCellFromEntityId.bind(runtime);
@@ -570,7 +1200,7 @@ describe("assign-slug", () => {
         ...args: Parameters<Runtime["getCellFromEntityId"]>
       ) => {
         const cell = originalGetCell(...args);
-        if (JSON.stringify(args[1]) !== slugEntity) {
+        if (String(args[1]) !== slugEntity) {
           return cell;
         }
         (cell as unknown as { sync: () => Promise<unknown> }).sync = () => {
@@ -595,6 +1225,91 @@ describe("assign-slug", () => {
       expect(output.message).toContain("doubling-report");
       expect(output.message).not.toContain("already names another piece");
       expect(await pieces.getRegisteredPieces()).toEqual([]);
+    });
+
+    it("says the piece is listed when a name passed over after the join leaves the next one unanswerable", async () => {
+      // The registry join has committed, the bare word is then found held
+      // by another piece at the write, and the counter's first candidate
+      // cannot be read at all. The refusal reports what the call left: a
+      // listed piece with no name, not "nothing was assigned" — a caller
+      // told the latter would never look for the piece it listed.
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const created = await createPiece(engine, 21);
+      const other = await createPiece(engine, 22);
+      const otherCell = pieces.runtime.getCellFromLink(
+        parseLLMFriendlyLink(other.resultRef, pieces.getSpace()),
+      );
+      await otherCell.sync();
+
+      // Only the counter's slug document fails to sync; the bare word and
+      // everything else the call reaches behave normally.
+      const counterEntity = String(
+        entityIdFrom(slugIdForSpace(pieces.getSpace(), "doubling-report-2")),
+      );
+      const originalGetCell = runtime.getCellFromEntityId.bind(runtime);
+      runtime.getCellFromEntityId = ((
+        ...args: Parameters<Runtime["getCellFromEntityId"]>
+      ) => {
+        const cell = originalGetCell(...args);
+        if (String(args[1]) !== counterEntity) {
+          return cell;
+        }
+        (cell as unknown as { sync: () => Promise<unknown> }).sync = () =>
+          Promise.reject(new Error("storage unavailable"));
+        return cell;
+      }) as Runtime["getCellFromEntityId"];
+      const originalAdd = pieces.add.bind(pieces);
+      pieces.add = async (cells) => {
+        await originalAdd(cells);
+        // The join has landed; the bare word now belongs to another piece.
+        await setSlugLink(pieces, "doubling-report", otherCell);
+      };
+      const result = await engine.invokeBuiltinTool("assign_slug", {
+        token: created.resultRef,
+        slug: "doubling-report",
+      });
+      pieces.add = originalAdd;
+      runtime.getCellFromEntityId = originalGetCell;
+
+      const output = result.output as AssignSlugToolErrorOutput;
+      expect(output.status).toBe("error");
+      expect(output.message).toContain("could not establish");
+      expect(output.message).toContain("doubling-report-2");
+      expect(output.message).toContain("the piece is listed");
+      expect(output.message).not.toContain("Nothing was assigned");
+      expect(await resolvePieceAddress(pieces, "doubling-report")).toBe(
+        other.pieceId,
+      );
+      const registered = await pieces.getRegisteredPieces();
+      expect(registered.map((piece) => piece.id)).toEqual([created.pieceId]);
+    });
+
+    it("refuses a taken word too long for any counter to fit, naming nothing", async () => {
+      // The one collision that is refused: the requested word already sits
+      // at the slug length limit, so no counter can be appended and the tool
+      // has no free name to derive. Saying so beats inventing a shorter one.
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const first = await createPiece(engine, 21);
+      const second = await createPiece(engine, 22);
+      const longest = "a".repeat(80);
+      const held = await engine.invokeBuiltinTool("assign_slug", {
+        token: first.resultRef,
+        slug: longest,
+      });
+      expect((held.output as AssignSlugToolSuccessOutput).slug).toBe(longest);
+
+      const result = await engine.invokeBuiltinTool("assign_slug", {
+        token: second.resultRef,
+        slug: longest,
+      });
+      const output = result.output as AssignSlugToolErrorOutput;
+      expect(output.status).toBe("error");
+      expect(output.message).toContain("no free slug can be derived");
+      expect(await resolvePieceAddress(pieces, longest)).toBe(first.pieceId);
+      const registered = await pieces.getRegisteredPieces();
+      expect(registered.map((piece) => piece.id)).toEqual([first.pieceId]);
     });
 
     it("returns the slug without a URL when the session's space is configured by DID", async () => {

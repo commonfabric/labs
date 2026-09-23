@@ -1,5 +1,9 @@
 import ts from "typescript";
-import { deepFreeze, hashStringOf } from "@commonfabric/data-model";
+import {
+  deepFreeze,
+  type FabricValue,
+  hashStringOf,
+} from "@commonfabric/data-model";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { TransformationContext, Transformer } from "../core/mod.ts";
 import type { CfcPolicyCompilerManifestV1 } from "../core/runtime-contract.ts";
@@ -23,15 +27,15 @@ type AuthoringImports = {
 type AuthoredRule = {
   readonly name: string;
   readonly preCondition: {
-    readonly confidentiality: readonly unknown[];
-    readonly integrity: readonly unknown[];
+    readonly confidentiality: readonly FabricValue[];
+    readonly integrity: readonly FabricValue[];
   };
   readonly preConfScope?: "targetClause" | "anywhere";
   readonly postCondition: {
-    readonly confidentiality: readonly unknown[];
-    readonly integrity: readonly unknown[];
+    readonly confidentiality: readonly FabricValue[];
+    readonly integrity: readonly FabricValue[];
   };
-  readonly guard?: { readonly policyState: readonly unknown[] };
+  readonly guard?: { readonly policyState: readonly FabricValue[] };
 };
 
 class StaticAuthoringError extends Error {
@@ -65,7 +69,7 @@ const propertyName = (node: ts.PropertyName): string | undefined => {
 const evaluateStatic = (
   input: ts.Expression,
   imports: AuthoringImports,
-): unknown => {
+): FabricValue => {
   const node = unwrapExpression(input);
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     return node.text;
@@ -88,7 +92,7 @@ const evaluateStatic = (
   }
 
   if (ts.isObjectLiteralExpression(node)) {
-    const result: Record<string, unknown> = {};
+    const result: Record<string, FabricValue> = {};
     for (const property of node.properties) {
       if (!ts.isPropertyAssignment(property)) {
         throw new StaticAuthoringError(
@@ -228,7 +232,7 @@ const containsThisPolicy = (value: unknown): boolean => {
 
 const lowerRule = (
   symbol: string,
-  value: unknown,
+  value: FabricValue,
   node: ts.Node,
 ): AuthoredRule => {
   if (!isObjectNotArray(value)) {
@@ -375,7 +379,7 @@ const lowerRule = (
       : { preConfScope: value.preConfScope }),
     postCondition: { confidentiality: postConfidentiality, integrity: [] },
     ...(guard === undefined ? {} : { guard }),
-  } as AuthoredRule;
+  };
 };
 
 const collectImports = (sourceFile: ts.SourceFile): AuthoringImports => {

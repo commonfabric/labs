@@ -57,6 +57,30 @@ describe("canonical", () => {
   const digestOf = (traces: CfcDereferenceTrace[]) =>
     preparedDigestFor(baseInput({ dereferenceTraces: traces }));
 
+  it("preserves literal value field paths in initialization permissions", () => {
+    const inputAt = (path: string[]) =>
+      baseInput({
+        writePolicyInputs: [{
+          kind: "initialization",
+          mode: "default",
+          target: address("initialized", ...path),
+          value: [],
+        }],
+      });
+    for (const path of [["value"], ["value", "name"]]) {
+      const input = inputAt(path);
+      expect(canonicalizePreparedDigestInput(input).writePolicyInputs[0])
+        .toEqual(input.writePolicyInputs[0]);
+      expect(
+        canonicalizePreparedDigestInput(canonicalizePreparedDigestInput(input))
+          .writePolicyInputs,
+      ).toEqual(input.writePolicyInputs);
+      expect(preparedDigestFor(input)).not.toBe(
+        preparedDigestFor(inputAt(path.slice(1))),
+      );
+    }
+  });
+
   it("preserves hash-tiebreak order and value binding across mutable policy inputs", () => {
     const inputs = Array.from({ length: 40 }, (_, index) => ({
       kind: "custom" as const,
@@ -79,6 +103,34 @@ describe("canonical", () => {
       expected(),
     );
     expect(preparedDigestFor(input)).not.toBe(before);
+  });
+
+  it("orders external observations with the same source by their content", () => {
+    const observation = (content: string) => ({
+      source: address("external"),
+      flow: { confidentiality: [content], integrity: [] },
+      consumed: { confidentiality: [], integrity: [] },
+      labeledSpaces: [],
+      sources: [],
+    });
+    const first = observation("first");
+    const second = observation("second");
+
+    expect(preparedDigestFor(baseInput({
+      externalContentObservations: [first, second],
+    }))).toBe(preparedDigestFor(baseInput({
+      externalContentObservations: [second, first],
+    })));
+    expect(
+      canonicalizePreparedDigestInput(baseInput({
+        externalContentObservations: [first, second],
+      })).externalContentObservations,
+    ).toHaveLength(2);
+    expect(preparedDigestFor(baseInput({
+      externalContentObservations: [first, second],
+    }))).not.toBe(preparedDigestFor(baseInput({
+      externalContentObservations: [first],
+    })));
   });
 
   describe("dereference traces in the prepared digest", () => {

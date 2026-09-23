@@ -1,5 +1,9 @@
 import { assertEquals } from "@std/assert";
 import { createSession, Identity } from "@commonfabric/identity";
+import {
+  getServerExecutionConfig,
+  setServerExecutionConfig,
+} from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -3102,3 +3106,481 @@ Deno.test("sub-pattern binding alias carries the parent slot's declared scope on
     await storageManager.close();
   }
 });
+
+for (const recordScope of ["space", "user"] as const) {
+  Deno.test(`child reads a ${recordScope}-scoped cell passed into a value-scoped argument slot`, async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    const tx = runtime.edit();
+
+    try {
+      const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+
+      const recordBase = runtime.getCell<{ status: string }>(
+        space,
+        `value-scoped argument slot ${recordScope} record`,
+        undefined,
+        tx,
+      );
+      const record = createCell<{ status: string }>(
+        runtime,
+        { ...recordBase.getAsNormalizedFullLink(), scope: recordScope },
+        tx,
+      );
+      record.set({ status: "done" });
+
+      // What `Writable<PerUser<Run>>` emits: the scope sits on the value,
+      // beside a plain `asCell` entry.
+      const runSchema = {
+        type: "object",
+        properties: { status: { type: "string" } },
+        asCell: ["cell"],
+        scope: "user",
+      } as const;
+
+      const readStatus = lift(
+        ({ run }: { run: Cell<{ status?: string }> }) =>
+          run.get()?.status ?? "missing",
+        {
+          type: "object",
+          properties: { run: runSchema },
+          required: ["run"],
+        },
+        { type: "string" },
+      );
+
+      const Child = pattern<{ run: Cell<{ status: string }> }>(
+        ({ run }) => ({ status: readStatus({ run }) }),
+        {
+          type: "object",
+          properties: { run: runSchema },
+          required: ["run"],
+        },
+      );
+
+      const Root = pattern<{ record: Cell<{ status: string }> }>(
+        ({ record }) => ({ child: Child({ run: record }) }),
+        {
+          type: "object",
+          properties: {
+            record: {
+              type: "object",
+              properties: { status: { type: "string" } },
+              asCell: ["cell"],
+            },
+          },
+          required: ["record"],
+        },
+      );
+
+      const resultCell = runtime.getCell(
+        space,
+        `value-scoped argument slot ${recordScope} result`,
+        undefined,
+        tx,
+      );
+      const result = runtime.run(tx, Root, { record }, resultCell);
+      runtime.prepareTxForCommit(tx);
+      await tx.commit();
+      await runtime.idle();
+      await runtime.storageManager.synced();
+      await result.pull();
+
+      assertEquals(
+        result.key("child").key("status").get() as unknown,
+        "done",
+      );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+}
+
+Deno.test("child reads a plain value passed into a value-scoped argument slot from the scoped instance", async () => {
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const tx = runtime.edit();
+
+  try {
+    const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+
+    const runSchema = {
+      type: "object",
+      properties: { status: { type: "string" } },
+      asCell: ["cell"],
+      scope: "user",
+    } as const;
+
+    const readStatus = lift(
+      ({ run }: { run: Cell<{ status?: string }> }) =>
+        run.get()?.status ?? "missing",
+      {
+        type: "object",
+        properties: { run: runSchema },
+        required: ["run"],
+      },
+      { type: "string" },
+    );
+
+    const Child = pattern<{ run: Cell<{ status: string }> }>(
+      ({ run }) => ({ status: readStatus({ run }) }),
+      {
+        type: "object",
+        properties: { run: runSchema },
+        required: ["run"],
+      },
+    );
+
+    const resultCell = runtime.getCell(
+      space,
+      "value-scoped argument slot plain value result",
+      undefined,
+      tx,
+    );
+    const result = runtime.run(
+      tx,
+      Child,
+      { run: { status: "done" } } as never,
+      resultCell,
+    );
+    runtime.prepareTxForCommit(tx);
+    await tx.commit();
+    await runtime.idle();
+    await runtime.storageManager.synced();
+    await result.pull();
+
+    assertEquals(result.key("status").get() as unknown, "done");
+
+    // The content lives in the user instance; the base slot redirects to it.
+    const argument = runtime.getCellFromLink(getMetaLink(result, "argument")!);
+    const baseSlot = createCell<{ run: unknown }>(
+      runtime,
+      { ...argument.getAsNormalizedFullLink(), schema: undefined },
+    ).key("run");
+    assertEquals(parseLink(baseSlot.getRaw(), baseSlot)?.scope, "user");
+    const userInstance = createCell<{ status: string }>(
+      runtime,
+      {
+        ...argument.getAsNormalizedFullLink(),
+        path: ["run"],
+        schema: undefined,
+        scope: "user",
+      },
+    );
+    assertEquals(userInstance.getRaw(), { status: "done" });
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+Deno.test("a write through a value-scoped slot's handle lands in the passed cell's own instance", async () => {
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const tx = runtime.edit();
+
+  try {
+    const { pattern } = createTrustedBuilder(runtime).commonfabric;
+    const record = runtime.getCell<{ status: string }>(
+      space,
+      "value-scoped slot write-back record",
+      undefined,
+      tx,
+    );
+    record.set({ status: "done" });
+
+    const runSchema = {
+      type: "object",
+      properties: { status: { type: "string" } },
+      asCell: ["cell"],
+      scope: "user",
+    } as const;
+    const argumentSchema = {
+      type: "object",
+      properties: { run: runSchema },
+      required: ["run"],
+    } as const;
+    const Child = pattern<{ run: Cell<{ status: string }> }>(
+      ({ run }) => ({ run }),
+      argumentSchema,
+    );
+
+    const resultCell = runtime.getCell(
+      space,
+      "value-scoped slot write-back result",
+      undefined,
+      tx,
+    );
+    const result = runtime.run(tx, Child, { run: record } as never, resultCell);
+    runtime.prepareTxForCommit(tx);
+    await tx.commit();
+    await runtime.idle();
+
+    // Write the way a handler does: through the handle the slot reads as.
+    const writeTx = runtime.edit();
+    const argument = createCell<{ run: Cell<{ status: string }> }>(
+      runtime,
+      {
+        ...getMetaLink(result, "argument")!,
+        schema: argumentSchema,
+      },
+      writeTx,
+    );
+    argument.get().run.set({ status: "finished" });
+    runtime.prepareTxForCommit(writeTx);
+    await writeTx.commit();
+    await runtime.idle();
+
+    // The record's shared instance holds the content, not a redirect to a
+    // per-user instance other readers would find empty.
+    const recordRaw = createCell<{ status: string }>(
+      runtime,
+      { ...record.getAsNormalizedFullLink(), schema: undefined },
+    );
+    assertEquals(recordRaw.getRaw(), { status: "finished" });
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+for (
+  const [slotSpelling, recordScope, expected] of [
+    ["user-scoped", "space", "Ada"],
+    ["user-scoped", "session", "missing"],
+    ["user-capped handle", "space", "Ada"],
+    ["user-capped handle", "session", "missing"],
+  ] as const
+) {
+  Deno.test(`a nested binding below a ${slotSpelling} slot reads a ${recordScope}-scoped cell passed into it as ${expected}`, async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    const tx = runtime.edit();
+
+    try {
+      const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+      const profileBase = runtime.getCell<{ name: string }>(
+        space,
+        `nested binding ${slotSpelling} ${recordScope} profile`,
+        undefined,
+        tx,
+      );
+      const profile = createCell<{ name: string }>(
+        runtime,
+        { ...profileBase.getAsNormalizedFullLink(), scope: recordScope },
+        tx,
+      );
+      profile.set({ name: "Ada" });
+
+      const readName = lift(
+        ({ name }: { name?: string }) => name ?? "missing",
+        { type: "object", properties: { name: { type: "string" } } },
+        { type: "string" },
+      );
+      const Child = pattern<{ profile: { name: string } }>(
+        ({ profile }) => ({ name: readName({ name: profile.name }) }),
+        {
+          type: "object",
+          properties: {
+            profile: slotSpelling === "user-scoped"
+              ? {
+                type: "object",
+                properties: { name: { type: "string" } },
+                scope: "user",
+              }
+              : {
+                type: "object",
+                properties: { name: { type: "string" } },
+                asCell: [{ kind: "cell", scope: "user" }],
+              },
+          },
+          required: ["profile"],
+        },
+      );
+
+      const resultCell = runtime.getCell(
+        space,
+        `nested binding ${slotSpelling} ${recordScope} result`,
+        undefined,
+        tx,
+      );
+      const result = runtime.run(
+        tx,
+        Child,
+        { profile } as never,
+        resultCell,
+      );
+      runtime.prepareTxForCommit(tx);
+      await tx.commit();
+      await runtime.idle();
+      await runtime.storageManager.synced();
+      await result.pull();
+
+      assertEquals(result.key("name").get() as unknown, expected);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+}
+
+Deno.test("a handle-scoped argument slot does not follow a narrower cell passed into it", async () => {
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const tx = runtime.edit();
+
+  try {
+    const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+    const recordBase = runtime.getCell<{ status: string }>(
+      space,
+      "handle-scoped slot session record",
+      undefined,
+      tx,
+    );
+    const record = createCell<{ status: string }>(
+      runtime,
+      { ...recordBase.getAsNormalizedFullLink(), scope: "session" },
+      tx,
+    );
+    record.set({ status: "done" });
+
+    // What `PerUser<Writable<Run>>` emits: the scope caps the handle.
+    const runSchema = {
+      type: "object",
+      properties: { status: { type: "string" } },
+      asCell: [{ kind: "cell", scope: "user" }],
+    } as const;
+    const readStatus = lift(
+      ({ run }: { run: Cell<{ status?: string }> }) =>
+        run.get()?.status ?? "missing",
+      { type: "object", properties: { run: runSchema }, required: ["run"] },
+      { type: "string" },
+    );
+    const Child = pattern<{ run: Cell<{ status: string }> }>(
+      ({ run }) => ({ status: readStatus({ run }) }),
+      { type: "object", properties: { run: runSchema }, required: ["run"] },
+    );
+
+    const resultCell = runtime.getCell(
+      space,
+      "handle-scoped slot session result",
+      undefined,
+      tx,
+    );
+    const result = runtime.run(tx, Child, { run: record } as never, resultCell);
+    runtime.prepareTxForCommit(tx);
+    await tx.commit();
+    await runtime.idle();
+    await runtime.storageManager.synced();
+    await result.pull();
+
+    assertEquals(result.key("status").get() as unknown, "missing");
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+for (const serverExecution of [false, true]) {
+  for (const passed of ["a plain value", "a space-scoped cell"] as const) {
+    Deno.test(
+      `a session-scoped argument slot reads ${passed} passed into it${
+        serverExecution ? " with server execution" : ""
+      }`,
+      async () => {
+        const prior = getServerExecutionConfig();
+        setServerExecutionConfig(serverExecution);
+        try {
+          const storageManager = StorageManager.emulate({ as: signer });
+          const runtime = new Runtime({
+            apiUrl: new URL(import.meta.url),
+            storageManager,
+          });
+          const tx = runtime.edit();
+
+          try {
+            const { lift, pattern } =
+              createTrustedBuilder(runtime).commonfabric;
+            const name = `session slot ${passed} ${serverExecution}`;
+            const draftSchema = {
+              type: "object",
+              properties: { text: { type: "string" } },
+              asCell: ["cell"],
+              scope: "session",
+            } as const;
+            const readText = lift(
+              ({ draft }: { draft: Cell<{ text?: string }> }) =>
+                draft.get()?.text ?? "missing",
+              {
+                type: "object",
+                properties: { draft: draftSchema },
+                required: ["draft"],
+              },
+              { type: "string" },
+            );
+            const Child = pattern<{ draft: Cell<{ text: string }> }>(
+              ({ draft }) => ({ text: readText({ draft }) }),
+              {
+                type: "object",
+                properties: { draft: draftSchema },
+                required: ["draft"],
+              },
+            );
+
+            let draft: unknown = { text: "hello" };
+            if (passed === "a space-scoped cell") {
+              const cell = runtime.getCell<{ text: string }>(
+                space,
+                `${name} draft`,
+                undefined,
+                tx,
+              );
+              cell.set({ text: "hello" });
+              draft = cell;
+            }
+            const resultCell = runtime.getCell(
+              space,
+              `${name} result`,
+              undefined,
+              tx,
+            );
+            const result = runtime.run(
+              tx,
+              Child,
+              { draft } as never,
+              resultCell,
+            );
+            runtime.prepareTxForCommit(tx);
+            await tx.commit();
+            await runtime.idle();
+            await runtime.storageManager.synced();
+            await result.pull();
+
+            assertEquals(result.key("text").get() as unknown, "hello");
+          } finally {
+            await runtime.dispose();
+            await storageManager.close();
+          }
+        } finally {
+          setServerExecutionConfig(prior);
+        }
+      },
+    );
+  }
+}

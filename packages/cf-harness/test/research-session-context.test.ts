@@ -297,6 +297,9 @@ describe("research session context", () => {
         "ALTER TABLE chat_session DROP COLUMN research_context",
       );
       store.database.exec(
+        "ALTER TABLE chat_session DROP COLUMN assigned_pieces",
+      );
+      store.database.exec(
         "ALTER TABLE chat_session DROP COLUMN transcript_omissions",
       );
       store.close();
@@ -309,13 +312,16 @@ describe("research session context", () => {
     }
   });
 
-  it("rolls back both legacy columns when the second migration fails", async () => {
+  it("rolls back session context columns when a later migration fails", async () => {
     const root = await Deno.makeTempDir();
     const url = toFileUrl(join(root, "chat.sqlite"));
     const store = await openSqliteHarnessChatSessionStore({ url });
     try {
       store.database.exec(
         "ALTER TABLE chat_session DROP COLUMN research_context",
+      );
+      store.database.exec(
+        "ALTER TABLE chat_session DROP COLUMN assigned_pieces",
       );
       store.database.exec(
         "ALTER TABLE chat_session DROP COLUMN transcript_omissions",
