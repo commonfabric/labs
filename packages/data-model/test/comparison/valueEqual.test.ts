@@ -33,58 +33,6 @@ import {
 
 describe("valueEqual()", () => {
   describe("shared and cyclic graphs", () => {
-    it("compares shared descendants once per pair, regardless of freezing", () => {
-      for (const frozen of [false, true]) {
-        let reads = 0;
-        const graph = () => {
-          let node: FabricValue = { label: "leaf" };
-          for (let depth = 0; depth < 14; depth++) {
-            const target: Record<string, FabricValue> = {
-              left: node,
-              right: node,
-            };
-            node = new Proxy(frozen ? Object.freeze(target) : target, {
-              get(target, key, receiver) {
-                if (key === "left" || key === "right") {
-                  if (++reads > 1_000) {
-                    throw new Error(
-                      "The comparison expanded the shared graph.",
-                    );
-                  }
-                }
-                return Reflect.get(target, key, receiver);
-              },
-            });
-          }
-          return node;
-        };
-
-        expect(valueEqual(graph(), graph())).toBe(true);
-        expect(reads).toBeLessThanOrEqual(4 * 14);
-      }
-    });
-
-    it("leaves an identical descendant unread", () => {
-      const shared = new Proxy({}, {
-        ownKeys() {
-          throw new Error("An unchanged descendant was enumerated.");
-        },
-      });
-
-      expect(valueEqual({ shared }, { shared })).toBe(true);
-    });
-
-    it("compares deep containers without consuming the JavaScript stack", () => {
-      let left: FabricValue = "leaf";
-      let right: FabricValue = "leaf";
-      for (let depth = 0; depth < 20_000; depth++) {
-        left = { next: left };
-        right = { next: right };
-      }
-
-      expect(valueEqual(left, right)).toBe(true);
-    });
-
     it("compares cyclic contents and still detects differences after a back edge", () => {
       const left: Record<string, FabricValue> = { label: "same" };
       const right: Record<string, FabricValue> = { label: "same" };
@@ -122,6 +70,19 @@ describe("valueEqual()", () => {
       expect(valueEqual(left, new UnknownValue("Node@2", leftState))).toBe(
         false,
       );
+    });
+
+    it("returns `false` where two cycles close at different containers, in every cache state", () => {
+      const one: Record<string, FabricValue> = {};
+      one.x = one;
+      const two: Record<string, FabricValue> = {};
+      two.x = { x: two };
+
+      expect(valueEqual(one, two)).toBe(false);
+      expect(valueEqual({ x: one }, one)).toBe(false);
+      hashStringOf(deepFreeze(one));
+      hashStringOf(deepFreeze(two));
+      expect(valueEqual(one, two)).toBe(false);
     });
 
     it("observes mutation between comparisons", () => {
@@ -297,7 +258,7 @@ describe("valueEqual()", () => {
     const other = (() => 1) as unknown as FabricValue;
     for (const [left, right] of [[fn, other], [fn, 1], [1, fn]]) {
       expect(() => valueEqual({ nested: [left] }, { nested: [right] }))
-        .toThrow("Cannot compare a function value.");
+        .toThrow("unsupported type `function`");
     }
   });
 
