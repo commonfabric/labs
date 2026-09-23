@@ -291,36 +291,13 @@ export function createQueryResultProxy<T>(
 }
 
 /**
- * A prototype member of a `FabricInstance`, read against the instance for a
- * view over it: the value of an accessor, or a method bound to the instance,
- * since a method is called after the trap returns, with the view as `this`,
- * and reads its private fields through a proxy that does not declare them.
- *
- * Two are left as found. `constructor` names the class, and a bound function
- * is a different one that reports itself under another name. A member
- * inherited unchanged from `Object.prototype` is generic -- bound to the
- * instance, `valueOf()` would hand the stored value out from behind its view
- * -- and keeps running against the view, like a plain object's. A class that
- * overrides one of those names supplies a different function, which is
- * bound.
- *
- * Which side refuses a mutator follows from which side it runs against. An
- * instance's own, bound, runs against the instance, and what refuses it is
- * that a stored instance is deep-frozen; a generic one left unbound,
- * `__defineGetter__` say, runs against the view and meets the view's own
- * trap. What a method returns is what the instance returns, as for an
- * accessor.
+ * Whether `member`, found under `prop` on a `FabricInstance`, is the generic
+ * one the instance inherits unchanged from `Object.prototype`. A class that
+ * overrides one of those names supplies a different function, and is not.
  */
-function instanceMember(instance: FabricInstance, prop: string): unknown {
-  const member = Reflect.get(instance, prop, instance);
-  if (
-    typeof member === "function" && prop !== "constructor" &&
-    !(Object.hasOwn(Object.prototype, prop) &&
-      Reflect.get(Object.prototype, prop) === member)
-  ) {
-    return member.bind(instance);
-  }
-  return member;
+function isGenericObjectMember(prop: string, member: unknown): boolean {
+  return Object.hasOwn(Object.prototype, prop) &&
+    Reflect.get(Object.prototype, prop) === member;
 }
 
 /**
@@ -586,6 +563,41 @@ function createViewProxy<T>(
     verifiedAt = memo;
   };
 
+  // A method of a `FabricInstance` view, as the caller holds it. A method is
+  // read off the view once and may be called any time after -- detached, or
+  // rebound to the view -- so nothing is captured at the read. Each call
+  // resolves the instance the document holds then, through the transaction
+  // and inside this view's instant, with the kind check every trap makes: a
+  // rewrite since the read is followed, a document that no longer holds an
+  // instance refuses (`ViewDriftError`), and so does a pinned view whose
+  // transaction has finished. The method found under the name on that
+  // instance then runs with the instance as `this`, since it reads private
+  // fields a proxy does not declare. It runs outside the instant, as a saved
+  // array method's callback does: the instant belongs to reading the
+  // document, and the instance is already materialized, so running it reads
+  // nothing more. A generic member the instance inherits unchanged from
+  // `Object.prototype` runs against this view instead, as a plain object's
+  // does: run against the instance, `valueOf()` would hand the stored value
+  // out from behind its view, and a generic mutator such as
+  // `__defineGetter__` meets the view's own refusal. What the method returns
+  // is what the instance returns, as for an accessor, and what refuses an
+  // instance's own mutator is that a stored instance is deep-frozen.
+  const instanceMethod = (prop: string) => (...args: unknown[]): unknown => {
+    const instance = atEpoch(() => currentValue(true)) as FabricInstance;
+    const method = Reflect.get(instance, prop, instance);
+    if (typeof method !== "function") {
+      throw new TypeError(
+        `\`${prop}\` is not a method of the \`${instance.constructor.name}\` ` +
+          "this view's document now holds.",
+      );
+    }
+    return Reflect.apply(
+      method,
+      isGenericObjectMember(prop, method) ? proxy : instance,
+      args,
+    );
+  };
+
   // Index by the CALLER's transaction, not by the one reads resolve through.
   // A standing handle is created without a transaction and resolves a fresh one
   // per access, so indexing by the resolved transaction gives every read its own
@@ -794,9 +806,19 @@ function createViewProxy<T>(
         // instance has no own properties by contract (`BaseFabricInstance`
         // seals it), so any name it answers is a member. The read is a data
         // read, and is recorded as one.
+        //
+        // A method is handed out as `instanceMethod()` above, which resolves
+        // the instance again when it is called. `constructor` comes back as
+        // found: it names the class, and a wrapped copy is a different
+        // function.
         if (boundKind === "FabricInstance") {
           const current = currentValue(true) as FabricInstance;
-          if (prop in current) return instanceMember(current, prop);
+          if (prop in current) {
+            const member = Reflect.get(current, prop, current);
+            return typeof member !== "function" || prop === "constructor"
+              ? member
+              : instanceMethod(prop);
+          }
         } else if (!Object.hasOwn(value, prop) && prop in value) {
           return Reflect.get(value, prop);
         }

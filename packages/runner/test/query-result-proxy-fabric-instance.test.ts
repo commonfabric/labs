@@ -145,6 +145,65 @@ describe("query-result proxy: a FabricInstance's members reach the instance", ()
     expect(view.message).toBe("after");
   });
 
+  it("resolves a saved method's instance when it is called, not when it was read", () => {
+    // A method is read off the view once and may be called any time later.
+    // The instance it runs against is the one the document holds at the
+    // call, however the caller holds the method -- detached, or rebound to
+    // the view.
+    const cell = runtime.getCell<unknown>(space, "savedMethod", undefined, tx);
+    cell.set(Object.assign(new Error("before"), { code: 1 }));
+    const view = cell.get() as FabricError;
+    const getExtra = view.getExtra;
+    const clone = view.deepClone.bind(view);
+
+    cell.set(Object.assign(new Error("after"), { code: 2 }));
+
+    expect(getExtra("code")).toBe(2);
+    const copy = clone(false) as FabricError;
+    expect(copy.message).toBe("after");
+    expect(copy.getExtra("code")).toBe(2);
+  });
+
+  it("refuses a saved method once the document no longer holds an instance", () => {
+    const cell = runtime.getCell<unknown>(space, "savedDrift", undefined, tx);
+    cell.set(new Error("before"));
+    const view = cell.get() as FabricError;
+    const getExtra = view.getExtra;
+    const clone = view.deepClone.bind(view);
+
+    cell.set({ getExtra: 1 });
+
+    expect(() => getExtra("code")).toThrow(ViewDriftError);
+    expect(() => clone(false)).toThrow(ViewDriftError);
+  });
+
+  it("refuses a saved method on a pinned view whose transaction has finished", async () => {
+    const seedTx = runtime.edit();
+    const cell = runtime.getCell<unknown>(
+      space,
+      "savedPinned",
+      undefined,
+      seedTx,
+    );
+    cell.set(Object.assign(new Error("boom"), { code: 42 }));
+    await seedTx.commit();
+
+    const readTx = runtime.edit();
+    readTx.markLazyMaterialize(true);
+    const view = createQueryResultProxy<FabricError>(
+      runtime,
+      readTx,
+      cell.getAsNormalizedFullLink(),
+    );
+    const getExtra = view.getExtra;
+    const clone = view.deepClone.bind(view);
+    expect(getExtra("code")).toBe(42);
+    await readTx.commit();
+
+    expect(() => getExtra("code")).toThrow("Transaction is complete");
+    expect(() => clone(false)).toThrow("Transaction is complete");
+  });
+
   it("refuses a member once the document no longer holds an instance", () => {
     // The kind a view was built over is the kind it reads (`ViewDriftError`
     // otherwise), so a method name, an accessor, or an inherited member read
