@@ -1,10 +1,9 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import ts from "typescript";
 
-import {
-  type CapabilityParamSummary,
-  CrossStageState,
-  type TransformationContext,
+import type {
+  CapabilityParamSummary,
+  TransformationContext,
 } from "../src/core/mod.ts";
 import {
   applyShrinkAndWrap,
@@ -151,7 +150,9 @@ function createContext(sourceFile: ts.SourceFile): {
     sourceFile,
     factory: ts.factory,
     options: {},
-    state: new CrossStageState(),
+    state: {
+      typeRegistry: new WeakMap<ts.Node, ts.Type>(),
+    },
     reportDiagnostic: (d: CollectedDiagnostic) => {
       diagnostics.push({
         severity: d.severity,

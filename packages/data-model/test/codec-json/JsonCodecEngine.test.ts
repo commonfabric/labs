@@ -516,6 +516,14 @@ describe("JsonCodecEngine", () => {
       expect(roundTrip('with"quotes')).toBe('with"quotes');
     });
 
+    it("passes through lone surrogates in strings and property names", () => {
+      expect(roundTrip("\ud800")).toBe("\ud800");
+      expect(roundTrip("a\udc00b")).toBe("a\udc00b");
+      expect(roundTrip({ "\udbff": ["\udfff"] })).toEqual({
+        "\udbff": ["\udfff"],
+      });
+    });
+
     it("passes through `Number.MAX_SAFE_INTEGER`", () => {
       expect(roundTrip(Number.MAX_SAFE_INTEGER)).toBe(
         Number.MAX_SAFE_INTEGER,
@@ -619,6 +627,13 @@ describe("JsonCodecEngine", () => {
       const objResult = roundTrip(obj) as Record<string, unknown>;
       expect(objResult.kind).toBe(Symbol.for("event"));
       expect(objResult.flag).toBe(Symbol.for("ready"));
+    });
+
+    it("round-trips an interned symbol whose key has a lone surrogate", () => {
+      expect(roundTrip(Symbol.for("\ud800"))).toBe(Symbol.for("\ud800"));
+      expect(roundTrip({ kind: Symbol.for("a\udc00") })).toEqual({
+        kind: Symbol.for("a\udc00"),
+      });
     });
 
     it("loudly fails to encode an unencodable value (unique / uninterned `Symbol`)", () => {

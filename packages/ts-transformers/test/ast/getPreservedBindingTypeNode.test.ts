@@ -75,7 +75,7 @@ function preserved(
   // node may come from a module other than the one being printed.
   return node && ts.createPrinter({ removeComments: true }).printNode(
     ts.EmitHint.Unspecified,
-    cloneTypeNodeDeepForEmission(node, undefined, undefined),
+    cloneTypeNodeDeepForEmission(node),
     sourceFile,
   );
 }

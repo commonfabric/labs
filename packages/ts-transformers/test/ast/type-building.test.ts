@@ -7,7 +7,7 @@ import {
   buildCaptureTypeElements,
   cloneTypeNodeDeepForEmission,
 } from "../../src/ast/type-building.ts";
-import { CrossStageState, TransformationContext } from "../../src/core/mod.ts";
+import { TransformationContext } from "../../src/core/mod.ts";
 import {
   type CaptureTreeNode,
   createCaptureTreeNode,
@@ -45,7 +45,7 @@ Deno.test("cloneTypeNodeDeepForEmission prints cross-file literal types from the
   );
   const printer = ts.createPrinter({ removeComments: true });
 
-  const cloned = cloneTypeNodeDeepForEmission(typeNode, undefined, undefined);
+  const cloned = cloneTypeNodeDeepForEmission(typeNode);
   const printed = printer.printNode(ts.EmitHint.Unspecified, cloned, emitFile);
 
   assertEquals(printed, `Default<string, "default-text">`);
@@ -66,30 +66,9 @@ Deno.test("cloneTypeNodeDeepForEmission carries typeRegistry entries onto clones
   const typeRegistry = new WeakMap<ts.Node, ts.Type>();
   typeRegistry.set(typeNode, fakeType);
 
-  const cloned = cloneTypeNodeDeepForEmission(
-    typeNode,
-    typeRegistry,
-    undefined,
-  );
+  const cloned = cloneTypeNodeDeepForEmission(typeNode, typeRegistry);
 
   assertStrictEquals(typeRegistry.get(cloned), fakeType);
-});
-
-Deno.test("cloneTypeNodeDeepForEmission records the clone of a print as printed from its type", () => {
-  const state = new CrossStageState();
-  const printedType = { flags: ts.TypeFlags.String } as ts.Type;
-  const printed = ts.factory.createKeywordTypeNode(
-    ts.SyntaxKind.StringKeyword,
-  );
-  state.recordPrintedFrom(printed, printedType);
-
-  const cloned = cloneTypeNodeDeepForEmission(
-    ts.factory.createArrayTypeNode(printed),
-    undefined,
-    state,
-  );
-
-  assertStrictEquals(state.printedFrom(cloned.elementType), printedType);
 });
 
 //
