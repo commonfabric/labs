@@ -2811,6 +2811,42 @@ describe("writeAuthorizationCoversPath", () => {
     expect(writeAuthorizationCoversPath(schema, [], ["0"])).toBe(false);
   });
 
+  it("covers a list whose claim is reached through a reference", () => {
+    const schema = {
+      type: "object",
+      properties: { items: { $ref: "#/$defs/Protected" } },
+      $defs: {
+        Protected: {
+          type: "array",
+          items: { type: "object" },
+          ifc: { writeAuthorizedBy },
+        },
+      },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["items", "0"])).toBe(
+      true,
+    );
+  });
+
+  it("does not hold a named property to the additionalProperties claim", () => {
+    const schema = {
+      type: "object",
+      properties: { open: { type: "array" } },
+      additionalProperties: { type: "array", ifc: { writeAuthorizedBy } },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["open", "0"])).toBe(
+      false,
+    );
+  });
+
+  it("covers a key only the additionalProperties schema describes", () => {
+    const schema = {
+      type: "object",
+      additionalProperties: { type: "array", ifc: { writeAuthorizedBy } },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["any", "0"])).toBe(true);
+  });
+
   it("ignores claims that are not write authorizations", () => {
     const schema = {
       type: "object",

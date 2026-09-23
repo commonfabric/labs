@@ -47,6 +47,7 @@ import {
   storedCfcMetadataAppliesToPath,
   StoredCfcMetadataError,
 } from "./cfc/metadata.ts";
+import { cfcSchemaEntries } from "./cfc/schema-label-view.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
@@ -224,48 +225,22 @@ export const schemaIfcOverlapsPath = (
 
 // Exported for unit testing. Not part of the public surface. Whether a
 // `writeAuthorizedBy` claim in `schema` (rooted at `basePath`) covers
-// `targetPath` for every value that can land there. Only the keywords every
-// value is held to are followed — properties, items, tuple slots,
-// additionalProperties and `allOf` — because a claim inside an `anyOf`,
-// `oneOf` or `not` branch applies to some values and not others, and the
-// written value is not known here.
+// `targetPath` for every value that can land there. The declarations are the
+// ones `cfcSchemaEntries` finds, references resolved, less those inside an
+// `anyOf` or `oneOf` branch: such a claim holds for some values and not
+// others, and the written value is not known here.
 export const writeAuthorizationCoversPath = (
   schema: JSONSchema | undefined,
   basePath: readonly string[],
   targetPath: readonly string[],
-): boolean => {
-  const visit = (
-    current: JSONSchema | undefined,
-    path: readonly string[],
-  ): boolean => {
-    if (current === undefined || typeof current === "boolean") {
-      return false;
-    }
-    if (
-      isObjectOrArray(current.ifc) &&
-      current.ifc.writeAuthorizedBy !== undefined &&
-      pathPrefixMatches(path, targetPath)
-    ) {
-      return true;
-    }
-    return forEachSubschema(current, (child, keyword, key, index) => {
-      switch (keyword) {
-        case "properties":
-          return visit(child, [...path, key!]);
-        case "prefixItems":
-          return visit(child, [...path, String(index!)]);
-        case "items":
-        case "additionalProperties":
-          return visit(child, [...path, "*"]);
-        case "allOf":
-          return visit(child, path);
-        default:
-          return false;
-      }
-    });
-  };
-  return visit(schema, basePath);
-};
+): boolean =>
+  schema !== undefined &&
+  cfcSchemaEntries(schema, [...basePath]).some((entry) =>
+    entry.conditional !== true &&
+    isObjectOrArray(entry.schema) && isObjectOrArray(entry.schema.ifc) &&
+    entry.schema.ifc.writeAuthorizedBy !== undefined &&
+    pathPrefixMatches(entry.path, targetPath)
+  );
 
 // Whether a write-authorization claim arriving with this transaction covers the
 // target. A stored claim is found by `storedCfcMetadataAppliesToPath`; this

@@ -20,6 +20,12 @@ export interface CfcSchemaEntry {
 
   /** The schema document that resolves local references inside `.schema`. */
   readonly root: JSONSchema;
+
+  /**
+   * Set when the declaration sits inside an `anyOf` or `oneOf` branch, so it
+   * holds only for the values that branch matches.
+   */
+  readonly conditional?: true;
 }
 
 interface IfcSchemaVisit {
@@ -34,6 +40,8 @@ interface IfcSchemaVisit {
  * Compound schemas contribute at their current path. Array items and
  * record-only additional properties use a wildcard path. Tuple entries use
  * their concrete index. Negated schemas do not describe labels on real data.
+ * A declaration reached through an `anyOf` or `oneOf` branch is marked
+ * `conditional`.
  */
 export const cfcSchemaEntries = (
   schema: JSONSchema,
@@ -41,6 +49,7 @@ export const cfcSchemaEntries = (
   entries: CfcSchemaEntry[] = [],
   root: JSONSchema = schema,
   active?: IfcSchemaVisit,
+  conditional = false,
 ): CfcSchemaEntry[] => {
   if (!isSubschema(schema) || typeof schema === "boolean") {
     return entries;
@@ -80,6 +89,7 @@ export const cfcSchemaEntries = (
       },
       schema: resolved,
       root: childRoot,
+      ...(conditional ? { conditional: true as const } : {}),
     });
   }
 
@@ -95,12 +105,22 @@ export const cfcSchemaEntries = (
           entries,
           childRoot,
           nextActive,
+          conditional,
         );
         break;
       case "anyOf":
       case "oneOf":
+        cfcSchemaEntries(child, path, entries, childRoot, nextActive, true);
+        break;
       case "allOf":
-        cfcSchemaEntries(child, path, entries, childRoot, nextActive);
+        cfcSchemaEntries(
+          child,
+          path,
+          entries,
+          childRoot,
+          nextActive,
+          conditional,
+        );
         break;
       case "items":
         // The wildcard covers tuple positions and the rest schema when
@@ -111,6 +131,7 @@ export const cfcSchemaEntries = (
           entries,
           childRoot,
           nextActive,
+          conditional,
         );
         break;
       case "prefixItems":
@@ -120,6 +141,7 @@ export const cfcSchemaEntries = (
           entries,
           childRoot,
           nextActive,
+          conditional,
         );
         break;
       case "additionalProperties":
@@ -132,6 +154,7 @@ export const cfcSchemaEntries = (
             entries,
             childRoot,
             nextActive,
+            conditional,
           );
         }
         break;
@@ -140,7 +163,14 @@ export const cfcSchemaEntries = (
         break;
       default:
         // Unknown structural keywords contribute at the current position.
-        cfcSchemaEntries(child, path, entries, childRoot, nextActive);
+        cfcSchemaEntries(
+          child,
+          path,
+          entries,
+          childRoot,
+          nextActive,
+          conditional,
+        );
         break;
     }
   });
