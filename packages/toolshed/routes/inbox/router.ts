@@ -89,7 +89,7 @@ export function createInboxRouter(
             path: c.req.path,
             method: c.req.method,
             authority: host ?? new URL(c.req.url).origin,
-            error: error instanceof Error ? error.message : String(error),
+            error: String(error),
           },
           "Rejected unauthenticated first-party HTTP request",
         );

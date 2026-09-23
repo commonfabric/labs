@@ -129,7 +129,7 @@ export function createSpaceInviteRouter(
             path: c.req.path,
             method: c.req.method,
             authority: configuredHost ?? new URL(c.req.url).origin,
-            error: error instanceof Error ? error.message : String(error),
+            error: String(error),
           },
           "Rejected unauthenticated first-party HTTP request",
         );
