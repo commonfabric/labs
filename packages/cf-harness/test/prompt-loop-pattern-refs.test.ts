@@ -6,6 +6,7 @@
  */
 
 import { describe, it } from "@std/testing/bdd";
+import type { FabricValue } from "@commonfabric/data-model";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 
@@ -20,7 +21,15 @@ import { PatternIndexClient } from "../src/pattern-index/client.ts";
 import type { HarnessModelTurnRequest } from "../src/model/client.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import type { HarnessFetch } from "../src/contracts/http-fetch.ts";
-import type { HarnessResearchRunSummary } from "../src/contracts/research.ts";
+import {
+  HARNESS_RESEARCH_HANDLE_TYPE,
+  type HarnessResearchHandleValue,
+  type HarnessResearchRunSummary,
+} from "../src/contracts/research.ts";
+import {
+  createHarnessHandleTable,
+  mintReferentHandle,
+} from "../src/handle-table.ts";
 import type { HarnessRunState } from "../src/run-state.ts";
 import type {
   SandboxCommandRequest,
@@ -763,6 +772,31 @@ Use this as available evidence; do not assume it is mandatory.`,
       describedHandles: [],
       completedAt: "2026-09-14T00:00:00.000Z",
     } satisfies HarnessResearchRunSummary;
+    // The kit is also held as a research handle, as the research tool leaves
+    // it; naming that token is how the delegation hands the findings over.
+    const heldResearch = await mintReferentHandle(
+      createHarnessHandleTable("run-research-resume"),
+      {
+        kind: "research",
+        source: "research",
+        labelSource: "research",
+        label: {},
+        value: {
+          type: HARNESS_RESEARCH_HANDLE_TYPE,
+          researchRunId: researchRun.researchRunId,
+          kit: researchRun.kit,
+          confirmedPatterns: researchRun.confirmedPatterns,
+          describedHandles: [],
+          cfc: {
+            version: 1,
+            sourceLabel: {},
+            outputLabel: {},
+            coverage: "complete",
+            missingLabels: [],
+          },
+        } satisfies HarnessResearchHandleValue as unknown as FabricValue,
+      },
+    );
     const resumedState: HarnessRunState = {
       runId: "run-research-resume",
       status: "failed",
@@ -772,6 +806,7 @@ Use this as available evidence; do not assume it is mandatory.`,
       currentDir: "/workspace",
       model: "gpt-5.4",
       researchRuns: [researchRun],
+      handleTable: heldResearch.table,
       policyEvents: [],
       toolOutputs: [],
       failureRecords: [],
@@ -779,7 +814,7 @@ Use this as available evidence; do not assume it is mandatory.`,
     const requests: unknown[] = [];
     const turns = [
       toolCallTurn("call-delegate", "delegate_task", {
-        goal: "Use the confirmed research pattern.",
+        goal: `Use the confirmed research pattern in ${heldResearch.token}.`,
         patternRefs: [{ patternId: SEARCH_HIT.patternId }],
       }),
       assistantTurn("Child used the confirmed pattern."),
@@ -826,7 +861,9 @@ Use this as available evidence; do not assume it is mandatory.`,
 
     expect(childPrompt).toContain(SEARCH_HIT.patternId);
     expect(childPrompt).toContain(PATTERN_RECORD.description);
-    expect(childPrompt).toContain(researchRun.researchRunId);
+    // The findings reach the child as the named handle, not as prompt text.
+    expect(childPrompt).toContain(heldResearch.token);
+    expect(childPrompt).not.toContain("Run the confirmed pattern.");
     expect(delegateOutput.patternRefRefusals).toBeUndefined();
     expect(result.runState.researchRuns).toEqual([researchRun]);
   });

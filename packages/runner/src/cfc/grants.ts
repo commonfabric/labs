@@ -1,4 +1,8 @@
-import { hashStringOf } from "@commonfabric/data-model";
+import {
+  type FabricValue,
+  hashStringOf,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
 import { isDID } from "@commonfabric/identity/did";
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
@@ -9,6 +13,7 @@ import type {
   MemorySpace,
 } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
+import { type AtomPattern, isAtomPattern } from "./atom-pattern.ts";
 import { FORBIDDEN_OR_CLAUSE_ALTERNATIVE_TYPES, isOrClause } from "./clause.ts";
 import type {
   CfcGrantResolver,
@@ -100,7 +105,7 @@ export type CfcGrantIdentity = {
 
   /** What it releases: a doc reference (URI string) or an atom-pattern
    * scope record (design §2.1 `Reference | AtomPattern`). */
-  readonly resource: unknown;
+  readonly resource: AtomPattern;
 };
 
 /** A verified grant record (design doc §2.1 shape). */
@@ -137,7 +142,7 @@ export type CfcGrant = CfcGrantIdentity & {
 export type CfcGrantWriteInput = {
   readonly kind: string;
   readonly owner: string;
-  readonly resource: unknown;
+  readonly resource: AtomPattern;
   readonly audience: readonly unknown[];
 
   /** Defaults to `owner` — the v1 governing-space posture (module doc). */
@@ -437,6 +442,9 @@ export const prepareCfcGrantWrite = (
   ) {
     throw new Error("cfc-grant: resource must name what the grant releases");
   }
+  if (!isAtomPattern(resource)) {
+    throw new Error("cfc-grant: resource must be a `FabricValue`");
+  }
   if (!Array.isArray(audience) || audience.length === 0) {
     throw new Error("cfc-grant: audience must be a non-empty array");
   }
@@ -518,9 +526,9 @@ export const prepareCfcGrantWrite = (
 export const verifyCfcGrantDocument = (
   space: string,
   id: string,
-  value: unknown,
+  value: FabricValue,
 ): CfcGrant | undefined => {
-  if (!isObjectNotArray(value)) return undefined;
+  if (!isFabricPlainObject(value)) return undefined;
   const candidate = value as Partial<CfcGrant> & Record<string, unknown>;
   if (candidate.version !== CFC_GRANT_VERSION) return undefined;
   if (

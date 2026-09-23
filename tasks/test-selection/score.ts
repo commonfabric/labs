@@ -62,6 +62,15 @@ export interface Observation {
   commit: string;
 
   /**
+   * The seed the run shuffled its tests by, absent for a run that ran
+   * them in the order they were declared. Two observations at one commit
+   * ran under the same conditions only where this agrees too: an
+   * order-dependent test passes in one order and fails in another, and
+   * that is a bug in the test rather than chance.
+   */
+  seed?: number;
+
+  /**
    * Who saw it: the branch for a continuous-integration run, the
    * reporting person's login for a local one.
    */
@@ -115,7 +124,9 @@ export interface IdentityState {
    * between them, which makes it a catch; one that is still failing is
    * the same breakage continuing, and waits.
    */
-  pendingMain: Array<{ day: string; commit: string; source: string }>;
+  pendingMain: Array<
+    { day: string; commit: string; seed?: number; source: string }
+  >;
 }
 
 /** A fresh, empty history. */
@@ -171,20 +182,26 @@ function bump(counts: Record<string, number>, day: string): void {
 }
 
 /**
- * Judges the failures on `main` that were waiting for a later `main` run.
- * A failure the next run still shows is the same breakage continuing, so
- * it keeps waiting and nothing new is learned. A failure the next run
- * does not show is a flake when that run is at the same commit, and a
- * catch otherwise. Nothing separates a failure a change fixed from one
- * that healed itself, so a failure that healed itself is credited as a
- * catch as well.
- */
-/**
  * The longest window any of a state's per-day counters is kept for, which
  * is also how long a failure on the default branch waits to be judged.
  */
 const LONGEST_WINDOW_DAYS = Math.max(CHURN_WINDOW_DAYS, FLAKE_WINDOW_DAYS);
 
+/**
+ * Judges the failures on `main` that were waiting for a later `main` run.
+ * A failure the next run still shows is the same breakage continuing, so
+ * it keeps waiting and nothing new is learned. A failure the next run
+ * does not show is a flake when that run is at the same commit in the
+ * same order, and a catch when it is at a later commit in the same
+ * order. A pass in a different order is neither, and the failures in
+ * other orders are dropped: an order-dependent test stops failing when
+ * the order moves on, so the pass says nothing about whether a change
+ * fixed anything. Failures in the pass's own order are judged whatever
+ * else is waiting beside them.
+ * Nothing separates a failure a change fixed from one that healed
+ * itself, so a failure that healed itself in one order is credited as a
+ * catch as well.
+ */
 function resolvePendingMain(
   state: IdentityState,
   observation: Observation,
@@ -198,7 +215,8 @@ function resolvePendingMain(
   // to answer this on its own: a fold resolves every observation it
   // reads before it ages anything.
   const live = state.pendingMain.filter((pending) =>
-    daysBetween(pending.day, observation.day) <= LONGEST_WINDOW_DAYS
+    daysBetween(pending.day, observation.day) <= LONGEST_WINDOW_DAYS &&
+    pending.seed === observation.seed
   );
   state.pendingMain = [];
   if (live.length === 0) return;
@@ -224,6 +242,18 @@ function resolvePendingMain(
 }
 
 /**
+ * Where an observation was made, as the rules that compare two runs need
+ * it: the commit, and the order its tests ran in. A run with no seed ran
+ * in declaration order, which is an order of its own, so its point is
+ * the bare commit and matches no seeded run's.
+ */
+function pointOf(observation: Pick<Observation, "commit" | "seed">): string {
+  return observation.seed === undefined
+    ? observation.commit
+    : `${observation.commit}#${observation.seed}`;
+}
+
+/**
  * The cross-batch context two of the rules need. A batch cannot be judged
  * on its own: whether an identity disagreed with itself at a commit, and
  * whether a failure spans enough sources to read as the environment, are
@@ -232,10 +262,11 @@ function resolvePendingMain(
  */
 export interface FoldContext {
   /**
-   * The outcomes seen at one commit, by identity, with the commit's day.
-   * Keyed by commit rather than by the pair so that the window below can
-   * drop a whole commit at once, and so that a commit's name is stored
-   * once instead of against every identity that ran at it.
+   * The outcomes seen at one commit in one order, by identity, with the
+   * commit's day. Keyed by that point (see `pointOf`) rather than by the
+   * pair of point and identity so that the window below can drop a whole
+   * point at once, and so that a point's name is stored once instead of
+   * against every identity that ran at it.
    */
   outcomesAtCommit: Map<
     string,
@@ -243,16 +274,17 @@ export interface FoldContext {
   >;
 
   /**
-   * The most recently seen commits, oldest first, at most
-   * `FLAKE_COMMIT_REACH` of them. Outcomes are remembered at a commit
+   * The most recently seen points (see `pointOf`), oldest first, at most
+   * `FLAKE_COMMIT_REACH` of them. Outcomes are remembered at a point
    * while it is in here, and afterwards only for identities the failure
-   * witness still names.
+   * witness still names. A commit run in one order is one point, which is
+   * every commit that runs without an override.
    */
   recentCommits: string[];
 
   /**
-   * What the default branch said about one identity at one commit, with
-   * the day. A rerun of a commit can arrive long after the run it
+   * What the default branch said about one identity at one point (see
+   * `pointOf`), with the day. A rerun of a commit can arrive long after the run it
    * repeats, so this outlives the batch: without it, a later pass
    * elsewhere would make that rerun look like the first failure at a
    * commit the branch had already shown broken.
@@ -443,8 +475,9 @@ export interface FoldOptions {
  * The observations must be in ascending time order, because the rules
  * that decide whether a failure is a catch look backwards at what `main`
  * last said and forwards at what it says next. Observations at one commit
- * are considered together: an identity that both passed and failed there
- * disagreed with itself, which is a flake observation and never a catch.
+ * in one order are considered together: an identity that both passed and
+ * failed there disagreed with itself, which is a flake observation and
+ * never a catch.
  *
  * Both of those need the whole batch in view before any one observation is
  * judged, so this walks the batch more than once and the iterable has to
@@ -501,9 +534,9 @@ export function foldObservations(
     if (observation.place !== "main" || observation.outcome === "skip") {
       continue;
     }
-    const at = `${key} ${observation.commit}`;
-    // A failure anywhere at one commit is the commit being broken; a pass
-    // beside it does not clear that.
+    const at = `${key} ${pointOf(observation)}`;
+    // A failure anywhere at one commit in one order is the commit being
+    // broken; a pass beside it does not clear that.
     if (observation.outcome === "fail" || !mainAtCommit.has(at)) {
       mainAtCommit.set(at, observation.outcome);
     }
@@ -525,12 +558,12 @@ export function foldObservations(
     // read a skip beside a failure as the test disagreeing with itself.
     if (observation.outcome === "skip") continue;
     const key = testIdentityKey(observation.test);
-    const commit = observation.commit;
-    let seen = outcomesAtCommit.get(commit);
+    const point = pointOf(observation);
+    let seen = outcomesAtCommit.get(point);
     if (seen === undefined) {
       seen = { day: observation.day, identities: new Map() };
-      outcomesAtCommit.set(commit, seen);
-      recent.push(commit);
+      outcomesAtCommit.set(point, seen);
+      recent.push(point);
       while (recent.length > FLAKE_COMMIT_REACH) {
         const dropped = recent.shift()!;
         const held = outcomesAtCommit.get(dropped);
@@ -541,7 +574,7 @@ export function foldObservations(
         if (held.identities.size === 0) outcomesAtCommit.delete(dropped);
       }
     }
-    if (!recent.includes(commit) && !failures.has(key)) continue;
+    if (!recent.includes(point) && !failures.has(key)) continue;
     const outcomes = seen.identities.get(key) ?? new Set<string>();
     outcomes.add(observation.outcome);
     seen.identities.set(key, outcomes);
@@ -585,10 +618,12 @@ export function foldObservations(
 
     bump(state.failuresByDay, day);
 
-    const seen = outcomesAtCommit.get(observation.commit)?.identities.get(key);
+    const seen = outcomesAtCommit.get(pointOf(observation))?.identities.get(
+      key,
+    );
     if ((seen?.size ?? 0) > 1) {
-      // It passed and failed at one commit, with nothing between the two
-      // runs but chance.
+      // It passed and failed at one commit in one order, with nothing
+      // between the two runs but chance.
       bump(state.flakesByDay, day);
       continue;
     }
@@ -599,7 +634,7 @@ export function foldObservations(
       // very commit outranks what it last said, and is known ahead of
       // time so that the order this batch happened to arrive in cannot
       // decide the verdict.
-      const here = mainAtCommit.get(`${key} ${observation.commit}`);
+      const here = mainAtCommit.get(`${key} ${pointOf(observation)}`);
       if (
         here === "fail" ||
         (here === undefined && state.lastMainOutcome === "fail")
@@ -613,6 +648,7 @@ export function foldObservations(
       state.pendingMain.push({
         day,
         commit: observation.commit,
+        ...(observation.seed === undefined ? {} : { seed: observation.seed }),
         source: observation.source,
       });
       continue;

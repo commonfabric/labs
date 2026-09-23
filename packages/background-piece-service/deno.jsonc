@@ -4,13 +4,14 @@
     "start": "deno run -A --unstable-worker-options src/main.ts",
     "help": "deno run -A src/main.ts --help",
     "add-admin-piece": "deno run -A cast-admin.ts --patternPath=bgAdmin.tsx",
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
     // --no-check: this package is type-checked by `deno task check` (tasks/check.sh).
     // --preload runs test/clock-preload.ts before the test modules; it replaces
     // the clock so the service's own polls and timeouts auto-advance and test
     // sleeps freeze. See that file and docs/development/waiting-in-tests.md. The
     // global `clock` type lives in test/clock.d.ts, which `deno task check` sees
     // by type-checking the package as one program.
-    "test": "deno test --no-check --preload=test/clock-preload.ts --allow-env --allow-ffi --allow-net=127.0.0.1 --allow-read --allow-run --allow-write --allow-sys test/*.test.ts",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --preload=test/clock-preload.ts --allow-env --allow-ffi --allow-net=127.0.0.1 --allow-read --allow-run --allow-write --allow-sys test/*.test.ts",
     "check": "deno check src/**/*.ts",
     "lint": "deno lint",
     "fmt": "deno fmt"

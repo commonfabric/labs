@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 
+import type { AtomPattern } from "../src/cfc/atom-pattern.ts";
 import {
   type CfcConfClause,
   type CfcOrClause,
@@ -194,8 +195,8 @@ describe("CFC exchange-rule evaluation (B4)", () => {
       const tierC = { type: "https://example.com/atoms/Tier", level: "c" };
       const upgrade = (
         id: string,
-        from: unknown,
-        to: unknown,
+        from: AtomPattern,
+        to: AtomPattern,
       ): ExchangeRule => ({
         id,
         appliesTo: from,

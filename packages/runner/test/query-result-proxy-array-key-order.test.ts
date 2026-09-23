@@ -1,8 +1,13 @@
 /**
- * The `ownKeys` trap supplies a `length` key when the underlying value has
- * none of its own. Where it puts that key matters: own-key order is what
- * distinguishes an index-only array from one carrying named properties, and
- * `isArrayWithOnlyIndexProperties()` reads exactly that.
+ * A proxied array reports its own keys in the array's own order -- indices,
+ * then `length`, then any other name -- because the `ownKeys` trap reports the
+ * stored array's keys as they are. Own-key order is what distinguishes an
+ * index-only array from one carrying named properties, and
+ * `isArrayWithOnlyIndexProperties()` reads exactly that. The trap used to
+ * supply a `length` of its own for an array-bound view over a value with none,
+ * a state only reachable by rewriting the document to another kind; such a
+ * view refuses now (`ViewDriftError`), so the stored array's keys are the
+ * whole story.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -21,7 +26,6 @@ describe("query result proxy array key order", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
   let runtime: Runtime;
   let tx: IExtendedStorageTransaction;
-
   beforeEach(() => {
     storageManager = StorageManager.emulate({ as: signer });
     runtime = new Runtime({
@@ -30,55 +34,53 @@ describe("query result proxy array key order", () => {
     });
     tx = runtime.edit();
   });
-
   afterEach(async () => {
     await tx.commit();
     await runtime?.dispose();
     await storageManager?.close();
   });
 
-  /**
-   * Builds a proxy whose target is array-shaped but whose stored value is
-   * record-shaped, which is the case in which the trap has to supply `length`
-   * itself. The proxy target is fixed when the proxy is built, so setting an
-   * array first and overwriting it afterwards produces the mismatch.
-   */
-  function arrayTargetOverRecord(cause: string, record: unknown): object {
-    const cell = runtime.getCell<unknown>(space, cause, undefined, tx);
-    cell.set([1, 2]);
-    const proxy = createQueryResultProxy<object>(
+  it("reports a stored array's keys with `length` after the indices", () => {
+    const cell = runtime.getCell<unknown[]>(
+      space,
+      "order-clean",
+      undefined,
+      tx,
+    );
+    cell.set(["a", "b"]);
+    const proxy = createQueryResultProxy<unknown[]>(
       runtime,
       tx,
       cell.getAsNormalizedFullLink(),
       0,
     );
-    cell.set(record);
-    return proxy;
-  }
-
-  it("places a supplied `length` after the index keys, not last", () => {
-    const proxy = arrayTargetOverRecord("order-named", { 0: "a", foo: "x" });
-
-    // A real array orders its own keys indices-first, then `length`, then any
-    // other name. Appending `length` instead would put it after `foo`.
-    expect(Reflect.ownKeys(proxy).map(String)).toEqual(["0", "length", "foo"]);
-  });
-
-  it("does not let a named property masquerade as index-only", () => {
-    const proxy = arrayTargetOverRecord("order-predicate", {
-      0: "a",
-      foo: "x",
-    });
-
-    // The whole point of the ordering: `foo` is a named property, so this
-    // must not read as an index-only array.
-    expect(isArrayWithOnlyIndexProperties(proxy)).toBe(false);
-  });
-
-  it("still reads as index-only when the value has no named properties", () => {
-    const proxy = arrayTargetOverRecord("order-clean", { 0: "a", 1: "b" });
 
     expect(Reflect.ownKeys(proxy).map(String)).toEqual(["0", "1", "length"]);
+    expect(isArrayWithOnlyIndexProperties(proxy)).toBe(true);
+  });
+
+  it("keeps `length` last as elements are added", () => {
+    const cell = runtime.getCell<unknown[]>(
+      space,
+      "order-grows",
+      undefined,
+      tx,
+    );
+    cell.set(["a"]);
+    const proxy = createQueryResultProxy<unknown[]>(
+      runtime,
+      tx,
+      cell.getAsNormalizedFullLink(),
+      0,
+    );
+    cell.set(["a", "b", "c"]);
+
+    expect(Reflect.ownKeys(proxy).map(String)).toEqual([
+      "0",
+      "1",
+      "2",
+      "length",
+    ]);
     expect(isArrayWithOnlyIndexProperties(proxy)).toBe(true);
   });
 });

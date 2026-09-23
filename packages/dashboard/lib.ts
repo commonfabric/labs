@@ -7,8 +7,8 @@
  */
 
 import { isObjectOrArray } from "@commonfabric/utils/types";
-import type { Status } from "./types.ts";
-import { PROD_SERVICE } from "./config.ts";
+import type { Run, Status } from "./types.ts";
+import { PROD_SERVICE, REPO } from "./config.ts";
 import {
   type GitHubPrimaryRateLimit,
   performanceGitHubRateLimit,
@@ -20,9 +20,12 @@ import {
   durationTag,
   escapeHtml,
   groupDigits,
+  humanDuration,
   humanSpan,
   SPARKLINE_HEIGHT,
   STATUS_DOT,
+  STATUS_RANK,
+  worstStatus,
 } from "./tile-render-values.ts";
 
 export {
@@ -32,9 +35,12 @@ export {
   durationTag,
   escapeHtml,
   groupDigits,
+  humanDuration,
   humanSpan,
   SPARKLINE_HEIGHT,
   STATUS_DOT,
+  STATUS_RANK,
+  worstStatus,
 };
 
 // The service.name to scope a SigNoz query to. The name lands inside a query
@@ -488,6 +494,38 @@ async function githubDownloadResponse(
   }
 }
 
+/** The GitHub JSON call a collection makes, so a test can supply its own. */
+export interface GitHubJson {
+  json<T>(path: string, token: string): Promise<T>;
+}
+
+/**
+ * The id of the newest unexpired artifact of `runId` named `name`, or
+ * `undefined` where the run has none.
+ *
+ * The listing filters on the name, so the answer holds the artifacts of that
+ * name alone rather than the hundred and more a run of the test workflow
+ * uploads in total. Artifact ids are monotonic, so the newest of them is the
+ * highest: re-running one job uploads a second artifact under the name that
+ * job uploads, beside the original attempt's.
+ */
+export async function runArtifactId(options: {
+  github: GitHubJson;
+  runId: number;
+  name: string;
+  token: string;
+}): Promise<number | undefined> {
+  const { github, runId, name, token } = options;
+  const params = new URLSearchParams({ name, per_page: "100" });
+  const listed = await github.json<{
+    artifacts?: { id: number; name: string; expired: boolean }[];
+  }>(`repos/${REPO}/actions/runs/${runId}/artifacts?${params}`, token);
+  const ids = (listed.artifacts ?? [])
+    .filter((artifact) => artifact.name === name && !artifact.expired)
+    .map((artifact) => artifact.id);
+  return ids.length === 0 ? undefined : Math.max(...ids);
+}
+
 // Cache an async result for ttlMs; a rejection is not cached (so it retries).
 export function memo<T>(ttlMs: number, fn: () => Promise<T>): () => Promise<T> {
   let at = 0;
@@ -554,6 +592,20 @@ export function usd(n: number): string {
   if (cents === 0) return "$0";
   if (Math.abs(cents) < 100) return `${cents}¢`;
   return `$${Math.round(n)}`;
+}
+
+/**
+ * How long a completed run ran, in milliseconds, or nothing at all when it is
+ * still running or its two timestamps do not describe a span.
+ */
+export function runDurationMs(run: Run): number | undefined {
+  if (run.status !== "completed") return undefined;
+  const start = Date.parse(run.run_started_at);
+  const end = Date.parse(run.updated_at);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return undefined;
+  }
+  return end - start;
 }
 
 // A completed run's dot color: only genuine failures are red.

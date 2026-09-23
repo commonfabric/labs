@@ -23,9 +23,6 @@ export interface RunPatternToolInput {
    */
   patternId?: string;
 
-  /** One-line reasons for selected research patterns this source does not import. */
-  reuseReasons?: Readonly<Record<string, string>>;
-
   inputs?: Record<string, unknown>;
   resultSchema?: JSONSchema;
 }
@@ -43,16 +40,6 @@ export const RUN_PATTERN_INPUT_SCHEMA = {
       type: "string",
       description:
         "Id of a pattern published to the index, as search_patterns reports it. Exactly one of sourceText and patternId is given; the published program is fetched and compiled without passing through this conversation.",
-    },
-    reuseReasons: {
-      type: "object",
-      additionalProperties: {
-        type: "string",
-        minLength: 1,
-        pattern: "^[^\\r\\n]*\\S[^\\r\\n]*(?![\\s\\S])",
-      },
-      description:
-        "One-line reasons keyed by patternId for selected kit.patterns entries this source does not import. Explain why each omitted pattern does not fit this call, including when this is a separate atom or a reader of an existing result. Required for each omission from retained research, even when its kit is incomplete. Unverified leads do not require a reason. Reasons remain in the tool-call record.",
     },
     description: {
       type: "string",
@@ -77,7 +64,7 @@ export const RUN_PATTERN_INPUT_SCHEMA = {
         { type: "object", additionalProperties: true },
       ],
       description:
-        'JSON Schema for the result value. Without it you get resultRef only and no value at all, so pass it whenever you need to read what the pattern computed. A value is returned only for the fields the schema models: an inert one (a number, a boolean, an enum or const string) comes back as itself; anything else is withheld as text and comes back as a reference token addressing that position, which describe_handle can inspect and a later run_pattern can wire by reference. Example: {"type":"object","properties":{"total":{"type":"number"}},"required":["total"]}. The framework\'s own result keys ($NAME, $UI and the other rendering variants) need not be declared. When the space\'s policy does not admit releasing the values to you, value is withheld, valueError says why and which input carried the refused label, and resultRef still names the result: pass it on by reference.',
+        'JSON Schema for the result value. Without it, value is omitted; resultRef and host-computed pending/hasError flags are returned when the release fit admits the flags. A refused host-only status fit silently omits the flags and keeps resultRef. Pass this schema to read computed values such as counts or rows. A value is returned only for the fields the schema models: an inert one (a number, a boolean, an enum or const string) comes back as itself; anything else is withheld as text and comes back as a reference token addressing that position, which describe_handle can inspect and a later run_pattern can wire by reference. Example: {"type":"object","properties":{"total":{"type":"number"}},"required":["total"]}. The framework\'s own result keys ($NAME, $UI and the other rendering variants) need not be declared. When the space\'s policy does not admit releasing the requested values to you, value is withheld, valueError says why and which input carried the refused label, and resultRef still names the result: pass it on by reference.',
     },
   },
   // Exactly one of `sourceText` and `patternId` is required, which is a

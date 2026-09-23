@@ -23,6 +23,7 @@ function suite(
     needs: [],
     units: measured.flatMap((set) => set.units),
     unavailable,
+    whole: [],
     measured,
     locate: () => undefined,
     command: () => Promise.resolve([]),

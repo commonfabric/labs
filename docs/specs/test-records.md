@@ -167,6 +167,14 @@ optional `headCommit` (the pull request's head; `commit` is the ephemeral
 merge commit), and the provenance pair `event` and `fork`, stamped from
 the trusted `workflow_run` payload.
 
+A context also carries `shuffleSeed`, the seed the run's test runners shuffled
+their order by, where they shuffled; a context without one records a run whose
+tests ran in declaration order. Two contexts at one commit describe the same
+order exactly when this field agrees, which is what a consumer comparing
+outcomes needs to know
+([test selection](test-selection.md#two-runs-under-the-same-conditions)). A
+value that is not a non-negative integer makes the line malformed.
+
 Every value is public-repository material. Records and contexts never
 carry usernames, hostnames, tokens, or log text; branch names, agent
 labels, and file paths are world-readable and accepted as such. Failure
@@ -477,8 +485,9 @@ as a fork and carries the flag that keeps it out of a consumer's
 baselines. For runs that do ship, the relay composes each artifact's
 context (run identity and
 provenance from the trusted event payload; the checked-out commit, job
-display name, and machine facts from the artifact's own `job.json`,
-which the payload does not carry) and creates one object per artifact.
+display name, shuffle seed, and machine facts from the artifact's own
+`job.json`, which the payload does not carry) and creates one object per
+artifact.
 
 ## Trust boundaries for consumers
 

@@ -3,7 +3,6 @@ import {
   type FabricContainerValuePlus,
   type FabricInstancePlus,
   type FabricPlainObjectPlus,
-  type FabricValue,
   type FabricValuePlus,
 } from "@/interface.ts";
 import { type FabricContainerValueTag, type FabricValuePlusTag } from "@/types";
@@ -22,7 +21,7 @@ import {
  */
 export abstract class BaseValueVisitor<
   PlusType = never,
-  ResultType = FabricValue,
+  ResultType = FabricValuePlus<PlusType>,
 > implements ValueVisitor<PlusType, ResultType> {
   //
   // Subclass contract
@@ -68,11 +67,44 @@ export abstract class BaseValueVisitor<
   /**
    * @inheritDoc
    *
+   * If not overridden, this returns `true`, thereby corresponding with the
+   * default binding for the result type to `FabricValuePlus<PlusType>`.
+   *
+   * Any visitor with a non-default `PlusType` or `ResultType` _must_ override
+   * this method if the default could cause the engine to return a type-lying
+   * value _and_ the calling client cares about avoiding type lies.
+   */
+  isDomainAssignableToResultType(): boolean {
+    return true;
+  }
+
+  /**
+   * @inheritDoc
+   *
    * If not overridden, this returns `false`, thereby corresponding with the
    * default binding for the `PlusType` parameter to `never`.
+   *
+   * Any visitor with a non-default `PlusType` must override this method if it
+   * is to ever receive `PlusType` values.
    */
   isPlusType(_value: unknown): _value is PlusType {
     return false;
+  }
+
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `true`, thereby corresponding with the
+   * default binding for the result type to `FabricValuePlus<PlusType>`.
+   *
+   * Any visitor with a non-default `PlusType` or `ResultType` _must_ override
+   * this method if the default could cause the engine to return a type-lying
+   * value _and_ the calling client cares about avoiding type lies.
+   */
+  isResultType(
+    _value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
+  ): _value is ResultType {
+    return true;
   }
 
   /**

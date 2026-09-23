@@ -2114,6 +2114,13 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   prepareForCommit(): void;
 
   /**
+   * Runs the same preparation with cooperative yields between targets.
+   * Cancellation aborts the uncommitted transaction. The caller must await
+   * completion before committing; activity during a yield aborts the attempt.
+   */
+  prepareForCommitCooperatively(signal: AbortSignal): Promise<void>;
+
+  /**
    * Runs CFC boundary verification for this transaction and records the
    * prepared digest. Takes no caller-supplied input: the commit-time digest
    * recheck only confirms the prepared input matches real activity, so an

@@ -21,6 +21,9 @@ labels. Preparation permits that single attempt only when its final reference
 and complete stored CFC envelope remain unchanged. Extra attempts, applied
 writes, and changed policy require ordinary writer authorization. This cannot
 adopt an unprotected reference. Streams retain their ordinary declaration path.
+The envelope's version is not a change: a version-1 envelope spells the same
+labels as its version-2 rewrite, so a preserved output leaves it in version 1
+and the document migrates on its next authorized write.
 
 Lowering preserves authored writer-binding syntax through a cell constructor,
 its `.for()` call, and stable local bindings. Generated lift-result and inferred

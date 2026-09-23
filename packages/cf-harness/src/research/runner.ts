@@ -16,6 +16,7 @@ import { mergeLabel } from "@commonfabric/runner/cfc/label-view-core";
 import type {
   HarnessResearchCfcProjection,
   HarnessResearchHandleRecord,
+  HarnessResearchHandleValue,
   HarnessResearchMissingLabel,
   HarnessResearchMissingLabelSource,
   HarnessResearchPatternRecord,
@@ -150,6 +151,14 @@ export interface HarnessResearchRequest {
   /** General handles visible to the calling run. */
   handleTokens: readonly string[];
 
+  /**
+   * Names for those of {@link handleTokens} that are granted references,
+   * keyed by token; a token with no name is listed bare. The name is what
+   * lets research describe the handles a task needs rather than every handle
+   * the run holds to find out which is which.
+   */
+  handleNames?: Readonly<Record<string, string>>;
+
   /** Explicit attachments; only their operator names and tokens reach the model. */
   inputCells?: readonly HarnessInputCell[];
 
@@ -161,6 +170,13 @@ export interface HarnessResearchRequest {
 
   /** Prior research retained by this run, newest last. */
   priorResearchRuns?: readonly HarnessResearchRunSummary[];
+
+  /**
+   * Findings an earlier call admitted, handed in as a research handle. When
+   * present it is the whole of the prior context: the caller chose it by
+   * naming the token, so no selection over retained runs happens here.
+   */
+  priorResearch?: HarnessResearchHandleValue;
 
   /** Index-resolved pattern attachments supplied with the root task. */
   attachedPatterns?: readonly TrustedPatternRecord[];
@@ -570,7 +586,9 @@ const userPrompt = (
   request: HarnessResearchRequest,
 ): string => {
   const retained = request.priorResearchRuns ?? [];
-  const prior = request.followUpTo === undefined
+  const prior = request.priorResearch !== undefined
+    ? [request.priorResearch]
+    : request.followUpTo === undefined
     ? selectResearchContext(retained)
     : retained.filter((run) =>
       run.researchRunId === request.followUpTo ||
@@ -593,7 +611,10 @@ const userPrompt = (
     "",
     "Authoritative general handle inventory for this research call:",
     request.handleTokens.length > 0
-      ? request.handleTokens.join("\n")
+      ? request.handleTokens.map((token) => {
+        const name = request.handleNames?.[token];
+        return name === undefined ? token : `${token} — ${name}`;
+      }).join("\n")
       : "No general handles are available.",
     ...(request.inputCells === undefined ? [] : [
       "",
@@ -1051,7 +1072,10 @@ const invokeResearchTool = async (
       if (request.getPatternIndex === undefined) {
         throw new Error("this run has no configured pattern index");
       }
-      const patternId = stringValue(input.patternId, 500);
+      const patternId = stringValue(input.patternId, 500).replace(
+        /^cf:pattern:/,
+        "",
+      );
       if (patternId.length === 0) throw new Error("patternId is required");
       return await inspectPattern(
         state,
@@ -1060,7 +1084,11 @@ const invokeResearchTool = async (
       );
     }
     case "open_pattern_file": {
-      const patternId = stringValue(input.patternId, 500);
+      const patternId = stringValue(input.patternId, 500).replace(
+        /^cf:pattern:/,
+        "",
+      );
+      if (patternId.length === 0) throw new Error("patternId is required");
       const path = stringValue(input.path, 2_000);
       const program = state.programs.get(patternId);
       if (program === undefined) {
@@ -1175,7 +1203,13 @@ async (request) => {
       integrity: structuredClone([...section.integrity]),
     });
   }
-  for (const prior of request.priorResearchRuns ?? []) {
+  // An explicit handle is the whole prior context, so only its label and gaps
+  // fold in; the retained runs fold in when nothing was named.
+  for (
+    const prior of request.priorResearch === undefined
+      ? request.priorResearchRuns ?? []
+      : [request.priorResearch]
+  ) {
     if (prior.cfc === undefined) {
       addMissingLabel(
         state,

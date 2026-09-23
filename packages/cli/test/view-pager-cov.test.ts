@@ -21,8 +21,10 @@ import { parseDiff } from "../lib/view/diff.ts";
 import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
 import { diffSource } from "../lib/view/diffedit.ts";
 import { ViewError } from "../lib/view/errors.ts";
-import { term } from "../lib/view/ansi.ts";
-import { ui } from "../lib/view/theme.ts";
+import { sgr, term } from "../lib/view/ansi.ts";
+import { onGrammarLoad } from "../lib/view/languages/language.ts";
+import { swiftLanguage } from "../lib/view/languages/swift/language.ts";
+import { styleFor, ui } from "../lib/view/theme.ts";
 import { buildView } from "../lib/view/mod.ts";
 
 const OPTS = { color: false, showLineNumbers: false };
@@ -39,7 +41,10 @@ type Step =
   | { bytes: Uint8Array }
   | { eof: true }
   | { fire: Deno.Signal }
-  | { fireTimers: true };
+  | { fireTimers: true }
+  | { parserLoaded: true }
+  | { parserFailed: string }
+  | { wait: Promise<unknown> };
 
 interface FakeOpts {
   steps?: Step[];
@@ -59,6 +64,10 @@ function makeFake(opts: FakeOpts = {}) {
   const signals = new Map<string, () => void>();
   const removed: string[] = [];
   const timers = new Map<number, () => void>();
+  const parserListeners = new Set<(failure?: string) => void>();
+  // How many writes the parser listeners made, which is how a test sees that
+  // a finished load drew the document again.
+  const parserWrites = { count: 0 };
   const exited: number[] = [];
   const ttyState = { rawModes: [] as boolean[], closes: 0 };
   let nextTimer = 1;
@@ -66,17 +75,31 @@ function makeFake(opts: FakeOpts = {}) {
   const steps = (opts.steps ?? []).slice();
 
   const tty: PagerTty = {
-    read(buf) {
+    async read(buf) {
       for (;;) {
         const step = steps.shift();
-        if (!step) return Promise.resolve(null);
+        if (!step) return null;
         if ("bytes" in step) {
           buf.set(step.bytes);
-          return Promise.resolve(step.bytes.length);
+          return step.bytes.length;
         }
-        if ("eof" in step) return Promise.resolve(null);
+        if ("eof" in step) return null;
+        if ("wait" in step) {
+          await step.wait;
+          continue;
+        }
         if ("fire" in step) {
           signals.get(step.fire)?.();
+          continue;
+        }
+        if ("parserLoaded" in step) {
+          const before = writes.length;
+          for (const listener of parserListeners) listener();
+          parserWrites.count += writes.length - before;
+          continue;
+        }
+        if ("parserFailed" in step) {
+          for (const listener of parserListeners) listener(step.parserFailed);
           continue;
         }
         const handlers = [...timers.values()];
@@ -135,8 +158,22 @@ function makeFake(opts: FakeOpts = {}) {
     // Resolve at once: a test drives frames with `fireTimers`, so a real wait
     // here would only stall the run.
     delay: () => Promise.resolve(),
+    onGrammarLoad: (listener) => {
+      parserListeners.add(listener);
+      return () => parserListeners.delete(listener);
+    },
   };
-  return { deps, writes, signals, removed, timers, exited, ttyState };
+  return {
+    deps,
+    writes,
+    signals,
+    removed,
+    timers,
+    exited,
+    ttyState,
+    parserListeners,
+    parserWrites,
+  };
 }
 
 Deno.test("pager: a missing /dev/tty raises a ViewError", async () => {
@@ -363,6 +400,83 @@ Deno.test("pager: an edit schedules the deferred reparse, which then runs", asyn
   }
 });
 
+Deno.test("pager: a parser that finishes loading re-parses and redraws the document", async () => {
+  const { doc, source, dir, parses } = editableDoc();
+  try {
+    const { deps, parserListeners, parserWrites } = makeFake({
+      steps: [{ parserLoaded: true }, { eof: true }],
+    });
+    await runPager(doc, OPTS, undefined, source, deps);
+    assertEquals(parses(), 1, "the loaded parser re-parsed the document");
+    assert(parserWrites.count > 0, "the document was drawn again");
+    assertEquals(parserListeners.size, 0, "the pager stopped listening");
+  } finally {
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
+Deno.test("pager: a Swift file parsed before its parser loads is colored once it loads", async () => {
+  const dir = Deno.makeTempDirSync();
+  try {
+    const path = join(dir, "main.swift");
+    const text = "func greet() {}\n";
+    Deno.writeTextFileSync(path, text);
+    const source = fileSource(path);
+    // Nothing in this file loads the Swift parser first, so this parse is the
+    // first use: it shows plain text and starts the load.
+    const doc = source.parse(text);
+    assertEquals(doc.structure, []);
+    const { deps, writes } = makeFake({
+      steps: [{ wait: swiftLanguage.prepare!() }, { eof: true }],
+    });
+    deps.onGrammarLoad = onGrammarLoad;
+
+    await runPager(
+      doc,
+      { color: true, showLineNumbers: false },
+      undefined,
+      source,
+      deps,
+    );
+
+    // The frame merges the editor background into the keyword's sequence.
+    const keyword = sgr(styleFor("storageKeyword")).slice(0, -1);
+    const colored = new RegExp(`${keyword.replace("[", "\\[")}[;0-9]*mfunc`);
+    const frames = writes.filter((frame) => frame.includes("greet"));
+    assertEquals(colored.test(frames[0]), false, "the first frame is plain");
+    assert(
+      frames.some((frame) => colored.test(frame)),
+      "a frame drawn after the load colors the declaring keyword",
+    );
+  } finally {
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
+Deno.test("pager: a parser that cannot load says why and leaves the document as it was", async () => {
+  const { doc, source, dir, parses } = editableDoc();
+  try {
+    const { deps, writes } = makeFake({
+      steps: [
+        { parserFailed: "cf view: the swift grammar could not be read." },
+        { eof: true },
+      ],
+      // Wide enough for the status line to hold the whole reason.
+      consoleSize: { columns: 200, rows: 24 },
+    });
+    await runPager(doc, OPTS, undefined, source, deps);
+    assertEquals(parses(), 0, "nothing was parsed again");
+    assert(
+      writes.join("").includes(
+        "cf view: the swift grammar could not be read. Its files are shown as plain text.",
+      ),
+      "the reason is in the status line",
+    );
+  } finally {
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
 Deno.test("pager: a second edit reschedules the reparse; a pending timer is cleared on exit", async () => {
   const { doc, source, dir, parses } = editableDoc();
   try {
@@ -416,6 +530,7 @@ Deno.test("realPagerDeps: the wrappers reach the real primitives", () => {
   d.env("CF_VIEW_DEFINITELY_UNSET");
   const cancel = d.setTimer(() => {}, 0);
   cancel();
+  d.onGrammarLoad(() => {})();
   // Opening the controlling terminal either succeeds (close it) or throws when
   // the test has none; both reach the wrapper.
   try {

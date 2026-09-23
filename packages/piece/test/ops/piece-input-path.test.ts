@@ -177,9 +177,10 @@ describe("piece input paths", () => {
       hidden: "retained",
     });
     expect(
-      await piece.input.edit((stored) => ({ value: `${stored} edited` }), [
-        "title",
-      ]),
+      await piece.input.edit(
+        (stored) => ({ value: `${String(stored)} edited` }),
+        ["title"],
+      ),
     ).toEqual({ wrote: true });
     expect(await piece.input.get(["title"])).toBe("Topic edited");
   });

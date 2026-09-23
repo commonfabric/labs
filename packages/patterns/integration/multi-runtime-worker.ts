@@ -1058,3 +1058,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
     fail,
   );
 };
+
+(self as unknown as Worker).postMessage(
+  { ready: true } satisfies WorkerResponse,
+);

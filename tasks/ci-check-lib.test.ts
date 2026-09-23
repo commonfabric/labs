@@ -145,6 +145,7 @@ Deno.test("coverage baseline files round-trip compile cache states", () => {
     ],
   ]);
   const states: CompileCacheStates = {
+    "compile-cache": "cold",
     "generated-patterns": "cold",
     "pattern-unit": "warm",
   };

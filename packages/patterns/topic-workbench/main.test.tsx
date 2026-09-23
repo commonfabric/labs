@@ -19,8 +19,12 @@
  * harness no source runs is listed but starts nothing, the rail's own
  * buttons attach and detach a row and add the topic's words to the prompt,
  * provider identities differing only in where a slash falls stay apart while
- * casing and padding the connector normalizes join the same row, and a verb
- * call without both ids is refused.
+ * casing and padding the connector normalizes join the same row, a verb
+ * call without both ids is refused, and a desktop start sends the surface
+ * and no mode, is confirmed by the session the app makes under an id of its
+ * own that names the start's as `startedAs`, joins under that id, drops its
+ * record on Detach by row or by verb, and is blocked with the reason over a
+ * source that cannot open the app.
  */
 import {
   action,
@@ -45,13 +49,18 @@ import type {
   Attachment,
   CommandValue,
   IndexBucketView,
+  PairedSessionIndexView,
   SessionIndexView,
   SessionStart,
   StartableSourcesView,
 } from "../workbench/sessions.ts";
 import Workbench, { type TopicView } from "./main.tsx";
 
-type IndexFixture = SessionIndexView & StartableSourcesView & IndexBucketView;
+type IndexFixture =
+  & SessionIndexView
+  & StartableSourcesView
+  & IndexBucketView
+  & PairedSessionIndexView;
 
 /** The first queued command, decoded; `null` when the queue is empty. */
 // deno-lint-ignore no-explicit-any
@@ -66,6 +75,23 @@ const lastCommand = (queued: readonly CommandValue[]): any =>
 /** Whether the Start control is disabled, as the rendered tree has it. */
 const startDisabled = (root: unknown): boolean =>
   propValue(findNode(root, isButton("Start")), "disabled") === true;
+
+/** An index row for a session the app made for a desktop start: its own id,
+ * and the start's as `startedAs`. */
+const appMade = (id: string, startedAs: string) => ({
+  sourceId: "claude",
+  nativeSessionId: id,
+  title: "topic #7: Workbench topic",
+  cwd: "/w/labs",
+  gitRepo: null,
+  gitBranch: "main",
+  gitWorktreeRoot: null,
+  updatedAt: "2026-09-16T21:00:00.000Z",
+  active: true,
+  archived: false,
+  syncStatus: "complete",
+  startedAs,
+});
 
 // Plain rows stand in for the connector's linked child cells: the pattern
 // reads the same shallow fields either way. Codex is configured but its driver
@@ -219,6 +245,33 @@ export default pattern(() => {
       ],
     }),
     attached: keysAttached,
+  });
+  // A desktop start: the connector opens Claude Code on this Mac with the
+  // kickoff ready to send; the session the app makes carries the start's id
+  // as `startedAs` and its own id everywhere else.
+  const desktopIndex = new Writable<IndexFixture>({
+    ...INDEX,
+    sources: [{
+      id: "claude",
+      driver: "claude-agent-sdk",
+      capabilities: { startSession: true, surfaces: ["headless", "desktop"] },
+    }],
+  });
+  const deskCommands = new Writable<CommandValue[] | Default<[]>>([]);
+  const deskStarts = new Writable<SessionStart[] | Default<[]>>([]);
+  const desk = Workbench({
+    topic,
+    sessions: desktopIndex,
+    attached: new Writable<Attachment[] | Default<[]>>([]),
+    commands: deskCommands,
+    starts: deskStarts,
+    startMode: "acceptEdits",
+    startSurface: "desktop",
+  });
+  const deskBlocked = Workbench({
+    topic,
+    sessions: index,
+    startSurface: "desktop",
   });
   // A start mode for the first turn, and a harness shown that no source runs.
   const shownCommands = new Writable<CommandValue[] | Default<[]>>([]);
@@ -647,6 +700,144 @@ export default pattern(() => {
     )
   );
 
+  // A desktop start: the caption says where the session opens and names no
+  // permission mode; the command carries the surface and no mode; the start
+  // waits as starting until the app's session, made under its own id and
+  // naming the start's, confirms it, and then the session is attached under
+  // its own id. Detach on the row drops the start's record; so does the
+  // detach verb given the session's own id.
+  const assert_desktop_note = assert(() =>
+    desk.startBlocker === "" &&
+    hasText(desk[UI], "Opens Claude Code on this Mac with the kickoff ready") &&
+    !hasText(desk[UI], "permission mode")
+  );
+  const action_desktop_start = action(() => {
+    desk.spawnRoot.set("/w/labs");
+    desk.spawnPrompt.set("Open it in the app.");
+    desk.startSession.send();
+  });
+  const assert_desktop_started = assert(() =>
+    deskCommands.get().length === 1 &&
+    firstCommand(deskCommands.get())?.payload?.surface === "desktop" &&
+    firstCommand(deskCommands.get())?.payload?.mode === undefined &&
+    firstCommand(deskCommands.get())?.payload?.cwd === "/w/labs" &&
+    (firstCommand(deskCommands.get())?.payload?.text ?? "").startsWith(
+      "Open it in the app.",
+    ) &&
+    desk.startingSessions.length === 1 &&
+    desk.attachedSessions.length === 0 &&
+    hasText(desk[UI], "sent to Claude Code on this Mac")
+  );
+  const action_desktop_confirm = action(() => {
+    const started = firstCommand(deskCommands.get())?.nativeSessionId ?? "";
+    const current = desktopIndex.get();
+    desktopIndex.set({
+      ...current,
+      sessions: [...current.sessions, appMade("app-made-1", started)],
+    });
+  });
+  const assert_desktop_confirmed = assert(() =>
+    desk.startingSessions.length === 0 &&
+    desk.attachedSessions.length === 1 &&
+    desk.attachedSessions[0]?.nativeSessionId === "app-made-1" &&
+    desk.attachedSessions[0]?.startedAs ===
+      firstCommand(deskCommands.get())?.nativeSessionId &&
+    desk.attachedSessions[0]?.gitBranch === "main" &&
+    desk.recentSessions.every((row) => row.nativeSessionId !== "app-made-1") &&
+    desk.startBlocker === ""
+  );
+  const action_desktop_detach = action(() => {
+    clickInRow(desk[UI], "topic #7: Workbench topic", "Detach");
+  });
+  const assert_desktop_detached = assert(() =>
+    desk.attachedSessions.length === 0 &&
+    deskStarts.get().length === 0 &&
+    desk.recentSessions.some((row) => row.nativeSessionId === "app-made-1")
+  );
+  const action_desktop_start_again = action(() => {
+    desk.spawnPrompt.set("Once more.");
+    desk.startSession.send();
+  });
+  const assert_desktop_started_again = assert(() =>
+    deskCommands.get().length === 2 && desk.startingSessions.length === 1
+  );
+  const action_desktop_confirm_again = action(() => {
+    const started = lastCommand(deskCommands.get())?.nativeSessionId ?? "";
+    const current = desktopIndex.get();
+    desktopIndex.set({
+      ...current,
+      sessions: [...current.sessions, appMade("app-made-2", started)],
+    });
+  });
+  const assert_desktop_confirmed_again = assert(() =>
+    desk.startingSessions.length === 0 &&
+    desk.attachedSessions.length === 1 &&
+    desk.attachedSessions[0]?.nativeSessionId === "app-made-2"
+  );
+  // The index marks the app's session deleted: the row shows from the
+  // start's record, naming no start of its own, and Detach on it still finds
+  // the start through the index's pairings and drops the record, so the
+  // session does not come straight back as a confirmed start.
+  const action_desktop_delete_row = action(() => {
+    // The deleted row is built from plain data: spreading the stored row
+    // would carry only the fields its view had materialized.
+    const started = lastCommand(deskCommands.get())?.nativeSessionId ?? "";
+    const current = desktopIndex.get();
+    desktopIndex.set({
+      ...current,
+      sessions: current.sessions.map((s) =>
+        s && s.nativeSessionId === "app-made-2"
+          ? {
+            ...appMade("app-made-2", started),
+            syncStatus: "deleted" as const,
+          }
+          : s
+      ),
+    });
+  });
+  const assert_desktop_deleted_still_attached = assert(() =>
+    desk.attachedSessions.length === 1 &&
+    desk.attachedSessions[0]?.nativeSessionId === "app-made-2" &&
+    desk.attachedSessions[0]?.startedAs === ""
+  );
+  const action_desktop_detach_deleted = action(() => {
+    clickInRow(desk[UI], "topic #7: Workbench topic", "Detach");
+  });
+  const assert_desktop_deleted_detached = assert(() =>
+    desk.attachedSessions.length === 0 && deskStarts.get().length === 0
+  );
+  // A third start, confirmed, is dropped by the detach verb given the
+  // session's own id.
+  const action_desktop_start_third = action(() => {
+    desk.spawnPrompt.set("A third time.");
+    desk.startSession.send();
+  });
+  const action_desktop_confirm_third = action(() => {
+    const started = lastCommand(deskCommands.get())?.nativeSessionId ?? "";
+    const current = desktopIndex.get();
+    desktopIndex.set({
+      ...current,
+      sessions: [...current.sessions, appMade("app-made-3", started)],
+    });
+  });
+  const assert_desktop_confirmed_third = assert(() =>
+    desk.startingSessions.length === 0 &&
+    desk.attachedSessions.length === 1 &&
+    desk.attachedSessions[0]?.nativeSessionId === "app-made-3"
+  );
+  const action_desktop_detach_verb = action(() => {
+    desk.detach.send({ sourceId: "claude", nativeSessionId: "app-made-3" });
+  });
+  const assert_desktop_verb_detached = assert(() =>
+    desk.attachedSessions.length === 0 && deskStarts.get().length === 0
+  );
+  // Over a source that cannot open the app, a desktop start is blocked.
+  const assert_desktop_blocked = assert(() =>
+    deskBlocked.startBlocker ===
+      "claude cannot open a session in Claude Code on this Mac; pick a harness that can, or start headlessly." &&
+    startDisabled(deskBlocked[UI])
+  );
+
   // The join key keeps `("a/b", "c")` apart from `("a", "b/c")`, and an
   // attach spelled with the source's casing and padding the connector
   // normalizes away joins the row all the same, under one record.
@@ -757,6 +948,32 @@ export default pattern(() => {
       { assertion: assert_clicked_detached },
       { action: action_click_topic_words },
       { assertion: assert_topic_words_appended },
+      { render: desk[UI] },
+      { assertion: assert_desktop_note },
+      { action: action_desktop_start },
+      { render: desk[UI] },
+      { assertion: assert_desktop_started },
+      { action: action_desktop_confirm },
+      { assertion: assert_desktop_confirmed },
+      { render: desk[UI] },
+      { action: action_desktop_detach },
+      { assertion: assert_desktop_detached },
+      { action: action_desktop_start_again },
+      { assertion: assert_desktop_started_again },
+      { action: action_desktop_confirm_again },
+      { assertion: assert_desktop_confirmed_again },
+      { action: action_desktop_delete_row },
+      { assertion: assert_desktop_deleted_still_attached },
+      { render: desk[UI] },
+      { action: action_desktop_detach_deleted },
+      { assertion: assert_desktop_deleted_detached },
+      { action: action_desktop_start_third },
+      { action: action_desktop_confirm_third },
+      { assertion: assert_desktop_confirmed_third },
+      { action: action_desktop_detach_verb },
+      { assertion: assert_desktop_verb_detached },
+      { render: deskBlocked[UI] },
+      { assertion: assert_desktop_blocked },
       { action: action_attach_keys },
       { assertion: assert_keys_distinct },
       { action: action_detach_keys },

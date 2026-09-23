@@ -208,8 +208,10 @@ exposes none of them and a walk stops there (Section 8.6).
 >   via their registry key. **Unique** symbols (`Symbol(desc)`, where
 >   `Symbol.keyFor(s)` returns `undefined`) have no portable representation and
 >   are rejected. The TypeScript `symbol` type cannot express this distinction,
->   so it is enforced at runtime by the conversion, hashing, and encoding
->   boundaries (Sections 4.9, 6, and 5). Symbol-keyed *properties* on plain
+>   so it is enforced at runtime by membership, by the tag dispatch (which tags
+>   a unique symbol `null`, as it does a function), and by the conversion,
+>   hashing, and encoding boundaries (Sections 4.9, 6, and 5). Symbol-keyed
+>   *properties* on plain
 >   objects are a separate matter — see Section 1.5 (Plain Containers /
 >   Objects).
 > - `function` — Functions are opaque closures with no portable representation.
@@ -3664,6 +3666,7 @@ four categories by high nibble:
 |:------------------|:-------|:--------|:--------------------------------|
 | `TAG_END`         | `0x00` | 0       | end-of-sequence sentinel         |
 | `TAG_HOLE`        | `0x01` | 1       | sparse array holes (run-length) |
+| `TAG_CYCLE`       | `0x02` | 2       | cycle reference to a container on the path |
 
 **Compound tags (`0x1N`)** — containers whose children are tagged values:
 
@@ -3818,6 +3821,12 @@ export function hashOf(value: unknown): FabricHash {
   //                        where `codec` is `codecOf(v)` -- the class's
   //                        `[CODEC]` (Section 2.4), the same source of
   //                        truth the codec layer uses.
+  // - cycle:               an array, object, or `FabricInstance` that is
+  //                        already on the path from the root (by identity)
+  //                        is hashed as hash(TAG_CYCLE, leb128(distance)),
+  //                        where `distance` counts up the path from this
+  //                        position: 1 for the enclosing container. See
+  //                        the byte-level spec, Section 4.19.
   //
   // The JS object wrappers and temporal types are hashed as follows:
   //
@@ -3941,8 +3950,15 @@ Otherwise, an iterative comparison visits each distinct object pair once and
 skips identical descendants. Sharing is not itself content: one shared child can
 equal multiple independent copies. Cycles compare the contents reached through
 corresponding edges; a mismatch reachable after a back edge still makes the
-values unequal. Equality therefore supports cyclic values even when the hash
-encoding does not.
+values unequal. Equality therefore supports cyclic values.
+
+For a cyclic value, though, this comparison and the content hash can disagree,
+because the hash also distinguishes where a cycle closes
+(`2-hash-byte-format.md` Section 4.19): `a = {x: a}` and `b = {x: {x: b}}`
+compare equal by the walk above, and hash differently. Since available hashes
+settle a comparison, the result for such a pair also depends on whether both
+of its hashes are cached. That is an exception to the governing principle, and
+to the statement below that caching a hash does not change an equality result.
 
 **UTF-8 representation.** Container equality preserves the hash encoding's
 replacement of lone UTF-16 surrogates with U+FFFD in strings, symbol registry
@@ -4221,9 +4237,11 @@ export function fabricFromConvertibleJsValue(
 > and whatever the value's prototype names: an `Error` re-pointed at
 > `Object.prototype` is still `"JsError"`.
 > Then the `typeof` question, ahead of every object question: a primitive,
-> and `null`, is tagged by its `typeof` name, and a function comes back
-> `null`, whatever its prototype names, since a function is never asked an
-> object question.
+> and `null`, is tagged by its `typeof` name; a function comes back `null`,
+> whatever its prototype names, since a function is never asked an object
+> question; and a symbol is tagged `"symbol"` only when it is
+> registry-interned, a unique symbol coming back `null` for the reason
+> Section 1.3 gives.
 > An array is tagged next, by `Array.isArray()`, so a subclass instance, a
 > severed-prototype array, and a cross-realm array all reach array handling and
 > are handled by the array rule of Section 1.5, rather than being rejected as
@@ -4234,17 +4252,21 @@ export function fabricFromConvertibleJsValue(
 > lets the object rule of Section 1.5 reject the value by name rather than as
 > some unrecognized class. Then a `FabricPrimitive`, by the tag its instance
 > reports, one of `FABRIC_PRIMITIVE_VALUE_TAGS`, and a `FabricInstance`, by
-> class. What remains is a JS class instance, decided last by its class, read
-> from its prototype, by a `switch` on constructor identity; a
+> class. What remains is a JS class instance, decided last by its class, by a
+> `switch` on the identity of its prototype; a
 > recognized one is a value the conversion has yet to import, the heavier
 > path, so the lookup's cost sits on it alone. That `switch` names only the
 > classes no earlier question decides: an object merely built on a plain
 > object, or on the prototype of `Array` or of an `Error` class, is none of
 > those by the test that decides it, and comes back `null`, unrecognized
-> rather than misidentified. Constructor identity is a per-realm question, so
+> rather than misidentified. Prototype identity is a per-realm question, so
 > a `Map`, `Set`, `Date`, `Uint8Array`, or `RegExp` from another realm comes
 > back `null` the same way, where an array or an error from another realm is
-> decided by the earlier test that holds across realms. A
+> decided by the earlier test that holds across realms. The realm's global
+> constructor bindings do not enter into it: SES lockdown replaces the global
+> `Date` and `RegExp` with constructors of its own that keep the original
+> prototypes, so an instance made before lockdown, after it, or inside a
+> compartment is recognized alike. A
 > `FabricPrimitive` subclass that reports no tag of its own is tagged as its
 > parent, which is a defect in that subclass rather than one the dispatch
 > guards against.

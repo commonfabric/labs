@@ -283,8 +283,8 @@ export interface VerbDeps {
    *
    * The rule is what a caller can check, and it is checked: a case cancels
    * from inside each read there is and at each line's first suspension, and
-   * asserts that nothing was read afterwards (`shuttle-verbs.test.ts`). That
-   * observes the property instead of enumerating the boundaries, so a
+   * asserts that nothing was read afterwards (`shuttle-verbs.serial.test.ts`).
+   * That observes the property instead of enumerating the boundaries, so a
    * boundary nobody thought of fails it too.
    *
    * What it cannot stop is a read already sent: the runtime's reads take no
@@ -349,7 +349,7 @@ export type Ran<T> = { readonly kind: "ran"; readonly answer: T };
  * So this is a guarantee against the edit somebody makes, not against the
  * edit somebody constructs, and the cases are what cover the second: a line
  * cancelled at its first suspension reaches this function before its read,
- * and every verb that reads has such a case (`shuttle-verbs.test.ts`).
+ * and every verb that reads has such a case (`shuttle-verbs.serial.test.ts`).
  *
  * There are two checks and not one, and the second is what a caller relies on
  * without knowing it. The first stops the act; the second stops its *answer*,

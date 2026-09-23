@@ -12,6 +12,7 @@
 // Built in one reconstruction pass over the space (buildAllDetails) so link
 // targets and owner→child names resolve against the whole space.
 
+import type { FabricValue } from "@commonfabric/data-model";
 import {
   isObjectNotArray,
   type ReadonlyRecord,
@@ -115,7 +116,7 @@ export interface EntityDetail {
 
   /** The result JSONSchema (annotated), if the entity carries one. Streams and
    * named owned cells get their DECLARED schema resolved from the owner piece. */
-  schema?: unknown;
+  schema?: FabricValue;
 
   schemaKeys?: string[];
 
@@ -268,7 +269,7 @@ function parseCfc(
 function declaredSchemaFor(
   ownerDoc: EntityDocument | undefined,
   key: string,
-): { schema: unknown; keys?: string[]; via: string } | undefined {
+): { schema: FabricValue; keys?: string[]; via: string } | undefined {
   // 1. inline schema carried on the naming link, in either at-rest form.
   const naming = isObjectNotArray(ownerDoc?.value)
     ? (ownerDoc!.value as Record<string, unknown>)[key]

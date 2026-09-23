@@ -3,12 +3,9 @@ import { describe, it } from "@std/testing/bdd";
 import {
   formatError,
   parseOnly,
-  parseShard,
   patternsToCheck,
   selectionFor,
-  shardLabel,
   USAGE,
-  WHOLE,
 } from "./cfcheck-lib.ts";
 
 /** Four patterns, spread across the trees the collector walks. */
@@ -67,30 +64,6 @@ describe("cfcheck-lib", () => {
     });
   });
 
-  describe("parseShard()", () => {
-    it("returns the whole corpus where the environment names no share", () => {
-      expect(parseShard(undefined)).toEqual(WHOLE);
-      expect(parseShard("")).toEqual(WHOLE);
-    });
-
-    it("counts from one outside and from zero inside", () => {
-      // `CFCHECK_SHARD=1/8` is the first of eight, which selects the files
-      // whose index leaves no remainder.
-      expect(parseShard("1/8")).toEqual({ index: 0, count: 8 });
-      expect(parseShard("8/8")).toEqual({ index: 7, count: 8 });
-    });
-
-    it("throws for a share it cannot read", () => {
-      expect(() => parseShard("nonsense")).toThrow();
-      expect(() => parseShard("1/")).toThrow();
-    });
-
-    it("throws for a share outside the count it names", () => {
-      expect(() => parseShard("9/8")).toThrow();
-      expect(() => parseShard("0/8")).toThrow();
-    });
-  });
-
   describe("patternsToCheck()", () => {
     it("takes the whole corpus where no term was given", () => {
       expect(patternsToCheck(CORPUS, [])).toEqual(CORPUS);
@@ -121,60 +94,20 @@ describe("cfcheck-lib", () => {
     it("takes nothing for a term no pattern matches", () => {
       expect(patternsToCheck(CORPUS, ["no-such-pattern"])).toEqual([]);
     });
-
-    it("divides the corpus between the shares of a shard", () => {
-      const first = patternsToCheck(CORPUS, [], { index: 0, count: 2 });
-      const second = patternsToCheck(CORPUS, [], { index: 1, count: 2 });
-      expect(first).toEqual([
-        "packages/connectors/agents/debug-view/logic.ts",
-        "packages/patterns/form-demo.tsx",
-      ]);
-      // Between them the two shares are the corpus, with nothing in both.
-      expect([...first, ...second].toSorted()).toEqual([...CORPUS].toSorted());
-    });
-
-    it("divides what the terms selected rather than the corpus", () => {
-      // The shard applies after the filter. Dividing first and filtering
-      // second would leave one share holding both matches and the other
-      // holding none, so a two-process run would do all its work in one.
-      const only = ["packages/patterns/counter/counter.tsx", "home.tsx"];
-      const first = patternsToCheck(CORPUS, only, { index: 0, count: 2 });
-      const second = patternsToCheck(CORPUS, only, { index: 1, count: 2 });
-      expect(first).toEqual(["packages/patterns/counter/counter.tsx"]);
-      expect(second).toEqual(["packages/patterns/system/home.tsx"]);
-    });
   });
 
   describe("selectionFor()", () => {
-    it("reads the command line and the share together", () => {
-      const selected = selectionFor(
-        CORPUS,
-        ["--only", "packages/patterns/"],
-        "2/2",
-      );
-
-      expect(selected.shard).toEqual({ index: 1, count: 2 });
-      expect(selected.files).toEqual(["packages/patterns/form-demo.tsx"]);
+    it("takes the patterns the command line names", () => {
+      expect(selectionFor(CORPUS, ["--only", "home.tsx"]))
+        .toEqual(["packages/patterns/system/home.tsx"]);
     });
 
-    it("takes the whole corpus given neither", () => {
-      expect(selectionFor(CORPUS, [], undefined))
-        .toEqual({ files: CORPUS, shard: WHOLE });
+    it("takes the whole corpus given no term", () => {
+      expect(selectionFor(CORPUS, [])).toEqual(CORPUS);
     });
 
-    it("throws rather than widening, for either one it cannot read", () => {
-      expect(() => selectionFor(CORPUS, ["--only"], undefined)).toThrow();
-      expect(() => selectionFor(CORPUS, [], "nonsense")).toThrow();
-    });
-  });
-
-  describe("shardLabel()", () => {
-    it("says which share a run took, of how many", () => {
-      expect(shardLabel({ index: 0, count: 8 })).toBe(" [shard 1/8]");
-    });
-
-    it("says nothing for a run that took the whole corpus", () => {
-      expect(shardLabel(WHOLE)).toBe("");
+    it("throws rather than widening, for a command line it cannot read", () => {
+      expect(() => selectionFor(CORPUS, ["--only"])).toThrow();
     });
   });
 
@@ -189,11 +122,8 @@ describe("cfcheck-lib", () => {
   });
 
   describe("USAGE", () => {
-    it("names both the flag and the environment variable", () => {
-      // A caller who gets this has already had one of them refused, so it
-      // has to name the other as well for the message to be any use.
+    it("names the flag", () => {
       expect(USAGE).toContain("--only");
-      expect(USAGE).toContain("CFCHECK_SHARD");
     });
   });
 });

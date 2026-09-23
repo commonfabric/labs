@@ -445,12 +445,12 @@ export function expressionToTypeNode(
   expr: ts.Expression,
   context: TransformationContext,
 ): ts.TypeNode {
-  const authoredCell = getAuthoredCellTypeNode(
+  const constructedCell = getConstructedCellTypeNode(
     expr,
     context.checker,
     context.state.typeRegistry,
   );
-  if (authoredCell) return authoredCell;
+  if (constructedCell) return constructedCell;
   const symbol = ts.isIdentifier(expr)
     ? context.checker.getSymbolAtLocation(expr)
     : undefined;
@@ -481,11 +481,18 @@ export function expressionToTypeNode(
 }
 
 /**
- * Preserve a cell constructor's authored type arguments through identity-
- * preserving bindings. Printing its inferred type expands `typeof handler`
- * into a structural function type, which cannot name a CFC writer.
+ * The type of a cell an expression constructs, written with the type arguments
+ * its author gave the constructor. The expression is read back to the `new`
+ * through the forms that keep the cell's identity: an unannotated `const`, and
+ * `.for()`. Printing the inferred type instead expands `typeof handler` into a
+ * structural function type, which cannot name a CFC writer, so this applies
+ * only where the arguments name a value binding ({@link namesValueBinding}).
+ *
+ * `getAuthoredCellValueTypeNode()` in `type-shrinking.ts` is the reader for the
+ * other direction: it starts from a cell's type node and returns the value
+ * type inside it.
  */
-export function getAuthoredCellTypeNode(
+export function getConstructedCellTypeNode(
   expression: ts.Expression,
   checker: ts.TypeChecker,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
@@ -509,7 +516,7 @@ export function getAuthoredCellTypeNode(
         !(declaration.parent.flags & ts.NodeFlags.Const)
       ) return undefined;
       if (declaration.initializer) {
-        return getAuthoredCellTypeNode(
+        return getConstructedCellTypeNode(
           declaration.initializer,
           checker,
           typeRegistry,
@@ -523,7 +530,7 @@ export function getAuthoredCellTypeNode(
     ts.isPropertyAccessExpression(node.expression) &&
     node.expression.name.text === "for"
   ) {
-    return getAuthoredCellTypeNode(
+    return getConstructedCellTypeNode(
       node.expression.expression,
       checker,
       typeRegistry,
@@ -531,7 +538,10 @@ export function getAuthoredCellTypeNode(
     );
   }
   if (
-    !ts.isNewExpression(node) || !node.typeArguments?.some(containsTypeQuery)
+    !ts.isNewExpression(node) ||
+    !node.typeArguments?.some((argument) =>
+      namesValueBinding(argument, checker)
+    )
   ) return undefined;
   const kind = detectNewExpressionKind(node, checker);
   if (!kind) return undefined;
@@ -547,10 +557,47 @@ export function getAuthoredCellTypeNode(
   return typeNode;
 }
 
-/** Whether the authored syntax names a value binding instead of just its shape. */
-export function containsTypeQuery(node: ts.Node): boolean {
-  return ts.isTypeQueryNode(node) ||
-    ts.forEachChild(node, containsTypeQuery) === true;
+/**
+ * Whether authored type syntax names a value binding (`typeof handler`)
+ * instead of just a shape: in the node itself, in anything it holds, or in a
+ * type alias or interface it refers to by name, through any import binding.
+ * A generic alias is read without substituting its parameters, since the
+ * question is only whether a `typeof` is written anywhere the reference
+ * reaches; the reference's own arguments are read as the nodes it holds.
+ *
+ * Only declarations in authored modules are followed. A writer binding names
+ * a value in authored code, so an alias that carries one is authored too, and
+ * a declaration file's `typeof` (a brand key, say) names no writer.
+ */
+export function namesValueBinding(
+  node: ts.Node,
+  checker: ts.TypeChecker,
+  seen = new Set<ts.Node>(),
+): boolean {
+  if (ts.isTypeQueryNode(node)) return true;
+  if (ts.isTypeReferenceNode(node)) {
+    const name = ts.isIdentifier(node.typeName)
+      ? node.typeName
+      : node.typeName.right;
+    let symbol = checker.getSymbolAtLocation(name);
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
+      symbol = checker.getAliasedSymbol(symbol);
+    }
+    for (const declaration of symbol?.declarations ?? []) {
+      if (
+        !(ts.isTypeAliasDeclaration(declaration) ||
+          ts.isInterfaceDeclaration(declaration)) ||
+        declaration.getSourceFile().isDeclarationFile ||
+        seen.has(declaration)
+      ) continue;
+      seen.add(declaration);
+      if (namesValueBinding(declaration, checker, seen)) return true;
+    }
+  }
+  return ts.forEachChild(
+    node,
+    (child) => namesValueBinding(child, checker, seen) || undefined,
+  ) === true;
 }
 
 export function getDeclaredTypeNodeForBindingElement(

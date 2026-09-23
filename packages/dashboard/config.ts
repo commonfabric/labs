@@ -28,6 +28,12 @@ export const LOOM_CI_WORKFLOW = "test-fast.yml";
 export const CI_RUNS_MAX = 200; // workflow runs
 export const CI_RUNS_MAX_AGE_DAYS = 60; // ~2 months
 
+// How long a job's failure stays red on the ci tile. A job that has been
+// failing for longer than this is still failing, and still listed, but it is
+// no longer the thing that just broke, so it goes orange and leaves the red
+// for a failure somebody can still act on.
+export const CI_FAILURE_FRESH_HOURS = 48;
+
 // Tile display windows and status thresholds (tune here).
 export const TRUST_GOOD = 90, TRUST_WARN = 75; // first-try-green %
 export const DUR_GOOD = 12, DUR_WARN = 20; // median CI minutes

@@ -13,7 +13,6 @@ import {
 import { TILE_LAYOUT_FIXTURES } from "./tile-layout-fixtures.ts";
 import { runSource, type Ctx, type Run } from "./types.ts";
 import { CI_WORKFLOW, LOOM_CI_WORKFLOW, LOOM_REPO, REPO } from "./config.ts";
-import { labsCi, loomCi } from "./tiles/main-build.ts";
 import { labsCiTrust, loomCiTrust } from "./tiles/ci-trust.ts";
 import { labsCiDuration, loomCiDuration } from "./tiles/ci-duration.ts";
 import { commitGanttHref, recentRuns } from "./tiles/recent-runs.ts";
@@ -96,26 +95,6 @@ function cellColors(extra: string | undefined): string[] {
     .map((match) => match[1])
     .reverse();
 }
-
-Deno.test("labs ci:passing tip -> good", async () => {
-  const v = await labsCi.collect(ctx([run({ conclusion: "success" })]));
-  assertEquals(v.status, "good");
-  assertEquals(v.value, "passing");
-});
-
-Deno.test("labs ci:failing tip -> bad (shows the raw conclusion)", async () => {
-  const v = await labsCi.collect(ctx([run({ conclusion: "failure" })]));
-  assertEquals(v.status, "bad");
-  assertEquals(v.value, "failure");
-});
-
-Deno.test("labs ci:no completed runs -> unknown", async () => {
-  const v = await labsCi.collect(
-    ctx([run({ status: "in_progress", conclusion: null })]),
-  );
-  assertEquals(v.status, "unknown");
-  assertEquals(v.value, "—");
-});
 
 Deno.test("labs ci trust: only first-attempt success counts as green", async () => {
   // Two of four completed runs passed first try. A success on retry remains in
@@ -360,6 +339,27 @@ Deno.test("labs ci trust: an earlier attempt GitHub does not return fails the co
       );
     },
   );
+});
+
+Deno.test("labs ci trust: an earlier attempt that is not the one asked for fails the collection", async () => {
+  const retried = run({ conclusion: "success", run_attempt: 2 });
+  const answers: Run[] = [
+    // Still going, so it carries no verdict to read.
+    { ...attemptOf(retried, 1, "failure"), status: "in_progress", conclusion: null },
+    // Another run's attempt.
+    { ...attemptOf(retried, 1, "failure"), id: retried.id + 1 },
+    // Another attempt of the same run.
+    attemptOf(retried, 2, "failure"),
+  ];
+  for (const answer of answers) {
+    await withGithubAttempt(answer, async () => {
+      await assertRejects(
+        () => labsCiTrust.collect(ctx([retried])),
+        Error,
+        "did not include a completed conclusion",
+      );
+    });
+  }
 });
 
 Deno.test("labs ci trust: a job count GitHub does not return fails the collection", async (t) => {
@@ -686,18 +686,10 @@ Deno.test("recent runs: duration opens every successful run for the commit", asy
   assertStringIncludes(html, '>42s</a><a class="evarrow"');
 });
 
-Deno.test("tile labels: the labs/loom ci family is renamed and paired", async () => {
+Deno.test("ci trust: both repositories keep their strip at the tile bottom", async () => {
   const one = ctx([run({ conclusion: "success" })]);
-  const labsTrust = await labsCiTrust.collect(one);
-  const loomTrust = await loomCiTrust.collect(one);
-  assertEquals((await labsCi.collect(one)).label, "labs ci");
-  assertEquals((await loomCi.collect(one)).label, "loom ci");
-  assertEquals(labsTrust.label, "labs ci trust");
-  assertEquals(loomTrust.label, "loom ci trust");
-  assertEquals(labsTrust.alignChartBottom, true);
-  assertEquals(loomTrust.alignChartBottom, true);
-  assertEquals((await labsCiDuration.collect(one)).label, "labs ci duration");
-  assertEquals((await loomCiDuration.collect(one)).label, "loom ci duration");
+  assertEquals((await labsCiTrust.collect(one)).alignChartBottom, true);
+  assertEquals((await loomCiTrust.collect(one)).alignChartBottom, true);
 });
 
 Deno.test("runSource creates workflow snapshot metadata", () => {
@@ -710,26 +702,13 @@ Deno.test("runSource creates workflow snapshot metadata", () => {
 Deno.test("CI tiles declare the workflow snapshots that drive them", () => {
   const labsSource = [{ repo: REPO, workflow: CI_WORKFLOW }];
   const loomSource = [{ repo: LOOM_REPO, workflow: LOOM_CI_WORKFLOW }];
-  for (const tile of [labsCi, labsCiTrust, labsCiDuration]) {
+  for (const tile of [labsCiTrust, labsCiDuration]) {
     assertEquals(tile.runSources, labsSource);
   }
-  for (const tile of [loomCi, loomCiTrust, loomCiDuration]) {
+  for (const tile of [loomCiTrust, loomCiDuration]) {
     assertEquals(tile.runSources, loomSource);
   }
   assertEquals(recentRuns.runSources, [...labsSource, ...loomSource]);
-});
-
-Deno.test("labs ci: an in-flight build renders at the bottom (extra), not the header (aside)", async () => {
-  const runs = [
-    run({ status: "in_progress", conclusion: null, display_title: "wip" }),
-    run({ conclusion: "success" }),
-  ];
-  const v = await labsCi.collect(ctx(runs));
-  assertStringIncludes(v.extra ?? "", "next build running");
-  assert(
-    !(v.aside ?? "").includes("next build running"),
-    "the badge is no longer in the header aside",
-  );
 });
 
 Deno.test("recent runs: labs and loom runs interleave chronologically, each tagged", async () => {
@@ -755,6 +734,9 @@ Deno.test("recent runs: labs and loom runs interleave chronologically, each tagg
   assertEquals(order, ["3", "7", "2", "6"]);
   assertStringIncludes(v.extra ?? "", "labs · ");
   assertStringIncludes(v.extra ?? "", "loom · ");
+  assertStringIncludes(v.aside ?? "", ">4 in window</span>");
+  // The list's scroll position carries over live updates.
+  assertStringIncludes(v.extra ?? "", '<div class="evscroll" data-focus-key="runs">');
 });
 
 Deno.test("dau: distinct identities per UTC day, excluding the DIDs we name", () => {
@@ -980,11 +962,11 @@ Deno.test("benchmark: formatNs picks a readable unit", () => {
   assertEquals(formatNs(NaN), "—");
 });
 
-Deno.test("registry: unique ids and positive intervals", () => {
-  const ids = TILES.map((t) => t.id);
-  assertEquals(new Set(ids).size, ids.length, "tile ids must be unique");
+Deno.test("registry: unique labels and positive intervals", () => {
+  const labels = TILES.map((t) => t.label);
+  assertEquals(new Set(labels).size, labels.length, "tile labels must be unique");
   for (const t of TILES) {
-    assert(t.intervalMs > 0, `${t.id} needs a positive intervalMs`);
+    assert(t.intervalMs > 0, `${t.label} needs a positive intervalMs`);
   }
 });
 
@@ -994,23 +976,23 @@ Deno.test("every tile's drill-down link reaches a route the dashboard serves", (
   const served = new Set(
     TILES.flatMap((tile) => tile.routes ?? []).map((route) => route.path),
   );
-  for (const { id, view } of TILE_LAYOUT_FIXTURES) {
+  for (const { label, view } of TILE_LAYOUT_FIXTURES) {
     if (view.href === undefined || /^https?:/.test(view.href)) continue;
     const path = new URL(view.href, "http://dashboard").pathname;
     assert(
       served.has(path),
-      `${id} links to ${path}, which no registered tile serves`,
+      `${label} links to ${path}, which no registered tile serves`,
     );
   }
 });
 
 Deno.test("layout fixtures cover every registered tile in registry order", () => {
   assertEquals(
-    TILE_LAYOUT_FIXTURES.map(({ id }) => id),
-    TILES.map(({ id }) => id),
+    TILE_LAYOUT_FIXTURES.map(({ label }) => label),
+    TILES.map(({ label }) => label),
   );
   assertEquals(
-    TILE_LAYOUT_FIXTURES.filter(({ wide }) => wide).map(({ id }) => id),
-    TILES.filter(({ wide }) => wide).map(({ id }) => id),
+    TILE_LAYOUT_FIXTURES.filter(({ wide }) => wide).map(({ label }) => label),
+    TILES.filter(({ wide }) => wide).map(({ label }) => label),
   );
 });

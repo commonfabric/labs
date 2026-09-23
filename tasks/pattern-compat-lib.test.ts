@@ -170,6 +170,17 @@ describe("parseArgs", () => {
   it("rejects an unknown argument rather than silently checking everything", () => {
     expect(() => parseArgs(["--updat"])).toThrow(/Unknown argument/);
   });
+
+  it("reads --update beside a filter", () => {
+    expect(parseArgs(["--update", "--only", "home"])).toEqual({
+      update: true,
+      only: ["home"],
+    });
+  });
+
+  it("refuses a filter with no value rather than checking everything", () => {
+    expect(() => parseArgs(["--only"])).toThrow("--only needs a value");
+  });
 });
 
 describe("parseShard", () => {

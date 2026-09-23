@@ -12,8 +12,9 @@ import {
   assertMatch,
   assertStringIncludes,
 } from "@std/assert";
-import type { Ctx } from "../types.ts";
+import type { Ctx, Tile } from "../types.ts";
 import { buildSnapshot, discordOnline, loadHistory } from "./discord-online.ts";
+import type * as discordOnlineModule from "./discord-online.ts";
 
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
@@ -196,8 +197,8 @@ async function withWire(opts: Opts, body: (w: Wire) => Promise<void>): Promise<v
 
 // Take the poll up to the point where the gateway has said HELLO and the tile has
 // identified. The returned promise is the collect() still in flight.
-function connect(w: Wire, heartbeatMs = 41_250) {
-  const view = discordOnline.collect(ctx(LIVE));
+function connect(w: Wire, tile: Tile = discordOnline, heartbeatMs = 41_250) {
+  const view = tile.collect(ctx(LIVE));
   w.socket().deliver({ op: 10, d: { heartbeat_interval: heartbeatMs } });
   return view;
 }
@@ -293,95 +294,104 @@ Deno.test("discord snapshot: absent Team aliases do not produce a valid snapshot
   assertEquals(missing, null);
 });
 
-Deno.test("discord online: a snapshot -> good; the reloaded history draws the chart, stale samples age out", async () => {
-  // This is the first test that reaches the history, so it is the one that sees
-  // the file being loaded. The load happens once per process, on first use.
+Deno.test("discord online: the history is read from disk once and carried from poll to poll", async (t) => {
+  // The tile module loads the history file once, on the first poll that
+  // records a sample, and each later poll works on what that load left. These
+  // steps poll a copy of the module no other test has polled, so the first of
+  // them sees the load, and they run in the order in which each builds on the
+  // one before.
 
-  clock = T0;
-  const persisted = [
-    { t: T0 - 90 * DAY, team: 1, visitors: 1 }, // past the 60-day retention window
-    { t: T0 - 2 * DAY, team: 3, visitors: 4 },
-    "nonsense",
-    null,
-    42,
-    { t: T0 - DAY, team: 1 }, // missing `visitors`: not a point
-  ];
-  await withWire({ read: () => Promise.resolve(JSON.stringify(persisted)) }, async (w) => {
-    const view = connect(w);
-    w.socket().deliver({ op: 0, t: "GUILD_CREATE", d: GUILD });
-    const v = await view;
+  const fresh: typeof discordOnlineModule = await import(
+    `./discord-online.ts?history=${crypto.randomUUID()}`
+  );
 
-    assertEquals(v.status, "good");
-    assertEquals(v.value, "3"); // a, b and d are online; c is not
-    // The span reaches back to the sample from two days ago, which only exists
-    // because the file was reloaded.
-    assertEquals(v.duration, 2 * DAY);
-    assertStringIncludes(v.extra ?? "", "<svg");
-    assertMatch(
-      v.extra ?? "",
-      new RegExp(`background:light-dark\\(#[0-9a-f]{6},${VISITOR_GREY}\\)`),
-    );
-    assertMatch(
-      v.extra ?? "",
-      /background:light-dark\(#[0-9a-f]{6},#2ecc71\)/,
-    ); // the team role's own color
-    // With the chart drawn the counts sit at each line's end, not in the subline.
-    assertStringIncludes(v.extra ?? "", "team + ");
-
-    // What was persisted: the retained sample plus the fresh one. The ancient
-    // sample and the entries that are not points are gone.
-    assertEquals(w.reads.length, 1);
-    assertStringIncludes(w.reads[0], "fabric-wall-discord-history.json");
-    assertEquals(w.writes.length, 1);
-    assertEquals(JSON.parse(w.writes[0].data), [
+  await t.step("a snapshot -> good; the reloaded history draws the chart, stale samples age out", async () => {
+    clock = T0;
+    const persisted = [
+      { t: T0 - 90 * DAY, team: 1, visitors: 1 }, // past the 60-day retention window
       { t: T0 - 2 * DAY, team: 3, visitors: 4 },
-      { t: T0, team: 2, visitors: 1 },
-    ]);
-    // Written to a temp file, then renamed over the file it read.
-    assertEquals(w.writes[0].path, `${w.reads[0]}.tmp`);
-    assertEquals(w.renames, [{ from: `${w.reads[0]}.tmp`, to: w.reads[0] }]);
+      "nonsense",
+      null,
+      42,
+      { t: T0 - DAY, team: 1 }, // missing `visitors`: not a point
+    ];
+    await withWire({ read: () => Promise.resolve(JSON.stringify(persisted)) }, async (w) => {
+      const view = connect(w, fresh.discordOnline);
+      w.socket().deliver({ op: 0, t: "GUILD_CREATE", d: GUILD });
+      const v = await view;
 
-    // The socket and its heartbeat are both stopped before the poll resolves.
-    assertEquals(w.socket().closed, true);
-    assertEquals(w.cleared, [BEAT_ID]);
+      assertEquals(v.status, "good");
+      assertEquals(v.value, "3"); // a, b and d are online; c is not
+      // The span reaches back to the sample from two days ago, which only exists
+      // because the file was reloaded.
+      assertEquals(v.duration, 2 * DAY);
+      assertStringIncludes(v.extra ?? "", "<svg");
+      assertMatch(
+        v.extra ?? "",
+        new RegExp(`background:light-dark\\(#[0-9a-f]{6},${VISITOR_GREY}\\)`),
+      );
+      assertMatch(
+        v.extra ?? "",
+        /background:light-dark\(#[0-9a-f]{6},#2ecc71\)/,
+      ); // the team role's own color
+      // With the chart drawn the counts sit at each line's end, not in the subline.
+      assertStringIncludes(v.extra ?? "", "team + ");
+
+      // What was persisted: the retained sample plus the fresh one. The ancient
+      // sample and the entries that are not points are gone.
+      assertEquals(w.reads.length, 1);
+      assertStringIncludes(w.reads[0], "fabric-wall-discord-history.json");
+      assertEquals(w.writes.length, 1);
+      assertEquals(JSON.parse(w.writes[0].data), [
+        { t: T0 - 2 * DAY, team: 3, visitors: 4 },
+        { t: T0, team: 2, visitors: 1 },
+      ]);
+      // Written to a temp file, then renamed over the file it read.
+      assertEquals(w.writes[0].path, `${w.reads[0]}.tmp`);
+      assertEquals(w.renames, [{ from: `${w.reads[0]}.tmp`, to: w.reads[0] }]);
+
+      // The socket and its heartbeat are both stopped before the poll resolves.
+      assertEquals(w.socket().closed, true);
+      assertEquals(w.cleared, [BEAT_ID]);
+    });
   });
-});
 
-Deno.test("discord online: a two-month gap ages the history out; a lone sample shows its counts inline", async () => {
-  clock = T0 + 90 * DAY;
-  await withWire({}, async (w) => {
-    const view = connect(w);
-    w.socket().deliver({ op: 0, t: "GUILD_CREATE", d: GUILD });
-    const v = await view;
+  await t.step("a two-month gap ages the history out; a lone sample shows its counts inline", async () => {
+    clock = T0 + 90 * DAY;
+    await withWire({}, async (w) => {
+      const view = connect(w, fresh.discordOnline);
+      w.socket().deliver({ op: 0, t: "GUILD_CREATE", d: GUILD });
+      const v = await view;
 
-    assertEquals(v.status, "good");
-    assertEquals(v.value, "3");
-    // Every earlier sample is past the window, so there is nothing to chart.
-    assertEquals(v.duration, 0);
-    assert(!(v.extra ?? "").includes("<svg"), "one sample is not a chart");
-    // A numberless tile would be useless, so the counts move into the subline.
-    assertStringIncludes(v.extra ?? "", "team 2 + ");
-    assertStringIncludes(v.extra ?? "", "visitors 1");
-    assertEquals(JSON.parse(w.writes[0].data), [{ t: clock, team: 2, visitors: 1 }]);
-    // The file is read once per process, not once per poll.
-    assertEquals(w.reads.length, 0);
+      assertEquals(v.status, "good");
+      assertEquals(v.value, "3");
+      // Every earlier sample is past the window, so there is nothing to chart.
+      assertEquals(v.duration, 0);
+      assert(!(v.extra ?? "").includes("<svg"), "one sample is not a chart");
+      // A numberless tile would be useless, so the counts move into the subline.
+      assertStringIncludes(v.extra ?? "", "team 2 + ");
+      assertStringIncludes(v.extra ?? "", "visitors 1");
+      assertEquals(JSON.parse(w.writes[0].data), [{ t: clock, team: 2, visitors: 1 }]);
+      // The file is read once per process, not once per poll.
+      assertEquals(w.reads.length, 0);
+    });
   });
-});
 
-Deno.test("discord online: a history that can't be persisted is logged, not fatal", async () => {
-  clock = T0 + 90 * DAY + HOUR;
-  await withWire({ write: () => Promise.reject(new Error("no space left on device")) }, async (w) => {
-    const view = connect(w);
-    w.socket().deliver({ op: 0, t: "GUILD_CREATE", d: GUILD });
-    const v = await view;
+  await t.step("a history that can't be persisted is logged, not fatal", async () => {
+    clock = T0 + 90 * DAY + HOUR;
+    await withWire({ write: () => Promise.reject(new Error("no space left on device")) }, async (w) => {
+      const view = connect(w, fresh.discordOnline);
+      w.socket().deliver({ op: 0, t: "GUILD_CREATE", d: GUILD });
+      const v = await view;
 
-    // The poll still reports what it saw, and the chart still spans the hour
-    // between this sample and the last.
-    assertEquals(v.status, "good");
-    assertEquals(v.value, "3");
-    assertEquals(v.duration, HOUR);
-    assertEquals(w.logged, ["discord: could not persist history: no space left on device"]);
-    assertEquals(w.renames, [], "a failed write is never renamed into place");
+      // The poll still reports what it saw, and the chart still spans the hour
+      // between this sample and the last.
+      assertEquals(v.status, "good");
+      assertEquals(v.value, "3");
+      assertEquals(v.duration, HOUR);
+      assertEquals(w.logged, ["discord: could not persist history: no space left on device"]);
+      assertEquals(w.renames, [], "a failed write is never renamed into place");
+    });
   });
 });
 
@@ -415,7 +425,7 @@ Deno.test("discord online: the identify frame carries the token and the privileg
 
 Deno.test("discord online: heartbeats go out at the gateway's interval; a dead socket's tick is swallowed", async () => {
   await withWire({}, async (w) => {
-    const view = connect(w, 41_250);
+    const view = connect(w, discordOnline, 41_250);
     assertEquals(w.beatMs, 41_250); // the interval HELLO asked for, not one of our own
     w.beat();
     assertEquals(w.socket().frames()[1], { op: 1, d: null });

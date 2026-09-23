@@ -4413,6 +4413,34 @@ export type ToIndentedDebugStringFunction = (
   value: unknown,
   options?: DebugValueOptions,
 ) => string;
+/**
+ * Composes a diagnostic message. A substitution is converted the way a
+ * template literal converts one, except that the conversion never throws, and
+ * except where a _directive_ comes right before it: a dollar sign and one or
+ * more comma-separated words, as in `$quote,long${value}`. The directive is
+ * removed from the text, and the value after it gets a debug rendering, cut to
+ * the size its size word names and quoted where it holds `quote`.
+ *
+ * - With no `indent`, the rendering is that of `toCompactDebugString()`, cut
+ *   to 50 characters, or with `long` to 500, or with `xlong` to 5000; `short`
+ *   names the default. With `quote` it is a Markdown code span.
+ * - With `indent`, the rendering is that of `toIndentedDebugString()`, cut to
+ *   5 lines, or with `long` to 50, or with `xlong` to 500. With `quote` it is
+ *   a Markdown fenced block on lines of its own.
+ *
+ * Either way the quoting survives a backtick in the value, which a
+ * hand-written pair of backticks does not. A backslash before the dollar sign,
+ * as in `\$quote${value}`, makes the text literal and the substitution an
+ * ordinary one. A directive holding any other word stays in the message as
+ * text, where the misspelling can be seen, and its value gets the default
+ * rendering.
+ *
+ * As with the renderers it calls, how a value renders is not a contract.
+ */
+export type DebugStrFunction = (
+  strings: TemplateStringsArray,
+  ...values: readonly unknown[]
+) => string;
 
 /**
  * Compare two cells or values for equality after resolving, i.e. after
@@ -4514,6 +4542,7 @@ export function getPatternEnvironment(): PatternEnvironment {
 }
 export declare const toCompactDebugString: ToCompactDebugStringFunction;
 export declare const toIndentedDebugString: ToIndentedDebugStringFunction;
+export declare const debugStr: DebugStrFunction;
 
 export interface UiActionProps {
   readonly as?: string;

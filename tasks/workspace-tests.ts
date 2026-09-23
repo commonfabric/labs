@@ -17,6 +17,7 @@ import {
   recordsDir,
   spoolWriteArgument,
 } from "@commonfabric/test-support/records";
+import { DENO_TEST_TASK } from "./run-member-tests.ts";
 import { parseShard, type Shard } from "./shard-utils.ts";
 import { WORKSPACE_TEST_WEIGHTS } from "./test-timing-weights.ts";
 import { writeUnlaunchedMembers } from "./unlaunched-members.ts";
@@ -210,37 +211,33 @@ const INTERNALLY_SHARDED_PACKAGES: Record<
     total: 5,
     envVar: "AGENTS_HOST_TEST_SHARD",
   },
-  // packages/cli/test/run-tests.ts reads CLI_TEST_SHARD.
   cli: { total: 10, envVar: "CLI_TEST_SHARD" },
   piece: { total: 3, envVar: "PIECE_TEST_SHARD" },
   tasks: { total: 3, envVar: "TASK_TEST_SHARD" },
 };
 
-// A member's test task takes an appended `--junit-path` whole when it runs
-// exactly one `deno test`. That is read from the task itself, so a package
-// that lands with an ordinary test task is covered without being listed
-// anywhere. Two shapes are not readable from the task line, and both are
-// named below.
+// A member's leaf — its `test` task, or the `deno-test` that task hands
+// the flags to when it runs `tasks/run-member-tests.ts` — takes an
+// appended `--junit-path` whole when it runs exactly one `deno test`.
+// That is read from the task itself, so a package that lands with an
+// ordinary leaf is covered without being listed anywhere. A leaf carrying
+// a shell metacharacter puts the appended flag somewhere other than the
+// test command, and takes it for none.
 //
-// A task carrying a shell metacharacter puts the appended flag somewhere
-// other than the test command: `api` chains a type-performance benchmark
-// after its tests, and `patterns` runs two test commands, so the flag
-// would reach only the last one. A member that names its halves as
-// separate tasks has no `test` command at all, and takes neither flag for
-// the same reason a dependencies-only task does not.
-//
-// A task that runs a script cannot show what the script does with the
-// flags it is handed. The members listed here route through a runner that
-// forwards them to one `deno test`. The runners that do not appear here
-// keep their leaves out: `cli` runs three `deno test` invocations per
-// slice, which would each overwrite the file, and `dashboard` and
-// `identity` drive browser harnesses that record through the
-// deno-web-test reporter instead.
-const FLAG_FORWARDING_RUNNERS = new Set([
-  "./packages/connectors/agents/host",
-  "./packages/piece",
-  "./tasks",
-]);
+// A leaf that runs a script of its own cannot show what the script does
+// with the flags it is handed. `tasks/run-sharded-test-files.ts` is the
+// script known to forward them: it hands them to its `deno test` runs and
+// leaves one report where the flag names. A leaf running any other script
+// is kept out: `dashboard` and `identity` drive browser harnesses that
+// record through the deno-web-test reporter instead.
+const FLAG_FORWARDING_RUNNER = "run-sharded-test-files.ts";
+
+/** Whether a leaf task runs the script that forwards its flags. */
+function runsForwardingRunner(task: string): boolean {
+  return task.split(/\s+/).some((word) =>
+    path.basename(word) === FLAG_FORWARDING_RUNNER
+  );
+}
 
 /**
  * A directory, given as a path or a URL, as a URL that member paths
@@ -286,6 +283,7 @@ interface MemberManifest {
 async function memberManifest(
   member: string,
   root: string | URL,
+  task = "test",
 ): Promise<MemberManifest> {
   const rootUrl = directoryUrl(root);
   for (const manifest of ["deno.json", "deno.jsonc"]) {
@@ -299,9 +297,43 @@ async function memberManifest(
     const tasks = (parseJsonc(text) as {
       tasks?: Record<string, TaskDefinition>;
     })?.tasks;
-    return { path: manifestPath, testTask: tasks?.test };
+    return { path: manifestPath, testTask: tasks?.[task] };
   }
   return { path: `${member}/deno.jsonc`, testTask: undefined };
+}
+
+/**
+ * The wrapper a member's `test` task runs where it runs several
+ * commands, and the task that wrapper hands the appended flags to.
+ */
+const MEMBER_TEST_RUNNER = "run-member-tests.ts";
+
+/**
+ * The command a member's appended flags reach.
+ *
+ * `deno task` appends to the `test` task's own command line, so for most
+ * members that command is the one. A member running the wrapper above is
+ * the exception: the wrapper hands the flags to that member's
+ * `deno-test` and to nothing else, so that is the command whose shape
+ * decides whether a report path and the preload can be used at all.
+ *
+ * Reading through the wrapper here is what keeps this runner and the
+ * test topology reading one thing. The topology already prefers a
+ * member's `deno-test` over its `test`, and a member whose two readers
+ * disagree is selectable a file at a time and recorded not at all.
+ */
+export async function leafTask(
+  member: string,
+  root: string | URL = Deno.cwd(),
+): Promise<string | undefined> {
+  const task = await memberTestTask(member, root);
+  if (task === undefined) return undefined;
+  const runs = task.split(/\s+/).some((word) =>
+    word.endsWith(`/${MEMBER_TEST_RUNNER}`)
+  );
+  if (!runs) return task;
+  const { testTask } = await memberManifest(member, root, DENO_TEST_TASK);
+  return typeof testTask === "string" ? testTask : testTask?.command;
 }
 
 /**
@@ -342,9 +374,10 @@ export async function assertMemberTestTasksDefined(
     [
       `Every workspace member needs a \`test\` task of its own.`,
       `Missing from: ${named}.`,
-      `Add a \`test\` entry to that manifest's \`tasks\` — \`deno test\` where`,
-      `the package has tests, or \`echo 'No tests defined.'\` where it has`,
-      `none yet, as \`packages/utils/deno.jsonc\` shows. Put it in the file`,
+      `Add a \`test\` entry to that manifest's \`tasks\` — one running`,
+      `\`tasks/run-member-tests.ts\` over a \`deno-test\` entry where the`,
+      `package has tests, as \`packages/utils/deno.jsonc\` shows, or`,
+      `\`echo 'No tests defined.'\` where it has none yet. Put it in the file`,
       `named above rather than in a second manifest beside it: where a member`,
       `carries both a \`deno.json\` and a \`deno.jsonc\`, Deno takes the`,
       `\`deno.json\` and ignores the other whole, \`imports\` and all.`,
@@ -356,16 +389,14 @@ export async function assertMemberTestTasksDefined(
 }
 
 /**
- * Whether an appended `--junit-path` reaches this member's `deno test`
- * whole, so the runner can thread the flag and ingest the XML it writes.
+ * Whether an appended `--junit-path` reaches the `deno test` of a member
+ * whose leaf is `task`, whole, so the runner can thread the flag and
+ * ingest the XML it writes.
  */
-export function acceptsJUnitPath(
-  member: string,
-  task: string | undefined,
-): boolean {
-  if (FLAG_FORWARDING_RUNNERS.has(member)) return true;
+export function acceptsJUnitPath(task: string | undefined): boolean {
   if (task === undefined) return false;
   if (/[&;|<>]/.test(task)) return false;
+  if (runsForwardingRunner(task)) return true;
   return /(^|\s)deno test(\s|$)/.test(task);
 }
 
@@ -380,11 +411,8 @@ export function acceptsJUnitPath(
  * with nothing of this repository's own between the file and
  * `Deno.test`.
  */
-export function acceptsPreload(
-  member: string,
-  task: string | undefined,
-): boolean {
-  if (!acceptsJUnitPath(member, task)) return false;
+export function acceptsPreload(task: string | undefined): boolean {
+  if (!acceptsJUnitPath(task)) return false;
   return task === undefined || !/--import-map[= ]/.test(task);
 }
 
@@ -420,9 +448,9 @@ export function recordingSpool(
  * permission the preload has. Every other member runs its leaf directly,
  * and the whole line is that leaf's.
  */
-export function leafFlags(member: string, task: string): string[] {
+export function leafFlags(task: string): string[] {
   const tokens = task.split(/\s+/);
-  if (!FLAG_FORWARDING_RUNNERS.has(member)) return tokens;
+  if (!runsForwardingRunner(task)) return tokens;
   const forwarded = tokens.indexOf("--");
   return forwarded === -1 ? tokens : tokens.slice(forwarded + 1);
 }
@@ -440,12 +468,12 @@ export async function memberRecordingArguments(
 ): Promise<Map<string, string[]>> {
   const recording = new Map<string, string[]>();
   for (const member of members) {
-    const task = await memberTestTask(member, root);
-    if (!acceptsPreload(member, task)) {
+    const task = await leafTask(member, root);
+    if (!acceptsPreload(task)) {
       recording.set(member, []);
       continue;
     }
-    const write = spoolWriteArgument(leafFlags(member, task ?? ""), spool);
+    const write = spoolWriteArgument(leafFlags(task ?? ""), spool);
     recording.set(
       member,
       write === undefined ? [preloadArgument()] : [preloadArgument(), write],
@@ -461,7 +489,7 @@ export async function junitCapableMembers(
 ): Promise<Set<string>> {
   const capable = new Set<string>();
   for (const member of members) {
-    if (acceptsJUnitPath(member, await memberTestTask(member, root))) {
+    if (acceptsJUnitPath(await leafTask(member, root))) {
       capable.add(member);
     }
   }

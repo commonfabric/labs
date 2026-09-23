@@ -67,7 +67,7 @@ jobs:
         working-directory: packages/cf-harness
         env:
           CF_HARNESS_PROPERTY_ARTIFACT_ROOT: ${{ runner.temp }}/cfc-properties
-        run: deno test -A test/cfc-properties/
+        run: deno test --shuffle=$(deno task -q test-seed) -A test/cfc-properties/
 
       - name: 🔎 Audit the artifacts the suite just wrote
         working-directory: packages/cf-harness

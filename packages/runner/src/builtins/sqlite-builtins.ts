@@ -873,18 +873,10 @@ export function sqliteQuery(
   let selectedResult: Cell<QueryState>;
   let resultScope: CellScope | undefined;
 
-  // This node's own lifetime. A request that is staged and never sent settles
-  // its ending on transactions of its own, after the run that staged it, so a
-  // piece cancelled in between would otherwise write that ending to a result
-  // cell nobody is reading — and worse, to one whose runtime-owned
-  // ENROLLMENT the cancellation just released, which is what carries route 2.
-  // The write would then arrive at a store whose control paths resolve to the
-  // empty ceiling again, and at `enforce-strict` it is refused exactly as the
-  // incident this builtin's route-2 work exists to remove.
-  //
-  // `#7902` gives every phase of this builtin an `AbortController` off the
-  // same hook. When it lands, its controller replaces this one rather than
-  // joining it: one signal, and the endings below read that instead.
+  // One owner signal covers query work and completion writebacks. Unsent
+  // endings also observe it: cancellation releases the result store's
+  // runtime-owned enrollment, so a later write loses its transaction-derived
+  // policy.
   const cancelled = new AbortController();
   addCancel(() => cancelled.abort());
 
@@ -904,6 +896,7 @@ export function sqliteQuery(
   let sequence = 0;
 
   const action: Action = (tx: IExtendedStorageTransaction) => {
+    if (cancelled.signal.aborted) return;
     const inputs = inputsCell.withTx(tx).get() as {
       db?: unknown;
       sql?: string;
@@ -1409,6 +1402,7 @@ export function sqliteQuery(
       // `trackAsyncWork` for that reason; the unsent settle above is separate
       // work with its own completion, and is registered.
       async () => {
+        if (cancelled.signal.aborted) return;
         inFlightIssues.add(effectKey);
         // The requesting RUN's identity, applied to every writeback
         // transaction of this flush (OW53; serving-loop.md §4: the effect
@@ -1462,16 +1456,20 @@ export function sqliteQuery(
           // Write an error result for THIS request, guarded against a newer query
           // (different inputs -> different hash) that superseded it mid-flight.
           const failQuery = (error: string) =>
-            runtime.editWithRetry((wtx) => {
-              markEffectCompletion(wtx, effectKey);
-              applyRunIdentity(wtx);
-              if (storedRequestHash(wtx) !== hash) return;
-              result.withTx(wtx).set({
-                pending: false,
-                error,
-                requestHash: hash,
-              });
-            });
+            runtime.editWithRetry(
+              (wtx) => {
+                markEffectCompletion(wtx, effectKey);
+                applyRunIdentity(wtx);
+                if (storedRequestHash(wtx) !== hash) return;
+                result.withTx(wtx).set({
+                  pending: false,
+                  error,
+                  requestHash: hash,
+                });
+              },
+              undefined,
+              { signal: cancelled.signal },
+            );
           const provider = runtime.storageManager.open(databaseSpace);
           try {
             if (!provider.sqliteQuery) {
@@ -1489,6 +1487,7 @@ export function sqliteQuery(
               ? { ...runIdentity, principal: actingReader }
               : undefined;
             const res = await provider.sqliteQuery(db, sql, params, reader);
+            if (cancelled.signal.aborted) return;
             // Decode asCell-marked `_cf_link` columns from sigil STRINGS to sigil
             // OBJECTS so a typed consumer's asCell schema rehydrates them to live
             // Cells (Piece A). Untyped queries (no rowSchema) keep raw strings.
@@ -1690,103 +1689,107 @@ export function sqliteQuery(
               columnLabeled: labelSchema !== undefined,
               rowLabel: (i) => perRow[i],
             });
-            const wrote = await runtime.editWithRetry((wtx) => {
-              markEffectCompletion(wtx, effectKey);
-              applyRunIdentity(wtx);
-              // Stale-writeback guard: a newer query (different inputs -> different
-              // hash) may have superseded this one while the RPC was in flight.
-              // Only write back if the result cell still records THIS request.
-              if (storedRequestHash(wtx) !== hash) {
-                return;
-              }
-              const base = result.getAsNormalizedFullLink();
-              let writeSchema = rowWriteSchema;
-              // The store's declaration is grow-only, so the prior is read
-              // whether or not THIS settle carries anything: a refresh whose
-              // rows lost their labels, or whose parameter did, would
-              // otherwise re-mint the path empty and take the declaration
-              // back. A parameter's label is the one that moves.
-              const priorShape = cfcConfidentialityForObservationNode({
-                labelView: cfcLabelViewFromMetadata(
-                  readStoredCfcMetadata(wtx, base),
-                  [...base.path, "result"],
-                ),
-              });
-              const shapeIfcAtoms = joinCfcObservedConfidentiality([
-                priorShape,
-                shapeConfidentiality,
-              ]);
-              if (shapeIfcAtoms.length > 0) {
-                // A shared array's length and membership reveal its rows even
-                // without dereferencing them. The complete row-label join also
-                // protects a count of rows a query contract deliberately skips.
-                const properties = (writeSchema?.properties ?? {}) as Record<
-                  string,
-                  Record<string, unknown>
-                >;
-                // Known row payloads keep their own labels; only
-                // membership and the withheld count inherit this cumulative
-                // floor.
-                const shapeIfc = { confidentiality: shapeIfcAtoms };
-                writeSchema = {
-                  ...writeSchema,
-                  type: "object",
-                  additionalProperties: true,
-                  properties: {
-                    ...properties,
-                    result: {
-                      ...properties.result,
-                      type: "array",
-                      ifc: { ...shapeIfc, observes: "enumerate" },
+            const wrote = await runtime.editWithRetry(
+              (wtx) => {
+                markEffectCompletion(wtx, effectKey);
+                applyRunIdentity(wtx);
+                // Stale-writeback guard: a newer query (different inputs -> different
+                // hash) may have superseded this one while the RPC was in flight.
+                // Only write back if the result cell still records THIS request.
+                if (storedRequestHash(wtx) !== hash) {
+                  return;
+                }
+                const base = result.getAsNormalizedFullLink();
+                let writeSchema = rowWriteSchema;
+                // The store's declaration is grow-only, so the prior is read
+                // whether or not THIS settle carries anything: a refresh whose
+                // rows lost their labels, or whose parameter did, would
+                // otherwise re-mint the path empty and take the declaration
+                // back. A parameter's label is the one that moves.
+                const priorShape = cfcConfidentialityForObservationNode({
+                  labelView: cfcLabelViewFromMetadata(
+                    readStoredCfcMetadata(wtx, base),
+                    [...base.path, "result"],
+                  ),
+                });
+                const shapeIfcAtoms = joinCfcObservedConfidentiality([
+                  priorShape,
+                  shapeConfidentiality,
+                ]);
+                if (shapeIfcAtoms.length > 0) {
+                  // A shared array's length and membership reveal its rows even
+                  // without dereferencing them. The complete row-label join also
+                  // protects a count of rows a query contract deliberately skips.
+                  const properties = (writeSchema?.properties ?? {}) as Record<
+                    string,
+                    Record<string, unknown>
+                  >;
+                  // Known row payloads keep their own labels; only
+                  // membership and the withheld count inherit this cumulative
+                  // floor.
+                  const shapeIfc = { confidentiality: shapeIfcAtoms };
+                  writeSchema = {
+                    ...writeSchema,
+                    type: "object",
+                    additionalProperties: true,
+                    properties: {
+                      ...properties,
+                      result: {
+                        ...properties.result,
+                        type: "array",
+                        ifc: { ...shapeIfc, observes: "enumerate" },
+                      },
+                      withheld: { type: "number", ifc: shapeIfc },
                     },
-                    withheld: { type: "number", ifc: shapeIfc },
-                  },
-                };
-              }
-              // The stored link is bare. The row's schema, per-column labels
-              // and row label included, goes on the write alone, whose policy
-              // input is what carries the labels to the row document. A link
-              // carrying a schema would install that schema as a
-              // content-addressed document, and two scoped instances of one
-              // result settling in separate waves would both write it, which
-              // the second wave refuses.
-              const storedRows = resultRows.map((row, i) => {
-                const schema = {
-                  ...rowSchemas[i],
-                  ...(perRow[i] !== undefined && { ifc: perRow[i] }),
-                };
-                const rowCell = createCell(
-                  runtime,
-                  {
-                    ...base,
-                    id: toURI(createRef(rowKeys[i], {
-                      parent: { id: base.id, space: base.space },
-                      path: [...base.path, "result"],
-                      context: "sqlite-result-row",
-                    })),
-                    path: [],
-                    schema: undefined,
-                  },
-                  wtx,
-                );
-                rowCell.asSchema(
-                  schema as Parameters<Cell<unknown>["asSchema"]>[0],
-                ).set(row);
-                return rowCell;
-              });
-              const target = writeSchema
-                ? result.asSchema(writeSchema).withTx(wtx)
-                : result.withTx(wtx);
-              target.set({
-                pending: false,
-                result: storedRows,
-                requestHash: hash,
-                ...(withheld !== undefined ? { withheld } : {}),
-              });
-            });
+                  };
+                }
+                // The stored link is bare. The row's schema, per-column labels
+                // and row label included, goes on the write alone, whose policy
+                // input is what carries the labels to the row document. A link
+                // carrying a schema would install that schema as a
+                // content-addressed document, and two scoped instances of one
+                // result settling in separate waves would both write it, which
+                // the second wave refuses.
+                const storedRows = resultRows.map((row, i) => {
+                  const schema = {
+                    ...rowSchemas[i],
+                    ...(perRow[i] !== undefined && { ifc: perRow[i] }),
+                  };
+                  const rowCell = createCell(
+                    runtime,
+                    {
+                      ...base,
+                      id: toURI(createRef(rowKeys[i], {
+                        parent: { id: base.id, space: base.space },
+                        path: [...base.path, "result"],
+                        context: "sqlite-result-row",
+                      })),
+                      path: [],
+                      schema: undefined,
+                    },
+                    wtx,
+                  );
+                  rowCell.asSchema(
+                    schema as Parameters<Cell<unknown>["asSchema"]>[0],
+                  ).set(row);
+                  return rowCell;
+                });
+                const target = writeSchema
+                  ? result.asSchema(writeSchema).withTx(wtx)
+                  : result.withTx(wtx);
+                target.set({
+                  pending: false,
+                  result: storedRows,
+                  requestHash: hash,
+                  ...(withheld !== undefined ? { withheld } : {}),
+                });
+              },
+              undefined,
+              { signal: cancelled.signal },
+            );
             // Surface a write-back failure as `q.error` rather than leaving the
             // query stuck `pending` (editWithRetry returns the error, not throws).
-            if (wrote.error) {
+            if (wrote.error && !cancelled.signal.aborted) {
               await failQuery(
                 wrote.error.message ?? "sqlite: result write failed",
               );

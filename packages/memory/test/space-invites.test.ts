@@ -1,9 +1,11 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import {
   buildInviteLink,
   createInviteCredentials,
   inviteCodeVerifier,
+  isInviteId,
   isInviteSecret,
   normalizeInviteHost,
   parseInviteLink,
@@ -172,6 +174,30 @@ describe("space-invites", () => {
     const inFragment = new URL(link);
     inFragment.hash = `${inFragment.hash.slice(1)}&inviter=${space}`;
     expect(() => parseInviteLink(inFragment)).toThrow("invalid-link");
+  });
+  it("generates invite IDs that begin with a letter and vary with the first random byte", () => {
+    const ids = new Set<string>();
+    for (let first = 0; first < 256; first++) {
+      using _random = stub(
+        crypto,
+        "getRandomValues",
+        <T extends ArrayBufferView | null>(array: T) => {
+          const bytes = new Uint8Array(
+            array!.buffer,
+            array!.byteOffset,
+            array!.byteLength,
+          );
+          bytes.fill(0xF8);
+          bytes[0] = first;
+          return array;
+        },
+      );
+      const { inviteId } = createInviteCredentials();
+      expect(isInviteId(inviteId)).toBe(true);
+      expect(inviteId).toMatch(/^[A-Za-z]/);
+      ids.add(inviteId);
+    }
+    expect(ids.size).toBeGreaterThanOrEqual(128);
   });
   it("binds the verifier to its version, normalized origin, space, invite ID, and full secret", () => {
     const invite = {

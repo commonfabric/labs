@@ -3,6 +3,7 @@
  */
 
 import {
+  debugStr,
   FabricInstance,
   FabricPrimitive,
   toCompactDebugString,
@@ -348,9 +349,11 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     FabricLink,
     FabricError,
 
-    // Debug stringifiers (helpers exposed for pattern code)
+    // Debug stringifiers, and the tag that composes a message around one
+    // (helpers exposed for pattern code)
     toCompactDebugString,
     toIndentedDebugString,
+    debugStr,
 
     // Value comparison helper exposed for pattern code
     valueEqual,

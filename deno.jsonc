@@ -52,6 +52,7 @@
     "check-docs": "deno run --allow-read --allow-write --allow-run --allow-env ./docs/check.ts",
     "check-no-waitfor": "deno run --allow-read ./tasks/check-no-waitfor.ts",
     "check-conflict-markers": "deno run --allow-read --allow-run=git ./tasks/check-conflict-markers.ts",
+    "check-test-shuffle": "deno run --allow-read --allow-run=git ./tasks/check-test-shuffle.ts",
     "check-control-characters": "deno run --allow-read --allow-run=git ./tasks/check-control-characters.ts",
     "check-local-program": "deno run --allow-read --allow-env --allow-run=git ./tasks/check-local-program.ts",
     "check-docs-history-index": "deno run --allow-read ./tasks/check-docs-history-index.ts",
@@ -87,6 +88,10 @@
     "agents-host": "deno run -A ./packages/connectors/agents/host/main.ts",
     "github-host": "deno run -A ./packages/connectors/github/host/main.ts",
     "test": "./tasks/test.ts",
+    // The seed each `deno test` in the workspace shuffles by. Every test
+    // task substitutes this task's output into its own `--shuffle`, which
+    // is what makes every run of one commit agree on one order.
+    "test-seed": "deno run --allow-env=CF_TEST_SHUFFLE_SEED --allow-run=git ./tasks/test-seed.ts",
     "test-all": "echo \"Use 'deno task test' instead.\" && exit 1",
     "run-recorded": "./tasks/run-recorded.ts",
     "test-records-key": "./tasks/test-records-key.ts",

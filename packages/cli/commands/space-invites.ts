@@ -150,6 +150,52 @@ async function prepareInviteRequest(
   return { request, requestFile };
 }
 
+/** Usage line for a command that requires an invitation ID. */
+const requiredInviteIdUsage = "<invite-id> | [options] -- <invite-id>";
+
+/**
+ * Returns the invitation ID a command names, written either as its argument or
+ * as the one word after `--`, or `undefined` when it names none. Throws a
+ * `ValidationError` when it names one in both places, or when more than one
+ * word follows `--`.
+ *
+ * An invitation ID may begin with "-". The parser reads such a word in the
+ * argument's place as an option, and sets every word after `--` aside unparsed,
+ * so an ID beginning with "-" is written after `--`.
+ */
+function optionalInviteId(
+  argument: string | undefined,
+  literal: readonly string[],
+): string | undefined {
+  if (literal.length === 0) return argument;
+  if (literal.length > 1) {
+    throw new ValidationError(
+      "Only the invitation ID may follow `--`; options go before it.",
+    );
+  }
+  if (argument !== undefined) {
+    throw new ValidationError(
+      "Name the invitation ID either before or after `--`, not both.",
+    );
+  }
+  return literal[0];
+}
+
+/**
+ * Like {@link optionalInviteId}, except that naming no invitation ID throws a
+ * `ValidationError`.
+ */
+function requiredInviteId(
+  argument: string | undefined,
+  literal: readonly string[],
+): string {
+  const inviteId = optionalInviteId(argument, literal);
+  if (inviteId === undefined) {
+    throw new ValidationError("Missing argument: `invite-id`.");
+  }
+  return inviteId;
+}
+
 /** Builds the `cf space invite` command group. */
 export function buildSpaceInviteCommand() {
   const client = async (
@@ -256,14 +302,16 @@ export function buildSpaceInviteCommand() {
       );
     })
     .command(
-      "redeem <invite-id:string>",
+      "redeem [invite-id:string]",
       "Redeem as the identity keyfile's DID.",
     )
+    .usage(requiredInviteIdUsage)
     .option(
       "--code-file <path:string>",
       "File containing the bearer code; use - for stdin.",
     )
-    .action(async (options, inviteId) => {
+    .action(async function (options, argument) {
+      const inviteId = requiredInviteId(argument, this.getLiteralArgs());
       if (!options.codeFile) {
         throw new ValidationError("--code-file is required.");
       }
@@ -281,21 +329,25 @@ export function buildSpaceInviteCommand() {
       console.log(JSON.stringify(await (await client(options)).client.list()))
     )
     .command(
-      "revoke <invite-id:string>",
+      "revoke [invite-id:string]",
       "Disable admission without removing existing access.",
     )
-    .action(async (options, inviteId) =>
+    .usage(requiredInviteIdUsage)
+    .action(async function (options, argument) {
+      const inviteId = requiredInviteId(argument, this.getLiteralArgs());
       console.log(
         JSON.stringify(await (await client(options)).client.revoke(inviteId)),
-      )
-    )
+      );
+    })
     .command(
       "receipts [invite-id:string]",
       "List distinct invitation and identity receipt pairs.",
     )
-    .action(async (options, inviteId) =>
+    .usage("[invite-id] | [options] -- <invite-id>")
+    .action(async function (options, argument) {
+      const inviteId = optionalInviteId(argument, this.getLiteralArgs());
       console.log(
         JSON.stringify(await (await client(options)).client.receipts(inviteId)),
-      )
-    );
+      );
+    });
 }

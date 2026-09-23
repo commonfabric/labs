@@ -303,9 +303,9 @@ export async function integrationCf(
 
 // Runs `fn` with `name` set on this process. Every test file in a
 // `deno test --parallel` run shares one environment, so a file that calls
-// this cannot run beside one that reads the same name: list it in
-// SERIAL_TESTS in test/run-tests.ts. Configuring a spawned CLI needs none of
-// this — pass `env` to `cf` instead.
+// this cannot run beside one that reads the same name: name it
+// `*.serial.test.ts`, which the package's `deno-test` task runs on its own.
+// Configuring a spawned CLI needs none of this — pass `env` to `cf` instead.
 export async function withEnv(
   name: string,
   value: string | undefined,

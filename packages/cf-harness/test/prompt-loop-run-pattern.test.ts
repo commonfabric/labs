@@ -193,8 +193,8 @@ describe("prompt-loop run_pattern model boundary", () => {
       const runId = "run-pattern-result-schema";
       const doublingSource = [
         "import { computed, pattern } from 'commonfabric';",
-        "export default pattern<{ n: number }, { doubled: number }>(",
-        "  ({ n }) => ({ doubled: computed(() => n * 2) }),",
+        "export default pattern<{ n: number }, { doubled: number; pending: boolean; error: string }>(",
+        "  ({ n }) => ({ doubled: computed(() => n * 2), pending: true, error: 'status-only-error-sentinel' }),",
         ");",
       ].join("\n");
       const requestBodies: unknown[] = [];
@@ -262,6 +262,11 @@ describe("prompt-loop run_pattern model boundary", () => {
         (message) => message.role === "tool",
       );
       expect(toolMessage?.content).not.toContain("resultRefSchema");
+      expect(toolMessage?.content).not.toContain("status-only-error-sentinel");
+      expect(JSON.parse(toolMessage!.content)).toMatchObject({
+        pending: true,
+        hasError: true,
+      });
     } finally {
       await fabricRuntime.dispose();
       await storageManager.close();

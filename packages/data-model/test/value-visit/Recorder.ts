@@ -48,7 +48,14 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
    */
   readonly plusTypeChecks: unknown[] = [];
 
+  /**
+   * The values handed to `isResultType()`, in order. Kept apart from `events`
+   * for the same reason as `plusTypeChecks`.
+   */
+  readonly resultTypeChecks: unknown[] = [];
+
   onIsPlusType?: (value: unknown) => boolean;
+  onIsResultType?: (value: unknown) => boolean;
   onValue?: (
     value: unknown,
     tag: FabricValuePlusTag | null,
@@ -99,6 +106,12 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     // The domain is `unknown`, so everything outside `FabricValue` is in it.
     this.plusTypeChecks.push(value);
     return this.onIsPlusType ? this.onIsPlusType(value) : true;
+  }
+
+  override isResultType(value: unknown): value is unknown {
+    // The result type is `unknown`, so every value is in it.
+    this.resultTypeChecks.push(value);
+    return this.onIsResultType ? this.onIsResultType(value) : true;
   }
 
   override visitValue(

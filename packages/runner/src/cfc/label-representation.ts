@@ -1,6 +1,10 @@
 import type { CfcAtom, CfcJsonValue } from "@commonfabric/api/cfc";
-import { hashStringOf } from "@commonfabric/data-model";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import {
+  type FabricValue,
+  hashStringOf,
+  isFabricPlainObject,
+  valueEqual,
+} from "@commonfabric/data-model";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { CfcConfClause } from "./clause.ts";
@@ -62,8 +66,11 @@ export const commitCfcFieldValue = (
  * and arrays compare fieldwise/elementwise so a committed field nested
  * inside an atom still matches its plaintext counterpart.
  */
-export const commitmentAwareEquals = (a: unknown, b: unknown): boolean => {
-  if (deepEqual(a, b)) return true;
+export const commitmentAwareEquals = (
+  a: FabricValue,
+  b: FabricValue,
+): boolean => {
+  if (valueEqual(a, b)) return true;
   const aIsCommitment = isCfcFieldCommitment(a);
   const bIsCommitment = isCfcFieldCommitment(b);
   if (aIsCommitment !== bIsCommitment) {
@@ -72,25 +79,18 @@ export const commitmentAwareEquals = (a: unknown, b: unknown): boolean => {
     return hashStringOf(plain) === commitment.digestOf;
   }
   if (aIsCommitment) {
-    // Both markers and not deepEqual: different digests.
+    // Both markers and not equal: different digests.
     return false;
   }
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length &&
       a.every((element, index) => commitmentAwareEquals(element, b[index]));
   }
-  if (
-    isObjectOrArray(a) && isObjectOrArray(b) && !Array.isArray(a) &&
-    !Array.isArray(b)
-  ) {
+  if (isFabricPlainObject(a) && isFabricPlainObject(b)) {
     const aKeys = Object.keys(a);
     if (aKeys.length !== Object.keys(b).length) return false;
     return aKeys.every((key) =>
-      Object.hasOwn(b, key) &&
-      commitmentAwareEquals(
-        (a as Record<string, unknown>)[key],
-        (b as Record<string, unknown>)[key],
-      )
+      Object.hasOwn(b, key) && commitmentAwareEquals(a[key], b[key])
     );
   }
   return false;

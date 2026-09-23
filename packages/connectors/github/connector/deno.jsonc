@@ -1,7 +1,8 @@
 {
   "name": "@commonfabric/github-connector",
   "tasks": {
-    "test": "deno test --allow-env --allow-read --allow-write --allow-run --allow-ffi --allow-sys=homedir,uid"
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../../../tasks/run-member-tests.ts deno-test",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --allow-env --allow-read --allow-write --allow-run --allow-ffi --allow-sys=homedir,uid"
   },
   "exports": {
     ".": "./mod.ts",

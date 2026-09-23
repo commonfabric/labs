@@ -979,7 +979,9 @@ export const set = (cache: Cache, key: string, value: string) =>
   the required test jobs are already in the same rough timing band.
 - Check typings with `deno task check`.
 - Run linter with `deno lint`.
-- Run all tests using `deno task test` (NOT `deno test`)
+- Run all tests using `deno task test` (NOT `deno test`). It is not a
+  substitute for `deno task check`: some packages' tests skip type checking
+  outright, and the rest check only the modules their tests reach.
 - To run a single test file use `deno test path/to/test.ts`.
 - To test a specific package, `cd` into the package directory and run
   `deno task test`.
@@ -1002,18 +1004,23 @@ suite will break.
    `"test"` entry, naming the member; that check is what keeps a missing entry
    to a message rather than a CI timeout.
 
-   Use `"deno test"` for packages with tests, or `"echo 'No tests defined.'"` as
-   a stub for packages that don't have tests yet. A `"test"` task defined by its
-   `"dependencies"` alone counts too: what the check asks is whether the name
-   resolves in the package's own directory.
+   For a package with tests, `"test"` runs `tasks/run-member-tests.ts`, naming
+   the package's `"deno-test"` task, which runs the tests themselves — a
+   `deno test` for most packages, or a runner of the package's own; see
+   [TESTING.md](TESTING.md) for why. The `--allow-env` names the two variables
+   the test-records preload reads, as `docs/development/test-records.md`
+   explains. A package without tests yet uses `"echo 'No tests defined.'"`.
 
 3. **Minimal `deno.jsonc` example:**
 
-   ```json
+   ```jsonc
    {
      "name": "@commonfabric/my-package",
      "exports": { ".": "./mod.ts" },
-     "tasks": { "test": "deno test" }
+     "tasks": {
+       "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+       "deno-test": "deno test --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST"
+     }
    }
    ```
 

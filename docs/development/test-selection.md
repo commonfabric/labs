@@ -121,6 +121,14 @@ and what packing the stand-ins asks for — and says on the error stream
 that it did so, since a projection from costs nobody has measured would
 be arithmetic over an invented figure.
 
+Whichever way it gets its answer, it answers no more than
+`FULL_LANES_MAX`, so that one push's full run leaves runners for the
+changes waiting behind it. A run that needs more takes that many and says
+so on the error stream. Every test still runs when that happens. A test
+whose repeated runs fit in no lane runs fewer times, down to once, and a
+test that fits nowhere even once goes into the lane it leaves shortest,
+so the lanes run past their budget instead.
+
 ## The coverage gate
 
 A **measured set** is one suite's units over one workspace member's lines.
@@ -146,7 +154,7 @@ where the directory holds the lanes' uploaded coverage. It prints a row
 per set — the baseline, this run's count, the change, and the outcome —
 and stops with a non-zero status on a rise nothing accepted.
 
-Four things are worth knowing before reading a failure.
+Five things are worth knowing before reading a failure.
 
 - **Each set is on its own.** A member with two measured sets has two
   numbers, and neither pays the other down. Nor does the source group over
@@ -163,11 +171,18 @@ Four things are worth knowing before reading a failure.
   ordinary rules; it is the run-the-whole-set part that stops. A set some
   run measured anyway is still scored, so a pull request labelled
   `ci: full`, which measures every set, is gated whatever the cap says.
-- **A run with a failing test is reported rather than gated.** Coverage
-  measured through a failure says nothing about whether the change was
-  tested, and the failing test is what to fix. So is a set whose reports
+- **A run with a failing test reports rather than gates every set a lane
+  reported.** Coverage measured through a failure says nothing about
+  whether the change was tested, and the failing test is what to fix. So is a set whose reports
   name no line of its member: that is a conversion that produced
   nothing, not a set that covered nothing.
+- **A forced set that no lane reported fails**, in a run with a failing
+  test as in any other. The change was made to measure that set, and a
+  lane that stopped before writing its report, an upload that carried
+  nothing, and a download that found nothing all arrive at the gate
+  looking the same. The row says a rise cannot be ruled out. A set the
+  cap left unforced has nothing asking for it to be measured, so one no
+  run measured is reported rather than failed.
 
 Nothing about coverage fails a run on `main`. That run measures every set,
 which is where the baselines come from, and merges every report into the
@@ -183,6 +198,12 @@ deno run -A tasks/coverage-report.ts --reports <directory> \
 The run's identity is required rather than defaulted, because the gate
 looks a baseline up by the commit it was measured at and a figure stamped
 with none matches nothing.
+
+The report also publishes whether the run's compile byte cache was cold,
+read from the record each lane that opened the cache leaves beside its
+coverage, so that the dashboard can leave a cold run out of its trend.
+[Compile cache state and cold runs](COVERAGE.md#compile-cache-state-and-cold-runs)
+says why a cold run's figure differs.
 
 One set can come out of that with no baseline. A lane that saw a unit of
 a measured set fail writes a marker beside that set's report, and the
@@ -237,6 +258,7 @@ rather than a setting to fix.
 | `LANE_BUDGET_SECONDS` | 230 | seconds | derived | Nothing edits this. It is the bound less the prologue and the safety margin, so a budget that does not fit inside its own bound cannot be written down. |
 | `FULL_LANE_BOUND_SECONDS` | 600 | seconds | chosen | Up when the run on `main` uses more jobs than it needs; down when `main` takes too long to say something broke. |
 | `FULL_LANE_BUDGET_SECONDS` | 530 | seconds | derived | Nothing edits this. It is the full run's bound less the same prologue and safety margin a pull request's lane pays, since a lane of either run is the same job doing the same setup on the same runner. |
+| `FULL_LANES_MAX` | 30 | lanes | chosen | Up when the organization's runner limit rises; down when a push's full run crowds out the pull requests behind it. A full run needing more lanes than this takes this many, and a lane may then run past its budget. |
 | `FULL_RUN_LABEL` | ci: full | a label | chosen | Not a quantity. Change it only if the label collides with one the repository already uses for something else. |
 | `UNMEASURED_COST_SECONDS` | 1 | seconds | chosen | Up when a lane holding new tests runs long; down when it finishes early. It is reached for only by a suite with no measured unit at all, since a suite that has any charges an unmeasured one the larger of its units' mean and their ninetieth percentile. |
 | `VALUE_FLOOR` | 0.05 | score | chosen | Up when the cheap tail is not being swept up; down when it crowds out tests with a record of catching things. |
@@ -1102,6 +1124,64 @@ artifacts, so it takes minutes; nothing waits on it.
 
 To see what it would say about a run, set `MAIN_REPORT_RUN_ID` to that
 run and pass `--dry-run`, which posts nothing.
+
+## Units that run whole
+
+An invocation unit is usually one test file. A lane that wants part of
+one registers the rest of the file's tests as ignored.
+
+Some units hold more than one test and cannot be split. These are a
+workspace member whose test task takes no file list, a member's browser
+half, the reload suite's directory, and a section of the FUSE
+integration script. A lane that asks for one test of such a unit runs
+every test in it.
+
+Each suite lists these units in `whole`, and a lane writes no skip list
+for one. Most units in `whole` hold a single identity, such as a gate, a
+type-check group, a binary build, one pattern's check, or one vintage
+fixture's replay. Only the four kinds above hold several. A unit's shape
+does not tell you which kind it is, because two of the four kinds are
+paths.
+
+The packer places each such unit as one choice. `plan()` in
+`tasks/test-selection/plan.ts` merges the unit's tests into one choice
+before it packs. That choice costs what all the tests cost together, and
+it is held back when any of them is. The plan it writes lists the tests
+again in place of the merged choice. The merge exists only inside
+`plan()`. The manifest, the records, and the plan all name tests, so
+anything that matches a record against the manifest or a plan finds the
+test by its own name.
+
+A change to such a member's source makes its unit mandatory only
+through the coverage gate. A member with a measured set is reached by
+changes under its own tree. At present those members are
+`packages/connectors/agents/debug-view` and `packages/dashboard`. The
+others have no measured set, because
+[the coverage gate excludes them](#the-coverage-gate). No diff names a
+directory, so those units reach a lane only on the score of their tests.
+At present those are `packages/identity`, `packages/patterns`, and the
+three browser halves.
+
+A workspace member stops running whole when the task holding its tests
+becomes one the topology can point at files. That task is its
+`deno-test`, or its `test` if it defines no `deno-test`. The topology can
+point a single `deno test` at files, and also a dependency list that
+resolves to one, or the shard wrapper around one. It cannot point a task
+that joins commands with a shell operator such as `&&`, a task that
+names its own import map, or a test runner of the package's own.
+
+The shard wrapper, `tasks/run-sharded-test-files.ts`, is also how a
+member whose files need different flags stays splittable. Its `--serial`
+option names files that cannot run beside another test file in one
+process, and those run in a `deno test` without `--parallel`, one file
+at a time. Its `--all-access` option names files that need every
+permission, and those run under `--allow-all`. The wrapper runs each
+group as a `deno test` of its own and merges their JUnit reports into
+the one path it was handed. A lane groups the files it selects the same
+way, with a report for each group. The topology refuses a `--serial` or
+`--all-access` pattern that names no test file, and so does the wrapper,
+which also refuses such an `--ignore`. `packages/cli` is the member that
+uses both options.
 
 ## A case that fails only when its siblings do not run
 

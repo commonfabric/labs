@@ -89,6 +89,29 @@ transaction is skipped so that both call sites reach the same answer about
 one — `commit()` takes none of the step for a read-only transaction — and a
 transaction that admits no writes has nothing to stamp in any case.
 
+## Cooperative preparation for asynchronous completions
+
+`Runtime.editWithRetry` accepts an optional owner `AbortSignal`. With one, it
+awaits `prepareForCommitCooperatively` before committing. The synchronous and
+cooperative entry points run the same boundary checks; the cooperative driver
+uses `CooperativeYield` between target documents so cancellation can reach the
+event loop. Cancellation aborts the uncommitted transaction and ends retries.
+No target is omitted from a successful preparation.
+
+The privileged write scope covers each synchronous verification step and ends
+before a yield. If the transaction's activity epoch changes during that yield,
+the attempt aborts rather than sealing candidates collected before the change.
+The caller must await preparation before committing. Initial collections, each
+target's verification, and final ceiling, grant, and digest work remain
+synchronous.
+
+`sqliteQuery` supplies its builtin lifetime signal to completion and error
+writebacks. Stopping the builtin cancels preparation; a later activation can
+reissue its stored pending query. This does not cancel the shared runtime or an
+already submitted storage commit. Callers without an owner signal retain
+synchronous preparation, including scheduler fan-out, whose instance ordering
+does not permit an intervening macrotask.
+
 ## Read-only renderer subscriptions
 
 The worker VDOM reconciler subscribes through the internal `readOnly` option
@@ -148,6 +171,12 @@ the commit.
 
 ## Where this is pinned
 
+- [cfc/preparation-cancellation.test.ts](../../packages/runner/test/cfc/preparation-cancellation.test.ts)
+  — cancellation during preparation, label and refusal parity, and changes to
+  the transaction during a yield.
+- [sqlite-query-cancellation.test.ts](../../packages/runner/test/sqlite-query-cancellation.test.ts)
+  — stopping a piece discards its query writeback; restarting reissues the
+  pending query.
 - [cfc-commit-preparation.test.ts](../../packages/runner/test/cfc-commit-preparation.test.ts)
   — a transaction that turns relevant after the caller prepared it still
   commits prepared; an `editWithRetry` action runs once for a CFC verdict on a

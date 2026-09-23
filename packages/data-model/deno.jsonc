@@ -22,12 +22,12 @@
   },
   "tasks": {
     "check": "deno check .",
-    "just-test": {
+    "deno-test": {
       "description": "Run unit tests",
       // `--allow-read` so that a test may start a `Worker`, which reads the
       // worker's module from disk. `codec-realm`'s round trips go through a
       // real one, that being the boundary the format exists for.
-      "command": "deno test --allow-read"
+      "command": "deno test --shuffle=$(deno task -q test-seed) --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST --allow-read"
     },
     "bench": {
       "description": "Run benchmarks",
@@ -37,13 +37,7 @@
       // exists for.
       "command": "deno bench --allow-read"
     },
-    "test": {
-      "description": "Type check & run tests",
-      "dependencies": [
-        "check",
-        "just-test"
-      ]
-    }
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test"
   },
   "test": {
     "include": [

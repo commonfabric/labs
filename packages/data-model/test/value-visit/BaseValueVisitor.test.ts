@@ -33,9 +33,21 @@ describe("BaseValueVisitor", () => {
   }
 
   describe("instance members", () => {
+    describe("isDomainAssignableToResultType()", () => {
+      it("returns `true`", () => {
+        expect(new Base().isDomainAssignableToResultType()).toBe(true);
+      });
+    });
+
     describe("isPlusType()", () => {
       it("returns `false`", () => {
         expect(new Base().isPlusType(new Date(0))).toBe(false);
+      });
+    });
+
+    describe("isResultType()", () => {
+      it("returns `true`", () => {
+        expect(new Base().isResultType(undefined)).toBe(true);
       });
     });
 

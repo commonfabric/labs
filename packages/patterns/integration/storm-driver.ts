@@ -12,6 +12,7 @@
  */
 
 import { join } from "@std/path";
+import { debugStr } from "@commonfabric/data-model";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
@@ -83,7 +84,7 @@ const views = {
   bob: summarize(await messages(bob)),
   observer: summarize(await messages(observer)),
 };
-console.log(`[driver] result-path views:`, JSON.stringify(views));
+console.log(debugStr`[driver] result-path views: $quote,xlong${views}`);
 
 // Raw replica reads at the messages address — bypass schema/link resolution.
 // Stored doc trees root at ["value", …]; link() reports the logical path.
@@ -119,7 +120,7 @@ for (
     `[driver] rawRead[array] ${name}: ok=${raw.ok} len=${len}` +
       (raw.error ? ` error=${raw.error}` : "") +
       (Array.isArray(v) && v.length > 0
-        ? ` first=${JSON.stringify(v[0]).slice(0, 140)}`
+        ? debugStr` first=$quote,long${v[0]}`
         : ""),
   );
 }
@@ -140,7 +141,7 @@ for (
     });
     const v = raw.value === undefined
       ? "ABSENT"
-      : JSON.stringify(raw.value).slice(0, 80);
+      : debugStr`$quote,long${raw.value}`;
     console.log(`[driver] rawRead[doc] ${name} ${id.slice(-8)}: ${v}`);
   }
 }
@@ -155,9 +156,8 @@ if (chase.length > 0) {
     scope: "space",
   });
   console.log(
-    `[driver] stored element doc (observer, full): ${
-      JSON.stringify(fullDoc.value)
-    }`,
+    `[driver] stored element doc (observer, full): ` +
+      debugStr`$quote,xlong${fullDoc.value}`,
   );
 }
 const probePaths: [string, (string | number)[]][] = [
@@ -170,7 +170,7 @@ for (const [label, path] of probePaths) {
   try {
     const v = await observer.read(path);
     console.log(
-      `[driver] observer read ${label}: ${JSON.stringify(v)?.slice(0, 120)}`,
+      debugStr`[driver] observer read ${label}: $quote,long${v}`,
     );
   } catch (error) {
     console.log(

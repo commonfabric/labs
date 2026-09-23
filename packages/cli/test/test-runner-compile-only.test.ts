@@ -3,7 +3,7 @@
  * `compileTestPatterns()` reports for a file that compiles and one that
  * does not, and the exit the command takes on the latter. The cache the pass
  * leaves behind is pinned across processes in
- * `test-runner-compile-byte-cache.test.ts`.
+ * `test-runner-compile-byte-cache.serial.test.ts`.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";

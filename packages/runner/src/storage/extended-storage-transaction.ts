@@ -77,7 +77,6 @@ import {
   type OrderedWriteAttempt,
   type PolicySnapshot,
   type PostCommitSideEffect,
-  prepareBoundaryCommit,
   prepareCfcGrantWrite,
   preparedDigestFor,
   type PreparedDigestInput,
@@ -87,6 +86,7 @@ import {
   type TrustSnapshot,
   type WritePolicyInput,
 } from "../cfc/mod.ts";
+import { prepareBoundaryCommitSteps } from "../cfc/prepare.ts";
 import { CFC_POLICY_MANIFEST_ID_PREFIX } from "../cfc/policy.ts";
 import {
   runtimeOwnedStoreKey,
@@ -116,6 +116,7 @@ import {
   type ReservedSibling,
 } from "../reserved-sibling-seam.ts";
 import { ignoreReadForScheduling } from "../scheduler.ts";
+import { CooperativeYield } from "../scheduler/cooperative-yield.ts";
 import { getContentAddressedSchemasConfig } from "../schema-doc-config.ts";
 import { lookupSchemaDocument } from "../schema-registry.ts";
 import { normalizeCellScope, scopeRank } from "../scope.ts";
@@ -1232,11 +1233,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   /**
    * Runs `fn` with writes to protected system paths (a document's `["cfc"]`
-   * label-map) permitted. The runtime's own label/schema persistence in
-   * `prepareBoundaryCommit()` is the only legitimate such writer;
-   * `prepareCfc()` wraps that call in this scope via `this`. ECMAScript-private
-   * (`#`) and absent from `IExtendedStorageTransaction`, so handler code
-   * reaching `cell.tx` cannot enter the scope —
+   * label-map) permitted. Boundary preparation runs each synchronous step
+   * inside this scope and leaves it before a cooperative yield. The method is
+   * ECMAScript-private (`#`) and absent from `IExtendedStorageTransaction`.
+   * Handler code reaching `cell.tx` cannot enter the scope —
    * `(cell.tx as any).#runPrivilegedSystemWrite` is a `TypeError`, not a bypass
    * (audit S18). A fixture that needs stored `["cfc"]` metadata reaches one
    * write inside this scope through `accessForTestingOnly`, which names what
@@ -2708,11 +2708,52 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * it; a transaction that admits no writes has nothing to stamp anyway.
    */
   prepareForCommit(): void {
-    if (this.tx.status().status !== "ready") {
+    if (this.#needsCfcPreparation()) this.prepareCfc();
+  }
+
+  /** Prepares between cooperative yields, aborting canceled or changed work. */
+  async prepareForCommitCooperatively(signal: AbortSignal): Promise<void> {
+    if (signal.aborted) {
+      if (this.tx.status().status === "ready" && !this.isReadOnly()) {
+        this.abort(signal.reason);
+      }
       return;
     }
+    if (!this.#needsCfcPreparation()) return;
+    const started = performance.now();
+    const steps = this.#prepareCfc();
+    const yielder = new CooperativeYield();
+    try {
+      while (this.tx.status().status === "ready" && !signal.aborted) {
+        if (steps.next().done) return;
+        const epoch = this.#cfcActivityEpoch;
+        const turn = yielder.maybeYield();
+        if (turn !== undefined) {
+          await turn;
+          if (this.#cfcActivityEpoch !== epoch) {
+            if (this.tx.status().status === "ready") {
+              this.abort("transaction activity changed during CFC preparation");
+            }
+            return;
+          }
+        }
+      }
+      if (signal.aborted && this.tx.status().status === "ready") {
+        this.abort(signal.reason);
+      }
+    } finally {
+      steps.return("");
+      logger.time(started, "prepareCfc");
+    }
+  }
+
+  /** Settles relevance before choosing how to drive the boundary checks. */
+  #needsCfcPreparation(): boolean {
+    if (this.tx.status().status !== "ready") {
+      return false;
+    }
     if (this.isReadOnly()) {
-      return;
+      return false;
     }
     if (this.#cfcState.enforcementMode === "disabled") {
       // A vouched ingest still needs its provenance mark minted even where
@@ -2724,13 +2765,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // (which would desync ingest txs from the runtime's real mode). The
       // stamp already marked the tx relevant; nothing else here applies when
       // disabled.
-      if (
-        externalIngestStamp(this) !== undefined &&
-        this.#cfcState.prepare.status === "unprepared"
-      ) {
-        this.prepareCfc();
-      }
-      return;
+      return externalIngestStamp(this) !== undefined &&
+        this.#cfcState.prepare.status === "unprepared";
     }
     // Flow-label relevance is computed, not caller-marked: a tx that
     // observed or wrote a labeled doc derives labels even when nothing
@@ -2770,26 +2806,25 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     ) {
       this.markCfcRelevant("sink-request-ceiling");
     }
-    if (
-      this.#cfcState.relevant &&
-      this.#cfcState.prepare.status === "unprepared"
-    ) {
-      this.prepareCfc();
-    }
+    return this.#cfcState.relevant &&
+      this.#cfcState.prepare.status === "unprepared";
   }
 
   /** Evaluates CFC gates and records the complete preparation interval. */
   prepareCfc(): string {
     const started = performance.now();
     try {
-      return this.#prepareCfc();
+      const steps = this.#prepareCfc();
+      let step = steps.next();
+      while (!step.done) step = steps.next();
+      return step.value;
     } finally {
       logger.time(started, "prepareCfc");
     }
   }
 
   /** Evaluates gates and seals preparation inputs for this transaction. */
-  #prepareCfc(): string {
+  *#prepareCfc(): Generator<void, string> {
     // Verification always runs. There is deliberately no caller-supplied input
     // override: the commit-time digest recheck only confirms the prepared input
     // matches real activity, so accepting an external input here would let a
@@ -2815,21 +2850,27 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // refusal below rather than escaping (the totality this catch exists
       // for).
       this.#materializeReferencedSchemaDocuments();
-      reasons = this.#runPrivilegedSystemWrite(() =>
-        prepareBoundaryCommit(
-          this,
-          // Stage-0 precision counters: threaded through only when the hook is
-          // installed, so the gate skips all measurement (and the summary
-          // allocation) otherwise. The non-null assertion restates the
-          // presence check above — the hooks object is fixed at construction.
-          this.#cfcInstrumentation.onPrefixProvenance === undefined
-            ? undefined
-            : {
-              onPrefixProvenance: (summary) =>
-                this.#cfcInstrumentation.onPrefixProvenance!(summary),
-            },
-        )
+      const steps = prepareBoundaryCommitSteps(
+        this,
+        // Stage-0 precision counters: threaded through only when the hook is
+        // installed, so the gate skips all measurement (and the summary
+        // allocation) otherwise. The non-null assertion restates the
+        // presence check above — the hooks object is fixed at construction.
+        this.#cfcInstrumentation.onPrefixProvenance === undefined
+          ? undefined
+          : {
+            onPrefixProvenance: (summary) =>
+              this.#cfcInstrumentation.onPrefixProvenance!(summary),
+          },
       );
+      // Privilege covers each synchronous step only. Other work admitted by
+      // a cooperative yield must go through the ordinary write checks.
+      let step = this.#runPrivilegedSystemWrite(() => steps.next());
+      while (!step.done) {
+        yield;
+        step = this.#runPrivilegedSystemWrite(() => steps.next());
+      }
+      reasons = step.value;
     } catch (error) {
       // An UNMODELED crash inside commit-prep (e.g. schema-merge's
       // divergent-ifc assert reached through a stored envelope — the served-
@@ -4062,6 +4103,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   prepareForCommit(): void {
     this.#wrapped.prepareForCommit();
+  }
+
+  prepareForCommitCooperatively(signal: AbortSignal): Promise<void> {
+    return this.#wrapped.prepareForCommitCooperatively(signal);
   }
 
   prepareCfc(): string {

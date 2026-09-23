@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -581,11 +582,13 @@ describe("profile owner CFC policy", () => {
         asCell?: unknown[];
         ifc?: { addIntegrity?: unknown[]; requiredIntegrity?: unknown[] };
       };
+      // The pattern spells the atom out; this pins it to the constant the
+      // runtime's mint gate lists, so the two cannot drift apart.
       expect(verifiedIdentitySchema.ifc?.requiredIntegrity).toContain(
-        "loom-verified-external-identity",
+        CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM,
       );
       expect(verifiedIdentitySchema.ifc?.addIntegrity).not.toContain(
-        "loom-verified-external-identity",
+        CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM,
       );
 
       const publishSchema = resolveLocalSchemaRef(
@@ -603,7 +606,7 @@ describe("profile owner CFC policy", () => {
         ifc?: { requiredIntegrity?: unknown[] };
       };
       expect(publishedIdentity.ifc?.requiredIntegrity).toContain(
-        "loom-verified-external-identity",
+        CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM,
       );
     } finally {
       await runtime.dispose();

@@ -2,6 +2,7 @@ import {
   action,
   cellFromUrl,
   computed,
+  debugStr,
   type Default,
   equals,
   FS,
@@ -15,7 +16,6 @@ import {
   SELF,
   type Stream,
   TILE_UI,
-  toCompactDebugString,
   UI,
   type VNode,
   wish,
@@ -315,9 +315,9 @@ const Note = pattern<NoteInput, NoteOutput>(
         const value = loose?.detail?.value;
         if (typeof value !== "string") {
           console.error(
-            `editContent: invalid input shape. Expected { detail: { value: string } }, got: ${
-              toCompactDebugString(rawInput)
-            }`,
+            `editContent: invalid input shape. ` +
+              `Expected { detail: { value: string } }, ` +
+              debugStr`got: $quote,long${rawInput}`,
           );
           return;
         }

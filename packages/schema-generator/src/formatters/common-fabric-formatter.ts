@@ -28,6 +28,11 @@ import {
   resolveAliasedSymbol,
 } from "../typescript/literal-value.ts";
 import {
+  readAuthoredTypeNode,
+  unwrapTypeParentheses,
+} from "../typescript/type-node.ts";
+import { resolveWriterBinding } from "../typescript/writer-binding.ts";
+import {
   type CellWrapperKind,
   getCellBrand,
   getCellWrapperInfo,
@@ -281,7 +286,7 @@ const lowersDownAliasChain = (
   // A scope wrapper reads its payload from its argument, so one reached with
   // none is not lowered.
   if (SCOPE_WRAPPER_NAMES.has(declaration.name.text)) return args.length > 0;
-  const aliased = declaration.type;
+  const aliased = unwrapTypeParentheses(declaration.type);
   if (!ts.isTypeReferenceNode(aliased)) return false;
   // An argument left out is its parameter's default, read with the arguments
   // before it; a parameter with neither leaves the chain unlowered.
@@ -361,7 +366,7 @@ export function scopeOfAliasChain(
     const scope = scopeForWrapperName(declaration.name.text);
     if (scope !== undefined) return scope;
     visited.add(declaration);
-    const aliased = declaration.type;
+    const aliased = unwrapTypeParentheses(declaration.type);
     if (!ts.isTypeReferenceNode(aliased)) return undefined;
     const symbol = checker.getSymbolAtLocation(aliased.typeName);
     declaration = symbol &&
@@ -1382,7 +1387,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       throw new Error(`${aliasName}<T> requires type argument`);
     }
 
-    const baseTypeNode = this.#getAliasTypeArgumentNode(context.typeNode, 0);
+    const baseTypeNode = this.#getAliasTypeArgumentNode(context, 0);
     const baseSchema = this.#schemaGenerator.formatChildType(
       baseType,
       context,
@@ -1522,7 +1527,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       terminals,
       aliasDeclaration,
       aliasArgs,
-      this.#getAliasTypeArgumentNodes(context.typeNode),
+      this.#getAliasTypeArgumentNodes(context),
       context,
       new Set([aliasDeclaration]),
     );
@@ -1547,7 +1552,10 @@ export class CommonFabricFormatter implements TypeFormatter {
       };
     }
 
-    const aliased = aliasDeclaration.type;
+    // Parentheses around the body denote the same type; a body read raw
+    // would not be seen as the policy it holds, and the field would lose its
+    // policy and its type together.
+    const aliased = unwrapTypeParentheses(aliasDeclaration.type);
     if (!ts.isTypeReferenceNode(aliased)) {
       return undefined;
     }
@@ -1653,7 +1661,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       return this.#extractLiteralLikeValue(
         aliasArgs[index],
         aliasArgNodes?.[index] ??
-          this.#getAliasTypeArgumentNode(context.typeNode, index),
+          this.#getAliasTypeArgumentNode(context, index),
         context,
       );
     };
@@ -1757,7 +1765,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     const readValue = (index: number): unknown => {
       return this.#extractLiteralLikeValue(
         aliasArgs[index],
-        this.#getAliasTypeArgumentNode(context.typeNode, index),
+        this.#getAliasTypeArgumentNode(context, index),
         context,
       );
     };
@@ -1776,7 +1784,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     const sourceRefType = aliasArgs[0] as TypeWithInternals | undefined;
-    const sourceRefNode = this.#getAliasTypeArgumentNode(context.typeNode, 0);
+    const sourceRefNode = this.#getAliasTypeArgumentNode(context, 0);
     const nestedPathType = sourceRefType?.aliasTypeArguments?.[1];
     const nestedPathNode =
       sourceRefNode && ts.isTypeReferenceNode(sourceRefNode)
@@ -1838,8 +1846,10 @@ export class CommonFabricFormatter implements TypeFormatter {
     aliasArgNodes: readonly ts.TypeNode[] | undefined,
     bindingIndex: number,
   ): Record<string, unknown> | undefined {
+    // The binding itself must be a direct `typeof` (cfc_authoring_contract.md);
+    // `WriteAuthorizedByValidationTransformer` reports any other spelling.
     const bindingNode = aliasArgNodes?.[bindingIndex] ??
-      this.#getAliasTypeArgumentNode(context.typeNode, bindingIndex);
+      this.#getAliasTypeArgumentNode(context, bindingIndex);
     if (!bindingNode || !ts.isTypeQueryNode(bindingNode)) {
       return undefined;
     }
@@ -1862,23 +1872,13 @@ export class CommonFabricFormatter implements TypeFormatter {
     bindingName: ts.Identifier,
     normalizeFile = true,
   ): { file: string; path: string[]; moduleIdentity?: string } {
-    // Resolved here rather than through `resolveAliasedSymbol`: the file this
-    // lands on becomes the writer's module identity, and a hop that fell back
-    // to the importing file would attribute authority to the wrong module.
-    const symbol = context.typeChecker.getSymbolAtLocation(bindingName);
-    const declarationSymbol = symbol && (symbol.flags & ts.SymbolFlags.Alias)
-      ? context.typeChecker.getAliasedSymbol(symbol)
-      : symbol;
-    const declaration = declarationSymbol?.valueDeclaration ??
-      declarationSymbol?.declarations?.[0];
-    const declaredName = declaration && ts.isVariableDeclaration(declaration) &&
-        ts.isIdentifier(declaration.name)
-      ? declaration.name.text
-      : declaration && ts.isFunctionDeclaration(declaration) &&
-          declaration.name
-      ? declaration.name.text
-      : bindingName.text;
-    const sourceFileName = declaration?.getSourceFile().fileName ??
+    // The file this lands on becomes the writer's module identity, so the
+    // binding is resolved to its DECLARATION: a claim that fell back to the
+    // importing file would attribute authority to the wrong module. The
+    // fallback below is for a binding the checker cannot resolve at all.
+    const binding = resolveWriterBinding(bindingName, context.typeChecker);
+    const declaredName = binding?.name ?? bindingName.text;
+    const sourceFileName = binding?.fileName ??
       bindingName.getSourceFile().fileName ??
       context.sourceFileName ??
       "unknown";
@@ -1899,18 +1899,24 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   #getAliasTypeArgumentNode(
-    typeNode: ts.TypeNode | undefined,
+    context: GenerationContext,
     index: number,
   ): ts.TypeNode | undefined {
-    if (!typeNode || !ts.isTypeReferenceNode(typeNode)) {
-      return undefined;
-    }
-    return typeNode.typeArguments?.[index];
+    return this.#getAliasTypeArgumentNodes(context)?.[index];
   }
 
+  /**
+   * The type arguments written on the reference being formatted. The
+   * reference is read through parentheses and plain aliases
+   * (`readAuthoredTypeNode()`): `type Name = Owned<string, typeof setName>`
+   * holds the arguments that `Name` stands for, and a policy read from the
+   * bare `Name` would find none and drop the writer binding without a word.
+   */
   #getAliasTypeArgumentNodes(
-    typeNode: ts.TypeNode | undefined,
+    context: GenerationContext,
   ): readonly ts.TypeNode[] | undefined {
+    const typeNode = context.typeNode &&
+      readAuthoredTypeNode(context.typeNode, context.typeChecker);
     if (!typeNode || !ts.isTypeReferenceNode(typeNode)) {
       return undefined;
     }

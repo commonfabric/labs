@@ -9,7 +9,6 @@ import type {
   FabricContainerValuePlus,
   FabricInstancePlus,
   FabricPlainObjectPlus,
-  FabricValue,
   FabricValuePlus,
 } from "@/interface.ts";
 
@@ -113,7 +112,7 @@ export const DO_RECURSE_VALUES: RecurseForm = Object.freeze(
  * process it further, and there is no specific value to return from (this part
  * of) the visit.
  */
-export type BaselineVisitorMethodResult<ResultType = FabricValue> =
+export type BaselineVisitorMethodResult<ResultType> =
   | MainResultForm<ResultType>
   | undefined;
 
@@ -123,24 +122,16 @@ export type BaselineVisitorMethodResult<ResultType = FabricValue> =
  *
  * See the included result types for details on what they mean.
  */
-export type VisitResult<PlusType = never, ResultType = FabricValue> =
+export type VisitResult<PlusType, ResultType> =
   | BaselineVisitorMethodResult<ResultType>
   | RecurseForm
   | ReplaceForm<PlusType>;
 
 /**
- * Possible results from the `visitValue()` function and other similar
- * functions.
- */
-export type MainVisitResult<ResultType = FabricValue> =
-  BaselineVisitorMethodResult<ResultType>;
-
-/**
  * Possible results from `visited*()` calls (container iteration post-visit
  * methods).
  */
-export type VisitedResult<ResultType = FabricValue> =
-  BaselineVisitorMethodResult<ResultType>;
+export type VisitedResult<ResultType> = BaselineVisitorMethodResult<ResultType>;
 
 //
 // Visitor interface
@@ -161,18 +152,43 @@ export type VisitedResult<ResultType = FabricValue> =
  * `PlusType` type parameter is available to selectively include another type
  * (possibly itself compound) as an additional option.
  */
-export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
+export interface ValueVisitor<
+  PlusType = never,
+  ResultType = FabricValuePlus<PlusType>,
+> {
+  /**
+   * Indicates whether the complete domain of a visitor -- that is, the type
+   * `FabricValuePlus<PlusType>` -- is considered assignable to the `ResultType`
+   * defined by the visitor. This is called at the start of a structural-map
+   * operation, to determine whether or not the visitor engine ever needs to use
+   * `isResultType()`.
+   *
+   * **Note:** This method is nascent: There are no structural-map methods in
+   * this module, yet.
+   */
+  isDomainAssignableToResultType(): boolean;
+
   /**
    * Indicates whether or not the given value is compatible with the `PlusType`
    * type defined by the visitor. This is a type predicate for `PlusType`. The
-   * visitor engine consults it only for a value whose shape is not a fabric
-   * one -- a function, or an object which is neither an array, a plain object,
-   * nor a `FabricSpecialObject` -- and its answer decides whether such a value
-   * goes to `visitPlusType()` or is `throw`n as being outside the visitor's
-   * domain. A value with a fabric shape is never put to it, so a predicate
+   * visitor engine consults it only for a value which cannot be a
+   * `FabricValue` -- a function, a unique (uninterned) symbol, or an object
+   * which is neither an array, a plain object, nor a `FabricSpecialObject` --
+   * and its result decides whether such a value is tagged `PlusType` or
+   * `null`. A value with a fabric shape is never put to it, so a predicate
    * which would accept, say, a plain object never sees one.
    */
   isPlusType(value: unknown): value is PlusType;
+
+  /**
+   * Indicates whether or not the given value is compatible with the
+   * `ResultType` defined by the visitor. This is a type predicate for
+   * `ResultType`. The visitor engine consults it only when it cannot otherwise
+   * determine membership of a value in `ResultType`.
+   */
+  isResultType(
+    value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
+  ): value is ResultType;
 
   /**
    * Visits a container value which is already in the process of being visited.

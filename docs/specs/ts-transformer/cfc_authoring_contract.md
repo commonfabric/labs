@@ -175,12 +175,14 @@ implementation binding, not a plain JSON value.
 Normative behavior:
 
 1. The second type argument must be a direct `typeof ...` query.
-2. The queried root binding must be declared in the same source file.
+2. The queried root binding must be declared in an authored module: the
+   source file itself, or a module it imports, through any re-export. A
+   declaration file cannot declare a writer.
 3. Supported binding declarations are intentionally narrow:
-   - a local variable initialized from `handler(...)`
-   - a local variable initialized from `module(...)`
-   - a local variable initialized from `requireEventIntegrity(...)`
-   - a local function declaration
+   - a variable initialized from `handler(...)`
+   - a variable initialized from `module(...)`
+   - a variable initialized from `requireEventIntegrity(...)`
+   - a function declaration
 4. The transformer must report `cfc-write-authorized-by` if any of the above
    conditions fail.
 5. The schema-generator must preserve the declaring source and binding path in
@@ -190,6 +192,11 @@ Normative behavior:
    `moduleIdentity`, so engine-authored claims are stamped when minted.
 6. If `moduleIdentities` is supplied but omits the defining source, compilation
    must fail instead of silently minting an unstamped claim.
+7. The defining module gives the binding its runtime binding identity,
+   whichever module wrote the claim: a claim in an importing module is
+   verified against the writer's own module, never the importer's. The
+   direct-root `toSchema<WriteAuthorizedBy<…>>()` path and nested claims
+   resolve the binding to its declaration the same way.
 
 One valid marker shape is:
 
@@ -266,7 +273,7 @@ Required diagnostic type:
 Required failure modes:
 
 - second type argument is not `typeof ...`
-- target is imported rather than local
+- target is declared in a declaration file, or not resolvable to a declaration
 - target is not a supported handler/module-style binding
 - policy declarations contain dynamic content, unsupported fields, unbound
   variables, missing guards, invalid exports, or rule reuse
@@ -274,7 +281,8 @@ Required failure modes:
 
 ## Current Limits
 
-- `WriteAuthorizedBy` only supports in-scope local bindings.
+- `WriteAuthorizedBy` only supports bindings the checker resolves to a
+  declaration in an authored module; dynamic lookup is rejected.
 - Exchange-rule declarations use a closed static expression grammar and must be
   module-level exports.
 - `PolicyOf` supports local, direct imported, and pinned `cf:` bindings; general

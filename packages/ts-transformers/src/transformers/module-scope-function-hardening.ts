@@ -5,6 +5,8 @@ import {
   VERIFIED_BINDING_METADATA_FIELD,
 } from "@commonfabric/utils/sandbox-contract";
 import { TransformationContext, Transformer } from "../core/mod.ts";
+import { resolveWriterBinding } from "@commonfabric/schema-generator/writer-binding";
+import { isCommonFabricModuleName } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { unwrapExpression } from "../utils/expression.ts";
 import { normalizeWriterIdentityFile } from "../utils/writer-identity-file.ts";
 
@@ -17,9 +19,14 @@ export class ModuleScopeFunctionHardeningTransformer extends Transformer {
     );
     let helperNeeded = false;
     let bindingHelperNeeded = false;
-    const trustedBindingNames = collectWriteAuthorizedByBindingNames(
-      sourceFile,
-    );
+    // A writer is trusted where it is DECLARED, whichever module wrote the
+    // claim that names it: the schema names the declaring module, and the
+    // runtime verifies the write against that module's binding identity.
+    const trustedBindingNames = new Set([
+      ...collectWriteAuthorizedByBindingNames(sourceFile),
+      ...(collectTrustedBindingsByFile(context).get(sourceFile.fileName) ??
+        []),
+    ]);
     const sourceFileName = normalizeWriterIdentityFile(
       sourceFile.fileName,
       context.options.canonicalWriterIdentityFile,
@@ -554,76 +561,285 @@ function createObjectOrFunctionCheck(
   );
 }
 
+/** Which type argument of a policy alias carries the writer binding. */
+type BindingPositions = (
+  reference: ts.TypeReferenceNode,
+) => ReadonlySet<number> | undefined;
+
+/**
+ * The key a reference stands for in a positions index, and the key an alias
+ * declaration is indexed under. The library's policy types are keyed by
+ * their bare names; an authored alias's key must never collide with those,
+ * since an alias that borrows the name `WriteAuthorizedBy` names no writer.
+ */
+interface AliasKeys {
+  readonly reference: (reference: ts.TypeReferenceNode) => string | undefined;
+  readonly declaration: (declaration: ts.TypeAliasDeclaration) => string;
+}
+
+const referenceName = (reference: ts.TypeReferenceNode): ts.Identifier =>
+  ts.isIdentifier(reference.typeName)
+    ? reference.typeName
+    : reference.typeName.right;
+
+const leftmostName = (name: ts.EntityName): ts.Identifier =>
+  ts.isIdentifier(name) ? name : leftmostName(name.left);
+
+const LIBRARY_BINDING_POSITIONS: ReadonlyMap<string, ReadonlySet<number>> =
+  new Map([
+    ["WriteAuthorizedBy", new Set([1])],
+    ["TrustedActionWrite", new Set([1])],
+    ["TrustedActionWriteWithIntegrity", new Set([1])],
+  ]);
+
+/**
+ * The binding names this file's own claims cite, read from the file as it
+ * reaches this stage and by spelling. Kept beside the program-wide index
+ * below for a claim an earlier stage synthesized, which the program's
+ * original files do not hold.
+ */
 function collectWriteAuthorizedByBindingNames(
   sourceFile: ts.SourceFile,
 ): Set<string> {
-  const bindingPositions = discoverWriteAuthorizedByBindingPositions(
-    sourceFile,
+  const bySpelling: AliasKeys = {
+    reference: (reference) =>
+      ts.isIdentifier(reference.typeName) ? reference.typeName.text : undefined,
+    declaration: (declaration) => declaration.name.text,
+  };
+  const positionsByKey = discoverAliasBindingPositions(
+    [sourceFile],
+    bySpelling,
   );
   const names = new Set<string>();
+  visitWriterBindings(
+    sourceFile,
+    (reference) => {
+      const key = bySpelling.reference(reference);
+      return key === undefined ? undefined : positionsByKey.get(key);
+    },
+    (binding) => names.add(binding.text),
+  );
+  return names;
+}
+
+const trustedBindingsByProgram = new WeakMap<
+  ts.Program,
+  ReadonlyMap<string, ReadonlySet<string>>
+>();
+
+/**
+ * Every writer binding a claim anywhere in the program names, indexed by the
+ * module that DECLARES it. A claim in an importing module names a writer
+ * declared elsewhere — `cfc-spec-gallery` binds the trusted surfaces' writers
+ * this way — and that writer's own module must give it the binding identity,
+ * or the runtime finds no identity to verify the claim against. Claims and
+ * policy aliases are read from the program's original files and resolved
+ * through the checker: an alias declared in another module, and a binding
+ * imported under another name, resolve to what they stand for.
+ */
+function collectTrustedBindingsByFile(
+  context: TransformationContext,
+): ReadonlyMap<string, ReadonlySet<string>> {
+  const { program, checker } = context;
+  const cached = trustedBindingsByProgram.get(program);
+  if (cached) return cached;
+  const files = program.getSourceFiles().filter((file) =>
+    !file.isDeclarationFile && !program.isSourceFileDefaultLibrary(file)
+  );
+  // A reference stands for one of the library's policy types when it is
+  // imported from the library, through any chain of authored re-exports; an
+  // authored alias, including one that borrows the name, is keyed by its
+  // own declaration and reads as what it declares.
+  const declarationKey = (declaration: ts.TypeAliasDeclaration): string =>
+    `${declaration.getSourceFile().fileName}\0${declaration.name.text}`;
+  const byDeclaration: AliasKeys = {
+    reference: (reference) => {
+      const name = referenceName(reference);
+      const symbol = checker.getSymbolAtLocation(name);
+      const resolved = symbol && symbol.flags & ts.SymbolFlags.Alias
+        ? checker.getAliasedSymbol(symbol)
+        : symbol;
+      const declaration = resolved?.declarations?.find(
+        ts.isTypeAliasDeclaration,
+      );
+      // The library's type is known by its DECLARED name, whatever the
+      // reference spells it — `import { WriteAuthorizedBy as Guarded }` — and
+      // by where it comes from. A qualified `cf.WriteAuthorizedBy` is the
+      // library's when its namespace is: the right-hand name resolves past
+      // every import hop.
+      const canonical = declaration?.name.text ?? name.text;
+      const qualifier = ts.isQualifiedName(reference.typeName)
+        ? checker.getSymbolAtLocation(leftmostName(reference.typeName))
+        : undefined;
+      if (
+        LIBRARY_BINDING_POSITIONS.has(canonical) &&
+        (isImportedFromLibrary(symbol, checker) ||
+          isImportedFromLibrary(qualifier, checker))
+      ) {
+        return canonical;
+      }
+      return declaration && declarationKey(declaration);
+    },
+    declaration: declarationKey,
+  };
+  const positionsByKey = discoverAliasBindingPositions(files, byDeclaration);
+  const positionsFor: BindingPositions = (reference) => {
+    const key = byDeclaration.reference(reference);
+    return key === undefined ? undefined : positionsByKey.get(key);
+  };
+  const byFile = new Map<string, Set<string>>();
+  for (const file of files) {
+    visitWriterBindings(file, positionsFor, (binding) => {
+      const resolved = resolveWriterBinding(binding, checker);
+      if (!resolved) return;
+      let names = byFile.get(resolved.fileName);
+      if (!names) {
+        names = new Set();
+        byFile.set(resolved.fileName, names);
+      }
+      names.add(resolved.name);
+    });
+  }
+  trustedBindingsByProgram.set(program, byFile);
+  return byFile;
+}
+
+/**
+ * Whether `symbol`, followed one import or re-export at a time, is brought in
+ * from a Common Fabric module: a hop that imports from one by name, or a hop
+ * declared in a declaration file, which authored code never is — that is how
+ * a namespace-qualified `cf.WriteAuthorizedBy` resolves, straight to the
+ * library's own re-export. The first hop out of authored code is what
+ * decides it: the library's own files are roots of the compile too, and its
+ * `WriteAuthorizedBy` is declared in a companion module the path-based
+ * provenance check does not recognize, so neither the roots nor the final
+ * declaration can say whose type this is.
+ */
+function isImportedFromLibrary(
+  symbol: ts.Symbol | undefined,
+  checker: ts.TypeChecker,
+): boolean {
+  const seen = new Set<ts.Symbol>();
+  let current = symbol;
+  while (
+    current && current.flags & ts.SymbolFlags.Alias && !seen.has(current)
+  ) {
+    seen.add(current);
+    for (const declaration of current.declarations ?? []) {
+      if (declaration.getSourceFile().isDeclarationFile) return true;
+      const specifier = importModuleSpecifier(declaration);
+      if (
+        specifier !== undefined &&
+        (isCommonFabricModuleName(specifier) ||
+          specifier.startsWith("commonfabric/"))
+      ) {
+        return true;
+      }
+    }
+    current = checker.getImmediateAliasedSymbol(current);
+  }
+  return false;
+}
+
+/** The module an import or re-export declaration names, if it names one. */
+function importModuleSpecifier(
+  declaration: ts.Declaration,
+): string | undefined {
+  let node: ts.Node | undefined = declaration;
+  while (
+    node && !ts.isImportDeclaration(node) && !ts.isExportDeclaration(node)
+  ) {
+    node = node.parent;
+  }
+  const specifier = node?.moduleSpecifier;
+  return specifier && ts.isStringLiteral(specifier)
+    ? specifier.text
+    : undefined;
+}
+
+/**
+ * For every type alias in `files` that forwards a type parameter into a
+ * binding position of a policy it names, which of its own positions those
+ * are — to a fixed point, so an alias of an alias is read too. Keyed as
+ * `keys` says, seeded with the library's policy types under their names.
+ */
+function discoverAliasBindingPositions(
+  files: readonly ts.SourceFile[],
+  keys: AliasKeys,
+): Map<string, Set<number>> {
+  const positionsByKey = new Map<string, Set<number>>(
+    [...LIBRARY_BINDING_POSITIONS].map(([name, positions]) => [
+      name,
+      new Set(positions),
+    ]),
+  );
+  const positionsFor: BindingPositions = (reference) => {
+    const key = keys.reference(reference);
+    return key === undefined ? undefined : positionsByKey.get(key);
+  };
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const file of files) {
+      for (const statement of file.statements) {
+        if (
+          !ts.isTypeAliasDeclaration(statement) ||
+          !ts.isIdentifier(statement.name)
+        ) {
+          continue;
+        }
+
+        const positions = collectAliasBindingPositions(
+          statement,
+          positionsFor,
+        );
+        if (!positions.size) {
+          continue;
+        }
+
+        const key = keys.declaration(statement);
+        const existing = positionsByKey.get(key) ?? new Set();
+        for (const position of positions) {
+          if (!existing.has(position)) {
+            existing.add(position);
+            changed = true;
+          }
+        }
+        positionsByKey.set(key, existing);
+      }
+    }
+  }
+
+  return positionsByKey;
+}
+
+/** Calls `onBinding` for each `typeof` identifier in a binding position. */
+function visitWriterBindings(
+  root: ts.Node,
+  positionsFor: BindingPositions,
+  onBinding: (binding: ts.Identifier) => void,
+): void {
   const visit = (node: ts.Node): void => {
-    if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) {
-      const positions = bindingPositions.get(node.typeName.text);
+    if (ts.isTypeReferenceNode(node)) {
+      const positions = positionsFor(node);
       if (positions) {
         for (const position of positions) {
           const bindingNode = node.typeArguments?.[position];
           if (bindingNode) {
-            collectTypeQueryIdentifiers(bindingNode, names);
+            collectTypeQueryIdentifiers(bindingNode, onBinding);
           }
         }
       }
     }
     ts.forEachChild(node, visit);
   };
-  visit(sourceFile);
-  return names;
-}
-
-function discoverWriteAuthorizedByBindingPositions(
-  sourceFile: ts.SourceFile,
-): Map<string, Set<number>> {
-  const positionsByName = new Map<string, Set<number>>([
-    ["WriteAuthorizedBy", new Set([1])],
-    ["TrustedActionWrite", new Set([1])],
-    ["TrustedActionWriteWithIntegrity", new Set([1])],
-  ]);
-
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const statement of sourceFile.statements) {
-      if (
-        !ts.isTypeAliasDeclaration(statement) ||
-        !ts.isIdentifier(statement.name)
-      ) {
-        continue;
-      }
-
-      const positions = collectAliasBindingPositions(
-        statement,
-        positionsByName,
-      );
-      if (!positions.size) {
-        continue;
-      }
-
-      const existing = positionsByName.get(statement.name.text) ?? new Set();
-      for (const position of positions) {
-        if (!existing.has(position)) {
-          existing.add(position);
-          changed = true;
-        }
-      }
-      positionsByName.set(statement.name.text, existing);
-    }
-  }
-
-  return positionsByName;
+  visit(root);
 }
 
 function collectAliasBindingPositions(
   declaration: ts.TypeAliasDeclaration,
-  positionsByName: ReadonlyMap<string, ReadonlySet<number>>,
+  positionsFor: BindingPositions,
 ): Set<number> {
   const typeParameterPositions = new Map<string, number>();
   declaration.typeParameters?.forEach((parameter, index) => {
@@ -632,8 +848,8 @@ function collectAliasBindingPositions(
 
   const positions = new Set<number>();
   const visit = (node: ts.Node): void => {
-    if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) {
-      const bindingPositions = positionsByName.get(node.typeName.text);
+    if (ts.isTypeReferenceNode(node)) {
+      const bindingPositions = positionsFor(node);
       if (bindingPositions) {
         for (const bindingPosition of bindingPositions) {
           const bindingNode = node.typeArguments?.[bindingPosition];
@@ -674,12 +890,15 @@ function collectTypeParameterPositions(
 
 function collectTypeQueryIdentifiers(
   node: ts.Node,
-  names: Set<string>,
+  onBinding: (binding: ts.Identifier) => void,
 ): void {
   if (ts.isTypeQueryNode(node) && ts.isIdentifier(node.exprName)) {
-    names.add(node.exprName.text);
+    onBinding(node.exprName);
   }
-  ts.forEachChild(node, (child) => collectTypeQueryIdentifiers(child, names));
+  ts.forEachChild(
+    node,
+    (child) => collectTypeQueryIdentifiers(child, onBinding),
+  );
 }
 
 function isDirectFunctionExpression(expression: ts.Expression): boolean {

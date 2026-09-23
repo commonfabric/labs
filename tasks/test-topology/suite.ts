@@ -17,6 +17,7 @@ import {
   spoolWriteArgument,
   type TestIdentity,
 } from "@commonfabric/test-support/records";
+import { shuffleFlag, shuffleSeed } from "@commonfabric/test-support/shuffle";
 import type { CapabilityId } from "../ci-capabilities.ts";
 
 /** A kind and scope a suite's records may carry. */
@@ -169,6 +170,23 @@ export interface Suite {
 
   /** Every unit or exact leaf this configuration deliberately does not run. */
   unavailable: readonly Unavailable[];
+
+  /**
+   * The units whose runner runs every identity in them, whatever a lane asks
+   * for. Examples are a workspace member whose test task takes no file list, a
+   * browser half, a section of a script that brings one environment up for
+   * several phases, and a gate that is a single identity.
+   *
+   * A lane writes no skip list for one of these, because its runner reads none.
+   * Every other unit is a file that `deno test` is pointed at, and the
+   * registration preload reads the skip list under that file's
+   * repository-relative path.
+   *
+   * `tasks/test-topology.test.ts` checks this list in both directions. A unit
+   * left out of it has to be such a file. A unit named in it has to be one its
+   * suite writes no skip list for.
+   */
+  whole: readonly Unit[];
 
   /**
    * Tree paths this suite accounts for beyond its units. A suite whose
@@ -414,12 +432,12 @@ export interface ConfiguredSkip {
 export function unavailableFrom(
   skips: readonly ConfiguredSkip[],
   packageDir: string,
-): { whole: Set<Unit>; unavailable: Unavailable[] } {
-  const whole = new Set<Unit>();
+): { excluded: Set<Unit>; unavailable: Unavailable[] } {
+  const excluded = new Set<Unit>();
   const unavailable: Unavailable[] = [];
   for (const skip of skips) {
     const unit = `${packageDir}/${skip.file}`;
-    if (skip.step === undefined) whole.add(unit);
+    if (skip.step === undefined) excluded.add(unit);
     unavailable.push({
       unit,
       ...(skip.step === undefined ? {} : { leafName: skip.step }),
@@ -427,7 +445,7 @@ export function unavailableFrom(
       reason: skip.reason,
     });
   }
-  return { whole, unavailable };
+  return { excluded, unavailable };
 }
 
 /**
@@ -443,6 +461,16 @@ export function recordingArguments(
 ): string[] {
   const write = spoolWriteArgument(flags, context.spoolDir);
   return write === undefined ? [preloadArgument()] : [preloadArgument(), write];
+}
+
+/**
+ * The flag every `deno test` a suite builds shuffles by. The seed is the
+ * one the commit under test was committed on unless the environment names
+ * another, and the runner that starts a run puts the seed it settled on
+ * in the environment, so every invocation of that run takes the same one.
+ */
+export function shuffleArguments(): string[] {
+  return [shuffleFlag(shuffleSeed())];
 }
 
 /** Writes a batch's skip list where its invocations will read it. */
@@ -546,6 +574,9 @@ export function fileSuite(options: FileSuiteOptions): Suite {
     needs: options.needs,
     units,
     unavailable,
+    // Every unit here is a file the command names. The preload reads the skip
+    // list under the same path.
+    whole: [],
     ...(options.measured === undefined ? {} : { measured: options.measured }),
 
     locate(record) {
@@ -607,6 +638,7 @@ export function fileSuite(options: FileSuiteOptions): Suite {
             Deno.execPath(),
             "test",
             ...part.flags,
+            ...shuffleArguments(),
             ...recordingArguments(part.flags, context),
             `--junit-path=${junitPath}`,
             ...group.map((request) =>

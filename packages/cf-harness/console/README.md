@@ -856,13 +856,16 @@ record of what the run recorded rather than a cell with nothing to hide.
 
   Then the call's input and model-facing output as formatted JSON, with long
   lines scrolling inside their block rather than widening the page. Beside the
-  output, **withheld from the model** expands to the full artifact positions
-  named by `transcript-omissions.json`, each labeled by its omission rule. CFC
-  denials render a redaction marker. Scrubbed Fabric identifiers are shown with
-  `[fabric-id]` in place of their values when the artifact position is
-  available; that fixed marker stands in alone when it is not. A legacy result
-  with no omission record says so instead of inferring omissions from the full
-  result.
+  output, an omission block expands to the full artifact positions named by
+  `transcript-omissions.json`, each labeled by its omission rule.
+  `artifact-only` reads **kept on the artifact, not sent to the model**;
+  `observation-denied` reads **withheld by policy**, as do release refusals on
+  the CFC line. The block includes a short excerpt of the recorded result the
+  model received. CFC denials render a redaction marker. Scrubbed Fabric
+  identifiers are shown with `[fabric-id]` in place of their values when the
+  artifact position is available; that fixed marker stands in alone when it is
+  not. A legacy result with no omission record says so instead of inferring
+  omissions from the full result.
 
   Superseded `run_pattern` source is an assistant argument rather than a tool
   result, so it is outside the omission record. Where its marker appears, the

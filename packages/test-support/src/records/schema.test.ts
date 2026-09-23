@@ -167,6 +167,25 @@ describe("schema", () => {
         .toEqual(context);
     });
 
+    it("keeps the seed the run shuffled by", () => {
+      const context: RunContext = { ...CONTEXT, shuffleSeed: 20260922 };
+      expect(parseContextLine(serializeContextLine(context).trim()))
+        .toEqual(context);
+    });
+
+    it("leaves the seed out of a run that did not shuffle", () => {
+      const parsed = parseContextLine(serializeContextLine(CONTEXT).trim());
+      expect(parsed).toBeDefined();
+      expect("shuffleSeed" in parsed!).toBe(false);
+    });
+
+    it("returns undefined for a seed deno test would not take", () => {
+      for (const shuffleSeed of [-1, 1.5, "20260922", null]) {
+        const line = JSON.stringify({ ...CONTEXT, shuffleSeed });
+        expect(parseContextLine(line)).toBeUndefined();
+      }
+    });
+
     it("returns undefined for a wrong schema version", () => {
       const line = JSON.stringify({ ...CONTEXT, schema: 2 });
       expect(parseContextLine(line)).toBeUndefined();

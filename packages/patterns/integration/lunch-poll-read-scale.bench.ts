@@ -5,6 +5,7 @@
  * arm and requires a matching local toolshed and shell.
  */
 
+import { debugStr } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import {
   Browser,
@@ -338,12 +339,13 @@ for (const voteCount of SIZES) {
       }
       if (sample.eventCommits === 0 || sample.eventCommitErrors !== 0) {
         throw new Error(
-          `The diagnostic vote did not commit cleanly: ${
-            JSON.stringify(sample)
-          }`,
+          `The diagnostic vote did not commit cleanly: ` +
+            debugStr`$quote,long${sample}`,
         );
       }
-      note(`[lunch-read-scale] ${voteCount} votes: ${JSON.stringify(sample)}`);
+      note(
+        debugStr`[lunch-read-scale] ${voteCount} votes: $quote,long${sample}`,
+      );
       b.start();
       await vote(page, "green");
       b.end();

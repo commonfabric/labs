@@ -177,22 +177,24 @@ uses this fixture mechanism at both postures.
 ## View pager
 
 `cf view [file]` is an interactive pager for transformed TypeScript, source
-files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, and
-Python files use their own syntax highlighting. Web manifests, TLDraw documents,
-Deno lock files, editor workspace files, and Swift package resolutions use the
-JSON highlighting their suffixes do not announce. A `.cfg` file uses JSON
-highlighting when the source in view opens a JSON object; that suffix is shared
-with unrelated syntaxes, so its name alone leaves it as plain text. Transformed
-compiler output piped without a filename keeps TypeScript highlighting when its
-module header identifies it. Python interpreter shebangs select Python for
-otherwise unrecognized names. Node, Deno, and Bun shebangs select the TypeScript
-and JavaScript language family. Other filename-free source and named files with
-unrecognized syntax are shown as plain text. For piped source, `--filename`
-selects syntax as though the input had that name. `--language` selects a
-language by its stable identifier or alias. Both options keep the pipe read-only
-and suppress unified-diff auto-detection. An explicit language takes priority
-when both options are present. Use `--diff` instead when the pipe is a unified
-diff.
+files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
+and Swift files use their own syntax highlighting. A Swift package manifest is
+Swift source under its `.swift` extension, and a module's `.swiftinterface` is
+Swift as well. Web manifests, TLDraw documents, Deno lock files, editor
+workspace files, and Swift package resolutions use the JSON highlighting their
+suffixes do not announce. A `.cfg` file uses JSON highlighting when the source
+in view opens a JSON object; that suffix is shared with unrelated syntaxes, so
+its name alone leaves it as plain text. Transformed compiler output piped
+without a filename keeps TypeScript highlighting when its module header
+identifies it. Python interpreter shebangs select Python for otherwise
+unrecognized names, and `swift` and `xcrun swift` shebangs select Swift. Node,
+Deno, and Bun shebangs select the TypeScript and JavaScript language family.
+Other filename-free source and named files with unrecognized syntax are shown as
+plain text. For piped source, `--filename` selects syntax as though the input
+had that name. `--language` selects a language by its stable identifier or
+alias. Both options keep the pipe read-only and suppress unified-diff
+auto-detection. An explicit language takes priority when both options are
+present. Use `--diff` instead when the pipe is a unified diff.
 
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
@@ -1911,10 +1913,12 @@ use `cf exec <mounted-file> --help --json` or
 The supported output switches are:
 
 - `cf space ... --json` serializes the clone manifest, verify result, or
-  fingerprint. `cf space verify` and `cf space reset` exit nonzero when the
-  clone does not match its baseline, so a rehearsal script can gate on them; the
-  printed report, not usage help, is the output in that case. The procedure
-  these commands serve is `docs/development/space-clone-rehearsal.md`.
+  fingerprint; `cf space reset --json` also names the other spaces' stores and
+  the cell-derived databases it removed, in separate fields. `cf space verify`
+  and `cf space reset` exit nonzero when the clone does not match its baseline,
+  so a rehearsal script can gate on them; the printed report, not usage help, is
+  the output in that case. The procedure these commands serve is
+  `docs/development/space-clone-rehearsal.md`.
 - `cf inspect ... --json` serializes an inspector result. `inspect html` does
   not have a JSON representation, so `html` and `--json` are mutually exclusive.
   `inspect graph --dot` and `--json` are also mutually exclusive.
@@ -1967,19 +1971,25 @@ opened, for example `cf piece call ... search --query milk`, and
 before the callable name for `cf piece call` itself and the arguments after the
 name for the invoked callable.
 
-`--` belongs to the commands that have a callable section to close. On
-`cf piece call` and `cf exec` it closes the section the callable name opened and
-opens the read step's, so the only words that follow it are `--select`,
-`--schema` and `--filter`; anything else there is refused with the line that
-puts it back in the section. `--help` is the exception, and deliberately:
-written past the marker it still reaches the callable and prints that verb's own
-page, since a caller wanting this command's page writes it with no verb at all.
+On `cf piece call` and `cf exec`, which have a callable section, `--` closes the
+section the callable name opened and opens the read step's, so the only words
+that follow it are `--select`, `--schema` and `--filter`; anything else there is
+refused with the line that puts it back in the section. `--help` is the
+exception, and deliberately: written past the marker it still reaches the
+callable and prints that verb's own page, since a caller wanting this command's
+page writes it with no verb at all.
 
 `cf cell get`, `cf cell set` and `cf wish` have no callable section, so a `--`
 written on one of those is refused rather than read: the parser sets every word
 after it aside, and the command would otherwise return a value the caller did
 not ask for and exit zero. The refusal names the words that were set aside and
 the line that works.
+
+A few commands give `--` its conventional meaning instead: it ends the options,
+and the one word after it is read as an argument even when it begins with `-`.
+`cf id derive` and `cf id from-mnemonic` read the secret from the file named
+there, and `cf space invite redeem`, `revoke` and `receipts` take the invitation
+ID from it, as [Space invitations](#space-invitations) describes.
 
 ## Command visibility
 
@@ -2350,12 +2360,12 @@ provider is keyed to is the other question, and
 
 The remaining table entries hand the shell a constant `files` or `dirs`
 directive, which a fabric cannot change: those are asserted one by one, kind and
-glob, in `test/completion-providers.test.ts`. The set that has to be asserted is
-derived there rather than remembered — every slot the tree declares is probed
-with no fabric configured, and one that hands the shell a directive no case pins
-fails the test. A case pins one command where the provider says it answers per
-command, and every command at once where it does not — the same distinction the
-slot gate draws, and a provider held to it by a test of its own.
+glob, in `test/completion-providers.serial.test.ts`. The set that has to be
+asserted is derived there rather than remembered — every slot the tree declares
+is probed with no fabric configured, and one that hands the shell a directive no
+case pins fails the test. A case pins one command where the provider says it
+answers per command, and every command at once where it does not — the same
+distinction the slot gate draws, and a provider held to it by a test of its own.
 
 That split is not tidiness: a provider that reaches a fabric and comes back with
 the wrong set is invisible to a unit test and invisible at the prompt, because
@@ -2379,6 +2389,12 @@ JSON and require no existing memory session to redeem.
 - `cf space invite list` lists active metadata without codes or verifiers.
 - `cf space invite revoke <invite-id>` ends admission without removing grants.
 - `cf space invite receipts [invite-id]` lists unique invitation/DID pairs.
+
+An invitation ID may begin with `-`. Written where the argument goes, such an ID
+is read as an option, so `redeem`, `revoke`, and `receipts` also take the ID as
+the one word after `--`, which comes after every option:
+`cf space invite revoke -- -Pj4…` or
+`cf space invite redeem --code-file code.txt -- -Pj4…`.
 
 Creation saves its credentials before sending HTTP. With
 `--request-file <path>`, the command requires a private parent directory (0700)

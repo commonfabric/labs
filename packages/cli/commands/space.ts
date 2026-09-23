@@ -34,7 +34,6 @@ import {
   contentFingerprint,
   createClone,
   openSpace,
-  readManifest,
   resetClone,
   resolveSpace,
   verifyClone,
@@ -248,8 +247,8 @@ export const space = new Command()
   // `--from`/`--to` are required in substance but NOT declared `required`:
   // cliffy appends required options to the usage line, which would break the
   // repo invariant that a command's usage ends with its positional arguments
-  // (see main-command.test.ts). Validating here also gives a more actionable
-  // message than cliffy's generic one.
+  // (see main-command.serial.test.ts). Validating here also gives a more
+  // actionable message than cliffy's generic one.
   .option(
     "--from <source:string>",
     "Snapshot to clone: a .sqlite path, or an https URL to download.",
@@ -400,18 +399,31 @@ export const space = new Command()
     "Restore the working copy from the pristine snapshot, discarding the attempt.",
   )
   .action(async (options, dir) => {
-    const before = await readManifest(dir);
-    await resetClone(dir);
+    const { manifest: before, removedStores, removedCellDatabases } =
+      await resetClone(dir);
     const after = await verifyClone(dir);
-    out(!!options.json, { manifest: before, verify: after }, () => {
-      console.log(
-        `reset ${before.space} to its baseline (${before.createdAt})\n` +
-          `  commits back to ${after.counts.working.commits}\n` +
-          `  content  ${
-            after.fingerprint.match ? "matches baseline" : "STILL DIFFERS"
-          }`,
-      );
-    });
+    out(
+      !!options.json,
+      { manifest: before, removedStores, removedCellDatabases, verify: after },
+      () => {
+        console.log(
+          `reset ${before.space} to its baseline (${before.createdAt})\n` +
+            `  commits back to ${after.counts.working.commits}\n` +
+            `  content  ${
+              after.fingerprint.match ? "matches baseline" : "STILL DIFFERS"
+            }` +
+            (removedStores.length === 0
+              ? ""
+              : `\n  removed  ${removedStores.length} store(s) the attempt created for other spaces:\n` +
+                removedStores.map((space) => `           ${space}`).join(
+                  "\n",
+                )) +
+            (removedCellDatabases.length === 0
+              ? ""
+              : `\n  removed  ${removedCellDatabases.length} cell database(s) the attempt created`),
+        );
+      },
+    );
     if (!after.ok) Deno.exit(1);
   })
   /* space fingerprint */

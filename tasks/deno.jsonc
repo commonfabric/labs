@@ -5,7 +5,8 @@
     "typescript": "npm:typescript@6.0.3"
   },
   "tasks": {
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ./run-member-tests.ts deno-test",
     // --no-check: tasks/ is type-checked by the root `deno task check` job.
-    "test": "deno run --allow-env --allow-read --allow-run=$(deno eval \"console.log(Deno.execPath())\") ./run-sharded-test-files.ts TASK_TEST_SHARD tasks . -- --no-check -A"
+    "deno-test": "deno run --allow-env --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ./run-sharded-test-files.ts TASK_TEST_SHARD tasks . -- --no-check -A --shuffle=$(deno task -q test-seed)"
   }
 }

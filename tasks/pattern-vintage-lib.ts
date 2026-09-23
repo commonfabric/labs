@@ -12,6 +12,11 @@
  */
 
 import { exists } from "@std/fs";
+import {
+  acceptedDropKey,
+  type AcceptedStateDrop,
+} from "./pattern-vintage-accepted-drops.ts";
+import { readOnlyArguments } from "./only-arguments.ts";
 
 import {
   isStoredArgumentSchemaRefusal,
@@ -282,6 +287,78 @@ export function uncoveredRequiredPatterns(
   return requiredKeys.filter((key) => !covered.has(key)).sort();
 }
 
+/**
+ * What a run over the fixture tree is asked to judge, from what it
+ * replayed.
+ *
+ * Three checks need every fixture replayed: whether every required pattern
+ * is covered, whether each accepted removal still applies to some fixture,
+ * and whether each accepted removal names a pattern some fixture records.
+ * A filtered run makes none of them, and all three come back empty.
+ *
+ * A pattern is judged when a fixture's manifest names it, because a replay
+ * then either used its entries or showed they were not needed.
+ */
+export function judgeWholeTree(
+  whole: boolean,
+  requiredKeys: readonly string[],
+  replay: {
+    covered: ReadonlySet<string>;
+    coveredBy: ReadonlyMap<string, unknown>;
+    dropsApplied: ReadonlySet<string>;
+  },
+  drops: readonly AcceptedStateDrop[],
+): { uncovered: string[]; staleDrops: string[]; unjudgeableDrops: string[] } {
+  if (!whole) return { uncovered: [], staleDrops: [], unjudgeableDrops: [] };
+  const judged = new Set([...replay.covered, ...replay.coveredBy.keys()]);
+  return {
+    uncovered: uncoveredRequiredPatterns(requiredKeys, replay.covered),
+    // An accepted removal that applied to no replayed vintage is an
+    // exemption that no longer forgives anything. It is asked per path, so
+    // an entry cannot keep a line nothing needs.
+    staleDrops: drops
+      .filter((drop) => judged.has(drop.pattern))
+      .flatMap((drop) =>
+        drop.paths
+          .map((path) => acceptedDropKey(drop.pattern, path))
+          .filter((pair) => !replay.dropsApplied.has(pair))
+      ),
+    // An entry for a pattern no fixture records cannot be judged at all.
+    // Its remedy differs from a stale entry's, so it is reported apart.
+    unjudgeableDrops: drops
+      .filter((drop) => !judged.has(drop.pattern))
+      .map((drop) => drop.pattern),
+  };
+}
+
+/**
+ * What a run's command line asks it to replay: the `--only` terms, and
+ * whether the run covers every fixture. A filter next to a capture command
+ * is refused, because a capture decides what is due by reading every
+ * fixture and its positional argument is a test key rather than a fixture.
+ */
+export function replayScope(
+  args: readonly string[],
+): { only: string[]; whole: boolean } | { error: string } {
+  const filter = readOnlyArguments(args);
+  if ("error" in filter) return filter;
+  const whole = filter.only.length === 0;
+  if (!whole && CAPTURE_FLAGS.some((flag) => args.includes(flag))) {
+    return { error: reportOnlyWithCapture() };
+  }
+  return { only: filter.only, whole };
+}
+
+/** The commands that read every fixture to decide what to do. */
+const CAPTURE_FLAGS = ["--update", "--capture-changed", "--pin"] as const;
+
+/** What the task prints when a run replayed no fixture. */
+export function reportEmptyReplay(only: readonly string[]): string {
+  return only.length === 0
+    ? reportNothingReplayed()
+    : reportNothingMatched(only);
+}
+
 /** A vintage that could not be replayed under today's source. */
 export interface ReplayFailure {
   /** The TEST whose fixture this failure came from. */
@@ -549,7 +626,54 @@ export function describeCaptureOutcome(
 }
 
 /** Every flag this task understands. Anything else is a mistake, not a hint. */
-export const KNOWN_FLAGS = ["--update", "--capture-changed", "--pin"] as const;
+export const KNOWN_FLAGS = [
+  "--update",
+  "--capture-changed",
+  "--pin",
+  "--only",
+] as const;
+
+/** The flag that restricts a replay, in the form that carries its value. */
+const ONLY_PREFIX = "--only=";
+
+/**
+ * Whether a fixture is one a filter asked for. The filter is matched
+ * against the fixture's repository-relative path with `/` separators, which
+ * is how a lane names it, so a term matching part of the checkout's own
+ * directory matches nothing.
+ */
+export function replayFilterTakes(
+  path: string,
+  repoRoot: string,
+  only: readonly string[],
+): boolean {
+  if (only.length === 0) return true;
+  const relative = relativeToRepo(
+    path.replaceAll("\\", "/"),
+    repoRoot.replaceAll("\\", "/"),
+  );
+  const terms = only.map((value) => value.replaceAll("\\", "/"));
+  return terms.some((value) => relative.includes(value));
+}
+
+/** What the task prints when a filter matched no fixture in the tree. */
+export function reportNothingMatched(only: readonly string[]): string {
+  return [
+    `Replayed 0 vintages — no fixture's path holds ${
+      only.map((value) => `\`${value}\``).join(" or ")
+    }.`,
+    "A filter that matches nothing proves nothing, so it is a failure.",
+  ].join("\n");
+}
+
+/** What the task prints when a filter is paired with a capture command. */
+export function reportOnlyWithCapture(): string {
+  return [
+    "`--only` restricts a replay and every command that captures or pins " +
+    "reads the whole tree, so the two cannot be given together.",
+    "Run the capture on its own, then replay what you want.",
+  ].join("\n");
+}
 
 /**
  * Flags the task does not recognize.
@@ -579,7 +703,8 @@ export function unknownFlags(args: readonly string[]): string[] {
   // `deno task` forwards it verbatim, so rejecting it refused the ordinary
   // `deno task pattern-vintage -- --update <key>` invocation.
   return args.filter((arg) =>
-    arg.startsWith("-") && arg !== "--" && !known.has(arg)
+    arg.startsWith("-") && arg !== "--" && !known.has(arg) &&
+    !arg.startsWith(ONLY_PREFIX)
   );
 }
 
