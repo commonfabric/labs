@@ -23,15 +23,13 @@ Topic stores — the two are different questions, and "Which read answers what"
 below gives each one its command. `deno task cf cell get /top/<n> title` answers
 either way, because a member's address is the namespace's and not the Topic's.
 
-**This procedure has not been rehearsed against a clone in this shape.** The two
-source legs below are unchanged, and were measured twice —
+**What a clone rehearsal of the whole procedure showed** is recorded in
+`docs/history/plans/topics-numbering-rehearsal-2026-09-22.md`, and the earlier
+measurements of the source legs in
 `docs/history/plans/collection-naming-s6-backfill-rehearsal-2026-09-05.md` and
-`docs/history/plans/collection-naming-s6-backfill-rehearsal-rerun-2026-09-06.md`
-record what each run cost and which of its figures scale. What stands behind the
-numbering step is pattern-test coverage in
-`packages/patterns/topics/naming.test.tsx`, not a clone run. Rehearse per
-`docs/development/space-clone-rehearsal.md` before running any of this against a
-space holding real data.
+`docs/history/plans/collection-naming-s6-backfill-rehearsal-rerun-2026-09-06.md`.
+Rehearse per `docs/development/space-clone-rehearsal.md` before running any of
+this against a space holding real data.
 
 ### The order
 
@@ -131,11 +129,26 @@ deno task cf piece call --cell "$TOPICS_BOARD" --invocation '<id>' backfillNames
   '{"agentName":"Sol"}'
 ```
 
-One command for the whole board, where the shape this replaced cost one
-`cf piece link` per Topic. Step 2 is still one `setsrc` per Topic, serially, and
-on a board the size of the Estuary one that is the bulk-CLI shape
-`docs/history/topics-board-migration-2026-08-28.md` found unreliable from a
-laptop; run it from somewhere that record vindicates.
+`--invocation` needs an invocation session; set `CF_INVOCATION_SESSION` as
+`references/mutating.md` does. One command for the whole board, where the shape
+this replaced cost one `cf piece link` per Topic.
+
+Step 2 is still one source update per Topic. Drive it as a plan rather than a
+loop of `setsrc` calls:
+`cf piece survey --piece "$TOPICS_BOARD" --path topics
+--retarget "topics=<topic.tsx>"`
+with the same `--root`, `--test` flags and
+`--dangerously-allow-incompatible-schema`, then
+`cf piece retarget --plan <plan>
+--group-size 25 --apply`, then
+`cf piece survey --diff <plan>` as the verdict
+(`docs/common/workflows/bulk-operations.md`). A run that stops partway is
+resumed by running it again, since a Topic already on the target reads as landed
+and is not rewritten. On a board the size of the Estuary one this is the
+bulk-CLI shape `docs/history/topics-board-migration-2026-08-28.md` found
+unreliable from a laptop over the network, so prefer somewhere that record
+vindicates, and treat a stopped run as a reason to resume rather than start
+over.
 
 The report is three lists of numbers in filing order:
 
@@ -155,6 +168,40 @@ Topic's published `shortName` to tell a stored number from none, and
 however much it holds: `named` comes back empty and `pending` comes back holding
 every Topic on the board, run after run. What it cannot do is tell you it is
 done.
+
+### Telling when it is done
+
+While numbers are hidden, the step is finished when every Topic's own input
+stores a number, and only a read per Topic answers that. Read each one through
+the CLI, over the Topics the survey plan names:
+
+```bash
+deno task cf cell get --cell "$TOPIC" shortName --input
+```
+
+A Topic can come back without one after a run, and another run of the step does
+not necessarily reach it: in the rehearsal recorded in
+`docs/history/plans/topics-numbering-rehearsal-2026-09-22.md`, the same Topic
+missed in both passes and a second run changed nothing for it. So store its
+number directly. The numbers the namespace holds that no Topic reported storing
+are the ones to resolve. Read each entry as an address, since the map renders
+its members as `{}` otherwise, and confirm it is that Topic — by `createdAt`,
+for the reason `references/reading.md` gives — before sending:
+
+```bash
+deno task cf cell get --cell "$TOPICS_BOARD" names/<n> --input --select @
+# -> { "$link": "/of:fid1:..." }   compare its createdAt with the Topic's
+deno task cf piece call --cell "$TOPIC" recordName '{"name":"<n>"}'
+# -> { "name": "<n>", "wrote": true }
+```
+
+`recordName` stores whatever number it is handed, so resolving the entry first
+is what keeps the number the namespace's.
+
+Every run also logs `Event dropped: speculative origin failed` once per Topic.
+That counts the step's sends, not the Topics that missed: in the same rehearsal
+all but one stored their number regardless. The per-Topic read above is the
+count to trust.
 
 ### What a re-run writes
 
@@ -281,7 +328,8 @@ deno task cf cell get //<space>/top/2 title
 So the worst case is bounded: a number allocated, reachable, and permanently
 that Topic's, on a Topic that does not yet show it. No content is touched, no
 number is lost or reused, the board serves every Topic either way, and the
-repair is another run of the step. Nothing has to be undone.
+repair is another run of the step, or `recordName` on a Topic a run does not
+reach ("Telling when it is done"). Nothing has to be undone.
 
 ### Which read answers what
 
@@ -371,4 +419,25 @@ deno task cf piece call --cell "$TOPIC" recordName '{"name":"42"}'
 ```
 
 **A half-finished Topic is not an error state.** What it costs is above, under
-"What a half-finished Topic looks like"; the repair is another run of the step.
+"What a half-finished Topic looks like"; the repair is another run of the step,
+or `recordName` directly for a Topic a run does not reach.
+
+**A moved Topic does not move back.** `cf piece rollback` against the step-2
+plan refuses, `result.recordName: existing result field was removed`, because
+the old source publishes no `recordName`, and neither `rollback` nor
+`cf piece restore` takes an override. Treat step 2 as roll-forward only, and
+take what recovery would need immediately before a live run: a `VACUUM INTO`
+snapshot of the space (`docs/development/space-clone-rehearsal.md`) and an
+export with `scripts/topics-export.ts`.
+
+**On a clone, `top/<n>` may not resolve.** The address needs the space's `top`
+slug, and a clone that does not carry it answers `Slug "top" not found`. Read
+the entry off the board instead, with
+`deno task cf cell get --cell "$TOPICS_BOARD" names/<n> --input --select @`.
+
+**The clone's free-cell check does not see Topic inputs.** The fingerprint does
+not classify a Topic's input as a `free-cell`, so the authored-content reading
+in `docs/development/space-clone-rehearsal.md` — a changed free-cell is a
+clobber — passes a Topic whose title was overwritten as readily as one that only
+gained a `shortName`. Compare the authored fields directly, pristine against
+working: `title`, `body`, `comments`, `links`, `createdAt` and `createdBy`.
