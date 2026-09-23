@@ -467,10 +467,9 @@ describe("coverage-gate", () => {
       expect(report.verdicts[0]?.outcome).toBe("not-scored");
     });
 
-    it("reports rather than fails when the report names no line of the member", async () => {
-      // An empty report is a conversion that produced nothing. Charging
-      // the member every tracked line would fail the change for a
-      // measurement that never happened.
+    it("fails when the report of a forced set names no line of the member", async () => {
+      // An empty report is a lane that measured nothing, so a rise in
+      // the set cannot be ruled out.
       const { root } = await workspace("packages/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([[
@@ -482,6 +481,87 @@ describe("coverage-gate", () => {
         gate: coverageGateFor(suites, changed),
         reports,
         members: ["packages/bakery"],
+      }));
+      expect(report.ok).toBe(false);
+      expect(report.verdicts[0]?.outcome).toBe("nothing-measured");
+      expect(formatGateReport(report).join("\n"))
+        .toContain("no lane's report measured");
+    });
+
+    it("scores a forced set one of whose reports names no line of the member", async () => {
+      const { root, lcov } = await workspace("packages/bakery", 10, 6);
+      const { suites, changed } = bakery();
+      const { reports } = await reportsFor([
+        [
+          "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+          lcov,
+        ],
+        [
+          "lane-2/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+          "",
+        ],
+      ]);
+      const report = await runGate(gateInput({
+        root,
+        gate: coverageGateFor(suites, changed),
+        reports,
+        members: ["packages/bakery"],
+        baselines: [{
+          suite: "workspace-unit",
+          member: "packages/bakery",
+          commit: "abc",
+          createdAt: "2026-09-01T00:00:00.000Z",
+          uncoveredLines: 4,
+        }],
+      }));
+      expect(report.ok).toBe(true);
+      expect(report.verdicts[0]?.outcome).toBe("passed");
+      expect(report.verdicts[0]?.uncoveredLines).toBe(4);
+    });
+
+    it("fails a forced set whose report names no line of the member in a run with a failing test", async () => {
+      const { root } = await workspace("packages/bakery", 10, 6);
+      const { suites, changed } = bakery();
+      const { reports } = await reportsFor([[
+        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+        "",
+      ]]);
+      const report = await runGate(gateInput({
+        root,
+        gate: coverageGateFor(suites, changed),
+        reports,
+        members: ["packages/bakery"],
+        testsFailed: true,
+      }));
+      expect(report.ok).toBe(false);
+      expect(report.verdicts[0]?.outcome).toBe("nothing-measured");
+    });
+
+    it("reports rather than fails when the report of an unforced set names no line of the member", async () => {
+      // Over the cap nothing is forced, so nothing asked for the set to
+      // be measured.
+      const { root } = await workspace("packages/bakery", 10, 6);
+      const members = ["packages/bakery", "packages/b", "packages/c"];
+      const suites = [suite(
+        "workspace-unit",
+        members.map((member) => ({
+          member,
+          reachedBy: [`${member}/`],
+          units: [`${member}/one.test.ts`],
+        })),
+      )];
+      const changed = new Set(members.map((member) => `${member}/src/main.ts`));
+      const gate = coverageGateFor(suites, changed);
+      expect(gate.sets).toEqual([]);
+      const { reports } = await reportsFor([[
+        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+        "",
+      ]]);
+      const report = await runGate(gateInput({
+        root,
+        gate,
+        reports,
+        members: ["packages/bakery"],
         baselines: [{
           suite: "workspace-unit",
           member: "packages/bakery",
@@ -491,7 +571,12 @@ describe("coverage-gate", () => {
         }],
       }));
       expect(report.ok).toBe(true);
-      expect(report.verdicts[0]?.outcome).toBe("nothing-measured");
+      expect(
+        report.verdicts
+          .find((verdict) => verdict.member === "packages/bakery")?.outcome,
+      ).toBe("not-forced");
+      expect(formatGateReport(report).join("\n"))
+        .not.toContain("no lane's report measured");
     });
 
     it("fails an acceptance that names neither a member nor a group", async () => {
@@ -532,7 +617,7 @@ describe("coverage-gate", () => {
       expect(report.ok).toBe(false);
       expect(report.verdicts[0]?.outcome).toBe("no-report");
       expect(formatGateReport(report).join("\n"))
-        .toContain("no lane reported coverage for");
+        .toContain("no lane's report measured");
     });
 
     it("fails a forced set with no report in a run with a failing test", async () => {

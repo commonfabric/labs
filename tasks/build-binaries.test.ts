@@ -6,12 +6,14 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
-import { exists } from "@std/fs";
-import { fromFileUrl, join, relative, toFileUrl } from "@std/path";
+import { exists, walk } from "@std/fs";
+import { fromFileUrl, join, relative, SEPARATOR, toFileUrl } from "@std/path";
 
 import {
+  BINARY_NAMES,
   BINARY_SOURCES,
   build,
+  BUILD_HOST_VARIABLES,
   BuildConfig,
   type BuildDependencies,
   type BuildSignalApi,
@@ -235,6 +237,12 @@ Deno.test("BuildConfig resolves workspace paths against the root", async () => {
   }
 });
 
+/** Whether `at` is `parent` or lies beneath it. */
+function isWithin(parent: string, at: string): boolean {
+  const path = relative(parent, at);
+  return path !== ".." && !path.startsWith(`..${SEPARATOR}`);
+}
+
 /** Whether a repository-relative path lies within `BINARY_SOURCES`. */
 function withinBinarySources(at: string): boolean {
   return BINARY_SOURCES.some((source) =>
@@ -243,10 +251,11 @@ function withinBinarySources(at: string): boolean {
 }
 
 /**
- * The methods of `BuildConfig` that name a path the build writes. Every other
- * method that names a path under the root names one the build reads.
+ * The methods of `BuildConfig` that name a path the build does not read: one
+ * it writes, or one it tells the compile to leave out. Every other method that
+ * names a path under the root names one the build reads.
  */
-const OUTPUT_PATH_METHODS = new Set([
+const UNREAD_PATH_METHODS = new Set([
   "shellOutPath",
   "toolshedShellFrontendPath",
   "toolshedShellFrontendPathDev",
@@ -254,40 +263,67 @@ const OUTPUT_PATH_METHODS = new Set([
   "cliEnvPath",
   "distDir",
   "distPath",
+  "excludePaths",
 ]);
 
+/**
+ * Returns the paths the method `name` of `config` names when called with each
+ * binary name for any parameter it takes, or `undefined` when what it returns
+ * is not a path under the root or a list of them.
+ */
+function pathsNamedBy(
+  config: BuildConfig,
+  name: string,
+): string[] | undefined {
+  const method = Reflect.get(config, name) as (arg: string) => unknown;
+  const paths = BINARY_NAMES.flatMap((binary) => {
+    const value = method.call(config, binary);
+    return Array.isArray(value) ? value : [value];
+  });
+  return paths.length > 0 &&
+      paths.every((at) => typeof at === "string" && at.startsWith(config.root))
+    ? paths
+    : undefined;
+}
+
+/** Returns every path that the `UNREAD_PATH_METHODS` of `config` name. */
+function unreadPaths(config: BuildConfig): Set<string> {
+  return new Set(
+    [...UNREAD_PATH_METHODS].flatMap((name) =>
+      pathsNamedBy(config, name) ?? []
+    ),
+  );
+}
+
 Deno.test("BuildConfig lists every path it reads among its sources", async () => {
-  // A method is a path method when what it returns, called with a binary name
-  // for any parameter it takes, is a path under the root or a list of them.
-  // Every one of those is either an output or among `sourcePaths()`.
+  // A path method is one `pathsNamedBy()` returns paths for. Every path one
+  // names is either unread or among `sourcePaths()`.
   const root = await makeFakeRepo();
   try {
     const config = new BuildConfig({ root, toolshedFlags: [] });
-    const sources = new Set(config.sourcePaths());
+    const accounted = new Set([
+      ...config.sourcePaths(),
+      ...unreadPaths(config),
+    ]);
     const pathMethods = new Map<string, string[]>();
     for (const name of Object.getOwnPropertyNames(BuildConfig.prototype)) {
       if (name === "constructor" || name === "sourcePaths") continue;
-      const method = Reflect.get(config, name) as (arg: string) => unknown;
-      const value = method.call(config, "cf");
-      const paths = Array.isArray(value) ? value : [value];
-      if (
-        paths.length > 0 &&
-        paths.every((at) => typeof at === "string" && at.startsWith(root))
-      ) {
-        pathMethods.set(name, paths);
-      }
+      const paths = pathsNamedBy(config, name);
+      if (paths) pathMethods.set(name, paths);
     }
     const unsorted = [...pathMethods]
       .filter(([name, paths]) =>
-        !OUTPUT_PATH_METHODS.has(name) && !paths.every((at) => sources.has(at))
+        !UNREAD_PATH_METHODS.has(name) &&
+        !paths.every((at) => accounted.has(at))
       )
       .map(([name]) => name);
     assertEquals(unsorted, []);
     assertEquals(
-      [...OUTPUT_PATH_METHODS].filter((name) => !pathMethods.has(name)),
+      [...UNREAD_PATH_METHODS].filter((name) => !pathMethods.has(name)),
       [],
     );
     assert(pathMethods.has("docsCommonPath"));
+    assert(pathMethods.has("includePaths"));
     assert(!pathMethods.has("manifestOriginal"));
   } finally {
     await Deno.remove(root, { recursive: true });
@@ -309,12 +345,41 @@ Deno.test("BuildConfig reads nothing outside BINARY_SOURCES", async () => {
   }
 });
 
+/**
+ * Script modules, as opposed to declaration files: the modules among a path
+ * it embeds whose imports `deno compile` follows.
+ */
+const FOLLOWED_MODULE = /(?<!\.d)\.(?:[cm]?[jt]s|[jt]sx)$/;
+
+/**
+ * Returns the modules `deno compile` follows the imports of when it embeds
+ * `at`, leaving out those under any of `excluded`.
+ */
+async function followedModules(
+  at: string,
+  excluded: readonly string[],
+): Promise<string[]> {
+  const found = (await Deno.stat(at)).isDirectory
+    ? await Array.fromAsync(
+      walk(at, { includeDirs: false }),
+      ({ path }) => path,
+    )
+    : [at];
+  return found.filter((module) =>
+    FOLLOWED_MODULE.test(module) &&
+    !excluded.some((skip) => isWithin(skip, module))
+  );
+}
+
 Deno.test("each binary's modules and assets stay within BINARY_SOURCES", async () => {
-  // `deno compile` follows an entry point's imports wherever they lead, so the
-  // paths the build names are not the whole of what it reads. This asks Deno
-  // for each graph and holds every local module in it to the list. The shell
-  // bundle baked into the toolshed binary is built by the `felt` CLI from the
-  // entries, public directory and static directories its configuration names.
+  // `deno compile` follows the imports of each entry point, and of each module
+  // in a path the build embeds, wherever they lead, so the paths the build
+  // names are not the whole of what it reads. This asks Deno for the graph
+  // reached from all of them at once and holds every local module in it to
+  // the list. The paths the build writes before it compiles are left out. The
+  // shell bundle baked into the toolshed binary is built by the `felt` CLI
+  // from the entries, public directory and static directories its
+  // configuration names.
   const repo = fromFileUrl(new URL("../", import.meta.url));
   const config = new BuildConfig({ root: repo, toolshedFlags: [] });
   const shell = config.shellProjectPath();
@@ -334,34 +399,104 @@ Deno.test("each binary's modules and assets stay within BINARY_SOURCES", async (
     const within = relative(repo, at);
     if (!withinBinarySources(within)) outside.add(within);
   }
-  const entries = [
+  const unread = unreadPaths(config);
+  const roots = [
     buildBinariesScript,
     config.toolshedEntryPath(),
     config.bgPieceServiceEntryPath(),
-    config.bgPieceServiceWorkerPath(),
     config.cliEntryPath(),
-    config.cliMultiUserTestWorkerPath(),
     join(shell, "..", "felt", "cli.ts"),
     shellConfigPath,
     ...shellConfig.entries.map((entry) => entry.in),
   ];
-  for (const entry of entries) {
+  for (const binary of BINARY_NAMES) {
+    for (const at of config.includePaths(binary)) {
+      if (unread.has(at)) continue;
+      roots.push(...await followedModules(at, config.excludePaths(binary)));
+    }
+  }
+  const rootModule = await Deno.makeTempFile({ suffix: ".ts" });
+  try {
+    await Deno.writeTextFile(
+      rootModule,
+      roots.map((at) => `import ${JSON.stringify(toFileUrl(at).href)};\n`)
+        .join(""),
+    );
     const { success, stdout, stderr } = await runDenoCommandWithTemporaryLock({
       root: repo,
-      args: (lock) => ["info", "--json", "--lock", lock, "--frozen", entry],
+      args: (lock) => [
+        "info",
+        "--json",
+        "--lock",
+        lock,
+        "--frozen",
+        rootModule,
+      ],
     });
     assert(success, new TextDecoder().decode(stderr));
     const info = JSON.parse(new TextDecoder().decode(stdout)) as {
-      modules: { specifier: string }[];
+      modules: { specifier: string; error?: string }[];
     };
-    assert(info.modules.some(({ specifier }) => specifier.startsWith("file:")));
-    for (const { specifier } of info.modules) {
+    assertEquals(info.modules.filter(({ error }) => error !== undefined), []);
+    const reached = new Set(info.modules.map(({ specifier }) => specifier));
+    assertEquals(
+      roots.filter((at) => !reached.has(toFileUrl(at).href)),
+      [],
+    );
+    for (const specifier of reached) {
       if (!specifier.startsWith("file:")) continue;
-      const at = relative(repo, fromFileUrl(specifier));
-      if (!withinBinarySources(at)) outside.add(at);
+      const at = fromFileUrl(specifier);
+      if (at === rootModule) continue;
+      const within = relative(repo, at);
+      if (!withinBinarySources(within)) outside.add(within);
     }
+  } finally {
+    await Deno.remove(rootModule);
   }
   assertEquals([...outside].sort(), []);
+  assert(
+    roots.includes(join(config.patternPaths()[0], "counter", "counter.tsx")),
+  );
+});
+
+/**
+ * Loads the shell bundle's configuration in a process refused `denied` from
+ * the environment, and returns whether it loaded and what it wrote to
+ * standard error.
+ */
+async function loadShellConfig(
+  denied: readonly string[],
+): Promise<{ success: boolean; stderr: string }> {
+  const { success, stderr } = await runDenoCommandWithTemporaryLock({
+    root: fromFileUrl(new URL("../", import.meta.url)),
+    args: (lock) => [
+      "run",
+      `--lock=${lock}`,
+      "--allow-read",
+      "--allow-env",
+      `--deny-env=${denied.join(",")}`,
+      join("packages", "shell", "felt.config.ts"),
+    ],
+    env: { NO_COLOR: "1" },
+  });
+  return { success, stderr: new TextDecoder().decode(stderr) };
+}
+
+Deno.test("the shell configuration reads no host variable", async () => {
+  // A lane passes the host variables through to a build it caches, and the
+  // cache key does not cover them, so one baked into the shell would reach a
+  // binary the key does not describe. Deno refuses a read of a denied
+  // variable and names it. This sees what the configuration reads while it
+  // loads, which is when it computes its defines, and not a read in a
+  // function it hands the bundler.
+  const loaded = await loadShellConfig(BUILD_HOST_VARIABLES);
+  assert(loaded.success, loaded.stderr);
+  const denied = await loadShellConfig(["EXPERIMENTAL_SERVER_EXECUTION"]);
+  assert(!denied.success);
+  assertStringIncludes(
+    denied.stderr,
+    'Requires env access to "EXPERIMENTAL_SERVER_EXECUTION"',
+  );
 });
 
 Deno.test("requestedBinaries selects all binaries or named subsets", () => {

@@ -618,12 +618,16 @@ Newest is settled by the order of those commits in the default branch's
 own history, and never by when the run that measured one was created: a
 re-run of an older commit produces a later run of an earlier tree.
 
-Five states report rather than fail, and each is one where the
+Three states report rather than fail, and each is one where the
 comparison would be against something other than the change: a set with
 no baseline the change contains, a set the cap left unforced that no run
-measured, a set no report was written for, a set whose reports name no
-line of its member and so measured nothing, and a run with a failing
-test, whose coverage was measured through that failure.
+measured, and a run with a failing test, whose coverage was measured
+through that failure.
+
+A forced set that no report measured fails, whatever else happened in
+the run: one no report was written for, and one whose reports name no
+line of its member. The change was made to measure it, so a rise in it
+cannot be ruled out.
 
 A rise is accepted by an `ACCEPT_COVERAGE_DEBT` marker in the change's
 description, which names the member and the lines, and accepts the rise

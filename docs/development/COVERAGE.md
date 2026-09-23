@@ -83,7 +83,9 @@ is an error.
 
 Every one of those paths writes an output file, so the artifact upload always has
 one to collect and the outcome is read from the conversion step rather than from
-a missing file.
+a missing file. What reads the report decides what an empty one means: the pull
+request coverage gate fails a measured set the change forced whose reports name
+no line of its member, as [Test selection](test-selection.md) describes.
 
 ### Authored pattern code is measured by transformer instrumentation
 

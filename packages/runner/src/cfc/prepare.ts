@@ -2,6 +2,7 @@ import type { FabricValue } from "@commonfabric/api";
 import {
   CFC_ATOM_TYPE,
   CFC_COMPILED_BY_ATOM_PREFIX,
+  CFC_SYSTEM_STRING_ATOMS,
   type CfcAtom,
   cfcAtom,
 } from "@commonfabric/api/cfc";
@@ -5229,6 +5230,10 @@ const RUNTIME_MINTED_INTEGRITY_ATOM_TYPES = new Set<string>([
   CFC_ATOM_TYPE.Concept,
 ]);
 
+const SYSTEM_STRING_ATOMS: ReadonlySet<string> = new Set(
+  CFC_SYSTEM_STRING_ATOMS,
+);
+
 const isRuntimeMintedIntegrityAtom = (atom: unknown): boolean =>
   (isObjectOrArray(atom) && typeof atom.type === "string" &&
     RUNTIME_MINTED_INTEGRITY_ATOM_TYPES.has(atom.type)) ||
@@ -5236,7 +5241,10 @@ const isRuntimeMintedIntegrityAtom = (atom: unknown): boolean =>
   // marks a stored doc as system-compiler output, which the cache loader
   // then evaluates as trusted bodies — forging it from a pattern-authored
   // schema would be cross-user code injection.
-  (typeof atom === "string" && atom.startsWith(CFC_COMPILED_BY_ATOM_PREFIX));
+  (typeof atom === "string" && atom.startsWith(CFC_COMPILED_BY_ATOM_PREFIX)) ||
+  // System string atoms (see CFC_SYSTEM_STRING_ATOMS): facts only a trusted
+  // system writer asserts, such as Loom's verified external identities.
+  (typeof atom === "string" && SYSTEM_STRING_ATOMS.has(atom));
 
 /**
  * Drops runtime-minted evidence atoms from a persisted label's integrity unless
@@ -8510,9 +8518,15 @@ export function* prepareBoundaryCommitSteps(
     // document do not rewrite it at each other (SC-11).
     const migrates = existing !== undefined && existing.version === 1 &&
       metadata.version === 2;
+    // A preserved runtime output does not carry the migration: its waiver
+    // holds only while nothing about the envelope changes, and a version-1
+    // envelope spells the same labels as its version-2 rewrite. Refusing
+    // here instead would refuse every re-run of the initializer, since a
+    // refused commit never migrates the envelope; the document migrates on
+    // its next authorized write.
     if (
       existing !== undefined &&
-      !migrates &&
+      (!migrates || deferredWriterRefusal !== undefined) &&
       deepEqual(
         canonicalizeCfcMetadata(existing),
         canonicalizeCfcMetadata(metadata),
