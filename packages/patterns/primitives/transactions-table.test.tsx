@@ -37,9 +37,19 @@ const ROWS = [
   },
 ];
 
+// A row with no status, whose pending flag decides what the table shows.
+const PENDING_ROW = [{
+  transaction_id: "p1",
+  date: "2026-09-08",
+  signed_amount: -12,
+  merchant_name: "Parking",
+  pending: 1,
+}];
+
 export default pattern(() => {
   const table = TransactionsTable({ rows: ROWS });
   const empty = TransactionsTable({ rows: [] });
+  const pendingOnly = TransactionsTable({ rows: PENDING_ROW });
   // Rows derived by a computed, as a reader hands them over: read only, so a
   // table that sorted by rewriting its rows could not order them at all.
   const derived = TransactionsTable({
@@ -80,8 +90,12 @@ export default pattern(() => {
       },
       // A row with no merchant name falls back to its transaction name.
       { assertion: assert(() => table.sortedRows[1].description === "Refund") },
-      // A row with no status reads its pending flag.
+      // A row with neither a status nor a pending flag defaults to posted.
       { assertion: assert(() => table.sortedRows[1].status === "Posted") },
+      // A row with no status but a pending flag shows as pending.
+      {
+        assertion: assert(() => pendingOnly.sortedRows[0].status === "Pending"),
+      },
 
       // A first click on a non-date column sorts it ascending, as numbers.
       { action: byAmount },
