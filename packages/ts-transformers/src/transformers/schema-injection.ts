@@ -929,6 +929,27 @@ function inferSchemaContextualType(
   return checker.getContextualType(node) ?? inferContextualType(node, checker);
 }
 
+/**
+ * The `T` TypeScript inferred for a `wish()` call written without a type
+ * argument, when the call has a contextual type to infer it from.
+ *
+ * The schema `wish()` takes describes `T`, the resource the wish asks for; the
+ * runtime wraps it in the `WishState<T>` the call returns. The contextual type
+ * is that result, so it is not the schema's type: the inference that takes
+ * `T` out of it is the call's own, whatever wrapper or alias the result sits
+ * behind. A call with no contextual type gets no schema.
+ */
+function inferWishTypeArgument(
+  node: ts.CallExpression,
+  checker: ts.TypeChecker,
+): ts.Type | undefined {
+  if (!inferSchemaContextualType(node, checker)) return undefined;
+  const signature = checker.getResolvedSignature(node);
+  return signature
+    ? checker.getTypeArgumentsForResolvedSignature(signature)?.[0]
+    : undefined;
+}
+
 function scopedFactoryContextualScope(
   node: ts.Expression,
   checker: ts.TypeChecker,
@@ -4152,7 +4173,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           factory,
           typeRegistry,
           context.state,
-          () => inferSchemaContextualType(node, checker),
+          () => inferWishTypeArgument(node, checker),
         );
 
         const schemaCall = createRegisteredSchemaCallFromResolvedType(

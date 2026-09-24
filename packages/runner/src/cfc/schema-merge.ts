@@ -549,7 +549,10 @@ const mergeDefaults = (
   if (candidate === undefined) {
     return existing;
   }
-  if (isWalkableObjectOrArray(existing) && isWalkableObjectOrArray(candidate)) {
+  if (
+    isWalkableObjectOrArray(existing) && isWalkableObjectOrArray(candidate) &&
+    !Array.isArray(existing) && !Array.isArray(candidate)
+  ) {
     return { ...existing, ...candidate };
   }
   return candidate;
@@ -869,6 +872,37 @@ function schemaPolicyGraph(
   );
   return { ifc: schema.ifc, ref: schema.$ref, children };
 }
+
+/**
+ * Whether two envelopes declare the same policies at the same positions: the
+ * same `ifc` claims and reference edges, whatever the public value shapes,
+ * defaults and inert nested definition maps around them. A `cid:` reference
+ * compares as the document it names, and a claim spelled as a member holding
+ * `undefined` as no claim.
+ */
+export const cfcSchemaPoliciesEqual = (
+  left: JSONSchema,
+  right: JSONSchema,
+): boolean =>
+  hashStringOf(withoutUndefinedMembers(schemaPolicyGraph(left))) ===
+    hashStringOf(withoutUndefinedMembers(schemaPolicyGraph(right)));
+
+/**
+ * `value` with every object member holding `undefined` removed, recursively.
+ * A merge spells an absent claim as such a member, and a stored envelope read
+ * back does not, so the two are compared without them.
+ */
+export const withoutUndefinedMembers = <T>(value: T): T => {
+  if (Array.isArray(value)) {
+    return value.map(withoutUndefinedMembers) as T;
+  }
+  if (!isObjectNotArray(value)) return value;
+  const result: Record<string, unknown> = {};
+  for (const [key, member] of Object.entries(value)) {
+    if (member !== undefined) result[key] = withoutUndefinedMembers(member);
+  }
+  return result as T;
+};
 
 export const mergeCfcSchemaEnvelopes = (
   existing: JSONSchema,

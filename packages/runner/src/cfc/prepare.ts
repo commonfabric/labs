@@ -11,6 +11,8 @@ import {
   internSchema,
   internSchemaAsTaggedHashString,
 } from "@commonfabric/data-model-schema";
+import { walkSchemaDocumentClosure } from "@commonfabric/data-model-schema/schema-closure";
+import { anySchema } from "@commonfabric/data-model-schema/schema-walk";
 import { isDID } from "@commonfabric/identity/did";
 import {
   containsExternalSchemaRef,
@@ -38,6 +40,7 @@ import { deepEqual, deepEqualKey } from "@commonfabric/utils/deep-equal";
 import { getLogger } from "@commonfabric/utils/logger";
 import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { utf8Compare } from "@commonfabric/utils/utf8";
 
 import { encodePointer } from "../../../memory/v2/path.ts";
 import type { JSONSchema } from "../builder/types.ts";
@@ -156,8 +159,10 @@ import { sinkClassOf } from "./sink-inventory.ts";
 import {
   type CfcSchemaMergeIssue,
   cfcSchemaMergeIssue,
+  cfcSchemaPoliciesEqual,
   type MergeCfcSchemaEnvelopeOptions,
   mergeCfcSchemaEnvelopes,
+  withoutUndefinedMembers,
 } from "./schema-merge.ts";
 import {
   cfcSchemaResolvedRoot,
@@ -1083,7 +1088,8 @@ const writeIsRuntimeInitialization = (
   waived: "writeAuthorizedBy" | "uiContract",
 ): boolean => {
   const input = tx.getCfcState().writePolicyInputs.find((input) =>
-    input.kind === "initialization" && tx.isRuntimeWritePolicyInput(input) &&
+    input.kind === "initialization" && input.mode !== "replay" &&
+    tx.isRuntimeWritePolicyInput(input) &&
     input.target.space === target.space && input.target.id === target.id &&
     normalizeCellScope(input.target.scope) === target.scope &&
     concretePathHasPrefix(path, input.target.path)
@@ -1218,6 +1224,116 @@ const writePreservesRuntimeOutput = (
       }),
       input.value,
     );
+};
+
+/**
+ * Whether the runtime recorded `path`, or a slot above it, as an argument slot
+ * a setup replay carries over from the stored document. Only that replay's
+ * re-staging is a candidate for leaving a protected path as it is: any other
+ * write attempt at a writer-policied path, even one that changes no byte,
+ * needs the path's writer.
+ */
+const writeReplaysArgumentSlot = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean =>
+  tx.getCfcState().writePolicyInputs.some((input) =>
+    input.kind === "initialization" && input.mode === "replay" &&
+    tx.isRuntimeWritePolicyInput(input) &&
+    input.target.space === target.space && input.target.id === target.id &&
+    normalizeCellScope(input.target.scope) === target.scope &&
+    concretePathHasPrefix(
+      canonicalizeLogicalPath(path),
+      canonicalizeLogicalPath(input.target.path),
+    )
+  );
+
+/**
+ * Whether this transaction leaves the value at `path` exactly as it found it:
+ * no write it recorded changed anything at the path, above it where the
+ * difference reaches the path, or below it. A staged write carrying the value
+ * the document already holds records no write detail, so a path that only
+ * such attempts cover is unchanged. That is what a runtime replaying a
+ * piece's setup in another session does to an input it did not create: it
+ * re-stages the argument, and every byte stays where the first session left
+ * it. A path holding a wildcard is compared from its concrete prefix down,
+ * which is the conservative reading.
+ *
+ * Unchanged bytes are half of "modified nothing". The caller defers the
+ * writer refusal to the persist loop, which discards it only when the
+ * document's envelope is canonically unchanged too.
+ */
+const writeLeavesPathUnchanged = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  // Everything before the first wildcard (the whole path when it has none).
+  const protectedPath = [
+    "value",
+    ...path.slice(0, [...path, "*"].indexOf("*")),
+  ];
+  // An authoritative transaction commits each document it wrote whole, over
+  // whatever the store holds by then, so bytes it found unchanged in its own
+  // view are no evidence about what it leaves behind.
+  // A transaction that cannot list its writes proves nothing either.
+  const details = tx.getWriteDetailsForTarget?.(target) ??
+    tx.getWriteDetails?.(target.space);
+  if (tx.isAuthoritativeWrites?.() === true || details === undefined) {
+    return false;
+  }
+  for (const detail of details) {
+    // A space-wide listing holds other documents' writes too.
+    const sameDocument = detail.address.id === target.id &&
+      normalizeCellScope(detail.address.scope) === target.scope;
+    const detailPath = detail.address.path.map(String);
+    if (sameDocument && concretePathHasPrefix(detailPath, protectedPath)) {
+      // The value layer keeps a member holding `undefined`, so two `undefined`
+      // ends can still be a member removed or added. A write that changed
+      // nothing records no detail at all, so a recorded one with both ends
+      // `undefined` is read as a change.
+      if (
+        (detail.value === undefined && detail.previousValue === undefined) ||
+        !fabricAwareEqual(detail.value, detail.previousValue)
+      ) return false;
+    } else if (
+      sameDocument && concretePathHasPrefix(protectedPath, detailPath)
+    ) {
+      const relative = protectedPath.slice(detailPath.length);
+      if (
+        hasValueAtPath(detail.value, relative) !==
+          hasValueAtPath(detail.previousValue, relative) ||
+        !fabricAwareEqual(
+          getValueAtPath(detail.value, relative),
+          getValueAtPath(detail.previousValue, relative),
+        )
+      ) return false;
+    }
+  }
+  return true;
+};
+
+/**
+ * Whether `value` holds a member at `path`, one holding `undefined` included.
+ */
+const hasValueAtPath = (value: unknown, path: readonly string[]): boolean => {
+  let current = value;
+  for (const key of path) {
+    if (!isObjectOrArray(current) || !Object.hasOwn(current, key)) {
+      return false;
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+  return true;
 };
 
 /** An owner adoption accepts only the unchanged bytes at its exact target. */
@@ -4526,9 +4642,11 @@ const verifyInputRequirements = (
   // accumulated across the boundary pass. undefined — the default, whenever
   // no onPrefixProvenance hook is installed — skips all measurement.
   provenance?: CfcPrefixProvenanceSummary,
-  // A preserved runtime output defers only its writer refusal. The persist
-  // loop must prove the final envelope unchanged before discarding this reason.
-  deferWriterRefusal?: (reason: string) => boolean,
+  // A write that changes nothing defers only its writer refusal: a preserved
+  // runtime output, or an argument slot a setup replay carries over and
+  // leaves as it found it. The persist loop must prove the final envelope unchanged before
+  // discarding this reason.
+  deferWriterRefusal?: (reason: string, path: readonly string[]) => boolean,
   // `verdict` says whether the failure is a VERDICT on the data (see
   // cfc/verdict-reason.ts): every check here is, except a `maxConfidentiality`
   // miss whose policy evaluation could not resolve a manifest or grant — the
@@ -4741,10 +4859,7 @@ const verifyInputRequirements = (
       ) ||
       writeIsOwnerAdoption(tx, target, entry.path);
     if (writeAuthorizedByFailure !== undefined && !setupProjection) {
-      if (
-        entry.path.length !== 0 ||
-        deferWriterRefusal?.(writeAuthorizedByFailure) !== true
-      ) {
+      if (deferWriterRefusal?.(writeAuthorizedByFailure, entry.path) !== true) {
         return { reason: writeAuthorizedByFailure, verdict: true };
       }
     }
@@ -6053,17 +6168,42 @@ export const loadSchemaDocument = (
 };
 
 /**
+ * Whether a stored envelope root declares a definition map anywhere — at the
+ * root or as a nested scope below it. A decomposed root never does: the
+ * decomposition strips the root's `$defs` into documents of their own and
+ * refuses a nested one. A root that does is therefore the inline spelling of
+ * a merged envelope, whose `cid:` references are ones the confidential merge
+ * minted to keep a reference bound to the definition map of the document it
+ * came from (`resolveConfidentialSchema` in `./schema-merge.ts`).
+ */
+const declaresDefinitionScope = (root: JSONSchema): boolean =>
+  anySchema(
+    root,
+    (node) => isObjectNotArray(node.schema) && node.schema.$defs !== undefined,
+    { includeDefs: true, includeUnused: true },
+  );
+
+/**
  * The envelope schema in the INLINE form every consumer walks. A
  * self-contained root is returned as stored, spelling untouched. A root
- * carrying `$ref: cid:` members — a decomposed write, or the root a
- * reference-form declared schema left behind — is recomposed: one read
- * policy, every member resolved or the envelope is unreadable (fail
+ * carrying `$ref: cid:` members is resolved by one read policy: every
+ * referenced document is loaded or the envelope is unreadable (fail
  * closed). Members resolve through `loadSchemaDocument`: space-FIRST
  * with content verification, the registry supplying only what the space
  * does not hold — a registered copy was itself hash-verified at
  * registration, so content addressing makes it the stored document.
  * Each verified member is then registered, so in-session resolvers (the
  * decompose-root equality below among them) can supply the closure.
+ *
+ * What is returned depends on which spelling the root is. A decomposed
+ * write, or the root a reference-form declared schema left behind, is
+ * recomposed. A root that declares a definition map of its own is already
+ * the inline spelling the writer merged and stored: it is returned as
+ * stored, its references resolving through the registry exactly as they did
+ * for the writer. Recomposing it would be wrong twice over — recomposition
+ * reads a document's `$defs` as a cyclic group's members, and it moves every
+ * referenced definition into the root's map, where a reference inside a
+ * nested definition scope would no longer find it.
  */
 const loadEnvelopeSchema = (
   tx: IExtendedStorageTransaction,
@@ -6072,16 +6212,25 @@ const loadEnvelopeSchema = (
 ): JSONSchema => {
   const root = loadSchemaDocument(tx, space, metadata.schemaHash);
   if (!containsExternalSchemaRef(root)) return root;
-  return internSchema(recomposeSchema(
-    formatExternalSchemaRef(metadata.schemaHash),
-    (hash) => {
-      const document = hash === metadata.schemaHash
-        ? root
-        : loadSchemaDocument(tx, space, hash);
-      registerSchemaDocument(hash, document);
-      return document;
-    },
-  ));
+  const load = (hash: string): JSONSchema => {
+    const document = hash === metadata.schemaHash
+      ? root
+      : loadSchemaDocument(tx, space, hash);
+    registerSchemaDocument(hash, document);
+    return document;
+  };
+  if (declaresDefinitionScope(root)) {
+    // `load` throws on a document it cannot produce, so the walk either
+    // reaches the whole closure or fails closed; it reports no misses.
+    walkSchemaDocumentClosure({
+      roots: [metadata.schemaHash],
+      load: (hash) => ({ kind: "verified", schema: load(hash) }),
+    });
+    return root;
+  }
+  return internSchema(
+    recomposeSchema(formatExternalSchemaRef(metadata.schemaHash), load),
+  );
 };
 
 /**
@@ -7322,6 +7471,12 @@ export function* prepareBoundaryCommitSteps(
       : schema;
 
     let deferredWriterRefusal: string | undefined;
+    const deferredWriterPaths: (readonly string[])[] = [];
+    // A preserved runtime output's deferral is discarded only by SC-11's
+    // proof that the whole envelope is unchanged, never by the replay waiver
+    // below, which keeps the stored schema over a candidate spelled another
+    // way.
+    let deferredPreservedOutput = false;
     const requirementFailure = verifyInputRequirements(
       tx,
       verificationSchema,
@@ -7331,8 +7486,19 @@ export function* prepareBoundaryCommitSteps(
       metadataResolver,
       prefixProvenance,
       stored.status === "loaded"
-        ? (reason) => {
-          if (!writePreservesRuntimeOutput(tx, target)) return false;
+        ? (reason, path) => {
+          if (
+            writeReplaysArgumentSlot(tx, target, path) &&
+            writeLeavesPathUnchanged(tx, target, path)
+          ) {
+            deferredWriterPaths.push(path);
+          } else if (
+            path.length === 0 && writePreservesRuntimeOutput(tx, target)
+          ) {
+            deferredPreservedOutput = true;
+          } else {
+            return false;
+          }
           deferredWriterRefusal ??= reason;
           return true;
         }
@@ -8728,7 +8894,7 @@ export function* prepareBoundaryCommitSteps(
     // each label above the inline limit by content-addressed document,
     // version 1 holds every label inline, and reading resolves either to
     // the same metadata (`docs/specs/content-addressed-cfc-labels.md`).
-    const metadata: CfcMetadata = {
+    let metadata: CfcMetadata = {
       version: state.contentAddressedLabels ? 2 : 1,
       schemaHash: envelopeRoot?.rootHash ?? schemaAndHash.taggedHashString,
       labelMap: {
@@ -8782,6 +8948,69 @@ export function* prepareBoundaryCommitSteps(
       continue;
     }
 
+    // A write whose writer refusal was deferred changed no bytes at the
+    // protected paths. It modifies nothing there, and is admitted, when the
+    // envelope it would store leaves those paths as they were too: every
+    // label at, above or below each one unchanged, and the same policy
+    // claims throughout, the schema around them perhaps spelled another way
+    // — as a runtime replaying a piece's setup spells what the creating
+    // runtime spelled inline. The stored schema is kept: writing another
+    // spelling of it is the writer's to do. Labels elsewhere in the document
+    // are not the writer policy's to guard, and persist as for any write.
+    let keepsStoredSchema = false;
+    if (
+      deferredWriterRefusal !== undefined && !deferredPreservedOutput &&
+      existing !== undefined && storedSchema !== undefined &&
+      cfcSchemaPoliciesEqual(storedSchema, schemaAndHash.schema)
+    ) {
+      const storedEntries = canonicalizeCfcMetadata(existing).labelMap.entries;
+      const derivedEntries = canonicalizeCfcMetadata(metadata).labelMap.entries;
+      const entriesAt = (
+        entries: readonly LabelMapEntry[],
+        path: readonly string[],
+      ) => entries.filter((entry) => pathsOverlap(entry.path, path));
+      // The stored schema is the one kept, so the labels derived here must
+      // be the ones it declares. Equal claims can lay out differently — a
+      // rest claim is a label position only beside no named property — so
+      // the positions both schemas declare are compared whole, not at the
+      // deferred paths alone.
+      const declaredPositions = (schema: JSONSchema) =>
+        cfcSchemaEntries(schema).map((entry) => ({
+          path: encodePointer(canonicalizeLogicalPath(entry.path)),
+          ifc: withoutUndefinedMembers(
+            isObjectOrArray(entry.schema) ? entry.schema.ifc ?? null : null,
+          ),
+        })).sort((left, right) => utf8Compare(left.path, right.path));
+      if (
+        deepEqual(
+          declaredPositions(storedSchema),
+          declaredPositions(schemaAndHash.schema),
+        ) &&
+        deferredWriterPaths.every((path) =>
+          deepEqual(
+            entriesAt(storedEntries, path),
+            entriesAt(derivedEntries, path),
+          )
+        )
+      ) {
+        deferredWriterRefusal = undefined;
+        keepsStoredSchema = true;
+        // The stored spelling is kept whole, its envelope version included;
+        // a version-1 store migrates on its next authorized write.
+        metadata = {
+          ...metadata,
+          version: existing.version,
+          schemaHash: existing.schemaHash,
+        };
+        if (
+          deepEqual(
+            canonicalizeCfcMetadata(existing),
+            canonicalizeCfcMetadata(metadata),
+          )
+        ) continue;
+      }
+    }
+
     // A repeated initializer may reuse its reference only when SC-11 proved
     // the entire envelope unchanged. Changed schemas or labels require the
     // ordinary writer authority, even when no value bytes changed.
@@ -8790,7 +9019,10 @@ export function* prepareBoundaryCommitSteps(
       continue;
     }
 
-    if (envelopeRoot === undefined) {
+    if (keepsStoredSchema) {
+      // The stored schema document is already in place: it was loaded,
+      // content-verified, above.
+    } else if (envelopeRoot === undefined) {
       ensureSchemaDocument(
         tx,
         space,

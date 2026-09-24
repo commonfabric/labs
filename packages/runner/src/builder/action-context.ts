@@ -1,51 +1,13 @@
-import { isDeno } from "@commonfabric/utils/env";
-import {
-  type AsyncLocalStore,
-  FallbackAsyncLocalStore,
-} from "@commonfabric/utils/async-local-store";
+/**
+ * This module keeps builder artifacts out of running actions. It re-exports
+ * `runInActionExecution`, which `frame-context.ts` implements, and defines the
+ * guard the builder's mint sites call.
+ */
+
+import { inActionExecution } from "./frame-context.ts";
 import { getTopFrame } from "./pattern.ts";
 
-// Deno/Node `AsyncLocalStorage` when available, the promise-aware fallback
-// otherwise. The `await import` stays here (not in the shared utils module): a
-// top-level await in widely-imported utils stalls Deno module evaluation.
-const ActionWindowStorage = (isDeno()
-  // deno-lint-ignore cf-imports/no-inline-module-import
-  ? (await import("node:async_hooks")).AsyncLocalStorage
-  : FallbackAsyncLocalStore) as new <T>() => AsyncLocalStore<T>;
-
-/**
- * Ambient marker for "a runner Action (lift/handler invocation) is currently
- * executing user code" — the window in which minting NEW builder artifacts is
- * forbidden (identity E5, design Phase 4).
- *
- * Builder artifacts must be module-scope declarations: the builder-call-
- * hoisting transformer moves every authored builder call to module scope, the
- * SES verifier enforces that shape, and content-addressed identity
- * (`{ identity, symbol }`) only exists for module-scope artifacts. An
- * artifact minted inside a running action has no identity, no provenance, and
- * (closure-bearing) no serializable body — the legacy registry channel that
- * used to keep such values limping along is gone, so the mint now fails
- * loudly at creation time instead of producing a value that cannot be
- * rehydrated.
- *
- * The window rides `AsyncLocalStorage`, so an ASYNC action's continuations
- * stay covered past its awaits (Codex/cubic P1 on the E5 PR). Module
- * evaluation that interleaves while an action is suspended must stay legal:
- * engine evaluation pushes a frame marked `moduleEvaluation` and is
- * fully synchronous (no microtask can interleave inside it), so "a module-
- * eval frame is on top" precisely identifies the transformer's module-scope
- * mints — including under the non-Deno fallback store, whose window
- * conservatively spans the whole pending action promise.
- */
-const actionWindow = new ActionWindowStorage<true>();
-
-/**
- * Run an action's user code inside the no-minting window. Async results keep
- * the window open across their awaits.
- */
-export function runInActionExecution<R>(fn: () => R): R {
-  return actionWindow.run(true, fn);
-}
+export { runInActionExecution } from "./frame-context.ts";
 
 /**
  * Throw when called inside a running action: builder artifacts must be
@@ -55,7 +17,7 @@ export function runInActionExecution<R>(fn: () => R): R {
  */
 export function assertNotInActionExecution(kind: string): void {
   if (
-    actionWindow.getStore() === true &&
+    inActionExecution() &&
     getTopFrame()?.moduleEvaluation !== true
   ) {
     throw new Error(
