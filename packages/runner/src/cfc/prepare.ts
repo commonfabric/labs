@@ -42,6 +42,7 @@ import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { encodePointer } from "../../../memory/v2/path.ts";
 import type { JSONSchema } from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";
+import { droppedStoredClaim } from "./claim-preservation.ts";
 import { entityKindOfIdString } from "../entity-kind.ts";
 import {
   decomposeSchema,
@@ -73,6 +74,7 @@ import { arrayMatchesPositionally } from "../schema-match.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type {
   IExtendedStorageTransaction,
+  IMemorySpaceAddress,
   MediaType,
 } from "../storage/interface.ts";
 import {
@@ -790,11 +792,16 @@ const metadataAppliesToAnyPath = (
   return logicalPaths.some((path) => policies.hasPrefixOf(path));
 };
 
+// A claim that binds every later writer of the path keeps an entry for it even
+// where the path carries no label, so the path stays policy-carrying for a
+// writer whose own schema restates nothing. A `requiredIntegrity` floor is
+// one: on a write target it is store policy (spec §8.12.4.1).
 const hasPersistedPolicyClaim = (schema: JSONSchema): boolean => {
   if (!isObjectOrArray(schema) || !isObjectOrArray(schema.ifc)) {
     return false;
   }
-  return schema.ifc.writeAuthorizedBy !== undefined ||
+  return schema.ifc.requiredIntegrity !== undefined ||
+    schema.ifc.writeAuthorizedBy !== undefined ||
     schema.ifc.uiContract !== undefined ||
     schema.ifc.exactCopyOf !== undefined ||
     schema.ifc.projection !== undefined;
@@ -1552,6 +1559,50 @@ const generatedOutputPathsByTarget = (
   }
   return result;
 };
+
+/** The distinct paths each target's schema write-policy inputs wrote through. */
+const schemaInputPathsByTarget = (
+  inputs: readonly WritePolicyInput[],
+): Map<string, (readonly string[])[]> => {
+  const result = new Map<string, (readonly string[])[]>();
+  const seenByTarget = new Map<string, Set<string>>();
+  for (const input of inputs) {
+    if (input.kind !== "schema" || input.schema === undefined) continue;
+    const key = targetKey(input.target);
+    const path = canonicalizeLogicalPath(input.target.path);
+    let seen = seenByTarget.get(key);
+    if (seen === undefined) {
+      seenByTarget.set(key, seen = new Set());
+      result.set(key, []);
+    }
+    const encoded = encodePointer(path);
+    if (!seen.has(encoded)) {
+      seen.add(encoded);
+      result.get(key)!.push(path);
+    }
+  }
+  return result;
+};
+
+/**
+ * The stored envelope as seen from each path a write went through below the
+ * root, wrapped back to its place in the document. Enumerating a
+ * recursive definition from the root stops where it meets itself, so a write
+ * deeper than that meets its claims only through the envelope taken at its
+ * own path, which is the policy a writer declaring nothing there is handed.
+ */
+const storedEnvelopesAtWrittenPaths = (
+  stored: JSONSchema,
+  paths: readonly (readonly string[])[],
+): JSONSchema[] =>
+  [...new Map(paths.map((path) => [encodePointer(path), path])).values()]
+    .flatMap((path) => {
+      if (path.length === 0) return [];
+      const atPath = ContextualFlowControl.getSchemaAtPath(stored, [...path]);
+      return atPath === undefined || atPath === true
+        ? []
+        : [schemaEnvelopeForTargetPath(atPath, path)];
+    });
 
 const candidateSchemasByTarget = (
   inputs: readonly WritePolicyInput[],
@@ -3732,7 +3783,14 @@ const writeInstallsInitialSchemaDefault = (
   path: readonly string[],
   schema: JSONSchema | undefined,
 ): boolean => {
-  if (!isObjectOrArray(schema) || !("default" in schema)) {
+  // A wildcard path names no single value to compare with the default, and a
+  // merged schema node can carry `default` as an own key holding `undefined`,
+  // which declares no default. Either would let the comparison below hold
+  // vacuously.
+  if (
+    !isObjectOrArray(schema) || schema.default === undefined ||
+    path.includes("*")
+  ) {
     return false;
   }
   const pathTarget = { ...target, path };
@@ -4104,10 +4162,12 @@ const ifcEntryAppliesToAttemptedWrite = (
       normalizeCellScope(input.target.scope) === target.scope &&
       arraysEqual(input.target.path, path)
     );
+    let detailedTarget = false;
     for (const write of writes) {
       if (write.address.id !== target.id) continue;
       if (normalizeCellScope(write.address.scope) !== target.scope) continue;
       if (write.address.path[0] !== "value") continue;
+      detailedTarget = true;
       const writePath = write.address.path.slice(1).map((entry) =>
         String(entry)
       );
@@ -4120,18 +4180,31 @@ const ifcEntryAppliesToAttemptedWrite = (
       }
     }
     if (!touched) {
-      const reactiveWrites = [
-        ...(tx.getReactivityLog?.().writes ?? []),
-        ...(tx.getReactivityLog?.().attemptedWrites ?? []),
-      ];
-      touched = reactiveWrites.some((write) => {
+      // The reactivity log's `writes` are derived from the same changes as
+      // the write details, and list every ancestor whose shallow structure a
+      // change altered, so that shallow readers of it re-run: adding one key
+      // lists the object holding it. Such an ancestor was not written, and
+      // does not touch the paths beneath it. Where the details describe this
+      // target, a write to an ancestor is already among them, so an ancestor
+      // found only here is one of those. Where they do not, the log is all
+      // there is, and an ancestor in it touches. Attempted writes, elided
+      // no-op writes among them, are attempts wherever they sit, and touch in
+      // both directions.
+      const log = tx.getReactivityLog?.();
+      const reaches = (
+        write: IMemorySpaceAddress,
+        ancestorTouches: boolean,
+      ): boolean => {
         if (write.space !== target.space) return false;
         if (write.id !== target.id) return false;
         if (normalizeCellScope(write.scope) !== target.scope) return false;
         const writePath = canonicalizeLogicalPath(write.path);
-        return concretePathHasPrefix(path, writePath) ||
-          concretePathHasPrefix(writePath, path);
-      });
+        return concretePathHasPrefix(writePath, path) ||
+          (ancestorTouches && concretePathHasPrefix(path, writePath));
+      };
+      touched = (log?.writes ?? []).some((write) =>
+        reaches(write, !detailedTarget)
+      ) || (log?.attemptedWrites ?? []).some((write) => reaches(write, true));
     }
     if (!touched) {
       return false;
@@ -6987,6 +7060,7 @@ export function* prepareBoundaryCommitSteps(
     identityForInput,
     generatedOutputPaths,
   );
+  const schemaInputPaths = schemaInputPathsByTarget(state.writePolicyInputs);
   const writeAuthorIdentities = writePolicyIdentitiesByTarget(
     state.writePolicyInputs,
     identityForInput,
@@ -7305,6 +7379,15 @@ export function* prepareBoundaryCommitSteps(
       ));
       continue;
     }
+    // The merged envelope is what this commit persists, so a stored claim it
+    // lost would stop binding every later writer. Refuse the write instead.
+    if (storedSchema !== undefined && mergedSchema !== storedSchema) {
+      const dropped = droppedStoredClaim(storedSchema, mergedSchema);
+      if (dropped !== undefined) {
+        reasons.push(verdictReason(dropped));
+        continue;
+      }
+    }
 
     const linkWriteInputs = linkWrites.get(key) ?? [];
     // The full stored-to-candidate merge validates migrations above. Its
@@ -7320,23 +7403,55 @@ export function* prepareBoundaryCommitSteps(
           { generatedOutputPaths: generatedOutputPaths.get(key) },
         )
       : schema;
+    // A value write's candidate is the writer's own schema whenever that
+    // schema declares a label, so it can omit a requirement the document
+    // stores: a `writeAuthorizedBy`, a `uiContract`, a floor, a copy claim.
+    // The write therefore answers to the stored envelope as well as to the
+    // candidate, entry by entry wherever it touches one: the whole envelope,
+    // and the envelope taken at each path the write went through. The stored
+    // envelope is read as stored rather than through the merge, so no defect
+    // in how the two combine can remove a stored requirement from the check.
+    // Each schema can add requirements; none removes another's.
+    const verificationSchemas: readonly JSONSchema[] =
+      storedSchema !== undefined && !undefinedCandidate
+        ? [
+          verificationSchema,
+          storedSchema,
+          ...storedEnvelopesAtWrittenPaths(
+            storedSchema,
+            schemaInputPaths.get(key) ?? [],
+          ),
+        ]
+        : [verificationSchema];
+    const firstFailure = <T>(
+      verify: (schema: JSONSchema, index: number) => T | undefined,
+    ): T | undefined => {
+      for (const [index, schema] of verificationSchemas.entries()) {
+        const failure = verify(schema, index);
+        if (failure !== undefined) return failure;
+      }
+      return undefined;
+    };
 
     let deferredWriterRefusal: string | undefined;
-    const requirementFailure = verifyInputRequirements(
-      tx,
-      verificationSchema,
-      target,
-      (path) => identityForSchemaPath(writeAuthorIdentities.get(key), path),
-      prefixBounds,
-      metadataResolver,
-      prefixProvenance,
-      stored.status === "loaded"
-        ? (reason) => {
-          if (!writePreservesRuntimeOutput(tx, target)) return false;
-          deferredWriterRefusal ??= reason;
-          return true;
-        }
-        : undefined,
+    const requirementFailure = firstFailure((schema, index) =>
+      verifyInputRequirements(
+        tx,
+        schema,
+        target,
+        (path) => identityForSchemaPath(writeAuthorIdentities.get(key), path),
+        prefixBounds,
+        metadataResolver,
+        // The precision counters measure each protected write once.
+        index === 0 ? prefixProvenance : undefined,
+        stored.status === "loaded"
+          ? (reason) => {
+            if (!writePreservesRuntimeOutput(tx, target)) return false;
+            deferredWriterRefusal ??= reason;
+            return true;
+          }
+          : undefined,
+      )
     );
     // A verification failure records a reason (which rejects the whole commit
     // in enforcing modes) and skips persisting this target's declared label.
@@ -7359,10 +7474,8 @@ export function* prepareBoundaryCommitSteps(
       if (!isIngestTarget) continue;
       ingestVerificationFailed = true;
     }
-    const trustedEventFailure = verifyTrustedEventRequirements(
-      tx,
-      target,
-      verificationSchema,
+    const trustedEventFailure = firstFailure((schema) =>
+      verifyTrustedEventRequirements(tx, target, schema)
     );
     if (trustedEventFailure) {
       reasons.push(verdictReason(trustedEventFailure));
@@ -7373,14 +7486,9 @@ export function* prepareBoundaryCommitSteps(
     // Copy-claim verification: exactCopyOf and its §8.3 sub-path
     // generalization share one failure branch — both are "the written value
     // must equal a claimed source value" checks.
-    const exactCopyFailure = verifyExactCopyRequirements(
-      tx,
-      target,
-      verificationSchema,
-    ) ?? verifyProjectionRequirements(
-      tx,
-      target,
-      verificationSchema,
+    const exactCopyFailure = firstFailure((schema) =>
+      verifyExactCopyRequirements(tx, target, schema) ??
+        verifyProjectionRequirements(tx, target, schema)
     );
     if (exactCopyFailure) {
       reasons.push(verdictReason(exactCopyFailure));
@@ -7393,19 +7501,22 @@ export function* prepareBoundaryCommitSteps(
     // `observe` diagnoses; `enforce` records a reason (rejecting the commit
     // under the enforcing enforcement modes, mirroring requirementFailure).
     if (state.writeFloorMode !== "off") {
-      const floorFailures = verifyWriteFloor(tx, verificationSchema, target, {
-        identityForPath: (path) =>
-          identityForSchemaPath(writeAuthorIdentities.get(key), path),
-        identityForInput,
-        linkWriteInputs,
-        candidateSchemas: candidates,
-        // Only PERSISTED flow integrity may credit the floor: `observe` mode
-        // computes the join for diagnostics but stores nothing on the value, so
-        // crediting it would let a plain write pass a floor with integrity that
-        // never lands (codex/cubic review). Only `persist` writes the derived
-        // component.
-        flowIntegrity: flowPersist ? flowIntegrity : [],
-      });
+      const floorFailures = firstFailure((schema) => {
+        const failures = verifyWriteFloor(tx, schema, target, {
+          identityForPath: (path) =>
+            identityForSchemaPath(writeAuthorIdentities.get(key), path),
+          identityForInput,
+          linkWriteInputs,
+          candidateSchemas: candidates,
+          // Only PERSISTED flow integrity may credit the floor: `observe` mode
+          // computes the join for diagnostics but stores nothing on the value,
+          // so crediting it would let a plain write pass a floor with
+          // integrity that never lands (codex/cubic review). Only `persist`
+          // writes the derived component.
+          flowIntegrity: flowPersist ? flowIntegrity : [],
+        });
+        return failures.length > 0 ? failures : undefined;
+      }) ?? [];
       if (floorFailures.length > 0) {
         if (state.writeFloorMode === "enforce") {
           reasons.push(...floorFailures);
@@ -7484,8 +7595,8 @@ export function* prepareBoundaryCommitSteps(
               : undefined;
           if (
             ifc !== undefined &&
-            (Object.hasOwn(ifc, "confidentiality") ||
-              Object.hasOwn(ifc, "integrity"))
+            (ifc.confidentiality !== undefined ||
+              ifc.integrity !== undefined)
           ) {
             remintedDeclaredPaths.set(pathKey(entry.path), entry.path);
           }

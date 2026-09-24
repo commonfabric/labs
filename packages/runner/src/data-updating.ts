@@ -84,6 +84,10 @@ import {
 } from "./scheduler.ts";
 import { schemaHasIfc } from "./schema-ifc.ts";
 import {
+  mergeableOpRead,
+  withoutAttemptedWriteMark,
+} from "./storage/reactivity-log.ts";
+import {
   externalResolutionMissCount,
   onSchemaRegistryClear,
 } from "./schema-registry.ts";
@@ -629,9 +633,10 @@ export function scopedArgumentInitializationTargets(
     blocked || container.pendingHopDoc || container.scope !== "space" ||
     isFabricDataUri(container.id)
   ) return [];
+  // Reads which slots exist; the writes it leads to land in those slots.
   const value = tx.readValueOrThrow(container, {
     nonRecursive: true,
-    meta: { ...markReadAsAttemptedWrite, ...allowMutableTransactionRead },
+    meta: { ...allowMutableTransactionRead, ...mergeableOpRead },
   });
   if (!isKeyableObjectNotArray(value) || isPrimitiveCellLink(value)) return [];
   return sessionScopedArgumentKeys(schema).flatMap((key) => {
@@ -665,9 +670,10 @@ export function initializeScopedArgumentSlots(
   if (blocked || container.pendingHopDoc || isFabricDataUri(container.id)) {
     return;
   }
+  // Reads which slots exist; the writes it leads to land in those slots.
   const options = {
     nonRecursive: true,
-    meta: { ...markReadAsAttemptedWrite, ...allowMutableTransactionRead },
+    meta: { ...allowMutableTransactionRead, ...mergeableOpRead },
   };
   const value = tx.readValueOrThrow(container, options);
   if (!isKeyableObjectNotArray(value) || isPrimitiveCellLink(value)) return;
@@ -859,13 +865,20 @@ function anchorValueAsEntity(
 ): ChangeSet {
   let path = link.path;
 
+  // Each read below finds the id's context, as the write machinery reads to
+  // build its write; the write lands at `link`, not at what these read.
+  const probeOptions = {
+    ...options,
+    meta: { ...withoutAttemptedWriteMark(options?.meta), ...mergeableOpRead },
+  };
+
   // If we're setting an array element, make the array the context for the
   // derived id, not the array index. If it's a nested array, take the parent
   // array as context, recursively.
   while (
     path.length > 0 &&
     Array.isArray(
-      tx.readValueOrThrow({ ...link, path: path.slice(0, -1) }, options),
+      tx.readValueOrThrow({ ...link, path: path.slice(0, -1) }, probeOptions),
     )
   ) {
     path = path.slice(0, -1);

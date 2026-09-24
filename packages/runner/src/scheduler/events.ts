@@ -4,7 +4,11 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { createRef } from "../create-ref.ts";
 import { toURI } from "../uri-utils.ts";
-import { recordTrustedEventPolicyInputs } from "../cfc/ui-contract.ts";
+import { loadStoredCfcEnvelope } from "../cfc/prepare.ts";
+import {
+  recordTrustedEventPolicyInputs,
+  type StoredSchemaResolver,
+} from "../cfc/ui-contract.ts";
 import type { Cancel } from "../cancel.ts";
 import {
   ensurePieceRunningVerdict,
@@ -225,6 +229,22 @@ function eventAbandonError(reason: string): CommitError {
     message: `event abandoned before it committed: ${reason}`,
     reason: new Error(reason),
   } as CommitError;
+}
+
+/**
+ * Reads each written document's stored envelope through `tx` exactly as the
+ * commit boundary loads it, so the trusted-event recorder finds the contract
+ * the boundary will verify. An envelope that does not load reads as none
+ * here; the boundary refuses the write on its own. Nothing is read once `tx`
+ * is no longer open: a handler that aborted it commits nothing, and the
+ * abort it reported is the outcome to keep.
+ */
+function storedSchemaIn(tx: IExtendedStorageTransaction): StoredSchemaResolver {
+  return (write) => {
+    if (tx.status().status !== "ready") return undefined;
+    const stored = loadStoredCfcEnvelope(tx, write);
+    return stored.status === "loaded" ? stored.schema : undefined;
+  };
 }
 
 function normalizeEventCommitRejection(reason: unknown): EventCommitError {
@@ -2481,7 +2501,12 @@ export async function dispatchQueuedEvent(state: {
       }
       viewHandler = implementation;
       if (hasAnnotatedWrites(implementation)) {
-        recordTrustedEventPolicyInputs(tx, implementation.writes, eventValue);
+        recordTrustedEventPolicyInputs(
+          tx,
+          implementation.writes,
+          eventValue,
+          storedSchemaIn(tx),
+        );
       }
       const actionStartTime = performance.now();
       logger.timeStart(
@@ -2508,6 +2533,7 @@ export async function dispatchQueuedEvent(state: {
             tx,
             trustedEventCandidates,
             eventValue,
+            storedSchemaIn(tx),
           );
           const duration = (performance.now() - actionStartTime) / 1000;
           if (duration > 10) {
