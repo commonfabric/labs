@@ -165,6 +165,14 @@ class PlusProbe {}
 const isPlusProbe: PlusTypePredicate<PlusProbe> = (value): value is PlusProbe =>
   value instanceof PlusProbe;
 
+/**
+ * A `PlusType` predicate accepting exactly the null-prototype objects, which
+ * the vocabulary does not name.
+ */
+const isNullPrototype: PlusTypePredicate<object> = (value): value is object =>
+  (typeof value === "object") && (value !== null) &&
+  (Object.getPrototypeOf(value) === null);
+
 /** A `PlusType` that is a function, which the JS-type branch has to admit. */
 type PlusFn = () => void;
 
@@ -607,6 +615,13 @@ describe("tags", () => {
         );
       });
 
+      it("returns `PlusType` for a null-prototype object the predicate accepts", () => {
+        const obj = Object.assign(Object.create(null), { a: 1 });
+        expect(tagOfFabricValue(obj, isNullPrototype)).toBe(
+          VALUE_TAGS.PlusType,
+        );
+      });
+
       it("returns `PlusType` for a function the predicate accepts", () => {
         expect(tagOfFabricValue(() => {}, isPlusFn)).toBe(VALUE_TAGS.PlusType);
       });
@@ -707,6 +722,14 @@ describe("tags", () => {
         .toBe(null);
     });
 
+    it("returns `null` for a null-prototype object", () => {
+      // A record is `Object.prototype`-rooted, so an object holding the same
+      // properties with no prototype cannot possibly be one.
+
+      const obj = Object.assign(Object.create(null), { a: 1 }) as FabricValue;
+      expect(tagOfFabricValueElseNull(obj)).toBe(null);
+    });
+
     it("returns `null` for a class instance outside the vocabulary", () => {
       expect(tagOfFabricValueElseNull(new Date() as unknown as FabricValue))
         .toBe(null);
@@ -744,6 +767,13 @@ describe("tags", () => {
 
       it("returns `PlusType` for a class instance the predicate accepts", () => {
         expect(tagOfFabricValueElseNull(new PlusProbe(), isPlusProbe)).toBe(
+          VALUE_TAGS.PlusType,
+        );
+      });
+
+      it("returns `PlusType` for a null-prototype object the predicate accepts", () => {
+        const obj = Object.assign(Object.create(null), { a: 1 });
+        expect(tagOfFabricValueElseNull(obj, isNullPrototype)).toBe(
           VALUE_TAGS.PlusType,
         );
       });

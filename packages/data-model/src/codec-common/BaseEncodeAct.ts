@@ -136,7 +136,8 @@ export abstract class BaseEncodeAct<Encoded, SerializedForm = Encoded>
         }.`,
       );
     } else {
-      // `value` is a primitive, a function, a null-prototype object, or a
+      // `value` is a primitive (`null` included, under a registry that does
+      // not claim it), a function, a null-prototype object, or a
       // non-`FabricSpecialObject` instance (non-plain object). Distinguish them
       // in the error message. The notable primitive case here is uninterned
       // symbols (which are forbidden by the data model but cannot be forbidden
@@ -145,6 +146,8 @@ export abstract class BaseEncodeAct<Encoded, SerializedForm = Encoded>
       const typeName = typeof value;
       const label = (typeName !== "object")
         ? typeName
+        : (value === null)
+        ? "null"
         : (Object.getPrototypeOf(value) === null)
         ? "null-prototype object"
         : "instance";
