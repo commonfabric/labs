@@ -30,7 +30,7 @@ import {
   type CfcModulePolicyRefAtom,
 } from "@commonfabric/api/cfc";
 import { sha256 } from "@commonfabric/content-hash";
-import { debugStr, hashStringOf } from "@commonfabric/data-model";
+import { debugStr, deepFreeze, hashStringOf } from "@commonfabric/data-model";
 import { isDID } from "@commonfabric/identity/did";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
@@ -311,6 +311,9 @@ const actorOwnedSources = (
   return sources;
 };
 
+/** Stands in for a property the stance leaves out: its schema alone is checked. */
+const UNUSED_PROPERTY: unique symbol = Symbol("unused property");
+
 /**
  * Checks that `value` satisfies `schema`, and that `schema` admits only
  * instruction-inert values: booleans, bounded numbers, constants, and
@@ -325,6 +328,9 @@ const checkInertStance = (
   value: unknown,
   path: readonly (string | number)[] = [],
 ): void => {
+  // A property the value leaves out still has its schema checked, so an
+  // optional open-ended property is refused whether or not a value uses it.
+  const checksValue = value !== UNUSED_PROPERTY;
   const at = `/${path.join("/")}`;
   const refuse = (reason: string): never => {
     throw new Error(
@@ -345,7 +351,9 @@ const checkInertStance = (
     (typeof entry === "number" && Number.isFinite(entry));
   if (Object.hasOwn(node, "const")) {
     if (!isPrimitive(node.const)) refuse("`const` is not a primitive");
-    if (!deepEqual(value, node.const)) refuse("the value is not the constant");
+    if (checksValue && !deepEqual(value, node.const)) {
+      refuse("the value is not the constant");
+    }
     return;
   }
   if (Object.hasOwn(node, "enum")) {
@@ -353,17 +361,22 @@ const checkInertStance = (
       !Array.isArray(node.enum) || node.enum.length === 0 ||
       !node.enum.every(isPrimitive)
     ) refuse("`enum` is not a list of primitives");
-    if (!(node.enum as unknown[]).some((entry) => deepEqual(entry, value))) {
+    if (
+      checksValue &&
+      !(node.enum as unknown[]).some((entry) => deepEqual(entry, value))
+    ) {
       refuse("the value is not one of the enumerated values");
     }
     return;
   }
   switch (node.type) {
     case "boolean":
-      if (typeof value !== "boolean") refuse("the value is not a boolean");
+      if (checksValue && typeof value !== "boolean") {
+        refuse("the value is not a boolean");
+      }
       return;
     case "null":
-      if (value !== null) refuse("the value is not `null`");
+      if (checksValue && value !== null) refuse("the value is not `null`");
       return;
     case "number":
     case "integer": {
@@ -372,6 +385,7 @@ const checkInertStance = (
         typeof minimum !== "number" || typeof maximum !== "number" ||
         !Number.isFinite(minimum) || !Number.isFinite(maximum)
       ) refuse("a number needs a finite `minimum` and `maximum`");
+      if (!checksValue) return;
       if (
         typeof value !== "number" || !Number.isFinite(value) ||
         value < (minimum as number) || value > (maximum as number) ||
@@ -393,18 +407,26 @@ const checkInertStance = (
             Object.hasOwn(properties as object, key)
           ))
       ) refuse("`required` names a key the object does not declare");
+      if (!checksValue) {
+        for (const [key, entry] of Object.entries(properties as object)) {
+          checkInertStance(entry, UNUSED_PROPERTY, [...path, key]);
+        }
+        return;
+      }
       if (!isObjectNotArray(value)) refuse("the value is not an object");
       const record = value as Record<string, unknown>;
       for (const key of (required as string[] | undefined) ?? []) {
         if (!Object.hasOwn(record, key)) refuse(`\`${key}\` is missing`);
       }
-      for (const [key, entry] of Object.entries(record)) {
+      for (const key of Object.keys(record)) {
         if (!Object.hasOwn(properties as object, key)) {
           refuse(`\`${key}\` is not declared`);
         }
+      }
+      for (const [key, entry] of Object.entries(properties as object)) {
         checkInertStance(
-          (properties as Record<string, unknown>)[key],
           entry,
+          Object.hasOwn(record, key) ? record[key] : UNUSED_PROPERTY,
           [...path, key],
         );
       }
@@ -862,7 +884,14 @@ export async function prepareCustodySeal(
   room: CustodyRoom,
   options: CustodySealOptions,
 ): Promise<PreparedCustodySeal> {
+  // The preview and the retained consent share these values, so they are
+  // frozen: a caller that edits what it was shown cannot change what the
+  // commit compares against.
   const inspected = await inspect(draft, room, options);
+  deepFreeze(inspected.stance);
+  deepFreeze(inspected.terms);
+  deepFreeze(inspected.policy);
+  deepFreeze(inspected.sources);
   const consent = Object.freeze({}) as CustodySealConsent;
   consents.set(consent, {
     ...inspected,
@@ -889,7 +918,7 @@ export async function prepareCustodySeal(
  * actor's home space, then the entry in the box. A transaction writes one
  * space, so each is a separate commit, and the receipt is written before the
  * entry so that no entry exists without one; a receipt whose entry is absent
- * records a seal whose commit failed.
+ * records a seal whose commit failed, or an entry lost afterwards.
  *
  * @throws If the consent is unknown or spent, the gesture is not the host's,
  *   anything reviewed changed, the anchor is withheld from this runtime, or

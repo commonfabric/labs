@@ -64,7 +64,8 @@ established the checks are compared against the committing transaction.
 - **The value is instruction-inert.** `stanceSchema` may admit only booleans,
   `null`, numbers with a finite `minimum` and `maximum`, `const` and `enum`
   primitives, and closed objects of these, at most eight levels deep. It admits
-  no free strings and no arrays. The value must satisfy the schema.
+  no free strings and no arrays, including in a property the value leaves out.
+  The value must satisfy the schema.
 - **The actor holds a seat** in the terms.
 - **The terms carry nothing the room's readers lack.** Every clause of the
   terms document's label must admit `Space(S)` or `P`, because the terms are
@@ -89,7 +90,8 @@ Then:
 1. **A receipt in the actor's home space.** It is labeled `User(actor)` and
    records the event, `P`, `D`, the entry key, the sources, and the stance's
    digest. The receipt is written first, so every entry has one. A receipt
-   whose entry is absent records a seal that did not commit.
+   whose entry is absent records a seal that did not commit, or an entry lost
+   afterwards, as when the box is replaced (see below).
 2. **An entry in the instance's box.** The box is one document in `S` at the
    address `{custodyBox: {policy: P, instance: D}}`. The entry is
    `{instance: D, terms, stance}`. `terms` is the terms serialized as JSON with

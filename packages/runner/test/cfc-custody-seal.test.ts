@@ -736,6 +736,7 @@ describe("cfc-custody-seal", () => {
           allowedSources: sources,
         });
         expect(prepared.sources).toEqual(sources);
+        expect(Object.isFrozen(prepared.sources)).toBe(true);
         expect(prepared.stance).toEqual(honestStance);
         await commitCustodySeal(prepared.consent, trustedClick());
       } finally {
@@ -1085,6 +1086,17 @@ describe("cfc-custody-seal", () => {
           /keyword `items`/,
         ],
         [{ anyOf: [{ type: "boolean" }] }, true, /keyword `anyOf`/],
+        [
+          {
+            ...STANCE_SCHEMA,
+            properties: {
+              ...STANCE_SCHEMA.properties,
+              note: { type: "string" },
+            },
+          },
+          honestStance,
+          /admits open-ended values at `\/note`/,
+        ],
       ];
       for (const [stanceSchema, stance, refusal] of cases) {
         const fixture = await setup({ terms: { ...TERMS, stanceSchema } });
