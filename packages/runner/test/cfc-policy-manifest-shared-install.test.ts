@@ -5,6 +5,7 @@ import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { Runtime } from "../src/runtime.ts";
 import type { CommitError } from "../src/storage/interface.ts";
+import type { Cell } from "../src/cell.ts";
 import type { EventHandler } from "../src/scheduler/types.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import {
@@ -122,6 +123,13 @@ describe("cfc-policy-manifest-shared-install", () => {
 
   it("reports a stale absence of the installed manifest as a retryable conflict", async () => {
     expect((await writeLabeled(rtA, "a-brief")).error).toBeUndefined();
+    // The second runtime holds no subscription covering the manifest, so the
+    // first runtime's install is not fanned out to it: its replica has never
+    // held the document.
+    const replicaB = storageB.open(space).replica as unknown as {
+      getDocument(id: string): unknown;
+    };
+    expect(replicaB.getDocument(manifestId)).toBeUndefined();
 
     const tx = rtB.edit();
     rtB.getCell(space, "b-brief", policyOfSchema, tx).set("b-brief secret");
@@ -236,21 +244,29 @@ describe("cfc-policy-manifest-shared-install", () => {
       return failures;
     };
 
-    // Reports every start commit the second runtime makes as refused with
-    // `refusal`, and counts the attempts. The commit itself still goes
-    // through, so what the start installed stands as it would behind a real
-    // stale-read refusal, which leaves the install in place for the re-run:
-    // what these cases measure is how the start answers the verdict.
-    const refuseStarts = (refusal: () => CommitError) => {
+    // Reports the start commits the second runtime makes as refused with what
+    // `refusal` returns for each attempt, counting from 1, and passes the
+    // commit's own verdict through where it returns nothing. A refused commit
+    // still goes through, so what the start installed stands as it would
+    // behind a real stale-read refusal, which leaves the install in place for
+    // the re-run: what these cases measure is how the start answers the
+    // verdict.
+    const refuseStarts = (
+      refusal: (
+        attempt: number,
+        resultCell: Cell<unknown>,
+      ) => CommitError | undefined,
+    ) => {
       const attempts = { count: 0 };
       rtB.runner.accessForTestingOnly.deferredStartCommitter = async (
         _tx,
-        _resultCell,
+        resultCell,
         commit,
       ) => {
         attempts.count++;
-        await commit();
-        return { error: refusal() };
+        const verdict = await commit();
+        const error = refusal(attempts.count, resultCell);
+        return error === undefined ? verdict : { error };
       };
       return attempts;
     };
@@ -328,6 +344,91 @@ describe("cfc-policy-manifest-shared-install", () => {
 
       expect(attempts.count).toBe(1);
       expect(failures).toEqual([]);
+    });
+
+    it("runs it again after a local inconsistency at the manifest", async () => {
+      const pieceA = await setUpByFirstParticipant();
+      const failures = observeStartFailures();
+      const attempts = refuseStarts((attempt) =>
+        attempt === 1
+          ? {
+            name: "StorageTransactionInconsistent",
+            message: `${manifestId} changed while the start read it`,
+            address: {
+              space,
+              id: manifestId,
+              type: "application/json",
+              path: ["value"],
+            },
+          } as unknown as CommitError
+          : undefined
+      );
+
+      await runShared(rtB, "b-piece secret");
+
+      await waitForCellValue<string>(
+        rtA,
+        pieceA.key("brief"),
+        (value) => value === "b-piece secret",
+        { stuckLabel: "the second participant's retried piece start" },
+      );
+      await rtB.idle();
+      expect(attempts.count).toBe(2);
+      expect(failures).toEqual([]);
+    });
+
+    it("reports a refusal that is not a conflict without running it again", async () => {
+      await setUpByFirstParticipant();
+      const failures = observeStartFailures();
+      const attempts = refuseStarts(() =>
+        ({
+          name: "TransactionError",
+          message: `${manifestId}: the commit failed`,
+        }) as unknown as CommitError
+      );
+
+      await runShared(rtB, "b-piece secret");
+      await rtB.idle();
+
+      expect(attempts.count).toBe(1);
+      expect(failures).toHaveLength(1);
+    });
+
+    it("reports a manifest refusal whose start was stopped before its verdict", async () => {
+      await setUpByFirstParticipant();
+      const failures = observeStartFailures();
+      const attempts = refuseStarts((_attempt, resultCell) => {
+        rtB.runner.stop(resultCell);
+        return staleReadOf(manifestId);
+      });
+
+      await runShared(rtB, "b-piece secret");
+      await rtB.idle();
+
+      expect(attempts.count).toBe(1);
+      expect(failures).toHaveLength(1);
+    });
+
+    it("reports a manifest refusal whose piece another start took while it waited", async () => {
+      await setUpByFirstParticipant();
+      const failures = observeStartFailures();
+      const waiting = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const attempts = refuseStarts(() =>
+        staleReadOf(manifestId, () => {
+          waiting.resolve();
+          return release.promise;
+        })
+      );
+
+      const piece = await runShared(rtB, "b-piece secret");
+      await waiting.promise;
+      expect(await rtB.start(piece)).toBe(true);
+      release.resolve();
+      await rtB.idle();
+
+      expect(attempts.count).toBe(1);
+      expect(failures).toHaveLength(1);
     });
   });
 

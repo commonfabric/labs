@@ -6513,11 +6513,12 @@ export class Runner {
     ownership: DeferredCancelOwnership,
     installedRegistration: Cancel | undefined,
   ): Promise<"retry" | "terminal" | "settled"> {
-    if (!refusalNamesPolicyManifest(error)) return "terminal";
-    if (scheduledLifecycleEpoch !== this.#lifecycleEpoch) return "terminal";
-    if (ownership.isCancelled()) return "terminal";
+    // A stop, a release, or `stopAll()` since the install removed it from
+    // the registry, so the registration check also covers a canceled token
+    // and a newer lifecycle epoch.
     const key = this.#getDocKey(resultCell);
     if (
+      !refusalNamesPolicyManifest(error) ||
       installedRegistration === undefined ||
       this.#cancels.get(key) !== installedRegistration
     ) {
@@ -6526,12 +6527,13 @@ export class Runner {
     this.stop(resultCell);
     ownership.markInstalled(undefined);
     this.#registerPendingDeferredStart(key, ownership);
-    logger.info("piece-start-commit-retrying", () => [
-      `piece-run start for ${resultCell.getAsNormalizedFullLink().id} lost ` +
-      "a policy manifest install to another participant; running it again " +
-      "once storage has caught up",
+    logger.info(
+      "piece-start-commit-retrying",
+      "piece-run start lost a policy manifest install to another " +
+        "participant; running it again once storage has caught up",
+      resultCell.getAsNormalizedFullLink().id,
       error,
-    ]);
+    );
     const teardown = this.#runtime.writeTeardownSignal;
     await this.#runtime.awaitCommitRetryReadiness(error, teardown);
     if (
