@@ -79,6 +79,7 @@ export * from "./components/cf-resizable-panel/index.ts";
 export * from "./components/cf-resizable-panel-group/index.ts";
 export * from "./components/cf-screen/index.ts";
 export * from "./components/cf-share-snapshot/index.ts";
+export * from "./components/cf-custody-seal/index.ts";
 export * from "./components/cf-toolbar/index.ts";
 export * from "./components/cf-kbd/index.ts";
 export * from "./components/cf-theme/index.ts";

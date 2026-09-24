@@ -44,6 +44,7 @@ import { PieceHandle } from "./piece-handle.ts";
 import {
   type CellRef,
   ConsoleMessage,
+  type CustodySealPreview,
   ErrorNotification,
   type EventAttentionListResponse,
   type EventAttentionNotice,
@@ -68,7 +69,6 @@ import {
   RequestType,
   type RuntimeSecurityContext,
   type SlugRefusal,
-  type CustodySealPreview,
   type SnapshotShareAudienceRef,
   type SnapshotSharePreview,
   type SpaceAccessLostNotification,

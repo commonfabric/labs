@@ -1,0 +1,425 @@
+/** Native host confirmation for sealing a value into a custody room. */
+
+import {
+  type CellHandle,
+  type RuntimeClient,
+} from "@commonfabric/runtime-client";
+import { consume } from "@lit/context";
+import { css, html, nothing, type PropertyValues } from "lit";
+import { property } from "lit/decorators.js";
+
+import { BaseElement } from "../../core/base-element.ts";
+import { runtimeContext } from "../../runtime-context.ts";
+
+type SealPreview = Awaited<ReturnType<RuntimeClient["prepareCustodySeal"]>>;
+type SealBinding = {
+  runtime: RuntimeClient;
+  draft: CellHandle;
+  terms: CellHandle;
+  policy: CellHandle;
+  sources: CellHandle;
+  generation: number;
+};
+
+/** What the confirmation shows, derived only from the worker's preview. */
+type SealSummary = {
+  question: string | undefined;
+  answers: string[] | undefined;
+  leakBits: string | undefined;
+};
+
+/**
+ * Reads the display fields of the terms the worker sealed. The terms are the
+ * exact document the value is sealed under, so the confirmation shows them
+ * rather than anything the pattern renders around it. `answers` is the list of
+ * every answer the room can release; the bound on what one answer reveals is
+ * the base-2 logarithm of its length.
+ */
+export function summarizeCustodyTerms(terms: unknown): SealSummary {
+  const record = terms !== null && typeof terms === "object" &&
+      !Array.isArray(terms)
+    ? terms as Record<string, unknown>
+    : {};
+  const question = typeof record.question === "string"
+    ? record.question
+    : undefined;
+  if (!Array.isArray(record.answers) || record.answers.length === 0) {
+    return { question, answers: undefined, leakBits: undefined };
+  }
+  const answers = [
+    ...new Set(
+      record.answers.map((answer) =>
+        typeof answer === "string" ? answer : JSON.stringify(answer)
+      ),
+    ),
+  ];
+  const bits = Math.log2(answers.length);
+  return {
+    question,
+    answers,
+    leakBits: Number.isInteger(bits) ? `${bits}` : `~${bits.toFixed(1)}`,
+  };
+}
+
+/** A source atom as a person reads it: its name or class, and its kind. */
+function describeSource(source: unknown): string {
+  const atom = source as Record<string, unknown>;
+  if (typeof atom?.name === "string") return `${atom.name} (context)`;
+  if (typeof atom?.class === "string") return `${atom.class} (resource)`;
+  return JSON.stringify(source);
+}
+
+/**
+ * Seals the actor's draft into a custody room from a native host dialog. The
+ * dialog shows what the worker read and checked: the room space, who can read
+ * it, every answer the room can release and the bound on what one reveals,
+ * and which of the actor's sources go in, with the exact values under
+ * details. Only a trusted click on the dialog's own confirmation seals.
+ *
+ * @element cf-custody-seal
+ * @fires cf-sealed - The value is sealed; the event carries nothing
+ */
+export class CFCustodySeal extends BaseElement {
+  static override styles = [
+    BaseElement.baseStyles,
+    css`
+      :host {
+        display: block;
+      }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      button {
+        font: inherit;
+        padding: .7rem 1rem;
+        border: 1px solid #53655c;
+        border-radius: .5rem;
+        background: #fff;
+        color: #203b2e;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: .5;
+        cursor: default;
+      }
+      dialog {
+        all: initial;
+        box-sizing: border-box;
+        position: fixed;
+        inset: 0;
+        margin: auto;
+        width: min(42rem, calc(100vw - 2rem));
+        max-height: calc(100vh - 2rem);
+        overflow: auto;
+        padding: 1.5rem;
+        border: 2px solid #244938;
+        border-radius: .75rem;
+        background: #fff;
+        color: #18221c;
+        font: 16px/1.5 system-ui, sans-serif;
+      }
+      dialog:not([open]) {
+        display: none;
+      }
+      dialog::backdrop {
+        background: #0009;
+      }
+      h2 {
+        font-size: 1.35rem;
+        margin: 0 0 1rem;
+      }
+      dt {
+        font-weight: 600;
+        margin-top: .75rem;
+      }
+      dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      ul {
+        margin: 0;
+        padding-left: 1.25rem;
+      }
+      pre {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        background: #f3f5f3;
+        padding: 1rem;
+        border: 1px solid #ccd5cf;
+        font: 14px/1.5 monospace;
+      }
+      summary {
+        cursor: pointer;
+        margin: 1rem 0 .5rem;
+      }
+      .actions {
+        display: flex;
+        gap: .75rem;
+        justify-content: flex-end;
+      }
+      .confirm {
+        background: #244938;
+        color: #fff;
+      }
+      [role="alert"] {
+        color: #932c22;
+      }
+    `,
+  ];
+
+  /** Runtime supplied by the host's context provider. */
+  @consume({ context: runtimeContext, subscribe: true })
+  @property({ attribute: false })
+  accessor runtime: RuntimeClient | undefined;
+
+  /** The actor's draft, whose exact value is sealed. */
+  @property({ attribute: false })
+  accessor draft: CellHandle | undefined;
+
+  /** The room's terms document; its space is the room the value enters. */
+  @property({ attribute: false })
+  accessor terms: CellHandle | undefined;
+
+  /** A cell holding the room's custody policy reference. */
+  @property({ attribute: false })
+  accessor policy: CellHandle | undefined;
+
+  /** The actor's source policy, in the actor's home space. */
+  @property({ attribute: false })
+  accessor sources: CellHandle | undefined;
+
+  #preview: SealPreview | undefined;
+  #binding: SealBinding | undefined;
+  #busy = false;
+  #error = "";
+  #generation = 0;
+
+  /** Exercises host workflow without manufacturing a trusted DOM event. */
+  get accessForTestingOnly(): {
+    prepare(): Promise<void>;
+    confirm(event: Event): Promise<void>;
+    readonly preview: SealPreview | undefined;
+    readonly error: string;
+  } {
+    // deno-lint-ignore no-this-alias
+    const component = this;
+    return {
+      prepare: () => this.#prepare(),
+      confirm: (event) => this.#confirm(event),
+      get preview() {
+        return component.#preview;
+      },
+      get error() {
+        return component.#error;
+      },
+    };
+  }
+
+  override willUpdate(changed: PropertyValues): void {
+    super.willUpdate(changed);
+    if (
+      ["draft", "terms", "policy", "sources", "runtime"].some((key) =>
+        changed.has(key)
+      )
+    ) {
+      this.#invalidate();
+    }
+  }
+
+  override disconnectedCallback(): void {
+    this.#invalidate();
+    super.disconnectedCallback();
+  }
+
+  override render() {
+    const preview = this.#preview;
+    const summary = preview ? summarizeCustodyTerms(preview.terms) : undefined;
+    return html`
+      <button type="button" ?disabled=${this.#busy || !this.#bound() ||
+        !this.runtime}
+        @click=${this.#prepare}>Seal &amp; consent…</button>
+      ${this.#error ? html`<p role="alert">${this.#error}</p>` : nothing}
+      <dialog aria-labelledby="seal-title" @cancel=${this.#cancel}>
+        <h2 id="seal-title" tabindex="-1" autofocus>Join this room with these terms?</h2>
+        ${summary?.question
+          ? html`<p class="question">${summary.question}</p>`
+          : nothing}
+        <dl>
+          <dt>Room</dt>
+          <dd class="room">${preview?.room ?? ""}</dd>
+          <dt>Who can see the answer</dt>
+          <dd class="readers"><ul>${(preview?.readers ?? []).map((reader) =>
+            html`<li>${reader.principal === "*" ? "Anyone" : reader.principal}${
+              reader.principal === preview?.actor ? " (you)" : ""
+            }</li>`
+          )}</ul></dd>
+          <dt>Every answer that can come out</dt>
+          <dd class="answers">${summary?.answers
+            ? html`<ul>${
+              summary.answers.map((answer) => html`<li>${answer}</li>`)
+            }</ul>`
+            : "These terms do not list the answers the room can give."}</dd>
+          <dt>What goes in from your sources</dt>
+          <dd class="sources">${preview && preview.sources.length > 0
+            ? html`<ul>${
+              preview.sources.map((source) =>
+                html`<li>${describeSource(source)}</li>`
+              )
+            }</ul>`
+            : "Nothing beyond what you entered yourself."}</dd>
+        </dl>
+        <p class="leak">${summary?.leakBits !== undefined
+          ? `Each answer reveals at most ${summary.leakBits} ${
+            summary.leakBits === "1" ? "bit" : "bits"
+          } about any one input.`
+          : "These terms state no bound on what an answer reveals."}</p>
+        <details>
+          <summary>Details</summary>
+          <p>Your sealed values:</p>
+          <pre class="stance">${preview
+            ? JSON.stringify(preview.stance, null, 2)
+            : ""}</pre>
+          <p>The terms, as sealed:</p>
+          <pre class="terms">${preview
+            ? JSON.stringify(preview.terms, null, 2)
+            : ""}</pre>
+        </details>
+        <div class="actions">
+          <button type="button" ?disabled=${this.#busy} @click=${this
+            .#cancel}>Cancel</button>
+          <button class="confirm" type="button" ?disabled=${this.#busy ||
+            !preview}
+            @click=${this.#confirm}>Seal &amp; consent</button>
+        </div>
+      </dialog>
+    `;
+  }
+
+  #bound(): boolean {
+    return !!(this.draft && this.terms && this.policy && this.sources);
+  }
+
+  /** Drops the review whenever its binding is no longer current. */
+  #invalidate(): void {
+    if (this.#preview && this.#binding) {
+      this.#releasePreview(this.#binding.runtime, this.#preview.id);
+    }
+    this.#generation++;
+    this.#preview = undefined;
+    this.#binding = undefined;
+    this.#busy = false;
+    this.shadowRoot?.querySelector("dialog")?.close();
+  }
+
+  /** Teardown can outlive its runtime connection, so cancellation is best effort. */
+  #releasePreview(runtime: RuntimeClient, id: string): void {
+    void runtime.cancelCustodySeal(id).catch(() => {});
+  }
+
+  #cancel = (): void => {
+    this.#invalidate();
+    this.requestUpdate();
+  };
+
+  /** Checks captured handles before each asynchronous boundary. */
+  #current(binding: SealBinding): boolean {
+    return this.isConnected && binding.generation === this.#generation &&
+      binding.runtime === this.runtime && binding.draft === this.draft &&
+      binding.terms === this.terms && binding.policy === this.policy &&
+      binding.sources === this.sources;
+  }
+
+  /** Asks the worker for the checked preview and opens the dialog on it. */
+  #prepare = async (): Promise<void> => {
+    if (this.#busy) return;
+    const { runtime, draft, terms, policy, sources } = this;
+    if (
+      !runtime || !draft || !terms || !policy || !sources || !this.isConnected
+    ) {
+      return;
+    }
+    this.#invalidate();
+    const binding: SealBinding = {
+      runtime,
+      draft,
+      terms,
+      policy,
+      sources,
+      generation: this.#generation,
+    };
+    this.#binding = binding;
+    this.#busy = true;
+    this.#error = "";
+    this.requestUpdate();
+    try {
+      const preview = await runtime.prepareCustodySeal({
+        draft: draft.ref(),
+        terms: terms.ref(),
+        policy: policy.ref(),
+        allowedSources: sources.ref(),
+      });
+      if (!this.#current(binding)) {
+        this.#releasePreview(runtime, preview.id);
+        return;
+      }
+      this.#preview = preview;
+      this.#busy = false;
+      this.requestUpdate();
+      await this.updateComplete;
+      if (this.#current(binding)) {
+        this.shadowRoot?.querySelector("dialog")?.showModal();
+      }
+    } catch (error) {
+      if (!this.#current(binding)) return;
+      this.#busy = false;
+      this.#error = error instanceof Error
+        ? error.message
+        : "The seal could not be prepared.";
+      this.requestUpdate();
+    }
+  };
+
+  /** Admits only a real browser gesture on the open host confirmation. */
+  #confirm = async (event: Event): Promise<void> => {
+    Event.prototype.stopPropagation.call(event);
+    await this.#commitReviewed(event);
+  };
+
+  /** Seals the reviewed value and announces it. */
+  async #commitReviewed(event: Event): Promise<void> {
+    if (
+      typeof MouseEvent === "undefined" || !(event instanceof MouseEvent) ||
+      !event.isTrusted ||
+      event.currentTarget !==
+        this.shadowRoot?.querySelector("button.confirm") ||
+      !this.shadowRoot?.querySelector("dialog")?.open
+    ) {
+      return;
+    }
+    const binding = this.#binding;
+    const preview = this.#preview;
+    if (this.#busy || !binding || !preview || !this.#current(binding)) return;
+    this.#busy = true;
+    this.#error = "";
+    this.requestUpdate();
+    try {
+      await binding.runtime.commitCustodySeal(preview.id);
+      // The preview is consumed; nothing is left to cancel.
+      this.#preview = undefined;
+      if (!this.#current(binding)) return;
+      this.#invalidate();
+      this.emit("cf-sealed");
+    } catch (error) {
+      this.#preview = undefined;
+      if (!this.#current(binding)) return;
+      this.#invalidate();
+      this.#error = error instanceof Error
+        ? error.message
+        : "The value could not be sealed.";
+    } finally {
+      this.requestUpdate();
+    }
+  }
+}

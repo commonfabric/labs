@@ -124,6 +124,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-code-editor` | Code/prose editor with highlighting and `[[`-mention completion | `$value`, `$mentionable`, `$mentioned` |
 | `cf-collapsible` | Single collapsible section with trigger and content | |
 | `cf-copy-button` | Copy-to-clipboard button with visual feedback | |
+| `cf-custody-seal` | Native confirmation that seals the actor's draft into a custody room, showing the runtime-verified room, readers, answers and sources (see [custody seal](#cf-custody-seal)) | `$draft`, `$terms`, `$policy`, `$sources` |
 | `cf-dot-mark` | Scatter/dot mark rendered inside `cf-chart` | `$data` |
 | `cf-drag-source` | Wraps draggable content; pairs with `cf-drop-zone` (see [drag-and-drop](../patterns/meta/drag-and-drop.md)) | `$cell` |
 | `cf-draggable` | Absolutely-positioned draggable container (x/y) | |
@@ -1070,6 +1071,32 @@ verified audience changed after preparation. Once the released link is stored
 successfully, the component emits `cf-shared` with no payload. A consuming
 handler reads its bound result cell; the event does not carry source values or
 identity claims.
+
+## cf-custody-seal
+
+`cf-custody-seal` seals the actor's draft into the custody of a room's trusted
+declassifier policy, as the [custody seal](../../specs/cfc-custody-seal.md)
+specifies. Bind `$draft` to the value to seal, `$terms` to the room's terms
+document, `$policy` to a cell holding the room's custody policy reference, and
+`$sources` to the actor's source policy: a list of the actor's own `Context`
+and `Resource` atoms in the actor's home space.
+
+The button opens a native modal dialog that the host fills from what the
+runtime read and checked, not from anything the pattern renders: the room
+space, who can read it and so see the answer, every answer the terms list,
+which of the actor's sources go in, and the bound on what one answer reveals,
+which for `k` distinct answers is `log₂ k` bits about any one input. The exact
+sealed values and the terms are under a collapsed details section. Terms name
+the room's possible outputs in `answers` and may carry a `question`; terms
+without `answers` show that they state no bound.
+
+The actor confirms with one trusted browser gesture on **Seal & consent**; a
+scripted click cannot seal. Changing a binding, dismissing the dialog, or
+disconnecting the component invalidates the review, and the runtime refuses a
+seal when the draft, the terms, the room's readers or the actor's source policy
+changed after preparation. When the seal commits, the component emits
+`cf-sealed` with no payload. The event carries neither the value nor the
+actor's entry in the room.
 
 ## CFC Authorship
 

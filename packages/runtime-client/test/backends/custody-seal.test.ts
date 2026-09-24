@@ -304,7 +304,10 @@ describe("custody-seal", () => {
 
   it("discards a canceled seal and a departing client's seals, keeping others", async () => {
     await withFixture(async ({ processor, refs }) => {
-      const request = { type: RequestType.CustodySealPrepare as const, ...refs };
+      const request = {
+        type: RequestType.CustodySealPrepare as const,
+        ...refs,
+      };
       const canceled = await processor.handleCustodySealPrepare(request, first);
       await processor.handleRequest({
         type: RequestType.CustodySealCancel,

@@ -3006,6 +3006,7 @@ interface CFTextElement extends CFHTMLElement {}
 interface CFAvatarElement extends CFHTMLElement {}
 interface CFProfileBadgeElement extends CFHTMLElement {}
 interface CFShareSnapshotElement extends CFHTMLElement {}
+interface CFCustodySealElement extends CFHTMLElement {}
 interface CFBadgeElement extends CFHTMLElement {}
 interface CFChipElement extends CFHTMLElement {}
 interface CFEmptyStateElement extends CFHTMLElement {}
@@ -4337,6 +4338,18 @@ interface CFShareSnapshotAttributes<T> extends CFHTMLAttributes<T> {
   "oncf-shared"?: EventHandler<{}>;
 }
 
+interface CFCustodySealAttributes<T> extends CFHTMLAttributes<T> {
+  /** The actor's draft, whose exact value the trusted host seals. */
+  "$draft"?: CellLike<unknown>;
+  /** The room's terms document; its space is the room the value enters. */
+  "$terms"?: CellLike<unknown>;
+  /** A cell holding the room's custody policy reference. */
+  "$policy"?: CellLike<unknown>;
+  /** The actor's source policy, in the actor's home space. */
+  "$sources"?: CellLike<unknown>;
+  "oncf-sealed"?: EventHandler<{}>;
+}
+
 interface CFOwnerViewAttributes<T> extends CFHTMLAttributes<T> {
   /** Persisted creator identity whose attested owner is checked by the host. */
   "$originator"?: CellLike<unknown>;
@@ -5390,6 +5403,10 @@ declare global {
       "cf-share-snapshot": CFDOM.DetailedHTMLProps<
         CFShareSnapshotAttributes<CFShareSnapshotElement>,
         CFShareSnapshotElement
+      >;
+      "cf-custody-seal": CFDOM.DetailedHTMLProps<
+        CFCustodySealAttributes<CFCustodySealElement>,
+        CFCustodySealElement
       >;
       "cf-owner-view": CFDOM.DetailedHTMLProps<
         CFOwnerViewAttributes<CFHTMLElement>,
