@@ -3721,6 +3721,64 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     );
 
     await t.step(
+      "watches nothing for a cell whose label cannot be read",
+      async () => {
+        const unreadable = runtime.getCell<string>(
+          signer.did(),
+          "cfc-policy-of-unreadable",
+        );
+        unreadable.resolveAsCell = () => {
+          throw new Error("label resolution failed");
+        };
+        const subscribed: string[] = [];
+        const errors: Error[] = [];
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+          onError: (error) => errors.push(error),
+          renderConfidentialityCeiling: {
+            atoms: [cfcAtom.user(signer.did())],
+            caveatKinds: [],
+          },
+          resolveRenderConfidentiality: createRenderConfidentialityResolver({
+            actingPrincipal: signer.did(),
+          }),
+          membershipProvider: {
+            readerRole: () => null,
+            subscribe: (space) => {
+              subscribed.push(space);
+              return () => {};
+            },
+          },
+          modulePolicySource: {
+            subscribe: (_reference, space) => {
+              subscribed.push(space);
+              return () => {};
+            },
+          },
+        });
+        const cancel = reconciler.mount({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [unreadable as never],
+        });
+        try {
+          await t.settle();
+          assertEquals(
+            collector.getOpsOfType("create-text").map((op) => op.text)
+              .includes("Content hidden by policy"),
+            true,
+          );
+          assertEquals(subscribed, []);
+          assertEquals(errors, []);
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
       "reactively re-renders a PolicyOf cell once its manifest arrives",
       async () => {
         // The direct-release rule (packages/patterns/cfc-exchange-rules): the

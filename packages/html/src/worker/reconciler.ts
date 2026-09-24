@@ -44,6 +44,7 @@ import {
   CFC_LABEL_READ_FAILED_ATOM,
   type CfcLabelView,
   cfcLabelViewForCell,
+  type CfcLabelViewSource,
   cfcLabelViewSourceForCell,
   clauseAlternatives,
   markRendererTrustedEvent,
@@ -318,23 +319,6 @@ export class WorkerReconciler {
       },
       getHandler: (id) => this.#handlers.get(id),
     };
-  }
-
-  /**
-   * The spaces whose documents a cell's render label was read from, found by
-   * the same read and the same followed-target fallback as
-   * `#resolveCellLabelView`. A module policy's manifest is read from these
-   * (spec §4.4.1). Empty on a read failure, which leaves such a label sealed.
-   */
-  #labelSpacesOfCell(cell: Cell<unknown>): readonly string[] {
-    try {
-      const own = cfcLabelViewSourceForCell(cell);
-      return own.view !== undefined
-        ? own.spaces
-        : cfcLabelViewSourceForCell(cell.resolveAsCell()).spaces;
-    } catch {
-      return [];
-    }
   }
 
   /** Best-effort space of a cell; undefined when it can't name one. */
@@ -1056,8 +1040,19 @@ export class WorkerReconciler {
    * (`watchCellMembership`), so they can never drift out of lockstep.
    */
   #resolveCellLabelView(cell: Cell<unknown>): CfcLabelView | undefined {
-    return cfcLabelViewForCell(cell) ??
-      cfcLabelViewForCell(cell.resolveAsCell());
+    return this.#resolveCellLabelSource(cell).view;
+  }
+
+  /**
+   * {@link #resolveCellLabelView}, with the spaces of the documents the view
+   * was read from, where a module policy the label selects has its manifest
+   * (spec §4.4.1). May throw, like the view read.
+   */
+  #resolveCellLabelSource(cell: Cell<unknown>): CfcLabelViewSource {
+    const own = cfcLabelViewSourceForCell(cell);
+    return own.view !== undefined
+      ? own
+      : cfcLabelViewSourceForCell(cell.resolveAsCell());
   }
 
   /**
@@ -1306,8 +1301,11 @@ export class WorkerReconciler {
     }
 
     let labelView: CfcLabelView | undefined;
+    let labelSpaces: readonly string[];
     try {
-      labelView = this.#resolveCellLabelView(cell);
+      ({ view: labelView, spaces: labelSpaces } = this.#resolveCellLabelSource(
+        cell,
+      ));
     } catch {
       return false;
     }
@@ -1340,7 +1338,7 @@ export class WorkerReconciler {
       return this.#resolvedConfidentialityRenderable(
         confidentiality,
         this.#integrityLabels(labelView),
-        () => this.#labelSpacesOfCell(cell),
+        () => labelSpaces,
         policy,
       );
     }
@@ -1567,16 +1565,16 @@ export class WorkerReconciler {
     // the followed-target fallback) so the watcher and the fit stay in
     // lockstep — a followed cell whose `Space(...)` label lives on the target
     // is watched, not silently left un-upgradable.
-    let labelView: CfcLabelView | undefined;
+    let source: CfcLabelViewSource;
     try {
-      labelView = this.#resolveCellLabelView(cell);
+      source = this.#resolveCellLabelSource(cell);
     } catch {
-      labelView = undefined;
+      return;
     }
     // No stored label (or a read failure) → nothing to watch. The render fit
     // still fail-closes independently; we just set up no reactive upgrade.
-    if (labelView === undefined) return;
-    const confidentiality = this.#confidentialityLabels(labelView);
+    if (source.view === undefined) return;
+    const confidentiality = this.#confidentialityLabels(source.view);
     // A subscription that throws leaves that document unwatched (fail closed
     // on watching) and must not escape into the cell's sink.
     const watch = (key: string, subscribe: () => Cancel) => {
@@ -1594,12 +1592,10 @@ export class WorkerReconciler {
       }
     }
     if (manifests !== undefined) {
-      const references = modulePolicyRefsInConfidentiality(confidentiality);
-      const spaces = references.length === 0
-        ? []
-        : this.#labelSpacesOfCell(cell);
-      for (const reference of references) {
-        for (const space of spaces) {
+      for (
+        const reference of modulePolicyRefsInConfidentiality(confidentiality)
+      ) {
+        for (const space of source.spaces) {
           // Keyed apart from the space DIDs above, which never start with "[".
           watch(
             JSON.stringify([space, reference.policyDigest]),
