@@ -825,6 +825,40 @@ describe("stored write requirements", () => {
       }
     }
 
+    for (const writer of Object.keys(WRITERS) as (keyof typeof WRITERS)[]) {
+      it(`commits a write beneath the claimed object by its named writer, ${writer}`, async () => {
+        // The writer is the one the claim names, and it writes below the
+        // claimed path, so no write of its own sits at the claim.
+
+        const runtime = start();
+        const id = `named-writer-beneath-${writer}`;
+        await seed(runtime, id, STORED, SEED);
+        const tx = runtime.edit();
+        tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+        tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: WRITER });
+        runtime.getCell(space, id, WRITERS[writer] as JSONSchema | undefined, tx)
+          .key("frozen").key("digest" as never).set("e" as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        expect(runtime.getCell(space, id, STORED).get()).toMatchObject({
+          frozen: { digest: "e" },
+        });
+      });
+    }
+
+    it("commits a write beneath a claimed root by its named writer", async () => {
+      const runtime = start();
+      const root = { type: "object", ifc: CLAIM } as const satisfies JSONSchema;
+      await seed(runtime, "named-writer-under-root", root, { a: 1, b: 2 });
+      const tx = runtime.edit();
+      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+      tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: WRITER });
+      runtime.getCell(space, "named-writer-under-root", undefined, tx).key("a")
+        .set(3 as never);
+      expect((await tx.commit()).error).toBeUndefined();
+      expect(runtime.getCell(space, "named-writer-under-root", root).get())
+        .toEqual({ a: 3, b: 2 });
+    });
+
     for (
       const [kind, root] of [
         ["untyped", { ifc: CLAIM }],

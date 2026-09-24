@@ -1750,6 +1750,32 @@ const writePolicyIdentitiesByTarget = (
 };
 
 /**
+ * The authoring identities a claim at a field path answers to: that of the
+ * input {@link identityForSchemaPath} finds, and that of every input beneath
+ * the path, since a write beneath a claimed path changes the value the claim
+ * governs. With no input at or around the path, the one identity is
+ * `undefined`, which no claim accepts.
+ */
+const identitiesForClaimPath = (
+  entries: Map<string, ImplementationIdentity | undefined> | undefined,
+  path: readonly string[],
+): readonly (ImplementationIdentity | undefined)[] => {
+  const identities: (ImplementationIdentity | undefined)[] = [];
+  for (let depth = path.length; depth >= 0; depth--) {
+    const key = encodePointer(path.slice(0, depth));
+    if (entries?.has(key)) {
+      identities.push(entries.get(key));
+      break;
+    }
+  }
+  const beneath = `${encodePointer(path)}/`;
+  for (const [key, identity] of entries ?? []) {
+    if (key.startsWith(beneath)) identities.push(identity);
+  }
+  return identities.length > 0 ? identities : [undefined];
+};
+
+/**
  * The authoring identity for a field path: the schema input on this cell whose
  * own path is the longest prefix of (or equal to) the field path. That input is
  * the one whose schema contributed the IFC entry at this path, so its identity
@@ -4654,14 +4680,15 @@ const verifyInputRequirements = (
     id: URI;
     scope: ReturnType<typeof normalizeCellScope>;
   },
-  // Resolves the implementation identity that authored the schema write-policy
-  // input covering a given field path (the longest-prefix schema input on this
-  // cell). `writeAuthorizedBy` is verified per field against its authoring
-  // identity, so two protected fields on the same cell written under different
-  // identities are each checked against the correct one.
-  identityForPath: (
+  // Resolves the implementation identities that authored the schema
+  // write-policy inputs a claim at a field path governs: the longest-prefix
+  // input on this cell, and every input beneath the path. `writeAuthorizedBy`
+  // is verified per field against each of them, so two protected fields on the
+  // same cell written under different identities are each checked against the
+  // correct one, and a write beneath a claimed path answers to the claim.
+  identitiesForPath: (
     path: readonly string[],
-  ) => ImplementationIdentity | undefined,
+  ) => readonly (ImplementationIdentity | undefined)[],
   // D4 write-prefix provenance (docs/specs/cfc-write-prefix-provenance.md):
   // the per-path last-overlapping-write bounds each entry's input checks
   // quantify under.
@@ -4870,13 +4897,17 @@ const verifyInputRequirements = (
     if (currentPrincipalFailure !== undefined) {
       return { reason: currentPrincipalFailure, verdict: true };
     }
-    const writeAuthorizedByFailure = writeAuthorizedByReason(
-      tx,
-      entry.schema,
-      entry.path,
-      target.space,
-      identityForPath(entry.path),
-    );
+    let writeAuthorizedByFailure: string | undefined;
+    for (const identity of identitiesForPath(entry.path)) {
+      writeAuthorizedByFailure = writeAuthorizedByReason(
+        tx,
+        entry.schema,
+        entry.path,
+        target.space,
+        identity,
+      );
+      if (writeAuthorizedByFailure !== undefined) break;
+    }
     const setupProjection = setupProjectionSourceMatchesValue(
       tx,
       target,
@@ -7524,7 +7555,7 @@ export function* prepareBoundaryCommitSteps(
         tx,
         schema,
         target,
-        (path) => identityForSchemaPath(writeAuthorIdentities.get(key), path),
+        (path) => identitiesForClaimPath(writeAuthorIdentities.get(key), path),
         prefixBounds,
         metadataResolver,
         // The precision counters measure each protected write once.
