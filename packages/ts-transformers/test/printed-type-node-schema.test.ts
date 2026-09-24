@@ -1045,6 +1045,32 @@ export default pattern<{ x: string }>(() => {
       });
     });
 
+    it("shrinks the aliased value of a cell inside a printed value", async () => {
+      // The value is printed expanded, so shrinking reaches inside the union
+      // the alias names.
+      const [capture] = await liftSchemas(
+        `import { computed, pattern, Writable } from "commonfabric";
+type Item =
+  | { kind: "a"; x: string; extra: string }
+  | { kind: "b"; y: string; extra: string };
+export default pattern<{ list: Writable<Item>[] }>(({ list }) => ({
+  first: computed(() => list[1]?.get().kind),
+}));`,
+      );
+
+      const kindOnly = (kind: string) => ({
+        type: "object",
+        properties: { kind: { type: "string", enum: [kind] } },
+        required: ["kind"],
+      });
+      expect((capture as Schema).properties).toEqual({
+        list: {
+          type: "array",
+          items: { anyOf: [kindOnly("a"), kindOnly("b")], asCell: ["cell"] },
+        },
+      });
+    });
+
     it("refuses a type argument that holds a piece of a print", async () => {
       // A state saying each `string` keyword was built below a print stands in
       // for a pass that took a print apart.

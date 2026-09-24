@@ -3575,10 +3575,20 @@ function unfoldPrint(
     }
     if (isCellLikeTypeNode(node)) {
       const wrapper = getCellWrapperInfo(type, checker);
-      const [value, ...rest] = cellTypeArguments(type, checker);
-      return wrapper && value
+      const [argument, ...rest] = cellTypeArguments(type, checker);
+      // The value is printed expanded, so a pass can read inside it, unless
+      // the printer cannot write the expansion: then it is the argument the
+      // wrapper was given, which keeps an alias's name.
+      const value = unwrapCellLikeType(type, checker);
+      const expanded = value && print(value);
+      const printed = expanded &&
+          (expanded.kind !== ts.SyntaxKind.UnknownKeyword ||
+            isAnyOrUnknownType(value!))
+        ? expanded
+        : argument && print(argument);
+      return wrapper && printed
         ? createHelperWrapperTypeNode(
-          print(value),
+          printed,
           wrapper.kind,
           factory,
           rest.map(print),
