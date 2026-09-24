@@ -173,6 +173,7 @@ const setup = async (
     subscriptionRefreshDelayMs: 0,
   });
   const managers: EmulatedStorageManager[] = [];
+  const created: Runtime[] = [];
   const runtimeFor = (
     identity: Identity,
     signer: Identity = identity,
@@ -181,7 +182,7 @@ const setup = async (
       as: signer,
     });
     managers.push(storageManager);
-    return new Runtime({
+    const runtime = new Runtime({
       apiUrl: new URL("http://toolshed.test"),
       storageManager,
       trustSnapshotProvider: () => ({
@@ -192,6 +193,9 @@ const setup = async (
       cfcEnforcementMode: "enforce-strict",
       cfcFlowLabels: "persist",
     });
+    // Every runtime is torn down, including one a test swaps into `runtimes`.
+    created.push(runtime);
+    return runtime;
   };
   const runtimes = new Map<Identity, Runtime>(
     [alice, bob, carol, mallory].map((identity) => [
@@ -262,7 +266,10 @@ const setup = async (
       return await commitCustodySeal(prepared.consent, trustedClick());
     },
     async dispose() {
-      for (const runtime of runtimes.values()) await runtime.dispose();
+      // The managers are closed once, below, rather than by each runtime.
+      for (const runtime of created) {
+        await runtime.dispose({ closeStorage: false });
+      }
       for (const manager of managers) await manager.close();
       await server.close();
     },
