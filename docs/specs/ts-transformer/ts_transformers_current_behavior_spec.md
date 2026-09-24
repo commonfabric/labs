@@ -1848,20 +1848,29 @@ adjustments:
   when `.get()` contributes an empty path but coexists with more specific
   non-empty paths
 - a node the type-driven shrink builds keeps the scope wrapper and the default
-  of the type it stands for, at every level it retains. A scope wrapper the
-  type's alias names wraps the shrunk value as `__cfHelpers.PerUser<...>` (or
-  the wrapper of the same name), and a default the type carries in its
-  `Default` brand wraps it as `__cfHelpers.Default<shrunk, V>`, with `V`
-  printed from the brand's payload. Branded members that disagree on the value
-  restore no default, and a scope the type carries only as its brand, with no
-  alias left to name it, is not restored. Neither is a scope wrapper around a
-  cell: schema generation reads the wrapper by the scoped type it is registered
-  with, which would undo the capability narrowing of the cell inside it. A
-  default restored on a value that a union also lets be `undefined` or `null`
-  wraps the whole union, since the runtime reads a missing property's default
-  only from the top of the property's schema. A restored `Default` does not
-  count toward the preference for the node-driven candidate, which applies where
-  only that candidate holds an authored `Default` (`getScopeWrapper` and
+  of the type it stands for, at every level it retains. A scope wrapper wraps
+  the shrunk value as `__cfHelpers.PerUser<...>` (or the wrapper of its scope)
+  whether the type's alias names it or the type carries only its scope brand,
+  as a wrapper reached through an alias of the author's own does
+  (`type Rec = PerUser<Inner>`, which the checker reports as `Rec`). A brand
+  the checker distributed over a union is read from its members, each shrunk on
+  its own and wrapped as one union, except that a union of every literal of one
+  type — `boolean`, held as `false | true` — is wrapped as the type it was
+  written as. A brand over an alternative the checker flattened into several
+  intersection members restores no scope, having no type of its own to shrink:
+  the branded type is no substitute, since the node built from it carries the
+  brand into the wrapper, where schema generation refuses the scope it then
+  reads twice. A default the type
+  carries in its `Default` brand wraps it as `__cfHelpers.Default<shrunk, V>`,
+  with `V` printed from the brand's payload. Branded members that disagree on
+  the value restore no default. A scope wrapper around a cell is not restored:
+  schema generation reads the wrapper by the scoped type it is registered with,
+  which would undo the capability narrowing of the cell inside it. A default
+  restored on a value that a union also lets be `undefined` or `null` wraps the
+  whole union, since the runtime reads a missing property's default only from
+  the top of the property's schema. A restored `Default` does not count toward
+  the preference for the node-driven candidate, which applies where only that
+  candidate holds an authored `Default` (`getScopeWrapper` and
   `restoreDefault` in `transformers/type-shrinking.ts`;
   `test/shrunk-capture-wrappers.test.ts`)
 - tuple types and numeric-indexed object types are not rewritten to

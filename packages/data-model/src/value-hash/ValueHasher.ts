@@ -7,12 +7,18 @@ import { encodeULEB128 } from "@commonfabric/leb128";
 import { bigintToMinimalTwosComplement } from "@commonfabric/utils/bigint";
 import { LRUCache } from "@commonfabric/utils/cache";
 import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
-import { backtickQuote } from "@commonfabric/utils/markdown";
 import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 import { encodeWtf8 } from "@commonfabric/utils/wtf8";
 
-import { shallowFabricFromConvertibleJsValue } from "@/convertible-js.ts";
-import { tagOfConvertibleJsValueElseNull, VALUE_TAGS } from "@/types";
+import type {
+  FabricArray,
+  FabricContainerValue,
+  FabricPlainObject,
+  FabricPrimitive,
+  FabricValue,
+} from "@/interface.ts";
+import { tagOfFabricValueElseNull, VALUE_TAGS } from "@/types";
+import { debugStr } from "@/value-debug";
 import { BaseFabricInstance } from "@/fabric-bases";
 import { codecOf, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
 import {
@@ -191,18 +197,20 @@ export class ValueHasher {
    * Feeds a single `FabricValue` into the hasher, using the type-tagged byte
    * format from the byte-level spec.
    */
-  feedValue(value: unknown): void {
+  feedValue(value: FabricValue): void {
     const hasher = this.#hasher;
 
     switch (typeof value) {
-      case "boolean":
+      case "boolean": {
         hasher.update(value ? TAG_BOOLEAN_TRUE_BYTES : TAG_BOOLEAN_FALSE_BYTES);
         break;
+      }
 
-      case "number":
+      case "number": {
         hasher.update(TAG_NUMBER_BYTES);
         hasher.update(float64BytesOf(value));
         break;
+      }
 
       case "string": {
         hasher.update(getStringRep(value));
@@ -227,22 +235,26 @@ export class ValueHasher {
         break;
       }
 
-      case "undefined":
+      case "undefined": {
         hasher.update(TAG_UNDEFINED_BYTES);
         break;
+      }
 
-      case "object":
+      case "object": {
         if (value === null) {
           hasher.update(TAG_NULL_BYTES);
         } else {
           this.#feedObjectValue(value);
         }
         break;
+      }
 
-      default:
-        throw new Error(
-          `\`hashOf()\`: unsupported type \`${typeof value}\``,
-        );
+      default: {
+        // Notably, values of type `function` are _never_ `FabricValue`s:
+        // `FabricValue` contractually represents that its contents are inert,
+        // and `function` is about as "ert" as a value can get.
+        throw new Error(debugStr`Cannot hash value: $quote${value}`);
+      }
     }
   }
 
@@ -250,7 +262,7 @@ export class ValueHasher {
    * Feed an array value with sparse hole handling, terminated by `TAG_END`, or
    * a cycle reference if the array is on the path.
    */
-  #feedArray(value: unknown[]): void {
+  #feedArray(value: FabricArray): void {
     if (this.#feedCycleIfOnPath(value)) {
       return;
     }
@@ -312,12 +324,12 @@ export class ValueHasher {
   /**
    * Feed an object-typed value (`FabricPrimitive`, `FabricInstance`, `Array`,
    * or plain object) into the hasher. Dispatches via
-   * `tagOfConvertibleJsValueElseNull()` / `VALUE_TAGS` for recognized types.
-   * The `null` case is handled by the caller (`feedValue()`).
+   * `tagOfFabricValueElseNull()` / `VALUE_TAGS` for recognized types. The
+   * `null` case is handled by the caller (`feedValue()`).
    */
-  #feedObjectValue(value: object): void {
+  #feedObjectValue(value: FabricContainerValue | FabricPrimitive): void {
     const hasher = this.#hasher;
-    const tag = tagOfConvertibleJsValueElseNull(value);
+    const tag = tagOfFabricValueElseNull(value);
 
     switch (tag) {
       case VALUE_TAGS.FabricEpochNsec: {
@@ -352,13 +364,15 @@ export class ValueHasher {
         return;
       }
 
-      case VALUE_TAGS.Array:
-        this.#feedArray(value as unknown[]);
+      case VALUE_TAGS.Array: {
+        this.#feedArray(value as FabricArray);
         return;
+      }
 
-      case VALUE_TAGS.Object:
-        this.#feedPlainObject(value as Record<string, unknown>);
+      case VALUE_TAGS.Object: {
+        this.#feedPlainObject(value as FabricPlainObject);
         return;
+      }
 
       case VALUE_TAGS.FabricBytes: {
         hasher.update(TAG_BYTES_BYTES);
@@ -390,7 +404,7 @@ export class ValueHasher {
           // unreachable, and the algorithm alone is shared by every key that
           // uses it.
           throw new Error(
-            "`hashOf()`: cannot hash a key pair that holds handles.",
+            "Cannot hash a `FabricKeyPair` that holds opaque handles.",
           );
         }
         hasher.update(TAG_KEY_PAIR_BYTES);
@@ -418,24 +432,10 @@ export class ValueHasher {
         return;
       }
 
-      case VALUE_TAGS.JsDate:
-      case VALUE_TAGS.JsRegExp:
-      case VALUE_TAGS.JsUint8Array: {
-        // Native instances that have a well-defined `FabricValue` conversion.
-        // Convert on-the-fly and hash the converted value.
-        const converted = shallowFabricFromConvertibleJsValue(value, false);
-        this.feedValue(converted);
-        return;
-      }
-
       default: {
-        // Nothing else is handled. As of this writing, specifically missing are
-        // `Map`, `Set`, and `Error`.
-        throw new Error(
-          `\`hashOf()\`: unsupported object type ${
-            backtickQuote(value?.constructor?.name ?? typeof value)
-          }`,
-        );
+        // Nothing else is a `FabricValue`: a `Date`, a `Map`, or any other
+        // native or class instance included.
+        throw new Error(debugStr`Cannot hash value: $quote${value}`);
       }
     }
   }
@@ -445,7 +445,7 @@ export class ValueHasher {
    * encoding, terminated by `TAG_END`, or a cycle reference if the object is on
    * the path.
    */
-  #feedPlainObject(value: Record<string, unknown>): void {
+  #feedPlainObject(value: FabricPlainObject): void {
     if (this.#feedCycleIfOnPath(value)) {
       return;
     }
@@ -482,7 +482,7 @@ export class ValueHasher {
   /**
    * Computes the hash of a value without consulting or populating any cache.
    */
-  static computeHash(value: unknown): FabricHash {
+  static computeHash(value: FabricValue): FabricHash {
     const valueHasher = new ValueHasher();
     valueHasher.feedValue(value);
     return valueHasher.digest();
@@ -492,7 +492,7 @@ export class ValueHasher {
    * Like `computeHash()`, except it returns a simple string hash value,
    * encoded as `base64url`, rather than a hash object.
    */
-  static computeHashAsString(value: unknown): string {
+  static computeHashAsString(value: FabricValue): string {
     const valueHasher = new ValueHasher();
     valueHasher.feedValue(value);
     return valueHasher.digestString();

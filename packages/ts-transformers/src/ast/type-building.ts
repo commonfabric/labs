@@ -1140,7 +1140,12 @@ function resolveTypeAliasReferences(
 }
 
 /**
- * The wrappers a pattern body's view of a binding strips from its type.
+ * The wrappers a pattern body's view of a binding strips from its type. They
+ * are matched by spelling because what is preserved is the authored node. A
+ * declared type reaches them through a non-generic alias of the author's own
+ * once `resolveTypeAliasReferences()` has replaced the alias with its
+ * declaration; a generic alias stays as written, so a wrapper behind one is
+ * not matched and its declared type is not preserved.
  */
 const BODY_STRIPPED_WRAPPER_NAMES: ReadonlySet<string> = new Set([
   "Default",

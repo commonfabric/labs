@@ -1078,9 +1078,16 @@ identity claims.
 is provided, the renderer uses that explicit atom list.
 
 When no explicit requirement is provided and `$author`/`author` is a cell whose
-root CFC label contains `represents-principal`, the renderer infers a required
-`{ kind: "authored-by", subject }` atom from that author cell. This means a
-cell-backed author can make previously display-only text require matching
-authorship integrity. Use an explicit `requiredTextIntegrity` when a component
-needs a different policy, and avoid cell-backed `$author` for purely decorative
-author names.
+CFC label carries `represents-principal` at its root or on its top-level fields
+(a profile's owner-protected fields carry its owner's), the renderer infers a
+required `{ kind: "authored-by", subject }` atom for each principal those atoms
+name. One principal is the usual case; for an author naming several, text must
+carry `authored-by` for each of them. With no principal and no explicit
+requirement, the boundary admits no cell text at all. This means a cell-backed
+author can make previously display-only text require matching authorship
+integrity. Use an explicit `requiredTextIntegrity` when a component needs a
+different policy, and avoid cell-backed `$author` for purely decorative author
+names.
+
+The component itself checks its value's `authored-by` against the same
+principal, and marks the content verified when they match.

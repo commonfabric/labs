@@ -601,7 +601,9 @@ describe("FabricKeyPair", () => {
     it("throws for an instance holding handles", async () => {
       const pair = new FabricKeyPair(await generatePair());
 
-      expect(() => hashStringOf(pair)).toThrow(/cannot hash a key pair/);
+      expect(() => hashStringOf(pair)).toThrow(
+        "Cannot hash a `FabricKeyPair` that holds opaque handles",
+      );
     });
   });
 });

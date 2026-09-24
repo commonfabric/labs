@@ -64,6 +64,7 @@
     "./cfc/owner-adoption": "./src/cfc/owner-adoption.ts",
     "./cfc/clause": "./src/cfc/clause.ts",
     "./cfc/label-view-core": "./src/cfc/label-view-core.ts",
+    "./cfc/represents-principal": "./src/cfc/represents-principal.ts",
     "./executor/host": "./src/executor/host.ts",
     "./executor/loopback-storage": "./src/executor/loopback-storage.ts",
     "./executor/stats": "./src/executor/stats.ts",
