@@ -38,7 +38,7 @@ import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { PatternEnvironment, setPatternEnvironment } from "./builder/env.ts";
-import { popFrame, pushFrame } from "./builder/pattern.ts";
+import { popFrame, pushRuntimeDefaultFrame } from "./builder/pattern.ts";
 import type {
   AnyCell,
   Frame,
@@ -1961,7 +1961,7 @@ export class Runtime {
       }
 
       // Push a default frame with this runtime so builder functions can access it
-      this.#defaultFrame = pushFrame({ runtime: this });
+      this.#defaultFrame = pushRuntimeDefaultFrame(this);
     } catch (error) {
       this.#releaseServerExecutionEnabler();
       throw error;

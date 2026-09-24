@@ -37,6 +37,7 @@ import {
 } from "@commonfabric/utils/types";
 
 import { isAliasBinding } from "./alias-binding.ts";
+import { runInFrameContext } from "./builder/frame-context.ts";
 import {
   patternFromFrame,
   popFrame,
@@ -10410,7 +10411,12 @@ export class Runner {
     const handlerResultCell = schedulerRehydration.viewLocalOnly
       ? resultCell.withTx()
       : resultCell;
-    const handler = (tx: IExtendedStorageTransaction, event: any) => {
+    // Each run gets a frame context of its own, so its frame, which stays
+    // pushed until an async result settles, is invisible to anything that runs
+    // while it awaits.
+    const handler = (tx: IExtendedStorageTransaction, event: any) =>
+      runInFrameContext(() => runHandler(tx, event));
+    const runHandler = (tx: IExtendedStorageTransaction, event: any) => {
       const resultCell = schedulerRehydration.viewLocalOnly
         ? handlerResultCell.withTx(tx)
         : handlerResultCell;
@@ -10750,7 +10756,10 @@ export class Runner {
       : resultCell;
     const action: Action & {
       ignoredSchedulingWrites?: NormalizedFullLink[];
-    } = (tx: IExtendedStorageTransaction) => {
+    } = (tx: IExtendedStorageTransaction) =>
+      // A frame context of its own, as for a handler.
+      runInFrameContext(() => runAction(tx));
+    const runAction = (tx: IExtendedStorageTransaction) => {
       const resultCell = schedulerRehydration.viewLocalOnly
         ? actionResultCell.withTx(tx)
         : actionResultCell;
@@ -11224,9 +11233,9 @@ export class Runner {
     // — no serializable body, so nothing could ever rehydrate them. The
     // transformer hoists every authored builder call to module scope; the
     // window makes a mint that slipped through fail loudly at creation time
-    // (see builder/action-context.ts) instead of producing an unrehydratable
-    // value. The window rides AsyncLocalStorage, so an async action's
-    // continuations stay covered past its awaits.
+    // (see builder/frame-context.ts) instead of producing an unrehydratable
+    // value. The window is kept on the action's frame context, so an async
+    // action's continuations stay covered past its awaits.
     return runInActionExecution(invoke);
   }
 
