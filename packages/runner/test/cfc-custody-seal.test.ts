@@ -1154,6 +1154,39 @@ describe("cfc-custody-seal", () => {
       }
     });
 
+    it("seals both actors when two first seals race to create the anchor", async () => {
+      // Each runtime finds no anchor and creates one; the loser's create
+      // fails, and it has to find the winner's anchor rather than give up
+      // after its consent is spent and its receipt written.
+      const fixture = await setup();
+      try {
+        const drafts = await Promise.all(
+          [alice, bob, carol].map((identity) =>
+            fixture.draft(identity, honestStance)
+          ),
+        );
+        const prepared = await Promise.all(
+          [alice, bob, carol].map((identity, index) =>
+            prepareCustodySeal(drafts[index], fixture.room(identity))
+          ),
+        );
+        const outcomes = await Promise.allSettled(
+          prepared.map(({ consent }) =>
+            commitCustodySeal(consent, trustedClick())
+          ),
+        );
+        expect(
+          outcomes.map((outcome) =>
+            outcome.status === "rejected"
+              ? String(outcome.reason)
+              : outcome.status
+          ),
+        ).toEqual(["fulfilled", "fulfilled", "fulfilled"]);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
     it("refuses a second entry for an actor who already sealed", async () => {
       const fixture = await setup();
       try {

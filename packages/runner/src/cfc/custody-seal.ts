@@ -877,9 +877,9 @@ export async function prepareCustodySeal(
 }
 
 /**
- * Writes the reviewed entry after a host-trusted seal gesture: first the
- * actor-private receipt in the actor's home space, then the entry in the
- * box. A transaction writes one space, so the two are separate commits, and
+ * Writes the reviewed entry after a host-trusted seal gesture: the
+ * instance's anchor if it is absent, then the actor-private receipt in the
+ * actor's home space, then the entry in the box. A transaction writes one space, so the two are separate commits, and
  * the receipt is written first so that no entry exists without one; a receipt
  * whose entry is absent records a seal whose commit failed.
  *
@@ -926,6 +926,30 @@ export async function commitCustodySeal(
   const runtime = state.draft.runtime;
   const { actor, policy, instance, entryKey } = state;
 
+  // The anchor comes first, so a seal that cannot establish it has written
+  // nothing durable. It is written only where absent, and its value is a
+  // constant the entry transaction verifies, so two first seals racing to
+  // create it need no create-only mark: the loser's retry finds the winner's.
+  const anchor = anchorCell(runtime, policy, instance);
+  await anchor.sync();
+  const anchorLink = anchor.getAsNormalizedFullLink();
+  const anchored = await runtime.editWithRetry((tx) => {
+    if (
+      tx.readValueOrThrow(anchorLink, { meta: internalVerifierRead }) !==
+        undefined
+    ) return;
+    tx.setCfcImplementationIdentity({
+      kind: "builtin",
+      builtinId: CUSTODY_SEAL_WRITER,
+    });
+    anchor.withTx(tx).set({ instance });
+  });
+  if (anchored.error) {
+    throw new Error(
+      `Custody seal could not create its anchor: ${anchored.error.message}`,
+    );
+  }
+
   const receiptTx = runtime.edit();
   let receipt: Cell<unknown>;
   try {
@@ -964,37 +988,11 @@ export async function commitCustodySeal(
     throw error;
   }
 
-  const anchor = anchorCell(runtime, policy, instance);
-  await anchor.sync();
-  const anchorLink = anchor.getAsNormalizedFullLink();
-  const anchorExists = () => {
-    const tx = runtime.edit();
-    try {
-      return tx.readValueOrThrow(anchorLink, { meta: internalVerifierRead }) !==
-        undefined;
-    } finally {
-      tx.abort();
-    }
-  };
-  if (!anchorExists()) {
-    const anchorTx = runtime.edit();
-    anchorTx.setCfcImplementationIdentity({
-      kind: "builtin",
-      builtinId: CUSTODY_SEAL_WRITER,
-    });
-    anchor.withTx(anchorTx).set({ instance });
-    anchorTx.markCreateOnly?.(anchorLink);
-    const created = await anchorTx.commit();
-    // A concurrent seal may have created it first; either way it now exists.
-    if (created.error && !anchorExists()) {
-      throw new Error(
-        `Custody seal could not create its anchor: ${created.error.message}`,
-      );
-    }
-  }
-
-  const tx = runtime.edit();
-  try {
+  // Every seal of an instance writes the one box document, so seals by
+  // different actors conflict; each retry re-runs every check against the
+  // state that won, including whether this actor's entry now exists.
+  let box: Cell<Record<string, JSONValue>> | undefined;
+  const sealed = await runtime.editWithRetry((tx) => {
     if (tx.getCfcState().trustSnapshot?.actingPrincipal !== actor) {
       throw new Error("Custody seal actor changed after review");
     }
@@ -1013,7 +1011,7 @@ export async function commitCustodySeal(
     if (!absentOrAnchor(tx, anchorLink, anchorClause(policy), instance)) {
       throw new Error("Custody seal refuses an anchor the seal did not create");
     }
-    const box = boxCell(runtime, policy, instance, tx);
+    box = boxCell(runtime, policy, instance, tx);
     const boxLink = box.getAsNormalizedFullLink();
     if (!absentOrSealed(tx, boxLink)) {
       throw new Error("Custody seal refuses a box the seal did not create");
@@ -1041,17 +1039,17 @@ export async function commitCustodySeal(
       terms: canonicalJson(state.terms),
       stance: state.stance,
     });
-    const result = await tx.commit();
-    if (result.error) {
-      throw new Error(`Custody seal failed: ${result.error.message}`);
-    }
-    return {
-      box: box.withTx(undefined) as Cell<unknown>,
-      entryKey,
-      receipt: receipt.withTx(undefined),
-    };
-  } catch (error) {
-    tx.abort();
-    throw error;
+  });
+  if (sealed.error) {
+    // A check that threw is the refusal to report; anything else is the
+    // commit's own failure.
+    const reason = "reason" in sealed.error ? sealed.error.reason : undefined;
+    if (reason instanceof Error) throw reason;
+    throw new Error(`Custody seal failed: ${sealed.error.message}`);
   }
+  return {
+    box: box!.withTx(undefined) as Cell<unknown>,
+    entryKey,
+    receipt: receipt.withTx(undefined),
+  };
 }

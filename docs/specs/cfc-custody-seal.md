@@ -81,7 +81,10 @@ established the checks are compared against the committing transaction.
 
 ## What the seal writes
 
-A transaction writes one space, so the seal commits twice.
+A transaction writes one space, so the seal commits more than once. First, if
+the instance has no anchor yet (see [Attribution](#attribution)), the seal
+creates it, so a seal that cannot establish one has written nothing durable.
+Then:
 
 1. **A receipt in the actor's home space.** It is labeled `User(actor)` and
    records the event, `P`, `D`, the entry key, the sources, and the stance's
@@ -90,7 +93,11 @@ A transaction writes one space, so the seal commits twice.
 2. **An entry in the instance's box.** The box is one document in `S` at the
    address `{custodyBox: {policy: P, instance: D}}`. The entry is
    `{instance: D, terms, stance}`. `terms` is the terms serialized as JSON with
-   sorted keys, so that a consumer can compare entries byte for byte.
+   sorted keys, so that a consumer can compare entries byte for byte. Every
+   seal of an instance writes this one document, so concurrent seals by
+   different actors conflict. The entry transaction retries a conflict,
+   running every check again against the state that won, including whether
+   this actor's entry now exists.
 
 Each entry declares the confidentiality `[P]`. The box root's own label is the
 anchor's clause, `P ∨ Space(S)`, which the seal's read carries there when it
@@ -107,7 +114,9 @@ transaction reads the draft and the terms through verifier reads, so their
 clauses do not reach the entry. Its one labeled read is the instance's
 **anchor**: a seal-written constant at `{custodyAnchor: {policy: P, instance:
 D}}`, labeled `P ∨ Space(S)`. The anchor is created in a transaction of its
-own the first time it is needed. The read makes every location the seal writes
+own the first time it is needed, written only where absent. It carries no
+create-only mark: two first seals that race to create it write the same
+constant, and the loser's retry finds the winner's anchor. The read makes every location the seal writes
 carry `TransformedBy{builtin cfc-custody-seal}`, the root included when the
 seal creates the box. The anchor's clause fits the room space's residency
 ceiling, and on an entry it sits beside the entry's declared `[P]`, which still
