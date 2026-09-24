@@ -161,18 +161,14 @@ on the witnessed inputs and on the endorsed output, and a release rule should
 not rely on the witness without them.
 
 - **Removals and membership changes by another writer.** The witness is about
-  values written. A structure stamp records confidentiality and no integrity, so
-  when another writer empties a container inside a committed document, the
-  emptied location resolves to the committed value above it and keeps its
-  witness. Removing a path that never had an entry of its own leaves the label
-  map unchanged. Both let a secret choose what the endorsed transformer counts.
-  Declaring the committed documents `writeAuthorizedBy` the commit step confines
-  every write to them, removals included, to that code. The emptied-container
-  case also closes once structure stamps carry the writing transaction's
-  `TransformedBy` (L11 on the `conclave-policy-pins` branch): the emptied
-  location then resolves to the remover's stamp rather than to the committed
-  value above it, so a remover other than the committed writer leaves no
-  witness there.
+  values written. Removing a path that never had an entry of its own leaves the
+  label map unchanged, which lets a secret choose what the endorsed transformer
+  counts. Declaring the committed documents `writeAuthorizedBy` the commit step
+  confines every write to them, removals included, to that code. Emptying a
+  container is the case structure stamps cover: since #8029 they carry the
+  writing transaction's `TransformedBy`, so the emptied location resolves to the
+  remover's stamp rather than to the committed value above it, and a remover
+  other than the committed writer leaves no witness there.
 - **The bottom of a chain trusts its caller.** Every endorsed step mints its
   identity-only atom whatever it was fed, so the innermost level a rule pins is
   satisfied by crafted input to that step. Retaining only `TransformedBy`
