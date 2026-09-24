@@ -40,20 +40,76 @@ const ownerProtectedString = (ownerDid: string): JSONSchema => ({
   },
 });
 
+// A labeled field that makes a root cfc-relevant, with stored CFC metadata,
+// and names no writer.
+const labeledOwnerString: JSONSchema = {
+  type: "string",
+  ifc: { confidentiality: ["legacy-home-owner"] },
+};
+
 // A realistic pre-favorites home root: it once ran a home setup, so it carries
-// the primordial framework projection keys ($NAME/$UI) and an owner-protected
-// field (so the root is cfc-relevant / has stored CFC metadata), but it
-// predates favorites and the handlers that shipped with it — exactly the
-// vintage whose repair throws additive-required.
-const legacyHomeSchema = (ownerDid: string): JSONSchema => ({
+// the primordial framework projection keys ($NAME/$UI) and an `owner` field
+// that makes the root cfc-relevant (stored CFC metadata), but it predates
+// favorites and the handlers that shipped with it — exactly the vintage whose
+// repair throws additive-required. `owner` is owner-protected unless the
+// caller passes another schema for it.
+const legacyHomeSchema = (
+  ownerDid: string,
+  owner: JSONSchema = ownerProtectedString(ownerDid),
+): JSONSchema => ({
   type: "object",
   properties: {
     [NAME]: { type: "string" },
     [UI]: { type: "unknown" },
-    owner: ownerProtectedString(ownerDid),
+    owner,
   },
   required: [NAME, UI, "owner"],
 });
+
+/**
+ * Seeds `root` as a legacy home whose `owner` field is typed `owner`, as its
+ * named writer, then materializes the real home pattern over it.
+ */
+const materializeHomeOverLegacyRoot = async (
+  runtime: Runtime,
+  space: ReturnType<typeof alice.did>,
+  root: string,
+  owner: JSONSchema,
+) => {
+  const tx = runtime.edit();
+  tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+  tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: OWNER_WRITER });
+  const cell = runtime.getCell(space, root, legacyHomeSchema(space, owner), tx);
+  cell.set({
+    [NAME]: "Legacy Home (pre-setup)",
+    [UI]: null,
+    owner: "alice",
+  });
+  const target = cell.getAsNormalizedFullLink();
+  tx.recordCfcWritePolicyInput({
+    kind: "trusted-event",
+    target: {
+      space: target.space,
+      scope: target.scope,
+      id: target.id,
+      path: ["owner"],
+    },
+    eventId: "seed-owner",
+    provenance: { origin: "dom", trusted: true },
+  });
+  tx.prepareCfc();
+  expect((await tx.commit()).ok).toBeDefined();
+
+  const homePattern = await compileHomePattern(runtime, space);
+  const home = await runtime.runSynced(
+    runtime.getCell(space, root),
+    homePattern,
+    {},
+  );
+  await home.pull();
+  await runtime.idle();
+  return home;
+};
 
 const compileHomePattern = async (
   runtime: Runtime,
@@ -136,62 +192,22 @@ describe("CFC additive-required default preserves old documents", () => {
     // Faithful end-to-end: run the real home pattern's setup over a realistic
     // old home root, with enforcement ON. Before the fix, the setup commit is
     // rejected (defaultProfile, then the handler streams). After the fix it
-    // commits and the home heals.
+    // commits and the home heals. The root's `owner` field carries a label
+    // and no writer claim, so the only thing that could refuse the setup is
+    // the additive-required guard under test.
 
     const storageManager = StorageManager.emulate({ as: alice });
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager,
     });
-    const space = alice.did();
-    const ROOT = "legacy-home-root";
     try {
-      // 1. Seed the "old" home root doc (with stored CFC metadata) lacking
-      //    favorites and the handlers.
-      {
-        const tx = runtime.edit();
-        tx.setCfcTrustSnapshot({
-          id: `trust-${space}`,
-          actingPrincipal: space,
-        });
-        tx.setCfcImplementationIdentity({
-          kind: "builtin",
-          builtinId: OWNER_WRITER,
-        });
-        const cell = runtime.getCell(
-          space,
-          ROOT,
-          legacyHomeSchema(space),
-          tx,
-        );
-        cell.set({
-          [NAME]: "Legacy Home (pre-setup)",
-          [UI]: null,
-          owner: "alice",
-        });
-        const target = cell.getAsNormalizedFullLink();
-        tx.recordCfcWritePolicyInput({
-          kind: "trusted-event",
-          target: {
-            space: target.space,
-            scope: target.scope,
-            id: target.id,
-            path: ["owner"],
-          },
-          eventId: "seed-owner",
-          provenance: { origin: "dom", trusted: true },
-        });
-        tx.prepareCfc();
-        const res = await tx.commit();
-        expect(res.ok).toBeDefined();
-      }
-
-      // 2. Materialize the real home pattern over the SAME root cell.
-      const homePattern = await compileHomePattern(runtime, space);
-      const resultCell = runtime.getCell(space, ROOT);
-      const home = await runtime.runSynced(resultCell, homePattern, {});
-      await home.pull();
-      await runtime.idle();
+      const home = await materializeHomeOverLegacyRoot(
+        runtime,
+        alice.did(),
+        "legacy-home-root",
+        labeledOwnerString,
+      );
 
       // Discriminator: the setup projection only overwrites the root's $NAME
       // with the pattern's "Home" if its commit actually LANDED. When the
@@ -202,6 +218,31 @@ describe("CFC additive-required default preserves old documents", () => {
       // And favorites materialized to its defaulted empty list.
       const favorites = home.key("favorites");
       expect(favorites.get() ?? []).toEqual([]);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("refuses a home setup that would drop a writer-protected path", async () => {
+    // The home pattern declares no `owner`, so its setup rewrite of the whole
+    // result deletes the field, and only the field's named writer may.
+
+    const storageManager = StorageManager.emulate({ as: alice });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+    });
+    try {
+      const home = await materializeHomeOverLegacyRoot(
+        runtime,
+        alice.did(),
+        "legacy-home-root-protected-owner",
+        ownerProtectedString(alice.did()),
+      );
+
+      expect(home.key(NAME).get()).toBe("Legacy Home (pre-setup)");
+      expect(home.key("owner" as never).get()).toBe("alice");
     } finally {
       await runtime.dispose();
       await storageManager.close();
