@@ -223,6 +223,7 @@ const compareWritePolicyInput = (
   let primary = 0;
   switch (left.kind) {
     case "preserved-output":
+    case "policy-application":
     case "owner-adoption":
     case "initialization": {
       primary = compareCanonicalAddress(
@@ -296,6 +297,7 @@ export const canonicalizeWritePolicyInput = (
 ): WritePolicyInput => {
   switch (input.kind) {
     case "preserved-output":
+    case "policy-application":
     case "owner-adoption":
     case "initialization":
       // Runtime evidence addresses are already value-relative. A literal leading

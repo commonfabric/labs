@@ -1189,6 +1189,56 @@ const pathHoldsStagedReference = (
   );
 };
 
+const sameDocument = (
+  address: {
+    space: MemorySpace;
+    id: string;
+    scope?: ReturnType<typeof normalizeCellScope>;
+  },
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): boolean =>
+  address.space === target.space && address.id === target.id &&
+  normalizeCellScope(address.scope) === target.scope;
+
+/**
+ * Whether the transaction attempted nothing on `target`'s document but the
+ * reads a schema application marks as attempted writes, one at each of
+ * `paths`. A write that changes nothing leaves no write attempt, but does
+ * leave an attempted-write read of its own.
+ */
+const attemptsOnlyApplicationsAt = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  paths: readonly (readonly string[])[],
+): boolean => {
+  const writes = getTransactionWriteAttempts(tx);
+  if (
+    writes === undefined || writes.some((write) => sameDocument(write, target))
+  ) {
+    return false;
+  }
+  const unmatched = [...paths];
+  for (const read of getTransactionReadActivities(tx)) {
+    if (!sameDocument(read, target)) continue;
+    if (!isReadMarkedAsAttemptedWrite(read.meta)) continue;
+    const path = canonicalizeLogicalPath(read.path.map(String));
+    const index = unmatched.findIndex((candidate) =>
+      arraysEqual(candidate, path)
+    );
+    if (index === -1) return false;
+    unmatched.splice(index, 1);
+  }
+  return unmatched.length === 0;
+};
+
 /** A single runtime output attempt may preserve an existing root reference. */
 const writePreservesRuntimeOutput = (
   tx: IExtendedStorageTransaction,
@@ -1198,32 +1248,52 @@ const writePreservesRuntimeOutput = (
     scope: ReturnType<typeof normalizeCellScope>;
   },
 ): boolean => {
-  const sameTarget = (
-    address: {
-      space: MemorySpace;
-      id: string;
-      scope?: ReturnType<typeof normalizeCellScope>;
-    },
-  ) =>
-    address.space === target.space && address.id === target.id &&
-    normalizeCellScope(address.scope) === target.scope;
   const input = tx.getCfcState().writePolicyInputs.find((input) =>
     input.kind === "preserved-output" && tx.isRuntimeWritePolicyInput(input) &&
-    sameTarget(input.target) && input.target.path.length === 0
+    sameDocument(input.target, target) && input.target.path.length === 0
   );
   if (input?.kind !== "preserved-output") return false;
-  const writes = getTransactionWriteAttempts(tx);
-  if (writes === undefined || writes.some(sameTarget)) return false;
-  const attemptedReads = [...getTransactionReadActivities(tx)].filter((read) =>
-    sameTarget(read) && isReadMarkedAsAttemptedWrite(read.meta)
-  );
-  return attemptedReads.length === 1 &&
-    canonicalizeLogicalPath(attemptedReads[0].path.map(String)).length === 0 &&
+  return attemptsOnlyApplicationsAt(tx, target, [[]]) &&
     valueEqual(
       tx.readValueOrThrow({ ...target, path: [] }, {
         meta: INTERNAL_VERIFIER_META,
       }),
       input.value,
+    );
+};
+
+/**
+ * Whether the transaction's only business with `target` is a host's policy
+ * application (`applyCfcPolicyToExistingValue`): the runtime marked it, a
+ * builtin authored it, and nothing was written to the document. Such a
+ * transaction leaves the document's writer and click claims to the writers
+ * they name, since it makes no write for them to govern.
+ */
+const writeIsPolicyApplication = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  identityForPath: (
+    path: readonly string[],
+  ) => ImplementationIdentity | undefined,
+): boolean => {
+  const applications = tx.getCfcState().writePolicyInputs.filter((
+    input,
+  ): input is Extract<WritePolicyInput, { kind: "policy-application" }> =>
+    input.kind === "policy-application" &&
+    tx.isRuntimeWritePolicyInput(input) && sameDocument(input.target, target)
+  );
+  return applications.length > 0 &&
+    applications.every((input) =>
+      identityForPath(input.target.path)?.kind === "builtin"
+    ) &&
+    attemptsOnlyApplicationsAt(
+      tx,
+      target,
+      applications.map((input) => input.target.path),
     );
 };
 
@@ -4604,6 +4674,9 @@ const verifyInputRequirements = (
   // A preserved runtime output defers only its writer refusal. The persist
   // loop must prove the final envelope unchanged before discarding this reason.
   deferWriterRefusal?: (reason: string) => boolean,
+  // A host's policy application writes nothing, so no writer claim governs it
+  // (see `writeIsPolicyApplication`).
+  policyApplication = false,
   // `verdict` says whether the failure is a VERDICT on the data (see
   // cfc/verdict-reason.ts): every check here is, except a `maxConfidentiality`
   // miss whose policy evaluation could not resolve a manifest or grant — the
@@ -4815,7 +4888,7 @@ const verifyInputRequirements = (
         entry.path,
         "writeAuthorizedBy",
       ) ||
-      writeIsOwnerAdoption(tx, target, entry.path);
+      writeIsOwnerAdoption(tx, target, entry.path) || policyApplication;
     if (writeAuthorizedByFailure !== undefined && !setupProjection) {
       if (
         entry.path.length !== 0 ||
@@ -7441,6 +7514,11 @@ export function* prepareBoundaryCommitSteps(
     };
 
     let deferredWriterRefusal: string | undefined;
+    const policyApplication = writeIsPolicyApplication(
+      tx,
+      target,
+      (path) => identityForSchemaPath(writeAuthorIdentities.get(key), path),
+    );
     const requirementFailure = firstFailure((schema, index) =>
       verifyInputRequirements(
         tx,
@@ -7458,6 +7536,7 @@ export function* prepareBoundaryCommitSteps(
             return true;
           }
           : undefined,
+        policyApplication,
       )
     );
     // A verification failure records a reason (which rejects the whole commit
@@ -7481,9 +7560,11 @@ export function* prepareBoundaryCommitSteps(
       if (!isIngestTarget) continue;
       ingestVerificationFailed = true;
     }
-    const trustedEventFailure = firstFailure((schema) =>
-      verifyTrustedEventRequirements(tx, target, schema)
-    );
+    const trustedEventFailure = policyApplication
+      ? undefined
+      : firstFailure((schema) =>
+        verifyTrustedEventRequirements(tx, target, schema)
+      );
     if (trustedEventFailure) {
       reasons.push(verdictReason(trustedEventFailure));
       if (!isIngestTarget) continue;
