@@ -3746,12 +3746,11 @@ regardless of nibble range.
  * `true`, `false`; an LRU cache for primitives (`string`, `number`,
  * `bigint`); and a WeakMap for deep-frozen objects.
  *
- * JS `Date`, `RegExp`, and `Uint8Array` values are handled via
- * on-the-fly conversion to their fabric equivalents
- * (`shallowFabricFromConvertibleJsValue`), then hashed in their converted
- * form.
+ * A value outside the data model is refused, a JS `Date`, `RegExp`, or
+ * `Uint8Array` among them: a caller converts one to its fabric equivalent
+ * before hashing it.
  */
-export function hashOf(value: unknown): FabricHash {
+export function hashOf(value: FabricValue): FabricHash {
   // Type tag bytes — see Section 6.3 for the full table.
   // Tag categories: meta (0x0N), compound (0x1N), primitive (0x2N),
   // optimized (0xFN).

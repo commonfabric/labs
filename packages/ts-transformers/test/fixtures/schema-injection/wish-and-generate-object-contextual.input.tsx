@@ -15,7 +15,7 @@ const existingLabelSchema = {
 // FIXTURE: wish-and-generate-object-contextual
 // Verifies: wish() injects schemas from explicit and contextual result types, and generateObject() injects explicit schemas
 //   wish<string>({ query }) → wish<string>({ query }, { type: "string" })
-//   const state: WishState<{ title: string }> = wish({ query }) → object schema from contextual result type
+//   const state: WishState<{ title: string }> = wish({ query }) → { title: string }'s schema, the T inferred from the contextual WishState<T>
 //   generateObject<T>({ ... }) injects params.schema, but preserves authored schema when already present
 export default function TestWishAndGenerateObjectContextual() {
   const explicitWish = wish<string>({ query: "#greeting" });

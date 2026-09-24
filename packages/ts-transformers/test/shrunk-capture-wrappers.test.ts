@@ -6,7 +6,7 @@ import { callSchemas, parseModule } from "./transformed-ast.ts";
 import { transformSource } from "./utils.ts";
 
 const IMPORTS =
-  `import { computed, pattern, Writable, type Default, type PerUser } from "commonfabric";
+  `import { computed, pattern, Writable, type Default, type PerSession, type PerUser } from "commonfabric";
 interface Box<T> { value: T; extra: string; }
 interface Person { name: string; age: number; }
 `;
@@ -128,6 +128,83 @@ export default pattern<Input>(({ roster }) => ({
         type: "array",
         items: VALUE_ONLY,
         default: [{ value: 1, extra: "x" }],
+        scope: "user",
+      });
+    });
+
+    const ARRAY = "PerUser<Box<number>[]>";
+    for (
+      const [form, declaration, wrapper] of [
+        ["an alias of", `type Rec = ${ARRAY};`, ARRAY],
+        [
+          "an alias of an alias of",
+          `type Inner = ${ARRAY};\ntype Rec = Inner;`,
+          ARRAY,
+        ],
+        [
+          "a generic alias of",
+          "type Scoped<T> = PerUser<T[]>;\ntype Rec = Scoped<Box<number>>;",
+          ARRAY,
+        ],
+      ]
+    ) {
+      it(`gives an array typed by ${form} ${wrapper} the schema of the wrapper written in place`, async () => {
+        const aliased = await captureOf(readingElementsOf(
+          `${declaration}\ninterface Input { c: Rec; }`,
+        ));
+        const direct = await captureOf(readingElementsOf(
+          `interface Input { c: ${wrapper}; }`,
+        ));
+
+        expect(direct.c).toMatchObject({ scope: "user" });
+        expect(aliased.c).toEqual(direct.c);
+      });
+    }
+
+    it("keeps the scope and the type of a boolean typed by an alias of a scope wrapper", async () => {
+      // The checker holds `boolean` as `false | true`, so the brand a wrapper
+      // leaves on it is distributed over two literals. The pair is read back
+      // as the type the author wrote, rather than shrunk literal by literal.
+      const capture = await captureOf(`
+type Flag = PerSession<boolean>;
+interface Row { flag: Flag; value: number; extra: string; }
+interface Input { c: Row[]; }
+export default pattern<Input>(({ c }) => ({
+  s: computed(() => c.map((x) => x.flag)),
+}));`);
+
+      expect(capture.c).toEqual({
+        type: "array",
+        items: {
+          type: "object",
+          properties: { flag: { type: "boolean", scope: "session" } },
+          required: ["flag"],
+        },
+      });
+    });
+
+    it("gives an array typed by an alias of a scope wrapper around a union one alternative per member", async () => {
+      // The brand a wrapper leaves on a union is distributed over its members,
+      // so each member is shrunk on its own. The wrapper written in place
+      // names the union itself, and shrinks it to a single array whose element
+      // type is the union of the members' element types.
+      const capture = await captureOf(readingElementsOf(
+        `type Rec = PerUser<Box<number>[] | Box<string>[]>;
+interface Input { c: Rec; }`,
+      ));
+
+      expect(capture.c).toEqual({
+        anyOf: [
+          { type: "array", items: VALUE_ONLY },
+          {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { value: { type: "string" } },
+              required: ["value"],
+            },
+          },
+        ],
         scope: "user",
       });
     });

@@ -2,15 +2,13 @@
  * Shared helpers for reading CFC labels on the trusted main thread.
  *
  * These let a trusted component query a cell's runtime-attested CFC label (over
- * IPC) and pull the owning principal out of a `represents-principal` integrity
- * atom. `cf-cfc-authorship` has its own root-scoped, authorship-specific label
- * reading; this module is intentionally narrower (owner-principal extraction,
- * scanning every entry) and is the shared home for that concern. A future pass
- * can fold the authorship reader onto these primitives.
+ * IPC) and pull the owner a profile badge shows out of its
+ * `represents-principal` integrity atoms.
  */
 
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { representsPrincipalSubjects } from "@commonfabric/runner/cfc/represents-principal";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 export type { CfcLabelView };
 
@@ -21,8 +19,6 @@ export type CfcLabelQueryable = {
 export type CfcLabelResolvable = {
   resolveAsCell(): Promise<unknown> | unknown;
 };
-
-const REPRESENTS_PRINCIPAL = "represents-principal";
 
 export const canQueryCfcLabel = (value: unknown): value is CfcLabelQueryable =>
   isObjectOrArray(value) &&
@@ -87,38 +83,9 @@ export const readCfcLabelView = async (
  * Extracts the owning principal DID from a `represents-principal` integrity atom
  * anywhere in the label. Owner-protected profile fields (`name`/`avatar`/…)
  * carry this atom at their own paths rather than the root, so every entry is
- * scanned. Supports both the object form (`{ kind, subject }`) and the string
- * form (`represents-principal:<did>`). Returns the first concrete DID found.
+ * scanned. Returns the first DID found.
  */
 export const ownerPrincipalFromLabel = (
   view: CfcLabelView | undefined,
-): string | undefined => {
-  if (!view) {
-    return undefined;
-  }
-  for (const entry of view.entries) {
-    for (const atom of entry.label.integrity ?? []) {
-      if (typeof atom === "string") {
-        if (atom.startsWith(`${REPRESENTS_PRINCIPAL}:`)) {
-          const subject = atom.slice(REPRESENTS_PRINCIPAL.length + 1).trim();
-          if (subject.length > 0) {
-            return subject;
-          }
-        }
-        continue;
-      }
-      if (!isObjectNotArray(atom)) {
-        continue;
-      }
-      const record = atom as Record<string, unknown>;
-      if (
-        record.kind === REPRESENTS_PRINCIPAL &&
-        typeof record.subject === "string" && record.subject.trim().length > 0
-      ) {
-        // Trim to match the string-form branch — both yield a normalized DID.
-        return record.subject.trim();
-      }
-    }
-  }
-  return undefined;
-};
+): string | undefined =>
+  view === undefined ? undefined : representsPrincipalSubjects(view.entries)[0];

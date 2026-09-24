@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import type { JSONSchemaObj } from "../src/builder/types.ts";
 import {
   cfcSchemaMergeIssue,
+  cfcSchemaPoliciesEqual,
   mergeCfcSchemaEnvelopes,
 } from "../src/cfc/schema-merge.ts";
 import {
@@ -459,6 +460,21 @@ describe("mergeCfcSchemaEnvelopes", () => {
       title: "Untitled",
       done: false,
     });
+  });
+
+  it("keeps an array default an array", () => {
+    // Spreading two arrays into an object turns `[]` into `{}`, and
+    // `["a"]` into `{ 0: "a" }`: a default the value's own type refuses.
+    const merged = mergeCfcSchemaEnvelopes({
+      type: "array",
+      items: { type: "string" },
+      default: ["kept"],
+    }, {
+      type: "array",
+      items: { type: "string" },
+      default: [],
+    }) as JSONSchemaObj;
+    expect(merged.default).toEqual([]);
   });
 
   it("merges tuple (prefixItems) slots slot-wise", () => {
@@ -1695,5 +1711,60 @@ describe("storedCfcEnvelopeMergeIssue", () => {
     expect(issue?.message).toBe(
       "writeAuthorizedBy must remain stable at /name",
     );
+  });
+});
+
+describe("cfcSchemaPoliciesEqual", () => {
+  const CLAIM = { writeAuthorizedBy: ["writer"] };
+  const inline = {
+    type: "object",
+    properties: {
+      list: {
+        type: "array",
+        ifc: CLAIM,
+        items: { type: "object", properties: { n: { type: "number" } } },
+        default: [],
+      },
+    },
+  } as const;
+
+  it("compares two spellings of one policy equal", () => {
+    // A nested definition map carried along, another default, and absent
+    // claims spelled as members holding `undefined`, the way a merge leaves
+    // them.
+    const respelled = {
+      type: "object",
+      properties: {
+        list: {
+          type: "array",
+          ifc: { ...CLAIM, confidentiality: undefined },
+          items: {
+            type: "object",
+            properties: { n: { type: "number" } },
+            $defs: {},
+          },
+          default: {},
+        },
+      },
+    } as unknown as JSONSchemaObj;
+    expect(cfcSchemaPoliciesEqual(inline, respelled)).toBe(true);
+  });
+
+  it("tells a changed claim apart", () => {
+    const changed = {
+      ...inline,
+      properties: {
+        list: {
+          ...inline.properties.list,
+          ifc: { writeAuthorizedBy: ["other"] },
+        },
+      },
+    } as JSONSchemaObj;
+    expect(cfcSchemaPoliciesEqual(inline, changed)).toBe(false);
+    const dropped = {
+      ...inline,
+      properties: { list: { ...inline.properties.list, ifc: undefined } },
+    } as unknown as JSONSchemaObj;
+    expect(cfcSchemaPoliciesEqual(inline, dropped)).toBe(false);
   });
 });

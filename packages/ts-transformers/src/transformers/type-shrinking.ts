@@ -864,24 +864,30 @@ function buildShrunkTypeNodeFromType(
   if (normalized.length === 0) {
     return undefined;
   }
-  // Only the alias names the scope, so a node built from the scoped type's
-  // structure would drop it.
+  // The scope lives in the wrapper's alias and brand, not in the scoped
+  // type's structure, so a node built from that structure would drop it.
   const scopeWrapper = getScopeWrapper(type, checker);
   if (scopeWrapper) {
-    const shrunk = buildShrunkTypeNodeFromType(
-      scopeWrapper.scoped,
-      paths,
-      checker,
-      sourceFile,
-      factory,
-      typeRegistry,
-      state,
-      fullShapePaths,
-      visiting,
-    );
-    if (!shrunk) return undefined;
+    const alternatives: ts.TypeNode[] = [];
+    for (const payload of scopeWrapper.payload) {
+      const shrunk = buildShrunkTypeNodeFromType(
+        payload,
+        paths,
+        checker,
+        sourceFile,
+        factory,
+        typeRegistry,
+        state,
+        fullShapePaths,
+        visiting,
+      );
+      if (!shrunk) return undefined;
+      alternatives.push(shrunk);
+    }
     const wrapped = createHelperWrapperTypeNode(
-      shrunk,
+      alternatives.length === 1
+        ? alternatives[0]!
+        : factory.createUnionTypeNode(alternatives),
       scopeWrapper.name,
       factory,
     );
@@ -1205,33 +1211,88 @@ function buildShrunkTypeNodeFromType(
   );
 }
 
-/** The wrappers that store a value in a scope. A type names one by its alias. */
-const SCOPE_WRAPPER_NAMES: ReadonlySet<string> = new Set([
-  "PerAny",
-  "PerSession",
-  "PerSpace",
-  "PerUser",
-]);
+/**
+ * The type the checker decomposed into `alternatives`, each one a literal, and
+ * `undefined` where they are not every literal of one such type. `boolean` is
+ * the case that matters: the checker holds it as `false | true`, and a brand
+ * over it distributes into two alternatives that are the type written.
+ */
+function recomposedLiteralUnion(
+  alternatives: readonly ts.Type[],
+  checker: ts.TypeChecker,
+): ts.Type | undefined {
+  const [first] = alternatives;
+  if (!first) return undefined;
+  const base = checker.getBaseTypeOfLiteralType(first);
+  return base !== first && base.isUnion() &&
+      base.types.length === alternatives.length &&
+      base.types.every((member) => alternatives.includes(member))
+    ? base
+    : undefined;
+}
+
+/**
+ * The wrappers that store a value in a scope, which `getScopeWrapper()` reads
+ * by name when a type's alias is one of them: the alias then gives the
+ * wrapper's argument as it was written, where the brand gives only the members
+ * the checker resolved it to.
+ */
+const SCOPE_WRAPPER_NAMES: ReadonlySet<string> = new Set(
+  Object.values(SCOPE_WRAPPER_FOR_SCOPE),
+);
 
 /**
  * Helper for `buildShrunkTypeNodeFromType()`, which returns the name of the
- * `commonfabric` scope wrapper `type` instantiates, with the type it scopes,
- * or `undefined` for any other type. A type of the author's own that shares a
- * wrapper's name is not one, and neither is a scope wrapper around a cell: the
- * wrapper is read by the scoped type it is registered with, which would undo
- * the capability narrowing applied to the cell node inside it.
+ * `commonfabric` scope wrapper `type` instantiates, with the types it scopes,
+ * or `undefined` for any other type. The payload is given as the brand gives
+ * it: one alternative per member of a union the brand was distributed over,
+ * each listing the types that intersect to that alternative, which the caller
+ * shrinks and joins back together. The checker reports only the outermost
+ * alias, so a wrapper reached through an alias of the author's own, as in
+ * `type Rec = PerUser<Inner>`, is recognized by that brand rather than by the
+ * alias. A type of the author's own that shares a wrapper's name is not one,
+ * and neither is a scope wrapper around a cell: the wrapper is read by the
+ * scoped type it is registered with, which would undo the capability
+ * narrowing applied to the cell node inside it.
  */
 function getScopeWrapper(
   type: ts.Type,
   checker: ts.TypeChecker,
-): { readonly name: string; readonly scoped: ts.Type } | undefined {
+): { readonly name: string; readonly payload: readonly ts.Type[] } | undefined {
   const symbol = type.aliasSymbol;
-  const scoped = type.aliasTypeArguments?.[0];
-  return symbol && scoped && SCOPE_WRAPPER_NAMES.has(symbol.name) &&
-      !isCellLikeType(scoped, checker) &&
-      resolvesToCommonFabricSymbol(symbol, checker, symbol.name)
-    ? { name: symbol.name, scoped }
-    : undefined;
+  const argument = type.aliasTypeArguments?.[0];
+  if (
+    symbol && argument && SCOPE_WRAPPER_NAMES.has(symbol.name) &&
+    resolvesToCommonFabricSymbol(symbol, checker, symbol.name)
+  ) {
+    return isCellLikeType(argument, checker)
+      ? undefined
+      : { name: symbol.name, payload: [argument] };
+  }
+  const brand = getScopeBrand(type, checker);
+  if (!brand) return undefined;
+  // An alternative the checker flattened into several members has no type of
+  // its own to shrink. The branded type itself is no substitute: the node
+  // built from it is registered with a type that still carries the brand, and
+  // schema generation would then apply the scope inside the wrapper as well,
+  // which it refuses as a nested scope.
+  const payload = brand.payload.map((alternative) =>
+    alternative.length === 1 ? alternative[0]! : undefined
+  );
+  if (payload.some((alternative) => alternative === undefined)) {
+    return undefined;
+  }
+  const alternatives = payload as ts.Type[];
+  if (
+    alternatives.some((alternative) => isCellLikeType(alternative, checker))
+  ) {
+    return undefined;
+  }
+  const recomposed = recomposedLiteralUnion(alternatives, checker);
+  return {
+    name: SCOPE_WRAPPER_FOR_SCOPE[brand.scope],
+    payload: recomposed ? [recomposed] : alternatives,
+  };
 }
 
 /** The `Default` wrappers `wrapTypeNodeWithRestoredDefault()` built. */

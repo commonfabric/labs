@@ -37,6 +37,7 @@ import {
 } from "@commonfabric/utils/types";
 
 import { isAliasBinding } from "./alias-binding.ts";
+import { runInFrameContext } from "./builder/frame-context.ts";
 import {
   patternFromFrame,
   popFrame,
@@ -76,7 +77,10 @@ import {
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
 import { recordNewProtectedDefaults } from "./cfc/default-initialization.ts";
-import { recordReferencedArgumentFields } from "./cfc/reference-initialization.ts";
+import {
+  recordReferencedArgumentFields,
+  recordReplayedArgumentSlots,
+} from "./cfc/reference-initialization.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
 import type { EntityKind } from "./entity-kind.ts";
@@ -3138,6 +3142,7 @@ export class Runner {
     const stored = this.#runtime
       .getCellFromLink(argumentLink, undefined, tx)
       .getRaw({ meta: ignoreReadForScheduling });
+    recordReplayedArgumentSlots(tx, argumentLink, argument, stored);
     return foldStoredArgumentSlots(argument, stored);
   }
 
@@ -10310,8 +10315,14 @@ export class Runner {
     // line of defense rather than the first: `normalizeSandboxResult` runs on
     // every route here and already rejects a bare function at any depth, with
     // a better message than a hash could give.
+    //
+    // The walk types its result as a `FabricExecValue`, which admits a
+    // function; the cast says there is none left. The only functions in a
+    // pattern graph are builder artifacts, since `normalizeSandboxResult`
+    // refuses any other, and the walk replaces every artifact with its
+    // encodable form. The leaves were converted on the way out of the sandbox.
     const resultPatternKey = hashStringOf(
-      flattenBuilderArtifacts(resultPattern),
+      flattenBuilderArtifacts(resultPattern) as FabricValue,
     );
     // Keyed doc-then-INSTANCE, the instance being the SAME per-run resolved key
     // that selected the byScope cell above: a doc-level or
@@ -10410,7 +10421,12 @@ export class Runner {
     const handlerResultCell = schedulerRehydration.viewLocalOnly
       ? resultCell.withTx()
       : resultCell;
-    const handler = (tx: IExtendedStorageTransaction, event: any) => {
+    // Each run gets a frame context of its own, so its frame, which stays
+    // pushed until an async result settles, is invisible to anything that runs
+    // while it awaits.
+    const handler = (tx: IExtendedStorageTransaction, event: any) =>
+      runInFrameContext(() => runHandler(tx, event));
+    const runHandler = (tx: IExtendedStorageTransaction, event: any) => {
       const resultCell = schedulerRehydration.viewLocalOnly
         ? handlerResultCell.withTx(tx)
         : handlerResultCell;
@@ -10750,7 +10766,10 @@ export class Runner {
       : resultCell;
     const action: Action & {
       ignoredSchedulingWrites?: NormalizedFullLink[];
-    } = (tx: IExtendedStorageTransaction) => {
+    } = (tx: IExtendedStorageTransaction) =>
+      // A frame context of its own, as for a handler.
+      runInFrameContext(() => runAction(tx));
+    const runAction = (tx: IExtendedStorageTransaction) => {
       const resultCell = schedulerRehydration.viewLocalOnly
         ? actionResultCell.withTx(tx)
         : actionResultCell;
@@ -11224,9 +11243,9 @@ export class Runner {
     // — no serializable body, so nothing could ever rehydrate them. The
     // transformer hoists every authored builder call to module scope; the
     // window makes a mint that slipped through fail loudly at creation time
-    // (see builder/action-context.ts) instead of producing an unrehydratable
-    // value. The window rides AsyncLocalStorage, so an async action's
-    // continuations stay covered past its awaits.
+    // (see builder/frame-context.ts) instead of producing an unrehydratable
+    // value. The window is kept on the action's frame context, so an async
+    // action's continuations stay covered past its awaits.
     return runInActionExecution(invoke);
   }
 

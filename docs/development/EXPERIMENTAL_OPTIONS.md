@@ -972,7 +972,8 @@ the per-epic implementation notes).
   the link-schema document family and elided once the space's server
   confirms them. Off preserves the merged schema's interned spelling —
   which may itself carry references a reference-form declared schema
-  left, as the same section notes. Reading is
+  left, or ones the confidential merge minted, as the same section notes.
+  Reading is
   the same either way — every `$ref: cid:` member a stored root carries
   resolves (space-first, content-verified, with the hash-verified realm
   registry supplying what the space does not hold) or the envelope is

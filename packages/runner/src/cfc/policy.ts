@@ -292,7 +292,8 @@ const isThisPolicyPattern = (value: unknown): boolean =>
 
 const isThisPolicyFieldPattern = (value: unknown): boolean =>
   isPlainRecord(value) && Object.keys(value).length === 1 &&
-  value.thisPolicyField === "subject";
+  (value.thisPolicyField === "subject" ||
+    value.thisPolicyField === "moduleIdentity");
 
 const validateTemplatePattern = (
   value: unknown,

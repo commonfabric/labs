@@ -323,11 +323,23 @@ export type CfcThisPolicySubjectPattern = CfcAtomObject & {
   readonly thisPolicyField: "subject";
 };
 
+/**
+ * The content identity of the module defining the selected policy, bound at
+ * evaluation time. A rule uses it to name a function of its own module in a
+ * `TransformedBy` identity pattern without spelling the module's hash.
+ */
+export type CfcThisPolicyModuleIdentityPattern = CfcAtomObject & {
+  readonly thisPolicyField: "moduleIdentity";
+};
+
 export type CfcThisPolicyPattern = CfcAtomObject & {
   readonly thisPolicy: true;
 
   /** Non-enumerable authoring affordance; lowers to `thisPolicyField`. */
   readonly subject: CfcThisPolicySubjectPattern;
+
+  /** Non-enumerable authoring affordance; lowers to `thisPolicyField`. */
+  readonly moduleIdentity: CfcThisPolicyModuleIdentityPattern;
 };
 
 export type CfcPatternString =
@@ -395,12 +407,25 @@ const thisPolicySubject = deepFreeze(
     thisPolicyField: "subject",
   } as const,
 );
+const thisPolicyModuleIdentity = deepFreeze(
+  {
+    thisPolicyField: "moduleIdentity",
+  } as const,
+);
 const thisPolicyValue = { thisPolicy: true } as CfcThisPolicyPattern;
-Object.defineProperty(thisPolicyValue, "subject", {
-  value: thisPolicySubject,
-  enumerable: false,
-  configurable: false,
-  writable: false,
+Object.defineProperties(thisPolicyValue, {
+  subject: {
+    value: thisPolicySubject,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  },
+  moduleIdentity: {
+    value: thisPolicyModuleIdentity,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  },
 });
 
 /** The policy selected by a module-policy reference at evaluation time. */

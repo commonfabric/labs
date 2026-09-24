@@ -172,6 +172,17 @@ If you break it, you are responsible for fixing it.
 admission lifetime. `maxUses` defaults to 1. Unsupported hosts return 404;
 clients must report that state without falling back to wildcard grants.
 
+It also lists `access`, the grants this host can issue: `READ`, `WRITE`, and
+`OWNER`. A response without `access` comes from a host that predates OWNER
+invitations; such a host refuses an OWNER `create` with `invalid-request`, so a
+client that wants OWNER reads the field before offering it and never falls back
+to a lesser grant. An OWNER invitation makes every identity that redeems it a
+full owner of the space, able to change the ACL and to issue, list, and revoke
+invitations. The access is fixed by the issuer's signed `create` body and held
+by the service; neither the join link nor the redemption request carries it.
+Redemption only raises access: an identity that already holds the invited access
+or more keeps what it has.
+
 All invitation operations are signed JSON POSTs under
 `/api/spaces/:space/invites/`: `create`, `redeem`, `list`, `revoke`, and
 `receipts`. They use the existing CF1 proof, binding method, authority, path,

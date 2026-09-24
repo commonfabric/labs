@@ -64,6 +64,15 @@ import {
 type UiContractHint = NonNullable<SchemaHint["cfcUiContract"]>;
 type CellScope = "space" | "user" | "session";
 
+/**
+ * The scope each `commonfabric` scope wrapper declares, keyed by the wrapper's
+ * name. `cellScopeFromType()` reads it from a type's alias and falls back to
+ * the scope brand, which also covers a wrapper reached through an alias of the
+ * author's own. `typeNodeContainsScopeWrapper()` reads it from authored
+ * syntax, where only the spelling is available; a wrapper that spelling hides
+ * behind an alias is still carried by the inferred type, whose alias and brand
+ * schema generation reads.
+ */
 const SCOPE_ALIAS_TO_CELL_SCOPE: ReadonlyMap<string, CellScope | "any"> =
   new Map([
     ["PerSpace", "space"],
@@ -918,6 +927,27 @@ function inferSchemaContextualType(
   checker: ts.TypeChecker,
 ): ts.Type | undefined {
   return checker.getContextualType(node) ?? inferContextualType(node, checker);
+}
+
+/**
+ * The `T` TypeScript inferred for a `wish()` call written without a type
+ * argument, when the call has a contextual type to infer it from.
+ *
+ * The schema `wish()` takes describes `T`, the resource the wish asks for; the
+ * runtime wraps it in the `WishState<T>` the call returns. The contextual type
+ * is that result, so it is not the schema's type: the inference that takes
+ * `T` out of it is the call's own, whatever wrapper or alias the result sits
+ * behind. A call with no contextual type gets no schema.
+ */
+function inferWishTypeArgument(
+  node: ts.CallExpression,
+  checker: ts.TypeChecker,
+): ts.Type | undefined {
+  if (!inferSchemaContextualType(node, checker)) return undefined;
+  const signature = checker.getResolvedSignature(node);
+  return signature
+    ? checker.getTypeArgumentsForResolvedSignature(signature)?.[0]
+    : undefined;
 }
 
 function scopedFactoryContextualScope(
@@ -4143,7 +4173,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           factory,
           typeRegistry,
           context.state,
-          () => inferSchemaContextualType(node, checker),
+          () => inferWishTypeArgument(node, checker),
         );
 
         const schemaCall = createRegisteredSchemaCallFromResolvedType(

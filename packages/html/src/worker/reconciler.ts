@@ -38,6 +38,7 @@ import {
   useCancelGroup,
 } from "@commonfabric/runner";
 import type { CfcConfClause } from "@commonfabric/runner/cfc";
+import { authorPrincipalCandidates } from "@commonfabric/runner/cfc/represents-principal";
 import {
   atomsOutsideCeiling,
   CFC_LABEL_READ_FAILED_ATOM,
@@ -858,12 +859,14 @@ export class WorkerReconciler {
     if (!isCell(author)) {
       return undefined;
     }
-    const subject = this.#representsPrincipalSubjectForCell(
+    // Text must carry `authored-by` for every principal the author claim
+    // represents, one atom per principal when it names several.
+    const principals = this.#representedPrincipalsForCell(
       author as Cell<unknown>,
     );
-    return subject === undefined
+    return principals.length === 0
       ? undefined
-      : [{ kind: "authored-by", subject }];
+      : principals.map((subject) => ({ kind: "authored-by", subject }));
   }
 
   #bindingOpsForCell(
@@ -1028,31 +1031,17 @@ export class WorkerReconciler {
       cfcLabelViewForCell(cell.resolveAsCell());
   }
 
-  #representsPrincipalSubjectForCell(
-    cell: Cell<unknown>,
-  ): string | undefined {
-    let labelView: CfcLabelView | undefined;
+  /**
+   * The principals `cell`'s label says it represents, as
+   * `authorPrincipalCandidates()` reads them; none when its label cannot be
+   * read.
+   */
+  #representedPrincipalsForCell(cell: Cell<unknown>): string[] {
     try {
-      labelView = this.#resolveCellLabelView(cell);
+      return authorPrincipalCandidates(this.#resolveCellLabelView(cell));
     } catch {
-      return undefined;
+      return [];
     }
-    if (labelView === undefined) {
-      return undefined;
-    }
-    for (const atom of this.#integrityLabels(labelView)) {
-      if (!isObjectNotArray(atom)) {
-        continue;
-      }
-      const record = atom as Record<string, unknown>;
-      if (record.kind !== "represents-principal") {
-        continue;
-      }
-      if (typeof record.subject === "string") {
-        return record.subject;
-      }
-    }
-    return undefined;
   }
 
   #staticCellProp(

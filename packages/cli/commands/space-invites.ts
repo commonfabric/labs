@@ -7,6 +7,7 @@ import {
   createInviteCredentials,
   type InviteAccess,
   inviteCodeVerifier,
+  isInviteAccess,
   normalizeInviteHost,
   SPACE_INVITE_CAPABILITY,
   SpaceInviteClient,
@@ -233,7 +234,10 @@ export function buildSpaceInviteCommand() {
     })
     .globalOption("-s,--space <space:string>", "Target space DID.")
     .command("create", "Create an invitation; output contains the bearer code.")
-    .option("--access <access:string>", "READ or WRITE access.")
+    .option(
+      "--access <access:string>",
+      "READ, WRITE, or OWNER access. OWNER makes every holder of the link a full owner.",
+    )
     .option(
       "--ttl <seconds:integer>",
       "Admission lifetime in seconds, at most 2592000.",
@@ -252,8 +256,8 @@ export function buildSpaceInviteCommand() {
       "Shell origin for a fragment-secret join link.",
     )
     .action(async (options) => {
-      if (options.access !== "READ" && options.access !== "WRITE") {
-        throw new ValidationError("--access must be READ or WRITE.");
+      if (!isInviteAccess(options.access)) {
+        throw new ValidationError("--access must be READ, WRITE, or OWNER.");
       }
       if (options.ttl === undefined) {
         throw new ValidationError("--ttl is required.");
