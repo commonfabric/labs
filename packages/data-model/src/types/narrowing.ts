@@ -182,6 +182,14 @@ export function isWalkableObjectNotArray(value: unknown): boolean {
  *
  * The first signature takes a value already known to be one of the two, and
  * only reports; narrowing there would leave the `false` branch with nothing.
+ *
+ * **Type Validation Note:** A value this is handed is taken to honor the whole
+ * `FabricValue` contract, which says more than its type does, and what this
+ * returns for one that does not is best-effort. Asking `instanceof` is free,
+ * and it is the only check made. Not checked, because nothing short of probing
+ * an instance's private state tells them apart: a forged instance (an object
+ * made over a fabric class's prototype without its constructor), and an
+ * instance of a subclass that no codec knows.
  */
 export function isFabricSpecialObject(
   value: FabricPrimitive | FabricInstance,
@@ -201,6 +209,19 @@ export function isFabricSpecialObject(value: unknown): boolean {
  * a `FabricSpecialObject` that is not a `FabricInstance`, an object that is
  * not a container. The two are not interchangeable where the result decides a
  * descent.
+ *
+ * **Type Validation Note:** The argument is taken to honor the whole
+ * `FabricValue` contract, which says more than its type does, and what this
+ * returns for a value that does not is best-effort. The checks made are the
+ * free ones: `Array.isArray()`, a record's prototype, and `instanceof`. The
+ * rest are not made, because none is free. For a record: its property shapes
+ * (accessors, symbol and non-enumerable keys), the reserved names `__proto__`
+ * and `constructor`, and what its properties hold. For an array: its
+ * prototype (an `Array` subclass passes), non-index properties,
+ * accessor-backed indices, and what it holds. For a `FabricInstance`: nothing
+ * past `instanceof`. An array's prototype read alone costs several times the
+ * `Array.isArray()` it would join, and the rest take a probe per reserved name
+ * or a walk over the keys.
  */
 export function isFabricContainerValue(
   value: FabricValue,
@@ -220,6 +241,18 @@ export function isFabricContainerValue(
  * key means nothing against one. Assigning through a value this rejects and
  * that one accepts puts an own property on an instance, which is a state no
  * `FabricInstance` has.
+ *
+ * **Type Validation Note:** The argument is taken to honor the whole
+ * `FabricValue` contract, which says more than its type does, and what this
+ * returns for a value that does not is best-effort. The checks made are the
+ * free ones: `Array.isArray()` and a record's prototype. The rest are not made,
+ * because none is free. For a record: its property shapes (accessors, symbol
+ * and non-enumerable keys), the reserved names `__proto__` and `constructor`,
+ * and what its properties hold. For an array: its prototype (an `Array`
+ * subclass passes), non-index properties, accessor-backed indices, and what it
+ * holds. An array's prototype read alone costs several times the
+ * `Array.isArray()` it would join, and the rest take a probe per reserved name
+ * or a walk over the keys.
  */
 export function isFabricPlainContainer(
   value: FabricValue,
@@ -228,10 +261,16 @@ export function isFabricPlainContainer(
 }
 
 /**
- * Narrows to the array arm of `FabricValue` (`FabricArray`). This asks a shape
- * question of a value the type already says is a `FabricValue`, so an `Array`
- * subclass instance passes as readily as a direct one; the looseness costs
- * nothing, the input being out of contract either way.
+ * Narrows to the array arm of `FabricValue` (`FabricArray`).
+ *
+ * **Type Validation Note:** The argument is taken to honor the whole
+ * `FabricValue` contract, which says more than its type does, and what this
+ * returns for a value that does not is best-effort. `Array.isArray()` is the
+ * only check made. Not made, because none is free: the array's prototype (an
+ * `Array` subclass passes as readily as a direct instance), non-index
+ * properties, accessor-backed indices, and what the array holds. The prototype
+ * read alone costs several times the `Array.isArray()` it would join, and the
+ * rest take a walk over the keys.
  */
 export function isFabricArray(value: FabricValue): value is FabricArray {
   return Array.isArray(value);
@@ -255,6 +294,13 @@ export function isFabricArray(value: FabricValue): value is FabricArray {
  * `isFabricContainerValue()`, which rejects every `FabricSpecialObject` that
  * is not a `FabricInstance`, and `isFabricPlainContainer()`, which rejects all
  * of them.
+ *
+ * **Type Validation Note:** The argument is taken to honor the whole
+ * `FabricValue` contract, which says more than its type does, and what this
+ * returns for a value that does not is best-effort. The `typeof` test is the
+ * only check made, so an object of any shape passes, a class instance such as
+ * a `Date` included. The narrower predicates named above are where the free
+ * shape checks are made; the ones none of them makes are listed on each.
  */
 export function isFabricObjectOrArray(
   value: FabricValue,
@@ -271,12 +317,16 @@ export function isFabricObjectOrArray(
  * `FabricPlainObject`'s string index of `FabricValue` keeps an indexed value
  * typed as a `FabricValue`.
  *
- * This asks a shape question of a value the type already says is a
- * `FabricValue`, and answers it from the prototype alone. It does not look at
- * the properties, so it accepts a record that membership refuses for what one
- * of them is: an accessor, a symbol key, or a name this runtime reserves. For
- * the membership question asked of an `unknown`, see
+ * For the membership question asked of an `unknown`, see
  * `isValidFabricPlainObject()`.
+ *
+ * **Type Validation Note:** The argument is taken to honor the whole
+ * `FabricValue` contract, which says more than its type does, and what this
+ * returns for a value that does not is best-effort. The prototype is the only
+ * check made, being free. Not made, because none is free: the record's
+ * property shapes (accessors, symbol and non-enumerable keys), the reserved
+ * names `__proto__` and `constructor`, and what its properties hold. Those take
+ * a probe per reserved name or a walk over the keys.
  */
 export function isFabricPlainObject(
   value: FabricValue,
