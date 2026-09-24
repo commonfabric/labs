@@ -2006,13 +2006,6 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   /**
-   * The type arguments written on the reference being formatted. The
-   * reference is read through parentheses and plain aliases
-   * (`readAuthoredTypeNode()`): `type Name = Owned<string, typeof setName>`
-   * holds the arguments that `Name` stands for, and a policy read from the
-   * bare `Name` would find none and drop the writer binding without a word.
-   */
-  /**
    * Helper for {@link #formatResolvedCfcAlias}: the argument nodes of the
    * context's reference when it names `aliasName`, the alias reached by its own
    * name. A reference to another alias, one the checker resolved to
@@ -2032,6 +2025,13 @@ export class CommonFabricFormatter implements TypeFormatter {
       : undefined;
   }
 
+  /**
+   * The type arguments written on the reference being formatted. The
+   * reference is read through parentheses and plain aliases
+   * (`readAuthoredTypeNode()`): `type Name = Owned<string, typeof setName>`
+   * holds the arguments that `Name` stands for, and a policy read from the
+   * bare `Name` would find none and drop the writer binding without a word.
+   */
   #getAliasTypeArgumentNodes(
     context: GenerationContext,
   ): readonly ts.TypeNode[] | undefined {
