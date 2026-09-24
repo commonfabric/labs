@@ -8,14 +8,14 @@ import { Runtime } from "../src/runtime.ts";
 import { runtimePresets } from "../src/runtime-presets.ts";
 
 // A writer policy says which handler may modify a path, from any runtime. A
-// runtime that starts a piece it did not create replays the piece's setup,
-// and the replay re-stages the argument document with the bytes it already
-// holds: the writer-policied inputs among them, with whatever their named
-// handler has put there since. That re-stage modifies nothing, and refusing
-// it refuses the piece-start commit, which tears the started graph down, so
-// every member but the creator ran a piece that could not recompute. The
-// replay must be admitted without admitting anything else: a write from
-// another handler is still refused, in either runtime.
+// runtime that starts a piece it did not create replays the setup of the
+// sub-pieces its pattern composes, and the replay re-stages each argument
+// document with the bytes it already holds: the writer-policied inputs among
+// them, with whatever their named handler has put there since. That
+// re-stage modifies nothing. Refusing it would refuse the piece-start
+// commit, which tears the started graph down in every runtime but the
+// creator's. It is admitted without admitting anything else: a write from
+// another handler that changes a guarded byte is refused, in either runtime.
 
 const signer = await Identity.fromPassphrase("cfc-writer-policy-cold-start");
 const space = signer.did();
