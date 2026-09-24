@@ -102,6 +102,42 @@ describe("brand-payload default recovery (expanded Default<T, V>)", () => {
       .toEqual({ retries: 2 });
   });
 
+  it("keys an object payload's members by their written names", async () => {
+    // TypeScript escapes a name that starts with `__` by adding a third
+    // underscore, and marks a symbol-keyed member with `__@`. A string key
+    // written `__@x` is data, and escapes to `___@x`.
+    const code = `${DEFAULT_PRELUDE}
+      interface Settings {
+        config: Default<
+          { __foo: number; ___bar: number; "__@x": number; plain: string },
+          { __foo: 1; ___bar: 2; "__@x": 3; plain: "a" }
+        >;
+      }
+    `;
+    const { type, checker } = await getTypeFromCode(code, "Settings");
+    const schema = asObjectSchema(transformer.generateSchema(type, checker));
+
+    expect((schema.properties?.config as Record<string, unknown>).default)
+      .toEqual({ __foo: 1, ___bar: 2, "__@x": 3, plain: "a" });
+  });
+
+  it("keeps a `__proto__` payload member as an own property", async () => {
+    const code = `${DEFAULT_PRELUDE}
+      interface Settings {
+        config: Default<{ __proto__: number; id: number }, { __proto__: 1; id: 2 }>;
+      }
+    `;
+    const { type, checker } = await getTypeFromCode(code, "Settings");
+    const schema = asObjectSchema(transformer.generateSchema(type, checker));
+
+    const value = (schema.properties?.config as Record<string, unknown>)
+      .default as Record<string, unknown>;
+    expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
+    expect(Object.hasOwn(value, "__proto__")).toBe(true);
+    expect(value["__proto__"]).toBe(1);
+    expect(value.id).toBe(2);
+  });
+
   it("bails to plain formatting for non-literal payloads", async () => {
     // One-arg form: V = T = string, which is not a literal — no default can
     // or should be emitted.
