@@ -102,6 +102,20 @@ const groupAtomsByKey = (
   return groups;
 };
 
+/**
+ * Orders atoms by their canonical value hash: a total order that depends only
+ * on what each atom says, so a sort by it does not depend on the order the
+ * atoms arrived in.
+ */
+export const compareByCanonicalHash = (
+  left: CfcAtom,
+  right: CfcAtom,
+): number => {
+  const leftHash = hashStringOf(left);
+  const rightHash = hashStringOf(right);
+  return leftHash < rightHash ? -1 : leftHash > rightHash ? 1 : 0;
+};
+
 // Structural deduplication, keeping the first spelling of each atom. The
 // identity is `deepEqual` rather than reference equality, because a fabric
 // conversion clones an atom rather than sharing it, so two atoms saying the

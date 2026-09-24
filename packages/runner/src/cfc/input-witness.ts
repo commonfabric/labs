@@ -1,9 +1,3 @@
-import { CFC_ATOM_TYPE, type CfcAtom } from "@commonfabric/api/cfc";
-import { deepEqual, deepEqualKey } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray } from "@commonfabric/utils/types";
-
-import type { ImplementationIdentity } from "./types.ts";
-
 /**
  * Input witnesses on `TransformedBy` (spec §8.9.3, §4.5.1.1): what the runtime
  * retains about the integrity of the confidential inputs a transformation
@@ -20,6 +14,13 @@ import type { ImplementationIdentity } from "./types.ts";
  * matches with subset record patterns, and two such atoms conjoin soundly
  * because each already quantifies over every input.
  */
+
+import { CFC_ATOM_TYPE, type CfcAtom } from "@commonfabric/api/cfc";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { isObjectNotArray } from "@commonfabric/utils/types";
+
+import { compareByCanonicalHash, uniqueCfcAtoms } from "./observation.ts";
+import type { ImplementationIdentity } from "./types.ts";
 
 /**
  * The deepest `inputWitness` nesting a minted atom may carry. A transformer
@@ -84,10 +85,9 @@ export const mintTransformedBy = (
   witnesses: readonly CfcAtom[] | undefined,
 ): CfcAtom[] => {
   const minted: CfcAtom[] = [{ type: CFC_ATOM_TYPE.TransformedBy, identity }];
-  const ordered = [...(witnesses ?? [])]
-    .map((witness) => ({ witness, key: deepEqualKey(witness) }))
-    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-  for (const { witness } of ordered) {
+  // The meet keeps its left side's duplicates, so dedup before minting.
+  const ordered = uniqueCfcAtoms(witnesses ?? []).sort(compareByCanonicalHash);
+  for (const witness of ordered) {
     minted.push({
       type: CFC_ATOM_TYPE.TransformedBy,
       identity,
