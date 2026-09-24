@@ -395,20 +395,20 @@ describe("reference-initialization", () => {
       },
     };
 
-    /** Initializes the owner's message and returns a link to it. */
-    async function initializeOwnersMessage() {
+    /** Initializes the owner's message with protected-default authorship. */
+    async function initializeOwnersMessage(schema: JSONSchema = inboxSchema) {
       const seed = runtime.edit();
       runtime.getCell(space, "inbox", undefined, seed).set({ note: "saved" });
       runtime.prepareTxForCommit(seed);
       expect((await seed.commit()).error).toBeUndefined();
 
       const first = runtime.edit();
-      const inbox = runtime.getCell(space, "inbox", inboxSchema, first);
+      const inbox = runtime.getCell(space, "inbox", schema, first);
       recordNewProtectedDefaults(
         first,
         inbox.getAsNormalizedFullLink(),
         { type: "object", properties: { note: { type: "string" } } },
-        inboxSchema,
+        schema,
         { message: { body: "a" } },
         { message: { body: "a" }, note: "saved" },
       );
@@ -465,29 +465,42 @@ describe("reference-initialization", () => {
     });
 
     /**
-     * As `stager`, stages the owner's message into a first argument, then that
-     * argument's `element` into a second one, in one transaction.
+     * Stages a chain from the owner's message through two arguments as `stager`.
      */
-    async function stageChainAsStager(secondSchema: JSONSchema) {
+    async function stageChainAsStager(
+      secondSchema: JSONSchema,
+      downstreamFirst = false,
+    ) {
       actingPrincipal = stager.did();
       const stage = runtime.edit();
       const first = runtime.getCell(space, "first", argumentSchema, stage);
-      first.set({
-        element: runtime.getCell(space, "inbox", undefined, stage)
-          .key("message").asSchema(entrySchema),
-      });
-      recordReferencedArgumentFields(
-        stage,
-        first.getAsNormalizedFullLink(),
-        ["element"],
-      );
       const second = runtime.getCell(space, "second", secondSchema, stage);
-      second.set({ element: first.key("element") });
-      recordReferencedArgumentFields(
-        stage,
-        second.getAsNormalizedFullLink(),
-        ["element"],
-      );
+      const stageFirst = () => {
+        first.set({
+          element: runtime.getCell(space, "inbox", undefined, stage)
+            .key("message").asSchema(entrySchema),
+        });
+        recordReferencedArgumentFields(
+          stage,
+          first.getAsNormalizedFullLink(),
+          ["element"],
+        );
+      };
+      const stageSecond = () => {
+        second.set({ element: first.key("element") });
+        recordReferencedArgumentFields(
+          stage,
+          second.getAsNormalizedFullLink(),
+          ["element"],
+        );
+      };
+      if (downstreamFirst) {
+        stageSecond();
+        stageFirst();
+      } else {
+        stageFirst();
+        stageSecond();
+      }
       runtime.prepareTxForCommit(stage);
       return {
         error: (await stage.commit()).error,
@@ -501,6 +514,196 @@ describe("reference-initialization", () => {
 
       expect(error).toBeUndefined();
       expect(authorsAt(second, ["element"])).toEqual([signer.did()]);
+    });
+
+    it("preserves the owner's authorship when the downstream reference is staged first", async () => {
+      await initializeOwnersMessage();
+      const { error, second } = await stageChainAsStager(argumentSchema, true);
+
+      expect(error).toBeUndefined();
+      expect(authorsAt(second, ["element"])).toEqual([signer.did()]);
+    });
+
+    for (
+      const [name, principal] of [
+        ["owner", signer],
+        ["stager", stager],
+      ] as const
+    ) {
+      it(`${name === "owner" ? "accepts" : "refuses"} the ${name}'s authorship floor when the downstream reference is staged first`, async () => {
+        await initializeOwnersMessage();
+        const { error } = await stageChainAsStager({
+          type: "object",
+          properties: {
+            element: {
+              ...entrySchema,
+              ifc: {
+                ...entrySchema.ifc,
+                requiredIntegrity: [{
+                  kind: "authored-by",
+                  subject: principal.did(),
+                }],
+              },
+            },
+          },
+        }, true);
+
+        if (name === "owner") expect(error).toBeUndefined();
+        else expect(error?.message).toContain("write floor failed at /element");
+      });
+    }
+
+    it("preserves authorship through a chain of references in the same argument", async () => {
+      await initializeOwnersMessage();
+      actingPrincipal = stager.did();
+      const stage = runtime.edit();
+      const argument = runtime.getCell(space, "argument", {
+        type: "object",
+        properties: { first: entrySchema, second: entrySchema },
+      }, stage);
+      argument.set({
+        second: argument.key("first"),
+        first: runtime.getCell(space, "inbox", undefined, stage)
+          .key("message").asSchema(entrySchema),
+      });
+      const link = argument.getAsNormalizedFullLink();
+      recordReferencedArgumentFields(stage, link, ["second", "first"]);
+      runtime.prepareTxForCommit(stage);
+
+      expect((await stage.commit()).error).toBeUndefined();
+      expect(authorsAt(link, ["second"])).toEqual([signer.did()]);
+    });
+
+    it("preserves authorship through three references staged from the downstream end", async () => {
+      await initializeOwnersMessage();
+      actingPrincipal = stager.did();
+      const stage = runtime.edit();
+      const first = runtime.getCell(space, "first", argumentSchema, stage);
+      const second = runtime.getCell(space, "second", argumentSchema, stage);
+      const third = runtime.getCell(space, "third", argumentSchema, stage);
+      third.set({ element: second.key("element") });
+      second.set({ element: first.key("element") });
+      first.set({
+        element: runtime.getCell(space, "inbox", undefined, stage)
+          .key("message").asSchema(entrySchema),
+      });
+      for (const argument of [third, second, first]) {
+        recordReferencedArgumentFields(
+          stage,
+          argument.getAsNormalizedFullLink(),
+          ["element"],
+        );
+      }
+      runtime.prepareTxForCommit(stage);
+
+      expect((await stage.commit()).error).toBeUndefined();
+      expect(authorsAt(third.getAsNormalizedFullLink(), ["element"]))
+        .toEqual([signer.did()]);
+    });
+
+    for (const endorsed of [true, false]) {
+      it(`${endorsed ? "credits a nested integrity floor and carries nested confidentiality" : "refuses a nested floor credited only by an ancestor"} through a pending reference`, async () => {
+        await initializeOwnersMessage({
+          type: "object",
+          properties: {
+            note: { type: "string" },
+            message: {
+              ...entrySchema,
+              default: { body: "a" },
+              properties: {
+                body: {
+                  type: "string",
+                  ifc: {
+                    confidentiality: ["nested-secret"],
+                    integrity: ["nested-body"],
+                  },
+                },
+              },
+            },
+          },
+        });
+        actingPrincipal = stager.did();
+        const stage = runtime.edit();
+        const first = runtime.getCell(space, "first", argumentSchema, stage);
+        const second = runtime.getCell(space, "second", {
+          type: "object",
+          properties: {
+            element: {
+              ...entrySchema,
+              properties: {
+                body: {
+                  type: "string",
+                  ifc: {
+                    requiredIntegrity: endorsed ? ["nested-body"] : [{
+                      kind: "authored-by",
+                      subject: signer.did(),
+                    }],
+                  },
+                },
+              },
+            },
+          },
+        }, stage);
+        second.set({
+          element: first.key("element"),
+        });
+        recordReferencedArgumentFields(
+          stage,
+          second.getAsNormalizedFullLink(),
+          ["element"],
+        );
+        first.set({
+          element: runtime.getCell(space, "inbox", undefined, stage)
+            .key("message").asSchema(entrySchema),
+        });
+        recordReferencedArgumentFields(
+          stage,
+          first.getAsNormalizedFullLink(),
+          ["element"],
+        );
+        runtime.prepareTxForCommit(stage);
+
+        const error = (await stage.commit()).error;
+        if (!endorsed) {
+          expect(error?.message).toContain(
+            "write floor failed at /element/body",
+          );
+          return;
+        }
+        expect(error).toBeUndefined();
+        const entries = readStoredCfcMetadata(
+          runtime.edit(),
+          second.getAsNormalizedFullLink(),
+        )!.labelMap.entries;
+        const labels = entries.filter((entry) =>
+          entry.path.join("/") === "element/body"
+        ).map((entry) => entry.label);
+        expect(labels.flatMap((label) => label.confidentiality ?? []))
+          .toContain("nested-secret");
+        expect(labels.flatMap((label) => label.integrity ?? []))
+          .toContain("nested-body");
+      });
+    }
+
+    it("refuses a cycle of staged references without borrowing schema authorship", async () => {
+      actingPrincipal = stager.did();
+      const stage = runtime.edit();
+      const first = runtime.getCell(space, "first", argumentSchema, stage);
+      const second = runtime.getCell(space, "second", argumentSchema, stage);
+      first.set({ element: second.key("element") });
+      second.set({ element: first.key("element") });
+      for (const argument of [first, second]) {
+        recordReferencedArgumentFields(
+          stage,
+          argument.getAsNormalizedFullLink(),
+          ["element"],
+        );
+      }
+      runtime.prepareTxForCommit(stage);
+
+      expect((await stage.commit()).error?.message).toContain(
+        "cyclic staged reference in link label derivation",
+      );
     });
 
     it("refuses an integrity floor that only the staging principal's authorship would meet on a reference staged from another staged reference", async () => {

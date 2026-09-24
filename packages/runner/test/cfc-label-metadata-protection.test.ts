@@ -18,6 +18,7 @@ import {
   containsCfcFieldCommitment,
 } from "../src/cfc/label-representation.ts";
 import type { CfcLabelMetadataProtectionMode } from "../src/cfc/mod.ts";
+import { recordReferencedArgumentFields } from "../src/cfc/reference-initialization.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   runtimeWritePolicyAuthorization,
@@ -205,6 +206,56 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
       entry.path.length === path.length &&
       entry.path.every((seg, i) => seg === path[i])
     );
+
+  for (const mode of ["off", "observe", "enforce"] as const) {
+    it(`preserves ${mode} representation across a pending foreign reference followed by a local reference`, async () => {
+      const { storageManager, runtime } = makeRuntime(mode);
+      try {
+        await seedSource(runtime, spaceA, "chain-source");
+        const tx = runtime.edit();
+        const schema: JSONSchema = {
+          type: "object",
+          properties: {
+            field: { type: "object", ifc: { integrity: ["argument"] } },
+          },
+        };
+        const first = runtime.getCell(spaceB, "chain-first", schema, tx);
+        const second = runtime.getCell(spaceB, "chain-second", schema, tx);
+        second.set({ field: first.key("field") });
+        first.set({
+          field: runtime.getCell(spaceA, "chain-source", undefined, tx),
+        });
+        for (const cell of [second, first]) {
+          recordReferencedArgumentFields(tx, cell.getAsNormalizedFullLink(), [
+            "field",
+          ]);
+        }
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit()).error).toBeUndefined();
+        const entries = persistedEntriesFor(
+          storageManager,
+          spaceB,
+          second.getAsNormalizedFullLink().id,
+        )
+          .filter((entry) => entry.origin === "link");
+        expect(entryAt(entries, ["field"])!.label.confidentiality).toEqual([{
+          ...userAtom,
+          subject: mode === "enforce"
+            ? commitCfcFieldValue(userAtom.subject)
+            : userAtom.subject,
+        }]);
+        expect(entryAt(entries, ["field", "secret"])!.label.confidentiality)
+          .toEqual([{
+            ...caveatAtom,
+            source: mode === "enforce"
+              ? commitCfcFieldValue(fullSource)
+              : fullSource,
+          }]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+  }
 
   describe("enforce", () => {
     it("persists committed fields for a cross-space link write (both label sources)", async () => {

@@ -123,6 +123,48 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
     }
   });
 
+  it("credits a nested link floor using the builtin identity recorded for the write", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
+    try {
+      await seedLabeledDoc(runtime, "builtin-source", { nested: "approved" }, {
+        integrity: [LLM_DERIVED_ATOM],
+      }, ["nested"]);
+      const tx = runtime.edit();
+      tx.setCfcImplementationIdentity({
+        kind: "builtin",
+        builtinId: "floor-test",
+      });
+      const source = runtime.getCell(
+        signer.did(),
+        "builtin-source",
+        undefined,
+        tx,
+      );
+      const sink = runtime.getCell(signer.did(), "builtin-sink", {
+        type: "object",
+        properties: {
+          out: {
+            type: "object",
+            properties: {
+              nested: {
+                type: "string",
+                ifc: { requiredIntegrity: [LLM_DERIVED_ATOM] },
+              },
+            },
+          },
+        },
+      }, tx);
+      sink.set({ out: source });
+      tx.setCfcImplementationIdentity(undefined);
+      tx.prepareCfc();
+      expect((await tx.commit()).error).toBeUndefined();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("flow-persist with an empty hereditary meet does not weaken the floor", async () => {
     // Under cfcFlowLabels:"persist" the floor credits the flow meet — but an
     // empty meet (the common case: some unlabeled read empties it) credits
