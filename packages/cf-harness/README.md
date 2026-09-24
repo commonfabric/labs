@@ -1665,7 +1665,11 @@ exact source ids read in the current call. If a draft claiming completeness
 still cites an unread id and one of the scope's model turns remains, the loop
 allows one tool-free citation-only repair against that same catalog. It never
 fuzzily accepts, completes, or reopens an invented id, and the repair adds no
-private tool calls or extends the scope's budget.
+private tool calls or extends the scope's budget. A final answer that is not
+JSON gets the same kind of turn one step earlier: one tool-free re-ask, quoting
+only the parser's message, while a model turn remains. The reply is parsed as
+strictly as the first answer, nothing is patched into it, and a reply that still
+does not parse fails the call as malformed synthesis.
 
 The `kit` result envelope carries the scoped findings and distinguishes
 `complete` from `incomplete`. Selected patterns require verified published

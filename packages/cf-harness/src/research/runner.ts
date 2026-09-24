@@ -1073,6 +1073,16 @@ const readDocSection = (
   };
 };
 
+/** What `JSON.parse` says is wrong with `text`, or `undefined` when it parses. */
+const jsonSyntaxError = (text: string): string | undefined => {
+  try {
+    JSON.parse(text.trim());
+    return undefined;
+  } catch (error) {
+    return errorMessage(error);
+  }
+};
+
 /** Refuses a read batch before any of its windows enter the evidence record. */
 const checkReadBudget = (state: ResearchState, chars: number): void => {
   if (state.readChars + chars > state.readLimit) {
@@ -1505,33 +1515,19 @@ async (request) => {
         `research exceeded ${budget.modelTurns} model turns without a final kit`,
       );
     }
-    const parsed = parseStructuredResultJson(finalAssistant.content, {
-      emptyMessage: "research result was empty",
-      invalidMessage: "research result was not valid JSON",
-    });
-    let raw = objectValue(parsed) as RawResearchResult;
-    const invalidSourceIds = unreadSourceIds(raw, state);
-    if (
-      raw.status === "complete" && invalidSourceIds.length > 0 &&
-      modelTurns < budget.modelTurns
-    ) {
+    /**
+     * Spends one model turn with the private tools withheld on `instruction`,
+     * and returns the reply's text, or `undefined` when the model called a
+     * tool instead of answering.
+     */
+    const repairTurn = async (
+      turnName: string,
+      instruction: readonly string[],
+    ): Promise<string | undefined> => {
       if (runWasAborted(request.signal)) {
         throw abortError(request.signal);
       }
-      transcript.push({
-        role: "user",
-        content: [
-          "Citation repair turn: private tools are withheld. Correct sourceIds only and return the entire final JSON schema again.",
-          `These cited ids were not returned by an exact read in this research call: ${
-            JSON.stringify(invalidSourceIds)
-          }`,
-          sourceCatalog(state),
-          "Use no other source ids. Remove a claim whose support is absent or return status incomplete; do not invent, approximate, or reuse an id from a prior research call.",
-          `This is model turn ${
-            modelTurns + 1
-          } of ${budget.modelTurns}; no further repair turn is available.`,
-        ].join("\n"),
-      });
+      transcript.push({ role: "user", content: instruction.join("\n") });
       const repaired = await options.modelClient.complete({
         model,
         transcript: [...transcript],
@@ -1549,21 +1545,55 @@ async (request) => {
       const repairCalls = repaired.assistant.toolCalls ?? [];
       for (const call of repairCalls) {
         transcript.push(toolResultMessage(call.id, call.function.name, {
-          error: "private tools are withheld on the citation repair turn",
+          error: `private tools are withheld on the ${turnName} turn`,
         }));
       }
       if (runWasAborted(request.signal)) {
         throw abortError(request.signal);
       }
-      if (repairCalls.length === 0) {
+      return repairCalls.length === 0 ? repaired.assistant.content : undefined;
+    };
+    // A final answer that is not JSON gets one re-ask while the budget has a
+    // turn for it, quoting only the parser's own complaint. What comes back
+    // is parsed as strictly as the first answer, and failing again fails the
+    // call as it would have without the re-ask.
+    let finalText = finalAssistant.content;
+    const syntaxError = jsonSyntaxError(finalText);
+    if (syntaxError !== undefined && modelTurns < budget.modelTurns) {
+      finalText = await repairTurn("JSON repair", [
+        "JSON repair turn: private tools are withheld. Your final answer was not valid JSON.",
+        `The parser reported: ${syntaxError}`,
+        "Return the entire final JSON again, matching the schema, with nothing before or after it.",
+        `This is model turn ${modelTurns + 1} of ${budget.modelTurns}.`,
+      ]) ?? "";
+    }
+    const parsed = parseStructuredResultJson(finalText, {
+      emptyMessage: "research result was empty",
+      invalidMessage: "research result was not valid JSON",
+    });
+    let raw = objectValue(parsed) as RawResearchResult;
+    const invalidSourceIds = unreadSourceIds(raw, state);
+    if (
+      raw.status === "complete" && invalidSourceIds.length > 0 &&
+      modelTurns < budget.modelTurns
+    ) {
+      const repaired = await repairTurn("citation repair", [
+        "Citation repair turn: private tools are withheld. Correct sourceIds only and return the entire final JSON schema again.",
+        `These cited ids were not returned by an exact read in this research call: ${
+          JSON.stringify(invalidSourceIds)
+        }`,
+        sourceCatalog(state),
+        "Use no other source ids. Remove a claim whose support is absent or return status incomplete; do not invent, approximate, or reuse an id from a prior research call.",
+        `This is model turn ${
+          modelTurns + 1
+        } of ${budget.modelTurns}; no further repair turn is available.`,
+      ]);
+      if (repaired !== undefined) {
         try {
-          raw = objectValue(parseStructuredResultJson(
-            repaired.assistant.content,
-            {
-              emptyMessage: "citation repair result was empty",
-              invalidMessage: "citation repair result was not valid JSON",
-            },
-          )) as RawResearchResult;
+          raw = objectValue(parseStructuredResultJson(repaired, {
+            emptyMessage: "citation repair result was empty",
+            invalidMessage: "citation repair result was not valid JSON",
+          })) as RawResearchResult;
         } catch {
           // The original candidate remains available for strict admission.
         }

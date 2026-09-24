@@ -1978,7 +1978,7 @@ describe("research", () => {
       });
     });
 
-    it("carries exact reads when final JSON is malformed", async () => {
+    it("carries exact reads when final JSON stays malformed after its re-ask", async () => {
       const corpus = corpusWith([{
         path: "docs/api.md",
         heading: "Contract",
@@ -1992,6 +1992,7 @@ describe("research", () => {
             input: { sectionId: "section-0" },
           }]),
         () => assistant("not json"),
+        () => assistant("still not json"),
       ]);
 
       let failure: HarnessResearchError | undefined;
