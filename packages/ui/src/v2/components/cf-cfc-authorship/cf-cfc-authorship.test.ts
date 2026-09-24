@@ -8,6 +8,31 @@ import {
   integrityAtomMatchesAuthor,
 } from "./index.ts";
 
+/** A label whose root says its value was written by `sender`. */
+const authoredByLabel = (sender: string) => ({
+  version: 1 as const,
+  entries: [{
+    path: [],
+    label: { integrity: [{ kind: "authored-by", subject: sender }] },
+  }],
+});
+
+/**
+ * The label read through a message's link to a profile owned by `owner`: the
+ * message's `authored-by` for `sender` at the root, and the owner's
+ * `represents-principal` on each of the profile's owner-protected fields.
+ */
+const linkedProfileLabel = (sender: string, owner: string) => ({
+  version: 1 as const,
+  entries: [
+    ...authoredByLabel(sender).entries,
+    ...["avatar", "bio", "name"].map((field) => ({
+      path: [field],
+      label: { integrity: [{ kind: "represents-principal", subject: owner }] },
+    })),
+  ],
+});
+
 describe("CFCFCAuthorship", () => {
   it("registers the custom element", () => {
     expect(customElements.get("cf-cfc-authorship")).toBe(CFCFCAuthorship);
@@ -535,6 +560,93 @@ describe("CFCFCAuthorship", () => {
       subject: "did:example:alice",
       name: "Alice Snapshot",
     });
+  });
+
+  it("verifies a message against a profile whose principal is on its fields", async () => {
+    const element = new CFCFCAuthorship();
+    element.value = {
+      getCfcLabel: () => Promise.resolve(authoredByLabel("did:example:alice")),
+    };
+    element.author = {
+      get: () => ({ name: "Alice" }),
+      getCfcLabel: () =>
+        Promise.resolve(
+          linkedProfileLabel("did:example:alice", "did:example:alice"),
+        ),
+    };
+
+    await element.refreshLabel();
+    await element.refreshAuthorClaim();
+
+    expect(element.authorshipState).toBe("verified");
+    expect(element.authorClaim).toEqual({
+      subject: "did:example:alice",
+      name: "Alice",
+    });
+  });
+
+  it("reports unverified when the linked profile's owner did not send the message", async () => {
+    const element = new CFCFCAuthorship();
+    element.value = {
+      getCfcLabel: () =>
+        Promise.resolve(authoredByLabel("did:example:mallory")),
+    };
+    element.author = {
+      get: () => ({ name: "Alice" }),
+      getCfcLabel: () =>
+        Promise.resolve(
+          linkedProfileLabel("did:example:mallory", "did:example:alice"),
+        ),
+    };
+
+    await element.refreshLabel();
+    await element.refreshAuthorClaim();
+
+    expect(element.authorshipState).toBe("unverified");
+  });
+
+  it("does not verify on the claim's own id when the profile's label names two principals", async () => {
+    // Without the label's principal, the component would read an author id
+    // from the claim's value, which here names the sender.
+    const element = new CFCFCAuthorship();
+    element.value = {
+      getCfcLabel: () =>
+        Promise.resolve(authoredByLabel("did:example:mallory")),
+    };
+    element.author = {
+      get: () => ({ id: "did:example:mallory", name: "Alice" }),
+      getCfcLabel: () =>
+        Promise.resolve({
+          version: 1 as const,
+          entries: [
+            ...authoredByLabel("did:example:mallory").entries,
+            {
+              path: ["name"],
+              label: {
+                integrity: [{
+                  kind: "represents-principal",
+                  subject: "did:example:alice",
+                }],
+              },
+            },
+            {
+              path: ["avatar"],
+              label: {
+                integrity: [{
+                  kind: "represents-principal",
+                  subject: "did:example:bob",
+                }],
+              },
+            },
+          ],
+        }),
+    };
+
+    await element.refreshLabel();
+    await element.refreshAuthorClaim();
+
+    expect(element.authorClaim).toBeUndefined();
+    expect(element.authorshipState).toBe("unknown");
   });
 
   it("fails closed when a bound author claim cell changes away from the integrity subject", async () => {
