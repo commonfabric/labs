@@ -7,13 +7,13 @@ import { Runtime } from "../src/runtime.ts";
 
 // `removeByValue` and `addUnique` compare by link when handed a cell and by
 // stored-value equality otherwise. An array element that is an object is its
-// own entity, so the stored element is a link: a plain object read back out of
-// `.get()` carries a link but is not a cell, and comparing it against the
-// stored link never matches. The existing coverage in
+// own entity, so the stored element is a link: a value read back out of
+// `.get()` is a view of it, not a cell, and comparing it against the stored
+// link could never match, so both methods refuse one. The existing coverage in
 // array-push-mergeable.test.ts uses string elements, which store inline, so the
 // value form works there and this distinction does not show up.
 //
-// These cases pin the distinction for object elements, and pin that an element
+// These cases pin the refusal for object elements, and pin that an element
 // with no deterministic address is still removable through its positional cell.
 // See docs/features/migrating-collection-writes.md.
 
@@ -61,12 +61,14 @@ function withRuntime(
 
 describe("removeByValue argument kind, for object elements", () => {
   it(
-    "a plain object read back from get() removes nothing",
+    "removeByValue throws for a value read back from get(), removing nothing",
     withRuntime("value-form", async (rt) => {
       const tx = rt.edit();
       const cell = rt.getCell<Row[]>(space, "value-form", rowListSchema, tx);
       const row = cell.get().find((r) => r.name === "alice");
-      cell.removeByValue(row!);
+      expect(() => cell.removeByValue(row!)).toThrow(
+        "`Cell.removeByValue()` takes an element's cell or a plain value",
+      );
       await tx.commit();
 
       const after = rt.getCell<Row[]>(space, "value-form", rowListSchema).get();
@@ -89,16 +91,18 @@ describe("removeByValue argument kind, for object elements", () => {
   );
 
   it(
-    "a plain object read back from get() is added again by addUnique",
+    "addUnique throws for a value read back from get(), adding nothing",
     withRuntime("add-unique", async (rt) => {
       const tx = rt.edit();
       const cell = rt.getCell<Row[]>(space, "add-unique", rowListSchema, tx);
       const row = cell.get().find((r) => r.name === "alice");
-      cell.addUnique(row!);
+      expect(() => cell.addUnique(row!)).toThrow(
+        "`Cell.addUnique()` takes an element's cell or a plain value",
+      );
       await tx.commit();
 
       const after = rt.getCell<Row[]>(space, "add-unique", rowListSchema).get();
-      expect(after.map((r) => r.name)).toEqual(["alice", "bob", "alice"]);
+      expect(after.map((r) => r.name)).toEqual(["alice", "bob"]);
     }),
   );
 
