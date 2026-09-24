@@ -244,9 +244,12 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
       name: signer.did(),
       avatar: signer.did(),
     });
+    // The signer owns the field whose path sorts first in the stored label, so
+    // a reader taking the first principal it finds would admit the signer's
+    // text; only one requiring every principal blocks it.
     seedFieldLabeledProfile("cfc-render-policy-two-owner-profile", {
-      name: signer.did(),
-      avatar: OTHER_PRINCIPAL,
+      name: OTHER_PRINCIPAL,
+      avatar: signer.did(),
     });
     const authoredByProfileText = runtime.getCell<string>(
       signer.did(),
@@ -1373,7 +1376,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     );
 
     await t.step(
-      "strict text integrity requires authorship from a profile labeled on its fields",
+      "strict text integrity derives authorship from a profile labeled on its fields",
       async () => {
         const collector = createOpsCollector();
         const reconciler = new WorkerReconciler({
@@ -1386,7 +1389,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             verifyTextIntegrity: true,
             author: fieldLabeledProfileCell as never,
           },
-          children: [unsignedReleaseText as never],
+          children: [authoredByProfileTextCell as never],
         };
 
         const cancel = reconciler.mount(root);
@@ -1395,10 +1398,10 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
-          assertEquals(renderedText.includes("Unsigned release note"), false);
+          assertEquals(renderedText.includes("Profile-authored note"), true);
           assertEquals(
             renderedText.includes("Content hidden by integrity policy"),
-            true,
+            false,
           );
         } finally {
           cancel();
