@@ -3735,6 +3735,9 @@ export class CfHarnessPromptLoop {
           ...(this.#reasoningEffort !== undefined
             ? { reasoningEffort: this.#reasoningEffort }
             : {}),
+          ...(this.#researchReasoningEffort !== undefined
+            ? { researchReasoningEffort: this.#researchReasoningEffort }
+            : {}),
           ...(this.#promptCacheMode !== undefined
             ? { promptCacheMode: this.#promptCacheMode }
             : {}),

@@ -170,6 +170,11 @@ describe("session-assembly", () => {
         expect(harnessSessionEngineOptions(server)).toEqual(
           harnessSessionEngineOptions(cli),
         );
+        // Equal options would also pass if both surfaces dropped the setting.
+        expect(harnessSessionEngineOptions(server).researchReasoningEffort)
+          .toBe("high");
+        expect(harnessSessionEngineOptions(cli).researchReasoningEffort)
+          .toBe("high");
       } finally {
         await cleanup();
       }

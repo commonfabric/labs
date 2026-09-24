@@ -1882,6 +1882,183 @@ describe("CfHarnessPromptLoop research handoff", () => {
   });
 });
 
+/** Keeps every run report the loop persists, so a test can read what it recorded. */
+class ReportCapturingArtifactStore extends RecordingArtifactStore {
+  readonly runReports: Array<
+    Parameters<HarnessArtifactStore["persistRunReport"]>[0]
+  > = [];
+
+  override persistRunReport(
+    report: Parameters<HarnessArtifactStore["persistRunReport"]>[0],
+  ): Promise<string> {
+    this.runReports.push(report);
+    return Promise.resolve(`${this.runRoot}/run-report.json`);
+  }
+}
+
+describe("CfHarnessPromptLoop research reasoning effort", () => {
+  /** A research reply that finishes in one turn, citing nothing. */
+  const researchAnswer = () =>
+    Promise.resolve({
+      assistant: {
+        role: "assistant" as const,
+        content: JSON.stringify({
+          status: "incomplete",
+          summary: "Nothing established yet.",
+          inputs: [],
+          selectedPatternIds: [],
+          rules: [],
+          sourceIds: [],
+          missing: ["more evidence"],
+        }),
+      },
+    });
+  const toolCall = (id: string, name: string, args: unknown) => ({
+    assistant: {
+      role: "assistant" as const,
+      content: "",
+      toolCalls: [{
+        id,
+        type: "function" as const,
+        function: { name, arguments: JSON.stringify(args) },
+      }],
+    },
+  });
+  const docsEngine = async (root: string, runId: string) => {
+    const docsRoot = join(root, "docs");
+    await Deno.mkdir(docsRoot);
+    await Deno.writeTextFile(join(docsRoot, "api.md"), "# Contract\n\nText.\n");
+    const artifactStore = new ReportCapturingArtifactStore(
+      join(root, "artifacts"),
+      runId,
+    );
+    const engine = new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runId,
+      model: "gpt-test",
+      artifactStore,
+      docsCorpus: {
+        type: "cf-harness.docs-corpus-record",
+        source: "configured",
+        roots: [docsRoot],
+      },
+    });
+    return { engine, artifactStore };
+  };
+
+  it("sends it on research's own calls, not the run's, and records it in the run report", async () => {
+    const root = await Deno.makeTempDir({
+      prefix: "cf-harness-research-effort-",
+    });
+    const runId = "run-research-effort";
+    try {
+      const { engine, artifactStore } = await docsEngine(root, runId);
+      const research: HarnessModelTurnRequest[] = [];
+      const outer: HarnessModelTurnRequest[] = [];
+      const modelClient: HarnessModelClient = {
+        providerId: "test-provider",
+        complete: (request) => {
+          if (request.runId.includes(":research:")) {
+            research.push(request);
+            return researchAnswer();
+          }
+          outer.push(request);
+          return Promise.resolve(
+            outer.length === 1
+              ? toolCall("research-call", "research", {
+                task: "Find the contract.",
+                purpose: "answer",
+              })
+              : { assistant: { role: "assistant" as const, content: "Done." } },
+          );
+        },
+      };
+      await new CfHarnessPromptLoop({
+        engine,
+        modelClient,
+        researchReasoningEffort: "high",
+        allowedToolIds: ["research"],
+      }).runPrompt({
+        prompt: "Research the contract.",
+        promptSlotBinding: directPromptSlotBinding,
+      });
+
+      expect(research.length).toBeGreaterThan(0);
+      expect(research.map((request) => request.reasoningEffort))
+        .toEqual(research.map(() => "high"));
+      expect(outer.every((request) => request.reasoningEffort === undefined))
+        .toBe(true);
+      expect(artifactStore.runReports.at(-1)?.researchReasoningEffort)
+        .toBe("high");
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("hands it to a delegated child's research", async () => {
+    const root = await Deno.makeTempDir({
+      prefix: "cf-harness-research-effort-child-",
+    });
+    const runId = "run-research-effort-child";
+    try {
+      const { engine } = await docsEngine(root, runId);
+      const research: HarnessModelTurnRequest[] = [];
+      let parentTurns = 0;
+      let childTurns = 0;
+      const modelClient: HarnessModelClient = {
+        providerId: "test-provider",
+        complete: (request) => {
+          if (request.runId.includes(":research:")) {
+            research.push(request);
+            return researchAnswer();
+          }
+          if (request.runId === runId) {
+            parentTurns += 1;
+            return Promise.resolve(
+              parentTurns === 1
+                ? toolCall("delegate-call", "delegate_task", {
+                  goal: "Research the contract, then report.",
+                  profile: "pattern-author",
+                })
+                : {
+                  assistant: { role: "assistant" as const, content: "Done." },
+                },
+            );
+          }
+          childTurns += 1;
+          return Promise.resolve(
+            childTurns === 1
+              ? toolCall("child-research", "research", {
+                task: "Find the contract.",
+                purpose: "answer",
+              })
+              : {
+                assistant: { role: "assistant" as const, content: "Reported." },
+              },
+          );
+        },
+      };
+      await new CfHarnessPromptLoop({
+        engine,
+        modelClient,
+        researchReasoningEffort: "high",
+        allowedToolIds: ["delegate_task"],
+        allowedSubagentProfiles: ["pattern-author"],
+      }).runPrompt({
+        prompt: "Delegate the research.",
+        promptSlotBinding: directPromptSlotBinding,
+      });
+
+      expect(childTurns).toBeGreaterThan(0);
+      expect(research.length).toBeGreaterThan(0);
+      expect(research.map((request) => request.reasoningEffort))
+        .toEqual(research.map(() => "high"));
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+});
+
 describe("CfHarnessPromptLoop opening research", () => {
   it("recovers an interrupted opening with no output exactly once across resumes", async () => {
     const runId = "opening-without-output";
