@@ -4220,7 +4220,13 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           factory,
           typeRegistry,
           context.state,
-          () => inferContextualTypeArgument(node, checker),
+          () => {
+            const inferred = inferContextualTypeArgument(node, checker);
+            // An inferred `any` supplies no result shape for an LLM schema.
+            return inferred && (inferred.flags & ts.TypeFlags.Any)
+              ? undefined
+              : inferred;
+          },
         );
 
         const schemaCall = createRegisteredSchemaCallFromResolvedType(
@@ -4231,22 +4237,22 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
         );
 
         if (schemaCall) {
+          // Caller options follow the generated schema so authored schemas
+          // reached through spreads or computed keys take precedence.
           let newOptions: ts.Expression;
           if (args.length > 0 && ts.isObjectLiteralExpression(args[0]!)) {
-            // Add schema property to existing object literal
             newOptions = factory.createObjectLiteralExpression(
               [
-                ...(args[0] as ts.ObjectLiteralExpression).properties,
                 factory.createPropertyAssignment("schema", schemaCall),
+                ...(args[0] as ts.ObjectLiteralExpression).properties,
               ],
               true,
             );
           } else if (args.length > 0) {
-            // Options is an expression (not literal) -> { ...opts, schema: ... }
             newOptions = factory.createObjectLiteralExpression(
               [
-                factory.createSpreadAssignment(args[0]!),
                 factory.createPropertyAssignment("schema", schemaCall),
+                factory.createSpreadAssignment(args[0]!),
               ],
               true,
             );
