@@ -352,6 +352,25 @@ describe("summarizeCustodyTerms()", () => {
     expect(summary.answers).toEqual(["yes"]);
   });
 
+  it("strips format characters and line separators from room text", () => {
+    const hidden = [
+      "\u061c",
+      "\u200b",
+      "\u200c",
+      "\u200d",
+      "\u2028",
+      "\u2029",
+      "\ufeff",
+      "\u0085",
+    ];
+    const summary = summarizeCustodyTerms({
+      question: hidden.map((char, at) => `${at}${char}`).join(""),
+      answers: [hidden.join("yes")],
+    });
+    expect(summary.question).toBe("01234567");
+    expect(summary.answers).toEqual(["yes".repeat(hidden.length - 1)]);
+  });
+
   it("states no bound for terms that list no answers", () => {
     for (const terms of [{}, { answers: [] }, { answers: "yes" }, null, []]) {
       expect(summarizeCustodyTerms(terms)).toMatchObject({

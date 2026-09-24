@@ -34,15 +34,13 @@ const MAX_TERMS_TEXT = 280;
 
 /**
  * Room-authored text made safe to place beside host-verified fields: control
- * and bidirectional-override characters removed, so it cannot reorder the
- * dialog's own text, and capped in length.
+ * characters, format characters (the bidirectional marks and overrides, the
+ * zero-width characters, and the byte order mark among them), and line and
+ * paragraph separators removed, so it cannot reorder the dialog's own text or
+ * hide characters in its own, and capped in length.
  */
 function roomText(value: string): string {
-  const plain = value.replace(
-    // deno-lint-ignore no-control-regex
-    /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
-    "",
-  );
+  const plain = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "");
   return plain.length > MAX_TERMS_TEXT
     ? `${plain.slice(0, MAX_TERMS_TEXT)}…`
     : plain;
