@@ -93,7 +93,7 @@ export function hashOf(value: FabricValue): FabricHash {
  * Like `hashOf()`, except always returns a plain string of the hash, encoded as
  * base64url, _without_ a `<type>:` prefix.
  */
-export function hashStringOf(value: unknown): string {
+export function hashStringOf(value: FabricValue): string {
   const result = hashOfInternal(value, true);
   return (typeof result === "string") ? result : result.hashString;
 }

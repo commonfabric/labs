@@ -21,6 +21,7 @@ import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
 import { dataUriFromValue } from "@commonfabric/data-model/codec-data-uri";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
   encodableFormOf,
@@ -38,8 +39,20 @@ const space = signer.did();
  * The walk under test, with the copy callback ignored -- what a caller that
  * only wants the replacement passes. The callback has its own cases below.
  */
-function flatten<T>(value: T): T {
+function flatten(value: unknown): unknown {
   return replaceArtifacts(value, () => {});
+}
+
+/**
+ * The walk over a container whose result a case reads members of. A container
+ * comes back as one, which this checks rather than assumes.
+ */
+function flattenContainer(value: object): Record<string, unknown> {
+  const result = flatten(value);
+  if (!isObjectOrArray(result)) {
+    throw new Error("the walk turned a container into something else");
+  }
+  return result;
 }
 
 /** Builds an artifact of the shape `builder/module.ts` produces. */
@@ -71,7 +84,7 @@ describe("encodable-form", () => {
 
       it("returns a value carrying a sparse hole by identity", () => {
         const value = [1, , 3];
-        const result = flatten(value);
+        const result = flattenContainer(value);
         expect(result).toBe(value);
         expect(1 in result).toBe(false);
       });
@@ -224,14 +237,14 @@ describe("encodable-form", () => {
       it("shares the subtrees it did not have to rebuild", () => {
         const untouched = { c: 3 };
         const value = { a: artifact({ flat: true }), b: untouched };
-        const result = flatten(value);
+        const result = flattenContainer(value);
         expect(result).not.toBe(value);
         expect(result.b).toBe(untouched);
       });
 
       it("preserves a hole in an array it rebuilds", () => {
         const value = [artifact({ flat: true }), , 3];
-        const result = flatten(value);
+        const result = flattenContainer(value);
         expect(result[0]).toEqual({ flat: true });
         expect(1 in result).toBe(false);
         expect(result[2]).toBe(3);
@@ -245,7 +258,7 @@ describe("encodable-form", () => {
             return { serialized: true };
           },
         };
-        const result = flatten({
+        const result = flattenContainer({
           first: shared,
           second: shared,
         });
@@ -299,7 +312,7 @@ describe("encodable-form", () => {
         // record has no function-valued member, and that is what the walk keys
         // on; without it this value would reach the invoke and throw.
         const value = { toEncodableForm: 1 };
-        expect(flatten({ value }).value).toBe(value);
+        expect(flattenContainer({ value }).value).toBe(value);
       });
 
       it("leaves a plain object carrying an own `toJSON` alone", () => {
@@ -307,7 +320,7 @@ describe("encodable-form", () => {
         // object bearing one is ordinary data as far as this is concerned, and
         // what becomes of it is the conversion's to decide.
         const value = { secret: "internal", toJSON: () => ({ exposed: true }) };
-        expect(flatten({ value }).value).toBe(value);
+        expect(flattenContainer({ value }).value).toBe(value);
       });
 
       it("leaves a class instance with a prototype serializer alone", () => {
@@ -317,7 +330,7 @@ describe("encodable-form", () => {
           }
         }
         const value = new Serializable();
-        expect(flatten({ value }).value).toBe(value);
+        expect(flattenContainer({ value }).value).toBe(value);
       });
 
       it("leaves a class instance with an own serializer alone", () => {
@@ -325,7 +338,7 @@ describe("encodable-form", () => {
         const value = Object.assign(new Bare(), {
           toEncodableForm: () => "replaced",
         });
-        expect(flatten({ value }).value).toBe(value);
+        expect(flattenContainer({ value }).value).toBe(value);
       });
 
       it("leaves a null-prototype record alone", () => {
@@ -333,7 +346,7 @@ describe("encodable-form", () => {
           Object.create(null),
           { toEncodableForm: () => "replaced" },
         );
-        expect(flatten({ value }).value).toBe(value);
+        expect(flattenContainer({ value }).value).toBe(value);
       });
 
       it("leaves a cycle for the conversion to reject", () => {
