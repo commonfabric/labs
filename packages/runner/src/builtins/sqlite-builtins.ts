@@ -897,11 +897,15 @@ export function sqliteQuery(
 
   const action: Action = (tx: IExtendedStorageTransaction) => {
     if (cancelled.signal.aborted) return;
+    // TODO(danfuzz): `get()` on this schemaless cell returns a live query-result
+    // view, not a `FabricValue`: every container in it is a proxy over the
+    // stored value. The members the request identity hashes are typed
+    // `FabricValue` all the same, which is a type lie for now.
     const inputs = inputsCell.withTx(tx).get() as {
       db?: unknown;
       sql?: string;
       params?: WireParams;
-      reactOn?: unknown;
+      reactOn?: FabricValue;
       // Transformer-injected from `db.query<Row>` / `sqliteQuery<Row>`; absent
       // for untyped queries.
       rowSchema?: unknown;
@@ -909,11 +913,11 @@ export function sqliteQuery(
       // exceeds it ("fail" default | "skip"). The typed alternative is
       // MaxConfidentiality<> on the Row schema (rowSchema.ifc).
       maxConfidentiality?: CfcConfClause[];
-      onExceed?: unknown;
+      onExceed?: FabricValue;
       // CFC Phase 3.b: opt into read-time clearance — filter rows to those the
       // acting reader may read (a declared existence release). Requires the
       // touched rule-bearing table to permit it (rowLabelReadClearance).
-      readClearance?: unknown;
+      readClearance?: FabricValue;
     } | undefined;
 
     // The query result holds rows from a scope-partitioned db, so it must be at

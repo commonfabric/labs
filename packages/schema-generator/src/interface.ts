@@ -71,6 +71,15 @@ export interface SchemaGenerationOptions {
    * (`typescript/default-library.ts`).
    */
   readonly isDefaultLibrarySourceFile?: (sourceFile: ts.SourceFile) => boolean;
+
+  /**
+   * The type a type node was printed from, for a node the caller printed from
+   * a type, and `undefined` for any other node. A printed node stands for its
+   * type and says nothing more, so the generator reads that type in place of
+   * the node wherever the node appears: as the whole node, or inside a node
+   * the caller built.
+   */
+  readonly printedFrom?: (node: ts.TypeNode) => ts.Type | undefined;
 }
 
 /**
@@ -124,6 +133,13 @@ export interface GenerationContext {
   /** Type node for additional context */
   typeNode?: ts.TypeNode;
 
+  /**
+   * The node whose schema hints apply at this position when it is not the node
+   * read: a printed node, read by its type, keeps the hints a caller attached
+   * to it.
+   */
+  hintsNode?: ts.TypeNode;
+
   /** Source file name for authoring metadata that needs stable file identity */
   sourceFileName?: string;
 
@@ -147,6 +163,9 @@ export interface GenerationContext {
   /** The program's word on default-library membership, when supplied. */
   isDefaultLibrarySourceFile?: (sourceFile: ts.SourceFile) => boolean;
 
+  /** The type a printed node stands for (`SchemaGenerationOptions`). */
+  printedFrom?: (node: ts.TypeNode) => ts.Type | undefined;
+
   /** Schema hints for overriding default behavior (keyed by TypeNode) */
   schemaHints?: SchemaHints;
 
@@ -161,6 +180,20 @@ export interface GenerationContext {
    * every child context.
    */
   uninterpretedTypeNodes?: ts.TypeNode[];
+
+  /**
+   * Type parameters read as their arguments' types, for a payload read from
+   * the declaration that is written in them: a CFC alias chain entered from
+   * its type has no argument nodes to substitute. Wherever a bound parameter
+   * appears, its argument's type is read. A type that still depends on one
+   * where the binding cannot reach, such as `T["name"]` or a conditional
+   * type, is reported through `uninterpretedTypeNodes` as not fully read.
+   */
+  boundTypeParameters?: {
+    readonly types: ReadonlyMap<ts.TypeParameterDeclaration, ts.Type>;
+    /** The declared payload, reported where no nearer node is at hand. */
+    readonly declaredNode: ts.TypeNode;
+  };
 }
 
 /**

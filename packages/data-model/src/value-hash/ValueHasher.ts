@@ -1,12 +1,3 @@
-/**
- * Content hashing of `FabricValue`s. This module produces deterministic digests
- * based on values' logical structure.
- *
- * Traverses the value tree directly and feeds type-tagged data into a single
- * SHA-256 context. See Section 6 of the formal spec and the byte-level spec for
- * the full algorithm.
- */
-
 import {
   createHasher,
   type IncrementalHasher,
@@ -20,9 +11,7 @@ import { backtickQuote } from "@commonfabric/utils/markdown";
 import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 import { encodeWtf8 } from "@commonfabric/utils/wtf8";
 
-import { isDeepFrozen } from "./deep-freeze.ts";
-import type { FabricValue } from "@/interface.ts";
-import { shallowFabricFromConvertibleJsValue } from "./convertible-js.ts";
+import { shallowFabricFromConvertibleJsValue } from "@/convertible-js.ts";
 import { tagOfConvertibleJsValueElseNull, VALUE_TAGS } from "@/types";
 import { BaseFabricInstance } from "@/fabric-bases";
 import { codecOf, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
@@ -33,6 +22,8 @@ import {
   FabricRegExp,
   type FabricUnavailable,
 } from "@/fabric-primitives";
+
+import { float64BytesOf } from "./float64BytesOf.ts";
 
 //
 // Type tag bytes (Section 2 of the byte-level spec)
@@ -106,30 +97,6 @@ const MAX_DIRECT_STRING_LENGTH = 64;
 /** Maximum value (inclusive) of the small-length-number cache. */
 const MAX_CACHED_SMALL_LENGTH = 500;
 
-/** Reusable 8-byte buffer for float64 encoding. */
-const f64Buf = new ArrayBuffer(8);
-
-/** Float64 "view" of `f64Buf`. */
-const f64View = new DataView(f64Buf);
-
-/** Byte-array "view" of `f64Buf`. */
-const f64Bytes = new Uint8Array(f64Buf);
-
-/**
- * Canonical quiet-NaN payload (big-endian `7F F8 00 00 00 00 00 00`). All NaN
- * bit patterns hash to this single representation.
- */
-const CANONICAL_NAN_BYTES = new Uint8Array([
-  0x7f,
-  0xf8,
-  0x00,
-  0x00,
-  0x00,
-  0x00,
-  0x00,
-  0x00,
-]);
-
 /**
  * LRU cache for string representations. The entry count suits the short,
  * repeated strings this mostly sees — property names, ids, tags. The byte
@@ -184,32 +151,16 @@ function getStringRep(value: string) {
 }
 
 /**
- * Returns the eight bytes that represent the given number in a hash, which are
- * its big-endian IEEE 754 form. Every `NaN` gets `CANONICAL_NAN_BYTES`, and
- * those are not read from the value, so whichever bits an engine holds for a
- * `NaN` have no effect on a hash.
- *
- * The result is good until the next call. For every value other than `NaN`, it
- * is the one buffer this function writes into each time.
- *
- * @internal Exported so that `for-testing-only.ts` can offer it to tests.
- */
-export function float64BytesOf(value: number): Uint8Array {
-  if (Number.isNaN(value)) {
-    return CANONICAL_NAN_BYTES;
-  }
-
-  f64View.setFloat64(0, value, false); // big-endian
-  return f64Bytes;
-}
-
-/**
  * Computes the hash of one value. An instance holds the hasher the value's
  * bytes go into and the path of containers enclosing the position being fed,
  * so it serves exactly one hash: it is made, fed a value, and asked for a
  * digest.
+ *
+ * What it feeds is a value's type-tagged bytes, in the format of the byte-level
+ * spec, into a single SHA-256 context; Section 6 of the formal spec has the
+ * whole algorithm.
  */
-class ValueHasher {
+export class ValueHasher {
   /** Hasher which receives the value's bytes. */
   readonly #hasher: IncrementalHasher = createHasher();
 
@@ -546,180 +497,4 @@ class ValueHasher {
     valueHasher.feedValue(value);
     return valueHasher.digestString();
   }
-}
-
-//
-// Caches
-//
-
-/** Pre-computed hash of `null`. */
-const NULL_HASH = ValueHasher.computeHash(null);
-
-/** Pre-computed hash of `undefined`. */
-const UNDEFINED_HASH = ValueHasher.computeHash(undefined);
-
-/** Pre-computed hash of `true`. */
-const TRUE_HASH = ValueHasher.computeHash(true);
-
-/** Pre-computed hash of `false`. */
-const FALSE_HASH = ValueHasher.computeHash(false);
-
-/** Pre-computed hash of negative zero. */
-const NEGATIVE_ZERO_HASH = ValueHasher.computeHash(-0);
-
-/**
- * LRU cache for primitive value hashes. Primitives (strings, numbers,
- * bigints, registry-interned symbols) can't be WeakMap keys, so they use a
- * bounded cache. Sizing is based on historical testing (expected ~97% hit
- * rate in practice).
- *
- * A string key is held by the cache itself, and a hashed string can be a
- * whole document: an inline document's `data:` URI runs to tens of thousands
- * of characters. The entry count alone would let 50,000 of those add up to
- * gigabytes, so the same byte budget `stringRepCache` carries applies here,
- * and the count bounds the short keys that make up the rest.
- */
-const primitiveHashCache = new LRUCache<
-  string | number | bigint | symbol,
-  FabricHash
->({
-  capacity: 50_000,
-  weigh: (key) => (typeof key === "string" ? key.length * 2 : 16) + 96,
-  maxWeight: 8 * 1024 * 1024,
-});
-
-/**
- * WeakMap cache for deep-frozen object hashes. Deep-frozen objects are
- * immutable, so their hash is stable and safe to cache by identity.
- * Mutable objects are always recomputed.
- */
-const frozenObjectHashCache = new WeakMap<object, FabricHash>();
-
-let frozenObjectHashCacheHits = 0;
-
-/** Counts `hashOf` and `hashStringOf` calls served by the frozen-object cache. */
-export function getFrozenObjectHashCacheHits(): number {
-  return frozenObjectHashCacheHits;
-}
-
-/**
- * Looks up the given primitive in the LRU cache, computing and storing on
- * miss. Caller must filter out values that don't behave under `Map`'s
- * SameValueZero keying (notably `-0`, which collides with `+0`).
- */
-function cachedPrimitiveHash(
-  value: string | number | bigint | symbol,
-): FabricHash {
-  const cached = primitiveHashCache.get(value);
-  if (cached !== undefined) return cached;
-  const result = ValueHasher.computeHash(value);
-  primitiveHashCache.put(value, result);
-  return result;
-}
-
-//
-// Public API
-//
-
-/**
- * Common helper for the two exported hash functions, which _might_ return a
- * plain `string` when passed `stringOkay = true`.
- */
-function hashOfInternal(value: unknown, stringOkay: false): FabricHash;
-function hashOfInternal(
-  value: unknown,
-  stringOkay: true,
-): FabricHash | string;
-function hashOfInternal(
-  value: unknown,
-  stringOkay: boolean,
-): FabricHash | string {
-  switch (typeof value) {
-    case "boolean":
-      return value ? TRUE_HASH : FALSE_HASH;
-
-    case "string":
-    case "bigint":
-      return cachedPrimitiveHash(value);
-
-    case "number":
-      // `Map` keys via SameValueZero, which conflates `-0` with `+0`. Use the
-      // pre-computed hash for `-0` so it doesn't collide with (or pollute)
-      // the `+0` cache entry.
-      return Object.is(value, -0)
-        ? NEGATIVE_ZERO_HASH
-        : cachedPrimitiveHash(value);
-
-    case "undefined":
-      return UNDEFINED_HASH;
-
-    case "symbol": {
-      // Only registry-interned symbols are hashable; unique symbols have
-      // no portable representation. The throw inside `feedValue()` covers the
-      // unique case structurally; check here so that the cache key is sound.
-      if (Symbol.keyFor(value) === undefined) {
-        throw new Error("Cannot hash unique (uninterned) symbol");
-      }
-      return cachedPrimitiveHash(value);
-    }
-
-    case "object": {
-      if (value === null) {
-        return NULL_HASH;
-      }
-
-      const obj = value as object;
-
-      // Even if we don't know that `obj` is deep-frozen, it's okay to look it
-      // up in the cache for same (we just won't find it if it's not
-      // deep-frozen). And doing this lookup first minimizes the number of
-      // checks needed on the fast path.
-      const cached = frozenObjectHashCache.get(obj);
-      if (cached !== undefined) {
-        frozenObjectHashCacheHits += 1;
-        return cached;
-      }
-
-      if (isDeepFrozen(value)) {
-        const result = ValueHasher.computeHash(value);
-        frozenObjectHashCache.set(obj, result);
-        return result;
-      }
-
-      return stringOkay
-        ? ValueHasher.computeHashAsString(value)
-        : ValueHasher.computeHash(value);
-    }
-
-    default: {
-      throw new Error(`Cannot hash value of type \`${typeof value}\``);
-    }
-  }
-}
-
-/**
- * Computes the SHA-256 hash of a `FabricValue`. Returns a `FabricHash` with
- * algorithm tag `fid1` ("Fabric ID, Version 1").
- *
- * Caches results for primitives (LRU) and deep-frozen objects (`WeakMap`).
- */
-export function hashOf(value: FabricValue): FabricHash {
-  return hashOfInternal(value, false);
-}
-
-/**
- * Like `hashOf()`, except always returns a plain string of the hash, encoded as
- * base64url, _without_ a `<type>:` prefix.
- */
-export function hashStringOf(value: unknown): string {
-  const result = hashOfInternal(value, true);
-  return (typeof result === "string") ? result : result.hashString;
-}
-
-/**
- * Like `hashOf()`, except always returns a plain string of the hash, encoded as
- * base64url, with the `<type>:` prefix.
- */
-export function taggedHashStringOf(value: FabricValue): string {
-  return hashOfInternal(value, false).toString();
 }

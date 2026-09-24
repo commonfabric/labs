@@ -1,7 +1,7 @@
 /**
  * What this package offers to tests alone. There are two kinds of thing here:
- * examples of every concrete class, and steps internal to the package that a
- * test calls directly.
+ * examples of every concrete class, and internals of the package that a test
+ * reaches directly: steps it calls, and a count it reads.
  *
  * The examples are of every concrete `FabricPrimitive` and `FabricInstance`
  * class, for a test that ranges over the classes to take its values from, so
@@ -19,8 +19,8 @@
  *   returns, and every class has at least two makers, so a class's first two
  *   makers give a pair that differs.
  *
- * An internal step is here when a test of the package's public surface cannot
- * reach it dependably. Each one's doc comment says why that is.
+ * An internal is here when a test of the package's public surface cannot reach
+ * it dependably. Each one's doc comment says why that is.
  *
  * This has its own entry in the package's export map and no place in any
  * barrel, so that loading the classes constructs none of it.
@@ -44,7 +44,8 @@ import {
   FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
-import { float64BytesOf } from "./value-hash.ts";
+import { getFrozenObjectHashCacheHits } from "./value-hash/caching.ts";
+import { float64BytesOf } from "./value-hash/float64BytesOf.ts";
 
 /** At least two makers of one kind of value. */
 type Makers<Value> = readonly [() => Value, () => Value, ...(() => Value)[]];
@@ -222,8 +223,9 @@ export const FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY: {
 });
 
 /**
- * `float64BytesOf()` from `value-hash.ts`, which returns the eight bytes that
- * represent a number in a hash. The result is good until the next call.
+ * `float64BytesOf()` from `value-hash/float64BytesOf.ts`, which returns the
+ * eight bytes that represent a number in a hash. The result is good until the
+ * next call.
  *
  * It is here because a test of `hashOf()` cannot reach the function's `NaN`
  * arm dependably. That arm makes a difference for a `NaN` whose bits are not
@@ -234,6 +236,17 @@ export const FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY: {
  */
 export const float64BytesOfForTestingOnly: (value: number) => Uint8Array =
   float64BytesOf;
+
+/**
+ * `getFrozenObjectHashCacheHits()` from `value-hash/caching.ts`, which counts
+ * the hashes served by the deep-frozen-object cache.
+ *
+ * It is here because nothing on the package's public surface can tell a hash
+ * the cache served from one computed afresh: the two are equal. A test or a
+ * benchmark that is about the cache reads the count before and after.
+ */
+export const getFrozenObjectHashCacheHitsForTestingOnly: () => number =
+  getFrozenObjectHashCacheHits;
 
 /**
  * Helper for `FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY`, which calls every

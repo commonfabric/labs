@@ -179,9 +179,23 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.myProfile",
       "argument.rooms",
       "result.rooms",
+      "result.profileDraft",
+      "result.messageDraft",
+      "result.hostMessageDraft",
+      "result.roomDraft",
+      "result.setProfileDraft",
+      "result.setMessageDraft",
+      "result.setHostMessageDraft",
+      "result.setRoomDraft",
+      "result.saveProfile",
+      "result.sendTrustedMessage",
+      "result.addTrustedRoom",
+      "result.hostLookalikeSend",
     ],
     reason:
-      "the declared `Default<{}>` of the admin registry, the profile, and the room list is honored where the recorded contracts carry no default",
+      "the declared `Default<{}>` of the admin registry, the profile, and the room list is honored where the recorded contracts carry no default" +
+      "; and the drafts removed, with the trusted streams taking the text a " +
+      "`cf-submit-input` click carries (docs/history/cfc-chat-demo-submit-input-break.md)",
     record: "docs/history/admin-registry-default-honored-break.md",
   },
   {
@@ -754,26 +768,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/chat-send-event-opened.md",
   },
   {
-    // #7976 was reverted. Its printed-type-node reading narrowed this
-    // result (`$UI` from `true` to the `JSXElement` shape) and recorded the
-    // baseline below; the revert restores the contract recorded before it.
-    pattern: "examples/fetch-program-test.tsx",
-    baselines: ["20260923T184038Z-XJY1r8MIb3iWMhNG"],
-    paths: ["result.$UI"],
-    reason:
-      "#7976 reverted: the result returns to the contract recorded before it",
-    record: "docs/history/printed-type-node-revert-break.md",
-  },
-  {
-    // The same revert, same record.
-    pattern: "system/knowledge-graph.tsx",
-    baselines: ["20260923T184039Z-rq8KAA-ICBTFDbI6"],
-    paths: ["result.$UI"],
-    reason:
-      "#7976 reverted: the result returns to the contract recorded before it",
-    record: "docs/history/printed-type-node-revert-break.md",
-  },
-  {
     // The everyone-is-admin flag's `true` branch gains the `writeAuthorizedBy`
     // claim its type declares, which a canonical alias formatting its payload
     // without a node had dropped. The proof descends to the flag here.
@@ -782,9 +776,23 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "argument.adminRegistry.everyoneIsAdmin",
       "result.adminRegistry.everyoneIsAdmin",
+      "result.profileDraft",
+      "result.messageDraft",
+      "result.hostMessageDraft",
+      "result.roomDraft",
+      "result.setProfileDraft",
+      "result.setMessageDraft",
+      "result.setHostMessageDraft",
+      "result.setRoomDraft",
+      "result.saveProfile",
+      "result.sendTrustedMessage",
+      "result.addTrustedRoom",
+      "result.hostLookalikeSend",
     ],
     reason:
-      "the everyone-is-admin flag's `true` branch carries the write claim its type declares",
+      "the everyone-is-admin flag's `true` branch carries the write claim its type declares" +
+      "; and the drafts removed, with the trusted streams taking the text a " +
+      "`cf-submit-input` click carries (docs/history/cfc-chat-demo-submit-input-break.md)",
     record: "docs/history/everyone-admin-write-claim-restored-break.md",
   },
   {
@@ -792,9 +800,67 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // registry rather than descending to the flag.
     pattern: "cfc-group-chat-demo/main.tsx",
     baselines: ["20260918T041802Z-YAJU948xc_bQwY0H"],
-    paths: ["argument.adminRegistry", "result.adminRegistry"],
+    paths: [
+      "argument.adminRegistry",
+      "result.adminRegistry",
+      "result.profileDraft",
+      "result.messageDraft",
+      "result.hostMessageDraft",
+      "result.roomDraft",
+      "result.setProfileDraft",
+      "result.setMessageDraft",
+      "result.setHostMessageDraft",
+      "result.setRoomDraft",
+      "result.saveProfile",
+      "result.sendTrustedMessage",
+      "result.addTrustedRoom",
+      "result.hostLookalikeSend",
+    ],
     reason:
-      "the everyone-is-admin flag's `true` branch carries the write claim its type declares",
+      "the everyone-is-admin flag's `true` branch carries the write claim its type declares" +
+      "; and the drafts removed, with the trusted streams taking the text a " +
+      "`cf-submit-input` click carries (docs/history/cfc-chat-demo-submit-input-break.md)",
     record: "docs/history/everyone-admin-write-claim-restored-break.md",
+  },
+  {
+    // The CFC group chat demo's fields become `cf-submit-input`s, so Enter
+    // gives the trusted gesture its writes require. The drafts and their
+    // setter streams are removed, and the trusted streams take the submitted
+    // text as their event. The older baselines carry this break in the
+    // entries above that already name them.
+    pattern: "cfc-group-chat-demo/main.tsx",
+    baselines: ["20260923T205929Z-mHuHgI9LlBLCu53t"],
+    paths: [
+      "result.profileDraft",
+      "result.messageDraft",
+      "result.hostMessageDraft",
+      "result.roomDraft",
+      "result.setProfileDraft",
+      "result.setMessageDraft",
+      "result.setHostMessageDraft",
+      "result.setRoomDraft",
+      "result.saveProfile",
+      "result.sendTrustedMessage",
+      "result.addTrustedRoom",
+      "result.hostLookalikeSend",
+    ],
+    reason:
+      "the drafts removed, with the trusted streams taking the text a `cf-submit-input` click carries",
+    record: "docs/history/cfc-chat-demo-submit-input-break.md",
+  },
+  {
+    // Each `Panel` kind gains an optional `addedBy` DID. The proof does not
+    // apply the open-object evolution allowance inside a union branch, so a
+    // stored panel whose `addedBy` held a non-string reads as a refused
+    // alternative.
+    pattern: "loom/main.tsx",
+    baselines: [
+      "20260920T232507Z-_ewvPy8qDJYL47km",
+      "20260922T052256Z--2Q9ESzxSenSTer9",
+    ],
+    paths: ["argument.panels[]"],
+    reason:
+      "a Loom panel's new optional addedBy reads as a narrowed union branch under baselines that never had the property",
+    record: "docs/history/loom-panel-added-by-break.md",
   },
 ];

@@ -29,11 +29,26 @@ A published document stores `{source, notes}`. `source` is the allowlisted
 key. `notes` is collaborative text and remains intact when source data changes;
 the root renders it as a shared text field.
 
+Any panel may carry `addedBy`, the DID of the person who added it. A panel
+without one is attributed to the Loom's owner. `addPanel`, `addPiece`, and
+`duplicatePanel` refuse an `addedBy` that is not a DID in W3C DID Core syntax,
+or that is longer than 195 characters. They do not check that the DID names the
+person acting, and a direct write to the panels, or a later write to an
+occurrence, is not checked at all, so the stored value is a claim. The loom
+reconciler is to write each participant's principal there and read it. The
+root's own buttons pass no `addedBy` yet, so the panels they add or duplicate
+are attributed to the owner until the root's handlers link the profile under
+which the person is acting.
+
 `pieceRegistry` derives from piece panels in order, including duplicates.
-`addPiece({piece})` idempotently adds a registration occurrence. `addPanel`
-deduplicates by occurrence identity. `movePanel` and `duplicatePanel` accept an
-optional `before` occurrence; an absent source or anchor refuses. Duplicating
-copies the occurrence fields and retains its target link. The runtime invocation
+`addPiece({piece, addedBy?})` idempotently adds a registration occurrence; for a
+piece already registered it changes nothing, `addedBy` included, though a
+malformed `addedBy` is still refused. `addPanel` deduplicates by occurrence
+identity. `movePanel` and `duplicatePanel` accept an optional `before`
+occurrence; an absent source or anchor refuses. Duplicating copies the
+occurrence's complete target link and its title. It takes `addedBy` from its own
+event, never from the source: a copy is added by whoever duplicates it, and one
+made without `addedBy` is attributed to the owner. The runtime invocation
 identifies the new occurrence, including when that delivery is retried.
 `removePanel` removes only one occurrence and its presentation references.
 `removePiece` unregisters every occurrence of the specified complete piece link.

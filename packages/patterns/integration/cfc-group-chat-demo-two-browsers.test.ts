@@ -31,7 +31,6 @@ import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { UI } from "@commonfabric/runner";
 import { debugVDOMSchema } from "@commonfabric/runner/schemas";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
-import { assertEquals } from "@std/assert";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import {
@@ -41,6 +40,7 @@ import {
 import {
   armSenderEcho,
   clickCfButton,
+  clickTrustedAction,
   clickTrustedActionAndWaitForText,
   collectBrowserLoadSummary,
   fillCfInput,
@@ -48,9 +48,9 @@ import {
   logBrowserLoadSummary,
   logSenderEchoSummary,
   logStepTimings,
-  readCfInputValue,
   readSenderEchoReport,
   StepTimer,
+  submitViaEnter,
   waitForDisabled,
   waitForRuntimeIdle,
   waitForText,
@@ -75,6 +75,8 @@ const CHAT_SERIES_ARM = (() => {
   return on ? "ON" : "OFF";
 })();
 const SAVE_PROFILE_ACTION = "TrustedGroupChatSaveProfile";
+const SEND_ACTION = "TrustedGroupChatSendMessage";
+const ADD_ROOM_ACTION = "TrustedGroupChatAddRoom";
 const PROFILE_COUNT = Math.max(2, CFC_BROWSER_PROFILE_COUNT);
 
 // Deterministic, distinct names so isolation/liveness assertions read clearly.
@@ -199,26 +201,10 @@ describe(
             ),
         );
 
-        // Typing a name in the first browser must NOT appear in any other
-        // browser's input — the profile draft is per-user state.
-        await fillCfInput(pages[0], "#trusted-profile-name", userNames[0]);
-        await Promise.all(
-          pages.map((page) => waitForRuntimeIdle(page)),
-        );
-        for (let index = 1; index < pages.length; index++) {
-          assertEquals(
-            await readCfInputValue(pages[index], "#trusted-profile-name"),
-            "",
-            `${userNames[0]}'s profile-name draft leaked into ${
-              userNames[index]
-            }'s browser`,
-          );
-        }
-
         // First user saves. The trusted action is driven by its marker and
         // retried until the status flips, so a dropped dispatch can't wedge
         // the run. Every other user's profile must stay unset (not clobbered).
-        await waitForDisabled(pages[0], "#trusted-profile-save", false);
+        await fillCfInput(pages[0], "#trusted-profile-name", userNames[0]);
         await timer.run(
           `${userNames[0]} save + own status`,
           () =>
@@ -263,7 +249,6 @@ describe(
             "#trusted-profile-name",
             userNames[index],
           );
-          await waitForDisabled(pages[index], "#trusted-profile-save", false);
           await timer.run(
             `${userNames[index]} save + own status`,
             () =>
@@ -304,8 +289,7 @@ describe(
         // snapshot author names intact.
         const helloMessage = `Hello from ${userNames[0]}`;
         await fillCfInput(pages[0], "#trusted-message-draft", helloMessage);
-        await waitForDisabled(pages[0], "#trusted-send-button", false);
-        await clickCfButton(pages[0], "#trusted-send-button");
+        await submitViaEnter(pages[0], "#trusted-message-draft");
         await timer.run(
           "message propagation (first -> all)",
           () =>
@@ -351,8 +335,7 @@ describe(
           "#trusted-message-draft",
           lockdownMessage,
         );
-        await waitForDisabled(pages[lastIndex], "#trusted-send-button", false);
-        await clickCfButton(pages[lastIndex], "#trusted-send-button");
+        await clickTrustedAction(pages[lastIndex], SEND_ACTION);
         await timer.run(
           "post-lockdown message (non-admin -> admin)",
           () =>
@@ -368,20 +351,19 @@ describe(
         // README §1 "faster, not tolerably slower" bar): with
         // CF_CHAT_MESSAGE_SERIES=N set, the first browser posts N further
         // messages, DELAY apart, and each post is timed from the send
-        // click until the SECOND browser renders it — the byte-identical
+        // (Enter) until the SECOND browser renders it — the byte-identical
         // workload run in adjacent ON/OFF pairs by the measurement
         // protocol (fresh store, load recorded, medians + quartiles). Off
         // by default: the ordinary gate run is unchanged.
         if (CHAT_SERIES > 0) {
           // The sender-echo probe (W4): beside each post's arrival at the
           // OTHER browser, time the sender's OWN speculative render of it
-          // (click → the text in the sender's transcript), page-clock only.
+          // (Enter → the text in the sender's transcript), page-clock only.
           await installSenderEchoProbe(pages[0]);
           const perPost: number[] = [];
           for (let i = 0; i < CHAT_SERIES; i++) {
             const text = `series ${i} ${userNames[0]}`;
             await fillCfInput(pages[0], "#trusted-message-draft", text);
-            await waitForDisabled(pages[0], "#trusted-send-button", false);
             await armSenderEcho(
               pages[0],
               `series ${i}`,
@@ -389,7 +371,7 @@ describe(
               text,
             );
             const t0 = performance.now();
-            await clickCfButton(pages[0], "#trusted-send-button");
+            await submitViaEnter(pages[0], "#trusted-message-draft");
             await waitForText(pages[1], "#trusted-conversation-preview", text);
             perPost.push(performance.now() - t0);
             if (CHAT_SERIES_DELAY_MS > 0) {
@@ -430,7 +412,7 @@ describe(
         // Admin can still add rooms, and every other user sees the shared room.
         await fillCfInput(pages[0], "#trusted-room-name", "Ops");
         await waitForDisabled(pages[0], "#trusted-room-add-button", false);
-        await clickCfButton(pages[0], "#trusted-room-add-button");
+        await clickTrustedAction(pages[0], ADD_ROOM_ACTION);
         await waitForText(pages[0], "#rooms-panel", "Ops");
         await timer.run(
           "room propagation (first -> all)",

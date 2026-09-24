@@ -11,7 +11,7 @@ import {
 } from "@/interface.ts";
 import { isFabricSpecialObject } from "@/types";
 import { debugStr } from "@/value-debug";
-import { hashStringOf } from "@/value-hash.ts";
+import { hashStringOf } from "@/value-hash";
 
 /**
  * Compares two `FabricValue`s for logical (content) equality.
