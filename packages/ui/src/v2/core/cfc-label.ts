@@ -2,13 +2,13 @@
  * Shared helpers for reading CFC labels on the trusted main thread.
  *
  * These let a trusted component query a cell's runtime-attested CFC label (over
- * IPC) and pull a principal out of its `represents-principal` integrity atoms:
- * the owner a profile badge shows, and the author `cf-cfc-authorship` checks a
- * message against.
+ * IPC) and pull the owner a profile badge shows out of its
+ * `represents-principal` integrity atoms.
  */
 
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { representsPrincipalSubjects } from "@commonfabric/runner/cfc/represents-principal";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 export type { CfcLabelView };
 
@@ -19,8 +19,6 @@ export type CfcLabelQueryable = {
 export type CfcLabelResolvable = {
   resolveAsCell(): Promise<unknown> | unknown;
 };
-
-const REPRESENTS_PRINCIPAL = "represents-principal";
 
 export const canQueryCfcLabel = (value: unknown): value is CfcLabelQueryable =>
   isObjectOrArray(value) &&
@@ -82,43 +80,6 @@ export const readCfcLabelView = async (
 };
 
 /**
- * The DID a `represents-principal` integrity atom names, in either the object
- * form (`{ kind, subject }`) or the string form (`represents-principal:<did>`),
- * trimmed; `undefined` for any other atom, or for one naming no DID.
- */
-const representsPrincipalSubject = (atom: unknown): string | undefined => {
-  if (typeof atom === "string") {
-    if (!atom.startsWith(`${REPRESENTS_PRINCIPAL}:`)) {
-      return undefined;
-    }
-    const subject = atom.slice(REPRESENTS_PRINCIPAL.length + 1).trim();
-    return subject.length > 0 ? subject : undefined;
-  }
-  if (!isObjectNotArray(atom)) {
-    return undefined;
-  }
-  const record = atom as Record<string, unknown>;
-  if (
-    record.kind !== REPRESENTS_PRINCIPAL || typeof record.subject !== "string"
-  ) {
-    return undefined;
-  }
-  const subject = record.subject.trim();
-  return subject.length > 0 ? subject : undefined;
-};
-
-/** Every DID the `represents-principal` atoms of `entries` name, in order. */
-const representsPrincipalSubjects = (
-  entries: CfcLabelView["entries"],
-): string[] =>
-  entries.flatMap((entry) =>
-    (entry.label.integrity ?? []).flatMap((atom) => {
-      const subject = representsPrincipalSubject(atom);
-      return subject === undefined ? [] : [subject];
-    })
-  );
-
-/**
  * Extracts the owning principal DID from a `represents-principal` integrity atom
  * anywhere in the label. Owner-protected profile fields (`name`/`avatar`/…)
  * carry this atom at their own paths rather than the root, so every entry is
@@ -128,24 +89,3 @@ export const ownerPrincipalFromLabel = (
   view: CfcLabelView | undefined,
 ): string | undefined =>
   view === undefined ? undefined : representsPrincipalSubjects(view.entries)[0];
-
-/**
- * The DIDs that could be the principal the value labeled by `view` represents,
- * as an author claim is checked against: each distinct DID a
- * `represents-principal` atom names at the root or on a top-level field, in
- * order of first appearance. A profile's owner-protected fields carry their
- * owner's atom at their own top-level paths; atoms deeper down come from
- * documents the value links, and are not counted. One DID is the principal.
- * None means the label names no principal. More than one means it names no
- * single principal, and a claim resting on it must not verify.
- */
-export const authorPrincipalCandidates = (
-  view: CfcLabelView | undefined,
-): string[] =>
-  view === undefined ? [] : [
-    ...new Set(
-      representsPrincipalSubjects(
-        view.entries.filter((entry) => entry.path.length <= 1),
-      ),
-    ),
-  ];

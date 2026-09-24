@@ -1,9 +1,9 @@
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
+import { authorPrincipalCandidates } from "@commonfabric/runner/cfc/represents-principal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { css, html } from "lit";
 
 import { BaseElement } from "../../core/base-element.ts";
-import { authorPrincipalCandidates } from "../../core/cfc-label.ts";
 import { initialsForName } from "../cf-avatar/index.ts";
 
 export type CfcAuthorshipState = "verified" | "unverified" | "unknown";
