@@ -125,6 +125,9 @@ export default pattern(() => {
   const assert_starts_empty = assert(() =>
     sentIn(messages).length === 0 && alice.participants.length === 0
   );
+  const assert_composer_disabled_before_profile_resolves = assert(() =>
+    composerDisabled(alice[UI]) === true
+  );
   const assert_composer_enabled_with_profile = assert(() =>
     composerDisabled(alice[UI]) === false
   );
@@ -180,6 +183,9 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      // Alice's profile link holds nothing yet, as a `#profile` wish does before
+      // it resolves.
+      { assertion: assert_composer_disabled_before_profile_resolves },
       { action: action_link_alice_profile },
       { assertion: assert_starts_empty },
       { assertion: assert_composer_enabled_with_profile },
