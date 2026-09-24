@@ -256,20 +256,6 @@ let inboundHoldInstalled = false;
  */
 let heldInbound: (() => void)[] | undefined;
 
-/** Starts holding inbound frames, which `installInboundHold` must allow. */
-function startHoldingInbound(): void {
-  if (!inboundHoldInstalled) {
-    throw new Error(
-      "inbound frames are not holdable in this session; create it with " +
-        "`inboundHold: true`",
-    );
-  }
-  if (heldInbound !== undefined) {
-    throw new Error("inbound frames are already held");
-  }
-  heldInbound = [];
-}
-
 /**
  * Makes the storage WebSocket's inbound frames holdable: while a hold is in
  * effect, frames queue in arrival order, and `releaseInbound` delivers them.
@@ -457,6 +443,20 @@ const handlers: Record<
   },
 
   async send({ handler, event, trustedUi, idle: doIdle, thenHoldInbound }) {
+    // Refused before the event goes out, rather than after it has committed.
+    // A send waits on the store confirming the event's commit, which a
+    // runtime holding its inbound frames never hears.
+    if (heldInbound !== undefined) {
+      throw new Error(
+        "cannot send while inbound frames are held; `releaseInbound` first",
+      );
+    }
+    if (thenHoldInbound === true && !inboundHoldInstalled) {
+      throw new Error(
+        "inbound frames are not holdable in this session; create it with " +
+          "`inboundHold: true`",
+      );
+    }
     if (thenHoldInbound === true && doIdle === false) {
       throw new Error(
         "`thenHoldInbound` holds after the event has run, which `idle: false` " +
@@ -503,7 +503,7 @@ const handlers: Record<
     // this runtime until `releaseInbound`. The event cannot run here with
     // inbound frames held, since its run waits on the store confirming its
     // commit, so the hold can only start after it.
-    if (thenHoldInbound === true) startHoldingInbound();
+    if (thenHoldInbound === true) heldInbound = [];
     return {};
   },
 
