@@ -856,7 +856,8 @@ inside those payloads.
 | `TrustedActionUiContract<…>` | `{ uiContract: { helper: "UiAction", action, trustedPattern, requiredEventIntegrity? } }` |
 | `ExactCopy<T, S>` | `{ exactCopyOf: S }` |
 | `ProjectionPath<T, F, P>` | `{ projection: { from: F, path: P } }` |
-| `ProjectionOf<T, P>` / `Projection<T, P>` | `{ projection: { from: "/", path: P } }` |
+| `ProjectionOf<T, P>` | `{ projection: { from: "/", path: P } }` |
+| `Projection<SourceRef>` | `{ projection: { from: "/", path: Path } }` over the `Root` that `SourceRef`, a `Ref<Root, Path>`, carries; a source that carries no root is `never` |
 
 Mechanics:
 

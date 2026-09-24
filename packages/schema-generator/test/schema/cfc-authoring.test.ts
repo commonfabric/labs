@@ -279,6 +279,57 @@ describe("Schema: CFC authoring aliases", () => {
     });
   });
 
+  it("formats a projection reached through a user alias over the root its reference carries", async () => {
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type ProjectionPath<T, From extends string, Path extends readonly unknown[]> = Cfc<T, { projection: { from: From; path: Path } }>;
+      type ProjectionOf<Root, PathTuple extends readonly unknown[]> = ProjectionPath<Root, "/", PathTuple>;
+      type Ref<Root, Path extends readonly unknown[]> = {
+        readonly __ct_ref_root__?: Root;
+        readonly __ct_ref_path__?: Path;
+      };
+      type Projection<SourceRef> = SourceRef extends Ref<
+        infer Root,
+        infer Path extends readonly unknown[]
+      > ? ProjectionOf<Root, Path> : never;
+      type MyProjection<R> = Projection<R>;
+      declare const ref: Ref<{ title: string }, readonly ["nested", "path"]>;
+
+      interface SchemaRoot {
+        direct: Projection<Ref<{ title: string }, readonly ["nested", "path"]>>;
+        aliased: MyProjection<Ref<{ title: string }, readonly ["nested", "path"]>>;
+        directFromValue: Projection<typeof ref>;
+        aliasedFromValue: MyProjection<typeof ref>;
+        directWithoutRoot: Projection<{ title: string }>;
+        aliasedWithoutRoot: MyProjection<{ title: string }>;
+      }
+    `,
+      "SchemaRoot",
+    );
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+
+    expect(schema.properties?.aliased).toEqual(schema.properties?.direct);
+    expect(schema.properties?.aliasedFromValue).toEqual(
+      schema.properties?.directFromValue,
+    );
+    expect(schema.properties?.aliasedWithoutRoot).toEqual(
+      schema.properties?.directWithoutRoot,
+    );
+    expect(schema.properties?.directWithoutRoot).toBe(false);
+    expect(schema.properties?.directFromValue).toEqual(
+      schema.properties?.direct,
+    );
+    expect(schema.properties?.direct).toEqual({
+      type: "object",
+      properties: { title: { type: "string" } },
+      required: ["title"],
+      ifc: { projection: { from: "/", path: "/nested/path" } },
+    });
+  });
+
   it("expands nested aliases before lowering canonical Cfc metadata", async () => {
     const code = `
       type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
@@ -1050,6 +1101,23 @@ describe("Schema: CFC authoring aliases", () => {
         }
       `);
       expect(schema.ifc).toEqual({ confidentiality: [{ label: "ordinary" }] });
+    });
+
+    it("reads a union label element as its authored spelling does", async () => {
+      const { schema } = await generate(`
+        type Labeled<L extends readonly unknown[]> = Confidential<string, L>;
+        interface Holder { value: Labeled<readonly ["a" | "b"]> }
+      `);
+      const { type, checker } = await getTypeFromCode(
+        ALIASES + `
+        interface SchemaRoot { t: Confidential<string, readonly ["a" | "b"]> }
+      `,
+        "SchemaRoot",
+      );
+      const authored = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+      expect(schema.ifc).toEqual((authored.properties?.t as any)?.ifc);
     });
 
     it("lowers a label holding a parameter", async () => {

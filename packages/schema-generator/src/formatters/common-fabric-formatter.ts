@@ -54,6 +54,9 @@ const CFC_ALIAS_NAMES: ReadonlySet<string> = new Set(CFC_CANONICAL_ALIAS_NAMES);
 /** The property `AnyOf<X>` is as a type (`@commonfabric/api/cfc`). */
 const CFC_ANY_OF_BRAND = "__ct_cfc_any_of__";
 
+/** The member of `Ref<Root, Path>` (`@commonfabric/api/cfc`) that holds `Root`. */
+const CFC_REF_ROOT = "__ct_ref_root__";
+
 /**
  * The type of the value `member` holds, given `type`, its type: `type` less
  * the `undefined` that an optional member's `?` adds.
@@ -1357,8 +1360,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     resolved: ResolvedCfcAlias,
     context: GenerationContext,
   ): MutableJSONSchema {
-    const baseType = resolved.aliasArgs[0];
-    if (!baseType) {
+    if (!resolved.aliasArgs[0]) {
       throw new Error(`${resolved.aliasName}<T> requires type argument`);
     }
 
@@ -1371,7 +1373,15 @@ export class CommonFabricFormatter implements TypeFormatter {
     const argNodes = resolved.aliasArgNodes ??
       this.#getAliasTypeArgumentNodes(context);
     const parameterTypes = resolved.parameterTypes ?? NO_PARAMETER_TYPES;
-    const baseTypeNode = argNodes?.[0];
+    // `Projection<SourceRef>` is the `Root` its `Ref<Root, Path>` carries, so
+    // that is the payload, as `#buildProjectionMetadata` reads `Path` from the
+    // same reference. A source that carries no root projects to `never`, as
+    // `Projection` resolves it.
+    const payload = resolved.aliasName === "Projection"
+      ? this.#projectionRoot(resolved.aliasArgs[0]!, argNodes?.[0], context)
+      : [resolved.aliasArgs[0]!, argNodes?.[0]] as const;
+    if (!payload) return false;
+    const [baseType, baseTypeNode] = payload;
     // A payload still referring to a parameter that substitution had an
     // argument for but did not reach would be read with that parameter
     // unbound, so it is a guess.
@@ -1438,6 +1448,36 @@ export class CommonFabricFormatter implements TypeFormatter {
       context,
       baseTypeNode,
     );
+  }
+
+  /**
+   * The `Root` that `sourceRef`, a projection's `Ref<Root, Path>`, carries, read
+   * from its `__ct_ref_root__` member as the library's `Projection` infers it,
+   * with `Root`'s node where `sourceRefNode` writes it, and `undefined` for a
+   * source that carries no root.
+   */
+  #projectionRoot(
+    sourceRef: ts.Type,
+    sourceRefNode: ts.TypeNode | undefined,
+    context: GenerationContext,
+  ): readonly [ts.Type, ts.TypeNode | undefined] | undefined {
+    const checker = context.typeChecker;
+    const member = sourceRef.getProperty(CFC_REF_ROOT);
+    if (!member) return undefined;
+    const root = memberValueType(
+      member,
+      checker.getTypeOfSymbol(member),
+      checker,
+    );
+    const rootNode = sourceRefNode && ts.isTypeReferenceNode(sourceRefNode)
+      ? sourceRefNode.typeArguments?.[0]
+      : undefined;
+    return [
+      root,
+      rootNode && checker.getTypeFromTypeNode(rootNode) === root
+        ? rootNode
+        : undefined,
+    ];
   }
 
   #formatCfcAliasTypeNode(
@@ -2147,15 +2187,6 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
     if (type.flags & ts.TypeFlags.Undefined) {
       return undefined;
-    }
-
-    const typeText = context.typeChecker.typeToString(type);
-    if (
-      typeText.length >= 2 &&
-      ((typeText.startsWith('"') && typeText.endsWith('"')) ||
-        (typeText.startsWith("'") && typeText.endsWith("'")))
-    ) {
-      return typeText.slice(1, -1);
     }
 
     // `AnyOf<X>` is `{ readonly __ct_cfc_any_of__?: X }` as a type. That brand
