@@ -35,6 +35,7 @@ import { isDID } from "@commonfabric/identity/did";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
+import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 import type { Cell } from "../cell.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
@@ -226,8 +227,9 @@ const isActorOwnedAlternative = (atom: unknown, actor: string): boolean => {
     case CFC_ATOM_TYPE.Resource:
       return hasExactKeys(atom, ["type", "class", "subject"]) &&
         typeof atom.class === "string" && atom.subject === actor;
-    // The actor's home space is the space named by the actor's own DID, so
-    // its readers are the actor alone.
+    // The actor's home space is the space named by the actor's own DID. Its
+    // access list is the actor's to write, so what it admits is the actor's
+    // decision, as with a clause naming the actor.
     case CFC_ATOM_TYPE.Space:
       return hasExactKeys(atom, ["type", "id"]) && atom.id === actor;
     case CFC_ATOM_TYPE.PersonalSpace:
@@ -496,7 +498,7 @@ const canonicalJson = (value: JSONValue): string =>
     (_key, entry: unknown) =>
       isObjectNotArray(entry)
         ? Object.fromEntries(
-          Object.keys(entry).sort().map((key) => [key, entry[key]]),
+          utf8SortedKeysOf(entry).map((key) => [key, entry[key]]),
         )
         : entry,
   );
