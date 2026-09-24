@@ -1073,12 +1073,29 @@ describe("Schema: CFC authoring aliases", () => {
       expect(diagnostics).toEqual([]);
     });
 
-    it("reports a payload holding a parameter it cannot read, and keeps its structure", async () => {
+    it("reads an intersection payload with its parameter bound to its argument", async () => {
       // The instantiation of an intersection payload has two members beside
-      // the metadata carrier, so it does not say which is the payload.
+      // the metadata carrier, so the declaration is read with `T` bound.
       const { schema, diagnostics } = await generate(`
         type Tagged<T> = Confidential<{ value: T } & { tag: string }, readonly ["a"]>;
         interface Holder { value: Tagged<string> }
+      `);
+      expect(schema).toEqual({
+        type: "object",
+        properties: { value: { type: "string" }, tag: { type: "string" } },
+        required: ["value", "tag"],
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("reports a payload holding a parameter it cannot read, and keeps its structure", async () => {
+      // `T["name"]` is a type the checker defers, which a bound `T` does not
+      // reach.
+      const { schema, diagnostics } = await generate(`
+        type Named<T extends { name: unknown }> =
+          Confidential<{ value: T["name"] } & { tag: string }, readonly ["a"]>;
+        interface Holder { value: Named<{ name: string }> }
       `);
       expect(schema).toEqual({
         type: "object",
@@ -1089,9 +1106,7 @@ describe("Schema: CFC authoring aliases", () => {
       expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
         "schema-type:unread",
       ]);
-      expect(diagnostics[0]!.message).toContain(
-        "`{ value: T; } & { tag: string; }`",
-      );
+      expect(diagnostics[0]!.message).toContain('`T["name"]`');
     });
 
     it("keeps the labels nested in a payload that holds a parameter", async () => {

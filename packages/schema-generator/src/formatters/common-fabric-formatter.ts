@@ -306,10 +306,6 @@ const holdsTypeParameter = (
     holdsTypeParameter(child, checker, parameters) || undefined) ?? false);
 
 /**
- * The type `parameterTypes` gives `node` when `node` is a bare reference to one
- * of its parameters.
- */
-/**
  * The innermost payload of `type`, a CFC alias chain's instantiation, or
  * `undefined` where it cannot be told apart. Every CFC alias adds its metadata
  * to its payload as one more member of an intersection, a carrier holding only
@@ -329,6 +325,10 @@ const cfcPayloadOf = (type: ts.Type): ts.Type | undefined => {
   return rest.length === 1 ? rest[0] : undefined;
 };
 
+/**
+ * The type `parameterTypes` gives `node` when `node` is a bare reference to one
+ * of its parameters.
+ */
 const boundParameterType = (
   node: ts.TypeNode,
   checker: ts.TypeChecker,
@@ -1458,10 +1458,10 @@ export class CommonFabricFormatter implements TypeFormatter {
    * that is not itself a CFC alias. A node holding a parameter that has only a
    * type, such as `T[]`, is read from `instantiated`, the type the chain
    * instantiates, which holds the payload with that parameter's argument in.
-   * Where there is no such type to read, the node is not rebuilt around the
-   * parameter's type: it keeps the rest of its structure and metadata, the
-   * parameter's positions read as accepting any value, and it is reported as
-   * not fully read.
+   * Where that payload cannot be told apart, the declaration is read with each
+   * such parameter bound to its argument's type
+   * (`GenerationContext.boundTypeParameters`), and a use the binding cannot
+   * reach, such as `T["name"]`, is reported as not fully read.
    */
   #formatDeclaredPayload(
     baseType: ts.Type,
@@ -1483,7 +1483,19 @@ export class CommonFabricFormatter implements TypeFormatter {
           undefined,
         );
       }
-      context.uninterpretedTypeNodes?.push(baseTypeNode);
+      // Otherwise the declaration is read with each parameter bound to its
+      // argument's type, as the checker instantiates it.
+      return this.#schemaGenerator.formatChildType(
+        baseType,
+        {
+          ...context,
+          boundTypeParameters: {
+            types: parameterTypes,
+            declaredNode: baseTypeNode,
+          },
+        },
+        baseTypeNode,
+      );
     }
     return this.#schemaGenerator.formatChildType(
       baseType,

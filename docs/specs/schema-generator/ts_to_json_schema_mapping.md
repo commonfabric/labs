@@ -925,12 +925,16 @@ Mechanics:
   chain instantiates. Every CFC alias adds its metadata to its payload as one
   more member of an intersection, a carrier holding only `__ct_cfc__`, so the
   intersection's other member is the innermost payload, the argument in
-  wherever the declaration wrote the parameter (`cfcPayloadOf`). Where that
-  cannot be told apart, in a payload that is itself an intersection or a
-  union, the node is not rebuilt around the type: it keeps the rest of its
-  structure and metadata, the parameter's positions read as accepting
-  anything, and it is reported as not fully read. A label reads a parameter it
-  holds as its type wherever the label reader pairs that position. A `typeof` binding
+  wherever the declaration wrote the parameter (`cfcPayloadOf`). A payload
+  that is itself an intersection or a union has no one other member, and is
+  read from its declaration with each parameter bound to its argument's type
+  (`GenerationContext.boundTypeParameters`): wherever the walk reaches a bound
+  parameter, in a union's member, an intersection's part, an array's element,
+  or an object's property, its argument's type is read. A use the binding
+  cannot reach, one the checker defers such as `T["name"]` or a conditional
+  type, accepts any value there, and the payload is reported as not fully
+  read. A label reads a parameter it holds as its type wherever the label
+  reader pairs that position. A `typeof` binding
   supplied only as a type argument cannot be read from a type, so a
   `writeAuthorizedBy` claim whose binding arrives that way is not emitted; one
   written in the alias declaration itself is read from the declaration.

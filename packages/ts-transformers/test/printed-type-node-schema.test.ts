@@ -379,6 +379,44 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
             labelled(value),
           ],
           [
+            "an intersection holding it",
+            `type Sec<T> = Confidential<{ value: T } & { tag: string }, ["secret"]>;`,
+            `Integrity<Sec<string>, ["trusted"]>`,
+            labelled({
+              type: "object",
+              properties: {
+                value: { type: "string" },
+                tag: { type: "string" },
+              },
+              required: ["value", "tag"],
+            }),
+          ],
+          [
+            "a discriminated union holding it",
+            `type Sec<T> = Confidential<{ kind: "a"; value: T } | { kind: "b"; count: number }, ["secret"]>;`,
+            `Integrity<Sec<string>, ["trusted"]>`,
+            labelled({
+              anyOf: [
+                {
+                  type: "object",
+                  properties: {
+                    kind: { type: "string", enum: ["a"] },
+                    value: { type: "string" },
+                  },
+                  required: ["kind", "value"],
+                },
+                {
+                  type: "object",
+                  properties: {
+                    kind: { type: "string", enum: ["b"] },
+                    count: { type: "number" },
+                  },
+                  required: ["kind", "count"],
+                },
+              ],
+            }),
+          ],
+          [
             "another generic alias holding it",
             `type Sec<T> = Confidential<Integrity<T[], ["inner"]>, ["secret"]>;`,
             `MaxConfidentiality<Sec<string>, ["top"]>`,
@@ -402,6 +440,42 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
           );
           expect((input.properties as Schema).a).toEqual(expected);
           expect((output.properties as Schema).a).toEqual(expected);
+        });
+      }
+
+      // A union's argument schema is read from its written node and its
+      // result schema from its type, which write the same schema in different
+      // forms: `anyOf` in the members' written order, or a type list.
+      for (
+        const [spelling, payload, input, output] of [
+          [
+            "a union holding it",
+            "T | number",
+            { anyOf: [{ type: "string" }, { type: "number" }] },
+            { type: ["number", "string"] },
+          ],
+          [
+            "a union of an array and an object holding it",
+            "T[] | { value: T }",
+            { anyOf: [strings, value] },
+            { anyOf: [value, strings] },
+          ],
+        ] as const
+      ) {
+        it(`keeps a payload that is ${spelling}`, async () => {
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, Integrity, pattern } from "commonfabric";
+type Sec<T> = Confidential<${payload}, ["secret"]>;
+export default pattern<{ a: Integrity<Sec<string>, ["trusted"]> }>(({ a }) => ({ a }));`,
+          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+          const schemas = patternSchemas(parseModule(files["/main.tsx"]!));
+          expect((schemas.input.properties as Schema).a).toEqual(
+            labelled(input),
+          );
+          expect((schemas.output.properties as Schema).a).toEqual(
+            labelled(output),
+          );
         });
       }
     });

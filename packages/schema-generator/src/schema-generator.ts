@@ -914,6 +914,25 @@ function typeReadForPrintedNode(
 }
 
 /**
+ * The type `type` reads as where it is a type parameter the context binds
+ * (`GenerationContext.boundTypeParameters`): its argument's type. `undefined`
+ * for any other type.
+ */
+function boundArgumentType(
+  type: ts.Type,
+  context: GenerationContext,
+): ts.Type | undefined {
+  const bound = context.boundTypeParameters;
+  if (!bound || (type.flags & ts.TypeFlags.TypeParameter) === 0) {
+    return undefined;
+  }
+  const declaration = type.symbol?.declarations?.find(
+    ts.isTypeParameterDeclaration,
+  );
+  return declaration && bound.types.get(declaration);
+}
+
+/**
  * Main schema generator that uses a chain of formatters
  */
 export class SchemaGenerator {
@@ -1138,6 +1157,24 @@ export class SchemaGenerator {
     context: GenerationContext,
     typeNode?: ts.TypeNode,
   ): MutableJSONSchema {
+    // A bound type parameter reads as its argument's type, which is read as
+    // it is, apart from the declaration that binds it.
+    const argument = boundArgumentType(type, context);
+    if (argument) {
+      const { boundTypeParameters: _, ...unbound } = context;
+      return this.formatChildType(argument, unbound, undefined);
+    }
+    // A type still depending on a parameter, where no binding reaches it, is
+    // not fully read. One the checker defers, such as `T["name"]`, has no
+    // schema to read, so it accepts any value, as a conditional type does.
+    const bound = context.boundTypeParameters;
+    if (bound && (type.flags & ts.TypeFlags.Instantiable) !== 0) {
+      const unread = context.uninterpretedTypeNodes;
+      const node = typeNode ?? bound.declaredNode;
+      if (unread && !unread.includes(node)) unread.push(node);
+      if ((type.flags & ts.TypeFlags.TypeParameter) === 0) return {};
+    }
+
     const readInPlace = typeReadForPrintedNode(
       type,
       typeNode,

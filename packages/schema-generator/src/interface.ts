@@ -180,6 +180,20 @@ export interface GenerationContext {
    * every child context.
    */
   uninterpretedTypeNodes?: ts.TypeNode[];
+
+  /**
+   * Type parameters read as their arguments' types, for a payload read from
+   * the declaration that is written in them: a CFC alias chain entered from
+   * its type has no argument nodes to substitute. Wherever a bound parameter
+   * appears, its argument's type is read. A type that still depends on one
+   * where the binding cannot reach, such as `T["name"]` or a conditional
+   * type, is reported through `uninterpretedTypeNodes` as not fully read.
+   */
+  boundTypeParameters?: {
+    readonly types: ReadonlyMap<ts.TypeParameterDeclaration, ts.Type>;
+    /** The declared payload, reported where no nearer node is at hand. */
+    readonly declaredNode: ts.TypeNode;
+  };
 }
 
 /**

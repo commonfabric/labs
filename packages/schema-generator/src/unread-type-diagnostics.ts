@@ -31,11 +31,16 @@ export function reportUnreadTypes(
 ): void {
   const printer = ts.createPrinter({ removeComments: true });
   const blank = ts.createSourceFile("unread.ts", "", ts.ScriptTarget.Latest);
+  // A parsed node's literals are read from its own file's text, so it prints
+  // against that file. A node built afresh has no file and prints alone.
   const texts = [
     ...new Set(
       unread.map((typeNode) =>
-        printer.printNode(ts.EmitHint.Unspecified, typeNode, blank)
-          .replace(/\s+/g, " ")
+        printer.printNode(
+          ts.EmitHint.Unspecified,
+          typeNode,
+          sourceFileOf(typeNode) ?? blank,
+        ).replace(/\s+/g, " ")
       ),
     ),
   ];
@@ -63,4 +68,11 @@ export function reportUnreadTypes(
   } else {
     logger.warn("schema-gen", () => diagnostic.message);
   }
+}
+
+/** The file `node` was parsed from, or `undefined` for a node built afresh. */
+function sourceFileOf(node: ts.Node): ts.SourceFile | undefined {
+  let current: ts.Node | undefined = node;
+  while (current && !ts.isSourceFile(current)) current = current.parent;
+  return current;
 }
