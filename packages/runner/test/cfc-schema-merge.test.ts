@@ -1181,7 +1181,8 @@ describe("mergeCfcSchemaEnvelopes", () => {
       },
     });
     // In a release of the piece, which is the only writer that may adopt.
-    const merge = (stored: unknown, candidate: unknown, release = true) =>
+    type Claim = ReturnType<typeof claim>;
+    const merge = (stored: Claim, candidate: Claim, release = true) =>
       (
         (mergeCfcSchemaEnvelopes({
           type: "object",
