@@ -1,0 +1,66 @@
+name: Tomorrow's Test Order
+
+# Runs every CI test suite at the head of main under the seed the next Pacific
+# day's commits will shuffle their tests by, a day before any commit takes it.
+#
+# Every test run shuffles its tests by a seed, and the seed is the Pacific day
+# the commit under test was committed on (docs/development/TESTING.md, "Every
+# test run shuffles its order"). The order therefore changes with the first
+# commit of each Pacific day. This run fails when a test fails under the next
+# day's seed.
+#
+# 11:00 UTC is 04:00 in the Pacific zone in summer and 03:00 in winter. Either
+# way it is early on a Pacific day, so one schedule entry serves the whole
+# year, and a run that starts hours late still asks for the same next day.
+#
+# The suites are the CI workflow's own, called with the seed. The CI workflow
+# skips its coverage, topology, attestation and deploy jobs when called. The
+# records relay follows this workflow, and the records carry the seed they
+# ran under, which keeps them apart from the commit's own runs.
+on:
+  schedule:
+    - cron: "0 11 * * *" # Daily, 11:00 UTC
+  workflow_dispatch: {} # Allow manual trigger
+
+jobs:
+  seed:
+    name: "Tomorrow's seed"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      seed: ${{ steps.seed.outputs.seed }}
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: 🦕 Setup Deno
+        uses: ./.github/actions/deno-setup
+
+      - name: 🔍 Verify lock file & install dependencies
+        uses: ./.github/actions/deno-install
+
+      - name: 🔍 Resolve the seed of the next Pacific day
+        id: seed
+        run: |
+          seed=$(deno task -q test-seed --tomorrow)
+          echo "seed=$seed" >> "$GITHUB_OUTPUT"
+
+  # The name is what the run's checks on the commit are listed under, so it
+  # has to tell them apart from the checks of the CI workflow's own run.
+  ci:
+    name: "Tomorrow's order"
+    needs: seed
+    uses: ./.github/workflows/deno.yml
+    with:
+      shuffle-seed: ${{ needs.seed.outputs.seed }}
+    # A called workflow's jobs can hold no more than this grants, and GitHub
+    # checks each of them against it before the run starts, including the
+    # jobs the call skips. These are the permissions the CI workflow's jobs
+    # ask for.
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      id-token: write
+      attestations: write

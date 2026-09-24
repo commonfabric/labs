@@ -8,6 +8,7 @@
  * adapter, scoped storage, runtime-client IPC, and SQLite bridge together.
  */
 
+import { debugStr } from "@commonfabric/data-model";
 import { env, type Page, waitForCondition } from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { ANYONE_USER } from "@commonfabric/memory/acl";
@@ -313,9 +314,9 @@ async function issueCommand(
   if (!result?.ok) {
     const context = await readContextHandleProbe(page);
     throw new Error(
-      `cf-iframe command ${JSON.stringify(command.id)} failed: ` +
-        `${result?.error ?? "unknown error"}\nContext probe: ` +
-        JSON.stringify(context, null, 2),
+      debugStr`cf-iframe command $quote${command.id} failed: ` +
+        `${result?.error ?? "unknown error"}\n` +
+        debugStr`Context probe: $quote,indent,long${context}`,
     );
   }
   return result;
@@ -335,7 +336,7 @@ async function resolveBridgeIdentity(
     ?.identity;
   if (!identity?.instanceId) {
     throw new Error(
-      `cf-iframe resolve ${JSON.stringify(id)} returned no instance identity`,
+      debugStr`cf-iframe resolve $quote${id} returned no instance identity`,
     );
   }
   return identity;
@@ -419,7 +420,7 @@ async function waitForBridgeRowsContaining(
   if (result?.error) {
     throw new Error(
       `cf-iframe reported an error while waiting for SQLite rows ` +
-        `${JSON.stringify(expected)}: ${result.error}`,
+        debugStr`$quote,long${expected}: ${result.error}`,
     );
   }
 }

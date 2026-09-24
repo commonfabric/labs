@@ -17,6 +17,7 @@ import { CfHarnessEngine } from "../src/engine.ts";
 import type { HarnessFetch } from "../src/contracts/http-fetch.ts";
 import type { HarnessResearchRunSummary } from "../src/contracts/research.ts";
 import { REUSE_RESEARCH_RUNS } from "./fixtures/research-reuse.ts";
+import { PATTERN_COMPOSITION_EXAMPLE } from "../src/pattern-authoring.ts";
 import type { FabricPatternInstantiations } from "../src/fabric-instantiations.ts";
 import { comparableEntityHash } from "../src/fabric-observations.ts";
 import {
@@ -588,54 +589,6 @@ describe("run-pattern over the pattern index", () => {
   });
 
   describe("runPatternTool", () => {
-    it("refuses the rehearsal task's unexplained rewrite before accessing the index", async () => {
-      const index = stubIndex({});
-      const result = await createEngine(index, {
-        taskText: REUSE_RESEARCH_RUNS[0].kit.task,
-        researchRuns: REUSE_RESEARCH_RUNS,
-      }).invokeBuiltinTool("run_pattern", {
-        sourceText: DOUBLING_PATTERN_SOURCE,
-        inputs: { n: 21 },
-      });
-      const output = result.output as RunPatternToolErrorOutput;
-      expect(output.status).toBe("error");
-      expect(output.message).toContain(
-        "cf:pattern:-xx1hxtvAbY7AL6FeYuQWuEzbC0nOpUOHgXseIac2_w",
-      );
-      expect(output.message).toContain(
-        "import as cf:pattern:<id>, or supply reuseReasons[<id>] as one nonblank line",
-      );
-      expect(output).not.toHaveProperty("resultRef");
-      expect(index.calls).toEqual([]);
-    });
-
-    it("runs a narrower atom when the author states why the selected mailbox does not fit", async () => {
-      const result = await createEngine(undefined, {
-        taskText: REUSE_RESEARCH_RUNS[0].kit.task,
-        researchRuns: REUSE_RESEARCH_RUNS,
-      }).invokeBuiltinTool("run_pattern", {
-        sourceText: DOUBLING_PATTERN_SOURCE,
-        reuseReasons: {
-          "-xx1hxtvAbY7AL6FeYuQWuEzbC0nOpUOHgXseIac2_w":
-            "This atom doubles a count already supplied as input and does not read mail.",
-        },
-        inputs: { n: 21 },
-        resultSchema: DOUBLED_RESULT_SCHEMA,
-      });
-      const output = result.output as RunPatternToolSuccessOutput;
-      expect(output.status).toBe("ok");
-      expect(output.value).toEqual({ doubled: 42 });
-    });
-
-    it("returns an error for a malformed Fabric import during the reuse check", async () => {
-      const result = await createEngine(undefined, {
-        researchRuns: REUSE_RESEARCH_RUNS,
-      }).invokeBuiltinTool("run_pattern", {
-        sourceText: 'import Mailbox from "cf:pattern:invalid";',
-      });
-      expect(result.output).toMatchObject({ status: "error" });
-    });
-
     it("runs an indexed pattern and returns its result", async () => {
       const index = stubIndex({ "pat-doubler": INDEXED_PATTERN });
       const result = await createEngine(index, {
@@ -1140,6 +1093,23 @@ describe("run-pattern over the pattern index", () => {
   });
 
   describe("composing published patterns", () => {
+    it("compiles the authoring template against the mailbox reader it describes", async () => {
+      const reader = await Deno.readTextFile(
+        new URL(
+          "../../patterns/primitives/mailbox-month-headers.tsx",
+          import.meta.url,
+        ),
+      );
+      const readerId = await entryIdentityOf(reader);
+      const source = PATTERN_COMPOSITION_EXAMPLE.replace(
+        "INSPECTED_READER_ID",
+        readerId,
+      );
+      expect(await composedIdentityOf(source, [reader])).toMatch(
+        /^[A-Za-z0-9_-]{43}$/,
+      );
+    });
+
     /**
      * An index record for `source`, stored under the identity that source
      * compiles to — which is what a `cf:pattern:` import addresses, so a

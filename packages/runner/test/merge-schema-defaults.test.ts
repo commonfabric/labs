@@ -8,6 +8,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 
+import { toCell } from "../src/back-to-cell.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import {
   extractDefaultValues,
@@ -21,6 +22,41 @@ function unreadValue(): object {
       throw new Error("Default merging enumerated a retained value.");
     },
   });
+}
+
+/**
+ * Returns a stand-in for a query-result view of the document `id`, whose
+ * contents must remain unread.
+ */
+function viewOf(id: string): object {
+  const cell = {
+    getAsNormalizedFullLink: () => ({ space: "did:key:merge", id, path: [] }),
+  };
+  return new Proxy({}, {
+    get(_target, key) {
+      return key === toCell ? () => cell : undefined;
+    },
+    ownKeys() {
+      throw new Error("Default merging enumerated a view.");
+    },
+  });
+}
+
+/**
+ * Returns two different union branches that each add the same default, so
+ * that each merges on its own and the candidates they build agree.
+ */
+function equivalentDefaultBranches(): JSONSchema[] {
+  return [
+    { type: "object", properties: { count: { type: "number", default: 3 } } },
+    {
+      type: "object",
+      properties: {
+        count: { type: "number", default: 3 },
+        label: { type: "string" },
+      },
+    },
+  ];
 }
 
 describe("mergeSchemaDefaults", () => {
@@ -67,39 +103,37 @@ describe("mergeSchemaDefaults", () => {
     expect(value.retained.count).toBe(3);
   });
 
-  it("keeps the merged snapshot when materialized callbacks differ", () => {
+  it("returns the value itself where a member reads as a new callback each time", () => {
     const value = {
       get retained() {
         return () => 3;
       },
     };
-    const result = mergeSchemaDefaults(value, undefined, { type: "object" });
 
-    expect(result).not.toBe(value);
-    expect(result.retained()).toBe(3);
-    expect(result.retained).toBe(result.retained);
+    expect(mergeSchemaDefaults(value, undefined, { type: "object" }))
+      .toBe(value);
   });
 
-  it("keeps the merged snapshot when opaque contents cannot be compared", () => {
+  it("returns the value itself without reading the contents of a member it adds nothing to", () => {
     const prototype = { materialized: true };
+    let contentReads = 0;
     const value = {
       get retained() {
         return Object.create(prototype, {
           count: {
             enumerable: true,
             get() {
+              contentReads++;
               throw new Error("Opaque contents unavailable.");
             },
           },
         });
       },
     };
-    const result = mergeSchemaDefaults(value, undefined, { type: "object" });
 
-    expect(result).not.toBe(value);
-    expect(result.retained).toBe(result.retained);
-    expect(() => result.retained.count)
-      .toThrow("Opaque contents unavailable.");
+    expect(mergeSchemaDefaults(value, undefined, { type: "object" }))
+      .toBe(value);
+    expect(contentReads).toBe(0);
   });
 
   it("retains array elements, sparse holes, and explicit undefined", () => {
@@ -144,6 +178,53 @@ describe("mergeSchemaDefaults", () => {
 
     expect(result.retained).toBe(value.retained);
     expect(result).toHaveProperty("count", 3);
+  });
+
+  it("selects equivalent union defaults where the candidates hold two views of one document", () => {
+    // Each read of `retained` builds a new view, and the two branches merge
+    // separately, so the two candidates hold different views at that key.
+    const value = {
+      get retained() {
+        return viewOf("of:retained");
+      },
+    };
+    const result = mergeSchemaDefaults(value, undefined, {
+      anyOf: equivalentDefaultBranches(),
+    });
+
+    expect(result).toHaveProperty("count", 3);
+  });
+
+  it("leaves union defaults unapplied where the candidates hold views of different documents", () => {
+    let views = 0;
+    const value = {
+      get retained() {
+        return viewOf(`of:retained-${views++}`);
+      },
+    };
+
+    expect(mergeSchemaDefaults(value, undefined, {
+      anyOf: equivalentDefaultBranches(),
+    })).toBe(value);
+  });
+
+  it("leaves union defaults unapplied where the candidates hold members that cannot be read", () => {
+    const value = {
+      get retained() {
+        return Object.create({ materialized: true }, {
+          count: {
+            enumerable: true,
+            get() {
+              throw new Error("Opaque contents unavailable.");
+            },
+          },
+        });
+      },
+    };
+
+    expect(mergeSchemaDefaults(value, undefined, {
+      anyOf: equivalentDefaultBranches(),
+    })).toBe(value);
   });
 
   it("leaves ambiguous union defaults unapplied", () => {

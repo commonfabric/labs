@@ -1,4 +1,8 @@
-import { JSONSchemaObj, type JSONValue } from "@commonfabric/api";
+import {
+  JSONSchemaObj,
+  type JSONSchemaTypes,
+  type JSONValue,
+} from "@commonfabric/api";
 import { isDeepFrozen } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
@@ -34,7 +38,10 @@ import {
   externalResolutionMissCount,
   onSchemaRegistryClear,
 } from "./schema-registry.ts";
-import type { ResolvedExternalReference } from "./cfc/schema-primitives.ts";
+import {
+  localDefinition,
+  type ResolvedExternalReference,
+} from "./cfc/schema-primitives.ts";
 import { isSchemaScope, narrowerScopeCap } from "./scope.ts";
 import { declaredHandleKind as declaredHandleKindOf } from "./stream-declaration.ts";
 export {
@@ -279,6 +286,40 @@ const schemaAtPathKey = (
   for (const part of path) key += `|${part.length}:${part}`;
   return key;
 };
+
+/**
+ * The JSON types of the values an `enum` or `const` schema names, each once,
+ * in the order the members declare them; `undefined` where the schema names
+ * no values. Narrowing reads an enumeration for these types and no more.
+ */
+function enumeratedTypes(
+  schema: JSONSchemaObj,
+): readonly JSONSchemaTypes[] | undefined {
+  const members = Array.isArray(schema.enum)
+    ? schema.enum
+    : "const" in schema
+    ? [schema.const]
+    : undefined;
+  if (members === undefined) return undefined;
+  const types: JSONSchemaTypes[] = [];
+  for (const member of members) {
+    const type: JSONSchemaTypes = member === null
+      ? "null"
+      : Array.isArray(member)
+      ? "array"
+      : typeof member === "object"
+      ? "object"
+      : typeof member === "string"
+      ? "string"
+      : typeof member === "number"
+      ? "number"
+      : typeof member === "boolean"
+      ? "boolean"
+      : "undefined";
+    if (!types.includes(type)) types.push(type);
+  }
+  return types;
+}
 
 // The cfc rules. Every member is static: the derivations are pure functions of
 // their arguments, and what caching there is lives in module-level maps keyed
@@ -628,6 +669,10 @@ export class ContextualFlowControl {
       ? new Set<unknown>(extraConfidentiality)
       : new Set<unknown>();
     let cursor = schema;
+    // Whether the path descended through a wildcard: a true schema is what
+    // every child below it narrows to, markers and all, but its `default`
+    // describes the wildcard's own value and does not follow.
+    let throughWildcard = false;
     for (
       const [index, part] of path.map((value, index) =>
         [index, value] as [number, string]
@@ -646,13 +691,49 @@ export class ContextualFlowControl {
           defs = cursor.$defs;
         }
       }
+      // A false schema spelled as an object — `{ not: true }`, which is how a
+      // reference to a `false` definition resolves — admits nothing, and
+      // holds no children under either reading below.
+      if (ContextualFlowControl.isFalseSchema(cursor)) return false;
+      // An `enum` or `const` beside no `type` is read as the type list its
+      // members' types make — a string enumeration is a string, and holds no
+      // children — and nothing more of the members is read: traversal does
+      // not validate the keyword, and narrowing does not project it. That
+      // list then narrows as a declared one does, below.
+      if (isObjectOrArray(cursor) && cursor.type === undefined) {
+        const types = enumeratedTypes(cursor);
+        if (types !== undefined) {
+          cursor = internSchema({
+            ...cursor,
+            type: types.length === 1 ? types[0] : types,
+          });
+        }
+      }
+      // A cursor declaring no `type` admits every type, and which of its
+      // keywords apply is settled only by a value — `properties` and
+      // `additionalProperties` by an object, `prefixItems` and `items` by an
+      // array. Narrowing without one can say only what both readings admit,
+      // so such a cursor is read as the union of its object and array
+      // readings. A caller holding the value settles the type first. A
+      // conjunction is left out: this narrowing does not read a child out of
+      // `allOf` parts, and a reading that ignored them would admit a property
+      // a part constrains as anything, its schema and labels dropped.
+      const typeless = isObjectOrArray(cursor) && cursor.type === undefined &&
+        !("anyOf" in cursor) && !("oneOf" in cursor) &&
+        !("allOf" in cursor) && !ContextualFlowControl.isTrueSchema(cursor);
       if (
         isObjectOrArray(cursor) &&
-        (Array.isArray(cursor.type) || "anyOf" in cursor || "oneOf" in cursor)
+        (Array.isArray(cursor.type) || "anyOf" in cursor || "oneOf" in cursor ||
+          typeless)
       ) {
         const armSchemas: JSONSchema[] = [];
         const cursorObject = cursor;
-        const options = Array.isArray(cursorObject.type)
+        const options = typeless
+          ? [{ ...cursorObject, type: "object" as const }, {
+            ...cursorObject,
+            type: "array" as const,
+          }]
+          : Array.isArray(cursorObject.type)
           ? cursorObject.type.map((type) => ({ ...cursorObject, type }))
           : (cursorObject.anyOf && cursorObject.oneOf)
           ? [...cursorObject.anyOf, ...cursorObject.oneOf]
@@ -713,6 +794,7 @@ export class ContextualFlowControl {
         break;
       } else if (ContextualFlowControl.isTrueSchema(cursor)) {
         // wildcard schema -- equivalent to true, but we can add ifc tags
+        throughWildcard = true;
         break;
       } else if (cursor.type === "object") {
         if (cursor.ifc !== undefined) {
@@ -758,14 +840,12 @@ export class ContextualFlowControl {
         } else {
           return false;
         }
-      } else if (
-        cursor.type === "unknown" ||
-        Array.isArray(cursor.type) && cursor.type.includes("unknown")
-      ) {
+      } else if (cursor.type === "unknown") {
         // we can descend into unknown, but we just get more unknown
         cursor = { type: "unknown", ...(cursor.ifc && { ifc: cursor.ifc }) };
       } else {
-        // we can only descend into objects and arrays or unknown
+        // A declared type other than object, array or unknown holds no
+        // children.
         return false;
       }
     }
@@ -791,8 +871,33 @@ export class ContextualFlowControl {
       unknown
     >;
     delete result.$defs;
+    if (throughWildcard) delete result.default;
     if (selectedDefs !== undefined) result.$defs = selectedDefs;
     return result as JSONSchema;
+  }
+
+  /**
+   * `schema` with its `type` settled to `container`, for a reader holding a
+   * value of that shape. Narrowing without a value reads a schema declaring
+   * no `type` as the union of the readings it offers (`schemaAtPath`); a
+   * reader with the value in hand narrows through the one the value selects.
+   * The schema stands where it declares a type, refers elsewhere for one,
+   * names its values with `enum` or `const` — whose types narrowing reads as
+   * the declared type — or is true, the wildcard every child narrows to,
+   * markers and all.
+   */
+  static settledForContainer(
+    schema: JSONSchema,
+    container: "object" | "array",
+  ): JSONSchema {
+    if (
+      !isObjectOrArray(schema) || schema.type !== undefined ||
+      schema.$ref !== undefined || Array.isArray(schema.enum) ||
+      "const" in schema || ContextualFlowControl.isTrueSchema(schema)
+    ) {
+      return schema;
+    }
+    return internSchema({ ...schema, type: container });
   }
 
   /**
@@ -872,6 +977,11 @@ export class ContextualFlowControl {
    * to it, and the read follow-cap for that immediate hop); the top-level
    * `scope` applies only when there is no `asCell` wrapper.
    *
+   * The level is the schema with its root `$ref` resolved, whether that
+   * reference is local or external ({@link resolveRootRefForScope}): a
+   * definition declares what every position of its type holds, and which of
+   * the two forms the reference takes is a fact about how the schema travels.
+   *
    * This single precedence is used both for the read follow-cap (which link
    * scopes a read may follow — see link-resolution.ts / traverse.ts) and for
    * the write target scope (where content is stored — see data-updating.ts), so
@@ -882,7 +992,7 @@ export class ContextualFlowControl {
     schema: JSONSchema | undefined,
   ): SchemaScope | undefined {
     if (!isObjectOrArray(schema)) return undefined;
-    schema = resolveExternalRootRefForStructure(schema);
+    schema = resolveRootRefForScope(schema).schema;
     const entryScope = ContextualFlowControl.getAsCellScope(
       ContextualFlowControl.getAsCellValues(schema).at(0),
     );
@@ -906,29 +1016,128 @@ export class ContextualFlowControl {
    *   one-line cap bypass. Branches that declare no `asCell` at all (a `null`
    *   alternative) are not handles and are skipped; among those that do, the
    *   NARROWEST wins, since the runtime value may be any of them.
+   *
+   * Like {@link getSchemaScopeCap}, it reads the schema with its root `$ref`
+   * resolved, local or external, and a branch's against the same document.
    */
   static getAsCellFollowScopeCap(
     schema: JSONSchema | undefined,
   ): SchemaScope | undefined {
-    if (!isObjectOrArray(schema)) return undefined;
-    schema = resolveExternalRootRefForStructure(schema);
-    const entryScope = ContextualFlowControl.getAsCellScope(
-      ContextualFlowControl.getAsCellValues(schema).at(0),
-    );
-    if (isSchemaScope(entryScope)) return entryScope;
-    let cap: SchemaScope | undefined;
-    for (const branches of [schema.anyOf, schema.oneOf]) {
-      if (!Array.isArray(branches)) continue;
-      for (const branch of branches) {
-        const branchCap = ContextualFlowControl.getAsCellFollowScopeCap(
-          branch as JSONSchema,
-        );
-        cap = narrowerScopeCap(cap, branchCap);
-      }
-    }
-    return cap;
+    return isObjectOrArray(schema)
+      ? asCellFollowScopeCap(schema, schema)
+      : undefined;
   }
 }
+
+/**
+ * A scope declaration together with the document its local references name
+ * definitions of.
+ */
+interface ScopeDeclaration {
+  readonly schema: JSONSchemaObj;
+  readonly root: JSONSchema;
+}
+
+/**
+ * The schema a scope declaration is read from: `schema` with its root `$ref`
+ * resolved the way every reference is, local or external, with the keywords
+ * written beside the `$ref` merged over the definition's, and the document the
+ * result's own references resolve against. Where no reference resolves to an
+ * object, `schema` itself in `root`. Local references resolve against `root`,
+ * which defaults to `schema`: a link's schema is self-contained enough for
+ * that (`schemaAtPath` keeps the reachable `$defs` closure on it). A `$defs`
+ * below that root is inert, as it is to the resolver.
+ *
+ * A position carrying a local reference without the definition it names reads
+ * as itself without consulting the resolver, which would log the miss: the
+ * scope readers ask this of every position a read passes, and many carry no
+ * `$defs` closure at all.
+ */
+const resolveRootRefForScope = (
+  schema: JSONSchemaObj,
+  root: JSONSchema = schema,
+): ScopeDeclaration => {
+  const ref = schema.$ref;
+  if (typeof ref !== "string") return { schema, root };
+  if (!isExternalSchemaRef(ref) && localDefinition(root, ref) === undefined) {
+    return { schema, root };
+  }
+  const resolved = ContextualFlowControl.resolveSchemaRefs(schema, root);
+  if (!isObjectNotArray(resolved)) return { schema, root };
+  return {
+    schema: resolved,
+    root: cfcSchemaResolvedRoot(
+      resolved,
+      resolveCfcSchemaRefRoot(schema, root),
+    ),
+  };
+};
+
+/**
+ * Helper for {@link ContextualFlowControl.getAsCellFollowScopeCap}. A branch
+ * sits in the document its compound was read from, which changes only where a
+ * reference resolved into another one.
+ *
+ * `expanding` holds, per document, the compounds being expanded on the way
+ * down. A compound is what repeats when a definition reaches itself through a
+ * branch, so one already being expanded is not expanded again. A reference does
+ * not stand for its compound: keywords written beside a `$ref` replace the
+ * definition's, so two positions naming one definition can carry different
+ * compounds, and a position's own declaration is read whatever it names.
+ */
+const asCellFollowScopeCap = (
+  schema: JSONSchema | undefined,
+  root: JSONSchema,
+  expanding?: Map<JSONSchema, Set<readonly JSONSchema[]>>,
+): SchemaScope | undefined => {
+  if (!isObjectOrArray(schema)) return undefined;
+  const declaring = resolveRootRefForScope(schema, root);
+  const entryScope = ContextualFlowControl.getAsCellScope(
+    ContextualFlowControl.getAsCellValues(declaring.schema).at(0),
+  );
+  if (isSchemaScope(entryScope)) return entryScope;
+  let cap: SchemaScope | undefined;
+  for (const branches of [declaring.schema.anyOf, declaring.schema.oneOf]) {
+    if (!Array.isArray(branches)) continue;
+    // Allocated on the first compound: most positions carry none, and this
+    // runs for every key a cell is narrowed through.
+    expanding ??= new Map();
+    let inDocument = expanding.get(declaring.root);
+    if (inDocument?.has(branches)) continue;
+    if (inDocument === undefined) {
+      inDocument = new Set();
+      expanding.set(declaring.root, inDocument);
+    }
+    inDocument.add(branches);
+    try {
+      for (const branch of branches) {
+        cap = narrowerScopeCap(
+          cap,
+          asCellFollowScopeCap(branch as JSONSchema, declaring.root, expanding),
+        );
+      }
+    } finally {
+      inDocument.delete(branches);
+    }
+  }
+  return cap;
+};
+
+/**
+ * The `scope` keyword a schema declares for its own position, read from the
+ * schema with its root `$ref` resolved as
+ * {@link ContextualFlowControl.getSchemaScopeCap} reads it. It reads no
+ * `asCell` entry: an entry's scope describes the handle that entry declares
+ * rather than the position holding it, which is what the callers creating a
+ * cell from a schema ask about.
+ */
+export const declaredSchemaScope = (
+  schema: JSONSchema | undefined,
+): SchemaScope | undefined => {
+  if (!isObjectOrArray(schema)) return undefined;
+  const declaring = resolveRootRefForScope(schema).schema;
+  return isSchemaScope(declaring.scope) ? declaring.scope : undefined;
+};
 
 /**
  * Helper for {@link ContextualFlowControl.declaredHandleKind}, which follows

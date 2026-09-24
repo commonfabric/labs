@@ -6,6 +6,9 @@ server holding one in-process interactive chat service, and two Lit pages
 reading its events over Server-Sent Events: the console itself, and the live
 pane a host embeds to show one session working.
 
+Opening research appears in the live pane as “Orienting: working out what is
+already available,” with elapsed time until it completes, fails, or is canceled.
+
 A completed turn that names a piece keeps its reference for a bare follow-up in
 the same session, including after restart. Explicit attachments select the new
 turn's inputs; `inputCells: []` attaches none and clears the retained target on
@@ -150,6 +153,7 @@ Every environment variable has a flag, and the flag wins:
 | `--pattern-index-url`     | `CF_HARNESS_PATTERN_INDEX_URL`       | unset                                 |
 | `--skills-registry-url`   | `CF_HARNESS_SKILLS_REGISTRY_URL`     | unset                                 |
 | `--model`                 | `CF_HARNESS_MODEL`                   | the CLI's default model               |
+| `--reasoning-effort`      | `CF_HARNESS_REASONING_EFFORT`        | the provider's default                |
 | `--workspace`             | `CF_HARNESS_CONSOLE_WORKSPACE`       | `.cf-harness-console/workspace`       |
 | `--artifact-root`         | `CF_HARNESS_ARTIFACT_ROOT`           | `.cf-harness-console/runs`            |
 | `--session-db`            | `CF_HARNESS_CONSOLE_SESSION_DB`      | `.cf-harness-console/sessions.sqlite` |
@@ -408,6 +412,15 @@ a pin change or rollback does not hide a finished turn's result. Its `finalText`
 remains available. Malformed objects remain invalid; new tool calls and writes
 use the closed three-outcome contract.
 
+Optional `usage` contains the run report's cumulative `inputTokens`,
+`outputTokens`, and other reported token/cache/cost fields, including research
+and child calls. Reports without `totalUsage` use their legacy `usage` field.
+Unreported fields remain absent; they are not zero. `costUsd` is provider
+reported and `estimatedCostUsd` is the harness estimate, with neither presented
+as a total when any call lacks the corresponding cost. Optional `elapsedMs`
+measures wall time from the durable turn start to its terminal event; it is
+omitted when the turn timestamps are unavailable or invalid.
+
 `sessionId` identifies the conversation on every result. `continuable` says
 whether it currently accepts another turn: the session must be idle and
 reusable. A reply uses the existing task route with that `sessionId`, so the
@@ -484,6 +497,23 @@ or reason at the event level, and the structured object under `result`. Its turn
 attribution is unchanged. Live streams and replayed durable events have the same
 shape, so a caller can open `result.pieces[0].url` without parsing assistant
 prose. Pollers read the same object from `GET /api/turns/<turnId>/result`.
+
+A completed Fabric task produces a named UI piece. A text answer is rendered by
+a small pattern and named through `assign_slug`; a data-only computation is not
+the user-facing result. Revising an existing piece can confirm its existing
+slug. A plain-text completion without a successful naming receipt is returned to
+the model for correction within its current turn budget.
+
+During the turn, `turn_usage` events carry `{ turnId, usage?, elapsedMs? }`
+after each completed parent, private research, or child model call. `usage` is
+the cumulative root-turn total, so clients replace their displayed total rather
+than adding events together. A child's calls count while it is running and
+remain counted if it fails; the child's return adds no second charge. The
+envelope and event both identify the root turn. Updates use the ordinary durable
+event stream and replay in sequence. Counts do not include tokens still being
+generated in a provider request. The next turn starts its own total, and updates
+stop when a turn is canceled. An older console without `turn_usage` still
+exposes its existing terminal usage when available.
 
 The parent calls `finish_task` alone to ask a question or explain why it cannot
 proceed. This uses the ordinary tool policy and artifact path, then ends the
@@ -827,13 +857,16 @@ record of what the run recorded rather than a cell with nothing to hide.
 
   Then the call's input and model-facing output as formatted JSON, with long
   lines scrolling inside their block rather than widening the page. Beside the
-  output, **withheld from the model** expands to the full artifact positions
-  named by `transcript-omissions.json`, each labeled by its omission rule. CFC
-  denials render a redaction marker. Scrubbed Fabric identifiers are shown with
-  `[fabric-id]` in place of their values when the artifact position is
-  available; that fixed marker stands in alone when it is not. A legacy result
-  with no omission record says so instead of inferring omissions from the full
-  result.
+  output, an omission block expands to the full artifact positions named by
+  `transcript-omissions.json`, each labeled by its omission rule.
+  `artifact-only` reads **kept on the artifact, not sent to the model**;
+  `observation-denied` reads **withheld by policy**, as do release refusals on
+  the CFC line. The block includes a short excerpt of the recorded result the
+  model received. CFC denials render a redaction marker. Scrubbed Fabric
+  identifiers are shown with `[fabric-id]` in place of their values when the
+  artifact position is available; that fixed marker stands in alone when it is
+  not. A legacy result with no omission record says so instead of inferring
+  omissions from the full result.
 
   Superseded `run_pattern` source is an assistant argument rather than a tool
   result, so it is outside the omission record. Where its marker appears, the

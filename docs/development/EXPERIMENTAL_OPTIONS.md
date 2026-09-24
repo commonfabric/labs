@@ -91,7 +91,11 @@ the background piece service all go through that one mapping, so their wirings
 cannot drift; the shell reads the same variables from its build-time defines
 through the same canonical parser, for the flags it defines;
 `packages/shell/felt.config.ts` and `packages/shell/src/lib/env.ts` are the
-authority on which those are. `EXPERIMENTAL_ENV_VARS` itself is the authority on
+authority on which those are. A CI lane builds the binaries it caches with
+every define's variable unset unless `cachedBinaries()` in
+[`tasks/ci-capabilities.ts`](../../tasks/ci-capabilities.ts) sets it, so a lane
+that needs a flag in its baked shell names it there.
+`EXPERIMENTAL_ENV_VARS` itself is the authority on
 which flags are env-reachable — a flag that deliberately is not,
 `commitPreconditions` today, is mapped to `null` there, which records the
 decision rather than leaving an omission. The mapping accepts exactly `"true"`
@@ -576,6 +580,10 @@ server](#clients-that-are-not-built-alongside-their-server).
   nothing else; a reader that touches data the schema no longer describes
   refuses, and the run is disposed of as an argument that did not resolve.
   Unmarked transactions read exactly as they did before.
+- **Behavior.**
+  [`../features/lazy-cell-materialization.md`](../features/lazy-cell-materialization.md)
+  — what a view checks, where it diverges from an eager read, and where a
+  schema-less read takes over.
 - **Design, measurements and staging.**
   [`../plans/lazy-cell-materialization.md`](../plans/lazy-cell-materialization.md).
 
@@ -769,13 +777,19 @@ The bundle's sink decisions are total over the sink registry
 derives): every sink `KNOWN_SINKS` names carries either a ceiling or an
 explicit ungated release with its reason, its owner, and the condition that
 retires it, so a sink added to the inventory without a decision is a compile
-error rather than a sink that quietly releases ungated. The llm sinks are the
-explicit ungated ones, and a sink with no ceiling gets no gate: llm-sink
-release is ungoverned under this posture — pending a boundary-scoped admission
-mechanism, since an exact-match ceiling cannot admit the source-varying
-material-risk caveats an llm sink exists to process. Building that mechanism
-is planned in
+error rather than a sink that quietly releases ungated. Two families are the
+explicit ungated ones, and a sink with no ceiling gets no gate. The llm sinks:
+llm-sink release is ungoverned under this posture — pending a boundary-scoped
+admission mechanism, since an exact-match ceiling cannot admit the
+source-varying material-risk caveats an llm sink exists to process. Building
+that mechanism is planned in
 [`docs/plans/cfc-llm-sink-admission.md`](../plans/cfc-llm-sink-admission.md).
+And `sqliteQuery`, whose request is a read handed to the provider holding a
+space's replicas: the bound it wants is the database's own SPACE, which a
+clause list cannot express, so the sqlite builtin refuses a request carrying
+confidentiality for a database in another space before staging it. A
+deployment that wants a confidentiality gate on sqlite reads declares a
+ceiling for the sink, which the seam then applies.
 The bundle names no enforcement mode, so a runtime taking it keeps the core's
 `enforce-strict` pin, and it leaves `cfcDecomposedEnvelopes`,
 `cfcContentAddressedLabels`, `cfcTrustConfig` and

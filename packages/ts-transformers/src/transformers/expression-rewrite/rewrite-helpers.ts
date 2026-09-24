@@ -183,7 +183,7 @@ export function createReactiveWrapperForExpression(
     // to its result Type.)
     resultTypeNode = typeToTypeNodeWithRegistry(
       resultType,
-      { checker, factory, sourceFile },
+      { checker, factory, sourceFile, state: context.state },
       context.state.typeRegistry,
     );
   } catch {

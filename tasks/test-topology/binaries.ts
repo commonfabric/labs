@@ -64,6 +64,8 @@ function binarySuite(
     needs: ["deno"],
     units: [...binaries],
     unavailable: [],
+    // Each build is one identity, so a lane either builds it or does not.
+    whole: [...binaries],
 
     locate(record): Location | undefined {
       if (!claimsIdentity(surfaces, record.test)) return undefined;

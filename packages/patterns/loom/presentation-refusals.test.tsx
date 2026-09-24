@@ -1,10 +1,28 @@
-/** Refusals leave shared composition and presentation unchanged. */
-import { action, assert, pattern, TESTS, Writable } from "commonfabric";
+/** Refusals leave shared composition, presentation and participants unchanged. */
+import {
+  action,
+  assert,
+  type Confidential,
+  pattern,
+  TESTS,
+  Writable,
+} from "commonfabric";
 import Loom from "./main.tsx";
-import type { Panel } from "./schemas.tsx";
+import type { Panel, ParticipantRoster } from "./schemas.tsx";
+
+type TestProfile = Confidential<
+  { name?: string; avatar?: string },
+  readonly ["loom-test-profile"]
+>;
 
 export default pattern(() => {
-  const loom = Loom({});
+  const participants = Writable.of<ParticipantRoster>({});
+  const loom = Loom({ participants });
+  const member = Writable.of<TestProfile>({ name: "Member" });
+  const stranger = Writable.of<TestProfile>({ name: "Stranger" });
+  const join = action(() => loom.addParticipant.send({ profile: member }));
+  // The roster is written only by `addParticipant`, whoever holds its cell.
+  const directWrite = action(() => participants.key("items").set([stranger]));
   const first = new Writable<Panel>({
     kind: "url",
     url: "https://example.com/a",
@@ -46,11 +64,57 @@ export default pattern(() => {
   );
   const absentMoveSource = action(() => loom.movePanel.send({ panel: absent }));
   const invalidUrl = action(() => loom.addPanel.send({ panel: invalid }));
+  const piece = new Writable({ title: "Target" });
+  const notADid = new Writable<Panel>({
+    kind: "url",
+    url: "https://example.com/c",
+    addedBy: "alice",
+  });
+  const invalidAdderAdd = action(() => loom.addPanel.send({ panel: notADid }));
+  const invalidAdderPiece = action(() =>
+    loom.addPiece.send({ piece, addedBy: "did:key:has space" })
+  );
+  const invalidAdderDuplicate = action(() =>
+    loom.duplicatePanel.send({ panel: first, addedBy: "did:key:a/b" })
+  );
+  const fragmentAdderDuplicate = action(() =>
+    loom.duplicatePanel.send({ panel: first, addedBy: "did:key:z6Mk#key-1" })
+  );
+  const trailingColonAdderDuplicate = action(() =>
+    loom.duplicatePanel.send({ panel: first, addedBy: "did:key:z6Mk:" })
+  );
+  const punctuationAdderDuplicate = action(() =>
+    loom.duplicatePanel.send({ panel: first, addedBy: "did:key:z6Mk!" })
+  );
+  const registered = new Writable({ title: "Registered target" });
+  const registerPiece = action(() => loom.addPiece.send({ piece: registered }));
+  // A malformed adder is refused even where the piece would change nothing.
+  const invalidAdderRegisteredPiece = action(() =>
+    loom.addPiece.send({ piece: registered, addedBy: "alice" })
+  );
+  const overlongAdderDuplicate = action(() =>
+    loom.duplicatePanel.send({
+      panel: first,
+      // One character over the 195-character bound.
+      addedBy: `did:key:z${"6".repeat(187)}`,
+    })
+  );
   return {
     allowRuntimeErrors: true,
-    expectRuntimeErrors: 8,
+    expectRuntimeErrors: 16,
     allowConsoleErrors: true,
+    // The refused direct roster write is reported as a CFC policy warning.
+    allowConsoleWarnings: true,
     [TESTS]: [
+      { action: join },
+      { action: directWrite },
+      // A replacing write would also leave one entry; only its identity
+      // tells a refused write from an accepted one.
+      {
+        assertion: assert(() =>
+          loom.participants.length === 1 && loom.participants[0].equals(member)
+        ),
+      },
       { action: addFirst },
       { action: addSecond },
       { action: stage },
@@ -62,7 +126,16 @@ export default pattern(() => {
       { action: absentMove },
       { action: absentMoveSource },
       { action: invalidUrl },
-      { assertion: assert(() => loom.panels.length === 2) },
+      { action: invalidAdderAdd },
+      { action: invalidAdderPiece },
+      { action: registerPiece },
+      { action: invalidAdderRegisteredPiece },
+      { action: invalidAdderDuplicate },
+      { action: overlongAdderDuplicate },
+      { action: fragmentAdderDuplicate },
+      { action: trailingColonAdderDuplicate },
+      { action: punctuationAdderDuplicate },
+      { assertion: assert(() => loom.panels.length === 3) },
       { assertion: assert(() => loom.panels[0].equals(first)) },
       { assertion: assert(() => loom.presentation.stagedPanels.length === 1) },
       {

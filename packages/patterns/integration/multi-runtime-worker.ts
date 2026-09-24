@@ -153,15 +153,19 @@ async function attachPiece(next: PieceController): Promise<void> {
   };
 }
 
-// Test-only network shaping: wrap this realm's WebSocket so every frame (both
-// directions) is delayed by a fixed amount. Installed BEFORE the runtime opens
-// its storage session, so the whole client stack sees the added latency —
-// the in-process equivalent of the browser-harness WS shim used to reproduce
-// multiplayer contention (starvation / wedge) without a network.
-function installWsDelay(delayMs: number): void {
-  if (delayMs <= 0) return;
+/**
+ * Test-only network shaping: wraps this realm's WebSocket so that every
+ * inbound frame is handed to `inbound` as a thunk that delivers it, and every
+ * outbound frame to `outbound` as a thunk that sends it. Installed BEFORE the
+ * runtime opens its storage session, the shim reaches the whole client stack.
+ * A second install wraps the first.
+ */
+function installWsShim(
+  inbound: (deliver: () => void) => void,
+  outbound: (send: () => void) => void,
+): void {
   const Native = globalThis.WebSocket;
-  const Delayed = function (
+  const Shimmed = function (
     this: WebSocket,
     url: string | URL,
     protocols?: string | string[],
@@ -209,25 +213,63 @@ function installWsDelay(delayMs: number): void {
           fn.call(ws, ev);
         }
       };
-      setTimeout(deliver, delayMs);
+      inbound(deliver);
     });
     const nativeSend = ws.send.bind(ws);
     ws.send = (data: Parameters<WebSocket["send"]>[0]) => {
-      setTimeout(() => {
+      outbound(() => {
         try {
           nativeSend(data);
         } catch {
           // Socket closed while the frame was in flight; same as a network drop.
         }
-      }, delayMs);
+      });
     };
     return ws;
   } as unknown as typeof WebSocket;
-  Delayed.prototype = Native.prototype;
+  Shimmed.prototype = Native.prototype;
   for (const k of ["CONNECTING", "OPEN", "CLOSING", "CLOSED"] as const) {
-    (Delayed as unknown as Record<string, unknown>)[k] = Native[k];
+    (Shimmed as unknown as Record<string, unknown>)[k] = Native[k];
   }
-  globalThis.WebSocket = Delayed;
+  globalThis.WebSocket = Shimmed;
+}
+
+/**
+ * Delays every storage WebSocket frame, both directions, by `delayMs`: the
+ * in-process equivalent of the browser-harness WS shim used to reproduce
+ * multiplayer contention (starvation / wedge) without a network.
+ */
+function installWsDelay(delayMs: number): void {
+  if (delayMs <= 0) return;
+  installWsShim(
+    (deliver) => setTimeout(deliver, delayMs),
+    (send) => setTimeout(send, delayMs),
+  );
+}
+
+/** Whether `installInboundHold` has run in this realm. */
+let inboundHoldInstalled = false;
+
+/**
+ * Inbound frames held since a `send` with `thenHoldInbound`, in arrival
+ * order, or absent while inbound frames are delivered as they arrive.
+ */
+let heldInbound: (() => void)[] | undefined;
+
+/**
+ * Makes the storage WebSocket's inbound frames holdable: while a hold is in
+ * effect, frames queue in arrival order, and `releaseInbound` delivers them.
+ * Outbound frames are never held.
+ */
+function installInboundHold(): void {
+  inboundHoldInstalled = true;
+  installWsShim(
+    (deliver) => {
+      if (heldInbound !== undefined) heldInbound.push(deliver);
+      else deliver();
+    },
+    (send) => send(),
+  );
 }
 
 // When the harness process runs under Deno's native OpenTelemetry
@@ -335,6 +377,7 @@ const handlers: Record<
       diagnostics,
       recordRejections,
       wsDelayMs,
+      inboundHold,
       cfcWriteFloor,
       cfc,
       watchPaths: requestedWatchPaths,
@@ -344,6 +387,7 @@ const handlers: Record<
       keyPair as FabricKeyPair,
     );
     if (typeof wsDelayMs === "number") installWsDelay(wsDelayMs);
+    if (inboundHold === true) installInboundHold();
     boundedReads =
       (cfc as MultiRuntimeCfcOptions | undefined)?.cfcReadMaxConfidentiality !==
         undefined;
@@ -398,7 +442,27 @@ const handlers: Record<
     return {};
   },
 
-  async send({ handler, event, trustedUi, idle: doIdle }) {
+  async send({ handler, event, trustedUi, idle: doIdle, thenHoldInbound }) {
+    // Refused before the event goes out, rather than after it has committed.
+    // A send waits on the store confirming the event's commit, which a
+    // runtime holding its inbound frames never hears.
+    if (heldInbound !== undefined) {
+      throw new Error(
+        "cannot send while inbound frames are held; `releaseInbound` first",
+      );
+    }
+    if (thenHoldInbound === true && !inboundHoldInstalled) {
+      throw new Error(
+        "inbound frames are not holdable in this session; create it with " +
+          "`inboundHold: true`",
+      );
+    }
+    if (thenHoldInbound === true && doIdle === false) {
+      throw new Error(
+        "`thenHoldInbound` holds after the event has run, which `idle: false` " +
+          "does not wait for",
+      );
+    }
     const trusted = trustedUi as TrustedUiDescriptor | undefined;
     let eventValue: unknown = event ?? {};
     if (trusted) {
@@ -434,17 +498,24 @@ const handlers: Record<
     // optimistic pipeline (the multiplayer-contention shape) instead of
     // serializing one settled commit per event.
     if (doIdle !== false) await idle();
+    // Held from the turn the event's run here settles: every consequence the
+    // server has yet to send back, the event's own among them, stays out of
+    // this runtime until `releaseInbound`. The event cannot run here with
+    // inbound frames held, since its run waits on the store confirming its
+    // commit, so the hold can only start after it.
+    if (thenHoldInbound === true) heldInbound = [];
     return {};
   },
 
-  // Faithful mirror of RuntimeProcessor.handleCellSet — the path a UI binding
-  // takes for a plain `set`: ONE fresh edit tx, a single un-retried commit,
-  // marked as a blind leaf write. The blind-vs-CAS choice is by METHOD, not value
-  // shape: a `set` is ALWAYS blind (last-write-wins); read-modify-write goes
-  // through `push` (below), which keeps compare-and-set. We await the commit so
-  // the test can observe the outcome (a conflict surfaces as a Result error).
-  // Pass `idle: false` to leave this runtime un-settled, so its local replica
-  // stays stale (own-write-race repro).
+  // One attempt of the write a UI binding's `set` makes, which the runtime
+  // makes through `Runtime.commitUiCellWrite()` with `blind: true`: ONE fresh
+  // edit tx, marked as a blind leaf write, committed once. Unlike that method,
+  // this does not retry a retryable rejection, keeps no supersede lane, and
+  // sets no renderer-input mark, so that a test sees the outcome of the single
+  // commit (a conflict surfaces as a Result error). A `set` is ALWAYS blind
+  // (last-write-wins), whatever the value's shape. Pass `idle: false` to leave
+  // this runtime un-settled, so its local replica stays stale
+  // (own-write-race repro).
   async set({ path, value, idle: doIdle }) {
     const runtime = controller().runtime;
     const tx = runtime.edit();
@@ -453,8 +524,8 @@ const handlers: Record<
       cell = cell.key(segment as never) as Cell<any>;
     }
     markUiInputBlindWriteTx(tx);
-    // Mirror handleCellSet: thread the cell's PARENT address as the structural
-    // existence/shape precondition for the blind write.
+    // As `commitUiCellWrite()` does, thread the cell's PARENT address as the
+    // structural existence/shape precondition for the blind write.
     const link = cell.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
     setBlindStructuralTarget(tx, {
       id: link.id,
@@ -477,12 +548,15 @@ const handlers: Record<
     };
   },
 
-  // Faithful mirror of RuntimeProcessor.handleCellPush / CellHandle.push: a
-  // read-modify-write append, NOT blind — the set's diff read of the current
-  // array is kept as a commit precondition (compare-and-set), so a concurrent
-  // push aborts rather than being clobbered by a blind overwrite. Reads the
-  // current value from the local replica (no pull), mirroring CellHandle.push
-  // reading its cache.
+  // A read-modify-write append, NOT blind: it `set`s the whole new array, and
+  // that set's diff read of the current array is kept as a commit
+  // precondition (compare-and-set), so a concurrent push aborts rather than
+  // being clobbered by a blind overwrite. Reads the current value from the
+  // local replica (no pull). This is not the path a UI's `CellHandle.push()`
+  // takes: that sends only the appended members, and the runtime appends them
+  // through `Cell.push()`'s mergeable operation.
+  // TODO(danfuzz): Append through `Cell.push()` as the runtime does, once the
+  // tests that pin this compare-and-set are reworked to that path.
   async push({ path, value, idle: doIdle }) {
     const runtime = controller().runtime;
     let cell = result();
@@ -572,7 +646,12 @@ const handlers: Record<
       space: result().key("originator"),
     });
     const shared = await commitSnapshotShare(prepared.consent, shareClick());
-    result().key("publish").send({ library: shared });
+    const published = await runtime.commitUiCellWrite(
+      result().key("library", "value"),
+      shared.getAsLink(),
+      { blind: true },
+    );
+    if (published.error) throw published.error;
     await idle();
     return { value: prepared.value, audience: prepared.audience };
   },
@@ -881,6 +960,25 @@ const handlers: Record<
     return {};
   },
 
+  // How many events this runtime fired whose consequence has yet to arrive
+  // back here, or `null` where there is no speculation overlay to track them
+  // (the OFF arm). The handler table's contract is asynchronous.
+  // deno-lint-ignore require-await
+  async outstandingEventCount() {
+    return controller().runtime.speculationOverlay?.pendingIntentCount ?? null;
+  },
+
+  // Deliver the frames held since a `send` with `thenHoldInbound`, in arrival
+  // order, and deliver frames as they arrive from here on.
+  async releaseInbound() {
+    const held = heldInbound;
+    if (held === undefined) throw new Error("inbound frames are not held");
+    heldInbound = undefined;
+    for (const deliver of held) deliver();
+    await idle();
+    return {};
+  },
+
   // Wait until this runtime has NO outstanding event intents: every event it
   // fired has reached a terminal consequence (consequenced, errored, dropped,
   // or refused) AND that consequence has arrived back here — speculation.md
@@ -1053,3 +1151,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
     fail,
   );
 };
+
+(self as unknown as Worker).postMessage(
+  { ready: true } satisfies WorkerResponse,
+);

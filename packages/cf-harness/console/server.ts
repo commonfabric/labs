@@ -559,6 +559,7 @@ export const resolveConsoleConfig = async (
       "workspace",
       "artifact-root",
       "model",
+      "reasoning-effort",
       "loom-authoring-config",
       "fabric-api-url",
       "fabric-identity",
@@ -724,6 +725,9 @@ export const resolveConsoleConfig = async (
   // round; the interactive default of 8 strands a session mid-build.
   const maxModelTurns = flag("max-model-turns") ??
     nonEmpty(env.CF_HARNESS_CONSOLE_MAX_MODEL_TURNS) ?? "32";
+  // Unset, a turn names no effort and the provider applies its own default.
+  const reasoningEffort = flag("reasoning-effort") ??
+    nonEmpty(env.CF_HARNESS_REASONING_EFFORT);
 
   const spaceDb = flag("space-db") ?? nonEmpty(env.CF_HARNESS_SPACE_DB);
   const spaceDbPath = spaceDb === undefined ? undefined : resolve(cwd, spaceDb);
@@ -739,6 +743,7 @@ export const resolveConsoleConfig = async (
         join(nonEmpty(env.HOME) ?? cwd, ".cf-harness"),
     ),
     model: flag("model") ?? nonEmpty(env.CF_HARNESS_MODEL) ?? DEFAULT_MODEL,
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     fabricSession,
     ...(loomAuthoring !== undefined ? { loomAuthoring } : {}),
     ...(spaceDbPath !== undefined ? { spaceDbPath } : {}),
@@ -851,6 +856,14 @@ export const resolveConsoleConfig = async (
       name: "model",
       value: config.model ?? DEFAULT_MODEL,
       source: source("model", "CF_HARNESS_MODEL"),
+    }, {
+      name: "reasoning effort",
+      value: reasoningEffort ?? "provider default",
+      // An unnamed effort is the provider's choice rather than a console
+      // default, so its source says so.
+      source: reasoningEffort === undefined
+        ? "provider default"
+        : source("reasoning-effort", "CF_HARNESS_REASONING_EFFORT"),
     }],
   };
 };
@@ -1297,9 +1310,8 @@ export class ConsoleServer {
   ): Promise<ConsoleTurnResult | undefined> {
     const [session] = this.#service.status(sessionId).sessions;
     const turns = await this.#service.listTurnsForReplay({ sessionId });
-    const originLoomId = turns.turns.find((entry) =>
-      entry.turn.turnId === turnId
-    )?.input.loomId;
+    const turn = turns.turns.find((entry) => entry.turn.turnId === turnId);
+    const originLoomId = turn?.input.loomId;
     return await readConsoleTurnResult({
       sessionId,
       continuable: this.#sessionContinuable(sessionId),
@@ -1307,6 +1319,7 @@ export class ConsoleServer {
       artifactRoot: session?.artifactRoot ?? this.#config.artifactRoot,
       turnId,
       spaceName: this.#config.fabricSession.space,
+      timing: turn?.turn,
     });
   }
 

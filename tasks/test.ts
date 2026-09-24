@@ -17,10 +17,14 @@ import {
   RECORDS_DIR_VARIABLE,
   recordsDir,
 } from "@commonfabric/test-support/records";
+import { pinShuffleSeed } from "@commonfabric/test-support/shuffle";
 import { finishRunRecording, startRunRecording } from "./test-records.ts";
 import { main } from "./workspace-tests.ts";
 
 if (import.meta.main) {
+  // Settled before any member's task starts, so every leaf of this run
+  // shuffles the same way.
+  pinShuffleSeed();
   const recording = await startRunRecording();
   if (recording.mode === "own" && recordsDir() === undefined) {
     // The producers of this process and every child join the owned run

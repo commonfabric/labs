@@ -1,9 +1,11 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import {
   buildInviteLink,
   createInviteCredentials,
   inviteCodeVerifier,
+  isInviteId,
   isInviteSecret,
   normalizeInviteHost,
   parseInviteLink,
@@ -103,6 +105,99 @@ describe("space-invites", () => {
     expect(() =>
       parseInviteLink(link.href.replace("#code=", "&invite=duplicate#code="))
     ).toThrow("invalid-link");
+  });
+  it("round trips an optional inviter DID in the query, outside the code verifier", () => {
+    const inviter = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+    const invite = {
+      host: "https://example.com",
+      space,
+      ...createInviteCredentials(),
+    };
+    const link = buildInviteLink("https://shell.example", {
+      ...invite,
+      inviter,
+    });
+    expect(link.searchParams.get("inviter")).toBe(inviter);
+    expect(parseInviteLink(link)).toEqual({ ...invite, inviter });
+    // The parsed link verifies against the same code as the issued one: the
+    // inviter a link carries never enters the verifier.
+    expect(inviteCodeVerifier(parseInviteLink(link)!)).toBe(
+      inviteCodeVerifier(invite),
+    );
+    expect(inviteCodeVerifier({ ...invite, inviter })).toBe(
+      inviteCodeVerifier(invite),
+    );
+  });
+  it("parses a link without an inviter exactly as before", () => {
+    const invite = {
+      host: "https://example.com",
+      space,
+      ...createInviteCredentials(),
+    };
+    const link = buildInviteLink("https://shell.example", invite);
+    expect(link.searchParams.has("inviter")).toBe(false);
+    expect(parseInviteLink(link)).not.toHaveProperty("inviter");
+  });
+  it("rejects a malformed inviter when building or parsing, and any other unknown key", () => {
+    const invite = {
+      host: "https://example.com",
+      space,
+      ...createInviteCredentials(),
+    };
+    const link = buildInviteLink("https://shell.example", invite);
+    for (
+      const inviter of [
+        "",
+        "someone",
+        "did:key:z0invalid",
+        "did:web:x.test",
+        `did:key:z${"1".repeat(121)}`,
+      ]
+    ) {
+      expect(() =>
+        buildInviteLink("https://shell.example", { ...invite, inviter })
+      ).toThrow("invalid-request");
+      const malformed = new URL(link);
+      malformed.searchParams.set("inviter", inviter);
+      expect(() => parseInviteLink(malformed)).toThrow("invalid-link");
+    }
+    const duplicate = new URL(link);
+    duplicate.searchParams.append("inviter", space);
+    duplicate.searchParams.append("inviter", space);
+    expect(() => parseInviteLink(duplicate)).toThrow("invalid-link");
+    const unknown = new URL(link);
+    unknown.searchParams.set("inviter", space);
+    unknown.searchParams.set("note", "hello");
+    expect(() => parseInviteLink(unknown)).toThrow("invalid-link");
+    // The inviter belongs in the query; in the fragment beside the code it
+    // is an unknown fragment key.
+    const inFragment = new URL(link);
+    inFragment.hash = `${inFragment.hash.slice(1)}&inviter=${space}`;
+    expect(() => parseInviteLink(inFragment)).toThrow("invalid-link");
+  });
+  it("generates invite IDs that begin with a letter and vary with the first random byte", () => {
+    const ids = new Set<string>();
+    for (let first = 0; first < 256; first++) {
+      using _random = stub(
+        crypto,
+        "getRandomValues",
+        <T extends ArrayBufferView | null>(array: T) => {
+          const bytes = new Uint8Array(
+            array!.buffer,
+            array!.byteOffset,
+            array!.byteLength,
+          );
+          bytes.fill(0xF8);
+          bytes[0] = first;
+          return array;
+        },
+      );
+      const { inviteId } = createInviteCredentials();
+      expect(isInviteId(inviteId)).toBe(true);
+      expect(inviteId).toMatch(/^[A-Za-z]/);
+      ids.add(inviteId);
+    }
+    expect(ids.size).toBeGreaterThanOrEqual(128);
   });
   it("binds the verifier to its version, normalized origin, space, invite ID, and full secret", () => {
     const invite = {

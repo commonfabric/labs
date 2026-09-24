@@ -45,11 +45,11 @@ produce different hashes even though both could be represented as a zero byte).
 
 The authoritative tag assignments are in formal spec Section 6.3. Tags are
 organized into four categories by high nibble: **meta** (`0x0N`) for structural
-markers like `TAG_END` and `TAG_HOLE`, **compound** (`0x1N`) for containers
-whose children are tagged values, **primitive** (`0x2N`) for leaf value types,
-and **optimized** (`0xFN`) for hash-level encodings of primitive values that
-substitute a digest for the raw payload (see Section 4.4 for the long-string
-optimization). All unassigned values are reserved for future use.
+markers like `TAG_END`, `TAG_HOLE`, and `TAG_CYCLE`, **compound** (`0x1N`) for
+containers whose children are tagged values, **primitive** (`0x2N`) for leaf
+value types, and **optimized** (`0xFN`) for hash-level encodings of primitive
+values that substitute a digest for the raw payload (see Section 4.4 for the
+long-string optimization). All unassigned values are reserved for future use.
 
 ---
 
@@ -139,6 +139,17 @@ four special values that JSON cannot represent natively (`-0`, `NaN`,
 > hasher's contract regardless of how the values arrived.
 
 ### 4.4 `string`
+
+A string is encoded as **WTF-8** (<https://wtf-8.codeberg.page/>), the
+generalization of UTF-8 that can also encode lone surrogates. A well-formed
+string, one with no lone surrogates, has the same bytes in WTF-8 as in UTF-8,
+and this document speaks of a string's "UTF-8" encoding, bytes, and length in
+that sense throughout. A lone surrogate (a UTF-16 code unit in the range
+0xD800--0xDFFF with no partner to form a pair) is encoded as the three bytes
+UTF-8 would use for a code point of the same value: `"\ud800"` is `ED A0 80`.
+Under WTF-8, distinct strings always have distinct encodings. So a conforming
+implementation must not use an encoder that substitutes U+FFFD (`EF BF BD`) for
+a lone surrogate, as `TextEncoder` does.
 
 Strings use one of two encodings based on their UTF-8 byte length. The
 threshold is **64 bytes** (inclusive): strings whose UTF-8 encoding is 64 bytes
@@ -516,6 +527,41 @@ followed by two `TAG_NULL` bytes. The default message a kind supplies is not
 hashed: an `error` whose message is its kind's default hashes as one with no
 message. See `1-fabric-values.md` Section 1.4.12.
 
+### 4.19 Cycles
+
+```
+Bytes: TAG_CYCLE  DISTANCE_LEB128
+       0x02       <1+ bytes>
+```
+
+Total: 1 + len(LEB128) bytes (typically 2).
+
+A value may hold a cycle (formal spec Section 1.6). At any point in the
+traversal, the **path** is the sequence of containers whose encodings enclose
+that point, outermost first. The containers are arrays (Section 4.12), plain
+objects (Section 4.13), and `FabricInstance`s (Section 4.14). An instance
+encloses its encoded state, so when that state is an array or an object, the
+instance and the state are two entries on the path.
+
+Before encoding an array, a plain object, or a `FabricInstance`, an
+implementation checks whether that same object, by identity, is already on the
+path. If it is, the implementation emits `TAG_CYCLE` in place of the
+container's encoding, followed by the distance up the path to it, as unsigned
+LEB128: `1` for the container immediately enclosing this position, `2` for the
+one enclosing that, and so on. Otherwise it encodes the container as usual,
+with the container on the path while its contents are encoded.
+
+- **Only the path counts.** A container reached again by another route, which
+  is sharing rather than a cycle, is encoded in full each time. Sharing
+  therefore does not affect a hash.
+- **Where a cycle closes does.** `a = {x: a}` and `b = {x: {x: b}}` hash
+  differently, and so do `a` and `{x: a}`, although no finite sequence of reads
+  tells either pair apart.
+- **The distance is relative**, so a cyclic value encodes the same way wherever
+  it sits within a larger value.
+
+A value with no cycle contains no `TAG_CYCLE`.
+
 ---
 
 ## 5. Object Key Sorting
@@ -532,8 +578,10 @@ This is equivalent to the standard lexicographic ordering on byte sequences and
 matches the behavior of `Uint8Array` comparison or C's `memcmp` with a
 length tie-breaker.
 
-Since all string data in the hash stream uses UTF-8 encoding (Section 4.4),
-the sort order and the hash encoding use the same byte representation.
+Since all string data in the hash stream uses UTF-8 encoding (WTF-8 where a
+string has lone surrogates; Section 4.4), the sort order and the hash encoding
+use the same byte representation. That byte order is the order of the keys'
+code points, with a lone surrogate taking its own code unit's value.
 
 > **UTF-8 byte sort vs. JavaScript string comparison.** JavaScript's native
 > string comparison (`<`, `>`, `localeCompare` with no locale) compares by
@@ -568,7 +616,9 @@ The overall traversal is depth-first, left-to-right:
    then the payload.
 3. For compound types (array, object), recursively hash each child, then feed
    `TAG_END`. Each child's bytes (starting with its own type tag) are fed to
-   the **same** hasher — there is no per-child sub-hash.
+   the **same** hasher — there is no per-child sub-hash. A container that is
+   already on the path from the root is fed as a cycle reference instead
+   (Section 4.19).
 4. The entire value tree is serialized into one contiguous byte stream, then
    digested once.
 
@@ -854,6 +904,22 @@ Full byte stream:
 There is no enclosing object and no `TAG_END` terminator — the three fields are
 fed positionally.
 
+### 7.21 `a`, where `a = { self: a }` (cycle)
+
+- Object tag: `11`
+- Key `"self"` (4 bytes UTF-8): `24 04 73 65 6C 66`
+- Value `a`, which is the object enclosing this position: `02 01`
+  (`TAG_CYCLE` + distance 1)
+- End: `00`
+
+Full byte stream:
+```
+11
+24 04 73 65 6C 66
+02 01
+00
+```
+
 ---
 
 ## 8. Rejected Values
@@ -890,5 +956,6 @@ rejected; they have well-defined byte encodings — see Section 4.3.)
 | `symbol` registry key             | string (§4.4)   | Emitted as a complete tagged string value (direct or hashed form), prefixed by `TAG_SYMBOL` |
 | Object keys                       | string (§4.4)   | Emitted as complete tagged string values (direct or hashed form per key) |
 | Hole run count                    | unsigned LEB128 | Number of consecutive holes      |
+| Cycle reference                   | unsigned LEB128 | Distance up the path to a container, prefixed by `TAG_CYCLE` |
 | Array elements                    | `TAG_END`       | Sentinel after last element      |
 | Object key-value pairs            | `TAG_END`       | Sentinel after last pair         |

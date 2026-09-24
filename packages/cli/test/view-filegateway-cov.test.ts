@@ -11,6 +11,11 @@ import { join } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import { realFileGateway } from "../lib/view/filegateway.ts";
 import { MAX_BINARY_VIEW_BYTES } from "../lib/view/languages/binary/binary.ts";
+import { pythonLanguage } from "../lib/view/languages/python/language.ts";
+
+// These cases color Python through its synchronous entry points, which show
+// plain text until its parser has loaded.
+await pythonLanguage.prepare!();
 
 /** Make a fresh temp directory and ensure it is removed after `fn` runs. */
 async function withTempDir(

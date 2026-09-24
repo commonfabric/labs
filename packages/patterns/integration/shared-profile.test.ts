@@ -1,3 +1,4 @@
+import { debugStr } from "@commonfabric/data-model";
 import { env, Page } from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
@@ -117,9 +118,8 @@ async function waitForSelector(page: Page, selector: string) {
       .catch(() => "");
     const probe = await readProfileCreateProbe(page).catch(() => undefined);
     throw new Error(
-      `Unable to find ${selector}. Body: ${bodyText.slice(0, 1000)} Probe: ${
-        JSON.stringify(probe)
-      }`,
+      `Unable to find ${selector}. Body: ${bodyText.slice(0, 1000)} ` +
+        debugStr`Probe: $quote,indent,long${probe}`,
       { cause },
     );
   }

@@ -86,7 +86,7 @@ export default pattern<BookRecommendationsInput, BookRecommendationsOutput>(
     const view = RecommendationView({ state: recommendation });
     return {
       [NAME]: "Book recommendations",
-      [UI]: view,
+      [UI]: view[UI],
       finishedBooks,
       favoriteAuthors,
       recommendation,

@@ -33,7 +33,6 @@ import {
   ManagedStorageTransaction,
   MapSet,
   MapSetStringToPathSelectors,
-  mergeAnyOfBranchSchemas,
   mergeAnyOfMatches,
   PointerCycleTracker,
   schemaAcceptsType,
@@ -2170,129 +2169,6 @@ describe("mergeAnyOfMatches", () => {
     // object), the merge can't combine them and falls through to matches[0].
     const obj = { name: "Alice" };
     expect(mergeAnyOfMatches([obj, null])).toEqual(obj);
-  });
-});
-
-describe("mergeAnyOfBranchSchemas", () => {
-  it("returns null for fewer than 2 branches", () => {
-    expect(
-      mergeAnyOfBranchSchemas([{ type: "object" }], {}),
-    ).toBe(null);
-  });
-
-  it("returns null when a branch is not an object type", () => {
-    expect(
-      mergeAnyOfBranchSchemas(
-        [{ type: "string" }, { type: "object" }],
-        {},
-      ),
-    ).toBe(null);
-  });
-
-  it("merges disjoint properties from two branches", () => {
-    const result = mergeAnyOfBranchSchemas(
-      [
-        { type: "object", properties: { a: { type: "string" } } },
-        { type: "object", properties: { b: { type: "number" } } },
-      ],
-      {},
-    );
-    expect(result).not.toBe(null);
-    const r = result as Record<string, unknown>;
-    expect(r.type).toBe("object");
-    const props = r.properties as Record<string, unknown>;
-    expect(props.a).toEqual({ type: "string" });
-    expect(props.b).toEqual({ type: "number" });
-  });
-
-  it("wraps overlapping properties with different schemas in anyOf", () => {
-    const result = mergeAnyOfBranchSchemas(
-      [
-        { type: "object", properties: { x: { type: "string" } } },
-        { type: "object", properties: { x: { type: "number" } } },
-      ],
-      {},
-    );
-    expect(result).not.toBe(null);
-    const props = (result as Record<string, unknown>)
-      .properties as Record<string, unknown>;
-    const xSchema = props.x as Record<string, unknown>;
-    expect(xSchema.anyOf).toBeDefined();
-    expect((xSchema.anyOf as unknown[]).length).toBe(2);
-  });
-
-  it("uses single schema when overlapping properties are identical", () => {
-    const result = mergeAnyOfBranchSchemas(
-      [
-        { type: "object", properties: { x: { type: "string" } } },
-        { type: "object", properties: { x: { type: "string" } } },
-      ],
-      {},
-    );
-    expect(result).not.toBe(null);
-    const props = (result as Record<string, unknown>)
-      .properties as Record<string, unknown>;
-    expect(props.x).toEqual({ type: "string" });
-  });
-
-  it("computes required as intersection", () => {
-    const result = mergeAnyOfBranchSchemas(
-      [
-        {
-          type: "object",
-          properties: { a: { type: "string" }, b: { type: "string" } },
-          required: ["a", "b"],
-        },
-        {
-          type: "object",
-          properties: { a: { type: "string" }, c: { type: "number" } },
-          required: ["a"],
-        },
-      ],
-      {},
-    );
-    expect(result).not.toBe(null);
-    const r = result as Record<string, unknown>;
-    // Only "a" is required by both branches
-    expect(r.required).toEqual(["a"]);
-  });
-
-  it("merges $defs from all branches", () => {
-    const result = mergeAnyOfBranchSchemas(
-      [
-        {
-          type: "object",
-          properties: { a: { type: "string" } },
-          $defs: { Foo: { type: "string" } },
-        },
-        {
-          type: "object",
-          properties: { b: { type: "number" } },
-          $defs: { Bar: { type: "number" } },
-        },
-      ],
-      {},
-    );
-    expect(result).not.toBe(null);
-    const r = result as Record<string, unknown>;
-    const defs = r.$defs as Record<string, unknown>;
-    expect(defs.Foo).toEqual({ type: "string" });
-    expect(defs.Bar).toEqual({ type: "number" });
-  });
-
-  it("returns null when branches have no properties", () => {
-    expect(
-      mergeAnyOfBranchSchemas(
-        [{ type: "object" }, { type: "object" }],
-        {},
-      ),
-    ).toBe(null);
-  });
-
-  it("returns null for boolean branch schemas", () => {
-    expect(
-      mergeAnyOfBranchSchemas([true, { type: "object" }], {}),
-    ).toBe(null);
   });
 });
 

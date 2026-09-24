@@ -8,7 +8,8 @@
     ".": "./src/index.ts"
   },
   "tasks": {
-    "test": "deno test"
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST"
   },
   "test": {
     "include": [

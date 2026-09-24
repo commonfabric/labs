@@ -1,25 +1,18 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import type {
-  FabricContainerValuePlus,
-  FabricContainerValueTag,
-  FabricValue,
-  PrimitiveValueTag,
-} from "@";
+import type { FabricValue, PrimitiveValueTag } from "@";
 import { FabricError, FabricLink, FabricMap } from "@/fabric-instances";
 import { FabricBytes } from "@/fabric-primitives";
 import {
-  type DispatchingVisitorResult,
   DO_RECURSE_KEYS,
   DO_RECURSE_KEYS_VALUES,
   DO_RECURSE_VALUES,
-  DO_VISIT_SUBTYPE,
   type ValueVisitor,
 } from "@/value-visit";
 import { VisitInProgress } from "@/value-visit/VisitInProgress.ts";
 
-import { mainResult, Recorder, replace } from "./Recorder.ts";
+import { DO_DISPATCH, mainResult, Recorder, replace } from "./Recorder.ts";
 
 /** Runs a fresh visit of `value` with `vis`. */
 function visit(value: unknown, vis: ValueVisitor<unknown, unknown>): unknown {
@@ -39,16 +32,13 @@ describe("VisitInProgress", () => {
           expect(visit(root, rec)).toBeUndefined();
           expect(rec.events).toEqual([
             ["value", root, "Object"],
-            ["container", root, "Object"],
             ["object", root],
             ["value", array, "Array"],
-            ["container", array, "Array"],
             ["array", array],
             ["value", 1, "number"],
             ["primitive", 1, "number"],
             ["visitedElement", array, 0, 1],
             ["value", inner, "Object"],
-            ["container", inner, "Object"],
             ["object", inner],
             ["value", null, "null"],
             ["primitive", null, "null"],
@@ -74,7 +64,7 @@ describe("VisitInProgress", () => {
         ];
 
         for (const [label, value, tag] of primitiveCases) {
-          it(`passes ${label} to \`visitPrimitive()\` with the tag \`${tag}\``, () => {
+          it(`passes ${label} to \`visitValue()\` with the tag \`${tag}\``, () => {
             const rec = new Recorder();
 
             visit(value, rec);
@@ -85,41 +75,11 @@ describe("VisitInProgress", () => {
           });
         }
 
-        it("passes a `FabricInstance` through `visitFabricContainer()` to `visitFabricInstance()`", () => {
-          const rec = new Recorder();
-          rec.onInstance = () => undefined;
-          const instance = new FabricMap(new Map([["k", 1]]));
-
-          visit(instance, rec);
-          expect(rec.events).toEqual([
-            ["value", instance, "FabricInstance"],
-            ["container", instance, "FabricInstance"],
-            ["instance", instance],
-          ]);
-        });
-
-        it("does not call a subtype visitor when `visitFabricContainer()` returns something other than `visitSubtype`", () => {
-          class Stopping extends Recorder {
-            override visitFabricContainer(
-              value: FabricContainerValuePlus<unknown>,
-              tag: FabricContainerValueTag,
-            ): DispatchingVisitorResult<unknown, unknown> {
-              this.events.push(["container", value, tag]);
-              return mainResult("stopped");
-            }
-          }
-
-          const rec = new Stopping();
-
-          expect(visit([1], rec)).toEqual(mainResult("stopped"));
-          expect(rec.names).toEqual(["value", "container"]);
-        });
-
-        it("returns the result of `visitValue()` without dispatching, when it is not `visitSubtype`", () => {
+        it("returns the value of a `mainResult` from `visitValue()`, visiting nothing beneath the value", () => {
           const rec = new Recorder();
           rec.onValue = () => mainResult("done");
 
-          expect(visit([1], rec)).toEqual(mainResult("done"));
+          expect(visit([1], rec)).toBe("done");
           expect(rec.names).toEqual(["value"]);
         });
       });
@@ -127,7 +87,7 @@ describe("VisitInProgress", () => {
       describe("`replace` results", () => {
         it("dispatches on the replacement rather than the original", () => {
           const rec = new Recorder();
-          rec.onValue = (v) => (v === "x") ? replace(42) : DO_VISIT_SUBTYPE;
+          rec.onValue = (v) => (v === "x") ? replace(42) : DO_DISPATCH;
 
           visit("x", rec);
           expect(rec.events).toEqual([
@@ -142,7 +102,7 @@ describe("VisitInProgress", () => {
           rec.onValue = (v) => {
             if (v === "x") return replace("y");
             if (v === "y") return replace(3);
-            return DO_VISIT_SUBTYPE;
+            return DO_DISPATCH;
           };
 
           visit("x", rec);
@@ -177,7 +137,6 @@ describe("VisitInProgress", () => {
             ["value", 1, "number"],
             ["primitive", 1, "number"],
             ["value", replacement, "Array"],
-            ["container", replacement, "Array"],
             ["array", replacement],
           ]);
         });
@@ -185,7 +144,7 @@ describe("VisitInProgress", () => {
         it("passes the replacement's own tag when `visitValue()` replaces a container with a primitive", () => {
           const rec = new Recorder();
           const array = [1];
-          rec.onValue = (v) => (v === array) ? replace("x") : DO_VISIT_SUBTYPE;
+          rec.onValue = (v) => (v === array) ? replace("x") : DO_DISPATCH;
 
           visit(array, rec);
           expect(rec.events).toEqual([
@@ -198,7 +157,7 @@ describe("VisitInProgress", () => {
         it("routes a non-fabric replacement under a valid root to `visitPlusType()`", () => {
           const rec = new Recorder();
           const date = new Date(0);
-          rec.onValue = (v) => (v === "x") ? replace(date) : DO_VISIT_SUBTYPE;
+          rec.onValue = (v) => (v === "x") ? replace(date) : DO_DISPATCH;
 
           visit(["x"], rec);
           expect(rec.events.filter((e) => e[0] === "plusType")).toEqual([
@@ -208,7 +167,7 @@ describe("VisitInProgress", () => {
 
         it("reports the original element, not its replacement, to `visitedFabricArrayElement()`", () => {
           const rec = new Recorder();
-          rec.onValue = (v) => (v === "x") ? replace(42) : DO_VISIT_SUBTYPE;
+          rec.onValue = (v) => (v === "x") ? replace(42) : DO_DISPATCH;
           const array = ["x"];
 
           visit(array, rec);
@@ -222,8 +181,7 @@ describe("VisitInProgress", () => {
           replacement.self = replacement;
 
           const rec = new Recorder();
-          rec.onValue = (v) =>
-            (v === "x") ? replace(replacement) : DO_VISIT_SUBTYPE;
+          rec.onValue = (v) => (v === "x") ? replace(replacement) : DO_DISPATCH;
 
           visit(["x"], rec);
           expect(rec.events.filter((e) => e[0] === "cycle")).toEqual([
@@ -242,7 +200,7 @@ describe("VisitInProgress", () => {
               if (v === replacement && path === "directly") {
                 return DO_RECURSE_VALUES;
               }
-              return DO_VISIT_SUBTYPE;
+              return DO_DISPATCH;
             };
 
             visit(["x"], rec);
@@ -285,7 +243,7 @@ describe("VisitInProgress", () => {
           const rec = new Recorder();
           rec.onCycle = () => mainResult("cycle!");
 
-          expect(visit(a, rec)).toEqual(mainResult("cycle!"));
+          expect(visit(a, rec)).toBe("cycle!");
         });
 
         it("honors a `recurse` from `visitCycle()`, re-entering the value at the next depth", () => {
@@ -312,7 +270,7 @@ describe("VisitInProgress", () => {
             (i === 1) ? mainResult("at 1") : undefined;
           const array = [10, 20, 30];
 
-          expect(visit(array, rec)).toEqual(mainResult("at 1"));
+          expect(visit(array, rec)).toBe("at 1");
           expect(rec.events.filter((e) => e[0] === "visitedElement")).toEqual([
             ["visitedElement", array, 0, 10],
             ["visitedElement", array, 1, 20],
@@ -325,7 +283,7 @@ describe("VisitInProgress", () => {
           rec.onVisitedMapping = () => mainResult("first");
           const object = { a: 1, b: 2 };
 
-          expect(visit(object, rec)).toEqual(mainResult("first"));
+          expect(visit(object, rec)).toBe("first");
           expect(
             rec.events.filter((e) => e[0] === "visitedFabricPlainObjectEntry"),
           )
@@ -340,7 +298,7 @@ describe("VisitInProgress", () => {
           rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
           rec.onPrimitive = (v) => (v === "a") ? mainResult("key") : undefined;
 
-          expect(visit({ a: 1 }, rec)).toEqual(mainResult("key"));
+          expect(visit({ a: 1 }, rec)).toBe("key");
           expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
             ["primitive", "a", "string"],
           ]);
@@ -352,7 +310,7 @@ describe("VisitInProgress", () => {
           rec.onVisitedGap = () => mainResult("gap");
 
           // deno-lint-ignore no-sparse-arrays
-          expect(visit([, 1], rec)).toEqual(mainResult("gap"));
+          expect(visit([, 1], rec)).toBe("gap");
           expect(rec.names).not.toContain("visitedElement");
         });
 
@@ -361,7 +319,7 @@ describe("VisitInProgress", () => {
           rec.onVisitedGap = () => mainResult("gap");
 
           // deno-lint-ignore no-sparse-arrays
-          expect(visit([[1, ,], 2], rec)).toEqual(mainResult("gap"));
+          expect(visit([[1, ,], 2], rec)).toBe("gap");
           expect(rec.events.map((e) => e[1])).not.toContain(2);
         });
 
@@ -370,9 +328,7 @@ describe("VisitInProgress", () => {
           rec.onPrimitive = (v) =>
             (v === "stop") ? mainResult("deep") : undefined;
 
-          expect(visit({ p: [1, "stop", 3], q: 4 }, rec)).toEqual(
-            mainResult("deep"),
-          );
+          expect(visit({ p: [1, "stop", 3], q: 4 }, rec)).toBe("deep");
           expect(rec.events.map((e) => e[1])).not.toContain(3);
           expect(rec.events.map((e) => e[1])).not.toContain(4);
         });
@@ -476,7 +432,7 @@ describe("VisitInProgress", () => {
         it("honors a `recurse` returned directly from `visitValue()`, without subtype dispatch", () => {
           const rec = new Recorder();
           rec.onValue = (v) =>
-            Array.isArray(v) ? DO_RECURSE_VALUES : DO_VISIT_SUBTYPE;
+            Array.isArray(v) ? DO_RECURSE_VALUES : DO_DISPATCH;
 
           visit([1], rec);
           expect(rec.names).toEqual([
@@ -496,16 +452,7 @@ describe("VisitInProgress", () => {
           );
         });
 
-        it("throws for a `recurse` from `visitPrimitive()`", () => {
-          const rec = new Recorder();
-          rec.onPrimitive = () => DO_RECURSE_VALUES;
-
-          expect(() => visit("x", rec)).toThrow(
-            /Cannot use `recurse` result with non-container: /,
-          );
-        });
-
-        it("throws for a `recurse` from `visitPlusType()`", () => {
+        it("throws for a `recurse` from `visitValue()` on a `PlusType` value", () => {
           const rec = new Recorder();
           rec.onPlusType = () => DO_RECURSE_VALUES;
 
@@ -530,10 +477,8 @@ describe("VisitInProgress", () => {
           expect(visit(link, rec)).toBeUndefined();
           expect(rec.events).toEqual([
             ["value", link, "FabricInstance"],
-            ["container", link, "FabricInstance"],
             ["instance", link],
             ["value", payload, "Object"],
-            ["container", payload, "Object"],
             ["object", payload],
             ["value", "fid1:abc", "string"],
             ["primitive", "fid1:abc", "string"],
@@ -595,7 +540,7 @@ describe("VisitInProgress", () => {
             cause: undefined,
           });
 
-          expect(visit(error, rec)).toEqual(mainResult("found"));
+          expect(visit(error, rec)).toBe("found");
           expect(rec.names).not.toContain("visitedInstance");
         });
 
@@ -604,7 +549,7 @@ describe("VisitInProgress", () => {
           rec.onVisitedInstance = () => mainResult("after");
           const link = new FabricLink({ id: "fid1:abc" });
 
-          expect(visit([link, 1], rec)).toEqual(mainResult("after"));
+          expect(visit([link, 1], rec)).toBe("after");
           expect(rec.events.map((e) => e[1])).not.toContain(1);
         });
 
@@ -692,7 +637,6 @@ describe("VisitInProgress", () => {
           visit([fn], rec);
           expect(rec.names).toEqual([
             "value",
-            "container",
             "array",
             "value",
             "plusType",
@@ -710,7 +654,6 @@ describe("VisitInProgress", () => {
           );
           expect(rec.names).toEqual([
             "value",
-            "container",
             "array",
             "value",
             "primitive",
@@ -774,7 +717,6 @@ describe("VisitInProgress", () => {
           expect(rec.plusTypeChecks).toEqual([]);
           expect(rec.names).toEqual([
             "value",
-            "container",
             "object",
             "value",
             "primitive",
@@ -793,12 +735,46 @@ describe("VisitInProgress", () => {
           expect(rec.names).toEqual(["value", "plusType"]);
         });
 
+        it("passes a unique symbol to `isPlusType()` and, on `true`, to `visitPlusType()`", () => {
+          const rec = new Recorder();
+          const unique = Symbol("u");
+
+          visit(unique, rec);
+          expect(rec.plusTypeChecks).toEqual([unique]);
+          expect(rec.events).toEqual([
+            ["value", unique, "PlusType"],
+            ["plusType", unique],
+          ]);
+        });
+
+        it("passes a registry-interned symbol to `visitPrimitiveValue()` without consulting `isPlusType()`", () => {
+          const rec = new Recorder();
+          const interned = Symbol.for("value-visit");
+
+          visit(interned, rec);
+          expect(rec.plusTypeChecks).toEqual([]);
+          expect(rec.events).toEqual([
+            ["value", interned, "symbol"],
+            ["primitive", interned, "symbol"],
+          ]);
+        });
+
+        it("throws for a unique symbol, without calling `visitPlusType()`, on `false`", () => {
+          const rec = new Recorder();
+          rec.onIsPlusType = () => false;
+
+          expect(() => visit(Symbol("u"), rec)).toThrow(
+            /Cannot visit unrecognized value: /,
+          );
+          expect(rec.names).not.toContain("plusType");
+        });
+
         it("throws for a non-fabric value, without calling `visitPlusType()`, on `false`", () => {
           const rec = new Recorder();
           rec.onIsPlusType = () => false;
 
           expect(() => visit(new Date(0), rec)).toThrow(
-            /Encountered a value outside of the visitor's domain: /,
+            /Cannot visit unrecognized value: /,
           );
           expect(rec.names).not.toContain("plusType");
         });
@@ -809,7 +785,7 @@ describe("VisitInProgress", () => {
           rec.onIsPlusType = () => false;
 
           expect(() => visit(date, rec)).toThrow(
-            /Encountered a value outside of the visitor's domain: /,
+            /Cannot visit unrecognized value: /,
           );
           expect(rec.events).toEqual([["value", date, null]]);
         });
@@ -818,19 +794,18 @@ describe("VisitInProgress", () => {
           const rec = new Recorder();
           rec.onIsPlusType = () => false;
           rec.onValue = (_v, tag) =>
-            (tag === null) ? mainResult("untagged") : DO_VISIT_SUBTYPE;
+            (tag === null) ? mainResult("untagged") : DO_DISPATCH;
 
-          expect(visit([new Date(0)], rec)).toEqual(mainResult("untagged"));
+          expect(visit([new Date(0)], rec)).toBe("untagged");
         });
 
         it("throws for a non-fabric replacement under a valid root, on `false`", () => {
           const rec = new Recorder();
           rec.onIsPlusType = () => false;
-          rec.onValue = (v) =>
-            (v === "x") ? replace(new Date(0)) : DO_VISIT_SUBTYPE;
+          rec.onValue = (v) => (v === "x") ? replace(new Date(0)) : DO_DISPATCH;
 
           expect(() => visit(["x"], rec)).toThrow(
-            /Encountered a value outside of the visitor's domain: /,
+            /Cannot visit unrecognized value: /,
           );
         });
 
@@ -855,12 +830,38 @@ describe("VisitInProgress", () => {
           expect(visit({ a: [1] }, new Recorder())).toBeUndefined();
         });
 
-        it("returns the first `mainResult` a visitor produces", () => {
+        it("returns the value of the first `mainResult` a visitor produces", () => {
           const rec = new Recorder();
           rec.onPrimitive = (v, tag) =>
             (tag === "number") ? mainResult(v) : undefined;
 
-          expect(visit(["x", 7, 8], rec)).toEqual(mainResult(7));
+          expect(visit(["x", 7, 8], rec)).toBe(7);
+        });
+
+        it("puts `undefined` to `isResultType()` when no visitor produces a `mainResult`", () => {
+          const rec = new Recorder();
+
+          expect(visit([1], rec)).toBeUndefined();
+          expect(rec.resultTypeChecks).toStrictEqual([undefined]);
+        });
+
+        it("throws when no visitor produces a `mainResult` and `isResultType()` returns `false`", () => {
+          const rec = new Recorder();
+          rec.onIsResultType = () => false;
+
+          expect(() => visit([1], rec)).toThrow(
+            /Not a `ResultType` value: `undefined`/,
+          );
+          expect(rec.resultTypeChecks).toStrictEqual([undefined]);
+        });
+
+        it("does not put a `mainResult`'s value to `isResultType()`", () => {
+          const rec = new Recorder();
+          rec.onIsResultType = () => false;
+          rec.onPrimitive = () => mainResult(undefined);
+
+          expect(visit([1], rec)).toBeUndefined();
+          expect(rec.resultTypeChecks).toStrictEqual([]);
         });
       });
 
@@ -906,7 +907,7 @@ describe("VisitInProgress", () => {
             if (v === "root") {
               inProgress.visit(2);
             }
-            return DO_VISIT_SUBTYPE;
+            return DO_DISPATCH;
           };
 
           expect(() => inProgress.visit("root")).toThrow(
@@ -926,14 +927,13 @@ describe("VisitInProgress", () => {
               }
               return replace([1]);
             }
-            return DO_VISIT_SUBTYPE;
+            return DO_DISPATCH;
           };
 
           inProgress.visit("root");
           expect(rec.names).toEqual([
             "value",
             "value",
-            "container",
             "array",
             "value",
             "primitive",

@@ -100,9 +100,11 @@ export type AgentObservedHandle =
 
 /**
  * Everything a run's handle table says the run observed: each general
- * address handle as a cell, and each held referent as a document carrying
- * the content and label it was admitted under. A handle held for one purpose
- * only — a `skill-context` one — is not an observation.
+ * address handle as a cell, and each held document referent carrying the
+ * content and label it was admitted under. A handle held for one purpose
+ * only — a `skill-context` one — is not an observation, and neither is a
+ * research referent: it is a projection of the run's own work, held so a
+ * reader can consult it, and no document is minted from it.
  */
 export const agentObservedHandlesOfTable = (
   table: HarnessHandleTable,
@@ -110,12 +112,16 @@ export const agentObservedHandlesOfTable = (
   ...table.entries.filter((entry) => entry.capability === undefined).map((
     entry,
   ): AgentObservedHandle => ({ kind: "cell", token: entry.token })),
-  ...(table.referents ?? []).map((referent): AgentObservedHandle => ({
-    kind: "document",
-    token: referent.token,
-    value: referent.value,
-    label: referent.label,
-  })),
+  ...(table.referents ?? []).flatMap((referent): AgentObservedHandle[] =>
+    referent.kind === "document"
+      ? [{
+        kind: "document",
+        token: referent.token,
+        value: referent.value,
+        label: referent.label,
+      }]
+      : []
+  ),
 ];
 
 export interface WriteAgentResultOptions {
@@ -130,7 +136,11 @@ export interface WriteAgentResultOptions {
   /** The schema the result was requested against. */
   resultSchema: JSONSchema;
 
-  /** Everything the run observed, cells and non-cell referents alike. */
+  /**
+   * Everything the run observed: cells, and the document referents it holds.
+   * A research referent is not among them; see
+   * {@link agentObservedHandlesOfTable}.
+   */
   observedHandles: readonly AgentObservedHandle[];
 
   /**
@@ -149,7 +159,7 @@ export interface WriteAgentResultOptions {
   opaqueHandleId?: string;
 }
 
-/** A document the writer minted for a non-cell referent. */
+/** A document the writer minted for a document referent. */
 export interface AgentResultMintedDocument {
   token: string;
   link: NormalizedFullLink;
@@ -165,7 +175,7 @@ export interface WrittenAgentResult {
    */
   joinLabel: IFCLabel;
 
-  /** Durable documents minted for non-cell referents the result cites. */
+  /** Durable documents minted for document referents the result cites. */
   mintedDocuments: readonly AgentResultMintedDocument[];
 
   /** The positions sealed for exceeding the ceiling their position declares. */
@@ -214,7 +224,7 @@ export class AgentResultWriteError extends Error {
   }
 }
 
-/** The cause of the document minted for a non-cell referent of one result. */
+/** The cause of the document minted for a document referent of one result. */
 export const agentResultReferentCause = (
   resultCause: unknown,
   token: string,
@@ -560,8 +570,8 @@ const referenceText = (value: unknown): string | undefined => {
 /**
  * Resolves references throughout `value`, walking it beside `schema`, and
  * returns what each referencing position resolved to. A whole-position token
- * or canonical link string resolves against the run's table or its recorded
- * non-cell referents; a well-formed token the run does not hold, wherever it
+ * or canonical link string resolves against the run's table or its observed
+ * document referents; a well-formed token the run does not hold, wherever it
  * sits in a string, fails the walk, as does a whole-position address the
  * table does not hold. Text that is neither is the model's own and stays.
  */
@@ -756,7 +766,7 @@ const labelOf = (cell: Cell<unknown>): IFCLabel => {
  *
  * One or two transactions are committed. The optional first transaction
  * mints a document for every
- * non-cell referent the result cites, under the label the tool reported and
+ * document referent the result cites, under the label the tool reported and
  * with no read beside it, so the declaration is the whole of what the
  * document carries. Each uncited referent passes the same write admission in
  * an isolated transaction that is then aborted; an opaque runtime receipt

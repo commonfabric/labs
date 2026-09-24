@@ -244,19 +244,14 @@ describe("CFC clause-aware ceiling fit", () => {
       ).toBe(false);
     });
 
-    it("reads own properties only", () => {
-      // The rewrite builds an atom out of the field it reads, so a prototype
-      // supplying `type`/`owner` must not reach it. Two own enumerable keys
-      // make `Object.keys` report the canonical arity without the canonical
-      // shape.
-      const inherited = Object.create(alicePersonalSpace) as Record<
-        string,
-        unknown
-      >;
+    it("throws on an atom that is not a `FabricValue`", () => {
+      // An atom whose `type`/`owner` come from its prototype is not data, and
+      // the equality check refuses it before the rewrite can read it.
+      const inherited = Object.create(alicePersonalSpace);
       inherited.a = 1;
       inherited.b = 2;
-      expect(cfcObservationFitsCeiling([inherited as never], [aliceUser]))
-        .toBe(false);
+      expect(() => cfcObservationFitsCeiling([inherited], [aliceUser]))
+        .toThrow(/Cannot compare value/);
     });
 
     it("a committed owner is admitted where its plaintext twin is refused", () => {

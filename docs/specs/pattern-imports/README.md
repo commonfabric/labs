@@ -326,13 +326,13 @@ ref     = slug                ; no ":" — isSlugAddress convention
 space   = space-name | space-did ; parser shape; resolution currently requires a DID
 host    = domain[":"port]     ; a toolshed
 pin     = "@" hash            ; selected module identity
-hash    = 43 base64url chars  ; hashStringOf/hashOf output (value-hash.ts):
+hash    = 43 base64url chars  ; hashStringOf/hashOf output (value-hash/):
                               ; [A-Za-z0-9_-], case-SENSITIVE, no padding —
                               ; e.g. Avcny13Rj8q-2ClANy_-k0ikWWQcXx7QTdsiqGfrC1c
 ```
 
 (Hashes are **not** hex: `hashStringOf` emits unprefixed base64url
-(`packages/data-model/src/value-hash.ts`), and entity URIs carry the
+(`packages/data-model/src/value-hash/impl.ts`), and entity URIs carry the
 `fid1:` tag inside `of:` — `of:fid1:<hash>` is what `toURI` produces. The
 base64url alphabet contains no `/`, `@`, or `:`, so pin-splitting and
 segment-splitting stay unambiguous.)

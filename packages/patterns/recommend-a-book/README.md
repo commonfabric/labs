@@ -14,13 +14,15 @@ books they may have read and authors they may like. The shelf also accepts
 manual books and authors. These are suggestions to review, not verified reading
 history.
 
-**Ask for recommendations** creates `main.tsx` in a new anonymous space. The
-native sharing dialog previews the exact shelf snapshot and its destination.
-Confirming publishes that copy to the invitation; the personal shelf stays
-private. Open the invitation and use the piece menu's Access panel to grant each
-visitor WRITE on that space. Visitors need WRITE to run their private state and
-agent requests there; the owner-only shelf and inbox rules still govern what
-those writes may change and read.
+The shelf composes `shared-invitation.tsx`; both live in the same dedicated
+space. `main.tsx` remains an independent invitation entrypoint for pieces that
+use it. **Ask for recommendations** makes the invitation and its sharing
+controls available. The native sharing dialog previews the exact shelf snapshot
+and its destination. Confirming publishes that copy to the invitation's shared
+library slot; the personal shelf remains a separate `PerUser` value. Grant each
+visitor WRITE in the space's Access panel so their private state and agent
+requests can run. Because WRITE covers the whole space, use disposable demo
+data. Another member with WRITE can replace the published library slot directly.
 
 The invitation shows a few favorite authors and a collapsed list of the
 originator's books. The visitor's agent proposes books from that visitor's Loom
@@ -40,9 +42,10 @@ its sender and the originator.
 
 For a two-person demonstration:
 
-1. In the owner's home space, open `library.tsx`, add a book and favorite author
+1. In a dedicated demo space, open `library.tsx`, add a book and favorite author
    or run its agent, and click **Ask for recommendations**. Confirm the native
-   snapshot preview, then click **Open recommendation invitation**.
+   snapshot preview, then click **Open recommendation invitation**. The shelf
+   and invitation stay in that space.
 2. In the invitation's Access panel, grant the visitor WRITE and share the
    invitation link. The visitor opens that link under their own identity and
    sees the collapsed shelf and favorite authors.
@@ -61,7 +64,8 @@ Scopes select state; confidentiality labels restrict reads. Fresh private stores
 bind `User(CurrentPrincipal)` to their authenticated creator and retain that
 identity on later writes. The inbox supports appending references without
 reading its existing entries. The invitation's originator descriptor carries a
-persisted principal attestation, and the published shelf slot is owner-writable.
+persisted principal attestation. The published shelf slot has space-wide WRITE
+authority, so it does not enforce owner-only updates.
 
 `cf-share-snapshot` is a trusted host component. Its own modal displays the full
 JSON snapshot and verified audience and requires a genuine user confirmation.
@@ -79,8 +83,9 @@ A visitor with WRITE access can also write directly to shared invitation state.
 An inbox entry alone is not proof that its sender used the review dialog, and
 the inbox does not prevent spam or forged unreviewed entries. A raw reference to
 an unreleased private draft does not grant the originator read access to that
-draft under the bounded runtime. Treat the inbox as a demonstration feed, not as
-an authenticated submission record.
+draft under the bounded runtime. Such an unreadable entry can prevent the
+originator's inbox view from rendering until it is removed. Treat the inbox as a
+demonstration feed, not as an authenticated submission record.
 
 The owner view uses `cf-owner-view` to compare the runtime's acting principal
 with the originator's stored root attestation. Changing the selected `#profile`
@@ -108,6 +113,31 @@ strict harness mode refuses retrieval by a task in the `context` role. A demo
 using Loom retrieval needs the documented explicit override. Fabric clients can
 still enforce strict CFC with persisted flow labels.
 
+The Estuary shell supplies a render ceiling but no runtime-wide read ceiling.
+The native snapshot dialog can publish a reader's own private shelf and a
+visitor's reviewed recommendations: the trusted worker checks each source
+against the confirming user's `User` ceiling. Sources labeled only for another
+user are refused. The same-space integration tests exercise publication and
+visitor submission in this host posture.
+
+For a disposable hosted fixture, find the shared slot's `/of:fid1:…` address and
+write a JSON object with `books` and `favoriteAuthors` to its `value` path:
+
+```bash
+PUBLISHED_LIBRARY_CELL="$(
+  cf cell get --url "$SHELF_URL" --select 'publishedLibrary@' |
+    jq -r '.publishedLibrary["$link"]'
+)"
+cf cell set --api-url "$CF_API_URL" --space "$CF_SPACE" \
+  --cell "$PUBLISHED_LIBRARY_CELL" value < shelf.json
+cf piece step --url "$SHELF_URL"
+```
+
+The first command extracts the slot address from the JSON response. This direct
+fixture write is not a native reviewed share; writing through the shelf result
+path can carry the private shelf's label into the transaction and fail
+writer-fit. Use only disposable book data.
+
 The authored tests exercise manual entry, private selection, rendering, and
 selection changes without a live model:
 
@@ -115,6 +145,7 @@ selection changes without a live model:
 deno task cf test \
   packages/patterns/recommend-a-book/library.test.tsx \
   packages/patterns/recommend-a-book/main.test.tsx \
+  packages/patterns/recommend-a-book/shared-invitation.test.tsx \
   packages/patterns/recommend-a-book/views.test.tsx \
   --cfc-enforcement-mode enforce-strict --cfc-flow-labels persist
 ```

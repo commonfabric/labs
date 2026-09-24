@@ -28,6 +28,9 @@ export default pattern(() => {
     author: "R. F. Kuang",
   });
   const shelf = BookRecommendations({});
+  const assert_top_level_view = assert(() =>
+    hasText(shelf[UI], "Five books for you")
+  );
   const seed_reader = action(() => {
     shelf.finishedBooks.push(book);
     shelf.favoriteAuthors.push("Ursula K. Le Guin");
@@ -133,6 +136,7 @@ export default pattern(() => {
   );
   return {
     [TESTS]: [
+      { assertion: assert_top_level_view },
       { action: seed_reader },
       { assertion: assert_reader_cells },
       { assertion: assert_five_link_schema },

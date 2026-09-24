@@ -1,7 +1,7 @@
 /**
  * Drives the `cf profile` action bodies in-process with a stubbed
- * `createProfile()` and `readWish()` (the `wish-command.test.ts` idiom), so
- * flag handling, the home-space target and the output shapes are covered
+ * `createProfile()` and `readWish()` (the `wish-command.serial.test.ts` idiom),
+ * so flag handling, the home-space target and the output shapes are covered
  * without a server. The create itself is covered in `profile-create.test.ts`.
  */
 

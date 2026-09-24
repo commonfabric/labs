@@ -12,6 +12,7 @@ import {
   fabricFromConvertibleJsValue,
   type FabricPlainObject,
   type FabricValue,
+  isDeepFrozen,
   isFabricSpecialObject,
   isKeyableObjectNotArray,
   shallowFabricFromConvertibleJsObjectElseUndefined,
@@ -22,6 +23,7 @@ import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { getLogger } from "@commonfabric/utils/logger";
 import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isNontrivialSchema } from "@commonfabric/data-model-schema";
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 
 import { type CellScope, type JSONSchema } from "./builder/types.ts";
@@ -47,6 +49,7 @@ import {
   storedCfcMetadataAppliesToPath,
   StoredCfcMetadataError,
 } from "./cfc/metadata.ts";
+import { cfcSchemaEntries } from "./cfc/schema-label-view.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
@@ -80,6 +83,10 @@ import {
   markReadAsAttemptedWrite,
 } from "./scheduler.ts";
 import { schemaHasIfc } from "./schema-ifc.ts";
+import {
+  externalResolutionMissCount,
+  onSchemaRegistryClear,
+} from "./schema-registry.ts";
 import { resolveSchema, resolveSchemaForValue } from "./schema.ts";
 import { isCellScope, scopeRank } from "./scope.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
@@ -222,6 +229,77 @@ export const schemaIfcOverlapsPath = (
   return visit(schema, basePath);
 };
 
+// The unconditional write-authorization paths of each schema, keyed by schema
+// object. Only deep-frozen schemas are cached, since a mutable one could be
+// edited after its paths were taken, and only paths computed without a `cid:`
+// resolution miss, since a claim behind a document that has not arrived is
+// missing from them. The paths embed resolved content, so a registry clear
+// swaps the cache.
+let writeAuthorizationPathsCache = new WeakMap<
+  object,
+  readonly (readonly string[])[]
+>();
+onSchemaRegistryClear(() => {
+  writeAuthorizationPathsCache = new WeakMap();
+});
+
+/**
+ * Reports whether a `writeAuthorizedBy` claim in `schema`, rooted at
+ * `basePath`, covers `targetPath` for every value that can land there. The
+ * claims are those {@link cfcSchemaEntries} finds, references resolved. A claim
+ * inside an `anyOf` or `oneOf` branch is not counted, because it holds only
+ * for the values that branch matches; a location protected only by such a
+ * claim is therefore reported as uncovered. Exported for unit testing; not
+ * part of the public surface.
+ */
+export const writeAuthorizationCoversPath = (
+  schema: JSONSchema | undefined,
+  basePath: readonly string[],
+  targetPath: readonly string[],
+): boolean => {
+  if (!isObjectOrArray(schema)) return false;
+  let paths = writeAuthorizationPathsCache.get(schema);
+  if (paths === undefined) {
+    const missesBefore = externalResolutionMissCount();
+    paths = cfcSchemaEntries(schema)
+      .filter((entry) =>
+        entry.conditional !== true &&
+        isObjectOrArray(entry.schema) && isObjectOrArray(entry.schema.ifc) &&
+        entry.schema.ifc.writeAuthorizedBy !== undefined
+      )
+      .map((entry) => entry.path);
+    if (
+      isDeepFrozen(schema) && externalResolutionMissCount() === missesBefore
+    ) {
+      writeAuthorizationPathsCache.set(schema, paths);
+    }
+  }
+  return paths.some((path) =>
+    pathPrefixMatches([...basePath, ...path], targetPath)
+  );
+};
+
+/**
+ * Helper for {@link recordLinkWritePolicyInput}, which reports whether a
+ * write authorization arriving with this transaction covers `target`. A claim
+ * a commit has already stored is found by `storedCfcMetadataAppliesToPath`;
+ * this finds one that is not stored yet, as on the write that creates a
+ * protected list.
+ */
+const hasPendingWriteAuthorization = (
+  tx: IExtendedStorageTransaction,
+  target: NormalizedFullLink,
+): boolean => {
+  const targetPath = canonicalizeLogicalPath(target.path);
+  return tx.getCfcSchemaPolicyInputs(target.space, target.id).some((input) =>
+    writeAuthorizationCoversPath(
+      input.schema,
+      canonicalizeLogicalPath(input.target.path),
+      targetPath,
+    )
+  );
+};
+
 const hasPendingSchemaPolicyInput = (
   tx: IExtendedStorageTransaction,
   source: NormalizedFullLink,
@@ -272,8 +350,18 @@ const recordLinkWritePolicyInput = (
     sourceMetadata !== undefined || sourceEnvelopeUninterpretable ||
     hasPendingSchemaPolicyInput(tx, source) ||
     cfcLabelViewHasValues(carriedCfcLabelView);
-  const targetRelevant = storedCfcMetadataAppliesToPath(tx, target) ||
-    hasPendingSchemaPolicyInput(tx, target);
+  // A link stored below a document's root under a write authorization that
+  // arrives with this write is held to the same source check as one stored
+  // under the claim once a commit has persisted it: otherwise the write that
+  // creates a protected list admits a first entry every later one is refused.
+  // A link AT the root is excluded — the document then aliases its source and
+  // stores no entry of its own. The stored labels that the pointer this write
+  // replaces brought to the slot do not count: they leave with it (see
+  // `storedCfcMetadataAppliesToPath`).
+  const targetRelevant =
+    storedCfcMetadataAppliesToPath(tx, target, { replacingLink: true }) ||
+    hasPendingSchemaPolicyInput(tx, target) ||
+    (target.path.length > 0 && hasPendingWriteAuthorization(tx, target));
   if (!sourceRelevant && !targetRelevant) {
     return;
   }
@@ -789,12 +877,18 @@ function anchorValueAsEntity(
     context,
   });
 
+  // This link is persisted, so it carries a schema only where the schema is a
+  // shape: a `true` or `{}` on the parent is left off rather than written into
+  // the stored link. `false` is left off by the same test, and cannot reach
+  // here in any case — the diff walk hands a child slot its schema through
+  // `getSchemaAtPath`, which reads a `false` slot as no schema.
+  const entrySchema = resolveSchemaForValue(link.schema, content);
   const newEntryLink: NormalizedFullLink = {
     id: toURI(entityId),
     space: link.space,
     scope: link.scope,
     path: [],
-    schema: resolveSchemaForValue(link.schema, content),
+    schema: isNontrivialSchema(entrySchema) ? entrySchema : undefined,
   };
 
   state.seen.set(registerKey, newEntryLink);

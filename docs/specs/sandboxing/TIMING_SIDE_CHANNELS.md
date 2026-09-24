@@ -419,14 +419,14 @@ Landing order, smallest and safest first. Each is its own commit/PR.
     `security-timing.test.ts` unchanged, and the widened
     full-suite (raw `Date.now`/`Math.random`/`new Date()` now in scope) still
     green with zero new violations.
-  - **No escape to an ungated clock.** The gated `Date` has its own prototype
-    whose `constructor` is the gated `Date`, so the classic escape
-    `(new Date()).constructor.now()` routes back through the gate rather than
-    relying only on SES having tamed the shared `Date.prototype.constructor`; the
-    deeper `Date.prototype.constructor` still lands on the SES-tamed shared Date
-    (which throws), and `createGatedDate()` asserts lockdown has run before it
-    builds, so it fails loud rather than injecting a leaky clock if ever called
-    too early. `instanceof Date` and the real methods still work. Pinned by
+  - **No escape to an ungated clock.** The gated `Date` shares the intrinsic
+    `Date.prototype`, so an instance it makes is an ordinary `Date` to the host
+    and to the data model. The classic escapes
+    `(new Date()).constructor.now()` and `Date.prototype.constructor.now()` both
+    land on the SES-tamed shared Date, which throws, and `createGatedDate()`
+    asserts lockdown has run before it builds, so it fails loud rather than
+    injecting a leaky clock if ever called too early. `instanceof Date` and the
+    real methods still work. Pinned by
     `packages/runner/test/w6-intrinsic-escape.test.ts`, which drives every
     constructor/prototype escape and asserts none yields a number.
   - **Why it is better.** The native JS API becomes the safe API — authors write

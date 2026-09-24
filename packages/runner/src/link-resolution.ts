@@ -218,14 +218,23 @@ export const undefinedDataLink = (
   };
 };
 
-const canFollowLinkHop = (
+/**
+ * The cap a hop is decided by: what the resolving link declares at the hop's
+ * depth, narrowed by `carried`, the caps every hop before it was decided by.
+ *
+ * A cap has to outlive the hop that first applied it. The stored schema on a
+ * followed link replaces the one the resolution carried in, and with it the
+ * reader's own cap, so a reader whose schema caps at `user` would go on to
+ * follow a `session` link found one document further along. Every hop is a
+ * step toward the same leaf the reader declared, so a cap that governs the
+ * read governs the whole walk, and narrowing can only ever block more.
+ */
+const capForLinkHop = (
   source: NormalizedFullLink,
   hop: LinkHop,
-): boolean =>
-  canFollowScopedLink(
-    schemaScopeForLinkAtDepth(source, hop.depth),
-    hop.link.scope,
-  );
+  carried: SchemaScope | undefined,
+): SchemaScope | undefined =>
+  narrowerScopeCap(carried, schemaScopeForLinkAtDepth(source, hop.depth));
 
 /**
  * Force a fetch from the server when the local replica cannot serve a hop
@@ -662,6 +671,9 @@ export function resolveLinkTracingDereferences(
   // first-probe dead-end there is still a dead-end behind a hop — the
   // asCell boundary consumed the hop when it minted the handle.
   const inputViaLinkHop = link.viaLinkHop === true;
+  // The narrowest follow cap any hop so far was decided by; see
+  // `capForLinkHop` for why it travels.
+  let carriedCap: SchemaScope | undefined;
 
   while (true) {
     let deadEndDocMissing = false;
@@ -765,18 +777,18 @@ export function resolveLinkTracingDereferences(
     }
 
     if (nextHop !== undefined) {
-      if (!canFollowLinkHop(link, nextHop)) {
+      const hopCap = capForLinkHop(link, nextHop, carriedCap);
+      if (!canFollowScopedLink(hopCap, nextHop.link.scope)) {
         // Blocked narrower-scope follow during link resolution — resolves to
         // undefined silently. Warn (not info) so the drop is observable; see
         // the matching site in traverse.ts followPointer (CT-1642).
-        const schemaScope = schemaScopeForLinkAtDepth(link, nextHop.depth);
         logger.warn("scope: blocked narrower link follow", () => [
-          `a "${schemaScope}"-scoped read cannot follow a ` +
+          `a "${hopCap}"-scoped read cannot follow a ` +
           `"${nextHop.link.scope}"-scoped link, so it resolves to undefined. ` +
           `If this is inside a .map()/lift, resolve the narrower-scoped value ` +
           `at the top level and pass the value down.`,
           {
-            schemaScope,
+            schemaScope: hopCap,
             linkScope: nextHop.link.scope,
             source: cfcAddressFromLink(link),
             target: cfcAddressFromLink(nextHop.link),
@@ -805,6 +817,7 @@ export function resolveLinkTracingDereferences(
         logger.error("link-res-error", `Link cycle detected: ${detail}`);
         throw new Error(`Link cycle detected at ${key}: ${detail}`);
       }
+      carriedCap = hopCap;
       traces.push(recordDereferenceHop(tx, nextHop));
       if (readStatsActive) recordLinkResolution(tx);
       followedHop = true;

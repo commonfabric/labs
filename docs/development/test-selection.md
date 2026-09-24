@@ -19,6 +19,25 @@ Every local query about test selection goes through one entry point:
 deno task test-selection <mode>
 ```
 
+Every mode that reads a manifest reads the one the lanes testing the
+checked-out commit read: the newest the store had created at or before
+that commit's committer date, resolved by the same code a lane resolves it
+with. [The spec](../specs/test-selection.md#determinism) says why a lane
+resolves at that moment. On a commit made before the newest manifest was
+published, a mode therefore describes what lanes testing that commit would
+read, not what the newest manifest says.
+
+A pull request's lanes test the merge commit the continuous-integration
+provider makes, which is dated when that commit was made rather than when
+the branch's own last commit was. Checking out that merge commit is how to
+ask about them exactly.
+
+`--at <moment>`, in ISO 8601, reads the manifest that was current at that
+moment instead, which is how to ask about a manifest published after the
+checked-out commit was made. Where the commit's date cannot be read and no
+moment is named, the mode stops and says so, because the manifest the lanes
+testing that commit would read is then unknown.
+
 ## The modes
 
 ### `explain <identity>`
@@ -36,9 +55,10 @@ It prints the suite and the invocation unit the identity belongs to, its
 score and its cost, the catches behind that score and how many distinct
 sources they came from, when the most recent one was, its churn and flake
 rate, whether the manifest withholds it, how many times it would run, and
-whether the current manifest reaches it. An identity the store has never
-seen is reported as mandatory, which is what an identity with no history
-is.
+whether a lane testing this commit reaches it when the change touches
+nothing, which is the plan `plan --dry-run` prints. An identity the store
+has never seen is reported as mandatory, which is what an identity with no
+history is.
 
 Each of those is printed on its own, because they are not alternatives: a
 withheld identity a change reaches runs anyway, so an answer that picked
@@ -55,11 +75,13 @@ where the value comes from, and which way you would move it.
 
 ### `coverage`
 
-Every measured set — one suite's units over one workspace member's lines
-— with how many units it holds and the baseline the newest manifest holds
+Every measured set — one suite's units over one workspace member's lines —
+with how many units it holds and the baseline this commit's manifest holds
 for it, and then every workspace member that carries no set, with the
-reason. This is what answers "why is my package not gated?" and "what am
-I being compared against?".
+reason. That baseline is the one the coverage gate compares this commit
+against, since the gate resolves its manifest at the commit's moment too.
+This is what answers "why is my package not gated?" and "what am I being
+compared against?".
 
 A member with two measured sets has two lines and two baselines. The
 counts are never added together: a line one suite's tests cover says
@@ -72,6 +94,16 @@ holds, how many are withheld, and per lane the number of tests, the
 projected seconds against the budget, the capabilities it would open, and
 a count by why each test was chosen. Given a lane number it answers "what
 would lane three do?", and given none it prints all of them.
+
+The plan is the one a lane computes, taken from the lane's own code rather
+than worked out again here, so the two cannot disagree. It is the plan for
+a change that touches nothing. A change's lanes also run every unit the
+change touches, and the lane script's own dry run is the one that includes
+those:
+
+```
+deno run -A tasks/ci-lane.ts --lane 3 --dry-run --base <ref>
+```
 
 The count is of this tree rather than of the manifest, because those are
 different numbers and the plan beneath it is over the first. A manifest is
@@ -93,10 +125,14 @@ puts one of those past the bound is its own time on top of the charge and
 the charge alone does not say which. The count beside the suite is of
 what it can still run, so the two never disagree about the same test.
 
-`--verify` compares the identity set the topology produces against what a
-recorded run actually executed, in both directions: identities a run
-produced that no suite claims, and units the topology enumerates that the
-run never recorded.
+`--verify` compares the units the topology enumerates against the
+identities this commit's manifest holds, in both directions. A unit the
+manifest holds nothing for is one every lane runs as unknown, and
+`--verify` fails on any. A manifest entry naming a unit the tree no longer
+enumerates is reported without failing, because a manifest is hours old
+and a unit deleted since it was published is expected to linger in it. A
+unit the configuration declares unavailable is passed over, since nothing
+runs it.
 
 ### How many lanes the run on the default branch uses
 
@@ -120,6 +156,14 @@ tree instead — the larger of the number of suites with anything to run
 and what packing the stand-ins asks for — and says on the error stream
 that it did so, since a projection from costs nobody has measured would
 be arithmetic over an invented figure.
+
+Whichever way it gets its answer, it answers no more than
+`FULL_LANES_MAX`, so that one push's full run leaves runners for the
+changes waiting behind it. A run that needs more takes that many and says
+so on the error stream. Every test still runs when that happens. A test
+whose repeated runs fit in no lane runs fewer times, down to once, and a
+test that fits nowhere even once goes into the lane it leaves shortest,
+so the lanes run past their budget instead.
 
 ## The coverage gate
 
@@ -146,7 +190,7 @@ where the directory holds the lanes' uploaded coverage. It prints a row
 per set — the baseline, this run's count, the change, and the outcome —
 and stops with a non-zero status on a rise nothing accepted.
 
-Four things are worth knowing before reading a failure.
+Five things are worth knowing before reading a failure.
 
 - **Each set is on its own.** A member with two measured sets has two
   numbers, and neither pays the other down. Nor does the source group over
@@ -163,11 +207,21 @@ Four things are worth knowing before reading a failure.
   ordinary rules; it is the run-the-whole-set part that stops. A set some
   run measured anyway is still scored, so a pull request labelled
   `ci: full`, which measures every set, is gated whatever the cap says.
-- **A run with a failing test is reported rather than gated.** Coverage
-  measured through a failure says nothing about whether the change was
-  tested, and the failing test is what to fix. So is a set whose reports
-  name no line of its member: that is a conversion that produced
-  nothing, not a set that covered nothing.
+- **A run with a failing test reports rather than gates every set a
+  lane's report measured.** Coverage measured through a failure says
+  nothing about whether the change was tested, and the failing test is
+  what to fix.
+- **A forced set that no lane's report measured fails**, in a run with a
+  failing test as in any other. That is a set no lane reported, or one
+  whose reports name no line of its member; a set's tests always load
+  some of their own member's source, so an empty report measured nothing
+  rather than covering nothing. The change was made to measure that set,
+  and a lane that stopped before writing its report, an upload that
+  carried nothing, a download that found nothing, and a lane that wrote
+  an empty report all arrive at the gate looking the same. The row says a
+  rise cannot be ruled out. A set the cap left unforced has nothing
+  asking for it to be measured, so one no run measured is reported rather
+  than failed.
 
 Nothing about coverage fails a run on `main`. That run measures every set,
 which is where the baselines come from, and merges every report into the
@@ -183,6 +237,12 @@ deno run -A tasks/coverage-report.ts --reports <directory> \
 The run's identity is required rather than defaulted, because the gate
 looks a baseline up by the commit it was measured at and a figure stamped
 with none matches nothing.
+
+The report also publishes whether the run's compile byte cache was cold,
+read from the record each lane that opened the cache leaves beside its
+coverage, so that the dashboard can leave a cold run out of its trend.
+[Compile cache state and cold runs](COVERAGE.md#compile-cache-state-and-cold-runs)
+says why a cold run's figure differs.
 
 One set can come out of that with no baseline. A lane that saw a unit of
 a measured set fail writes a marker beside that set's report, and the
@@ -237,6 +297,7 @@ rather than a setting to fix.
 | `LANE_BUDGET_SECONDS` | 230 | seconds | derived | Nothing edits this. It is the bound less the prologue and the safety margin, so a budget that does not fit inside its own bound cannot be written down. |
 | `FULL_LANE_BOUND_SECONDS` | 600 | seconds | chosen | Up when the run on `main` uses more jobs than it needs; down when `main` takes too long to say something broke. |
 | `FULL_LANE_BUDGET_SECONDS` | 530 | seconds | derived | Nothing edits this. It is the full run's bound less the same prologue and safety margin a pull request's lane pays, since a lane of either run is the same job doing the same setup on the same runner. |
+| `FULL_LANES_MAX` | 30 | lanes | chosen | Up when the organization's runner limit rises; down when a push's full run crowds out the pull requests behind it. A full run needing more lanes than this takes this many, and a lane may then run past its budget. |
 | `FULL_RUN_LABEL` | ci: full | a label | chosen | Not a quantity. Change it only if the label collides with one the repository already uses for something else. |
 | `UNMEASURED_COST_SECONDS` | 1 | seconds | chosen | Up when a lane holding new tests runs long; down when it finishes early. It is reached for only by a suite with no measured unit at all, since a suite that has any charges an unmeasured one the larger of its units' mean and their ninetieth percentile. |
 | `VALUE_FLOOR` | 0.05 | score | chosen | Up when the cheap tail is not being swept up; down when it crowds out tests with a record of catching things. |
@@ -270,7 +331,7 @@ rather than a setting to fix.
 | `COVERAGE_COMMENT_LINES` | 25 | lines | chosen | Up when coverage comments are too noisy; down when debt is climbing unnoticed. |
 | `LOCAL_COVERAGE_MAX_SECONDS` | 30 | seconds | chosen | Up when too many sets are reported as expensive for the report to be worth reading; down when one is quietly eating a lane. Nothing is excluded either way; it only decides what the summary mentions. |
 | `LOCAL_COVERAGE_MAX_SETS` | 2 | measured sets | chosen | Up when broader changes should still be gated and the run can afford those sets' whole unit lists; down when sweeping changes are crowding lanes. |
-| `EXCLUDED_FROM_COVERAGE_GATE` | 8 | workspace members | chosen | Not a quantity. A line comes off when a package fits the run's budget or gains a Deno-only half, which gives it a measured set. A line goes on when a package's own tests stop being what covers it. |
+| `EXCLUDED_FROM_COVERAGE_GATE` | 9 | workspace members | chosen | Not a quantity. A line comes off when a package fits the run's budget or gains a Deno-only half, which gives it a measured set. A line goes on when a package's own tests stop being what covers it. |
 | `LOCAL_COVERAGE_BASELINE_DAYS` | 7 | days | chosen | Up when branches based further back are being reported for want of a baseline they contain; down when the manifest carries more history than anybody reads. |
 | `COVERAGE_TREND_WEEKS` | 3 | weeks | chosen | Up when the tile goes amber too readily; down when debt climbs for a month before anybody is told. |
 | `CATCH_BREADTH_WINDOW_DAYS` | 2 | days | chosen | Up when a broken runner's failures are being counted as catches; down when genuine breadth is being written off as environmental. |
@@ -893,9 +954,9 @@ default branch runs it as many times as its share asks for and does not
 fail for it, so it goes on being measured while it is out of changes, and
 a green run of the default branch can carry a failure of one of these
 tests and still deploy. `explain <identity>` says of any test whether the
-newest manifest withholds it and how many runs it is given. The lanes are
-what carry this, so it describes what lands with them rather than what runs
-today, and the reasoning behind each part is in [the
+manifest this commit resolves withholds it and how many runs it is given.
+The lanes are what carry this, so it describes what lands with them rather
+than what runs today, and the reasoning behind each part is in [the
 plan](../plans/pull-request-test-selection.md#an-excluded-test-still-runs-on-main).
 
 A repository gate is a test like any other here. A gate introspects the
@@ -1102,6 +1163,64 @@ artifacts, so it takes minutes; nothing waits on it.
 
 To see what it would say about a run, set `MAIN_REPORT_RUN_ID` to that
 run and pass `--dry-run`, which posts nothing.
+
+## Units that run whole
+
+An invocation unit is usually one test file. A lane that wants part of
+one registers the rest of the file's tests as ignored.
+
+Some units hold more than one test and cannot be split. These are a
+workspace member whose test task takes no file list, a member's browser
+half, the reload suite's directory, and a section of the FUSE
+integration script. A lane that asks for one test of such a unit runs
+every test in it.
+
+Each suite lists these units in `whole`, and a lane writes no skip list
+for one. Most units in `whole` hold a single identity, such as a gate, a
+type-check group, a binary build, one pattern's check, or one vintage
+fixture's replay. Only the four kinds above hold several. A unit's shape
+does not tell you which kind it is, because two of the four kinds are
+paths.
+
+The packer places each such unit as one choice. `plan()` in
+`tasks/test-selection/plan.ts` merges the unit's tests into one choice
+before it packs. That choice costs what all the tests cost together, and
+it is held back when any of them is. The plan it writes lists the tests
+again in place of the merged choice. The merge exists only inside
+`plan()`. The manifest, the records, and the plan all name tests, so
+anything that matches a record against the manifest or a plan finds the
+test by its own name.
+
+A change to such a member's source makes its unit mandatory only
+through the coverage gate. A member with a measured set is reached by
+changes under its own tree. At present those members are
+`packages/connectors/agents/debug-view` and `packages/dashboard`. The
+others have no measured set, because
+[the coverage gate excludes them](#the-coverage-gate). No diff names a
+directory, so those units reach a lane only on the score of their tests.
+At present those are `packages/identity`, `packages/patterns`, and the
+three browser halves.
+
+A workspace member stops running whole when the task holding its tests
+becomes one the topology can point at files. That task is its
+`deno-test`, or its `test` if it defines no `deno-test`. The topology can
+point a single `deno test` at files, and also a dependency list that
+resolves to one, or the shard wrapper around one. It cannot point a task
+that joins commands with a shell operator such as `&&`, a task that
+names its own import map, or a test runner of the package's own.
+
+The shard wrapper, `tasks/run-sharded-test-files.ts`, is also how a
+member whose files need different flags stays splittable. Its `--serial`
+option names files that cannot run beside another test file in one
+process, and those run in a `deno test` without `--parallel`, one file
+at a time. Its `--all-access` option names files that need every
+permission, and those run under `--allow-all`. The wrapper runs each
+group as a `deno test` of its own and merges their JUnit reports into
+the one path it was handed. A lane groups the files it selects the same
+way, with a report for each group. The topology refuses a `--serial` or
+`--all-access` pattern that names no test file, and so does the wrapper,
+which also refuses such an `--ignore`. `packages/cli` is the member that
+uses both options.
 
 ## A case that fails only when its siblings do not run
 

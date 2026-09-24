@@ -1,4 +1,4 @@
-import type { CellKind, LinkScope } from "@commonfabric/api";
+import type { CellKind, FabricValue, LinkScope } from "@commonfabric/api";
 import { fabricAwareEqual, taggedHashStringOf } from "@commonfabric/data-model";
 import { schemaWithProperties } from "@commonfabric/data-model-schema";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -101,7 +101,7 @@ interface PieceCellIo {
   get(path?: CellPath): Promise<unknown>;
   set(value: unknown, path?: CellPath): Promise<void>;
   edit(
-    produce: (stored: unknown) => { value: unknown } | undefined,
+    produce: (stored: FabricValue) => { value: unknown } | undefined,
     path?: CellPath,
   ): Promise<{ wrote: boolean }>;
   getCell(path?: CellPath): Promise<Cell<unknown>>;
@@ -1619,11 +1619,12 @@ export function durableSourceContract(
   );
   const relativePath = (
     producerLink: ReturnType<Cell<unknown>["getAsNormalizedFullLink"]>,
+    matchScope: LinkScope | undefined = sourceLink.scope,
   ): (string | number)[] | undefined => {
     if (
       producerLink.space !== sourceLink.space ||
       producerLink.id !== sourceLink.id ||
-      (producerLink.scope ?? "space") !== (sourceLink.scope ?? "space") ||
+      (producerLink.scope ?? "space") !== (matchScope ?? "space") ||
       producerLink.path.length > sourceLink.path.length ||
       producerLink.path.some((segment, index) =>
         segment !== sourceLink.path[index]
@@ -1719,7 +1720,12 @@ export function durableSourceContract(
             parsed.schema,
             linkedCell.tx,
           ).getAsNormalizedFullLink();
-          const suffix = relativePath(target);
+          // A projection is matched at the instance the link names. A result
+          // alias reading a scoped input addresses the input's base slot and
+          // reaches the scoped value through its redirect, so it is not
+          // collected for a scoped source; the argument contract above
+          // governs that value.
+          const suffix = relativePath(target, rawSourceLink.scope);
           if (suffix !== undefined) {
             projected.push({
               root: ownerSchema,
@@ -3175,7 +3181,7 @@ class PiecePropIo implements PieceCellIo {
    * read, the way a write's caller verifies the write.
    */
   async edit(
-    produce: (stored: unknown) => { value: unknown } | undefined,
+    produce: (stored: FabricValue) => { value: unknown } | undefined,
     path?: CellPath,
   ): Promise<{ wrote: boolean }> {
     const pieces = this.#cc.pieces();
@@ -3214,7 +3220,9 @@ class PiecePropIo implements PieceCellIo {
       // Build the path with transaction context
       const txCell = targetCell.withTx(tx).key(...(path ?? []));
 
-      const decision = produce(txCell.getRaw({ lastNode: "value" }));
+      const decision = produce(
+        txCell.getRawUntyped({ lastNode: "value" }),
+      );
       if (decision === undefined) return { wrote: false };
       const value = decision.value;
 
@@ -5197,7 +5205,7 @@ function pieceSourceArgumentEvidence(
   argumentCell: Cell<unknown>,
   pieces: PiecesController,
 ): string {
-  const raw = argumentCell.getRaw();
+  const raw = argumentCell.getRawUntyped();
   const links = suppliedLinks(raw).map((suppliedLink) => {
     let linkBase = argumentCell;
     for (const segment of suppliedLink.path) {

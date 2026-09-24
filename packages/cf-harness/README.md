@@ -203,7 +203,7 @@ What works today:
   opt-in ChatGPT/Codex subscription transports
 - interactive chat NDJSON stdio transport with opt-in SQLite session, turn, and
   event persistence
-- single-child subagent delegation with fresh child prompt context, explicit
+- subagent delegation with fresh child prompt context, explicit
   default/browser/web_fetch/web_search/pattern-author child profiles, retained
   child run references, and a sanitized summary/state return channel, plus a
   bounded private research loop that is not a delegable profile
@@ -288,7 +288,10 @@ What is not done yet:
 - first-class browser operation policy on top of the provisional browser
   subagent profile
 - dynamic/model-driven Agent Skills activation
-- parallel child orchestration
+- parallel child orchestration beyond one model turn: a turn's delegations run
+  together, apart from a `browser` delegation, which holds the calls after it,
+  while its other calls run in order; nothing schedules, budgets, or cancels
+  across turns
 - app UI event provenance
 - streaming model responses
 - richer mid-turn resumability
@@ -438,20 +441,48 @@ CF_HARNESS_API_KEY=... deno task run -- \
   --prompt "Inspect the cf-harness package and summarize its model adapters."
 ```
 
-Operator output includes one aggregate `usage:` line covering the parent and
-completed descendant runs. The persisted `run-report.json` keeps `usage` and
-`modelUsage` for the direct run, plus `totalUsage` including completed
-descendants. The batch result JSON carries that total usage object. `costUsd`,
-when present, came from the provider; `estimatedCostUsd` is an estimate based on
-the public OpenAI GPT-5.6 price schedule and is not an invoice or a subscription
-quota conversion.
+Operator output includes one aggregate `usage:` line covering reported parent,
+research, and descendant calls. Each completed model call contributes once,
+including calls made by a child that later fails or is canceled. The persisted
+`run-report.json` keeps `usage` and `modelUsage` for the direct run, plus
+`totalUsage` including research and descendants. The batch result JSON carries
+that total usage object. `costUsd`, when present, came from the provider;
+`estimatedCostUsd` is an estimate based on the public OpenAI GPT-5.6 price
+schedule and is not an invoice or a subscription quota conversion.
 
-The parent ends a successful task with its normal final answer. When a missing
-input or choice blocks the goal, it calls `finish_task` with
-`{ "outcome": "question", "message": "…" }`; when it cannot proceed, it uses
-`"gave-up"` and a concrete reason. The call must stand alone in its model turn.
-An admitted call persists its ordinary policy decision, artifact, and paired
-transcript result, then ends the loop without another provider request.
+Interactive streams emit `turn_usage` after each completed model call with the
+root turn id, cumulative `usage`, and `elapsedMs` on the turn's wall clock. The
+console's completed-turn result carries the same usage aggregate and elapsed
+time through its terminal event. Unreported usage fields stay absent, and a call
+without usage prevents a partial dollar cost from being shown as a total. There
+is no estimate of tokens still being generated within a provider call.
+
+For an ordinary task with a configured Fabric session, the parent completes only
+after `assign_slug` successfully names a UI piece in that run. A text answer
+becomes a small pattern that renders the answer, created through the ordinary
+authoring and tool policy path. Data-only probes stay unnamed. An existing piece
+can keep its address: after a revision, `assign_slug` confirms the same piece
+under its existing slug. Its pending-read and UI checks apply in either case.
+
+Outside a budget-finalizing turn, a plain-text final answer without that receipt
+gets a host correction within the existing model-turn bound. Exhausting a strict
+turn budget still records `max_model_turns`; with `finalizeOnTurnLimit`, the
+last turn instead records the existing budget-finalized give-up without a
+correction. The host does not create a replacement piece on the model's behalf.
+Same-run resume retains naming receipts and the requirement from its recorded
+Fabric session even when connection flags are omitted; conversation history
+alone does not satisfy a new turn. Generic library runs without a configured
+Fabric session keep their text return contract; factory-only library callers can
+enable `requirePieceOutput`. Host-configured structured-result requests keep
+their schema-based document return contract, including on resume. Child return
+contracts are unchanged. A budget-finalized give-up can still report partial
+findings without a piece.
+
+When a missing input or choice blocks the goal, the parent calls `finish_task`
+with `{ "outcome": "question", "message": "…" }`; when it cannot proceed, it
+uses `"gave-up"` and a concrete reason. The call must stand alone in its model
+turn. An admitted call persists its ordinary policy decision, artifact, and
+paired transcript result, then ends the loop without another provider request.
 Malformed or withheld calls remain recoverable tool errors. Children retain
 their failure-return contract and cannot call `finish_task`.
 
@@ -947,16 +978,18 @@ bound for model context carries tokens, while the persisted tool-output artifact
 keeps the raw addresses. Model-authored tool arguments resolve tokens back to
 canonical references before policy evaluation, summarization, and dispatch —
 except for `finish_task`, whose user-facing sentence remains text, and
-`delegate_task`, whose `goal` and `context` reach the child verbatim, so a token
-there is inert text to the parent boundary. Its `skillHandle` and `patternRefs`
-fields are resolved separately on the trusted side: materializing stored skill
-text and rebuilding selected pattern-search records are those parameters' whole
-point (see "Skill by handle" and "Pattern references by search record" below).
-And a sealed subagent structured-return string whose raw value names an address
-comes back as a token rather than an opaque `@link` object; the return's
-`linkedStringCount` counts only the positions still sealed. Denial-path tool
-messages are not swapped; that coverage, value handles, and an explicit
-release/readback mechanism are listed in [docs/ROADMAP.md](docs/ROADMAP.md).
+`delegate_task`, whose `goal` and `context` reach the child verbatim: a token
+there is not resolved at the parent boundary, and is instead seeded into the
+child's table when the parent holds it (see "Handles across a delegation"). Its
+`skillHandle` and `patternRefs` fields are resolved separately on the trusted
+side: materializing stored skill text and rebuilding selected pattern-search
+records are those parameters' whole point (see "Skill by handle" and "Pattern
+references by search record" below). And a sealed subagent structured-return
+string whose raw value names an address comes back as a token rather than an
+opaque `@link` object; the return's `linkedStringCount` counts only the
+positions still sealed. Denial-path tool messages are not swapped; that
+coverage, value handles, and an explicit release/readback mechanism are listed
+in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 #### Well-known grants
 
@@ -1086,13 +1119,14 @@ declared a schema for, whose value carries the table schemas the database was
 created under. The rows are in the database file, which nothing here opens. So
 where no schema was declared and the value is a database handle, the reply
 carries `database` instead of `schema`: `tables`, one property per table whose
-own properties are that table's columns with their types, and `labels`, one
-entry per column that declares an `ifc`, addressed by table name and column
-name. The tables go through the same reduction every disclosed schema does, so
-the table- and column-name channels are bounded exactly as a property-name
-channel is and the columns' annotations, prose and defaults do not ride out on
-the schema. The read is conditional on nothing being declared, so a referent
-that states its own shape is never opened.
+own properties are that table's columns with their types, and `labels`, the
+distinct labels those columns declare through `ifc`, each reported once however
+many columns carry it and none naming a column. The tables go through the same
+reduction every disclosed schema does, so the table- and column-name channels
+are bounded exactly as a property-name channel is and the columns' annotations,
+prose and defaults do not ride out on the schema; only columns that reduction
+kept contribute a label. The read is conditional on nothing being declared, so a
+referent that states its own shape is never opened.
 
 **How full each of those tables is answers beside the contract, under `fill`.**
 One entry per disclosed table: `rows`, every row the table holds, and `nonNull`,
@@ -1118,14 +1152,16 @@ is what a pattern does with the answer.
 
 **What is disclosed is structure and only structure**: property names, types,
 nesting, required-ness, array and object composition, a `type` from the schema
-vocabulary, a `format` from the small known set, and a local `$ref` with the
-`$defs` it points into. Definition names are not part of that: every `$defs` and
-`definitions` key is replaced by an opaque `d0`, `d1`, … and every `$ref` that
-resolves to one is rewritten to match, so the reported schema stays
-referentially valid while no name its author chose for a definition crosses. A
-`$ref` that resolves to nothing — a pointer into a `$defs` the schema does not
-declare — is dropped rather than reported, since there is nothing left of it but
-its author's text.
+vocabulary, a `format` from the small known set, a recognized `scope` (`space`,
+`user`, `session`, or `any`), and a local `$ref` with the `$defs` it points
+into. Scope annotations survive at every schema depth so a composing author can
+declare the same scope on the corresponding input. Definition names are not part
+of that: every `$defs` and `definitions` key is replaced by an opaque `d0`,
+`d1`, … and every `$ref` that resolves to one is rewritten to match, so the
+reported schema stays referentially valid while no name its author chose for a
+definition crosses. A `$ref` that resolves to nothing — a pointer into a `$defs`
+the schema does not declare — is dropped rather than reported, since there is
+nothing left of it but its author's text.
 
 **What is not disclosed is anything a value or a word can hide in.** A JSON
 Schema is a place to put data: `const`, `enum`, `default` and `examples` carry
@@ -1135,8 +1171,9 @@ therefore REBUILT from an allowlist of structural keywords rather than copied
 with a few keywords deleted — at every depth, through `properties`, `items`,
 `$defs`, and every combinator — so a keyword nobody anticipated is absent rather
 than disclosed. A `required` name that no property declares is dropped too: that
-is a string, not structure. Numeric bounds, string patterns, and the Common
-Fabric schema extensions do not cross either.
+is a string, not structure. Numeric bounds, string patterns, unrecognized scope
+values, and Common Fabric schema extensions other than `scope` do not cross
+either.
 
 The schema is also reduced to a bounded depth. Past a nesting depth no authored
 schema reaches, a subschema reports as the empty shape `{}`, the same answer a
@@ -1207,12 +1244,13 @@ A child resolves the parent's tokens through its own boundary, against a table
 the delegation seeds. When the parent delegates, the tokens written into the
 `goal` and `context` are looked up in the parent's table, and each entry that
 resolves is copied verbatim — same token, same reference — into a fresh table
-salted with the child's run id. Nothing else crosses. A token the parent held
-but did not write into the delegation is not in the child's table, so the child
-cannot resolve it; it stays the inert text an unknown token always is. This is
-the privilege boundary: what a subagent can reach by reference is exactly what
-its delegation handed it, and the decomposition structure is therefore the
-opacity structure.
+salted with the child's run id. A research handle written there brings the
+address entries its kit binds as inputs with it. Nothing else crosses. A token
+the parent held but did not write into the delegation is not in the child's
+table, so the child cannot resolve it; it stays the inert text an unknown token
+always is. This is the privilege boundary: what a subagent can reach by
+reference is exactly what its delegation handed it, and the decomposition
+structure is therefore the opacity structure.
 
 Copying entries verbatim keeps a reference stable across the hierarchy. Minting
 looks up by address, so a child minting a handle for a seeded address gets the
@@ -1491,9 +1529,10 @@ not existing compositions or the index's stored event history.
 
 ### Researching Common Fabric
 
-`research` takes a `task`, a `purpose`, and an optional `followUpTo` naming an
-available research run or output. Both purposes have the same tools and limits;
-the question determines how much research is useful:
+`research` takes a `task`, a `purpose`, and an optional `followUpTo` naming a
+research handle this run holds. A successful result names the handle minted for
+its findings under `researchHandle`. Both purposes have the same tools and
+limits; the question determines how much research is useful:
 
 | Purpose            | Result                                                                                                                                    | Model turns / tool calls / read characters |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
@@ -1504,19 +1543,29 @@ The tool is available to the parent and `pattern-author` whenever the run can
 supply a documentation corpus or pattern index. The gateway transport uses
 `gemini-3.5-flash`; the owner-authenticated Codex transport uses `gpt-5.6-luna`.
 Research is a private tool loop, not web search or a delegable child profile.
+Its `inspect_pattern` and `open_pattern_file` tools accept a bare pattern id or
+`cf:pattern:<id>`; index lookups and retained evidence use the bare id.
 
 Fresh CLI tasks and interactive sessions without retained research request an
-opening `orient` pass. Subsequent chat turns reuse the retained findings and let
-the parent request targeted answers; they do not repeat orientation. It runs
-through the ordinary policy, artifacts, provenance, cancellation, and usage path
-before the first parent turn. A host-supplied user message puts the result
-immediately before the task. The result's `purpose` limits what `complete`
-means: a complete orientation establishes a supported approach; it does not
-claim that the application has been built. Both purposes can inspect pattern
-source, describe handles, and return examples. Orientation's `leads` are
-host-observed metadata, usable as search references for delegation, and remain
-separate from inspected `patterns`. The current user goal accompanies narrower
-research questions and delegated tasks so they retain the original context.
+opening `orient` pass for open-ended tasks. A task already selecting an
+implementation skips that automatic pass only through attached `patternRefs` or
+explicit markers in the request: `pattern:<space>/<slug>`, `cf:pattern:<id>`, or
+`skill:<id>`. A skill id names a registered skill or an `owner/repository/skill`
+address. Bare ids, paths, and prose such as "use the named skill X" remain open
+unless X uses a marker. Recognition uses the existing address parsers; it does
+not resolve references, acquire skills, or grant authority. The ordinary tools
+do that. The parent can still call `research` for an unresolved question.
+Subsequent chat turns reuse the retained findings and let the parent request
+targeted answers; they do not repeat orientation. It runs through the ordinary
+policy, artifacts, provenance, cancellation, and usage path before the first
+parent turn. A host-supplied user message puts the result immediately before the
+task. The result's `purpose` limits what `complete` means: a complete
+orientation establishes a supported approach; it does not claim that the
+application has been built. Both purposes can inspect pattern source, describe
+handles, and return examples. Orientation's `leads` are host-observed metadata,
+usable as search references for delegation, and remain separate from inspected
+`patterns`. The current user goal accompanies narrower research questions and
+delegated tasks so they retain the original context.
 
 Orientation and the parent distinguish inputs already given, inputs findable
 within the granted scope, and actions the available capabilities cannot perform.
@@ -1536,13 +1585,17 @@ agent follows the not-checked verification rule and never asks for a nonexistent
 permission to release it.
 
 The parent uses findings that settle a decision directly. It requests `answer`
-for a specific remaining uncertainty, with `followUpTo` selecting the relevant
-prior result. Code is optional in either purpose and may demonstrate a small
-idiom or a composable piece without expanding into a complete application. The
-private follow-up receives selected findings and reopenable source locations,
-with old examples and handle bindings omitted. Citations still require exact
-reads in the current call; a prior citation is a lead to reopen, not fresh
-proof. Attached pattern references are also leads until inspected.
+for a specific remaining uncertainty, with `followUpTo` naming the research
+handle to build on. Code is optional in either purpose and may demonstrate a
+small idiom or a composable piece without expanding into a complete application.
+The private follow-up receives that handle's findings with its recipe omitted,
+and the host carries its evidence forward on proof: a binding it described
+counts as described where this run still holds the token, and is reported as
+unavailable otherwise; each of its sources is read again through the path that
+first read it, and counts as cited by its old id only where the bytes still
+match the digest — a source that changed is reported stale, its old id refused,
+and the fresh read left in the catalog under a new id. Attached pattern
+references are leads until inspected.
 
 Opening research has a durable `openingResearch` checkpoint in `run-state.json`.
 The driver records pending intent before invocation, then records whether a kit
@@ -1740,27 +1793,18 @@ status, distinguishable from results known to have no omissions. SQLite schema
 inspection and migration share an immediate transaction, so concurrent openers
 cannot both migrate the same missing column.
 
-Children receive projected findings and retain the selected raw summaries in run
-state, joined by research run id. An inherited orientation lists only handles
-available in the child's own table. They have no research tool call to own a
-separate omission entry for inherited context. Only selected, current
-`inputs[].token` bindings transfer automatically. Prose mentions, superseded
-bindings, and historical bindings transfer nothing. The parent's full CFC
-context carries forward even when selection omits a result. Pattern authors
-start from these findings and ask only unresolved questions.
-
-Before compiling new `run_pattern.sourceText`, the host checks selections from
-the retained orientation and two answers. Each `kit.patterns` entry must have a
-Fabric pattern import in the source or a nonblank, one-line reason under
-`reuseReasons[patternId]` explaining why it does not fit this call. This applies
-to parent and child authors, incomplete kits, and retained findings with
-historical bindings. An unrelated atom, an existing result passed by reference,
-or a verification reader can state that narrower scope. Unverified leads and
-unselected inspected records create no requirement; direct `patternId` execution
-is unchanged. The compiler import reader excludes comments and quoted examples.
-The check establishes an import or explanation, not meaningful invocation or the
-explanation's correctness. Reasons remain in the tool-call record when old
-source attempts are collapsed.
+Research reaches a child the way any other content does: as a handle. An
+admitted kit is minted into the run's handle table as a research referent (a
+`cfh:v:` token the result names under `researchHandle`), under the kit's own CFC
+label. A parent that names the token in a delegation's `goal` or `context` seeds
+it into the child's table together with the address entries the kit binds as
+`inputs`, and nothing else about the research transfers: a child whose brief
+names no research handle receives no findings. The child reads the findings with
+`describe_handle`, which returns the kit, the patterns research confirmed, and
+the handles it described — each marked `unavailable` when the child's table does
+not hold its token — and the child's `run_pattern` can run a confirmed pattern
+by id as the parent can. The parent's full CFC context carries forward whether
+or not a handle is named.
 
 Locally authored source artifacts record the research run ids that shaped them.
 The pattern-index publication API has no research-association field, so this
@@ -1969,27 +2013,34 @@ reference into another space, and a document with no pattern identity are each
 refused with a structured error.
 
 The slug is validated, then checked for availability, before anything is
-written, so an unusable slug and a slug already naming another piece are both
-structured errors that change nothing. The availability question fails closed: a
-slug is free only on the outcomes that say nothing is there — no document, a
-malformed one, one that is not a piece, one carrying no piece id. A slug that
-resolves into a piece rather than to one names a collection, and is refused the
-way a taken name is: it is an address a person opens. Any other failure refuses
-the call saying the availability could not be established, because reporting a
-storage error as a free name would write over whatever is there. That check is
-what stops a caller from taking over a name a person already opens, and it is
-the narrower of the two rules in play: the assignment underneath refuses a name
-pointing anywhere at all, while this one competes only with pieces and
-collections, so a name whose document holds no usable redirect is free here and
-not there. The check's answer is carried into the write as the state to take the
-name from, not forced past the wider rule — forcing would spend the claim the
-assignment makes, and two calls that both read a name as free would both take
-it. Carried in, the write judges this rule against what it lands on, so a name
-bound between the check and the write is refused there instead. A slug that
-already points at the very piece the token names answers `ok` rather than a
-refusal: the request is already true. `assign_slug` sets the address, not the
-title: what the piece list displays is the pattern's own `NAME` result, so a
-pattern that wants a title sets `NAME` in its source.
+written, so an unusable slug is a structured error that changes nothing. A slug
+already naming another piece is never repointed: the tool appends a counter —
+`-2`, `-3`, and so on — to the requested word until it reaches a free name, or
+one already naming this piece, and the receipt's `slug` and `url` carry the name
+assigned, which is where the model reads the address it got. A requested word so
+long that no counter fits under the slug length limit is the one collision that
+is refused. The availability question fails closed: a slug is free only on the
+outcomes that say nothing is there — no document, a malformed one, one that is
+not a piece, one carrying no piece id. A slug that resolves into a piece rather
+than to one names a collection, and is passed over the way a taken name is: it
+is an address a person opens. Any other failure refuses the call saying the
+availability could not be established, because reporting a storage error as a
+free name would write over whatever is there. That check is what stops a caller
+from taking over a name a person already opens, and it is the narrower of the
+two rules in play: the assignment underneath refuses a name pointing anywhere at
+all, while this one competes only with pieces and collections, so a name whose
+document holds no usable redirect is free here and not there. The check's answer
+is carried into the write as the state to take the name from, not forced past
+the wider rule — forcing would spend the claim the assignment makes, and two
+calls that both read a name as free would both take it. Carried in, the write
+judges this rule against what it lands on, so a name bound between the check and
+the write is passed over there instead, and the call moves on to the next
+counter. A slug that already points at the very piece the token names answers
+`ok`: the request is already true. Repointing an address is not something
+`assign_slug` does; the runtime has no primitive for releasing a slug, so
+neither does the harness. `assign_slug` sets the address, not the title: what
+the piece list displays is the pattern's own `NAME` result, so a pattern that
+wants a title sets `NAME` in its source.
 
 An invocation rejected by the retained-pattern preflight returns before opening
 Fabric or compiling, so it persists nothing. A `run_pattern` invocation that
@@ -2046,6 +2097,8 @@ output's key, the identity of the pattern that produced it — which for a
 composed one is the id its own `cf:pattern:` import addresses — and fixed text
 saying what to do about it. Absent when there is nothing to say, and one entry
 per pattern, output and kind however many times a pattern was materialized.
+Policy-refused results omit pending concerns because a refusal calls for no
+reread.
 
 Two bounds decide what a concern may be read from, and both fail closed. Only an
 output the pattern's own schema DECLARES at its top level is read: a property
@@ -2073,10 +2126,10 @@ exact returned snapshot is checked even when the runtime has no instantiation
 recorder or the read settles before the composed-output scan. A failure is
 reported alongside pending either way. Pass the held result reference as an
 `inputs` entry to a minimal unnamed reader pattern through `run_pattern`, with a
-`resultSchema` covering pending, error, and counts, before describing counts or
-naming the page; a replacement page is not needed to receive the outstanding
-reply. A settled, error-free empty filtered result should be checked against the
-same source without the uncertain predicate, and both counts and the filter
+`resultSchema` for any counts to describe, before describing counts or naming
+the page; a replacement page is not needed to receive the outstanding reply. A
+settled, error-free empty filtered result should be checked against the same
+source without the uncertain predicate, and both counts and the filter
 presented. All value reads use the ordinary release boundary.
 
 The failure's own TEXT does not travel in the result. A concern names what the
@@ -2104,27 +2157,32 @@ carrying it, and an agent holding one can wire it into a later run, hand it to a
 child, or publish it under a slug without ever reading it — the
 [CFC integration profile](../../docs/specs/agent-harness/02-cfc-integration.md)
 states this as AH-CFC-18. So a run that asks for no `resultSchema` gets
-`resultRef` whatever labels its result carries, and the ceiling is consulted
-only when a `resultSchema` asks for values. The measurement reads the result
-through a transaction — the result document and every computed cell it links to
-— and fits that transaction's consumed join to the ceiling. Under an enforcing
-mode a clause outside it withholds `value`, and the answer is still
-`{ status: "ok", resultRef }`: `valueError` states the refusal as an
-instruction, and `policyRefusal` carries it as data — the gates and sinks that
-refused, the offending atoms (a structured atom is counted rather than named,
-since it can carry the principal that introduced it), the keys of this call's
-own `inputs` whose values carried those atoms in, and whether dropping those
-keys is the whole remedy (`complete`), narrows the flow (`partial`), or reaches
-none of it (`none`). An input is attributed by the label-map entry the refused
-read consumed, so a link addressing a labeled field of a document is named for
-that entry whether the read landed on the field or on the document root. The
-refusal's reason names labels and documents, so it stays in the artifact's
-`rawCauseMessage` and out of the model-facing text. At `disabled` and `observe`
-nothing withholds: the values go out, and the same measurement is recorded on
-the artifact as `releaseObservation`, so an operator staging the ladder can size
-what raising it would withhold. The measurement applies no exchange-rule
-rewriting, so a clause a policy evaluation would have discharged is withheld
-here.
+`resultRef` whatever labels its result carries. Every captured success also fits
+host-computed `pending` and `hasError` booleans against the same ceiling, using
+the declared top-level pending and failure observations in that capture. No
+status fields yields two false flags; these are snapshot observations, not proof
+that every nested dependency is healthy. A refused host-only status fit silently
+omits both flags; a release `policyRefusal` is reserved for a model-supplied
+`resultSchema`. Compile, error, and cancellation outputs keep their own status.
+The measurement reads the result through a transaction — the result document and
+every computed cell it links to — and fits that transaction's consumed join to
+the ceiling. Under an enforcing mode a clause outside it withholds `value`, and
+the answer is still `{ status: "ok", resultRef }`: `valueError` states the
+refusal as an instruction, and `policyRefusal` carries it as data — the gates
+and sinks that refused, the offending atoms (a structured atom is counted rather
+than named, since it can carry the principal that introduced it), the keys of
+this call's own `inputs` whose values carried those atoms in, and whether
+dropping those keys is the whole remedy (`complete`), narrows the flow
+(`partial`), or reaches none of it (`none`). An input is attributed by the
+label-map entry the refused read consumed, so a link addressing a labeled field
+of a document is named for that entry whether the read landed on the field or on
+the document root. The refusal's reason names labels and documents, so it stays
+in the artifact's `rawCauseMessage` and out of the model-facing text. At
+`disabled` and `observe` nothing withholds: the values go out, and the same
+measurement is recorded on the artifact as `releaseObservation`, so an operator
+staging the ladder can size what raising it would withhold. The measurement
+applies no exchange-rule rewriting, so a clause a policy evaluation would have
+discharged is withheld here.
 
 Whichever way it went, the measurement is also a decision in the run's
 `policy-trace.json`, in the same record every tool-policy decision is written
@@ -2141,10 +2199,10 @@ ceiling the flow was fitted against, and the refusal with its attribution —
 beside the reference to the tool output it decided about. It is appended AFTER
 the allow-side decision for the same call, because that decision answers whether
 the call may run and is recorded before it does; a boundary that refuses inside
-the call cannot appear there at all. A call that asks for no values makes no
-release decision, since nothing was measured. Nothing of this reaches the model:
-the refusal already reaches it as `valueError` and `policyRefusal`, and the
-trace is where an operator reads it.
+the call cannot appear there at all. Host-initiated status fits also record a
+release decision. Nothing of this reaches the model: requested-value refusals
+reach it as `valueError` and `policyRefusal`; a host-only status refusal stays
+in the trace.
 
 A result that settles to nothing names its cause when one was observed: when the
 settled result fails the declared `resultSchema` or holds no fields of its own
@@ -2168,7 +2226,8 @@ concern reader and the runtime's UI schema. Unexpected pattern, result, or UI
 read failures retain their cause in the run's failure record and stop the call
 before registration or naming.
 
-A successful `assign_slug` returns `{ slug }`, plus `url` when the harness can
+A successful `assign_slug` returns `{ slug }` — the name assigned, which is the
+requested word or that word with a counter — plus `url` when the harness can
 compose one honestly, to the model. Its on-disk tool-output artifact also
 records `pieceId`, the slug's actual target. Join that field to the `pieceId` in
 a `run_pattern` artifact, across the run family's directories when a child
@@ -2277,6 +2336,12 @@ from `CF_HARNESS_FABRIC_API_URL`, `CF_HARNESS_FABRIC_IDENTITY`, and
 identity paths resolve against the host process's working directory. All three
 values form one binding, and partial or invalid configuration fails before the
 service starts. Without that binding the service has no Fabric session.
+
+The interactive service owns the Fabric runtimes created for its chat sessions.
+Completed turns keep their runtimes until the session closes. Closing an active
+session aborts its turn and releases its runtimes after the turn unwinds;
+`waitForIdle()` includes that cleanup. Persisted pieces can reopen in a later
+session. Library callers supplying an existing engine retain ownership of it.
 
 These entrypoints share the batch CLI's CFC session options:
 `--fabric-cfc-enforcement-mode`, `--fabric-cfc-flow-labels`,
@@ -2535,6 +2600,21 @@ skill registry, the child preloads the `pattern-dev`, `pattern-schema`, and
 root does not carry them, or that resolved no skills root at all, still gets the
 same child with the same tools, just without the preloaded guidance.
 
+The author carries compact compiler guidance: supported `cf-alert` props,
+serializable input/output shapes, straight-line pattern-owned callbacks, and
+scalar formatting inside a reactive computation. The private researcher does not
+carry it: research chooses published parts, which are imported rather than
+rewritten, so it judges a part on what it does and on its argument and result
+contract, never on its source's style; the author that writes new source is the
+one the rules are for. The author and researcher share a reader composition
+template, which is compiled against the mailbox primitive in tests and requires
+the actual inspected pattern id and matching argument/result contracts, and
+preserves pending/error status beside its sample count. The child's composition
+template follows the composition-guidance switch. These instructions reduce
+avoidable compiler errors; they do not establish UI behavior or live-data
+correctness. An implementation kit without its required example is incomplete;
+factual orientation and answers may be complete without code.
+
 For an existing piece, `read_piece_source` returns its current source and
 revision, plus an opaque `inputRef` to its bound arguments. The author wires
 that reference into `run_pattern` to check the inputs the piece actually uses.
@@ -2568,13 +2648,12 @@ sampled delta, subject to any refresh warning.
 For both creation and revision, unavailable inspection does not prevent applying
 the requested source. When execution or the update succeeds but its result
 cannot be inspected, the child returns the piece with `ok: true` and
-`verification: "not-checked"`. The piece includes a visible summary stating that
-limitation. The parent states it in the final text, describes only the build or
-change, and points the user to the piece. It claims no unseen rows, counts,
-matches, or other results, and requests no nonexistent permission to release
-aggregates. A release refusal does not trigger repeated verification or another
-delegation. Compile errors, refused writes, and observed query failures remain
-failures to repair or report.
+`verification: "not-checked"`. The parent's final text states the inspection
+limitation, describes only the build or change, and points to the piece. It
+claims no unseen rows, counts, matches, or other results, and requests no
+nonexistent permission to release aggregates. A release refusal does not trigger
+repeated verification or another delegation. Compile errors, refused writes, and
+observed query failures remain failures to repair or report.
 
 For styling, a supplied computed-surface observation can establish the pane
 background. Source colors alone cannot. Without that observation or a permitted

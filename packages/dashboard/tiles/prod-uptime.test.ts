@@ -399,14 +399,17 @@ Deno.test("prod uptime: healthy server checks keep pings while other hosts disap
         `${hostname} AAAA`,
       ]).sort(),
     );
-    assertEquals(view.label, "production");
     assertEquals(view.status, "good");
     assertEquals(view.value, "8/8 hosts up");
     assertEquals(view.sub, undefined);
     assertStringIncludes(view.extra ?? "", "estuary");
     assertStringIncludes(view.extra ?? "", "rapids");
     assertEquals((view.extra ?? "").includes("commonfabric.com"), false);
-    assertEquals((view.extra ?? "").match(/\d+ ms/g)?.length, 2);
+    // The detail cells themselves, not the tooltips repeating them.
+    assertEquals(
+      [...(view.extra ?? "").matchAll(/tabular-nums[^>]*>(\d+ ms)</g)].length,
+      2,
+    );
     assert(!(view.extra ?? "").includes("bastion"));
     assert(!(view.extra ?? "").includes("prod shell"));
     assert(!(view.extra ?? "").includes("DNS yes"));
@@ -455,6 +458,8 @@ Deno.test("prod uptime: several hosts with nothing behind them are counted", asy
     assertStringIncludes(view.extra ?? "", 'class="tile-detail-list"');
     assertStringIncludes(view.extra ?? "", 'role="region"');
     assertStringIncludes(view.extra ?? "", 'tabindex="0"');
+    // Its keyboard focus and scroll position carry over live updates.
+    assertStringIncludes(view.extra ?? "", 'data-focus-key="targets"');
     assertStringIncludes(view.extra ?? "", "scroll for more");
     assertStringIncludes(view.extra ?? "", "rapids");
     assertStringIncludes(view.extra ?? "", "bastion");
@@ -1176,6 +1181,6 @@ Deno.test("prod uptime: an unparseable configured URL rejects the collection", a
 });
 
 Deno.test("prod uptime: identity and cadence", () => {
-  assertEquals(prodUptime.id, "prod-uptime");
+  assertEquals(prodUptime.label, "production");
   assertEquals(prodUptime.intervalMs, 30_000);
 });

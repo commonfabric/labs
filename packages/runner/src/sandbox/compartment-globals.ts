@@ -10,10 +10,10 @@ import { sandboxDateNow, sandboxRandom } from "../builder/safe-builtins.ts";
 // docs/specs/sandboxing/TIMING_SIDE_CHANNELS.md.
 function createGatedDate(): DateConstructor {
   const RealDate = Date;
-  // The deep prototype-chain reads (`Date.prototype.constructor.now()` and
-  // deeper) reach the shared Date only when SES lockdown has already tamed it to
-  // throw. If this ran before lockdown, that path would re-expose the real
-  // clock, so fail loud rather than injecting a leaky Date.
+  // An instance's `constructor`, like `Date.prototype.constructor`, is the
+  // shared Date, which is safe only once SES lockdown has tamed it to throw.
+  // If this ran before lockdown, that path would re-expose the real clock, so
+  // fail loud rather than injecting a leaky Date.
   if (RealDate.prototype.constructor === RealDate) {
     throw new Error(
       "createGatedDate() requires SES lockdown to have run first " +
@@ -32,17 +32,10 @@ function createGatedDate(): DateConstructor {
   GatedDate.now = () => sandboxDateNow();
   GatedDate.parse = RealDate.parse;
   GatedDate.UTC = RealDate.UTC;
-  // GatedDate gets its own prototype that inherits the real Date methods but
-  // whose `constructor` is GatedDate, so `(new Date()).constructor` is the gated
-  // Date (not an ungated one) while `instanceof Date` and the methods still work.
-  const gatedProto = Object.create(RealDate.prototype);
-  Object.defineProperty(gatedProto, "constructor", {
-    value: GatedDate,
-    writable: true,
-    enumerable: false,
-    configurable: true,
-  });
-  GatedDate.prototype = gatedProto;
+  // Instances carry the shared `Date.prototype`, so a `Date` made here is an
+  // ordinary `Date` to the host and to the data model, and `instanceof Date`
+  // holds both ways across the compartment boundary.
+  GatedDate.prototype = RealDate.prototype;
   Object.defineProperty(GatedDate, "name", { value: "Date", writable: false });
   Object.defineProperty(GatedDate, "length", { value: 7 });
   return GatedDate as DateConstructor;

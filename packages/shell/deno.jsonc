@@ -7,9 +7,10 @@
     "serve": "deno run -A ../felt/cli.ts serve .",
     "dev": "deno task clean && API_URL=https://toolshed.saga-castor.ts.net deno run -A ../felt/cli.ts dev .",
     "dev-local": "deno task clean && API_URL=http://localhost:$TOOLSHED_PORT deno run -A ../felt/cli.ts dev .",
-    "integration": "LOG_LEVEL=warn deno test -A $INTEGRATION_TEST_FLAGS \"./integration/*.test.ts\"",
+    "integration": "LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) -A $INTEGRATION_TEST_FLAGS \"./integration/*.test.ts\"",
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
     // --no-check: this package is type-checked by `deno task check` (tasks/check.sh).
-    "test": "deno test --no-check --allow-net=127.0.0.1 --allow-read --allow-write --allow-run --allow-env test/*.test.ts"
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-net=127.0.0.1 --allow-read --allow-write --allow-run --allow-env test/*.test.ts"
   },
   "exports": {
     "./app-state": "./src/lib/app-state.ts"

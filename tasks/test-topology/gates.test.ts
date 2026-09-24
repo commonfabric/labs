@@ -46,16 +46,18 @@ const context = { root: "/repo", outputDir: "/out", spoolDir: "/spool" };
  * from as well, so the two cannot disagree about the name; the record
  * name's own spelling is held by `tasks/pattern-vintage-run.test.ts`.
  */
-function vintageRecordNames(): string[] {
+function vintageFixtures(): Map<string, string> {
   const listed = new Deno.Command("git", {
     args: ["-C", root, "ls-files", "-z", VINTAGES_DIR],
   }).outputSync();
-  const names = new Set<string>();
+  const fixtures = new Map<string, string>();
   for (const file of new TextDecoder().decode(listed.stdout).split("\0")) {
     const fixture = parseVintagePath(file);
-    if (fixture !== undefined) names.add(vintageRecordName(fixture));
+    if (fixture !== undefined) {
+      fixtures.set(vintageRecordName(fixture), fixture.path);
+    }
   }
-  return [...names].sort();
+  return fixtures;
 }
 
 describe("the repository's gate suites", () => {
@@ -234,6 +236,7 @@ describe("the repository's gate suites", () => {
       "check-local-program",
       "check-package-cycles",
       "check-skill-facts",
+      "check-test-shuffle",
       "check-test-topology",
       "check-unused-deps",
       "deno-fmt",
@@ -457,11 +460,8 @@ describe("the repository's gate suites", () => {
   });
 
   it("asks a pattern gate for everything without a filter", async () => {
-    // A run given every pattern is the task's own unfiltered run, which
-    // is what a gate with a whole-tree question of its own needs: the
-    // compatibility gate asks whether a retired pattern still has a
-    // baseline and whether an accepted break has gone orphaned, and a
-    // filtered run asks neither.
+    // A run given every unit is the task's own unfiltered run, so what a
+    // person types and what a lane given everything runs are one command.
     for (const id of ["cfcheck", "pattern-compat"]) {
       const suite = byId(id);
       const [invocation] = await suite.command(
@@ -519,6 +519,22 @@ describe("the repository's gate suites", () => {
     expect(widened).toEqual([]);
   });
 
+  it("hands each compatibility unit an `--only` selecting that unit alone", async () => {
+    // The same reasoning as the type check's, over the paths the
+    // compatibility gate's units stand for, which are not all files: a
+    // pattern whose file is gone is a unit too.
+    const suite = byId("pattern-compat");
+    const terms = await Promise.all(suite.units.map(async (unit) => {
+      const [invocation] = await suite.command([{ unit, skip: [] }], context);
+      const command = invocation!.command;
+      return command[command.indexOf("--only") + 1]!;
+    }));
+    const widened = terms.filter((term) =>
+      terms.filter((item) => matchesPatternFilter(item, term)).length !== 1
+    );
+    expect(widened).toEqual([]);
+  });
+
   it("names the pattern type check's units the way git names a file", async () => {
     // A unit that is a path needs no `unitsForChange`: the census makes
     // it mandatory from the diff naming it, so every unit has to be a
@@ -535,24 +551,31 @@ describe("the repository's gate suites", () => {
     expect(cfcheck.units.length).toBeGreaterThan(0);
   });
 
-  it("claims a vintage record for every fixture the tree holds", () => {
+  it("gives every fixture the tree holds a unit of its own", () => {
     // The gate writes one record per fixture under the committed vintage
     // tree, named for the fixture's test key, tier and capture stamp. The
     // fixture set is read from git rather than from the enumerator the
     // gate replays with, so this compares the claim against the tree
     // rather than against the same walk twice.
     const vintage = byId("pattern-vintage");
-    const names = vintageRecordNames();
-    expect(names.length).toBeGreaterThan(0);
-    for (const name of names) {
+    const fixtures = vintageFixtures();
+    expect(fixtures.size).toBeGreaterThan(0);
+    for (const [name, unit] of fixtures) {
       expect(
         vintage.locate({ test: { k: "gate", s: "repo", n: name } }),
-      ).toEqual({ level: "unit", unit: "pattern-vintage" });
+      ).toEqual({ level: "unit", unit });
     }
-    // The wrapper's own record, which carries what the whole replay took.
+    expect(vintage.units.toSorted()).toEqual([...fixtures.values()].toSorted());
+  });
+
+  it("gives the replay's own record to the suite rather than a unit", () => {
+    // The task's own record measures the whole replay. Counting it in a unit as
+    // well as the fixtures would count that work twice.
     expect(
-      vintage.locate({ test: { k: "gate", s: "repo", n: "pattern-vintage" } }),
-    ).toEqual({ level: "unit", unit: "pattern-vintage" });
+      byId("pattern-vintage").locate({
+        test: { k: "gate", s: "repo", n: "pattern-vintage" },
+      }),
+    ).toEqual({ level: "suite" });
   });
 
   it("disowns a vintage record no fixture in the tree carries", () => {
@@ -577,18 +600,29 @@ describe("the repository's gate suites", () => {
     }
   });
 
-  it("runs the vintage replay whole", async () => {
-    // It writes a record per vintage and takes no way of running part of
-    // itself, so the suite is one unit and the command is the task,
-    // wrapped so its exit code becomes that unit's record.
+  it("replays the fixtures a lane chose, and no others", async () => {
+    // Each fixture's replay is independent of the others, so `--only` can
+    // restrict the run to the fixtures a lane chose.
     const vintage = byId("pattern-vintage");
-    const [invocation] = await vintage.command(
+    const [some] = await vintage.command(
       [{ unit: vintage.units[0]!, skip: [] }],
       context,
     );
-    expect(invocation!.command).toContain("run-recorded");
-    expect(invocation!.command.at(-1)).toBe(vintage.units[0]);
+    expect(some!.command).toContain("run-recorded");
+    expect(some!.command.slice(-2)).toEqual(["--only", vintage.units[0]!]);
     expect(await vintage.command([], context)).toEqual([]);
+  });
+
+  it("passes no filter where a lane asked for every fixture", async () => {
+    // The task makes the checks that need every fixture replayed only when it
+    // runs with no filter.
+    const vintage = byId("pattern-vintage");
+    const [all] = await vintage.command(
+      vintage.units.map((unit) => ({ unit, skip: [] })),
+      context,
+    );
+    expect(all!.command).not.toContain("--only");
+    expect(all!.command.at(-1)).toBe("pattern-vintage");
   });
 
   it("declines a type-check record whose name is another gate's", () => {

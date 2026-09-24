@@ -1,0 +1,666 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Panel": {
+        "anyOf": [
+          {
+            "properties": {
+              "addedBy": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "piece"
+                ],
+                "type": "string"
+              },
+              "piece": {
+                "asCell": [
+                  "cell"
+                ],
+                "type": "unknown"
+              },
+              "titleOverride": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "piece"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "addedBy": {
+                "type": "string"
+              },
+              "content": {
+                "$ref": "#/$defs/PublishedDocument",
+                "asCell": [
+                  "cell"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "document"
+                ],
+                "type": "string"
+              },
+              "titleOverride": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "addedBy": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "url"
+                ],
+                "type": "string"
+              },
+              "titleOverride": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "url"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ParticipantList": {
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/loom/participants.tsx",
+              "moduleIdentity": "7yRcWrY7qIapItd2WnxsvbrnSiOsPq4Ww7VrfyyWhQE",
+              "path": [
+                "addParticipant"
+              ]
+            }
+          }
+        },
+        "items": {
+          "asCell": [
+            "cell"
+          ],
+          "properties": {
+            "avatar": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "ParticipantRoster": {
+        "properties": {
+          "items": {
+            "$ref": "#/$defs/ParticipantList"
+          }
+        },
+        "type": "object"
+      },
+      "Presentation": {
+        "properties": {
+          "focusedPanel": {
+            "$ref": "#/$defs/Panel",
+            "asCell": [
+              "cell"
+            ]
+          },
+          "stagedPanels": {
+            "items": {
+              "$ref": "#/$defs/Panel",
+              "asCell": [
+                "cell"
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "stagedPanels"
+        ],
+        "type": "object"
+      },
+      "PublishedChannel": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PublishedDocument": {
+        "properties": {
+          "notes": {
+            "default": "",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/$defs/PublishedSource"
+          }
+        },
+        "required": [
+          "source",
+          "notes"
+        ],
+        "type": "object"
+      },
+      "PublishedSource": {
+        "anyOf": [
+          {
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "page-excerpt"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "title",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "channels": {
+                "items": {
+                  "$ref": "#/$defs/PublishedChannel"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "person-card"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "photo": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "channels"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "description": "Shared state supplied when a Loom is instantiated.",
+    "properties": {
+      "panels": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Panel",
+          "asCell": [
+            "cell"
+          ]
+        },
+        "type": "array"
+      },
+      "participants": {
+        "$ref": "#/$defs/ParticipantRoster",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": {}
+      },
+      "presentation": {
+        "$ref": "#/$defs/Presentation",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": {
+          "stagedPanels": []
+        }
+      },
+      "title": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "Shared Loom",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "loom/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Panel": {
+        "anyOf": [
+          {
+            "properties": {
+              "addedBy": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "piece"
+                ],
+                "type": "string"
+              },
+              "piece": {
+                "type": "unknown"
+              },
+              "titleOverride": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "piece"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "addedBy": {
+                "type": "string"
+              },
+              "content": {
+                "$ref": "#/$defs/PublishedDocument"
+              },
+              "kind": {
+                "enum": [
+                  "document"
+                ],
+                "type": "string"
+              },
+              "titleOverride": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "addedBy": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "url"
+                ],
+                "type": "string"
+              },
+              "titleOverride": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "url"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "PanelDuplication": {
+        "properties": {
+          "addedBy": {
+            "type": "string"
+          },
+          "before": {
+            "$ref": "#/$defs/Panel"
+          },
+          "panel": {
+            "$ref": "#/$defs/Panel"
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "type": "object"
+      },
+      "PanelPosition": {
+        "properties": {
+          "before": {
+            "$ref": "#/$defs/Panel"
+          },
+          "panel": {
+            "$ref": "#/$defs/Panel"
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "type": "object"
+      },
+      "Presentation": {
+        "properties": {
+          "focusedPanel": {
+            "$ref": "#/$defs/Panel"
+          },
+          "stagedPanels": {
+            "items": {
+              "$ref": "#/$defs/Panel"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "stagedPanels"
+        ],
+        "type": "object"
+      },
+      "PublishedChannel": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PublishedDocument": {
+        "properties": {
+          "notes": {
+            "default": "",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/$defs/PublishedSource"
+          }
+        },
+        "required": [
+          "source",
+          "notes"
+        ],
+        "type": "object"
+      },
+      "PublishedSource": {
+        "anyOf": [
+          {
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "page-excerpt"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "title",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "channels": {
+                "items": {
+                  "$ref": "#/$defs/PublishedChannel"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "person-card"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "photo": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "channels"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ViewerState": {
+        "properties": {
+          "selectedPanel": {
+            "$ref": "#/$defs/Panel"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "description": "Standard default-pattern exports and the public composition actions.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addPanel": {
+        "$ref": "#/$defs/PanelPosition",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "addParticipant": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "profile": {
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "type": "object"
+      },
+      "addPiece": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "addedBy": {
+            "type": "string"
+          },
+          "piece": {
+            "type": "unknown"
+          }
+        },
+        "required": [
+          "piece"
+        ],
+        "type": "object"
+      },
+      "duplicatePanel": {
+        "$ref": "#/$defs/PanelDuplication",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "movePanel": {
+        "$ref": "#/$defs/PanelPosition",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "panels": {
+        "items": {
+          "$ref": "#/$defs/Panel"
+        },
+        "type": "array"
+      },
+      "participants": {
+        "items": {
+          "properties": {
+            "avatar": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "pieceRegistry": {
+        "items": {
+          "type": "unknown"
+        },
+        "type": "array"
+      },
+      "presentation": {
+        "$ref": "#/$defs/Presentation"
+      },
+      "removePanel": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "panel": {
+            "$ref": "#/$defs/Panel"
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "type": "object"
+      },
+      "removePiece": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "piece": {
+            "type": "unknown"
+          }
+        },
+        "required": [
+          "piece"
+        ],
+        "type": "object"
+      },
+      "setPresentation": {
+        "$ref": "#/$defs/Presentation",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "title": {
+        "type": "string"
+      },
+      "viewerState": {
+        "$ref": "#/$defs/ViewerState"
+      }
+    },
+    "required": [
+      "title",
+      "viewerState",
+      "panels",
+      "presentation",
+      "pieceRegistry",
+      "addPiece",
+      "removePiece",
+      "addPanel",
+      "removePanel",
+      "movePanel",
+      "duplicatePanel",
+      "setPresentation",
+      "participants",
+      "addParticipant",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

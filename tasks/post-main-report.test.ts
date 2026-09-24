@@ -459,6 +459,7 @@ describe("post-main-report", () => {
       needs: ["deno"],
       units: [unit],
       unavailable: [],
+      whole: [],
       locate: () => undefined,
       command: () => Promise.resolve([]),
     }];

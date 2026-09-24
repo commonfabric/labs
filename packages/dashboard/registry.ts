@@ -9,14 +9,15 @@ import type { Tile } from "./types.ts";
 import { benchmark, keyBenchmarks } from "./tiles/benchmark.ts";
 import { labsCiDuration, loomCiDuration } from "./tiles/ci-duration.ts";
 import { labsCiTrust, loomCiTrust } from "./tiles/ci-trust.ts";
+import { ciHealth } from "./tiles/ci-health.ts";
 import { coverageDebt } from "./tiles/coverage-debt.ts";
 import { cubicSpend } from "./tiles/cubic-spend.ts";
 import { dau } from "./tiles/dau.ts";
 import { discordOnline } from "./tiles/discord-online.ts";
+import { emptyTile } from "./tiles/empty.ts";
 import { gcpSpend } from "./tiles/gcp-spend.ts";
 import { githubCiSpend } from "./tiles/github-ci-spend.ts";
 import { githubMembers } from "./tiles/github-members.ts";
-import { labsCi, loomCi } from "./tiles/main-build.ts";
 import { modelSpend } from "./tiles/model-spend.ts";
 import { prodErrors } from "./tiles/prod-errors.ts";
 import { prodUptime } from "./tiles/prod-uptime.ts";
@@ -26,12 +27,12 @@ import { testSelection } from "./tiles/test-selection.ts";
 
 /** Tiles in grid order, followed by full-width tiles in display order. */
 export const TILES: Tile[] = [
-  labsCi,
+  ciHealth,
   labsCiTrust,
   labsCiDuration,
   benchmark,
 
-  loomCi,
+  emptyTile,
   loomCiTrust,
   loomCiDuration,
   keyBenchmarks,

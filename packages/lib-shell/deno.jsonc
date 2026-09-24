@@ -2,7 +2,8 @@
   // Dependency guide: ../../docs/development/DEPENDENCIES.md
   "name": "@commonfabric/lib-shell",
   "tasks": {
-    "test": "deno test --allow-read --allow-write --allow-run --allow-env test/*.test.ts"
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --allow-read --allow-write --allow-run --allow-env test/*.test.ts"
   },
   "exports": {
     ".": "./src/index.ts",

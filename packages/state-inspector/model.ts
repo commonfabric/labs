@@ -51,7 +51,8 @@
 //                  (`hasTable`, the scope_key shim). A schema-migration concern.
 // └────────────────────────────────────────────────────────────────────────────┘
 
-import type { JSONSchema } from "@commonfabric/api";
+import type { FabricValue, JSONSchema } from "@commonfabric/api";
+import { isFabricPlainObject } from "@commonfabric/data-model";
 import {
   classifySchemaMetaValue,
   SCHEMA_DOCUMENT_REF_PREFIX,
@@ -187,16 +188,16 @@ export interface EntityModel {
 }
 
 /** The target id of a SigilLink value, if it is one. */
-function linkId(v: unknown): string | undefined {
+function linkId(v: FabricValue): string | undefined {
   return decodedLinkOf(v)?.id ?? undefined;
 }
 
 /** Owned child cell ids from a piece's `internal` manifest. */
-function internalIds(internal: unknown): string[] {
+function internalIds(internal: FabricValue): string[] {
   if (!Array.isArray(internal)) return [];
   const out: string[] = [];
   for (const el of internal) {
-    if (isObjectNotArray(el) && "link" in el) {
+    if (isFabricPlainObject(el) && "link" in el) {
       const id = linkId(el.link);
       if (id) out.push(id);
     }
@@ -275,10 +276,10 @@ export function spaceDocumentReader(
  * where it was reached by reference.
  */
 export interface ResolvedSchema {
-  schema: unknown;
+  schema: FabricValue;
 
   /** The document whose `$defs` a local `$ref` in `schema` names. */
-  root: unknown;
+  root: FabricValue;
 
   /** Whether the schema was held inline or read out of a schema document. */
   via: "own" | "document";
@@ -369,7 +370,7 @@ export function streamDeclarationOf(
   if (!Array.isArray(manifest)) return undefined;
   const resolveExternal = externalReferenceResolver(readDocument);
   for (const entry of manifest) {
-    if (!isObjectNotArray(entry)) continue;
+    if (!isFabricPlainObject(entry)) continue;
     const link = decodedLinkOf(entry.link);
     if (link === null || link.id !== id || (link.path?.length ?? 0) > 0) {
       continue;
@@ -404,13 +405,13 @@ function isPieceResultValue(v: unknown): boolean {
  * retirement note).
  */
 function isLegacyProcessValue(
-  v: unknown,
+  v: FabricValue,
 ): v is {
   $TYPE: string;
-  resultRef?: unknown;
-  argument?: unknown;
-  spell?: unknown;
-  source?: unknown;
+  resultRef?: FabricValue;
+  argument?: FabricValue;
+  spell?: FabricValue;
+  source?: FabricValue;
 } {
   return isObjectNotArray(v) && typeof v.$TYPE === "string" &&
     ("resultRef" in v || "spell" in v || "source" in v);

@@ -175,7 +175,7 @@ export const toReplicaLoadFailureError = (
 /**
  * Metadata that can be attached to read operations
  */
-export interface Metadata extends Record<PropertyKey, unknown> {}
+export interface Metadata extends Record<PropertyKey, FabricValue> {}
 
 /**
  * Options for read operations
@@ -2112,6 +2112,13 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * nothing. `docs/specs/cfc-commit-preparation.md` covers the arrangement.
    */
   prepareForCommit(): void;
+
+  /**
+   * Runs the same preparation with cooperative yields between targets.
+   * Cancellation aborts the uncommitted transaction. The caller must await
+   * completion before committing; activity during a yield aborts the attempt.
+   */
+  prepareForCommitCooperatively(signal: AbortSignal): Promise<void>;
 
   /**
    * Runs CFC boundary verification for this transaction and records the

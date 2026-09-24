@@ -136,6 +136,14 @@ export interface RunContext {
 
   /** ISO 8601 UTC. */
   startedAt: string;
+
+  /**
+   * The seed the run's test runners shuffled their order by. Absent from
+   * a run that did not shuffle, whose tests ran in the order they were
+   * declared, so two contexts agree on the order exactly when this field
+   * does.
+   */
+  shuffleSeed?: number;
 }
 
 const OUTCOMES = new Set(["pass", "fail", "skip"]);
@@ -146,6 +154,11 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
+}
+
+/** Whether a value is a seed `deno test --shuffle` would take. */
+export function isSeed(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
 /** Serializes a record as one NDJSON line, newline included. */
@@ -224,7 +237,8 @@ export function parseContextLine(line: string): RunContext | undefined {
     !isNonEmptyString(context.os) || !isNonEmptyString(context.arch) ||
     !isNonEmptyString(context.denoVersion) ||
     !isNonEmptyString(context.startedAt) ||
-    !isOptionalString(context.branch) || !isOptionalString(context.agent)
+    !isOptionalString(context.branch) || !isOptionalString(context.agent) ||
+    (context.shuffleSeed !== undefined && !isSeed(context.shuffleSeed))
   ) {
     return undefined;
   }
@@ -276,6 +290,9 @@ export function parseContextLine(line: string): RunContext | undefined {
   if (context.branch !== undefined) result.branch = context.branch as string;
   if (ci !== undefined) result.ci = ci;
   if (context.agent !== undefined) result.agent = context.agent as string;
+  if (context.shuffleSeed !== undefined) {
+    result.shuffleSeed = context.shuffleSeed as number;
+  }
   return result;
 }
 

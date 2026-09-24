@@ -24,6 +24,7 @@ import { internalVerifierRead } from "../storage/reactivity-log.ts";
 import { type CfcConfClause, clauseAlternatives } from "./clause.ts";
 import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
+import { cfcObservationFitsCeiling } from "./observation.ts";
 import { collectConsumedLabel } from "./prepare.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { isRendererTrustedEvent } from "./ui-contract.ts";
@@ -154,20 +155,24 @@ function inspect(source: Cell<unknown>, requested: SnapshotShareAudience) {
     if (!isDID(actor)) {
       throw new Error("Snapshot sharing requires an authenticated actor");
     }
-    if (runtime.cfcReadMaxConfidentiality === undefined) {
-      throw new Error(
-        "Snapshot sharing requires a bounded runtime read ceiling",
-      );
-    }
     const target = "user" in requested ? requested.user : requested.space;
     if (target.runtime !== runtime) {
       throw new Error("Snapshot handles must belong to the same runtime");
     }
     const sourceLink = source.withTx(tx).resolveAsCell()
       .getAsNormalizedFullLink();
-    const value = snapshotJsonValue(source.withTx(tx).get());
+    const sourceValue = source.withTx(tx).get();
     const consumed = collectConsumedLabel(tx);
     const actorAtom = cfcAtom.user(actor);
+    if (
+      runtime.cfcReadMaxConfidentiality === undefined &&
+      !cfcObservationFitsCeiling(consumed.confidentiality, [actorAtom])
+    ) {
+      throw new Error(
+        "Snapshot source exceeds the authenticated actor's read ceiling",
+      );
+    }
+    const value = snapshotJsonValue(sourceValue);
     const resolved = resolveAudience(requested, tx);
     const audience = snapshotJsonValue(resolved.audience) as CfcAtom;
     const retained: CfcConfClause[] = [];

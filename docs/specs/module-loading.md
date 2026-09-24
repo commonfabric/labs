@@ -939,7 +939,7 @@ index's restart-stable `action` column,
 [c10]: ../../packages/runner/src/sandbox/ses-runtime.ts
 [c11]: ../../packages/runner/src/builder/module.ts
 [c12]: ../../packages/runner/src/scheduler/run.ts
-[c13]: ../../packages/data-model/src/value-hash.ts
+[c13]: ../../packages/data-model/src/value-hash/impl.ts
 [c14]: ../../packages/runner/src/compilation-cache/cell-cache.ts
 [c15]: ../../packages/runner/src/sandbox/runtime-module-policy.ts
 [c16]: ../../packages/runner/src/harness/authored-debug-source.ts

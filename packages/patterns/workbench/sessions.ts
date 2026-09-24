@@ -62,7 +62,11 @@ export interface SourceEntry {
  * a lift's own parameter type is what bounds its read. */
 export interface StartableSourcesView {
   sources?: Array<
-    | { id: string; driver: string; capabilities?: { startSession?: boolean } }
+    | {
+      id: string;
+      driver: string;
+      capabilities?: { startSession?: boolean; surfaces?: string[] };
+    }
     | undefined
   >;
 }
@@ -76,6 +80,39 @@ export interface StartableSourcesView {
 export interface IndexBucketView {
   ownerDid?: string;
   bucket?: string;
+}
+
+/** A session entry with the desktop start that made it, as the lifts that
+ * confirm starts read the index. The argument contract's `SessionEntry` sits
+ * in `SessionEntry | undefined` alternatives, where the update-compatibility
+ * check allows no evolution, so the field is declared on this lift-local
+ * view instead, which a lift's own parameter type reads through. */
+export interface PairedSessionEntry {
+  sourceId: string;
+  nativeSessionId: string;
+  title: string | null;
+  cwd: string | null;
+  gitRepo: string | null;
+  gitBranch: string | null;
+  gitWorktreeRoot: string | null;
+  updatedAt: string | null;
+  active: boolean | null;
+  archived: boolean | null;
+  syncStatus: string;
+  /** The id a `start` command named, when the app made this session for a
+   * desktop start under an id of its own. */
+  startedAs?: string;
+}
+
+/** The index as the lifts that confirm starts read it: `SessionIndexView`
+ * with each session's pairing. */
+export interface PairedSessionIndexView {
+  schema: string;
+  ownerDid?: string;
+  generatedAt?: string;
+  sources?: Array<SourceEntry | undefined>;
+  sessions: Array<PairedSessionEntry | undefined>;
+  checkouts?: Array<CheckoutEntry | undefined>;
 }
 
 /** A harness shown in the picker that no configured source backs. */
@@ -147,6 +184,9 @@ export interface SessionRow {
   updatedAt: string;
   active: boolean;
   attached: boolean;
+  /** The id the start that made this session named, or "" when the session
+   * is its own start's or none. */
+  startedAs: string;
 }
 
 /** One entry of a picker: a harness or a checkout. */
@@ -174,19 +214,79 @@ export interface DetachEvent {
 
 export { sessionKey };
 
+/** The index row carrying a session: the row under that id, or the row of
+ * a session the app made for a desktop start under an id of its own, which
+ * names the start's id as `startedAs`. A plain copy of the fields read, made
+ * where the row is live. */
+const indexRowFor = (
+  index: PairedSessionIndexView | undefined,
+  sourceId: string,
+  nativeSessionId: string,
+):
+  | { sourceId: string; nativeSessionId: string; startedAs: string }
+  | undefined => {
+  const key = sessionKey(sourceId, nativeSessionId);
+  for (const s of index?.sessions ?? []) {
+    if (s === undefined) continue;
+    const own = sessionKey(s.sourceId, s.nativeSessionId) === key;
+    const made = !!s.startedAs && sessionKey(s.sourceId, s.startedAs) === key;
+    if (own || made) {
+      return {
+        sourceId: s.sourceId,
+        nativeSessionId: s.nativeSessionId,
+        startedAs: s.startedAs ?? "",
+      };
+    }
+  }
+  return undefined;
+};
+
 /** Whether the index carries a session in any state. A row the connector
  * has since marked deleted still confirms that the session existed, so a
  * confirmed start stays attached, showing from its own record the way a
  * manually attached session does once the index drops it. */
 const indexCarries = (
-  index: SessionIndexView | undefined,
+  index: PairedSessionIndexView | undefined,
   sourceId: string,
   nativeSessionId: string,
-): boolean => {
+): boolean => indexRowFor(index, sourceId, nativeSessionId) !== undefined;
+
+/** One session the app made for a desktop start: its own id and the id the
+ * start named. Plain values, for a verb that runs where the index is read
+ * through the argument contract and so cannot see the pairing itself. */
+export interface SessionPairing {
+  sourceId: string;
+  nativeSessionId: string;
+  startedAs: string;
+}
+
+/** The pairings the index carries, read where the rows are live. */
+export const pairingsOf = lift((
+  { index }: { index?: PairedSessionIndexView },
+): SessionPairing[] =>
+  (index?.sessions ?? []).flatMap((s) =>
+    s?.startedAs
+      ? [{
+        sourceId: s.sourceId,
+        nativeSessionId: s.nativeSessionId,
+        startedAs: s.startedAs,
+      }]
+      : []
+  )
+);
+
+/** The id the start that made a session named, from the pairings under the
+ * session's own id; "" when none names it. */
+export const startedAsOf = (
+  pairings: readonly SessionPairing[],
+  sourceId: string,
+  nativeSessionId: string,
+): string => {
   const key = sessionKey(sourceId, nativeSessionId);
-  return (index?.sessions ?? []).some((s) =>
-    s !== undefined && sessionKey(s.sourceId, s.nativeSessionId) === key
-  );
+  for (const p of pairings) {
+    if (sessionKey(p.sourceId, p.nativeSessionId) === key) return p.startedAs;
+  }
+  return "";
 };
 
 /** The starts the index has confirmed, as attachments: the connector
@@ -194,17 +294,21 @@ const indexCarries = (
 export const confirmedStartsOf = lift((
   { starts, index }: {
     starts: SessionStart[] | Default<[]>;
-    index?: SessionIndexView;
+    index?: PairedSessionIndexView;
   },
 ): Attachment[] =>
-  starts.filter((s) => indexCarries(index, s.sourceId, s.nativeSessionId))
-    .map((s) => ({
+  // The attachment names the session's own id: a desktop start's session
+  // carries an id the app minted, and the rows join on it.
+  starts.flatMap((s) => {
+    const row = indexRowFor(index, s.sourceId, s.nativeSessionId);
+    return row === undefined ? [] : [{
       sourceId: s.sourceId,
-      nativeSessionId: s.nativeSessionId,
+      nativeSessionId: row.nativeSessionId,
       title: s.title,
       attachedAt: s.startedAt,
       ...(s.workstreamId ? { workstreamId: s.workstreamId } : {}),
-    }))
+    }];
+  })
 );
 
 /** The starts the index has not confirmed: still starting, or refused by
@@ -212,7 +316,7 @@ export const confirmedStartsOf = lift((
 export const startingOf = lift((
   { starts, index }: {
     starts: SessionStart[] | Default<[]>;
-    index?: SessionIndexView;
+    index?: PairedSessionIndexView;
   },
 ): SessionStart[] =>
   starts.filter((s) => !indexCarries(index, s.sourceId, s.nativeSessionId))
@@ -255,7 +359,7 @@ export const attachmentsOf = lift((
  * render. Reads the shallow row and nothing under the manifest. */
 export const sessionRowsOf = lift((
   { index, attached }: {
-    index?: SessionIndexView;
+    index?: PairedSessionIndexView;
     attached: Attachment[] | Default<[]>;
   },
 ): SessionRow[] => {
@@ -277,6 +381,7 @@ export const sessionRowsOf = lift((
       updatedAt: s.updatedAt ?? "",
       active: s.active === true,
       attached: attachedKeys.has(key),
+      startedAs: s.startedAs ?? "",
     });
   }
   return rows.toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -295,6 +400,7 @@ export const rowFromAttachment = (a: Attachment): SessionRow => ({
   updatedAt: "",
   active: false,
   attached: true,
+  startedAs: "",
 });
 
 /** The attached sessions, in attach order, each joined with its live row when
@@ -411,9 +517,18 @@ export const dropStart = (
   starts: Writable<SessionStart[] | Default<[]>>,
   sourceId: string,
   nativeSessionId: string,
+  startedAs = "",
 ): void => {
-  const key = sessionKey(sourceId, nativeSessionId);
-  starts.removeByValue(starts.elementById(key));
-  const record: Writable<SessionStart | undefined> = starts.elementById(key);
-  record.set(undefined);
+  // A desktop start's record lives under the id the start named, while its
+  // session carries that id as `startedAs`: a detach by the session's own
+  // id drops the record under either.
+  const ids = startedAs && startedAs !== nativeSessionId
+    ? [nativeSessionId, startedAs]
+    : [nativeSessionId];
+  for (const id of ids) {
+    const key = sessionKey(sourceId, id);
+    starts.removeByValue(starts.elementById(key));
+    const record: Writable<SessionStart | undefined> = starts.elementById(key);
+    record.set(undefined);
+  }
 };

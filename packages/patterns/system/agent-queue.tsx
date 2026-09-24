@@ -34,10 +34,7 @@ import {
   Writable,
   type WriteAuthorizedBy,
 } from "commonfabric";
-import AgentRunView, {
-  type AgentRun,
-  type AgentRunRecord,
-} from "./agent-run.tsx";
+import AgentRunView, { type AgentRun } from "./agent-run.tsx";
 
 /**
  * One submitted run. `host` is the origin of the toolshed serving the
@@ -51,7 +48,7 @@ export type AgentQueueEntry = {
 };
 
 type MaterializedAgentQueueEntry = {
-  run: AgentRunRecord;
+  run: AgentRun;
   host: string;
   address?: string;
 };
@@ -184,7 +181,7 @@ const AgentQueue = pattern(
               : null}
             {empty ? <p>No agent runs yet.</p> : null}
             {entries.map((entry) => {
-              const resolved = cellFromUrl<AgentRunRecord>({
+              const resolved = cellFromUrl<AgentRun>({
                 url: entry.address ?? "",
                 spaceHost: entry.host,
                 writable: true,

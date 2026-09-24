@@ -148,4 +148,23 @@ describe("protected runtime output preservation", () => {
     sendOutput(tx);
     await expectRefusal(tx);
   });
+
+  // An envelope stored in version 1 is rewritten in version 2 on its next
+  // persist once content-addressed labels are selected (SC-11's one
+  // exception). Both spell the same labels, so a preserved output still
+  // changes nothing: it must pass, and the document migrates on its next
+  // authorized write. Refusing instead would refuse every re-run of the
+  // initializer, since a refused commit never migrates the envelope.
+  it("preserves an output whose envelope only differs in version", async () => {
+    const tx = runtime.edit();
+    const stored = readStoredCfcMetadata(tx, output);
+    expect(stored?.version).toBe(1);
+    tx.setCfcContentAddressedLabels(true);
+    sendOutput(tx);
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit()).error).toBeUndefined();
+    const inspect = runtime.edit();
+    expect(readStoredCfcMetadata(inspect, output)).toEqual(stored);
+    inspect.abort();
+  });
 });

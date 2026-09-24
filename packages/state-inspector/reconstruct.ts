@@ -17,6 +17,11 @@
 // applier would get subtly wrong. `applyPatch` is offline-safe (pure value ops;
 // no live runtime/cell). See packages/memory/v2/patch.ts.
 
+import {
+  type FabricValue,
+  isFabricArray,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
 import { applyPatchToDocument } from "@commonfabric/memory/v2/patch";
 import {
   decodeStoredDocumentPayload,
@@ -40,48 +45,66 @@ export interface ReconstructOptions extends EntityAddress {
   atSeq?: number;
 }
 
-export type EntityDocument =
-  & { value?: unknown; source?: unknown }
-  & Record<
-    string,
-    unknown
-  >;
+/**
+ * A stored document as the inspector reads one. It is memory's
+ * `EntityDocument` except for `source`, which memory declares as an
+ * `EntityRef`. A legacy result document holds a sigil link to its process cell
+ * there, and the inspector reads such documents, so `source` is any
+ * `FabricValue` here.
+ *
+ * The members are written out because `Omit<StoredDocument, "source">` does
+ * not keep them: on a type that has a string index signature, `Omit` drops
+ * every named key and leaves the index signature. `reconstructOutcome()`
+ * returns one of memory's documents as one of these, so a change to memory's
+ * type that stops it being assignable to this one stops this file compiling.
+ */
+export type EntityDocument = {
+  value?: FabricValue;
+  source?: FabricValue;
+  [key: string]: FabricValue;
+};
 
 export interface PathSelection {
   /** Whether every segment selected an own property. */
   found: boolean;
 
   /** The selected value. This can be `undefined` when `found` is true. */
-  value: unknown;
+  value: FabricValue;
 }
 
 /**
  * Navigates own properties using exact string segments and reports whether the
  * selected property exists. Array segments must be canonical array-index
- * property names.
+ * property names. The values with own properties to select are arrays, plain
+ * objects, and strings, whose own properties are `length` and one per
+ * character index. A `FabricSpecialObject` holds its contents privately, so no
+ * segment selects anything within one.
  */
 export function selectAtPath(
-  root: unknown,
+  root: FabricValue,
   path: string[],
 ): PathSelection {
-  let cur: unknown = root;
+  const notFound = { found: false, value: undefined };
+  let cur: FabricValue = root;
   for (const key of path) {
-    if (cur == null) return { found: false, value: undefined };
-    if (Array.isArray(cur)) {
-      if (!isArrayIndexPropertyName(key)) {
-        return { found: false, value: undefined };
-      }
+    if (isFabricArray(cur)) {
+      if (!isArrayIndexPropertyName(key)) return notFound;
       const index = Number(key);
-      if (!Object.hasOwn(cur, index)) {
-        return { found: false, value: undefined };
-      }
+      if (!Object.hasOwn(cur, index)) return notFound;
       cur = cur[index];
-    } else {
-      const boxed = Object(cur) as Record<string, unknown>;
-      if (!Object.hasOwn(boxed, key)) {
-        return { found: false, value: undefined };
+    } else if (isFabricPlainObject(cur)) {
+      if (!Object.hasOwn(cur, key)) return notFound;
+      cur = cur[key];
+    } else if (typeof cur === "string") {
+      if (key === "length") {
+        cur = cur.length;
+      } else if (isArrayIndexPropertyName(key) && Number(key) < cur.length) {
+        cur = cur[Number(key)];
+      } else {
+        return notFound;
       }
-      cur = boxed[key];
+    } else {
+      return notFound;
     }
   }
   return { found: true, value: cur };
@@ -91,7 +114,7 @@ export function selectAtPath(
  * Navigates own properties using exact string segments. Array segments must be
  * canonical array-index property names.
  */
-export function getAtPath(root: unknown, path: string[]): unknown {
+export function getAtPath(root: FabricValue, path: string[]): FabricValue {
   return selectAtPath(root, path).value;
 }
 
@@ -503,7 +526,7 @@ export function reconstructOutcome(
         row.seq,
         row.op_index,
       );
-    return { status: "present", document: document as EntityDocument };
+    return { status: "present", document };
   } catch (error) {
     return { status: "undecodable", error };
   }
@@ -530,7 +553,7 @@ export interface ValueAtResult {
   document?: EntityDocument;
 
   /** The value navigated to `path` within `document.value`. */
-  value?: unknown;
+  value?: FabricValue;
 }
 
 /** A reconstructed value result that distinguishes a missing selected path. */

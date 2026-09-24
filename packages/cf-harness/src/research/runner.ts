@@ -16,12 +16,12 @@ import { mergeLabel } from "@commonfabric/runner/cfc/label-view-core";
 import type {
   HarnessResearchCfcProjection,
   HarnessResearchHandleRecord,
+  HarnessResearchHandleValue,
   HarnessResearchMissingLabel,
   HarnessResearchMissingLabelSource,
   HarnessResearchPatternRecord,
   HarnessResearchPurpose,
   HarnessResearchResult,
-  HarnessResearchRunSummary,
   HarnessResearchSourceRead,
 } from "../contracts/research.ts";
 import {
@@ -44,6 +44,7 @@ import { findSectionPassage, rankSections } from "../docs-corpus/sections.ts";
 import { errorMessage } from "../error-message.ts";
 import { inputCellsContextMessage } from "../input-cells.ts";
 import { ORIENTATION_GUIDANCE } from "../orientation.ts";
+import { PATTERN_COMPOSITION_GUIDANCE } from "../pattern-authoring.ts";
 import { PIECE_TARGETING_GUIDANCE } from "../piece-targeting.ts";
 import type {
   HarnessModelAttemptDiagnostic,
@@ -70,7 +71,6 @@ import {
   unreadSourceIds,
 } from "./admission.ts";
 import { objectValue, stringValue, unique } from "./model-value.ts";
-import { researchStartingContext, selectResearchContext } from "./context.ts";
 
 /** Cheap gateway model used by the bounded research loop. */
 export const RESEARCH_MODEL = "gemini-3.5-flash" as const;
@@ -146,6 +146,14 @@ export interface HarnessResearchRequest {
   /** General handles visible to the calling run. */
   handleTokens: readonly string[];
 
+  /**
+   * Names for those of {@link handleTokens} that are granted references,
+   * keyed by token; a token with no name is listed bare. The name is what
+   * lets research describe the handles a task needs rather than every handle
+   * the run holds to find out which is which.
+   */
+  handleNames?: Readonly<Record<string, string>>;
+
   /** Explicit attachments; only their operator names and tokens reach the model. */
   inputCells?: readonly HarnessInputCell[];
 
@@ -155,8 +163,14 @@ export interface HarnessResearchRequest {
   /** Existing CFC label on the task and accumulated model context. */
   taskCfcLabel?: IFCLabel;
 
-  /** Prior research retained by this run, newest last. */
-  priorResearchRuns?: readonly HarnessResearchRunSummary[];
+  /**
+   * Findings an earlier call admitted, handed in as a research handle: the
+   * whole of the prior context, chosen by the caller naming the token. Its
+   * still-held bindings count as described, its confirmed patterns as
+   * confirmed, and each of its sources is read again and counts as cited
+   * only where the bytes still match the digest it was read under.
+   */
+  priorResearch?: HarnessResearchHandleValue;
 
   /** Index-resolved pattern attachments supplied with the root task. */
   attachedPatterns?: readonly TrustedPatternRecord[];
@@ -519,6 +533,7 @@ const systemPrompt = (purpose?: HarnessResearchPurpose): string =>
       : "Produce the smallest complete recipe for the requested implementation using only the supplied tools.",
     "This is CF documentation, skills, pattern-index, source, dependency, and handle research; it is not web research.",
     PIECE_TARGETING_GUIDANCE,
+    PATTERN_COMPOSITION_GUIDANCE,
     ...(purpose === "orient" ? [ORIENTATION_GUIDANCE] : []),
     "Search for the next unresolved fact. Search results are leads, not proof of applicability. Read exact evidence only when it changes the decision; do not keep searching after the question is answered.",
     "A long section or source file is never represented by its first chunk alone. Follow nextOffset with another exact read whenever the needed answer could continue later.",
@@ -534,7 +549,9 @@ const systemPrompt = (purpose?: HarnessResearchPurpose): string =>
       "Prefer direct-run when one verified pattern solves the task, composition when verified parts fit, and author only when reuse does not. Implementation direction is separate from the scope of this call.",
       "A run-pattern-input example has an invocation OBJECT conforming to run_pattern, with a selected patternId and no sourceText; the host serializes it into copyable JSON. A pattern-source example has complete TypeScript/TSX in content. Never put TSX into an invocation or return a clipped code prefix.",
       "Every API illustrated in an example, including an API mentioned only in a comment, must be supported by an exact opened read cited in example.sourceIds.",
-      "Examples are optional. Include one when it makes the answer usable; it may be a small idiom or a composable piece. Do not expand a factual question into a whole app. State routine assumptions and reserve missing for actual blockers to this answer, not everything left for the author to do.",
+      purpose === undefined
+        ? "An implementation kit needs a complete example: a run-pattern-input invocation for direct-run, or pattern-source for author/compose. Without it, report incomplete and name the missing example. A focused-api fact needs a cited rule, not application code."
+        : "Examples are optional. Include one when it makes the answer usable; it may be a small idiom or a composable piece. Do not expand a factual question into a whole app. State routine assumptions and reserve missing for actual blockers to this answer, not everything left for the author to do.",
     ],
     "Distinguish available inputs, the requirements of one candidate, and missing user data. A candidate's SQLite or connector contract is specific to that candidate, not a universal task prerequisite. No current mailbox handle means mail is not yet given, not that permitted discovery cannot find it; local-only apps need no external handle.",
     "Check documentTitle and headingPath before applying a snippet. Iframe React guest code and ordinary commonfabric patterns use different execution environments. A React JSX pragma or React import belongs to an iframe guest, never add it to an ordinary compiled CF pattern. Use the relevant canonical guide sections for the execution environment. Search matching passages or list an outline to choose what to read; read larger sections when their context matters.",
@@ -558,16 +575,44 @@ const canonicalGuideSections = (request: HarnessResearchRequest) => {
   );
 };
 
+/**
+ * What a prior research handle contributed to this call's evidence, as the
+ * prompt states it: which of its bindings this run still holds, which it does
+ * not, and which of its sources read back unchanged.
+ */
+interface CarriedResearch {
+  /** Tokens the prior kit described that are general handles here. */
+  bindings: string[];
+
+  /** Tokens the prior kit described that this run does not hold. */
+  unavailable: string[];
+
+  /** Source ids whose bytes still match, citable as they stand. */
+  verified: string[];
+
+  /** Locations whose bytes changed or could not be read; reopened anew. */
+  stale: string[];
+}
+
+/** The prior kit's findings for a new question, with its recipe omitted. */
+const priorFindings = (prior: HarnessResearchHandleValue) => ({
+  researchRunId: prior.researchRunId,
+  task: prior.kit.task,
+  summary: prior.kit.summary,
+  patterns: prior.kit.patterns.map((
+    { patternId, importHint, argumentType, resultType },
+  ) => ({ patternId, importHint, argumentType, resultType })),
+  ...(prior.kit.purpose === "orient"
+    ? { leads: prior.kit.leads, questions: prior.kit.questions }
+    : {}),
+  rules: prior.kit.rules,
+  missing: prior.kit.missing,
+});
+
 const userPrompt = (
   request: HarnessResearchRequest,
+  carried: CarriedResearch | undefined,
 ): string => {
-  const retained = request.priorResearchRuns ?? [];
-  const prior = request.followUpTo === undefined
-    ? selectResearchContext(retained)
-    : retained.filter((run) =>
-      run.researchRunId === request.followUpTo ||
-      run.outputId === request.followUpTo
-    );
   const attachedPatterns = request.attachedPatterns ?? [];
   const canonicalGuides = canonicalGuideSections(request).map((
     { section },
@@ -585,7 +630,10 @@ const userPrompt = (
     "",
     "Authoritative general handle inventory for this research call:",
     request.handleTokens.length > 0
-      ? request.handleTokens.join("\n")
+      ? request.handleTokens.map((token) => {
+        const name = request.handleNames?.[token];
+        return name === undefined ? token : `${token} — ${name}`;
+      }).join("\n")
       : "No general handles are available.",
     ...(request.inputCells === undefined ? [] : [
       "",
@@ -608,15 +656,147 @@ const userPrompt = (
         "These records are trusted search leads, not source inspection. Call inspect_pattern before selecting one, then open every source file the current answer relies on.",
       ]
       : []),
-    ...(prior.length > 0
-      ? [
-        "",
-        "Selected prior findings and reopenable sources:",
-        JSON.stringify(prior.map(researchStartingContext)),
-        "These findings omit old recipes and handle bindings. Only the current inventory above is authoritative. Treat these as starting context and research only unresolved items. Their sourceIds are not citations for this fresh research call: reopen every source the current answer relies on, using a section-N value from a documentation source location as open_doc_section.sectionId, and cite only the newly returned sourceId.",
-      ]
-      : []),
+    ...(request.priorResearch === undefined || carried === undefined ? [] : [
+      "",
+      "Prior research carried in by handle:",
+      JSON.stringify(priorFindings(request.priorResearch)),
+      `Bindings it described that this run still holds, already described for this call: ${
+        JSON.stringify(carried.bindings)
+      }. Bindings it described that this run does not hold, which cannot be bound: ${
+        JSON.stringify(carried.unavailable)
+      }.`,
+      `Its sources read back unchanged and are citable by these sourceIds: ${
+        JSON.stringify(carried.verified)
+      }. These sources changed since they were read, or could not be read, and their old ids are not citable — the current read, where one succeeded, is in the catalog under a new id: ${
+        JSON.stringify(carried.stale)
+      }.`,
+      "Research only what these findings leave unresolved. Only the current inventory above is authoritative for bindings.",
+    ]),
   ].join("\n");
+};
+
+/**
+ * Seeds `state` from a prior research handle and reports what carried:
+ * described handles this run still holds, every confirmed pattern, and each
+ * source read again through the same host path it was first read through —
+ * a read whose bytes still match yields the same source id and stands as
+ * cited; one whose bytes changed, or that cannot be read, is reported stale,
+ * with the fresh read left in the catalog under its own id. The reads are the
+ * host's, not the model's, so they charge neither its read nor its call
+ * budget.
+ */
+const carryPriorResearch = async (
+  request: HarnessResearchRequest,
+  state: ResearchState,
+  prior: HarnessResearchHandleValue,
+): Promise<CarriedResearch> => {
+  const carried: CarriedResearch = {
+    bindings: [],
+    unavailable: [],
+    verified: [],
+    stale: [],
+  };
+  for (const record of prior.describedHandles) {
+    if (request.handleTokens.includes(record.token)) {
+      state.describedHandles.set(record.token, structuredClone(record));
+      carried.bindings.push(record.token);
+    } else {
+      carried.unavailable.push(record.token);
+    }
+  }
+  for (const pattern of prior.confirmedPatterns) {
+    state.confirmedPatterns.set(pattern.patternId, structuredClone(pattern));
+  }
+  const readChars = state.readChars;
+  const toolCalls = state.toolCalls;
+  state.readLimit = Number.POSITIVE_INFINITY;
+  try {
+    for (const source of prior.kit.sources) {
+      if (runWasAborted(request.signal)) throw abortError(request.signal);
+      let reread: HarnessResearchSourceRead | undefined;
+      try {
+        reread = await rereadSource(request, state, source);
+      } catch {
+        reread = undefined;
+      }
+      if (reread?.sourceId === source.sourceId) {
+        carried.verified.push(source.sourceId);
+      } else {
+        carried.stale.push(source.location);
+      }
+    }
+  } finally {
+    state.readLimit = RESEARCH_BUDGETS[request.purpose ?? "orient"].readChars;
+    state.readChars = readChars;
+    state.toolCalls = toolCalls;
+  }
+  return carried;
+};
+
+/**
+ * Reads the bytes `source` describes through the path that first read them,
+ * recording the read as this call's, and returns it.
+ *
+ * @throws Error when the location cannot be read in this call.
+ */
+const rereadSource = async (
+  request: HarnessResearchRequest,
+  state: ResearchState,
+  source: HarnessResearchSourceRead,
+): Promise<HarnessResearchSourceRead> => {
+  const chars = source.end - source.offset;
+  if (source.kind === "documentation") {
+    const match = /\(section-(\d+)\)$/.exec(source.location);
+    const section = match === null
+      ? undefined
+      : request.corpus?.sections[Number(match[1])];
+    if (
+      section === undefined ||
+      !section.integrity.some(isOperatorProvisionedReferenceAtom)
+    ) {
+      throw new Error(`unknown documentation section in ${source.location}`);
+    }
+    // The selector is positional, so it is held to the path and heading the
+    // location records: a corpus that moved sections puts another one at that
+    // index, and reading it would catalog unrelated text as the replacement.
+    if (documentationLocation(request, section) !== source.location) {
+      throw new Error(`documentation section moved from ${source.location}`);
+    }
+    const range = checkedReadRange(section.text, source.offset, chars);
+    readDocSection(request, state, section, range);
+    return state.sourceReads.find((read) =>
+      read.kind === "documentation" && read.location === source.location &&
+      read.offset === range.offset && read.end === range.end
+    )!;
+  }
+  if (request.getPatternIndex === undefined) {
+    throw new Error("this run has no configured pattern index");
+  }
+  const index = await request.getPatternIndex();
+  const patternMatch = /^cf:pattern:([^:]+)(?::(.+))?$/.exec(source.location);
+  if (patternMatch === null) {
+    throw new Error(`unreadable pattern location ${source.location}`);
+  }
+  const [, patternId, path] = patternMatch;
+  const inspected = await inspectPattern(state, index, patternId);
+  if (source.kind === "pattern-metadata") {
+    return state.sourceReads.find((read) =>
+      read.sourceId === inspected.sourceId
+    )!;
+  }
+  const program = state.programs.get(patternId);
+  const file = program?.files.find((candidate) => candidate.name === path);
+  if (file === undefined) {
+    throw new Error(`pattern ${patternId} has no file ${path}`);
+  }
+  const range = checkedReadRange(file.contents, source.offset, chars);
+  return addRead(state, {
+    kind: "pattern-source",
+    location: source.location,
+    offset: range.offset,
+    end: range.end,
+    totalChars: file.contents.length,
+  }, range.content);
 };
 
 const toolResultMessage = (
@@ -848,6 +1028,14 @@ const docSectionMetadata = (
   chars: section.text.length,
 });
 
+/** The location a documentation read of `section` is cited under. */
+const documentationLocation = (
+  request: HarnessResearchRequest,
+  section: HarnessDocsCorpusSection,
+): string =>
+  section.path + "#" + (section.headingPath?.join(" > ") ?? section.heading) +
+  " (" + docSectionMetadata(request, section).sectionId + ")";
+
 /** Records and returns the exact section text observed through search or read. */
 const readDocSection = (
   request: HarnessResearchRequest,
@@ -862,9 +1050,7 @@ const readDocSection = (
   addSourceLabel(state, cfcLabel);
   const read = addRead(state, {
     kind: "documentation",
-    location: section.path + "#" +
-      (section.headingPath?.join(" > ") ?? section.heading) + " (" +
-      metadata.sectionId + ")",
+    location: documentationLocation(request, section),
     offset: range.offset,
     end: range.end,
     totalChars: section.text.length,
@@ -1043,7 +1229,10 @@ const invokeResearchTool = async (
       if (request.getPatternIndex === undefined) {
         throw new Error("this run has no configured pattern index");
       }
-      const patternId = stringValue(input.patternId, 500);
+      const patternId = stringValue(input.patternId, 500).replace(
+        /^cf:pattern:/,
+        "",
+      );
       if (patternId.length === 0) throw new Error("patternId is required");
       return await inspectPattern(
         state,
@@ -1052,7 +1241,11 @@ const invokeResearchTool = async (
       );
     }
     case "open_pattern_file": {
-      const patternId = stringValue(input.patternId, 500);
+      const patternId = stringValue(input.patternId, 500).replace(
+        /^cf:pattern:/,
+        "",
+      );
+      if (patternId.length === 0) throw new Error("patternId is required");
       const path = stringValue(input.path, 2_000);
       const program = state.programs.get(patternId);
       if (program === undefined) {
@@ -1133,17 +1326,13 @@ export const createResearchRunner = (options: {
   /** Records each provider attempt in the parent run report. */
   onAttempt?: (attempt: HarnessModelAttemptDiagnostic) => void | Promise<void>;
 
-  /** Counts research usage beside delegated usage. */
-  onUsage?: (usage: HarnessModelUsage) => void;
+  /** Reports every completed private model call before the next one starts. */
+  onUsage?: (usage: HarnessModelUsage | undefined) => void | Promise<void>;
 }): HarnessResearchRunner =>
 async (request) => {
   const model = researchModel(options.modelClient.providerId);
   const budget = RESEARCH_BUDGETS[request.purpose ?? "orient"];
   const tools = RESEARCH_TOOLS;
-  const transcript: HarnessTranscriptMessage[] = [
-    { role: "system", content: systemPrompt(request.purpose) },
-    { role: "user", content: userPrompt(request) },
-  ];
   const state: ResearchState = {
     readLimit: budget.readChars,
     handleTokens: request.handleTokens,
@@ -1167,20 +1356,19 @@ async (request) => {
       integrity: structuredClone([...section.integrity]),
     });
   }
-  for (const prior of request.priorResearchRuns ?? []) {
-    if (prior.cfc === undefined) {
-      addMissingLabel(
-        state,
-        "prior-research",
-        `prior research run ${prior.researchRunId} summary did not retain CFC metadata`,
-      );
-      continue;
-    }
-    addSourceLabel(state, prior.cfc.outputLabel);
-    for (const missing of prior.cfc.missingLabels) {
+  if (request.priorResearch !== undefined) {
+    addSourceLabel(state, request.priorResearch.cfc.outputLabel);
+    for (const missing of request.priorResearch.cfc.missingLabels) {
       addMissingLabel(state, missing.source, missing.detail);
     }
   }
+  const carried = request.priorResearch === undefined
+    ? undefined
+    : await carryPriorResearch(request, state, request.priorResearch);
+  const transcript: HarnessTranscriptMessage[] = [
+    { role: "system", content: systemPrompt(request.purpose) },
+    { role: "user", content: userPrompt(request, carried) },
+  ];
   for (const pattern of request.attachedPatterns ?? []) {
     addMissingLabel(
       state,
@@ -1248,10 +1436,13 @@ async (request) => {
           : {}),
       });
       modelTurns += 1;
-      if (result.usage !== undefined) options.onUsage?.(result.usage);
+      await options.onUsage?.(result.usage);
       transcript.push(result.assistant);
       const calls = result.assistant.toolCalls ?? [];
       if (calls.length === 0) {
+        if (runWasAborted(request.signal)) {
+          throw abortError(request.signal);
+        }
         finalAssistant = result.assistant;
         break;
       }
@@ -1353,13 +1544,16 @@ async (request) => {
           : {}),
       });
       modelTurns += 1;
-      if (repaired.usage !== undefined) options.onUsage?.(repaired.usage);
+      await options.onUsage?.(repaired.usage);
       transcript.push(repaired.assistant);
       const repairCalls = repaired.assistant.toolCalls ?? [];
       for (const call of repairCalls) {
         transcript.push(toolResultMessage(call.id, call.function.name, {
           error: "private tools are withheld on the citation repair turn",
         }));
+      }
+      if (runWasAborted(request.signal)) {
+        throw abortError(request.signal);
       }
       if (repairCalls.length === 0) {
         try {

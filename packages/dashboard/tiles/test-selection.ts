@@ -48,7 +48,7 @@ export function makeTestSelection(
 ): Tile {
   const source = options.source ?? sharedTestSelection;
   return {
-    id: "test-selection",
+    label: "test selection",
     intervalMs: MANIFEST_SHARE_MS,
     routes: [{
       path: TEST_SELECTION_PATH,
@@ -71,7 +71,6 @@ function selectionView(
 ): TileView {
   if (manifest === undefined || manifest.entries.length === 0) {
     return {
-      label: "test selection",
       status: "unknown",
       value: "—",
       sub: manifest === undefined
@@ -98,7 +97,6 @@ function selectionView(
     : "good";
   const badge = `${compactSpan(age)} old`;
   return {
-    label: "test selection",
     status,
     value: `${share.toFixed(0)}%`,
     // The condition the tile is colored for takes this line, worst

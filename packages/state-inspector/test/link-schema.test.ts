@@ -10,12 +10,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import type { FabricValue } from "@commonfabric/data-model";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
 
 import { annotate, decodedLinkOf, summarizeLink } from "../decode.ts";
 
 /** A link in the legacy at-rest sigil form, carrying `schema` when given one. */
-function sigilLink(schema?: unknown): unknown {
+function sigilLink(schema?: FabricValue): FabricValue {
   return {
     "/": {
       "link@1": {
@@ -31,7 +32,7 @@ function sigilLink(schema?: unknown): unknown {
  * A schema with enough in it to exceed the inline budget, shaped like the ones
  * a pattern's argument cell really carries.
  */
-function largeSchema(description: string): Record<string, unknown> {
+function largeSchema(description: string): Record<string, FabricValue> {
   return {
     type: "object",
     description,
@@ -46,8 +47,8 @@ function largeSchema(description: string): Record<string, unknown> {
 }
 
 /** The `$link` body of an annotated single link. */
-function annotatedLink(value: unknown): Record<string, unknown> {
-  const annotated = annotate(value) as { $link: Record<string, unknown> };
+function annotatedLink(value: FabricValue): Record<string, FabricValue> {
+  const annotated = annotate(value) as { $link: Record<string, FabricValue> };
   return annotated.$link;
 }
 
@@ -164,7 +165,7 @@ describe("link-schema", () => {
     it("describes a schema nested past the call stack, without a digest", () => {
       // Hashing descends recursively, so a schema this deep has no digest to
       // report. Reporting none beats failing the whole rendering.
-      let deep: Record<string, unknown> = { type: "string" };
+      let deep: FabricValue = { type: "string" };
       for (let level = 0; level < 20_000; level++) {
         deep = { properties: { a: deep } };
       }

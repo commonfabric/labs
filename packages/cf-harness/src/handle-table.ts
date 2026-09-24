@@ -29,6 +29,7 @@ import {
   type HarnessHandleCapability,
   type HarnessHandleEntry,
   type HarnessHandleReferent,
+  type HarnessHandleReferentDraft,
   type HarnessHandleTable,
   MIN_HANDLE_TOKEN_SUFFIX_LENGTH,
   REFERENT_HANDLE_TOKEN_PREFIX,
@@ -274,29 +275,56 @@ export const mintAddressHandle = async (
   };
 };
 
-/**
- * Mints a referent handle for content a tool observed, returning the updated
- * table and the token. Minting is idempotent per referent: the same source,
- * content, label, and label source share one token, so a row a run retrieves
- * twice is held once. The suffix is derived the way an address handle's is.
- */
+/** Helper for minting, which names a referent by everything but its token. */
 const referentIdentityKey = (
   referent: Pick<
     HarnessHandleReferent,
-    "source" | "value" | "label" | "labelSource"
+    "kind" | "source" | "value" | "label" | "labelSource"
   >,
 ): string =>
   hashStringOf([
     "referent",
+    referent.kind,
     referent.source,
     referent.value,
     referent.label,
     referent.labelSource,
   ]);
 
+/**
+ * A referent of `referent`'s kind with its token removed, for minting it into
+ * another table under that table's own salt.
+ */
+export const referentDraft = (
+  referent: HarnessHandleReferent,
+): HarnessHandleReferentDraft =>
+  referent.kind === "document"
+    ? {
+      kind: referent.kind,
+      source: referent.source,
+      value: referent.value,
+      label: referent.label,
+      labelSource: referent.labelSource,
+    }
+    : {
+      kind: referent.kind,
+      source: referent.source,
+      value: referent.value,
+      label: referent.label,
+      labelSource: referent.labelSource,
+    };
+
+/**
+ * Mints a referent handle for `referent` — content a tool observed, or an
+ * admitted research kit, as its `kind` says — returning the updated table and
+ * the token. Minting is idempotent per referent: the same kind, source,
+ * content, label, and label source share one token, so a row a run retrieves
+ * twice is held once, and a document and a research kit with the same content
+ * are two referents. The suffix is derived the way an address handle's is.
+ */
 export const mintReferentHandle = async (
   table: HarnessHandleTable,
-  referent: Omit<HarnessHandleReferent, "token" | "kind">,
+  referent: HarnessHandleReferentDraft,
   options: { hasher?: HandleTokenHasher } = {},
 ): Promise<{ table: HarnessHandleTable; token: string }> => {
   const hasher = options.hasher ?? sha256Hasher;
@@ -318,9 +346,92 @@ export const mintReferentHandle = async (
   return {
     table: {
       ...table,
-      referents: [...referents, { token, kind: "document", ...referent }],
+      referents: [...referents, { token, ...referent }],
     },
     token,
+  };
+};
+
+/**
+ * Folds the entries and referents of `incoming` into `current`, answering a
+ * table that holds everything either held. Both were minted from one run's
+ * table, and a mint only ever fills a field an entry left undefined, so an
+ * address present in both is merged field by field: each optional field is
+ * taken from whichever side defines it, and from `current` where both do. A
+ * writer's table carries a copy of every entry it read, so neither side's
+ * copy of an entry can simply stand; two writers that each extended the
+ * table they read both keep their additions, whichever recorded second.
+ *
+ * @throws Error when the tables carry different salts, since their tokens
+ * were then derived from different runs and cannot share a table; or when
+ * two writers minting from one base drew different tokens for one address,
+ * or one token for two different addresses or referents, none of which
+ * either writer could see of the other.
+ */
+export const mergeHarnessHandleTables = (
+  current: HarnessHandleTable,
+  incoming: HarnessHandleTable,
+): HarnessHandleTable => {
+  if (current.salt !== incoming.salt) {
+    throw new Error(
+      `handle tables of different runs cannot merge: ${current.salt} and ${incoming.salt}`,
+    );
+  }
+  const entries = [...current.entries];
+  for (const entry of incoming.entries) {
+    const index = entries.findIndex((held) =>
+      held.addressKey === entry.addressKey
+    );
+    if (index === -1) {
+      if (entries.some((held) => held.token === entry.token)) {
+        throw new Error(
+          `handle token ${entry.token} was minted for two different addresses`,
+        );
+      }
+      entries.push(entry);
+      continue;
+    }
+    const held = entries[index];
+    if (held.token !== entry.token) {
+      throw new Error(
+        `handle address ${held.addressKey} was recorded under two different tokens`,
+      );
+    }
+    const schemaSide = held.schema !== undefined ? held : entry;
+    const capability = held.capability ?? entry.capability;
+    const acquisition = held.acquisition ?? entry.acquisition;
+    entries[index] = {
+      token: held.token,
+      kind: held.kind,
+      ref: held.ref,
+      addressKey: held.addressKey,
+      ...(capability !== undefined ? { capability } : {}),
+      ...(schemaSide.schema !== undefined ? { schema: schemaSide.schema } : {}),
+      ...(schemaSide.schemaSource !== undefined
+        ? { schemaSource: schemaSide.schemaSource }
+        : {}),
+      ...(acquisition !== undefined ? { acquisition } : {}),
+    };
+  }
+  const referents = [...(current.referents ?? [])];
+  for (const referent of incoming.referents ?? []) {
+    const held = referents.find((candidate) =>
+      candidate.token === referent.token
+    );
+    if (held === undefined) {
+      referents.push(referent);
+    } else if (
+      referentIdentityKey(held) !== referentIdentityKey(referent)
+    ) {
+      throw new Error(
+        `handle token ${referent.token} was minted for two different referents`,
+      );
+    }
+  }
+  return {
+    ...current,
+    entries,
+    ...(referents.length > 0 ? { referents } : {}),
   };
 };
 
@@ -569,9 +680,9 @@ const assertValidReferents = (referents: unknown): void => {
         `invalid handle table: malformed referent token \`${String(token)}\``,
       );
     }
-    if (kind !== "document") {
+    if (kind !== "document" && kind !== "research") {
       throw new Error(
-        `invalid handle table: referent kind must be \`document\`, got \`${
+        `invalid handle table: referent kind must be \`document\` or \`research\`, got \`${
           String(kind)
         }\``,
       );
@@ -586,7 +697,14 @@ const assertValidReferents = (referents: unknown): void => {
         `invalid handle table: referent \`${token}\` has a malformed label`,
       );
     }
-    if (labelSource !== "row" && labelSource !== "query") {
+    // A label source belongs to a kind: a row or a query labels a document,
+    // and only research labels research. A record pairing them otherwise was
+    // not minted by this module.
+    if (
+      kind === "document"
+        ? labelSource !== "row" && labelSource !== "query"
+        : labelSource !== "research"
+    ) {
       throw new Error(
         `invalid handle table: referent \`${token}\` has an unknown labelSource \`${
           String(labelSource)

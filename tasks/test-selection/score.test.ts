@@ -392,6 +392,86 @@ describe("score", () => {
     });
   });
 
+  describe("the order a run's tests were shuffled into", () => {
+    it("reads a pass and a failure at one commit in two orders as no flake", () => {
+      // An order-dependent test passes in one order and fails in another.
+      // That is a bug in the test, not chance, and a flake rate high
+      // enough would withhold it from pull requests rather than get it
+      // fixed.
+      const state = stateFrom([
+        saw("pass", { seed: 20260921, place: "pr", source: "branch" }),
+        saw("fail", { seed: 20260922, place: "pr", source: "branch" }),
+      ]);
+      expect(state.flakesByDay["2026-08-20"] ?? 0).toBe(0);
+      expect(flakeRate(state, "2026-08-20")).toBe(0);
+    });
+
+    it("still reads a pass and a failure in one order as a flake", () => {
+      const state = stateFrom([
+        saw("pass", { seed: 20260922, place: "pr", source: "branch" }),
+        saw("fail", { seed: 20260922, place: "pr", source: "branch" }),
+      ]);
+      expect(state.flakesByDay["2026-08-20"]).toBe(1);
+    });
+
+    it("keeps a seeded run apart from one in declaration order", () => {
+      // A run with no seed ran its tests in the order they were declared,
+      // which is an order of its own.
+      const state = stateFrom([
+        saw("pass", { place: "pr", source: "branch" }),
+        saw("fail", { seed: 20260922, place: "pr", source: "branch" }),
+      ]);
+      expect(state.flakesByDay["2026-08-20"] ?? 0).toBe(0);
+    });
+
+    it("credits no catch to a failure on main that a new order ended", () => {
+      // The order moved on and the test stopped failing, which says
+      // nothing about whether any change fixed it.
+      const state = stateFrom([
+        saw("fail", { day: "2026-08-19", commit: "c0", seed: 20260819 }),
+        saw("pass", { commit: "c1", seed: 20260820 }),
+      ]);
+      expect(state.mainCatches).toBe(0);
+      expect(state.pendingMain).toEqual([]);
+      expect(flakeRate(state, "2026-08-20")).toBe(0);
+    });
+
+    it("judges a failure in the pass's order beside one in another", () => {
+      // An older failure in another order is dropped, and does not take
+      // the same-order failure after it down with it.
+      const state = stateFrom([
+        saw("fail", { day: "2026-08-19", commit: "c0", seed: 20260819 }),
+        saw("fail", { day: "2026-08-20", commit: "c1", seed: 20260820 }),
+        saw("pass", { commit: "c2", seed: 20260820 }),
+      ]);
+      expect(state.mainCatches).toBe(1);
+      expect(state.lastCatch).toBe("2026-08-20");
+      expect(state.pendingMain).toEqual([]);
+    });
+
+    it("still credits a catch to a failure a later commit in one order ended", () => {
+      const state = stateFrom([
+        saw("fail", { day: "2026-08-20", commit: "c0", seed: 20260820 }),
+        saw("pass", { commit: "c1", seed: 20260820 }),
+      ]);
+      expect(state.mainCatches).toBe(1);
+    });
+
+    it("reads a rerun of one commit in another order as neither flake nor catch", () => {
+      const state = stateFrom([
+        saw("fail", { commit: "c1", seed: 20260820 }),
+        saw("pass", {
+          commit: "c1",
+          seed: 20260821,
+          day: "2026-08-21",
+          startedAt: "2026-08-21T00:00:00.000Z",
+        }),
+      ]);
+      expect(state.mainCatches).toBe(0);
+      expect(state.flakesByDay["2026-08-20"] ?? 0).toBe(0);
+    });
+  });
+
   describe("variants", () => {
     it("scores a variant apart from the default it shadows", () => {
       const marked = { ...TEST, v: "server-execution" };

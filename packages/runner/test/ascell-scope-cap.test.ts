@@ -23,6 +23,7 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { isCell } from "../src/cell.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";
+import { externalizeSchema } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { JSONSchema, SchemaScope } from "../src/builder/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -584,5 +585,159 @@ describe("asCell scope cap, positional and compound", () => {
     expect(isCell(handle)).toBe(true);
     // ...and the space-scoped profile below it reads through.
     expect(capped.key("myProfile", "profile", "field").get()).toBe("secret");
+  });
+});
+
+describe("asCell scope cap, through definitions", () => {
+  let runtime: Runtime;
+  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let tx: IExtendedStorageTransaction;
+
+  beforeEach(() => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    tx = runtime.edit();
+  });
+
+  afterEach(async () => {
+    await tx.commit();
+    await runtime?.dispose();
+    await storageManager?.close();
+  });
+
+  it("writes and dereferences a handle whose definition names itself", () => {
+    // What `type Recursive = Cell<Recursive> | null` generates: resolving the
+    // handle branch leads back to the union that holds it.
+    const recursive = {
+      type: "object",
+      properties: { node: { $ref: "#/$defs/Recursive" } },
+      required: ["node"],
+      $defs: {
+        Recursive: {
+          anyOf: [
+            { type: "null" },
+            { $ref: "#/$defs/Recursive", asCell: ["cell"] },
+          ],
+        },
+      },
+    } as const satisfies JSONSchema;
+    const holder = runtime.getCell(space, "recursive-holder", undefined, tx)
+      .asSchema(recursive);
+
+    holder.key("node").set(null);
+
+    // Read raw: projecting a value through this schema is a separate question
+    // from where the write lands and what dereferencing it reaches.
+    expect(
+      tx.readValueOrThrow(holder.key("node").getAsNormalizedFullLink()),
+    ).toBeNull();
+    expect(isCell(holder.key("node").resolveAsCell())).toBe(true);
+  });
+
+  it("caps a handle branch that repeats its compound's reference in either form", () => {
+    // The branch names the definition its compound is already expanding, and
+    // its own entry still bounds the follow, however the schema travels.
+    const secret = runtime.getCell(
+      space,
+      "repeated-ref-secret",
+      { type: "string" },
+      tx,
+      "session",
+    );
+    secret.set("session value");
+    const holder = runtime.getCell(space, "repeated-ref-holder", undefined, tx);
+    holder.set(secret as never);
+    const inline = {
+      $ref: "#/$defs/R",
+      anyOf: [
+        { $ref: "#/$defs/R", asCell: [{ kind: "cell", scope: "user" }] },
+        { type: "null" },
+      ],
+      $defs: { R: { type: "string" } },
+    } as const satisfies JSONSchema;
+    const stored = externalizeSchema(structuredClone(inline) as never);
+    expect((stored as { $ref?: string }).$ref).toMatch(/^cid:/);
+
+    expect(holder.asSchema(inline).resolveAsCell().get()).toBeUndefined();
+    expect(holder.asSchema(stored).resolveAsCell().get()).toBeUndefined();
+  });
+
+  it("caps a handle inside a repeated reference's own compound in either form", () => {
+    // The inner position names the same definition as the outer one but
+    // carries a compound of its own, whose handle bounds the follow.
+    const secret = runtime.getCell(
+      space,
+      "nested-compound-secret",
+      { type: "string" },
+      tx,
+      "session",
+    );
+    secret.set("session value");
+    const holder = runtime.getCell(
+      space,
+      "nested-compound-holder",
+      undefined,
+      tx,
+    );
+    holder.set(secret as never);
+    const inline = {
+      $ref: "#/$defs/R",
+      anyOf: [
+        {
+          $ref: "#/$defs/R",
+          anyOf: [
+            { type: "string", asCell: [{ kind: "cell", scope: "user" }] },
+            { type: "null" },
+          ],
+        },
+        { type: "null" },
+      ],
+      $defs: { R: { type: "string" } },
+    } as const satisfies JSONSchema;
+    const stored = externalizeSchema(structuredClone(inline) as never);
+    expect((stored as { $ref?: string }).$ref).toMatch(/^cid:/);
+
+    expect(holder.asSchema(inline).resolveAsCell().get()).toBeUndefined();
+    expect(holder.asSchema(stored).resolveAsCell().get()).toBeUndefined();
+  });
+
+  it("caps a branch's handle by the owning document's definition, not one nested in the branch", () => {
+    // A `$defs` below the root is inert, so the nested `session` entry does
+    // not loosen the `user` cap the root's `Handle` declares.
+    const secret = runtime.getCell(
+      space,
+      "nested-defs-secret",
+      { type: "string" },
+      tx,
+      "session",
+    );
+    secret.set("session value");
+    const holder = runtime.getCell(space, "nested-defs-holder", undefined, tx);
+    holder.set(secret as never);
+
+    const capped = holder.asSchema(
+      {
+        anyOf: [{
+          anyOf: [{ $ref: "#/$defs/Handle" }, { type: "null" }],
+          $defs: {
+            Handle: {
+              type: "string",
+              asCell: [{ kind: "cell", scope: "session" }],
+            },
+          },
+        }],
+        $defs: {
+          Handle: {
+            type: "string",
+            asCell: [{ kind: "cell", scope: "user" }],
+          },
+        },
+      } as JSONSchema,
+    );
+
+    expect(capped.resolveAsCell().get()).toBeUndefined();
   });
 });

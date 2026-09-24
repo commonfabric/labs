@@ -64,12 +64,19 @@ import {
   useCancelGroup,
   useDeferredCancelOwnership,
 } from "./cancel.ts";
-import { type Cell, createCell, isCell, syncCellForIdentity } from "./cell.ts";
+import {
+  type Cell,
+  createCell,
+  isCell,
+  schemaCellScope,
+  syncCellForIdentity,
+} from "./cell.ts";
 import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
 import { recordNewProtectedDefaults } from "./cfc/default-initialization.ts";
+import { recordReferencedArgumentFields } from "./cfc/reference-initialization.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
 import type { EntityKind } from "./entity-kind.ts";
@@ -228,7 +235,7 @@ import {
   setRunnableName,
 } from "./runner-utils.ts";
 import { normalizeSandboxResult } from "./sandbox/result-normalization.ts";
-import { isCellScope, narrowestScope } from "./scope.ts";
+import { narrowestScope } from "./scope.ts";
 import { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 import {
@@ -399,14 +406,6 @@ function schedulerActionInstanceKey(parts: {
     reads: (parts.reads ?? []).map(schedulerActionLinkIdentity),
     writes: (parts.writes ?? []).map(schedulerActionLinkIdentity),
   }).hashString.slice(0, 12);
-}
-
-function schemaCellScope(
-  schema: JSONSchema | undefined,
-): CellScope | undefined {
-  if (!isObjectNotArray(schema)) return undefined;
-  schema = resolveExternalRootRefForStructure(schema);
-  return isCellScope(schema.scope) ? schema.scope : undefined;
 }
 
 function patternDefaultScope(pattern: Pattern): CellScope | undefined {
@@ -1178,6 +1177,9 @@ type SetupValidationOptions = {
   /** Proposed module authority owned by this source transition. */
   sourceUpdate?: PreparedSourceUpdate;
 
+  /** See `RunnerRunOptions.referencedArgumentFields`. */
+  referencedArgumentFields?: readonly string[];
+
   /** Optional invariant over the argument stored before setup changes it. */
   validateCurrentArgument?: (argumentCell: Cell<unknown>) => void;
 
@@ -1516,6 +1518,12 @@ type RunnerRunOptions = {
   // instance) run supply resolves a nested piece's demanded instances
   // through the OUTER piece a client watches.
   parentPieceRootId?: string;
+  // Argument fields a collection builtin fills with a link to a cell that
+  // exists already: a list's entry, the list itself. Each one whose staged
+  // value is such a link is recorded as a protected initialization
+  // (docs/specs/cfc-protected-initialization.md), so handing a new piece a
+  // reference to an owner-protected cell does not pass for modifying it.
+  referencedArgumentFields?: readonly string[];
   // The source origin a piece brought into being by this run records with its
   // creation revision. A run that finds the piece already there leaves both
   // alone: what a piece records after it exists is decided by a source
@@ -2874,6 +2882,7 @@ export class Runner {
     pattern: Pattern,
     patternRef: { identity: string; symbol: string },
     setupState: SetupStateReuse,
+    referencedArgumentFields: readonly string[] = [],
   ): SetupResult<R> | undefined {
     const key = this.#getDocKey(resultCell);
     if (!this.#cancels.has(key)) return undefined;
@@ -2931,6 +2940,11 @@ export class Runner {
         nextArgument,
         pattern.argumentSchema,
         supplied,
+      );
+      recordReferencedArgumentFields(
+        tx,
+        argumentLink,
+        referencedArgumentFields,
       );
       return { resultCell, patternRef, needsStart: false };
     }
@@ -3138,6 +3152,7 @@ export class Runner {
     setupState: SetupStateReuse,
     argument: T,
     resultCell: Cell<R>,
+    referencedArgumentFields: readonly string[] = [],
   ): void {
     // Every write below fills a store this piece owns — the argument
     // document, each internal document the result projects to, and the result
@@ -3301,6 +3316,13 @@ export class Runner {
         nextArgument,
         pattern.argumentSchema,
         suppliedProjection ?? nextArgument,
+      );
+    }
+    if (nextArgument !== undefined) {
+      recordReferencedArgumentFields(
+        tx,
+        argumentLink,
+        referencedArgumentFields,
       );
     }
 
@@ -3642,6 +3664,7 @@ export class Runner {
       pattern,
       entryRef,
       setupState,
+      validationOptions.referencedArgumentFields,
     );
     if (runningSetup) {
       return runningSetup;
@@ -3663,6 +3686,7 @@ export class Runner {
       setupState,
       argument,
       resultCell,
+      validationOptions.referencedArgumentFields,
     );
 
     if (validationOptions.validateArgumentLinks !== undefined) {
@@ -6958,12 +6982,15 @@ export class Runner {
       patternOrModule,
       argument,
       resultCell,
-      creatingPiece
-        ? {
-          initializePieceSourceHistory: true,
-          initialPieceSourceOrigin: options.sourceOrigin,
-        }
-        : {},
+      {
+        referencedArgumentFields: options.referencedArgumentFields,
+        ...(creatingPiece
+          ? {
+            initializePieceSourceHistory: true,
+            initialPieceSourceOrigin: options.sourceOrigin,
+          }
+          : {}),
+      },
     );
 
     let installedCancel: Cancel | undefined;
@@ -9027,13 +9054,19 @@ export class Runner {
       inputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
     const outputs = unwrapOneLevelAndBindToDoc(
       outputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
     return {
       inputs,
@@ -11306,13 +11339,19 @@ export class Runner {
       inputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
     const mappedOutputBindings = unwrapOneLevelAndBindToDoc(
       outputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
 
     // For the list builtins, replace a pattern-valued input (the `op`) with a
@@ -11768,7 +11807,10 @@ export class Runner {
       outputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
     const io = {
       child,

@@ -13,9 +13,11 @@
 // targets and owner→child names resolve against the whole space.
 
 import {
-  isObjectNotArray,
-  type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+  type FabricPlainObject,
+  type FabricValue,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import type { SpaceDb } from "./db.ts";
 import {
@@ -115,7 +117,7 @@ export interface EntityDetail {
 
   /** The result JSONSchema (annotated), if the entity carries one. Streams and
    * named owned cells get their DECLARED schema resolved from the owner piece. */
-  schema?: unknown;
+  schema?: FabricValue;
 
   schemaKeys?: string[];
 
@@ -171,8 +173,8 @@ function importSpecifier(v: unknown): string | undefined {
  * callers below) retire with the closed process-cell era — see the retirement
  * note at the top of model.ts for the full removal checklist.
  */
-function legacyResultId(v: unknown): string | undefined {
-  if (isObjectNotArray(v) && "$TYPE" in v && "resultRef" in v) {
+function legacyResultId(v: FabricValue): string | undefined {
+  if (isFabricPlainObject(v) && "$TYPE" in v && "resultRef" in v) {
     return parseSigilLink(v.resultRef)?.id;
   }
   return undefined;
@@ -183,7 +185,7 @@ function legacyResultId(v: unknown): string | undefined {
  * process cell itself only carries `$TYPE`/refs). Resolve it through the docs.
  */
 function legacyName(
-  v: unknown,
+  v: FabricValue,
   docs: Map<string, EntityDocument>,
 ): string | undefined {
   const rid = legacyResultId(v);
@@ -268,11 +270,10 @@ function parseCfc(
 function declaredSchemaFor(
   ownerDoc: EntityDocument | undefined,
   key: string,
-): { schema: unknown; keys?: string[]; via: string } | undefined {
+): { schema: FabricValue; keys?: string[]; via: string } | undefined {
   // 1. inline schema carried on the naming link, in either at-rest form.
-  const naming = isObjectNotArray(ownerDoc?.value)
-    ? (ownerDoc!.value as Record<string, unknown>)[key]
-    : undefined;
+  const ownerValue = ownerDoc?.value;
+  const naming = isFabricPlainObject(ownerValue) ? ownerValue[key] : undefined;
   const linkSchema = decodedLinkOf(naming)?.schema;
   if (linkSchema !== undefined) {
     return {
@@ -293,14 +294,14 @@ function declaredSchemaFor(
   // `@commonfabric/runner/stream-declaration`, which the runtime reads through
   // as well and which carries none of the live runtime.
   const osch = ownerDoc?.schema;
-  if (isObjectNotArray(osch) && isObjectNotArray(osch.properties)) {
+  if (isFabricPlainObject(osch) && isFabricPlainObject(osch.properties)) {
     const prop = osch.properties[key];
-    if (isObjectNotArray(prop)) {
-      let resolved: ReadonlyRecord = prop;
+    if (isFabricPlainObject(prop)) {
+      let resolved: FabricPlainObject = prop;
       const ref = typeof prop.$ref === "string" ? prop.$ref : undefined;
-      if (ref?.startsWith("#/$defs/") && isObjectNotArray(osch.$defs)) {
+      if (ref?.startsWith("#/$defs/") && isFabricPlainObject(osch.$defs)) {
         const def = osch.$defs[ref.slice("#/$defs/".length)];
-        if (isObjectNotArray(def)) resolved = def;
+        if (isFabricPlainObject(def)) resolved = def;
       }
       return {
         schema: annotate(resolved),

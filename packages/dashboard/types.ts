@@ -12,7 +12,6 @@ export type Status = "good" | "warn" | "bad" | "unknown";
 
 // A render-ready snapshot produced by a tile's collect().
 export interface TileView {
-  label: string; // header label (plain text; escaped by the renderer)
   status: Status; // good / warn / bad / unknown -> green / orange / red / gray
   value?: string; // big headline (TRUSTED html — escape in the tile if it holds data)
   valueLabel?: string; // plain-text headline shown when CSS truncates value
@@ -37,10 +36,10 @@ export function runSource(repo: string, workflow: string) {
 export type RunSource = ReturnType<typeof runSource>;
 
 export interface Tile {
-  id: string; // unique, stable key for this tile's scheduling + latest-view state
-
-  /** Header before a view is available; defaults to the tile's id. */
-  label?: string;
+  // The tile's header on every view (plain text; escaped by the renderer). It
+  // is unique among registered tiles, and keys the tile's scheduling and
+  // latest-view state on the server and its markup in the browser.
+  label: string;
 
   intervalMs: number; // how often collect() runs, per source when runSources is set
   wide?: boolean; // render full-width below the grid, including before collection

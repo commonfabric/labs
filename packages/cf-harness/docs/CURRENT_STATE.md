@@ -78,9 +78,10 @@ The current package provides:
 - workspace, Fabric, and explicit host mounts with path containment;
 - sandboxed shell, file, image, web-fetch, skills, edit/write, and delegation
   tools;
-- one child at a time through `default`, `browser`, `web_fetch`, `web_search`,
-  and `pattern-author` profiles, beside a bounded private `research` loop that
-  no delegation may name;
+- children through `default`, `browser`, `web_fetch`, `web_search`, and
+  `pattern-author` profiles, of which the ones a turn starts together run
+  together, beside a bounded private `research` loop that no delegation may
+  name;
 - Common Fabric implementation research over the operator-provisioned docs and
   skills corpus, published pattern metadata and complete multi-file source,
   dependencies, and safe handle shapes. Fresh CLI root tasks and interactive
@@ -131,22 +132,21 @@ The current package provides:
   transcript remain in the tool artifact; the caller receives the derived kit
   plus explicit incomplete-kit guidance. Partial evidence survives malformed
   output, provider failure, budget exhaustion, and cancellation, with private
-  usage and failure counts included in the parent record. Context selection
-  retains the latest orientation and two answers. Private follow-ups receive
-  selected findings and source locations without copying prior examples or
-  bindings. Interactive sessions persist that context, the original user goal,
-  and full CFC influence with completed history. Follow-ups retain that goal
-  alongside the current request; old bindings remain historical. Child handle
-  transfer reads only selected current bindings; its inherited CFC context
-  retains the full parent influence even when no kit is selected. Kits and
-  confirmed records persist through delegation, while local authored-source
-  artifacts record the research ids that shaped them. Before new source
-  compiles, `run_pattern` requires an import or a one-line
-  `reuseReasons[patternId]` explanation for every selected pattern in retained
-  context, including incomplete kits; leads remain advisory. The check
-  establishes a dependency or explanation, not its semantic adequacy.
-  `query_docs` is accepted only as a legacy CLI or persisted-policy alias and is
-  normalized without rewriting old transcript or run-state evidence;
+  usage and failure counts included in the parent record. A private follow-up
+  names one research handle and receives its findings without the recipe; the
+  handle's still-held bindings count as described and its sources as cited where
+  they read back with the same digest, a changed source being reported stale and
+  reopened under a new id. Interactive sessions persist that context, the
+  original user goal, and full CFC influence with completed history. Follow-ups
+  retain that goal alongside the current request; bindings from earlier tasks
+  remain historical, except those a follow-up's named handle carries in and this
+  run still holds. An admitted kit is minted as a research handle; a child
+  receives findings only through a research handle its brief names, with the
+  entries that kit binds, and its inherited CFC context retains the full parent
+  influence either way. Local authored-source artifacts record the research ids
+  that shaped them. `query_docs` is accepted only as a legacy CLI or
+  persisted-policy alias and is normalized without rewriting old transcript or
+  run-state evidence;
 - shared parent and opening-research guidance that distinguishes given inputs,
   discovery within the granted scope, and unavailable actions before asking or
   giving up. Private research identifies applicable space-search patterns for
@@ -288,35 +288,37 @@ The current package provides:
   one in, so an entry without one is one whose shape was never free to capture
   and is answered from the fabric instead;
 - a `describe_handle` tool, available in any run that has handles: given a token
-  it reports the shape of the referent and its path segments, never the value,
-  and reports an unknown token as unknown rather than as an error. The shape is
-  what the referent declares in the session's fabric when the run has one — a
-  piece's document schema is the result schema of the pattern behind it, which
-  is what an agent building over that piece needs — and otherwise the
-  harness-derived schema the mint recorded. Whatever the source, the reported
-  schema is rebuilt from an allowlist of structural keywords at every depth, so
-  `const`, `enum`, `default`, `examples`, and free-text annotations never leave
-  the tool. Property names do cross, since code cannot be written over data
-  without them, so they are bounded in count and length and the model-facing
-  reply is scrubbed of bare fabric identifiers at every depth, keys included. A
-  referent that declares no schema and whose value is a SQLite database handle
-  reports `database` instead: its tables, one property per table whose own
-  properties are that table's columns with their types, reduced by the same
-  allowlist, and one label entry per column that declares an `ifc`, addressed by
-  table name and column name. Beside those it reports `fill`: per table the rows
-  it holds, and per disclosed column how many of those rows are non-NULL there,
-  so a column filled on no row is visible before a query filters on it and comes
-  back empty. A table that could not be counted reports `unread` rather than
-  zero, and a run whose storage provider offers no query reports no `fill` at
-  all. That is the one place the tool reads a value, and it is conditional on
-  nothing being declared — a database's tables are the contract it was created
-  under, its rows are in the database file, and nothing here opens one; a count
-  is taken of a whole table and of whole columns, never under a caller's own
-  predicate. Disclosure admits addresses in the session's own space and foreign
-  DIDs the operator lists with their host in `--fabric-foreign-spaces`; that
-  bound is on the handle's own address rather than on everything the document
-  reaches from it. Answering from the fabric establishes the run's fabric
-  session despite the tool's `read` effect class;
+  it reports the shape of the referent and its path segments, never the value —
+  except for a research handle, whose findings it returns under the kit's label,
+  marking each described binding the reader does not hold — and reports an
+  unknown token as unknown rather than as an error. The shape is what the
+  referent declares in the session's fabric when the run has one — a piece's
+  document schema is the result schema of the pattern behind it, which is what
+  an agent building over that piece needs — and otherwise the harness-derived
+  schema the mint recorded. Whatever the source, the reported schema is rebuilt
+  from an allowlist of structural keywords at every depth, so `const`, `enum`,
+  `default`, `examples`, and free-text annotations never leave the tool.
+  Property names do cross, since code cannot be written over data without them,
+  so they are bounded in count and length and the model-facing reply is scrubbed
+  of bare fabric identifiers at every depth, keys included. A referent that
+  declares no schema and whose value is a SQLite database handle reports
+  `database` instead: its tables, one property per table whose own properties
+  are that table's columns with their types, reduced by the same allowlist, and
+  one label entry per column that declares an `ifc`, addressed by table name and
+  column name. Beside those it reports `fill`: per table the rows it holds, and
+  per disclosed column how many of those rows are non-NULL there, so a column
+  filled on no row is visible before a query filters on it and comes back empty.
+  A table that could not be counted reports `unread` rather than zero, and a run
+  whose storage provider offers no query reports no `fill` at all. That is the
+  one place the tool reads a value, and it is conditional on nothing being
+  declared — a database's tables are the contract it was created under, its rows
+  are in the database file, and nothing here opens one; a count is taken of a
+  whole table and of whole columns, never under a caller's own predicate.
+  Disclosure admits addresses in the session's own space and foreign DIDs the
+  operator lists with their host in `--fabric-foreign-spaces`; that bound is on
+  the handle's own address rather than on everything the document reaches from
+  it. Answering from the fabric establishes the run's fabric session despite the
+  tool's `read` effect class;
 - bounded request-attribution headers on OpenAI-compatible gateway traffic,
   using persisted operational provenance rather than request content or personal
   identifiers;
@@ -348,14 +350,7 @@ The current package provides:
   together ([Read-only Loom retrieval](LOOM_RETRIEVAL.md));
 - opt-in fabric-session tools — `run_pattern` and `assign_slug`
   (`--fabric-api-url`, `--fabric-identity`, and `--fabric-space` configured
-  together, or their `CF_HARNESS_FABRIC_*` environment fallbacks). Before
-  opening Fabric or compiling new `sourceText`, `run_pattern` requires each
-  selected pattern in retained research context to be imported as
-  `cf:pattern:<id>` or explained in one nonblank line at `reuseReasons[<id>]`.
-  This includes incomplete kits; unselected leads are advisory and direct
-  indexed execution does not enter this gate. Omitting both for a selection
-  returns `error` with the retained identities and both retry paths, and
-  persists no piece.
+  together, or their `CF_HARNESS_FABRIC_*` environment fallbacks).
 
   `run_pattern`: compiles and runs an inline `sourceText` pattern (capped at 256
   KiB) against a deployed Fabric space from the trusted host side over a lazy
@@ -377,8 +372,8 @@ The current package provides:
   source passed on nowhere is still named — that report a failure, declare a
   pending read, or hold no rows on a settled result declaring a read. Pending
   zeros and empty lists are placeholders, not data; the root's returned snapshot
-  is checked even if a later observation has settled. A minimal unnamed reader
-  pattern takes the held result reference as an input to verify the same piece.
+  is checked even if a later observation has settled. Only a read without a
+  policy refusal carries pending concerns asking to reread the same piece.
   Concerns name the output and the pattern under the identity a `cf:pattern:`
   import addresses while the failure's own text stays in the artifact. Reporting
   is best-effort wherever it cannot read: an output reached through a `$ref` or
@@ -389,18 +384,19 @@ The current package provides:
   out of the space's registered piece list, with run→piece provenance carried by
   the run's persisted artifacts. `assign_slug` names a piece afterwards, from
   any handle token referring to one: it validates the slug, fails closed on an
-  availability question the space cannot answer, refuses a slug already naming
-  another piece (one already naming the same piece answers ok), refuses a token
-  that names a position inside a piece, another space, or a document with no
-  pattern identity, and refuses a declared top-level pending read or an
-  unestablished UI. Otherwise it registers the piece in the space's piece list
-  and points the slug at it, returning the slug and, when composable without a
-  bare fabric identifier, an openable URL. Successful naming records a host-only
-  reference. Completed interactive turns retain those references atomically with
-  history for bare follow-ups, including after restart, and remint them through
-  the existing input-cell path. Explicit attachments, including an empty list,
-  take precedence and clear the retained targets when that turn completes
-  without naming a piece; failed turns leave them unchanged. Without the session
+  availability question the space cannot answer, appends a counter to a slug
+  already naming another piece and returns the name assigned in the receipt (one
+  already naming the same piece answers ok), refuses a token that names a
+  position inside a piece, another space, or a document with no pattern
+  identity, and refuses a declared top-level pending read or an unestablished
+  UI. Otherwise it registers the piece in the space's piece list and points the
+  slug at it, returning the slug and, when composable without a bare fabric
+  identifier, an openable URL. Successful naming records a host-only reference.
+  Completed interactive turns retain those references atomically with history
+  for bare follow-ups, including after restart, and remint them through the
+  existing input-cell path. Explicit attachments, including an empty list, take
+  precedence and clear the retained targets when that turn completes without
+  naming a piece; failed turns leave them unchanged. Without the session
   configuration both tools are absent from the tool surface, for a `default`- or
   `pattern-author`-profile subagent as much as for the parent — a child shares
   the one session the parent built; `--fabric-cfc-enforcement-mode` (the
@@ -555,12 +551,12 @@ The current package provides:
   retried. A released, ready comparison with zero effect or an empty sample
   calls for a question. Unavailable inspection allows a requested create or
   revision to be applied: a successful receipt returns the piece with the fixed
-  `verification: "not-checked"` marker. The piece's visible summary and the
-  final text state the inspection limitation, describe only the build or change,
-  and point to the piece without claiming unseen results or asking for a
-  nonexistent release permission. Styling without a computed-surface observation
-  is explicitly reported as not checked. This is guidance, not a host proof of
-  arbitrary rule semantics.
+  `verification: "not-checked"` marker. The parent's final text states the
+  inspection limitation, describes only the build or change, and points to the
+  piece without claiming unseen results or asking for a nonexistent release
+  permission. Styling without a computed-surface observation is explicitly
+  reported as not checked. This is guidance, not a host proof of arbitrary rule
+  semantics.
 
 Run the capability probe instead of copying this list into adapters:
 
@@ -616,7 +612,12 @@ mode.
   preflight for workflows that require them.
 - Package-default sandbox networking is a provisional bridge-oriented posture,
   not the final destination policy model. Product adapters may narrow it.
-- Delegation is serial: only one child runs at a time.
+- A turn's tool calls run in the order written, and a delegation does not hold
+  the calls after it, so the children one turn starts run together while its
+  other calls run in turn against the session's one working directory; a
+  `browser` delegation holds the calls after it, since browser children share
+  one page. Across turns nothing schedules, budgets, or cancels children, and a
+  child cannot delegate.
 - The retained-pattern preflight returns before Fabric access or compilation
   when it refuses a `run_pattern` request, so it persists nothing. A created
   piece persists in the configured space and joins its registered piece list

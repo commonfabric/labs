@@ -1,3 +1,4 @@
+import { debugStr } from "@commonfabric/data-model";
 import { env, Page, waitForCondition } from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
@@ -10,7 +11,10 @@ import {
 } from "./pieces-controller.ts";
 import {
   clickCfButton,
+  clickTrustedAction,
   fillCfInput,
+  readCfInputValue,
+  submitViaEnter,
   waitForDisabled,
   waitForRuntimeIdle,
   waitForText,
@@ -18,6 +22,12 @@ import {
 } from "./cfc-browser-helpers.ts";
 
 const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+
+// Trusted action names from cfc-group-chat-demo/trusted.tsx (inlined, as the
+// multi-runtime demo test does).
+const SAVE_PROFILE_ACTION = "TrustedGroupChatSaveProfile";
+const SEND_ACTION = "TrustedGroupChatSendMessage";
+const ADD_ROOM_ACTION = "TrustedGroupChatAddRoom";
 const IMPORTED_MESSAGE_MARKERS = [
   "Jumping in late here.",
   "I think we already covered this above.",
@@ -88,8 +98,7 @@ describe("cfc group chat demo integration test", () => {
       "#trusted-profile-name",
       "Alice",
     );
-    await waitForDisabled(page, "#trusted-profile-save", false);
-    await clickCfButton(page, "#trusted-profile-save");
+    await submitViaEnter(page, "#trusted-profile-name");
     await waitForText(page, "#trusted-profile-status", "Alice");
     await waitForText(
       page,
@@ -120,7 +129,7 @@ describe("cfc group chat demo integration test", () => {
       true,
     );
     await waitForRuntimeIdle(page);
-    await clickCfButton(page, "#trusted-room-add-button");
+    await clickTrustedAction(page, ADD_ROOM_ACTION);
     await waitForRuntimeIdle(page);
     await waitForText(page, "#rooms-panel", "1 room");
     await waitForText(page, "#rooms-panel", "Ops");
@@ -130,15 +139,14 @@ describe("cfc group chat demo integration test", () => {
       "#host-message-draft",
       "Fake hello from Alice",
     );
-    // Wait for the send button to ENABLE before clicking, exactly like the
-    // trusted sends below (S-G, rootcause §2b): `hostSendDisabled` derives
-    // from the draft, and under the server-execution ON arm that derivation
-    // is a served round trip — clicking an interim-disabled cf-button
-    // retargets the click to the host element and the send never fires.
-    // Correct under the OFF arm too (the enable is just immediate there).
-    await waitForDisabled(page, "#host-send-button", false);
-    await clickCfButton(page, "#host-send-button");
+    // The lookalike is a real `cf-submit-input` outside every trusted surface:
+    // its Enter is a trusted click, and the field clearing is what shows the
+    // submit fired, so the message's absence below is the refusal.
+    await submitViaEnter(page, "#host-message-draft");
     await waitForRuntimeIdle(page);
+    if ((await readCfInputValue(page, "#host-message-draft")) !== "") {
+      throw new Error("the lookalike field did not submit");
+    }
     await waitForTextAbsent(
       page,
       "#trusted-conversation-preview",
@@ -151,8 +159,7 @@ describe("cfc group chat demo integration test", () => {
       "Hello from Alice",
     );
     await waitForRuntimeIdle(page);
-    await waitForDisabled(page, "#trusted-send-button", false);
-    await clickCfButton(page, "#trusted-send-button");
+    await submitViaEnter(page, "#trusted-message-draft");
     await waitForText(
       page,
       "#trusted-conversation-preview",
@@ -190,8 +197,7 @@ describe("cfc group chat demo integration test", () => {
       "#trusted-profile-name",
       "Bob",
     );
-    await waitForDisabled(page, "#trusted-profile-save", false);
-    await clickCfButton(page, "#trusted-profile-save");
+    await clickTrustedAction(page, SAVE_PROFILE_ACTION);
     await waitForText(page, "#trusted-profile-status", "Bob");
     await waitForRuntimeIdle(page);
 
@@ -201,14 +207,7 @@ describe("cfc group chat demo integration test", () => {
       "Hello from Bob",
     );
     await waitForRuntimeIdle(page);
-    // Wait for the send button to ENABLE before clicking, exactly like
-    // Alice's send above (S-G, rootcause §2b): `sendDisabled` derives from
-    // the draft, and under the server-execution ON arm that derivation is
-    // a served round trip — clicking an interim-disabled cf-button
-    // retargets the click to the host element and the send never fires.
-    // Correct under the OFF arm too (the enable is just immediate there).
-    await waitForDisabled(page, "#trusted-send-button", false);
-    await clickCfButton(page, "#trusted-send-button");
+    await clickTrustedAction(page, SEND_ACTION);
     await waitForText(
       page,
       "#trusted-conversation-preview",
@@ -243,7 +242,7 @@ describe("cfc group chat demo integration test", () => {
       "Bob after imported claims",
     );
     await waitForRuntimeIdle(page);
-    await clickCfButton(page, "#trusted-send-button");
+    await submitViaEnter(page, "#trusted-message-draft");
     await waitForText(
       page,
       "#trusted-conversation-preview",
@@ -344,9 +343,8 @@ async function waitForAuthorshipState(
   } catch (cause) {
     probe = await readAuthorshipProbe(page, containerSelector);
     throw new Error(
-      `Timed out waiting for verified authorship row. Last probe: ${
-        JSON.stringify(probe, null, 2)
-      }`,
+      `Timed out waiting for verified authorship row. ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }
@@ -443,9 +441,8 @@ async function waitForInvalidAuthorshipState(
   } catch (cause) {
     probe = await readAuthorshipProbe(page, containerSelector);
     throw new Error(
-      `Timed out waiting for invalid authorship row. Last probe: ${
-        JSON.stringify(probe, null, 2)
-      }`,
+      `Timed out waiting for invalid authorship row. ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }

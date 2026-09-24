@@ -150,15 +150,14 @@ async function openrouterMonthly(key: string): Promise<number> {
 }
 
 export const modelSpend: Tile = {
-  id: "model-spend",
+  label: "model spend",
   intervalMs: 3_600_000,
   async collect(ctx): Promise<TileView> {
-    const label = "model spend";
     const oaKey = ctx.env("OPENAI_ADMIN_KEY");
     const anKey = ctx.env("ANTHROPIC_ADMIN_KEY");
     const orKey = ctx.env("OPENROUTER_KEY");
     if (!oaKey && !anKey && !orKey) {
-      return { label, status: "unknown", value: "—", sub: "set OPENAI_ADMIN_KEY / ANTHROPIC_ADMIN_KEY / OPENROUTER_KEY" };
+      return { status: "unknown", value: "—", sub: "set OPENAI_ADMIN_KEY / ANTHROPIC_ADMIN_KEY / OPENROUTER_KEY" };
     }
 
     const now = new Date();
@@ -192,7 +191,7 @@ export const modelSpend: Tile = {
 
     const present = [oa, an, or].filter((p): p is { mtd: number; projected: number } => p !== null);
     if (present.length === 0) {
-      return { label, status: "unknown", value: "—", sub: "model spend unavailable" };
+      return { status: "unknown", value: "—", sub: "model spend unavailable" };
     }
     const totalMtd = present.reduce((s, p) => s + p.mtd, 0);
     const totalProjected = present.reduce((s, p) => s + p.projected, 0);
@@ -236,7 +235,6 @@ export const modelSpend: Tile = {
     const mtd = `${usd(totalMtd)} MTD`;
 
     return {
-      label,
       status,
       // Complete -> a projection (~); missing a provider -> the total is only a
       // lower bound, since the absent provider would add to it (≥).

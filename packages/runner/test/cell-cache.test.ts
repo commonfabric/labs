@@ -884,6 +884,43 @@ describe("cell-cache", () => {
       });
     });
 
+    it("keeps an annotation that links to another document a link across a rewrite", async () => {
+      const { modules, entryIdentity } = toModules(PROGRAM);
+      let tx = runtime.edit();
+      writeSourceDocs(runtime, spaceA, modules, entryIdentity, tx);
+      const nameDoc = runtime.getCell<{ title: string }>(
+        spaceA,
+        "annotated-name-doc",
+        undefined,
+        tx,
+      );
+      nameDoc.set({ title: "Annotated" });
+      runtime.prepareTxForCommit(tx);
+      await tx.commit();
+      const nameLink = nameDoc.getAsLink();
+      await runtime.patternManager.annotatePattern(
+        entryIdentity,
+        spaceA,
+        "name",
+        nameLink,
+      );
+
+      tx = runtime.edit();
+      writeSourceDocs(runtime, spaceA, modules, entryIdentity, tx);
+      runtime.prepareTxForCommit(tx);
+      await tx.commit();
+
+      // The stored document, not a read through it: a loaded closure hands
+      // back the document the annotation links to.
+      const stored = runtime.getCell<{ annotations?: unknown }>(
+        spaceA,
+        sourceDocKey(entryIdentity),
+        undefined,
+        runtime.edit(),
+      ).getRaw();
+      expect(stored?.annotations).toEqual({ name: nameLink });
+    });
+
     it("is empty for an entry that was never written", async () => {
       const tx = runtime.edit();
       const loaded = await loadSourceClosure(

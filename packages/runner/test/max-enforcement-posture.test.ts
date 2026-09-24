@@ -209,7 +209,7 @@ describe("max-enforcement CFC posture as one system", () => {
         .filter(([, governance]) => "ungated" in governance)
         .map(([sink]) => sink);
       expect(ungated.sort()).toEqual(
-        ["generateObject", "generateText", "llm", "llmDialog"],
+        ["generateObject", "generateText", "llm", "llmDialog", "sqliteQuery"],
       );
     });
 

@@ -4,6 +4,7 @@ import {
 } from "@commonfabric/utils/types";
 
 import {
+  HARNESS_COST_ESTIMATE_WITHHELD_REASONS,
   HARNESS_MODEL_USAGE_NUMERIC_FIELDS,
   type HarnessCostEstimateWithheldReason,
   type HarnessModelUsage,
@@ -16,6 +17,23 @@ const finiteNonNegativeNumber = (value: unknown): number | undefined =>
 
 const recordValue = (value: unknown): ReadonlyRecord | undefined =>
   isObjectNotArray(value) ? value : undefined;
+
+/** Reads recognized, valid usage fields from a stored run report. */
+export const readHarnessModelUsage = (
+  value: unknown,
+): HarnessModelUsage | undefined => {
+  if (!isObjectNotArray(value)) return undefined;
+  const usage: HarnessModelUsage = {};
+  for (const field of HARNESS_MODEL_USAGE_NUMERIC_FIELDS) {
+    const number = finiteNonNegativeNumber(value[field]);
+    if (number !== undefined) usage[field] = number;
+  }
+  const reason = HARNESS_COST_ESTIMATE_WITHHELD_REASONS.find((reason) =>
+    reason === value.estimateWithheldReason
+  );
+  if (reason !== undefined) usage.estimateWithheldReason = reason;
+  return Object.keys(usage).length > 0 ? usage : undefined;
+};
 
 const firstNumber = (
   record: ReadonlyRecord,

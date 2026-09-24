@@ -35,6 +35,7 @@
 // writes); the servingLoop stats block is absent, settles ride
 // `synced()`, and the ON-arm assertions are skipped explicitly.
 
+import { debugStr } from "@commonfabric/data-model";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import { env } from "@commonfabric/integration";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
@@ -119,7 +120,8 @@ const waitForStats = async (
     if (stats !== undefined && predicate(stats)) return stats;
     if (Date.now() > deadline) {
       throw new Error(
-        `timed out waiting for ${label} — last stats: ${JSON.stringify(stats)}`,
+        `timed out waiting for ${label} — last stats: ` +
+          debugStr`$quote,long${stats}`,
       );
     }
     await new Promise((resolve) => setTimeout(resolve, 100));

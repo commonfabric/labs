@@ -19,7 +19,7 @@
 // canonicalizing hash the runtime derives entity ids with, so this cannot drift
 // from the engine's notion of value identity.
 
-import { hashOf } from "@commonfabric/data-model";
+import { type FabricValue, hashOf } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 import type { SpaceDb } from "./db.ts";
@@ -41,16 +41,27 @@ import { scopesOfRows } from "./scopes.ts";
 const ENUMERATION_CAP = 1_000_000;
 
 /**
+ * Which way of fingerprinting a space this module implements.
+ *
+ * A clone records the scheme its baseline was computed under, and a verify
+ * refuses to compare that baseline with a working copy fingerprinted under
+ * another: the two hashes would differ for reasons that have nothing to do with
+ * the content, or agree when the content did not. Raise it whenever a change
+ * would give the same stored content a different fingerprint — what is hashed,
+ * how a value hashes, or which entities are excluded.
+ */
+export const FINGERPRINT_SCHEME = 1;
+
+/**
  * Hash one entity's durable value, reporting a rejection instead of throwing.
  *
- * `hashOf` refuses values it has no canonical form for (functions, symbols,
- * unsupported object types such as `Map`, cyclic structures). Nothing stored
- * today decodes to one, but `decodeStored` spans several at-rest formats, and a
- * single odd entity must not abort a whole-space fingerprint — nor be quietly
- * treated as empty, which would let real content drift read as "unchanged".
+ * `hashOf` refuses some values it is given, a value nested past the call stack
+ * among them, and a single odd entity must not abort a whole-space fingerprint —
+ * nor be quietly treated as empty, which would let real content drift read as
+ * "unchanged".
  */
 export function hashEntityValue(
-  value: unknown,
+  value: FabricValue,
 ): { hash: string } | { error: string } {
   try {
     return { hash: hashOf(value).toString() };
@@ -307,7 +318,7 @@ export function contentFingerprint(
       scope: model.scope,
       branch,
     });
-    const value = (doc as Record<string, unknown> | undefined)?.value;
+    const value = doc?.value;
     let hash: string | null = null;
     if (value !== undefined) {
       const hashed = hashEntityValue(value);

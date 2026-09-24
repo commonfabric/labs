@@ -25,6 +25,7 @@ import {
   RECORDS_DIR_VARIABLE,
   recordsDir,
 } from "@commonfabric/test-support/records";
+import { pinShuffleSeed } from "@commonfabric/test-support/shuffle";
 import {
   finishRunRecording,
   type RunRecording,
@@ -1151,6 +1152,9 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
+  // Settled before any package's task starts, so every runner this run
+  // reaches shuffles the same way.
+  pinShuffleSeed();
   main().catch((error) => {
     console.error("Integration run failed:", error);
     Deno.exit(1);

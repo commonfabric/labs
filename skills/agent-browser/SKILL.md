@@ -44,7 +44,8 @@ Every browser automation follows this pattern:
 1. Navigate: `agent-browser open <url>`
 2. Snapshot: `agent-browser snapshot -i`
 3. Interact: use refs to click, fill, select, or inspect
-4. Re-snapshot after navigation or DOM change
+4. Re-snapshot before the next interaction — refs are renumbered by every
+   snapshot
 
 ```bash
 agent-browser open https://example.com/form
@@ -201,12 +202,20 @@ commands unless your local install documents them explicitly.
 
 ## Ref Lifecycle
 
-Refs (`@e1`, `@e2`, and so on) are invalidated when the page changes. Always
-re-snapshot after:
+Refs (`@e1`, `@e2`, and so on) are invalidated by **the next snapshot**, whether
+or not the page changed. Read the ref immediately before the command that uses
+it, and do not carry one across another snapshot, a `wait`, or a screenshot.
+
+A page change is the obvious case, and these all require a fresh snapshot:
 
 - clicking links or buttons that navigate
 - form submissions
 - dynamic content loading such as dropdowns or modals
+
+The quieter case is a snapshot taken for any other reason — to check what the
+last one showed, or in a different snapshot mode, since the modes number
+independently. Reusing a ref across one does not error: it addresses a different
+element and the command appears to succeed.
 
 ```bash
 agent-browser click @e5

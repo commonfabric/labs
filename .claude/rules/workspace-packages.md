@@ -6,11 +6,32 @@ paths:
 
 # Workspace package configuration
 
+## A test task hands its runner a seed to shuffle by
+
+Every `deno test` in the workspace carries
+`--shuffle=$(deno task -q test-seed)`, which resolves to the root `test-seed`
+task from any directory in the checkout. `deno task check-test-shuffle` fails
+on one that does not, and on a package whose `test` task reaches no runner it
+knows shuffles.
+
+Two things about that spelling are easy to get wrong. Write it exactly, since
+`tasks/test-topology/deno-task.ts` recognizes that one string and takes it out
+before reading the rest of the task; any other command substitution makes the
+task unreadable, and the package loses the per-file granularity a
+continuous-integration lane selects with. And a package that runs its tests
+through a script of its own needs the script named in `RUNNERS` in
+`tasks/check-test-shuffle.ts`, saying whether it shuffles in its own code or
+forwards the flag to the `deno test` it starts.
+[TESTING.md](../../docs/development/TESTING.md#every-test-run-shuffles-its-order)
+covers what the shuffle reaches.
+
 ## Every package needs its own test task
 
 A package's `deno.jsonc` must contain a `"tasks"` object with a `"test"` entry.
-Use `"deno test"` when the package has tests, or `"echo 'No tests defined.'"`
-when it does not have them yet.
+When the package has tests, that entry runs `tasks/run-member-tests.ts` over a
+`"deno-test"` entry that runs the tests themselves — a `deno test` for most
+packages, or a runner of the package's own; when it does not have them yet, it
+is `"echo 'No tests defined.'"`.
 
 This is not a tidiness rule. The root test runner (`tasks/test.ts`) walks every
 workspace member and runs `deno task test` in each. A member with no `test`

@@ -25,7 +25,7 @@ separately, under
 | Class         | Status                                                     | Evidence boundary                                                                                                                                                                                                                                                                                                         |
 | ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Core batch    | implemented; provisional conformance                       | Package unit tests cover configuration, lifecycle, context management, tools, handles, attachment integrity, artifacts, resume, and diagnostics. Real Docker, Fabric, and other external-runtime behavior requires integration tests.                                                                                     |
-| Delegation    | implemented; experimental                                  | Unit tests cover profiles, fresh child context, retained child artifacts, and sanitized/structured return handling. Only serial single-child orchestration is supported.                                                                                                                                                  |
+| Delegation    | implemented; experimental                                  | Unit tests cover profiles, fresh child context, retained child artifacts, and sanitized/structured return handling. Children run together only when one model turn starts them; nothing schedules or budgets them across turns.                                                                                           |
 | Interactive   | implemented; experimental                                  | NDJSON v1 and SQLite-backed sessions/turns/events/replay are covered by package and Loom adapter tests, including crash-restart regressions that reconstruct a service from the same SQLite store at each mid-tool fault point and assert the transcript the next turn is given. The protocol is not yet declared stable. |
 | CFC transport | partial; reduced assurance in current product integrations | Prompt-slot, invocation-context, model-influence, mediation, and deny/recovery behavior are tested. Loom and Pattern Factory still select `observe` because trusted mediation is not wired end to end.                                                                                                                    |
 
@@ -229,10 +229,10 @@ never its data. It prefers the session Fabric's declared shape when available
 and otherwise uses a harness-captured schema, recursively removes value-bearing
 and descriptive schema fields, bounds disclosed property names, and scrubs bare
 Fabric identifiers. A referent that declares no schema and holds a SQLite
-database handle reports that database's tables and its columns' labels through
-the same reduction, which is the one value the tool reads. An unknown or
-shapeless token remains an ordinary bounded tool result rather than a
-dereference path.
+database handle reports that database's tables, and the distinct labels its
+columns carry, through the same reduction, which is the one value the tool
+reads. An unknown or shapeless token remains an ordinary bounded tool result
+rather than a dereference path.
 
 `run_pattern` accepts at most 256 KiB of inline source. It resolves whole-string
 LLM-friendly link inputs to live cells in the configured space and foreign

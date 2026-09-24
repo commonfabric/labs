@@ -1,10 +1,12 @@
 import { fromFileUrl } from "@std/path";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { pino } from "pino";
 import { Identity } from "@commonfabric/identity";
 import { InboxStore } from "@commonfabric/memory/inbox-store";
 import { InboxClient } from "@commonfabric/runner/inbox";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
+import { createRouter } from "../lib/create-app.ts";
 import { createInboxRouter } from "../routes/inbox/router.ts";
 
 function terminate(child: Deno.ChildProcess) {
@@ -79,18 +81,33 @@ async function startInboxProcess(
   }
 }
 
-async function fixture() {
+async function fixture(publicHost?: string) {
   const directory = await Deno.makeTempDir();
   let store = new InboxStore(`${directory}/inbox.sqlite`);
   const owner = await Identity.fromPassphrase("http-inbox-owner");
   const sender = await Identity.fromPassphrase("http-inbox-sender");
   const stranger = await Identity.fromPassphrase("http-inbox-stranger");
-  const router = createInboxRouter({ store: () => Promise.resolve(store) });
+  const router = createInboxRouter({
+    store: () => Promise.resolve(store),
+    host: publicHost,
+  });
+  const diagnostics: Record<string, unknown>[] = [];
+  const logger = pino({ level: "warn" }, {
+    write(message) {
+      diagnostics.push(JSON.parse(message));
+    },
+  });
+  const mounted = createRouter();
+  mounted.use("*", async (c, next) => {
+    c.set("logger", logger);
+    await next();
+  });
+  mounted.route("/", router);
   const http = Deno.serve({
     hostname: "127.0.0.1",
     port: 0,
     onListen: () => {},
-  }, (request) => router.fetch(request));
+  }, (request) => mounted.fetch(request));
   const host = `http://127.0.0.1:${http.addr.port}`;
   const client = (signer: Identity) => new InboxClient({ host, signer });
   return {
@@ -99,6 +116,7 @@ async function fixture() {
     stranger,
     host,
     client,
+    diagnostics,
     reopen() {
       store.close();
       store = new InboxStore(`${directory}/inbox.sqlite`);
@@ -342,6 +360,41 @@ describe("inbox HTTP and SDK", () => {
       });
       expect(preflight.headers.get("Access-Control-Allow-Origin")).toBeNull();
       await preflight.body?.cancel();
+    } finally {
+      await f.close();
+    }
+  });
+  it("logs the configured authority when it refuses a proof", async () => {
+    const f = await fixture("https://public.example");
+    try {
+      const url = new URL("/api/inbox/enable", f.host);
+      const headers = await signFirstPartyHttpRequest({
+        url,
+        method: "POST",
+        body: "{}",
+        signer: f.owner,
+      });
+      const refused = await fetch(url, { method: "POST", headers, body: "{}" });
+      expect(refused.status).toBe(401);
+      await refused.body?.cancel();
+      expect(f.diagnostics).toHaveLength(1);
+      expect(f.diagnostics[0]).toMatchObject({
+        path: "/api/inbox/enable",
+        method: "POST",
+        authority: "https://public.example",
+        error: "Invalid signature",
+        msg: "Rejected unauthenticated first-party HTTP request",
+      });
+      const logged = JSON.stringify(f.diagnostics);
+      const signed = [...headers].filter(([name]) =>
+        name.startsWith("cf-request-")
+      );
+      expect(signed.map(([name]) => name).sort()).toEqual([
+        "cf-request-auth",
+        "cf-request-body-sha256",
+        "cf-request-proof",
+      ]);
+      for (const [, value] of signed) expect(logged).not.toContain(value);
     } finally {
       await f.close();
     }

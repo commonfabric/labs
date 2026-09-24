@@ -120,6 +120,21 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/profile-inbox-piece-break.md",
   },
   {
+    // The record's scope moved from the value onto the handle once the schema
+    // generator stopped dropping a scope wrapper reached through an alias. The
+    // recorded contracts carry no scope at all; the argument now caps the
+    // handle at `user`, which every record the `agent` builtin creates meets.
+    pattern: "system/agent-run.tsx",
+    baselines: [
+      "20260920T164352Z-nTSuqgfjRzkwXIgf",
+      "20260920T170445Z-TMoN6scQaXVlTvPW",
+    ],
+    paths: ["argument.run"],
+    reason:
+      "the run argument's scope moved onto the handle as a user cap, which the recorded unscoped contracts read as a changed asCell entry; the linked records are user-scoped documents the cap admits",
+    record: "docs/history/agent-run-record-handle-scope-break.md",
+  },
+  {
     // The same ruling seen from the profile itself: the proof names the
     // first of the two fields that left.
     pattern: "system/profile-home.tsx",
@@ -179,9 +194,23 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.myProfile",
       "argument.rooms",
       "result.rooms",
+      "result.profileDraft",
+      "result.messageDraft",
+      "result.hostMessageDraft",
+      "result.roomDraft",
+      "result.setProfileDraft",
+      "result.setMessageDraft",
+      "result.setHostMessageDraft",
+      "result.setRoomDraft",
+      "result.saveProfile",
+      "result.sendTrustedMessage",
+      "result.addTrustedRoom",
+      "result.hostLookalikeSend",
     ],
     reason:
-      "the declared `Default<{}>` of the admin registry, the profile, and the room list is honored where the recorded contracts carry no default",
+      "the declared `Default<{}>` of the admin registry, the profile, and the room list is honored where the recorded contracts carry no default" +
+      "; and the drafts removed, with the trusted streams taking the text a " +
+      "`cf-submit-input` click carries (docs/history/cfc-chat-demo-submit-input-break.md)",
     record: "docs/history/admin-registry-default-honored-break.md",
   },
   {
@@ -714,5 +743,150 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "seeds one labeled cell beside one unlabeled cell, which a clause over " +
       "both defeated.",
     record: "docs/history/pattern-result-ifc-contract-break.md",
+  },
+  {
+    // The Send verb's event opens, the same break the roster Join verbs took
+    // above: `Record<PropertyKey, never>` compiled to a closed empty object,
+    // which the runner's closed-world gate enforces, so the Send button's
+    // serialized DOM event was refused and no message could be sent. `void`
+    // is a different recorded contract for the stream; nothing held state
+    // under the old one.
+    pattern: "profile-group-chat/main.tsx",
+    baselines: ["20260729T022742Z-VIR19UFKyKrauX_B"],
+    paths: ["result.sendMessage"],
+    reason:
+      "the Send verb's closed empty event refused every rendered click; re-declared void",
+    record: "docs/history/chat-send-event-opened.md",
+  },
+  {
+    // The same break in the scoped chat, same record.
+    pattern: "scoped-group-chat/main-plain-inputs.tsx",
+    baselines: [
+      "20260729T022742Z-Z-pkp9K1p6P_byR_",
+      "20260909T184756Z-M530BSuyTtIuZ_9J",
+    ],
+    paths: ["result.sendMessage"],
+    reason:
+      "the Send verb's closed empty event refused every rendered click; re-declared void",
+    record: "docs/history/chat-send-event-opened.md",
+  },
+  {
+    // The same break in the scoped chat's writable-input variant, same record.
+    pattern: "scoped-group-chat/main-with-writable-inputs.tsx",
+    baselines: [
+      "20260729T022742Z-_XyScfA2QEj14JnS",
+      "20260909T184756Z-NMt89YDsQnt_urES",
+    ],
+    paths: ["result.sendMessage"],
+    reason:
+      "the Send verb's closed empty event refused every rendered click; re-declared void",
+    record: "docs/history/chat-send-event-opened.md",
+  },
+  {
+    // The everyone-is-admin flag's `true` branch gains the `writeAuthorizedBy`
+    // claim its type declares, which a canonical alias formatting its payload
+    // without a node had dropped. The proof descends to the flag here.
+    pattern: "cfc-group-chat-demo/main.tsx",
+    baselines: ["20260922T020444Z-IRoEgfpuUdf-xwvE"],
+    paths: [
+      "argument.adminRegistry.everyoneIsAdmin",
+      "result.adminRegistry.everyoneIsAdmin",
+      "result.profileDraft",
+      "result.messageDraft",
+      "result.hostMessageDraft",
+      "result.roomDraft",
+      "result.setProfileDraft",
+      "result.setMessageDraft",
+      "result.setHostMessageDraft",
+      "result.setRoomDraft",
+      "result.saveProfile",
+      "result.sendTrustedMessage",
+      "result.addTrustedRoom",
+      "result.hostLookalikeSend",
+    ],
+    reason:
+      "the everyone-is-admin flag's `true` branch carries the write claim its type declares" +
+      "; and the drafts removed, with the trusted streams taking the text a " +
+      "`cf-submit-input` click carries (docs/history/cfc-chat-demo-submit-input-break.md)",
+    record: "docs/history/everyone-admin-write-claim-restored-break.md",
+  },
+  {
+    // The same break; against this older contract the proof blames the whole
+    // registry rather than descending to the flag.
+    pattern: "cfc-group-chat-demo/main.tsx",
+    baselines: ["20260918T041802Z-YAJU948xc_bQwY0H"],
+    paths: [
+      "argument.adminRegistry",
+      "result.adminRegistry",
+      "result.profileDraft",
+      "result.messageDraft",
+      "result.hostMessageDraft",
+      "result.roomDraft",
+      "result.setProfileDraft",
+      "result.setMessageDraft",
+      "result.setHostMessageDraft",
+      "result.setRoomDraft",
+      "result.saveProfile",
+      "result.sendTrustedMessage",
+      "result.addTrustedRoom",
+      "result.hostLookalikeSend",
+    ],
+    reason:
+      "the everyone-is-admin flag's `true` branch carries the write claim its type declares" +
+      "; and the drafts removed, with the trusted streams taking the text a " +
+      "`cf-submit-input` click carries (docs/history/cfc-chat-demo-submit-input-break.md)",
+    record: "docs/history/everyone-admin-write-claim-restored-break.md",
+  },
+  {
+    // The CFC group chat demo's fields become `cf-submit-input`s, so Enter
+    // gives the trusted gesture its writes require. The drafts and their
+    // setter streams are removed, and the trusted streams take the submitted
+    // text as their event. The older baselines carry this break in the
+    // entries above that already name them.
+    pattern: "cfc-group-chat-demo/main.tsx",
+    baselines: ["20260923T205929Z-mHuHgI9LlBLCu53t"],
+    paths: [
+      "result.profileDraft",
+      "result.messageDraft",
+      "result.hostMessageDraft",
+      "result.roomDraft",
+      "result.setProfileDraft",
+      "result.setMessageDraft",
+      "result.setHostMessageDraft",
+      "result.setRoomDraft",
+      "result.saveProfile",
+      "result.sendTrustedMessage",
+      "result.addTrustedRoom",
+      "result.hostLookalikeSend",
+    ],
+    reason:
+      "the drafts removed, with the trusted streams taking the text a `cf-submit-input` click carries",
+    record: "docs/history/cfc-chat-demo-submit-input-break.md",
+  },
+  {
+    // Each `Panel` kind gains an optional `addedBy` DID. The proof does not
+    // apply the open-object evolution allowance inside a union branch, so a
+    // stored panel whose `addedBy` held a non-string reads as a refused
+    // alternative.
+    pattern: "loom/main.tsx",
+    baselines: [
+      "20260920T232507Z-_ewvPy8qDJYL47km",
+      "20260922T052256Z--2Q9ESzxSenSTer9",
+    ],
+    paths: ["argument.panels[]"],
+    reason:
+      "a Loom panel's new optional addedBy reads as a narrowed union branch under baselines that never had the property",
+    record: "docs/history/loom-panel-added-by-break.md",
+  },
+  {
+    // Each `Panel` kind gains an optional `addedByProfile`, whose write
+    // contract and label are its type. The proof does not apply the
+    // open-object evolution allowance inside a union branch.
+    pattern: "loom/main.tsx",
+    baselines: ["20260923T232217Z-9unt7nppL26FihSK"],
+    paths: ["argument.panels[]"],
+    reason:
+      "a Loom panel's new optional addedByProfile reads as a narrowed union branch under the baseline recorded before it",
+    record: "docs/history/loom-panel-adder-profile-break.md",
   },
 ];

@@ -12,20 +12,25 @@ import {
 } from "../contracts/research-schema.ts";
 
 import {
+  HARNESS_RESEARCH_HANDLE_TYPE,
   HARNESS_RESEARCH_RUN_TYPE,
   type HarnessResearchCfcProjection,
+  type HarnessResearchHandleValue,
   type HarnessResearchPurpose,
   type HarnessResearchResult,
   type HarnessResearchRunSummary,
+  isHarnessResearchHandleValue,
 } from "../contracts/research.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import { errorMessage } from "../error-message.ts";
-import { RESEARCH_REUSE_GUIDANCE } from "../research/reuse.ts";
+import { resolveReferentToken } from "../handle-table.ts";
 import {
   createHarnessResearchCfcProjection,
   HarnessResearchError,
   type HarnessResearchRecord,
+  type HarnessResearchReply,
 } from "../research/runner.ts";
+import { wellKnownGrantLabel } from "../well-known-grants.ts";
 import { describeHandleForResearch } from "./describe-handle.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 
@@ -37,7 +42,7 @@ export interface ResearchToolInput {
   /** Orient to the user goal or investigate a follow-up question. */
   purpose?: HarnessResearchPurpose;
 
-  /** Earlier admitted research output to follow up on. */
+  /** The research handle of earlier admitted research to build on. */
   followUpTo?: string;
 }
 
@@ -51,6 +56,13 @@ export interface ResearchToolSuccessOutput {
 
   /** Host-admitted implementation kit given to the caller. */
   kit: HarnessResearchResult;
+
+  /**
+   * The handle minted for these findings, absent in a run that keeps no
+   * handle table. Name it in a delegation to hand the findings to the child,
+   * or in `followUpTo` to build on them.
+   */
+  researchHandle?: string;
 
   /** How the caller must treat the kit's admission status. */
   guidance: string;
@@ -96,7 +108,7 @@ export const researchToolDescriptor: HarnessToolDescriptor = {
   toolId: "research",
   title: "Research Common Fabric",
   description:
-    "Research Common Fabric documentation, skills, indexed pieces, and available data in service of the user goal. Use orient for an initial approach or answer (default) for a question. Both can inspect source and return useful code or invocations. Build on prior findings with followUpTo; ask for what remains unclear instead of commissioning another whole app. Prefer composition of existing pieces and a small reusable addition where needed. Indexed source and the private transcript remain in artifacts. This tool does not search the web.",
+    "Research Common Fabric documentation, skills, indexed pieces, and available data in service of the user goal. Use orient for an initial approach or answer (default) for a question. Both can inspect source and return useful code or invocations. Build on prior findings with followUpTo; ask for what remains unclear instead of commissioning another whole app. Prefer composition of existing pieces and a small reusable addition where needed. Indexed source and the private transcript remain in artifacts. The result names a research handle (a cfh:v: token) holding the findings: name it in a delegate_task goal so a child whose profile carries describe_handle (pattern-author) can read them instead of researching again, or in followUpTo; a child without that tool holds it as an opaque token. This tool does not search the web.",
   effectClass: "read",
   inputSchema: {
     type: "object",
@@ -119,7 +131,7 @@ export const researchToolDescriptor: HarnessToolDescriptor = {
         minLength: 1,
         maxLength: 500,
         description:
-          "Existing researchRunId or outputId to use as starting context. Only unresolved facts need new research.",
+          "A research handle (cfh:v: token) whose findings this call starts from: its still-held bindings count as described, and its sources count as cited where they read back unchanged. Only unresolved facts need new research.",
       },
     },
     required: ["task"],
@@ -132,6 +144,7 @@ export const researchToolDescriptor: HarnessToolDescriptor = {
         outputId: { type: "string" },
         status: { type: "string", enum: ["ok"] },
         kit: RESEARCH_KIT_SCHEMA,
+        researchHandle: { type: "string" },
         researchRecord: { type: "object" },
         guidance: { type: "string" },
         cfc: RESEARCH_CFC_SCHEMA,
@@ -162,13 +175,25 @@ export const researchToolDescriptor: HarnessToolDescriptor = {
   tags: ["fabric", "docs", "skills", "patterns", "research"],
 };
 
+/** What a research handle holds for `summary`: its kit, records and label. */
+const researchHandleValue = (
+  summary: HarnessResearchRunSummary,
+  cfc: HarnessResearchCfcProjection,
+): HarnessResearchHandleValue => ({
+  type: HARNESS_RESEARCH_HANDLE_TYPE,
+  researchRunId: summary.researchRunId,
+  kit: structuredClone(summary.kit),
+  confirmedPatterns: structuredClone([...summary.confirmedPatterns]),
+  describedHandles: structuredClone([...summary.describedHandles]),
+  cfc: structuredClone(cfc),
+});
+
 /** Stable model-facing explanation for an internal research failure. */
 const RESEARCH_FAILURE_MESSAGE =
   "research failed before returning an implementation kit";
 
 /** Caller guidance derived from the host-admitted kit status and selections. */
 export const researchKitGuidance = (kit: HarnessResearchResult): string =>
-  (kit.patterns.length > 0 ? `${RESEARCH_REUSE_GUIDANCE} ` : "") +
   (kit.status === "incomplete"
     ? "This research is incomplete. Do not present or implement unsupported parts as complete. "
     : "") +
@@ -218,25 +243,38 @@ export const researchTool: HarnessToolDefinition<
     if (context.runResearch === undefined) {
       return errorOutput("research requires the host research runner");
     }
+    // A follow-up names a research handle this run holds; a token this table
+    // does not hold, or holds as something other than research, is refused.
+    const priorReferent = input.followUpTo === undefined ||
+        context.handleTable === undefined
+      ? undefined
+      : resolveReferentToken(context.handleTable, input.followUpTo);
+    const priorResearch = priorReferent?.kind === "research" &&
+        isHarnessResearchHandleValue(priorReferent.value)
+      ? priorReferent.value
+      : undefined;
+    if (input.followUpTo !== undefined && priorResearch === undefined) {
+      return errorOutput(
+        "followUpTo must name a research handle this run holds",
+      );
+    }
+    // Only the research itself is a research failure. Retaining the kit and
+    // minting its handle come after, outside this catch, so a fault there
+    // surfaces as the fault it is rather than as a kit that was never found.
+    let reply: HarnessResearchReply;
     try {
-      if (
-        input.followUpTo !== undefined &&
-        !(context.researchRuns ?? []).some((run) =>
-          run.researchRunId === input.followUpTo ||
-          run.outputId === input.followUpTo
-        )
-      ) {
-        return errorOutput(
-          "followUpTo must name an admitted research result available to this run",
-        );
-      }
       const corpus = context.getDocsCorpus === undefined
         ? undefined
         : await context.getDocsCorpus();
       const generalTokens = (context.handleTable?.entries ?? [])
         .filter((entry) => entry.capability === undefined)
         .map((entry) => entry.token);
-      const reply = await context.runResearch({
+      const handleNames = Object.fromEntries(
+        (context.wellKnownGrants ?? [])
+          .filter((grant) => generalTokens.includes(grant.token))
+          .map((grant) => [grant.token, wellKnownGrantLabel(grant)]),
+      );
+      reply = await context.runResearch({
         task: input.task,
         ...(context.researchGoal === undefined
           ? {}
@@ -251,39 +289,17 @@ export const researchTool: HarnessToolDefinition<
           ? { getPatternIndex: context.getPatternIndexClient }
           : {}),
         handleTokens: generalTokens,
+        ...(Object.keys(handleNames).length > 0 ? { handleNames } : {}),
         inputCells: context.inputCells ?? [],
         describeHandle: async (token) =>
           await describeHandleForResearch(context, { token }),
         ...(context.researchTaskCfcLabel !== undefined
           ? { taskCfcLabel: context.researchTaskCfcLabel }
           : {}),
-        priorResearchRuns: context.researchRuns ?? [],
+        ...(priorResearch !== undefined ? { priorResearch } : {}),
         attachedPatterns: (context.patternRefs ?? []).map((ref) => ref.record),
         ...(context.signal !== undefined ? { signal: context.signal } : {}),
       });
-      const summary: HarnessResearchRunSummary = {
-        type: HARNESS_RESEARCH_RUN_TYPE,
-        researchRunId: outputId,
-        outputId,
-        kit: structuredClone(reply.kit),
-        confirmedPatterns: reply.record.confirmedPatterns.map((record) =>
-          structuredClone(record)
-        ),
-        describedHandles: reply.record.describedHandles.map((record) =>
-          structuredClone(record)
-        ),
-        cfc: structuredClone(reply.record.cfc),
-        completedAt: context.now(),
-      };
-      await context.recordResearchRun?.(summary);
-      return {
-        outputId,
-        status: "ok",
-        kit: reply.kit,
-        guidance: researchKitGuidance(reply.kit),
-        cfc: reply.record.cfc,
-        researchRecord: reply.record,
-      };
     } catch (error) {
       await context.recordResearchFailure?.();
       return {
@@ -294,5 +310,38 @@ export const researchTool: HarnessToolDefinition<
           : {}),
       };
     }
+    const summary: HarnessResearchRunSummary = {
+      type: HARNESS_RESEARCH_RUN_TYPE,
+      researchRunId: outputId,
+      outputId,
+      kit: structuredClone(reply.kit),
+      confirmedPatterns: reply.record.confirmedPatterns.map((record) =>
+        structuredClone(record)
+      ),
+      describedHandles: reply.record.describedHandles.map((record) =>
+        structuredClone(record)
+      ),
+      cfc: structuredClone(reply.record.cfc),
+      completedAt: context.now(),
+    };
+    await context.recordResearchRun?.(summary);
+    // Minted under the kit's own label, so a reader of the handle observes
+    // exactly what a reader of this result observes. Readable by a child
+    // whose profile carries describe_handle; another holds it opaque.
+    const researchHandle = context.mintResearchHandle === undefined
+      ? undefined
+      : await context.mintResearchHandle(
+        researchHandleValue(summary, reply.record.cfc),
+        structuredClone(reply.record.cfc.outputLabel),
+      );
+    return {
+      outputId,
+      status: "ok",
+      kit: reply.kit,
+      ...(researchHandle !== undefined ? { researchHandle } : {}),
+      guidance: researchKitGuidance(reply.kit),
+      cfc: reply.record.cfc,
+      researchRecord: reply.record,
+    };
   },
 };

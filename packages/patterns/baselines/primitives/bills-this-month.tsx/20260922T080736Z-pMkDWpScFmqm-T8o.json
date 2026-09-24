@@ -1,0 +1,192 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "BillHeader": {
+        "properties": {
+          "received_at": {
+            "default": "",
+            "type": "string"
+          },
+          "sender": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "sender"
+        ],
+        "type": "object"
+      },
+      "BillTransaction": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "category_primary": {
+            "default": "",
+            "type": "string"
+          },
+          "date": {
+            "default": "",
+            "type": "string"
+          },
+          "merchant_name": {
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "merchant_name",
+          "amount"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "headers": {
+        "default": [],
+        "description": "This month's mail headers, as a reader returned them.",
+        "items": {
+          "$ref": "#/$defs/BillHeader"
+        },
+        "type": "array"
+      },
+      "transactions": {
+        "default": [],
+        "description": "This month's bank rows, as a reader returned them.",
+        "items": {
+          "$ref": "#/$defs/BillTransaction"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "primitives/bills-this-month.tsx",
+  "resultSchema": {
+    "$defs": {
+      "PairedBill": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "date": {
+            "type": "string"
+          },
+          "matchedOn": {
+            "description": "The identifying words both sides shared, joined with commas.",
+            "type": "string"
+          },
+          "merchant": {
+            "type": "string"
+          },
+          "sender": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "sender",
+          "merchant",
+          "amount",
+          "date",
+          "matchedOn"
+        ],
+        "type": "object"
+      },
+      "UnmatchedPayment": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "date": {
+            "type": "string"
+          },
+          "merchant": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "merchant",
+          "amount",
+          "date"
+        ],
+        "type": "object"
+      },
+      "UnpaidBill": {
+        "properties": {
+          "received_at": {
+            "type": "string"
+          },
+          "sender": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "sender",
+          "received_at"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "paid": {
+        "items": {
+          "$ref": "#/$defs/PairedBill"
+        },
+        "type": "array"
+      },
+      "paidCount": {
+        "type": "number"
+      },
+      "unmatchedCount": {
+        "type": "number"
+      },
+      "unmatchedPayments": {
+        "items": {
+          "$ref": "#/$defs/UnmatchedPayment"
+        },
+        "type": "array"
+      },
+      "unpaid": {
+        "items": {
+          "$ref": "#/$defs/UnpaidBill"
+        },
+        "type": "array"
+      },
+      "unpaidCount": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "paid",
+      "unpaid",
+      "unmatchedPayments",
+      "paidCount",
+      "unpaidCount",
+      "unmatchedCount",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

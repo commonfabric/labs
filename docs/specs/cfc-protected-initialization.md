@@ -21,6 +21,9 @@ labels. Preparation permits that single attempt only when its final reference
 and complete stored CFC envelope remain unchanged. Extra attempts, applied
 writes, and changed policy require ordinary writer authorization. This cannot
 adopt an unprotected reference. Streams retain their ordinary declaration path.
+The envelope's version is not a change: a version-1 envelope spells the same
+labels as its version-2 rewrite, so a preserved output leaves it in version 1
+and the document migrates on its next authorized write.
 
 Lowering preserves authored writer-binding syntax through a cell constructor,
 its `.for()` call, and stable local bindings. Generated lift-result and inferred
@@ -49,6 +52,34 @@ one commit. A failed validation or authorization leaves the prior state intact.
 Source-update delegations continue to use `PreparedSourceUpdate`; initialization
 neither replaces that authority nor authorizes ordinary input rebinding.
 
+## References into a sub-pattern argument
+
+A collection builtin — `map`, `filter`, `flatMap` — instantiates one sub-pattern
+per entry of the list it runs over, and stages that entry into the new piece's
+argument as a link to the entry's own cell, beside a link to the list. The
+builtin hands the piece a reference; it writes nothing of what the entry holds.
+The runtime records each such field as a reference initialization when it stages
+the argument, at the builtin's request, and only where the staged value is a
+link to a cell that is not a write redirect. A field holding a value receives no
+record.
+
+Preparation permits the write on the terms above: the slot must be absent before
+the transaction, and the final value must be the recorded link. A link to
+another cell staged over a field that holds one is a modification and requires
+the field's ordinary writer. The same link staged again, as a runtime starting a
+piece it finds set up stages its argument, lands no write at the slot and is
+permitted: the slot keeps its link, and no policy stored on it is disturbed.
+
+The receiving slot's schema is the entry's own, so it can declare integrity the
+entry's writer adds, such as authorship by the current principal. Staging a
+link writes none of that content, so preparation mints none of that integrity
+for the principal staging it: not on the slot's declared label, not on the
+link's label, and not toward an integrity floor at the slot. The same holds for
+a label derived for the link's source when that source is itself a reference
+staged in the transaction. The link carries its source's label and the
+`LinkReference` a link write mints, so a reader reaching the entry through the
+link sees the entry's own authorship.
+
 ## Authorization and transaction evidence
 
 An initialization policy input is authoritative only when the runtime records it
@@ -62,11 +93,16 @@ whole-object deletion followed by a child write cannot turn an existing field
 into a new field. The exact-value check reads the transaction's final value,
 rather than reconstructing it from overlapping write details.
 
-The permission waives only `writeAuthorizedBy` for that initialization. Owner
-binding, represented-principal integrity, confidentiality, required integrity,
-schema compatibility, and storage authorization remain enforced. Stored policy
-is read and merged through ordinary CFC preparation; an unreadable envelope is
-never treated as absent.
+The permission waives `writeAuthorizedBy` and a UI contract's trusted-event
+requirement for that initialization, the two declarations that name who may
+write a value. A stored declaration of the same kind on the field or an ancestor
+refuses its waiver: a stored writer binding keeps its writer requirement, and a
+stored UI contract keeps its trusted-event requirement, while a declaration the
+candidate schema introduces beside it is waived. Owner binding,
+represented-principal integrity, confidentiality, required integrity, schema
+compatibility, and storage authorization remain enforced. Stored policy is read
+and merged through ordinary CFC preparation; an unreadable envelope is never
+treated as absent.
 
 ## Existing unprotected values
 

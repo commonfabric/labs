@@ -13,7 +13,8 @@
     "typescript": "npm:typescript@6.0.3"
   },
   "tasks": {
-    "test": "deno test --no-check --parallel --allow-read --allow-write --allow-env test/**/*.test.ts",
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --parallel --allow-read --allow-write --allow-env test/**/*.test.ts",
     "check": "deno check src/**/*.ts",
     "fmt": "deno fmt src/ test/**/*.test.ts",
     "lint": "deno lint src/ test/"

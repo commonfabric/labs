@@ -24,8 +24,10 @@ import {
 import type {
   Manifest,
   ManifestEntry,
+  ScoreInputs,
   UnschedulableEntry,
 } from "./manifest.ts";
+import { value } from "./score.ts";
 
 /** Why one identity is in the run. */
 export type SelectionReason =
@@ -200,6 +202,13 @@ export interface PlanInput {
 
   /** The hard bound on a lane's work step. Defaults to the policy's dial. */
   boundSeconds?: number;
+
+  /**
+   * The units whose runner runs every identity in them whatever it is asked,
+   * each written as `<suite>\t<unit>`. `wholeUnits()` builds this set from the
+   * topology.
+   */
+  wholeUnits: ReadonlySet<string>;
 }
 
 /**
@@ -291,6 +300,137 @@ function fixedCost(
 /** How a lane names one unit of one suite among the units it has opened. */
 function openedUnit(entry: ManifestEntry): string {
   return `${entry.suite}\t${entry.unit}`;
+}
+
+/**
+ * What must run, keyed as the packer places it. A test that must run makes its
+ * whole unit run. When two tests of one unit must run for different reasons,
+ * the unit is placed under the first reason. The plan still reports each test
+ * under its own reason.
+ */
+function mandatoryPlaced(
+  mandatory: ReadonlyMap<string, SelectionReason>,
+  placedAs: (key: string) => string,
+): Map<string, SelectionReason> {
+  const placed = new Map<string, SelectionReason>();
+  for (const [key, reason] of mandatory) {
+    const at = placedAs(key);
+    if (!placed.has(at)) placed.set(at, reason);
+  }
+  return placed;
+}
+
+/** The corpus with each whole unit merged, and the maps that expand it. */
+export interface Folding {
+  entries: ManifestEntry[];
+
+  /** For each entry standing for a whole unit, the entries it stands for. */
+  members: Map<string, ManifestEntry[]>;
+
+  /** For each identity inside a whole unit, the entry standing for it. */
+  standsFor: Map<string, string>;
+}
+
+/**
+ * The corpus, with each unit its runner runs whole merged into one entry.
+ *
+ * A lane that picks any test in such a unit runs every test in it. The packer
+ * therefore places the unit as one choice. The plan it writes lists the unit's
+ * tests again, so the manifest, the records, and the plan all name tests rather
+ * than units.
+ *
+ * The merged entry combines its tests as follows:
+ *
+ * - Cost is the sum, because running the unit runs every test in it.
+ * - Catches are the sum, because the unit catches whenever any of its tests
+ *   does. Two tests catching one commit count twice, which favors running
+ *   the unit.
+ * - Sources and churn are the largest, because an entry records how many
+ *   distinct sources saw a catch, not which ones.
+ * - Flake rate and repeat count are the largest, because a test disagreeing
+ *   with itself makes the whole invocation disagree.
+ * - The last run is the oldest of the tests' last runs, and absent when any
+ *   test has never run.
+ * - Score is computed from the combined inputs as of the day the manifest
+ *   was written, which is the date of every other score in it.
+ *
+ * A unit holding one identity keeps that identity's entry. A test the manifest
+ * lists twice counts once.
+ */
+export function foldWholeUnits(
+  manifest: Manifest,
+  wholeUnits: ReadonlySet<string>,
+): Folding {
+  const entries: ManifestEntry[] = [];
+  const grouped = new Map<string, ManifestEntry[]>();
+  const keys = new Set<string>();
+  for (const entry of manifest.entries) {
+    const key = testIdentityKey(entry.test);
+    keys.add(key);
+    const unit = openedUnit(entry);
+    if (!wholeUnits.has(unit)) {
+      entries.push(entry);
+      continue;
+    }
+    const group = grouped.get(unit) ?? [];
+    if (group.some((member) => testIdentityKey(member.test) === key)) continue;
+    grouped.set(unit, [...group, entry]);
+  }
+  const members = new Map<string, ManifestEntry[]>();
+  const standsFor = new Map<string, string>();
+  const today = manifest.generatedAt.slice(0, "YYYY-MM-DD".length);
+  for (const group of grouped.values()) {
+    const first = group[0]!;
+    if (group.length === 1) {
+      entries.push(first);
+      continue;
+    }
+    const latest = (days: (string | undefined)[]) =>
+      days.filter((day): day is string => day !== undefined).sort().at(-1);
+    const caught = latest(group.map((entry) => entry.inputs.lastCatch));
+    const inputs: ScoreInputs = {
+      catches: group.reduce((total, entry) => total + entry.inputs.catches, 0),
+      sources: Math.max(...group.map((entry) => entry.inputs.sources)),
+      churn: Math.max(...group.map((entry) => entry.inputs.churn)),
+      ...(caught === undefined ? {} : { lastCatch: caught }),
+    };
+    // The unit last ran when its stalest test did, and never where one of
+    // its tests never has. The exploration pass draws the longest-unrun
+    // entries first, and a unit is as unrun as its least-run test.
+    const days = group.map((entry) => entry.lastRun);
+    const ran = days.includes(undefined)
+      ? undefined
+      : days.filter((day): day is string => day !== undefined).sort()[0];
+    // Named for the suite and the unit. No record carries such a name, because
+    // records are named for tests. The name has to be unique in the corpus,
+    // because two entries sharing a key would leave one of them unplaced.
+    const entry: ManifestEntry = {
+      test: { ...first.test, n: `whole ${first.suite} ${first.unit}` },
+      suite: first.suite,
+      unit: first.unit,
+      cost: group.reduce((total, member) => total + member.cost, 0),
+      score: value(inputs, today),
+      inputs,
+      flakeRate: Math.max(...group.map((member) => member.flakeRate)),
+      repeats: Math.max(...group.map((member) => member.repeats)),
+      ...(ran === undefined ? {} : { lastRun: ran }),
+    };
+    const key = testIdentityKey(entry.test);
+    if (keys.has(key)) {
+      throw new Error(
+        `the merged entry for ${first.suite} ${first.unit} has the key ` +
+          `${key}, which another entry in the corpus already has; one of ` +
+          `the two would never be placed`,
+      );
+    }
+    keys.add(key);
+    entries.push(entry);
+    members.set(key, group);
+    for (const member of group) {
+      standsFor.set(testIdentityKey(member.test), key);
+    }
+  }
+  return { entries, members, standsFor };
 }
 
 /**
@@ -449,7 +589,10 @@ function place(
  * bounded by neither, and reports how far past a lane it went.
  */
 export function plan(input: PlanInput): Plan {
-  const manifest = input.manifest;
+  const folding = foldWholeUnits(input.manifest, input.wholeUnits);
+  const manifest: Manifest = { ...input.manifest, entries: folding.entries };
+  /** The key under which the packer places an identity. */
+  const placedAs = (key: string): string => folding.standsFor.get(key) ?? key;
   const laneCount = input.lanes ?? LANES;
   // Every pass below reaches for a lane to put work in, so there has to
   // be one.
@@ -488,14 +631,16 @@ export function plan(input: PlanInput): Plan {
         entry,
       ) => [testIdentityKey(entry.test), "full" as SelectionReason]),
     )
-    : input.mandatory;
+    : mandatoryPlaced(input.mandatory, placedAs);
 
   // What must not run, unless the change edits the test itself or its
   // suite maps the change onto its unit, in which case it is very likely
   // a fix and must be allowed to prove itself.
   const excluded = new Set<string>();
+  // A test that is held back holds back its whole unit, because running the
+  // unit runs that test.
   for (const held of manifest.withheld) {
-    const key = testIdentityKey(held.test);
+    const key = placedAs(testIdentityKey(held.test));
     if (!requiredOf.has(key)) excluded.add(key);
   }
   for (const entry of manifest.entries) {
@@ -525,10 +670,12 @@ export function plan(input: PlanInput): Plan {
     const key = testIdentityKey(entry.test);
     if (requiredOf.has(key)) continue;
     const counted = !excluded.has(key);
+    // A whole unit counts as the number of identities it holds.
+    const held = folding.members.get(key)?.length ?? 1;
     if (counted) {
       const seen = discretionary.get(entry.suite) ??
         { all: 0, unheld: 0, one: entry };
-      seen.all += 1;
+      seen.all += held;
       discretionary.set(entry.suite, seen);
     }
     // What an empty lane would pay for it: its own corrected time plus
@@ -539,9 +686,13 @@ export function plan(input: PlanInput): Plan {
     if (cost <= bound) continue;
     // That whole figure is what is reported, so whoever reads it is told
     // the number the bound was compared against.
-    unschedulable.push({ test: entry.test, suite: entry.suite, cost });
+    // A whole unit is reported as each of its tests, at the cost of the whole
+    // unit, because the unit is what no lane can hold.
+    for (const member of folding.members.get(key) ?? [entry]) {
+      unschedulable.push({ test: member.test, suite: entry.suite, cost });
+    }
     excluded.add(key);
-    if (counted) discretionary.get(entry.suite)!.unheld += 1;
+    if (counted) discretionary.get(entry.suite)!.unheld += held;
   }
 
   // Read once per suite rather than once per identity, because it is the
@@ -731,7 +882,23 @@ export function plan(input: PlanInput): Plan {
   return {
     lanes: lanes.map((lane) => ({
       lane: lane.lane,
-      selections: lane.selections,
+      selections: lane.selections.flatMap((selection) => {
+        const members = folding.members.get(
+          testIdentityKey(selection.entry.test),
+        );
+        if (members === undefined) return [selection];
+        // On a full run, every test keeps the full run's reason. Otherwise a
+        // test the change made mandatory keeps its own reason, and the unit's
+        // other tests take the unit's reason.
+        return members.map((entry) => ({
+          ...selection,
+          entry,
+          reason: everything
+            ? selection.reason
+            : input.mandatory.get(testIdentityKey(entry.test)) ??
+              selection.reason,
+        }));
+      }),
       projectedSeconds: lane.load,
       capabilities: [...lane.capabilities].sort(),
     })),

@@ -39,9 +39,10 @@ import {
 } from "./contracts/handle-table.ts";
 import type { HarnessFetch } from "./contracts/http-fetch.ts";
 import type { HarnessImageAttachment } from "./contracts/image.ts";
-import type {
-  HarnessResearchCfcProjection,
-  HarnessResearchRunSummary,
+import {
+  type HarnessResearchCfcProjection,
+  type HarnessResearchRunSummary,
+  isHarnessResearchHandleValue,
 } from "./contracts/research.ts";
 import type { TrustedPatternRecord } from "./contracts/trusted-pattern.ts";
 import {
@@ -160,6 +161,7 @@ import {
   defineOwnEntry,
   mintAddressHandle,
   mintReferentHandle,
+  referentDraft,
   resolveHandleRef,
   resolveHandleToken,
   resolveReferentToken,
@@ -173,9 +175,10 @@ import type {
 } from "./model/client.ts";
 import { OpenAICompatibleGatewayModelClient } from "./model/openai-compatible-gateway.ts";
 import { sumHarnessModelUsage } from "./model/usage.ts";
+import { PIECE_OUTPUT_GUIDANCE } from "./piece-output.ts";
+import { isClosedResearchTask } from "./research/closed-task.ts";
 import { collapseSupersededRunPatternDiagnostics } from "./run-pattern-diagnostic-collapse.ts";
 import { collapseSupersededRunPatternSources } from "./run-pattern-source-collapse.ts";
-import { RESEARCH_REUSE_GUIDANCE } from "./research/reuse.ts";
 import {
   type HarnessOpeningResearch,
   isTerminalHarnessRunStatus,
@@ -198,11 +201,12 @@ import {
   validateAndSanitizeSubagentReturn,
 } from "./subagent-return.ts";
 import { createResearchRunner } from "./research/runner.ts";
-import {
-  researchPatternRecords,
-  selectResearchContext,
-} from "./research/context.ts";
+import { researchPatternRecords } from "./research/context.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
+import {
+  PATTERN_AUTHORING_GUIDANCE,
+  PATTERN_COMPOSITION_GUIDANCE,
+} from "./pattern-authoring.ts";
 import { projectHarnessResearchKitForModel } from "./research/model-projection.ts";
 import { isEditFileToolSuccessOutput } from "./tools/edit-file.ts";
 import { isStructuredFileToolErrorOutput } from "./tools/file-errors.ts";
@@ -251,6 +255,14 @@ export interface CreateHarnessPromptLoopOptions
   /** Reserves the last root model turn for a partial answer without tools. */
   finalizeOnTurnLimit?: boolean;
 
+  /**
+   * Requires a library parent to name a UI piece before completing.
+   * Ordinary configured or recorded Fabric sessions require it automatically.
+   * Host-configured structured results use their document contract by default.
+   * Children retain their profile's return contract.
+   */
+  requirePieceOutput?: true;
+
   allowedToolIds?: readonly BuiltinToolId[];
   allowedSubagentProfiles?: readonly HarnessSubagentProfile[];
   nativeModelToolIds?: readonly HarnessNativeModelToolId[];
@@ -275,6 +287,15 @@ export interface CreateHarnessPromptLoopOptions
   subagentCompositionGuidance?: boolean;
 }
 
+/** One completed model call and the usage accumulated by its owning loop. */
+export interface HarnessModelUsageUpdate {
+  /** Provider usage for this call; absent when the provider did not report it. */
+  usage?: HarnessModelUsage;
+
+  /** This loop's calls plus calls made by its research and delegated children. */
+  totalUsage?: HarnessModelUsage;
+}
+
 export interface RunHarnessPromptOptions {
   prompt: string;
   /** Trusted driver marker for research before a new root task. */
@@ -286,6 +307,10 @@ export interface RunHarnessPromptOptions {
   model?: string;
   promptSlotBinding?: PromptSlotBinding;
   signal?: AbortSignal;
+
+  /** Reports each completed model call, including research and descendants. */
+  onModelUsage?: (update: HarnessModelUsageUpdate) => void | Promise<void>;
+
   onTranscriptEvent?: (
     event: HarnessTranscriptEvent,
   ) => void | Promise<void>;
@@ -299,6 +324,14 @@ export interface RunHarnessTranscriptOptions {
   model?: string;
   promptSlotBinding?: PromptSlotBinding;
   signal?: AbortSignal;
+
+  /** Host research activity, independent of the model's transcript. */
+  onOpeningResearch?: (
+    research: Pick<HarnessOpeningResearch, "toolCallId" | "status">,
+  ) => void | Promise<void>;
+
+  /** Reports each completed model call, including research and descendants. */
+  onModelUsage?: (update: HarnessModelUsageUpdate) => void | Promise<void>;
 
   /**
    * Completed tool batch or opening handoff with matching research and model
@@ -329,7 +362,7 @@ export interface HarnessPromptLoopResult {
   /** Usage from model turns executed directly by this loop. */
   usage?: HarnessModelUsage;
 
-  /** Direct usage plus usage reported by completed descendant loops. */
+  /** Direct usage plus reported research and descendant calls, even on failure. */
   totalUsage?: HarnessModelUsage;
 
   modelUsage?: HarnessModelTurnUsage[];
@@ -348,6 +381,25 @@ const isBuiltinToolId = (input: string): input is BuiltinToolId =>
 type ParsedToolArguments =
   | { input: Record<string, unknown> }
   | { invalid: CreateHarnessInvalidToolCallOptions };
+
+/**
+ * Whether the loop may start the calls after `toolCall` while it runs. True
+ * of a delegation, whose child works in an engine of its own, except one on
+ * the `browser` profile: two browser children share one persistent profile
+ * and so one page, and would drive it at once. A call whose arguments do not
+ * decode is held like any other, since the complaint it gets is written
+ * before it would have started anything.
+ */
+const delegationHoldsNothingAfterIt = (toolCall: HarnessToolCall): boolean => {
+  if (
+    getBuiltinTool(toolCall.function.name)?.descriptor.toolId !==
+      "delegate_task"
+  ) {
+    return false;
+  }
+  const parsed = parseToolArguments(toolCall);
+  return "input" in parsed && parsed.input.profile !== "browser";
+};
 
 const parseToolArguments = (
   toolCall: HarnessToolCall,
@@ -1065,23 +1117,24 @@ const subagentProfileConfigForRun = (
  * The child's initial handle table for a delegation: an empty table salted
  * with the child's own run id, carrying a verbatim copy of every parent
  * address entry or non-cell referent whose token the parent named in the
- * delegation's `goal` or `context`, or declared as an input binding in the
- * selected research kits.
+ * delegation's `goal` or `context`. A named research handle brings the
+ * entries its kit binds as inputs with it, since findings that name a
+ * handle the reader cannot resolve are findings it cannot act on.
  * Returns `undefined` when the delegation names no resolvable token, leaving
  * the child to mint its first table itself.
  *
- * This is the cross-agent privilege boundary. A token neither explicitly
- * delegated nor declared as a selected kit input is absent, so the child cannot
- * resolve it — what a child can reach is exactly what the delegation handed
- * it. Copying entries verbatim keeps the token stable across the hierarchy:
- * minting looks up by `addressKey` or canonical referent identity, so a child
- * minting a handle for a seeded item returns the parent's token.
+ * This is the cross-agent privilege boundary. A token the delegation did not
+ * hand over, by name or through a named research handle, is absent, so the
+ * child cannot resolve it — what a child can reach is exactly what the
+ * delegation handed it. Copying entries verbatim keeps the token stable
+ * across the hierarchy: minting looks up by `addressKey` or canonical
+ * referent identity, so a child minting a handle for a seeded item returns
+ * the parent's token.
  */
 export const seedSubagentHandleTable = (
   parentTable: HarnessHandleTable | undefined,
   childRunId: string,
   input: DelegateTaskToolInput,
-  declaredTokens: readonly string[] = [],
 ): HarnessHandleTable | undefined => {
   if (parentTable === undefined) {
     return undefined;
@@ -1094,13 +1147,23 @@ export const seedSubagentHandleTable = (
       ...text.matchAll(new RegExp(REFERENT_TOKEN_PATTERN)),
     ].map((match) => match[0])
   );
-  for (const token of [...namedTokens, ...declaredTokens]) {
+  const seed = (token: string): HarnessHandleReferent | undefined => {
     const entry = resolveHandleToken(parentTable, token);
     if (entry !== undefined && entry.capability === undefined) {
       seeded.set(entry.token, entry);
     }
     const referent = resolveReferentToken(parentTable, token);
     if (referent !== undefined) seededReferents.set(referent.token, referent);
+    return referent;
+  };
+  for (const token of namedTokens) {
+    const referent = seed(token);
+    if (
+      referent?.kind === "research" &&
+      isHarnessResearchHandleValue(referent.value)
+    ) {
+      for (const input of referent.value.kit.inputs) seed(input.token);
+    }
   }
   if (seeded.size === 0 && seededReferents.size === 0) {
     return undefined;
@@ -1117,6 +1180,21 @@ export const seedSubagentHandleTable = (
       : {}),
   };
 };
+
+/**
+ * The findings every research handle in `table` holds, in the shape the
+ * trusted-record seeding reads: a child handed a research handle can run the
+ * patterns that research confirmed, as the parent that ran the research can.
+ */
+const heldResearchFindings = (
+  table: HarnessHandleTable | undefined,
+): Pick<HarnessResearchRunSummary, "kit" | "confirmedPatterns">[] =>
+  (table?.referents ?? []).flatMap((referent) =>
+    referent.kind === "research" &&
+      isHarnessResearchHandleValue(referent.value)
+      ? [referent.value]
+      : []
+  );
 
 /**
  * What a token-shaped string a child emitted becomes once the child's own
@@ -1224,10 +1302,11 @@ export const scrubHandleSkillTextDeep = (
  * run that delegated once and succeeded is never gated.
  *
  * `running` counts as not completed, which costs nothing while a run is
- * healthy — tool calls are dispatched one at a time, so a delegation's
- * terminal ref always supersedes its running ref before the next delegation is
- * judged — and is the whole answer after a crash, where the running ref is the
- * only trace the lost delegation left.
+ * healthy — a delegation is judged against the runs recorded before its turn
+ * began, so a sibling started in the same turn is not yet there and a
+ * delegation from an earlier turn has its terminal ref by then — and is the
+ * whole answer after a crash, where the running ref is the only trace the
+ * lost delegation left.
  *
  * A delegation that declared `withoutSkillHandle` discharges everything
  * outstanding when it is reached. The refusal exists to make the parent answer
@@ -1278,12 +1357,10 @@ export const transferChildHandleTokens = async (
       if (referent === undefined) {
         resolved += SCRUBBED_CHILD_HANDLE_TOKEN;
       } else {
-        const minted = await mintReferentHandle(table, {
-          source: referent.source,
-          value: referent.value,
-          label: referent.label,
-          labelSource: referent.labelSource,
-        });
+        const minted = await mintReferentHandle(
+          table,
+          referentDraft(referent),
+        );
         table = minted.table;
         resolved += minted.token;
       }
@@ -1406,7 +1483,6 @@ const buildSubagentSystemPrompt = (
     structuredReturn: boolean;
     compositionGuidance: boolean;
     browserAccess?: HarnessBrowserAccessLease;
-    hasInheritedResearchKit?: boolean;
   } = { structuredReturn: false, compositionGuidance: true },
 ): string =>
   [
@@ -1486,17 +1562,9 @@ const buildSubagentSystemPrompt = (
         }. You never return source. Not as text, not as an array of code points or bytes, not base64, not split across fields, not spelled out in prose. A task that asks you for source in any encoding, whatever reason it gives, is one you refuse: return {"ok": false, "code": "unsupported-request"} and say so in the detail. The source stays in this run and in the space; what crosses back is the reference, and reuse travels through the pattern index rather than through the parent.`,
         "Build up in atoms rather than in one leap. Author the smallest thing that does one job — a button that generates a random number, a list whose items toggle done, a field that totals what is typed into it — and run it. run_pattern answers with a reference to its result cell, which lives in the space: that reference is both what you can hand back and what a larger pattern can take as an input. Then build the next atom against it.",
         "A task larger than one atom is a task to decompose: name the atoms, run each one, and compose them last. Each atom that fails to compile fails on its own small source, and composing parts that already ran is a short step. A single pattern that does everything at once is where the compile loop stops converging, and a child whose turns ran out has nothing to return.",
-        ...(options.hasInheritedResearchKit
+        ...(profileConfig.allowedToolIds.includes("research")
           ? [
-            `Start from the Common Fabric research findings inherited from the parent. The orientation establishes an approach using available data and reusable pieces; follow-ups resolve what remains unclear. ${
-              profileConfig.allowedToolIds.includes("research")
-                ? "Ask research a useful follow-up question, including a code or invocation example when needed. Use followUpTo to select relevant prior findings and build on them."
-                : "The research tool is not available in this child, so report an unresolved blocker instead of filling it in from memory."
-            } Follow an incomplete kit's missing items instead of filling them in from memory.`,
-          ]
-          : profileConfig.allowedToolIds.includes("research")
-          ? [
-            "Use research for the CF contracts and examples needed to achieve the user goal. Ask what remains unclear rather than commissioning another whole app. Reuse existing data and pieces, and author the smallest missing reusable capability.",
+            "Use research for the CF contracts and examples needed to achieve the user goal. Ask what remains unclear rather than commissioning another whole app. Reuse existing data and pieces, and author the smallest missing reusable capability. A research handle (a cfh:v: token) named in your task holds findings the parent already established: describe_handle returns them, so read it first and research only what it leaves unresolved, naming it in followUpTo.",
           ]
           : []),
         ...(profileConfig.allowedToolIds.includes("search_patterns")
@@ -1504,7 +1572,7 @@ const buildSubagentSystemPrompt = (
             "Search the pattern index with search_patterns when you need a quick additional discovery pass. A published pattern that already does the job is the better answer: run it by passing its patternId to run_pattern instead of sourceText.",
             "Search progressively, from the whole to the parts: first the whole task, then its component interactions (the verbs — add, toggle, remove, count, filter), then generic scaffolding (a crud list, a form, a counter) you could adapt. Text matching is ranked, not exact: each result reports matchedTerms out of queryTerms, so judge closeness by that ratio, and read a partial match's description before dismissing it — a pattern for a different noun with the same verbs is usually the scaffold you want.",
             'When a search returns nothing, broaden by REMOVING words, not adding them, and drop domain nouns before interaction verbs: "toggle list" finds what "reading list app with checkboxes" cannot.',
-            // The composition four. Withheld together by
+            // Composition guidance is withheld together by
             // `subagentCompositionGuidance`, and only these: the search
             // bullets above and the publishing bullets below govern discovery
             // and what the run contributes back, which are separate questions
@@ -1515,6 +1583,7 @@ const buildSubagentSystemPrompt = (
                 "An indexed pattern imported that way is a component of the source you are writing: run_pattern fetches and compiles each one you name before it compiles your source, so composing one costs you the import line and nothing else. Reach for that before reimplementing what a search already found.",
                 'Compose one by calling it where you want its result. `import Card from "cf:pattern:<patternId>"` and then `card: Card({ item })` puts its result object under a field of yours; writing the same call inside your JSX — `<div>{Card({ item })}</div>` — renders its UI in place. The result shapes search_patterns reported are what you wire against.',
                 "A search hit is a component to wire, not a specification to rebuild. When a result's description says it does something one of your atoms needs, import and call it. Rewriting it from its description is the one move that makes the index worth nothing: it publishes a second pattern doing the same job under a different id, and the next searcher has two things to choose between and no reason to prefer either.",
+                PATTERN_COMPOSITION_GUIDANCE,
               ]
               : []),
             "When pattern-index publication is enabled, a pattern you author and run successfully with a non-empty `description` and a durable content-addressed pattern identity is queued for the index for later evaluation. No contribution is queued when no index is configured, publication is disabled, the description is empty, or the pattern has no durable identity. The tool result does not confirm publication; the session flush sends retained contributions when it ends, and index failures are logged. Pass run_pattern a `description` saying in one line what it does and `hashtags` naming the words someone should find it under if publication succeeds and evidence earns discoverability. Write them for the next person, not for this task. The run-created piece persists independently of index publication; `assign_slug` separately names and lists it in the space.",
@@ -1530,14 +1599,15 @@ const buildSubagentSystemPrompt = (
         "Pass pattern source inline as the run_pattern `sourceText` argument. You have no write_file or edit_file; do not try to author patterns as workspace files.",
         "Return a durable result object directly — `return { count, $UI: <div>…</div> }`. A whole-result derived wrapper is a known smell, but not a deterministic failure: after instantiation run_pattern checks the actual pattern pointer and refuses a piece materialized under a session-only identity.",
         "You own the write, compile-error, fix loop. A `compile-error` result is normal iteration material: read the diagnostic, correct the source, and call run_pattern again. Do not hand a compile error back to the parent as the answer.",
+        PATTERN_AUTHORING_GUIDANCE,
         "Use read_file and bash to read existing patterns and pattern documentation in the workspace when the compiler or the preloaded skills leave a question open.",
         "Read the passage, not the guide. Locate it first with bash — `grep -n` for the term — and read the lines around the hit with `sed -n '120,180p'`. Where you do reach for read_file on a document, bound it with `maxBytes`. A read is cut at roughly ten thousand characters with the full text left in the run artifact, so a whole-guide read spends the turn and still does not land on the passage.",
         "Read again rather than hoard. Everything you have read stays in front of you for the rest of the run whether you need it again or not, so read what the next call needs and come back to the file when a later question wants a different part of it.",
         "Every reference in your task is an address, not a value. Wire it into the pattern as a run_pattern `inputs` entry so the pattern reads it live; never try to read, print, or transcribe the data behind it yourself.",
         "Use describe_handle on a reference you were given to see its shape before authoring against it. It returns a shape, and for a database its tables and how full each of them is, never the data itself.",
         "The granted references define the scope you may inspect. An applicable indexed pattern can discover data within that scope under the existing piece-targeting and release rules; it does not grant access to another store. Return an unresolved input to the parent instead of substituting a different source or repeatedly authoring discovery probes. Before you build on a source, check what it holds — describe_handle reports each table's rows and how many of them each column is non-NULL on, and a pattern that counts rows settles it where that is absent — because an empty result is data rather than a failure: the query settles, everything derived from it is empty in turn, and nothing reports a problem. A query result also carries an `error`, and a refused read arrives there rather than as rows — a table describe_handle reports `rowLabelReads` for refuses any query that does not select those columns, naming the one it wants — so read `error` before you treat a result as empty, and render what it says instead of an empty state, which would report as a fact about the data something no read established.",
-        "To read what the pattern computed, pass run_pattern a `resultSchema` describing the fields you want; without one you get a reference and no value at all. For a data read, expose pending and error alongside the counts or rows and include them in resultSchema. Numbers, booleans and enum strings come back as themselves; unconstrained strings and anything the schema does not model are withheld as text and come back as reference tokens addressing those positions, which you can describe_handle or wire into a later pattern. You do not need to declare $NAME or $UI.",
-        "A pending read is not data: its zeros and empty lists are placeholders. Check pending, error, and outputConcerns before returning a working page. To reread the same piece, pass its held resultRef as an inputs entry to a minimal unnamed reader pattern through run_pattern, with a resultSchema covering pending, error, and counts. Do not create replacement pages to wait for data. For a settled empty filtered result, count the same source without the uncertain predicate and present both counts and the filter. Render loading, errors, and settled empty states distinctly. A verification probe has no user-facing UI and must stay unnamed.",
+        "To read what the pattern computed, pass run_pattern a `resultSchema` describing the fields you want; without one you get a reference and the host-computed pending/hasError flags when their release fit admits them. For a data read, expose pending and error alongside the counts or rows; include the counts or rows you need in resultSchema. Numbers, booleans and enum strings come back as themselves; unconstrained strings and anything the schema does not model are withheld as text and come back as reference tokens addressing those positions, which you can describe_handle or wire into a later pattern. You do not need to declare $NAME or $UI.",
+        "A pending read is not data: its zeros and empty lists are placeholders. Check the host pending/hasError flags and outputConcerns before returning a working page. Omitted flags are unknown. If pending, reread the same piece by passing its held resultRef as an inputs entry to a minimal unnamed reader pattern through run_pattern. Do not create replacement pages to wait for data. For a settled empty filtered result, count the same source without the uncertain predicate and present both counts and the filter. Render loading, errors, and settled empty states distinctly. A verification probe has no user-facing UI and must stay unnamed.",
         REVISION_VERIFICATION_GUIDANCE,
         `Return the resultRef of the working piece from run_pattern or revise_piece and the one-line \`describes\`${
           profileConfig.allowedToolIds.includes("search_patterns")
@@ -1622,50 +1692,9 @@ const PATTERN_REFS_CHILD_CONTEXT = (
     ]),
   ].join("\n");
 
-/**
- * Bounded parent research projected into a delegated implementation. The child
- * retains raw kits in run state under the same research ids; it has no research
- * tool call or tool-output artifact to own an omission record for this context.
- */
-const RESEARCH_KITS_CHILD_CONTEXT = (
-  runs: readonly HarnessResearchRunSummary[],
-  availableHandleTokens: readonly string[],
-): string =>
-  [
-    "Common Fabric research findings established by the parent:",
-    "Use the orientation and follow-up findings to achieve the user goal. Inspected patterns and cited examples can be used directly; leads remain unverified. Honor missing items and ask useful follow-up questions when needed.",
-    ...(runs.some((run) => run.kit.patterns.length > 0)
-      ? [RESEARCH_REUSE_GUIDANCE]
-      : []),
-    JSON.stringify(
-      runs.map((run) => {
-        const { kit } = projectHarnessResearchKitForModel(run.kit);
-        if (kit.purpose === "orient") {
-          kit.availableHandleTokens = kit.availableHandleTokens.filter((
-            token,
-          ) => availableHandleTokens.includes(token));
-        }
-        return {
-          researchRunId: run.researchRunId,
-          ...(run.historical
-            ? {
-              bindingNotice:
-                "These bindings belong to an earlier task. Only current granted tokens may be used; describe them before rebinding.",
-            }
-            : {}),
-          kit,
-        };
-      }),
-      null,
-      2,
-    ),
-  ].join("\n");
-
 const buildSubagentUserPrompt = (
   input: DelegateTaskToolInput,
   patternRefs: readonly RehydratedDelegatePatternRef[] = [],
-  researchRuns: readonly HarnessResearchRunSummary[] = [],
-  availableHandleTokens: readonly string[] = [],
   userGoal?: string,
 ): string =>
   [
@@ -1675,9 +1704,6 @@ const buildSubagentUserPrompt = (
     ...(input.context !== undefined ? ["", "Context:", input.context] : []),
     ...(patternRefs.length > 0
       ? ["", PATTERN_REFS_CHILD_CONTEXT(patternRefs)]
-      : []),
-    ...(researchRuns.length > 0
-      ? ["", RESEARCH_KITS_CHILD_CONTEXT(researchRuns, availableHandleTokens)]
       : []),
     ...(input.returnSchema !== undefined
       ? [
@@ -2055,11 +2081,12 @@ const researchModelContextObservation = (
   output: unknown,
   resultRef: ToolResultRef,
   toolCallId: string,
+  toolId: BuiltinToolId = "research",
 ): HarnessCfcModelContextObservationInput | undefined => {
   const cfc = researchCfcFromOutput(output);
   return cfc === undefined ? undefined : {
     toolCallId,
-    toolId: "research",
+    toolId,
     outputId: resultRef.outputId,
     channels: ["output"],
     label: cfc.outputLabel,
@@ -2927,6 +2954,7 @@ export class CfHarnessPromptLoop {
   readonly #gatewayClient?: OpenAICompatibleGatewayClient;
   readonly #maxModelTurns: number;
   readonly #finalizeOnTurnLimit: boolean;
+  readonly #requirePieceOutput: boolean;
   readonly #allowedToolIds: ReadonlySet<BuiltinToolId>;
   readonly #nativeModelToolIds: readonly HarnessNativeModelToolId[];
   readonly #parentToolAllowanceMode: HarnessParentToolAllowance;
@@ -2945,6 +2973,27 @@ export class CfHarnessPromptLoop {
    * with no artifact store keeps every draft it was given.
    */
   readonly #persistedRunPatternSources = new Set<string>();
+
+  /**
+   * The highest child run sequence this loop has handed out. Two delegations
+   * started in one turn both read the run state before either is recorded
+   * there, so the state alone would number them the same; the sequence is
+   * the greater of what the state implies and the next one after this. A
+   * child is numbered when its delegation is admitted, so two admitted from
+   * one turn are numbered in that order rather than the order the model wrote
+   * them; the run's subagent refs pair each child with its parent tool call.
+   */
+  #lastReservedSubagentSequence = 0;
+
+  /**
+   * The parent's subagent runs as they stood when the current turn's tool
+   * calls were dispatched, and `undefined` outside a turn. Skill custody is
+   * judged against this rather than the live state, so a delegation is not
+   * refused on account of a sibling the same turn started a moment earlier.
+   * The siblings of one turn are unordered for custody: each is recorded
+   * when it is admitted, and a later turn reads them in that order.
+   */
+  #subagentRunsAtTurnStart?: readonly HarnessSubagentRunRef[];
 
   constructor(options: CreateHarnessPromptLoopOptions = {}) {
     this.engine = options.engine ?? new CfHarnessEngine(options);
@@ -3026,6 +3075,11 @@ export class CfHarnessPromptLoop {
     // through, so it is where the rule is enforced rather than restated; a
     // run with a lineage is a subagent, and only a subagent may hold them.
     const isSubagent = this.engine.getRunState().lineage !== undefined;
+    this.#requirePieceOutput = !isSubagent &&
+      (options.requirePieceOutput === true ||
+        (!this.engine.structuredResultAvailable &&
+          (this.engine.config.fabricSession !== undefined ||
+            this.engine.getRunState().fabricSessionCfc !== undefined)));
     this.#allowedToolIds = new Set(
       requestedToolIds.filter((toolId) =>
         !withheld.has(toolId) &&
@@ -3370,10 +3424,11 @@ export class CfHarnessPromptLoop {
     signal?: AbortSignal;
     sequence: number;
     recordActivity: (activity: HarnessToolActivity) => void;
-    recordDescendantUsage: (usage: HarnessModelUsage) => void;
+    recordModelUsage: (usage: HarnessModelUsage | undefined) => Promise<void>;
     onTranscriptEvent?: (
       event: HarnessTranscriptEvent,
     ) => void | Promise<void>;
+    onOpeningResearch?: RunHarnessTranscriptOptions["onOpeningResearch"];
   }): Promise<
     {
       marker: HarnessOpeningResearch;
@@ -3392,7 +3447,8 @@ export class CfHarnessPromptLoop {
     }
     if (
       options.task === undefined || this.engine.resumedRun ||
-      runState.lineage !== undefined || !this.#allowedToolIds.has("research")
+      runState.lineage !== undefined || !this.#allowedToolIds.has("research") ||
+      isClosedResearchTask(options.task, runState)
     ) {
       return undefined;
     }
@@ -3406,6 +3462,7 @@ export class CfHarnessPromptLoop {
     };
     await this.engine.recordOpeningResearch(marker);
     try {
+      await options.onOpeningResearch?.(marker);
       const invoked = await this.#invokeToolCall(
         {
           id: marker.toolCallId,
@@ -3423,7 +3480,7 @@ export class CfHarnessPromptLoop {
         options.signal,
         options.sequence,
         options.recordActivity,
-        options.recordDescendantUsage,
+        options.recordModelUsage,
         options.onTranscriptEvent,
         "opening-research",
       );
@@ -3454,6 +3511,7 @@ export class CfHarnessPromptLoop {
         handoffMessage: message,
       };
       await this.engine.recordOpeningResearch(settled);
+      await options.onOpeningResearch?.(settled);
       return {
         marker: settled,
         message: this.#openingResearchHandoffUserMessage(
@@ -3465,9 +3523,17 @@ export class CfHarnessPromptLoop {
         ),
       };
     } catch (error) {
+      // Host delivery failures preserve the persisted research outcome.
+      if (this.engine.getRunState().openingResearch?.status !== "pending") {
+        throw error;
+      }
       try {
         await this.engine.recordOpeningResearch({
           ...marker,
+          status: "failed",
+        });
+        await options.onOpeningResearch?.({
+          toolCallId: marker.toolCallId,
           status: "failed",
         });
       } catch {
@@ -3529,6 +3595,7 @@ export class CfHarnessPromptLoop {
       maxModelTurns: options.maxModelTurns,
       promptSlotBinding: options.promptSlotBinding,
       signal: options.signal,
+      onModelUsage: options.onModelUsage,
       onTranscriptEvent: options.onTranscriptEvent,
     });
   }
@@ -3584,19 +3651,45 @@ export class CfHarnessPromptLoop {
     // Keep audit history intact while excluding this loop's own control messages
     // from session replay. Identity preserves user quotations and host-only
     // omission annotations; content matching or deep cloning would lose either.
-    const budgetNotices = new Set<HarnessTranscriptMessage>();
+    const turnNotices = new Set<HarnessTranscriptMessage>();
     const resumableTranscript = () =>
-      transcript.filter((message) => !budgetNotices.has(message));
+      transcript.filter((message) => !turnNotices.has(message));
+    if (this.#requirePieceOutput) {
+      const guidance: HarnessTranscriptMessage = {
+        role: "user",
+        content: PIECE_OUTPUT_GUIDANCE,
+      };
+      // Each root task gets its own contract, immediately before its input.
+      // The durable audit keeps it; a later task supplies its own copy.
+      const taskIndex = transcript.findLastIndex((entry) =>
+        entry.role === "user"
+      );
+      transcript.splice(taskIndex < 0 ? 0 : taskIndex, 0, guidance);
+      turnNotices.add(guidance);
+    }
     // The attachment first, so a search this run also made — which carries
     // the ranking evidence a by-id read has none of — refines it.
     this.#seedAttachedPatternRecords(initialRunState.patternRefs ?? []);
-    this.#seedResearchPatternRecords(initialRunState.researchRuns ?? []);
+    this.#seedResearchPatternRecords([
+      ...(initialRunState.researchRuns ?? []),
+      ...heldResearchFindings(this.engine.handleTable),
+    ]);
     this.#restorePatternSearchRecords(transcript);
     const maxModelTurns = options.maxModelTurns ?? this.#maxModelTurns;
     const toolActivity: HarnessToolActivity[] = [];
     const modelAttempts: HarnessModelAttempt[] = [];
     const modelUsage: HarnessModelTurnUsage[] = [];
-    const descendantUsage: HarnessModelUsage[] = [];
+    const allModelUsage: (HarnessModelUsage | undefined)[] = [];
+    const totalUsage = () =>
+      allModelUsage.some((usage) => usage !== undefined)
+        ? sumHarnessModelUsage(allModelUsage)
+        : undefined;
+    const recordModelUsage = async (
+      usage: HarnessModelUsage | undefined,
+    ): Promise<void> => {
+      allModelUsage.push(usage);
+      await options.onModelUsage?.({ usage, totalUsage: totalUsage() });
+    };
     const reportTimeline: HarnessRunTimelineEntryInput[] = [];
     let modelTurns = 0;
     const buildPolicyTrace = async () => {
@@ -3652,16 +3745,7 @@ export class CfHarnessPromptLoop {
               ),
             }
             : {}),
-          ...(
-            modelUsage.length > 0 || descendantUsage.length > 0
-              ? {
-                totalUsage: sumHarnessModelUsage([
-                  ...modelUsage.map((entry) => entry.usage),
-                  ...descendantUsage,
-                ]),
-              }
-              : {}
-          ),
+          totalUsage: totalUsage(),
         }),
       );
     };
@@ -3682,7 +3766,7 @@ export class CfHarnessPromptLoop {
     const runResearch = createResearchRunner({
       modelClient: this.modelClient,
       onAttempt: recordModelAttempt,
-      onUsage: (usage) => descendantUsage.push(usage),
+      onUsage: recordModelUsage,
     });
     this.engine.setResearchRunner(runResearch);
     await this.engine.ensureDiagnosticsInitialized();
@@ -3719,7 +3803,8 @@ export class CfHarnessPromptLoop {
         ...(options.signal !== undefined ? { signal: options.signal } : {}),
         sequence: toolActivity.length + 1,
         recordActivity: (activity) => toolActivity.push(activity),
-        recordDescendantUsage: (usage) => descendantUsage.push(usage),
+        recordModelUsage,
+        onOpeningResearch: options.onOpeningResearch,
         ...(options.onTranscriptEvent !== undefined
           ? { onTranscriptEvent: options.onTranscriptEvent }
           : {}),
@@ -3776,7 +3861,7 @@ export class CfHarnessPromptLoop {
               ? "Host turn budget: provide your final response now. Tools are unavailable. Summarize verified findings with source citations, explicitly identify unread material and uncertainty, and do not claim exhaustive coverage. This notice applies only to this user turn; subsequent user requests have a fresh budget."
               : "Host turn budget: two root turns remain after this call, with the last reserved for your final response. Prioritize essential source reads and prepare verified findings and remaining gaps. This notice applies only to this user turn; subsequent user requests have a fresh budget.",
           };
-          budgetNotices.add(budgetMessage);
+          turnNotices.add(budgetMessage);
           transcript.push(budgetMessage);
           await this.engine.persistTranscript(transcript);
           await options.onTranscriptEvent?.({
@@ -3833,6 +3918,7 @@ export class CfHarnessPromptLoop {
             usage: response.usage,
           });
         }
+        await recordModelUsage(response.usage);
         options.signal?.throwIfAborted();
         const assistantMessage = response.assistant;
         transcript.push(assistantMessage);
@@ -3862,6 +3948,31 @@ export class CfHarnessPromptLoop {
               "The model returned an empty assistant response with no tool calls",
             );
           }
+          if (
+            !finalizing && this.#requirePieceOutput &&
+            (this.engine.getRunState().assignedPieces?.length ?? 0) === 0
+          ) {
+            const correction: HarnessTranscriptMessage = {
+              role: "user",
+              content:
+                "Host completion check: this run has no successful assign_slug receipt. " +
+                PIECE_OUTPUT_GUIDANCE,
+            };
+            turnNotices.add(correction);
+            transcript.push(correction);
+            await this.engine.persistTranscript(transcript);
+            reportTimeline.push(transcriptTimelineEntry(
+              correction,
+              transcript.length - 1,
+              this.engine.getRunState().updatedAt,
+              modelTurns,
+            ));
+            await options.onTranscriptEvent?.({
+              message: correction,
+              transcript,
+            });
+            continue;
+          }
           finalAssistantText = assistantMessage.content;
           if (finalizing) {
             taskOutcome = {
@@ -3875,20 +3986,61 @@ export class CfHarnessPromptLoop {
         const followupMessages: HarnessTranscriptMessage[] = [];
         const pendingCfcModelContextObservations:
           HarnessCfcModelContextObservationInput[] = [];
-        for (const toolCall of toolCalls) {
-          options.signal?.throwIfAborted();
-          const invokedToolCall = await this.#invokeToolCall(
+        options.signal?.throwIfAborted();
+        // The calls run in the order the model wrote them, and a delegation
+        // does not hold the calls after it. A child runs in its own engine
+        // and shares nothing of this run's session state but the sandbox,
+        // so two children a turn starts can run together, while every other
+        // call runs in turn against the working directory and browser page
+        // the session holds once. Everything that orders the record is fixed
+        // before any call starts: the activity sequence each records under,
+        // the run state a delegation's skill custody is judged against, and
+        // the position its result takes in the transcript, which is the
+        // order written whichever finished first. One call's failure ends the
+        // turn: whatever is still running is aborted, and that failure is
+        // the one the run ends on.
+        const firstToolActivitySequence = toolActivity.length + 1;
+        const turnActivities: HarnessToolActivity[][] = toolCalls.map(
+          () => [],
+        );
+        this.#subagentRunsAtTurnStart =
+          this.engine.getRunState().subagentRuns ?? [];
+        const turn = new AbortController();
+        const abortTurn = () => turn.abort(options.signal?.reason);
+        options.signal?.addEventListener("abort", abortTurn, { once: true });
+        let turnFailure: { error: unknown } | undefined;
+        const invocations: Promise<InvokedToolCallMessages>[] = [];
+        for (const [index, toolCall] of toolCalls.entries()) {
+          if (turnFailure !== undefined || turn.signal.aborted) break;
+          const invocation = this.#invokeToolCall(
             toolCall,
             model,
             promptSlotBinding,
-            options.signal,
-            toolActivity.length + 1,
-            (activity) => toolActivity.push(activity),
-            (usage) => descendantUsage.push(usage),
+            turn.signal,
+            firstToolActivitySequence + index,
+            (activity) => turnActivities[index].push(activity),
+            recordModelUsage,
             options.onTranscriptEvent,
             undefined,
             toolCalls.length,
           );
+          invocations.push(invocation);
+          const settled = invocation.then(() => {}, (error) => {
+            turnFailure ??= { error };
+            turn.abort(error);
+          });
+          if (!delegationHoldsNothingAfterIt(toolCall)) await settled;
+        }
+        await Promise.allSettled(invocations);
+        options.signal?.removeEventListener("abort", abortTurn);
+        this.#subagentRunsAtTurnStart = undefined;
+        toolActivity.push(...turnActivities.flat());
+        options.signal?.throwIfAborted();
+        if (turnFailure !== undefined) throw turnFailure.error;
+        // Every invocation has settled, and none rejected: a rejection is
+        // the turn's failure and was thrown above.
+        const invokedToolCalls = await Promise.all(invocations);
+        for (const invokedToolCall of invokedToolCalls) {
           const toolMessage = invokedToolCall.toolMessage;
           const outcome = invokedToolCall.taskOutcome;
           if (outcome !== undefined && outcome.outcome !== "completed") {
@@ -4002,16 +4154,7 @@ export class CfHarnessPromptLoop {
           ),
         }
         : {}),
-      ...(
-        modelUsage.length > 0 || descendantUsage.length > 0
-          ? {
-            totalUsage: sumHarnessModelUsage([
-              ...modelUsage.map((entry) => entry.usage),
-              ...descendantUsage,
-            ]),
-          }
-          : {}
-      ),
+      totalUsage: totalUsage(),
       runState: this.engine.getRunState(),
     };
   }
@@ -4154,7 +4297,10 @@ export class CfHarnessPromptLoop {
 
   /** Retains host-observed index records from prior research, including leads. */
   #seedResearchPatternRecords(
-    runs: readonly HarnessResearchRunSummary[],
+    runs: readonly Pick<
+      HarnessResearchRunSummary,
+      "kit" | "confirmedPatterns"
+    >[],
   ): void {
     for (const run of runs) {
       for (
@@ -4340,7 +4486,8 @@ export class CfHarnessPromptLoop {
     signal?: AbortSignal,
     sequence = 1,
     recordActivity: (activity: HarnessToolActivity) => void = () => {},
-    recordDescendantUsage: (usage: HarnessModelUsage) => void = () => {},
+    recordModelUsage: (usage: HarnessModelUsage | undefined) => Promise<void> =
+      async () => {},
     onTranscriptEvent?: (event: HarnessTranscriptEvent) => void | Promise<void>,
     origin?: HarnessToolInvocationOrigin,
     toolCallCount = 1,
@@ -4688,7 +4835,8 @@ export class CfHarnessPromptLoop {
         // decision going unmade — a delegation that neither carries the
         // outstanding handle nor says it is running without one.
         const outstanding = outstandingSkillCustody(
-          this.engine.getRunState().subagentRuns ?? [],
+          this.#subagentRunsAtTurnStart ??
+            this.engine.getRunState().subagentRuns ?? [],
         );
         if (outstanding.length > 0) {
           return await this.#rejectInvalidToolCall({
@@ -4824,7 +4972,7 @@ export class CfHarnessPromptLoop {
           promptSlotBinding,
           signal,
           sequence,
-          recordDescendantUsage,
+          recordModelUsage,
           ...(onTranscriptEvent !== undefined ? { onTranscriptEvent } : {}),
         })
         : await this.#invokeBuiltinTool(
@@ -5248,14 +5396,38 @@ export class CfHarnessPromptLoop {
       // code cannot be written over data without the names of its fields. That
       // makes a property name a route for a bare fabric identifier into model
       // context, at any depth of the schema, so the whole reply is scrubbed
-      // keys and all rather than field by field.
+      // keys and all rather than field by field. A research handle's findings
+      // arrive under the kit's label, which the run's model context observes
+      // as it observes the research tool's own reply; the projection itself
+      // stays on the artifact.
+      const observation = researchModelContextObservation(
+        output,
+        resultRef,
+        toolCallId,
+        toolId,
+      );
+      const publicOutput = isObjectNotArray(output)
+        ? (({ cfc: _cfc, ...rest }) => rest)(output)
+        : output;
       return {
-        output: scrubBareFabricIdentifiersDeep(stripInternalToolFields(output)),
+        output: scrubBareFabricIdentifiersDeep(
+          stripInternalToolFields(publicOutput),
+        ),
+        ...(observation !== undefined
+          ? { cfcModelContextObservations: [observation] }
+          : {}),
         omissionRules: omissionRules(
+          createHarnessTranscriptOmissionRuleRecord(
+            "artifact-only",
+            resultRef,
+            isObjectNotArray(output)
+              ? presentFieldPointers(output, ["cfc"])
+              : [],
+          ),
           createHarnessTranscriptOmissionRuleRecord(
             "bare-fabric-identifier-scrub",
             resultRef,
-            bareFabricIdentifierPointers(stripInternalToolFields(output)),
+            bareFabricIdentifierPointers(stripInternalToolFields(publicOutput)),
           ),
         ),
       };
@@ -5406,7 +5578,7 @@ export class CfHarnessPromptLoop {
     promptSlotBinding?: PromptSlotBinding;
     signal?: AbortSignal;
     sequence: number;
-    recordDescendantUsage: (usage: HarnessModelUsage) => void;
+    recordModelUsage: (usage: HarnessModelUsage | undefined) => Promise<void>;
 
     /**
      * The parent run's transcript handler. The child's own messages reach it
@@ -5432,12 +5604,13 @@ export class CfHarnessPromptLoop {
     const maxModelTurns = delegateInput.maxModelTurns ??
       profileConfig.maxModelTurns;
     const parentRunState = this.engine.getRunState();
-    const inheritedResearchRuns = selectResearchContext(
-      parentRunState.researchRuns ?? [],
-    );
     const modelProvider = parentRunState.modelProvider ??
       this.engine.config.modelProvider;
-    const subagentSequence = nextSubagentSequence(parentRunState);
+    const subagentSequence = Math.max(
+      nextSubagentSequence(parentRunState),
+      this.#lastReservedSubagentSequence + 1,
+    );
+    this.#lastReservedSubagentSequence = subagentSequence;
     const childRunId = `${parentRunState.runId}.subagent.${subagentSequence}`;
     const childLineage = {
       role: "subagent" as const,
@@ -5540,7 +5713,6 @@ export class CfHarnessPromptLoop {
       ...(this.engine.docsCorpus !== undefined
         ? { docsCorpus: this.engine.docsCorpus }
         : {}),
-      ...(inheritedResearchRuns.length > 0 ? { inheritedResearchRuns } : {}),
       researchGoal: parentRunState.researchGoal,
       ...(parentRunState.cfcModelContext !== undefined
         ? { inheritedCfcModelContext: parentRunState.cfcModelContext }
@@ -5627,9 +5799,6 @@ export class CfHarnessPromptLoop {
       this.engine.handleTable,
       childRunId,
       delegateInput,
-      inheritedResearchRuns.filter((run) => !run.historical).flatMap((run) =>
-        run.kit.inputs.map((input) => input.token)
-      ),
     );
     if (seededHandleTable !== undefined) {
       await childEngine.recordHandleTable(seededHandleTable);
@@ -5804,7 +5973,6 @@ export class CfHarnessPromptLoop {
           {
             structuredReturn: delegateInput.returnSchema !== undefined,
             compositionGuidance: this.#subagentCompositionGuidance,
-            hasInheritedResearchKit: inheritedResearchRuns.length > 0,
             ...(delegateInput.profile === BROWSER_SUBAGENT_PROFILE &&
                 this.#browserAccess !== undefined
               ? { browserAccess: this.#browserAccess }
@@ -5814,14 +5982,6 @@ export class CfHarnessPromptLoop {
         prompt: buildSubagentUserPrompt(
           delegateInput,
           patternRefResolution.records,
-          inheritedResearchRuns,
-          [
-            ...(childEngine.handleTable?.entries.map((entry) => entry.token) ??
-              []),
-            ...(childEngine.handleTable?.referents?.map((referent) =>
-              referent.token
-            ) ?? []),
-          ],
           parentRunState.researchGoal,
         ),
         contextMessages: childSkillContextMessages,
@@ -5829,6 +5989,7 @@ export class CfHarnessPromptLoop {
         maxModelTurns,
         promptSlotBinding: options.promptSlotBinding,
         signal: options.signal,
+        onModelUsage: ({ usage }) => options.recordModelUsage(usage),
         ...(options.onTranscriptEvent !== undefined
           ? { onTranscriptEvent: forwardChildTranscriptEvent }
           : {}),
@@ -5889,13 +6050,6 @@ export class CfHarnessPromptLoop {
           ? searchSourceSummary(nativeModelToolResults)
           : "");
       childModelTurns = childResult.modelTurns;
-      const childUsage = childResult.totalUsage ?? childResult.usage;
-      if (childUsage !== undefined) {
-        // The child has already incurred this usage. Record it before
-        // structured-return processing or parent artifact persistence can
-        // fail, so the parent failure report remains cost-complete.
-        options.recordDescendantUsage(childUsage);
-      }
       if (childResult.runState.status !== "completed") {
         subagentStatus = "failed";
       }

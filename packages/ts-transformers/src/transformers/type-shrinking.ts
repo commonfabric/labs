@@ -1,4 +1,5 @@
 import ts from "typescript";
+import type { SchemaScope } from "@commonfabric/api";
 import {
   isCommonFabricSymbol,
   resolvesToCommonFabricSymbol,
@@ -6,6 +7,12 @@ import {
 import { getDefaultMarkerPayload } from "@commonfabric/schema-generator/default-brand";
 import { getPropertyNameText } from "@commonfabric/schema-generator/property-name";
 import {
+  getScopeBrand,
+  SCOPE_WRAPPER_FOR_SCOPE,
+  scopeForWrapperName,
+} from "@commonfabric/schema-generator/scope-brand";
+import {
+  entityNameRight,
   readAuthoredTypeNode,
   unwrapTypeParentheses,
 } from "@commonfabric/schema-generator/type-node";
@@ -21,6 +28,7 @@ import { uniquePaths } from "../utils/path-serialization.ts";
 import {
   type CapabilityParamDefault,
   type CapabilityParamSummary,
+  type CrossStageState,
   type ReactiveCapability,
   TransformationContext,
 } from "../core/mod.ts";
@@ -659,6 +667,7 @@ function shrinkArrayElementTypeNode(
   factory: ts.NodeFactory,
   checker?: ts.TypeChecker,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  state?: CrossStageState,
 ): ts.TypeNode {
   let shrunkElement = buildShrunkTypeNodeFromTypeNode(
     elementType,
@@ -666,6 +675,7 @@ function shrinkArrayElementTypeNode(
     factory,
     checker,
     typeRegistry,
+    state,
     fullShapeItemPaths,
   ) ?? elementType;
   if (
@@ -843,6 +853,7 @@ function buildShrunkTypeNodeFromType(
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  state?: CrossStageState,
   fullShapePaths: readonly (readonly string[])[] = [],
   visiting: ReadonlySet<string> = new Set(),
 ): ts.TypeNode | undefined {
@@ -864,6 +875,7 @@ function buildShrunkTypeNodeFromType(
       sourceFile,
       factory,
       typeRegistry,
+      state,
       fullShapePaths,
       visiting,
     );
@@ -892,7 +904,7 @@ function buildShrunkTypeNodeFromType(
   if (visiting.has(visitKey)) {
     return typeToTypeNodeWithRegistry(
       type,
-      { checker, factory, sourceFile },
+      { checker, factory, sourceFile, state },
       typeRegistry,
       ts.NodeBuilderFlags.NoTruncation,
     );
@@ -902,7 +914,7 @@ function buildShrunkTypeNodeFromType(
   if (normalizedFullShapePaths.some((path) => path.length === 0)) {
     return typeToTypeNodeWithRegistry(
       type,
-      { checker, factory, sourceFile },
+      { checker, factory, sourceFile, state },
       typeRegistry,
       typeToNodeFlags,
     );
@@ -913,7 +925,7 @@ function buildShrunkTypeNodeFromType(
   if (isCellLikeType(type, checker)) {
     const node = typeToTypeNodeWithRegistry(
       type,
-      { checker, factory, sourceFile },
+      { checker, factory, sourceFile, state },
       typeRegistry,
       typeToNodeFlags,
     );
@@ -928,6 +940,7 @@ function buildShrunkTypeNodeFromType(
         factory,
         checker,
         typeRegistry,
+        state,
         normalizedFullShapePaths,
       );
     }
@@ -954,6 +967,7 @@ function buildShrunkTypeNodeFromType(
         sourceFile,
         factory,
         typeRegistry,
+        state,
       );
     }
     if (itemPaths.length > 0 && isHomogeneousArrayType(type, checker)) {
@@ -966,12 +980,13 @@ function buildShrunkTypeNodeFromType(
           sourceFile,
           factory,
           typeRegistry,
+          state,
           fullShapeItemPaths,
           guarded,
         ) ??
           typeToTypeNodeWithRegistry(
             elementType,
-            { checker, factory, sourceFile },
+            { checker, factory, sourceFile, state },
             typeRegistry,
             typeToNodeFlags,
           );
@@ -984,12 +999,13 @@ function buildShrunkTypeNodeFromType(
           sourceFile,
           factory,
           typeRegistry,
+          state,
         );
       }
     }
     return typeToTypeNodeWithRegistry(
       type,
-      { checker, factory, sourceFile },
+      { checker, factory, sourceFile, state },
       typeRegistry,
       typeToNodeFlags,
     );
@@ -998,7 +1014,7 @@ function buildShrunkTypeNodeFromType(
   if (normalized.some((path) => path.length === 0)) {
     return typeToTypeNodeWithRegistry(
       type,
-      { checker, factory, sourceFile },
+      { checker, factory, sourceFile, state },
       typeRegistry,
       typeToNodeFlags,
     );
@@ -1020,6 +1036,7 @@ function buildShrunkTypeNodeFromType(
         sourceFile,
         factory,
         typeRegistry,
+        state,
         normalizedFullShapePaths,
         guarded,
       );
@@ -1035,7 +1052,7 @@ function buildShrunkTypeNodeFromType(
             nullishMembers.push(
               typeToTypeNodeWithRegistry(
                 constituent,
-                { checker, factory, sourceFile },
+                { checker, factory, sourceFile, state },
                 typeRegistry,
                 typeToNodeFlags,
               ),
@@ -1044,12 +1061,21 @@ function buildShrunkTypeNodeFromType(
         }
       }
       if (nullishMembers.length === 0) return shrunkInner;
+      // A default restored on the value belongs to the whole union: the
+      // runtime reads a missing property's default only from the top of its
+      // schema.
+      const [value, defaultValue] = RESTORED_DEFAULTS.has(shrunkInner) &&
+          ts.isTypeReferenceNode(shrunkInner) && shrunkInner.typeArguments
+        ? shrunkInner.typeArguments
+        : [shrunkInner];
       const unionNode = factory.createUnionTypeNode([
-        shrunkInner,
+        value!,
         ...nullishMembers,
       ]);
       ensureTypeNodeRegistered(unionNode, checker, typeRegistry);
-      return unionNode;
+      return defaultValue
+        ? wrapTypeNodeWithRestoredDefault(unionNode, defaultValue, factory)
+        : unionNode;
     }
   }
 
@@ -1102,7 +1128,7 @@ function buildShrunkTypeNodeFromType(
     if (!hasDirectAccess && isPrimitiveScalarLikeType(propType)) {
       const propTypeNode = typeToTypeNodeWithRegistry(
         propType,
-        { checker, factory, sourceFile },
+        { checker, factory, sourceFile, state },
         typeRegistry,
         typeToNodeFlags,
       );
@@ -1131,6 +1157,7 @@ function buildShrunkTypeNodeFromType(
       sourceFile,
       factory,
       typeRegistry,
+      state,
       fullShapeChildPaths,
       guarded,
     );
@@ -1143,7 +1170,7 @@ function buildShrunkTypeNodeFromType(
     const propTypeNode = shrunkChild ??
       typeToTypeNodeWithRegistry(
         propType,
-        { checker, factory, sourceFile },
+        { checker, factory, sourceFile, state },
         typeRegistry,
         typeToNodeFlags,
       );
@@ -1174,6 +1201,7 @@ function buildShrunkTypeNodeFromType(
     sourceFile,
     factory,
     typeRegistry,
+    state,
   );
 }
 
@@ -1206,8 +1234,23 @@ function getScopeWrapper(
     : undefined;
 }
 
-/** The `Default` wrappers `restoreDefault()` built. */
+/** The `Default` wrappers `wrapTypeNodeWithRestoredDefault()` built. */
 const RESTORED_DEFAULTS = new WeakSet<ts.TypeNode>();
+
+/**
+ * Helper for `buildShrunkTypeNodeFromType()` and `restoreDefault()`, which
+ * wraps `node` in a `Default` of `value` that type shrinking restored rather
+ * than one its author wrote, and records it in `RESTORED_DEFAULTS`.
+ */
+function wrapTypeNodeWithRestoredDefault(
+  node: ts.TypeNode,
+  value: ts.TypeNode,
+  factory: ts.NodeFactory,
+): ts.TypeNode {
+  const restored = wrapTypeNodeWithDefault(node, value, factory);
+  RESTORED_DEFAULTS.add(restored);
+  return restored;
+}
 
 /**
  * Helper for `buildShrunkTypeNodeFromType()`, which wraps `node`, a node built
@@ -1224,6 +1267,7 @@ function restoreDefault(
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
   typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
 ): ts.TypeNode {
   const payloads = new Set<ts.Type>();
   for (const member of type.isUnion() ? type.types : [type]) {
@@ -1234,13 +1278,11 @@ function restoreDefault(
   if (!payload || others.length > 0) return node;
   const value = typeToTypeNodeWithRegistry(
     payload,
-    { checker, factory, sourceFile },
+    { checker, factory, sourceFile, state },
     typeRegistry,
     DEFAULT_TYPE_NODE_FLAGS | ts.NodeBuilderFlags.AllowEmptyTuple,
   );
-  const restored = wrapTypeNodeWithDefault(node, value, factory);
-  RESTORED_DEFAULTS.add(restored);
-  return restored;
+  return wrapTypeNodeWithRestoredDefault(node, value, factory);
 }
 
 function buildShrunkTypeNodeFromTypeNode(
@@ -1249,6 +1291,7 @@ function buildShrunkTypeNodeFromTypeNode(
   factory: ts.NodeFactory,
   checker?: ts.TypeChecker,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  state?: CrossStageState,
   fullShapePaths: readonly (readonly string[])[] = [],
 ): ts.TypeNode | undefined {
   const normalized = uniquePaths(paths);
@@ -1281,6 +1324,7 @@ function buildShrunkTypeNodeFromTypeNode(
             factory,
             checker,
             typeRegistry,
+            state,
             normalizedFullShapePaths,
           );
           if (shrunkInner && shrunkInner !== inner) {
@@ -1352,6 +1396,7 @@ function buildShrunkTypeNodeFromTypeNode(
             factory,
             checker,
             typeRegistry,
+            state,
           );
           const arrayNode = factory.createArrayTypeNode(shrunkElement);
           if (checker) {
@@ -1368,6 +1413,7 @@ function buildShrunkTypeNodeFromTypeNode(
             factory,
             checker,
             typeRegistry,
+            state,
           );
           return factory.updateArrayTypeNode(node, shrunkElement);
         }
@@ -1384,6 +1430,7 @@ function buildShrunkTypeNodeFromTypeNode(
             factory,
             checker,
             typeRegistry,
+            state,
           );
           return factory.updateTypeOperatorNode(
             node,
@@ -1406,6 +1453,7 @@ function buildShrunkTypeNodeFromTypeNode(
             factory,
             checker,
             typeRegistry,
+            state,
           );
           return factory.updateTypeReferenceNode(
             node,
@@ -1428,6 +1476,7 @@ function buildShrunkTypeNodeFromTypeNode(
               node.getSourceFile(),
               factory,
               typeRegistry,
+              state,
               normalizedFullShapePaths,
             );
           }
@@ -1446,6 +1495,7 @@ function buildShrunkTypeNodeFromTypeNode(
       factory,
       checker,
       typeRegistry,
+      state,
       normalizedFullShapePaths,
     );
   }
@@ -1464,6 +1514,7 @@ function buildShrunkTypeNodeFromTypeNode(
       factory,
       checker,
       typeRegistry,
+      state,
       normalizedFullShapePaths,
     ) ?? inner;
     return factory.updateTypeReferenceNode(
@@ -1486,6 +1537,7 @@ function buildShrunkTypeNodeFromTypeNode(
         factory,
         checker,
         typeRegistry,
+        state,
         normalizedFullShapePaths,
       );
       if (!shrunk) return undefined;
@@ -1517,6 +1569,7 @@ function buildShrunkTypeNodeFromTypeNode(
         factory,
         checker,
         typeRegistry,
+        state,
         normalizedFullShapePaths,
       );
       if (s && s !== member) {
@@ -1716,6 +1769,7 @@ function shrinkTypeLiteralMembers(
   factory: ts.NodeFactory,
   checker?: ts.TypeChecker,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  state?: CrossStageState,
   fullShapePaths: readonly (readonly string[])[] = [],
 ): ts.TypeNode | undefined {
   const grouped = groupPathsByHead(normalizedPaths);
@@ -1738,6 +1792,7 @@ function shrinkTypeLiteralMembers(
       factory,
       checker,
       typeRegistry,
+      state,
       fullShapeGrouped.get(propertyName) ?? [],
     ) ?? member.type;
 
@@ -2336,6 +2391,7 @@ export function overlayContractCapabilities(
   factory: ts.NodeFactory,
   sourceFile: ts.SourceFile,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  state?: CrossStageState,
 ): ts.TypeNode {
   const observation = contractObservationFrom(summary);
   const visiting = new Set<ts.Type>();
@@ -2491,7 +2547,7 @@ export function overlayContractCapabilities(
           const memberNode = declaredNode ??
             typeToTypeNodeWithRegistry(
               propertyType,
-              { checker, factory, sourceFile },
+              { checker, factory, sourceFile, state },
               typeRegistry,
             );
           if (!memberNode) continue;
@@ -2621,16 +2677,20 @@ function extractCellLikeInnerTypeNode(
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
-  typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
 ): ts.TypeNode | undefined {
   // A nullable cell handle keeps its value alternatives inside the inferred
   // capability wrapper. Read the narrowed syntax before consulting cached types.
   if (ts.isUnionTypeNode(node)) {
     const members: ts.TypeNode[] = [];
+    const nullish: ts.TypeNode[] = [];
+    const values: { node: ts.TypeNode; type: ts.Type | undefined }[] = [];
     let hasCell = false;
     for (const member of node.types) {
       if (isNullishTypeNode(member)) {
         members.push(member);
+        nullish.push(member);
         continue;
       }
       const memberType = getTypeFromTypeNodeWithFallback(
@@ -2645,12 +2705,31 @@ function extractCellLikeInnerTypeNode(
         sourceFile,
         factory,
         typeRegistry,
+        state,
       );
       if (!inner) return undefined;
       hasCell = true;
       members.push(inner);
+      values.push({
+        node: inner,
+        type: memberType && isCellLikeType(memberType, checker)
+          ? unwrapCellLikeType(memberType, checker)
+          : undefined,
+      });
     }
-    return hasCell ? factory.createUnionTypeNode(members) : undefined;
+    const scoped = values.length === 1 && nullish.length > 0
+      ? moveNullishIntoScopeWrapper(
+        values[0]!.node,
+        values[0]!.type,
+        nullish,
+        checker,
+        sourceFile,
+        factory,
+        typeRegistry,
+        state,
+      )
+      : undefined;
+    return hasCell ? scoped ?? factory.createUnionTypeNode(members) : undefined;
   }
 
   const semanticType = getTypeFromTypeNodeWithFallback(
@@ -2676,11 +2755,110 @@ function extractCellLikeInnerTypeNode(
     }
     return inner;
   }
-  const innerNode = typeToSchemaTypeNode(semanticInner, checker, sourceFile);
+  const innerNode = typeToSchemaTypeNode(
+    semanticInner,
+    checker,
+    sourceFile,
+    state,
+  );
   if (innerNode && semanticInner) {
     typeRegistry?.set(innerNode, semanticInner);
   }
   return innerNode;
+}
+
+/**
+ * Helper for `extractCellLikeInnerTypeNode()`, which returns the value of a
+ * nullable cell whose value is a scope wrapper as that wrapper around the
+ * payload and the nullish alternatives, `PerUser<T | undefined>` for
+ * `PerUser<T>` and `undefined`, or `undefined` for a value that is not a scope
+ * wrapper. A scope wrapper may not be a union member: its scope would sit in a
+ * branch the write path does not read.
+ *
+ * A wrapper written out is recognized by its name, as schema generation
+ * recognizes it, and names its payload. Otherwise the value's type is read,
+ * from the cell's type or, for a value node printed from a type, which the
+ * checker reads as `any`, by resolving the name it prints in `sourceFile`, and
+ * the payload is printed from the types the scope brand is intersected with,
+ * one alternative per member of a union the brand was distributed over.
+ */
+function moveNullishIntoScopeWrapper(
+  value: ts.TypeNode,
+  cellValueType: ts.Type | undefined,
+  nullish: readonly ts.TypeNode[],
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+  factory: ts.NodeFactory,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
+): ts.TypeNode | undefined {
+  const written = unwrapTypeParentheses(value);
+  const name = ts.isTypeReferenceNode(written)
+    ? entityNameRight(written.typeName)
+    : undefined;
+
+  const namedScope = name && scopeForWrapperName(name.text);
+  if (namedScope) {
+    const payload = (written as ts.TypeReferenceNode).typeArguments?.[0];
+    return payload && wrapInScope([payload], namedScope, nullish, factory);
+  }
+
+  const valueType = cellValueType ??
+    (name && ts.isIdentifier((written as ts.TypeReferenceNode).typeName) &&
+        !(written as ts.TypeReferenceNode).typeArguments?.length
+      ? declaredTypeInScope(name, sourceFile, checker)
+      : undefined);
+  const brand = valueType && getScopeBrand(valueType, checker);
+  if (!brand) return undefined;
+  const alternatives: ts.TypeNode[] = [];
+  for (const alternative of brand.payload) {
+    const parts = alternative.map((part) =>
+      typeToTypeNodeWithRegistry(
+        part,
+        { checker, factory, sourceFile, state },
+        typeRegistry,
+      )
+    );
+    alternatives.push(
+      parts.length === 1
+        ? parts[0]!
+        : factory.createIntersectionTypeNode(parts),
+    );
+  }
+  return wrapInScope(alternatives, brand.scope, nullish, factory);
+}
+
+/** `__cfHelpers.PerUser<A | B | ...nullish>` for the scope `user`. */
+function wrapInScope(
+  alternatives: readonly ts.TypeNode[],
+  scope: SchemaScope,
+  nullish: readonly ts.TypeNode[],
+  factory: ts.NodeFactory,
+): ts.TypeNode {
+  return createHelperWrapperTypeNode(
+    factory.createUnionTypeNode([...alternatives, ...nullish]),
+    SCOPE_WRAPPER_FOR_SCOPE[scope],
+    factory,
+  );
+}
+
+/**
+ * The declared type of the non-generic type `name` denotes in `sourceFile`'s
+ * scope, an import followed to what it imports.
+ */
+function declaredTypeInScope(
+  name: ts.Identifier,
+  sourceFile: ts.SourceFile,
+  checker: ts.TypeChecker,
+): ts.Type | undefined {
+  let symbol = checker.getSymbolAtLocation(name) ??
+    checker.resolveName(name.text, sourceFile, ts.SymbolFlags.Type, false);
+  if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
+    symbol = checker.getAliasedSymbol(symbol);
+  }
+  return symbol && (symbol.flags & ts.SymbolFlags.Type) !== 0
+    ? checker.getDeclaredTypeOfSymbol(symbol)
+    : undefined;
 }
 
 function selectCellPathCapability(
@@ -2788,6 +2966,7 @@ function applyCellCapabilityPathsToTypeNode(
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  state?: CrossStageState,
 ): ts.TypeNode {
   if (paths.length === 0) {
     return node;
@@ -2801,6 +2980,7 @@ function applyCellCapabilityPathsToTypeNode(
       checker,
       sourceFile,
       typeRegistry,
+      state,
     );
     return updated === node.type
       ? node
@@ -2838,6 +3018,7 @@ function applyCellCapabilityPathsToTypeNode(
       sourceFile,
       factory,
       typeRegistry,
+      state,
     );
     if (inner) {
       const capability = selectCellPathCapability(childPaths);
@@ -2862,6 +3043,7 @@ function applyCellCapabilityPathsToTypeNode(
           checker,
           sourceFile,
           typeRegistry,
+          state,
         );
       }
     }
@@ -3527,6 +3709,7 @@ export function applyCapabilityDefaultsToTypeNode(
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
+  state?: CrossStageState,
 ): ts.TypeNode {
   const initial = applyDefaultsToTypeNode(node, defaults, factory, checker);
   if (initial.appliedCount > 0 || !defaults || defaults.length === 0) {
@@ -3544,9 +3727,11 @@ export function applyCapabilityDefaultsToTypeNode(
       checker,
       sourceFile,
       factory,
+      undefined,
+      state,
     );
   }
-  fallbackNode ??= typeToSchemaTypeNode(baseType, checker, sourceFile);
+  fallbackNode ??= typeToSchemaTypeNode(baseType, checker, sourceFile, state);
   if (!fallbackNode) {
     return initial.node;
   }
@@ -3723,6 +3908,7 @@ export function applyShrinkAndWrap(
         checker,
         sourceFile,
         factory,
+        context?.state,
       );
 
     if (!shouldWrap) {
@@ -3787,6 +3973,7 @@ export function applyShrinkAndWrap(
         sourceFile,
         factory,
         context?.state.typeRegistry,
+        context?.state,
         fullShapePaths,
       );
       const nodeDriven = buildShrunkTypeNodeFromTypeNode(
@@ -3795,6 +3982,7 @@ export function applyShrinkAndWrap(
         factory,
         checker,
         context?.state.typeRegistry,
+        context?.state,
         fullShapePaths,
       );
       shrunk = choosePreferredShrinkCandidate(
@@ -3816,6 +4004,7 @@ export function applyShrinkAndWrap(
         factory,
         checker,
         context?.state.typeRegistry,
+        context?.state,
         fullShapePaths,
       );
       const typeDriven = baseType && identityPaths.length === 0
@@ -3826,6 +4015,7 @@ export function applyShrinkAndWrap(
           sourceFile,
           factory,
           context?.state.typeRegistry,
+          context?.state,
           fullShapePaths,
         )
         : undefined;
@@ -3878,6 +4068,7 @@ export function applyShrinkAndWrap(
     checker,
     sourceFile,
     factory,
+    context?.state,
   );
   next = applyCellCapabilityPathsToTypeNode(
     next,
@@ -3886,6 +4077,7 @@ export function applyShrinkAndWrap(
     checker,
     sourceFile,
     context?.state.typeRegistry,
+    context?.state,
   );
 
   if (!shouldWrap) {

@@ -88,7 +88,7 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
    * @inheritDoc
    *
    * Keys are visited in UTF-8 byte order, matching the canonical order
-   * `value-hash.ts` uses, so that this encoding is deterministic across
+   * `ValueHasher` uses, so that this encoding is deterministic across
    * implementations and across objects whose keys differ only in insertion
    * order. See `3-json-encoding.md` Section 10.
    *

@@ -252,10 +252,12 @@ export type ServingLoopStats = {
    * absolutely, since those counters reset on a fresh runtime);
    * `notCurrentRearms` (per-key not-current-for-pair re-arms, accumulated);
    * `demandPasses` the pass count and `demandPassMs` the pass's total WALL
-   * time (NOT pure reconcile cost: it INCLUDES the awaited structure-load
-   * segments — `ensurePieceRunning` / `#confirmNoPatternMeta` — for
-   * first-demand and pending ROOT keys, which dominate the early passes;
-   * the reconcile itself is the O(rows) map work — W1 review MINOR-3);
+   * time (NOT pure reconcile cost: it INCLUDES the pull of those keys' root
+   * documents — `structureRootsPreloaded` below — and the awaited
+   * structure-load segments after it — `ensurePieceRunning` /
+   * `#confirmNoPatternMeta` — for first-demand and pending ROOT keys, which
+   * dominate the early passes; the reconcile itself is the O(rows) map work
+   * — W1 review MINOR-3);
    * `pushGrowthWakes` / `watchWakes` count NOTIFIES (the push-time
    * `demandChanged` and the `session.watch.set` / `.add` notifies) BEFORE
    * the 300 ms grace coalesces them into a pending callback. A callback
@@ -277,6 +279,23 @@ export type ServingLoopStats = {
     notCurrentRearms: number;
     demandPasses: number;
     demandPassMs: number;
+
+    /** Root documents the pass pulled TOGETHER before its sequential
+     * structure loads ran (`SpaceServer.#loadStructureRootDocs`): the
+     * instance each demand names and, for every scoped demand, the space
+     * instance as well. A load syncs that space instance only when the scoped
+     * read finds no pattern pointer and starts nothing, so a scoped root
+     * whose own instance resolves has one address requested that its load
+     * never syncs. Issuing them in one pull is what lets the replica's refresh
+     * queue coalesce them into a single `session.watch.add` instead of one per
+     * address inside the wave's settle. Counted per address REQUESTED per
+     * pass, so a scoped root contributes two and a root whose load stays
+     * owed across passes counts again in each. Most requested addresses are
+     * ones the replica already watches, which `pull()` answers from its
+     * tracker without a round trip, so this runs well above the number of
+     * adds the pull saves. */
+    structureRootsPreloaded: number;
+
     pushGrowthWakes: number;
     watchWakes: number;
 
@@ -659,6 +678,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     notCurrentRearms: 0,
     demandPasses: 0,
     demandPassMs: 0,
+    structureRootsPreloaded: 0,
     pushGrowthWakes: 0,
     watchWakes: 0,
     warmWakes: 0,

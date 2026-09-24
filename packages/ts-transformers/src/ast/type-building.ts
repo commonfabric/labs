@@ -4,7 +4,7 @@ import {
   readAuthoredTypeNodeOnce,
   unwrapTypeParentheses,
 } from "@commonfabric/schema-generator/type-node";
-import type { TransformationContext } from "../core/mod.ts";
+import type { CrossStageState, TransformationContext } from "../core/mod.ts";
 import type { CaptureTreeNode } from "../utils/capture-tree.ts";
 import { createPropertyName } from "../utils/identifiers.ts";
 import { getCallArgumentPosition } from "./call-arguments.ts";
@@ -381,6 +381,10 @@ export interface TypeLiteralRegistrationContext {
 /**
  * Converts a Type to a TypeNode, optionally registering it in the type registry.
  * Provides a central place for type-to-typenode conversion with consistent flags.
+ * `context.state` records the node as printed from `type`
+ * (`CrossStageState.printedFrom()`), the `unknown` put in place of a type the
+ * checker will not print included. The key is required, so a caller passes
+ * `undefined` only by saying so, where it has no state to hand.
  */
 export function typeToTypeNodeWithRegistry(
   type: ts.Type,
@@ -388,13 +392,16 @@ export function typeToTypeNodeWithRegistry(
     checker: ts.TypeChecker;
     factory: ts.NodeFactory;
     sourceFile: ts.SourceFile;
+    state: CrossStageState | undefined;
   },
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
   flags = DEFAULT_TYPE_NODE_FLAGS,
 ): ts.TypeNode {
-  const rawNode =
-    context.checker.typeToTypeNode(type, context.sourceFile, flags) ??
-      context.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+  const rawNode = context.checker.typeToTypeNode(
+    type,
+    context.sourceFile,
+    flags,
+  ) ?? context.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
 
   // Rewrite commonfabric type references to the always-resolvable
   // `__cfHelpers.X` qualified form. The printer's natural output references
@@ -419,6 +426,7 @@ export function typeToTypeNodeWithRegistry(
   if (typeRegistry) {
     typeRegistry.set(node, type);
   }
+  context.state?.recordPrintedFrom(node, type);
 
   return node;
 }
@@ -445,12 +453,12 @@ export function expressionToTypeNode(
   expr: ts.Expression,
   context: TransformationContext,
 ): ts.TypeNode {
-  const authoredCell = getAuthoredCellTypeNode(
+  const constructedCell = getConstructedCellTypeNode(
     expr,
     context.checker,
     context.state.typeRegistry,
   );
-  if (authoredCell) return authoredCell;
+  if (constructedCell) return constructedCell;
   const symbol = ts.isIdentifier(expr)
     ? context.checker.getSymbolAtLocation(expr)
     : undefined;
@@ -460,6 +468,7 @@ export function expressionToTypeNode(
       declaration,
       context.checker,
       context.state.typeRegistry,
+      context.state,
     )
     : undefined;
   if (preserved) {
@@ -481,11 +490,18 @@ export function expressionToTypeNode(
 }
 
 /**
- * Preserve a cell constructor's authored type arguments through identity-
- * preserving bindings. Printing its inferred type expands `typeof handler`
- * into a structural function type, which cannot name a CFC writer.
+ * The type of a cell an expression constructs, written with the type arguments
+ * its author gave the constructor. The expression is read back to the `new`
+ * through the forms that keep the cell's identity: an unannotated `const`, and
+ * `.for()`. Printing the inferred type instead expands `typeof handler` into a
+ * structural function type, which cannot name a CFC writer, so this applies
+ * only where the arguments name a value binding ({@link namesValueBinding}).
+ *
+ * `getAuthoredCellValueTypeNode()` in `type-shrinking.ts` is the reader for the
+ * other direction: it starts from a cell's type node and returns the value
+ * type inside it.
  */
-export function getAuthoredCellTypeNode(
+export function getConstructedCellTypeNode(
   expression: ts.Expression,
   checker: ts.TypeChecker,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
@@ -509,7 +525,7 @@ export function getAuthoredCellTypeNode(
         !(declaration.parent.flags & ts.NodeFlags.Const)
       ) return undefined;
       if (declaration.initializer) {
-        return getAuthoredCellTypeNode(
+        return getConstructedCellTypeNode(
           declaration.initializer,
           checker,
           typeRegistry,
@@ -523,7 +539,7 @@ export function getAuthoredCellTypeNode(
     ts.isPropertyAccessExpression(node.expression) &&
     node.expression.name.text === "for"
   ) {
-    return getAuthoredCellTypeNode(
+    return getConstructedCellTypeNode(
       node.expression.expression,
       checker,
       typeRegistry,
@@ -531,7 +547,10 @@ export function getAuthoredCellTypeNode(
     );
   }
   if (
-    !ts.isNewExpression(node) || !node.typeArguments?.some(containsTypeQuery)
+    !ts.isNewExpression(node) ||
+    !node.typeArguments?.some((argument) =>
+      namesValueBinding(argument, checker)
+    )
   ) return undefined;
   const kind = detectNewExpressionKind(node, checker);
   if (!kind) return undefined;
@@ -547,10 +566,47 @@ export function getAuthoredCellTypeNode(
   return typeNode;
 }
 
-/** Whether the authored syntax names a value binding instead of just its shape. */
-export function containsTypeQuery(node: ts.Node): boolean {
-  return ts.isTypeQueryNode(node) ||
-    ts.forEachChild(node, containsTypeQuery) === true;
+/**
+ * Whether authored type syntax names a value binding (`typeof handler`)
+ * instead of just a shape: in the node itself, in anything it holds, or in a
+ * type alias or interface it refers to by name, through any import binding.
+ * A generic alias is read without substituting its parameters, since the
+ * question is only whether a `typeof` is written anywhere the reference
+ * reaches; the reference's own arguments are read as the nodes it holds.
+ *
+ * Only declarations in authored modules are followed. A writer binding names
+ * a value in authored code, so an alias that carries one is authored too, and
+ * a declaration file's `typeof` (a brand key, say) names no writer.
+ */
+export function namesValueBinding(
+  node: ts.Node,
+  checker: ts.TypeChecker,
+  seen = new Set<ts.Node>(),
+): boolean {
+  if (ts.isTypeQueryNode(node)) return true;
+  if (ts.isTypeReferenceNode(node)) {
+    const name = ts.isIdentifier(node.typeName)
+      ? node.typeName
+      : node.typeName.right;
+    let symbol = checker.getSymbolAtLocation(name);
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
+      symbol = checker.getAliasedSymbol(symbol);
+    }
+    for (const declaration of symbol?.declarations ?? []) {
+      if (
+        !(ts.isTypeAliasDeclaration(declaration) ||
+          ts.isInterfaceDeclaration(declaration)) ||
+        declaration.getSourceFile().isDeclarationFile ||
+        seen.has(declaration)
+      ) continue;
+      seen.add(declaration);
+      if (namesValueBinding(declaration, checker, seen)) return true;
+    }
+  }
+  return ts.forEachChild(
+    node,
+    (child) => namesValueBinding(child, checker, seen) || undefined,
+  ) === true;
 }
 
 export function getDeclaredTypeNodeForBindingElement(
@@ -601,6 +657,7 @@ export function getPreservedTypeForBindingElement(
   declaration: ts.BindingElement,
   checker: ts.TypeChecker,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  state?: CrossStageState,
 ): PreservedBindingType | undefined {
   const declared = getDeclaredTypeNodeForBindingElement(declaration, checker);
   const preserved = declared && getPreservedBindingTypeNode(declared, checker);
@@ -636,6 +693,7 @@ export function getPreservedTypeForBindingElement(
       preserved,
       checker.getTypeFromTypeNode(declared),
       typeRegistry,
+      state,
     );
   }
 
@@ -649,10 +707,16 @@ export function getPreservedTypeForBindingElement(
       declaration,
       checker,
       typeRegistry,
+      state,
     )
     : undefined;
   if (substituted) {
-    return registerForEmission(substituted, instantiated.type, typeRegistry);
+    return registerForEmission(
+      substituted,
+      instantiated.type,
+      typeRegistry,
+      state,
+    );
   }
 
   // The instantiated declared type still carries the wrapper. The binding's
@@ -661,7 +725,12 @@ export function getPreservedTypeForBindingElement(
   // would emit a value type without `T`.
   const typeNode = typeToTypeNodeWithRegistry(
     instantiated.type,
-    { checker, factory: ts.factory, sourceFile: declaration.getSourceFile() },
+    {
+      checker,
+      factory: ts.factory,
+      sourceFile: declaration.getSourceFile(),
+      state,
+    },
     typeRegistry,
   );
   return {
@@ -703,8 +772,9 @@ function registerForEmission(
   typeNode: ts.TypeNode,
   type: ts.Type,
   typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
 ): PreservedBindingType {
-  const cloned = cloneTypeNodeDeepForEmission(typeNode, typeRegistry);
+  const cloned = cloneTypeNodeDeepForEmission(typeNode, typeRegistry, state);
   typeRegistry?.set(cloned, type);
   return { typeNode: cloned };
 }
@@ -722,6 +792,7 @@ function substituteTypeParameters(
   declaration: ts.BindingElement,
   checker: ts.TypeChecker,
   typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
 ): ts.TypeNode | undefined {
   const replacements = new Map<ts.Type, ts.TypeNode>();
   for (const parameter of parameters) {
@@ -729,7 +800,12 @@ function substituteTypeParameters(
     if (!argument) return undefined;
     const replacement = typeToTypeNodeWithRegistry(
       argument,
-      { checker, factory: ts.factory, sourceFile: declaration.getSourceFile() },
+      {
+        checker,
+        factory: ts.factory,
+        sourceFile: declaration.getSourceFile(),
+        state,
+      },
       typeRegistry,
       DEFAULT_TYPE_NODE_FLAGS | ts.NodeBuilderFlags.InTypeAlias,
     );
@@ -1139,14 +1215,17 @@ export function shouldPreserveBindingDeclaredTypeNode(
  * synthetic, forcing the printer to print structurally (literals fall back
  * to their `.text`).
  *
- * Pass `typeRegistry` to carry each node's registered Type onto its clone.
+ * `typeRegistry` and `state` carry each node's registered type, and the type a
+ * print was printed from (`CrossStageState.printedFrom()`), onto its clone: a
+ * clone of a print stands for the same type.
  *
  * (Mirrors the helper of the same name on the lift-capture-shrink branch,
  * #4078 — whichever lands second keeps one copy.)
  */
 export function cloneTypeNodeDeepForEmission<T extends ts.TypeNode>(
   typeNode: T,
-  typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
 ): T {
   const nullContext = (ts as typeof ts & {
     nullTransformationContext?: ts.TransformationContext;
@@ -1174,6 +1253,10 @@ export function cloneTypeNodeDeepForEmission<T extends ts.TypeNode>(
     const registered = typeRegistry?.get(node);
     if (registered) {
       typeRegistry!.set(result, registered);
+    }
+    const printedFrom = state?.printedFrom(node);
+    if (printedFrom && ts.isTypeNode(result)) {
+      state!.recordPrintedFrom(result, printedFrom);
     }
     return result;
   };

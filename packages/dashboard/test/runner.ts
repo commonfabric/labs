@@ -1,4 +1,8 @@
 import { fromFileUrl } from "@std/path";
+import {
+  shuffleFlag,
+  shuffleSeed,
+} from "@commonfabric/test-support/shuffle";
 
 const DASHBOARD_DIRECTORY = fromFileUrl(new URL("../", import.meta.url));
 
@@ -10,6 +14,7 @@ const DASHBOARD_DIRECTORY = fromFileUrl(new URL("../", import.meta.url));
 export const TEST_COMMANDS = [
   [
     "test",
+    shuffleFlag(shuffleSeed()),
     "--allow-env",
     "--allow-read",
     "--allow-write",

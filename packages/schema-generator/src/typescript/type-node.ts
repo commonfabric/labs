@@ -43,6 +43,14 @@ export function unwrapTypeParentheses(node: ts.TypeNode): ts.TypeNode {
 }
 
 /**
+ * Returns the last identifier of `name`: `PerUser` for both `PerUser` and
+ * `cf.PerUser`.
+ */
+export function entityNameRight(name: ts.EntityName): ts.Identifier {
+  return ts.isIdentifier(name) ? name : name.right;
+}
+
+/**
  * Returns the declaration of the type alias that `reference` names, through
  * any import binding, or `undefined` for a reference to anything else. The
  * alias may be generic, in which case the node it declares is written in its
@@ -114,4 +122,53 @@ export function readAuthoredTypeNode(
     visited.add(next);
     current = next;
   }
+}
+
+/**
+ * Returns the annotation written on `member`'s declaration when it denotes
+ * exactly `type`, the member's type where it is read, apart from the
+ * `undefined` that an optional member's `?` adds. Returns `undefined` for a
+ * member declared without one, and for an annotation that denotes something
+ * else there, such as a type parameter that an instantiation of a generic
+ * declaration has replaced.
+ *
+ * Through this, a reader that has only a type reads what the member's author
+ * wrote, and so what only syntax says: which binding a `typeof` names, for
+ * one. The checker does the same when it prints a type, putting a member's
+ * annotation into the print in place of printing its type. The annotation
+ * denotes the type; it does not say that a reader can evaluate it, so a
+ * reader pairs the two and reads the type where it cannot read the syntax.
+ */
+export function readMemberAnnotation(
+  member: ts.Symbol,
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): ts.TypeNode | undefined {
+  const declaration = member.valueDeclaration;
+  const annotation = declaration &&
+      (ts.isPropertySignature(declaration) ||
+        ts.isPropertyDeclaration(declaration))
+    ? declaration.type
+    : undefined;
+  if (!annotation) return undefined;
+  const annotated = checker.getTypeFromTypeNode(annotation);
+  if (annotated === type) return annotation;
+  const optional = (member.flags & ts.SymbolFlags.Optional) !== 0;
+  return optional && sameBesidesUndefined(annotated, type)
+    ? annotation
+    : undefined;
+}
+
+/** Whether `a` and `b` are unions of the same types once `undefined` is set aside. */
+function sameBesidesUndefined(a: ts.Type, b: ts.Type): boolean {
+  const parts = (type: ts.Type) =>
+    new Set(
+      (type.isUnion() ? type.types : [type]).filter((part) =>
+        (part.flags & ts.TypeFlags.Undefined) === 0
+      ),
+    );
+  const aParts = parts(a);
+  const bParts = parts(b);
+  return aParts.size === bParts.size &&
+    [...aParts].every((part) => bParts.has(part));
 }

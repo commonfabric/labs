@@ -85,7 +85,7 @@ conversion layer (Section 8) and represented in `FabricValue` trees as
 > declarations in `api.ts` and `interface.ts`, the conversions in
 > `convertible-js.ts`, the clone helpers in `value-clone.ts`, and the
 > operations a value of any class is subject to -- `deep-freeze.ts`,
-> `value-hash.ts`, the debug renderers in `value-debug/`, the comparisons in
+> the hashing in `value-hash/`, the debug renderers in `value-debug/`, the comparisons in
 > `comparison/`, and the tag vocabulary in `types/`.
 > Of those, one is also an exported subpath: `api.ts` as
 > `@commonfabric/data-model/api`, which is how `@commonfabric/api` reaches it.
@@ -208,8 +208,10 @@ exposes none of them and a walk stops there (Section 8.6).
 >   via their registry key. **Unique** symbols (`Symbol(desc)`, where
 >   `Symbol.keyFor(s)` returns `undefined`) have no portable representation and
 >   are rejected. The TypeScript `symbol` type cannot express this distinction,
->   so it is enforced at runtime by the conversion, hashing, and encoding
->   boundaries (Sections 4.9, 6, and 5). Symbol-keyed *properties* on plain
+>   so it is enforced at runtime by membership, by the tag dispatch (which tags
+>   a unique symbol `null`, as it does a function), and by the conversion,
+>   hashing, and encoding boundaries (Sections 4.9, 6, and 5). Symbol-keyed
+>   *properties* on plain
 >   objects are a separate matter — see Section 1.5 (Plain Containers /
 >   Objects).
 > - `function` — Functions are opaque closures with no portable representation.
@@ -3610,7 +3612,7 @@ The implementation is split across several files for separation of concerns:
 
 | File | Purpose |
 |------|---------|
-| `index.ts` | Public surface, and the package's main entry point: re-exports the conversion functions (from `convertible-js.ts`), the type declarations (from `interface.ts`), the clone helpers (from `value-clone.ts`), the deep freeze (from `deep-freeze.ts`), the hash (from `value-hash.ts`), the debug renderers (from `value-debug/`), the tag vocabulary, narrowings, and validators (from `types/`), and the comparisons `valueEqual()` and `fabricAwareEqual()` (from `comparison/`) |
+| `index.ts` | Public surface, and the package's main entry point: re-exports the conversion functions (from `convertible-js.ts`), the type declarations (from `interface.ts`), the clone helpers (from `value-clone.ts`), the deep freeze (from `deep-freeze.ts`), the hash (from `value-hash/`), the debug renderers (from `value-debug/`), the tag vocabulary, narrowings, and validators (from `types/`), and the comparisons `valueEqual()` and `fabricAwareEqual()` (from `comparison/`) |
 | `api.ts` | The pattern-visible declarations: the `FabricValue` union and the types beside it, the three base classes and every concrete class as an `interface` plus a `declare const`, and the debug-rendering option types. It has no imports, so that the type module the sandbox is served can inline it; it is also the `./api` export subpath, which `@commonfabric/api` re-exports. |
 | `interface.ts` | The three abstract base classes as classes, the layer types, and the conversion-layer types (`FabricConvertibleJsObject`, `FabricConvertibleJsValue`); re-exports every type `api.ts` declares. Free of runtime imports, so that any module can import it. |
 | `api-agreement.ts` | Asserts that each of the three base classes and its `api.ts` declaration are mutually assignable. Nothing imports it; it exists to be type-checked, and everything in it erases at compile time. |
@@ -3618,7 +3620,7 @@ The implementation is split across several files for separation of concerns:
 | `fabric-bases/` | The abstract bases a concrete `FabricValue` extends, one per branch of the type hierarchy: `BaseFabricInstance.ts`, `BaseFabricPrimitive.ts` (plus an `index.ts` barrel). These are the implementer's half of the hierarchy; `interface.ts` is the client's, and reaching it does not reach these. |
 | `fabric-instances/` | Concrete `FabricInstance` subclasses, each in its own file: `FabricNativeWrapper.ts`, `FabricError.ts`, `FabricLink.ts`, `FabricMap.ts`, `FabricSet.ts`. `impl.ts` holds the set of instance classes and what derives from it, `codecClasses()` among them, and `index.ts` is the barrel. `UnknownValue` and `ProblematicValue` are `FabricInstance`s too, and members of that set, but live in `codec-common/`, existing only as products of a decode fault. |
 | `fabric-primitives/` | Concrete `FabricPrimitive` subclasses, each in its own file: `FabricBytes.ts`, `FabricHash.ts`, `FabricEpochNsec.ts`, `FabricEpochDay.ts`, `FabricKeyPair.ts`, `FabricRegExp.ts`, `FabricUnavailable.ts`. `interface.ts` holds the tag vocabularies that range over those classes and imports nothing, the classes being its importers; `impl.ts` holds the set of classes and what derives from it, `codecClasses()` and the schema `type` names among them; and `index.ts` is the barrel. |
-| `for-testing-only.ts` | What the package offers to tests alone, under an export-map entry of its own and in no barrel: makers of examples of every concrete `FabricPrimitive` and `FabricInstance` class, each table typed so that a class with no entry stops the build, and one shared instance per primitive maker. The makers keep a stated contract: a new object per call, equal objects from one maker, and unequal objects from two makers of one class, of which every class has at least two. A test that ranges over the classes takes its values from here and holds no table of its own. It also offers internal steps of the package that a test of the public surface cannot reach dependably, each under a name ending `ForTestingOnly`: `float64BytesOfForTestingOnly()` is `value-hash.ts`'s number-to-bytes step, whose `NaN` arm a test of `hashOf()` can exercise only where the engine keeps a `NaN`'s payload. Loading it also loads `value-debug/`, which is how a unit test that imports a module by its path gets the debug renderers installed. |
+| `for-testing-only.ts` | What the package offers to tests alone, under an export-map entry of its own and in no barrel: makers of examples of every concrete `FabricPrimitive` and `FabricInstance` class, each table typed so that a class with no entry stops the build, and one shared instance per primitive maker. The makers keep a stated contract: a new object per call, equal objects from one maker, and unequal objects from two makers of one class, of which every class has at least two. A test that ranges over the classes takes its values from here and holds no table of its own. It also offers internal steps of the package that a test of the public surface cannot reach dependably, each under a name ending `ForTestingOnly`: `float64BytesOfForTestingOnly()` is `value-hash/`'s number-to-bytes step, whose `NaN` arm a test of `hashOf()` can exercise only where the engine keeps a `NaN`'s payload, and `getFrozenObjectHashCacheHitsForTestingOnly()` counts the hashes `value-hash/`'s deep-frozen-object cache serves, which the public surface cannot tell from hashes computed afresh. Loading it also loads `value-debug/`, which is how a unit test that imports a module by its path gets the debug renderers installed. |
 | `value-debug-internal.ts` | The debug renderers as the package's own modules reach them, and what the import-map key `@/value-debug` names: one forwarder per renderer, each calling the renderer of the same name which `value-debug/` installs as it loads. It imports nothing at run time, so any module may import it without a circular load-time dependency, the root class in `fabric-bases/` included. A forwarder throws until `value-debug/` has loaded. Every export-map entry which loads a module that renders loads `value-debug/` too, by way of the `fabric-bases/` barrel, so a program which imports the package has the renderers; `index.ts` re-exports them from `value-debug/` itself. |
 
 ---
@@ -3664,6 +3666,7 @@ four categories by high nibble:
 |:------------------|:-------|:--------|:--------------------------------|
 | `TAG_END`         | `0x00` | 0       | end-of-sequence sentinel         |
 | `TAG_HOLE`        | `0x01` | 1       | sparse array holes (run-length) |
+| `TAG_CYCLE`       | `0x02` | 2       | cycle reference to a container on the path |
 
 **Compound tags (`0x1N`)** — containers whose children are tagged values:
 
@@ -3714,7 +3717,7 @@ regardless of nibble range.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/value-hash.ts
+// file: packages/data-model/src/value-hash/impl.ts
 
 /**
  * Compute a hash for a `FabricValue`. The hash is encoding-independent:
@@ -3818,6 +3821,12 @@ export function hashOf(value: unknown): FabricHash {
   //                        where `codec` is `codecOf(v)` -- the class's
   //                        `[CODEC]` (Section 2.4), the same source of
   //                        truth the codec layer uses.
+  // - cycle:               an array, object, or `FabricInstance` that is
+  //                        already on the path from the root (by identity)
+  //                        is hashed as hash(TAG_CYCLE, leb128(distance)),
+  //                        where `distance` counts up the path from this
+  //                        position: 1 for the enclosing container. See
+  //                        the byte-level spec, Section 4.19.
   //
   // The JS object wrappers and temporal types are hashed as follows:
   //
@@ -3870,9 +3879,12 @@ export function hashOf(value: unknown): FabricHash {
 }
 ```
 
-> **String encoding for hashing.** Strings are hashed as UTF-8 byte sequences,
-> prefixed by their byte length (unsigned LEB128). See the byte-level spec
-> (`2-hash-byte-format.md`, Section 4.4) for the precise encoding.
+> **String encoding for hashing.** Strings are hashed as WTF-8 byte sequences
+> (UTF-8, extended to encode lone surrogates as themselves). A string of up to
+> 64 such bytes is fed as those bytes, prefixed by their length (unsigned
+> LEB128); a longer one is fed as the SHA-256 digest of its bytes, with no
+> length prefix. See the byte-level spec (`2-hash-byte-format.md`, Section
+> 4.4) for the precise encoding.
 
 > **Map/Set ordering in hashing.** Hashing preserves insertion order for
 > `FabricMap` entries and `FabricSet` elements, matching the serialized form.
@@ -3905,18 +3917,22 @@ most current version of the data. Hashes are not used as entity addresses.
 ### 6.7 Value Equality
 
 `FabricValue`s are compared for logical (content) equality by
-`valueEqual(a: FabricValue, b: FabricValue): boolean`. This is the equality the
-reactive system's change-detection and no-op gates depend on, and the equality
-that `Map` / `Set` key behavior over `FabricValue`s is expected to follow.
+`valueEqual(a: FabricValue, b: FabricValue): boolean`. This is the equality
+the reactive system's change-detection and no-op gates depend on, and the
+equality that `Map` / `Set` key behavior over `FabricValue`s is expected to
+follow.
 
-**Governing principle.** Primitive arguments follow `Object.is()`. Hashable
-containers compare by their canonical content (Section 6.4), with the same
-result as comparing their content hashes. `Object.is()`, not `===`, preserves
-the numeric distinctions the hashing layer also carries:
+**Governing principle.** Value-equality follows `Object.is()` at the primitive
+level, and content-hash equality (Section 6.4) is defined to agree with it —
+equivalently, two `FabricValue`s are value-equal exactly when their content
+hashes are equal. `Object.is()`, not `===`, is the operator the contract
+names, and the two disagree in exactly the two cases the hashing layer already
+distinguishes:
 
-- **`-0` ≠ `+0`.** `Object.is(-0, +0)` is `false`, so `-0` and `+0` are distinct
-  `FabricValue`s and hash distinctly (Section 6.4; `2-hash-byte-format.md`
-  Section 4.3). (`===` would conflate them, treating `-0 === +0` as `true`.)
+- **`-0` ≠ `+0`.** `Object.is(-0, +0)` is `false`, so `-0` and `+0` are
+  distinct `FabricValue`s and hash distinctly (Section 6.4;
+  `2-hash-byte-format.md` Section 4.3). (`===` would conflate them, treating
+  `-0 === +0` as `true`.)
 - **All `NaN`s are value-equal.** `Object.is(NaN, NaN)` is `true`, so every
   `NaN` is value-equal to every other `NaN` — including bitwise-distinct
   payloads, which the hashing layer canonicalizes to a single quiet `NaN`
@@ -3924,34 +3940,40 @@ the numeric distinctions the hashing layer also carries:
   identically. (`===` would report `NaN !== NaN`.)
 
 Every other primitive falls through to ordinary same-value equality:
-`+Infinity`, `-Infinity`, and each finite number equals itself and nothing else,
-and likewise for `string`, `boolean`, `bigint`, interned `symbol`, `null`, and
-`undefined`.
+`+Infinity`, `-Infinity`, and each finite number equals itself and nothing
+else, and likewise for `string`, `boolean`, `bigint`, interned `symbol`,
+`null`, and `undefined`.
 
-**Objects, arrays, and instances.** Equality compares the contents of plain
-objects and arrays and the codec-defined type and state of instances. It
-distinguishes a sparse array hole from a stored `undefined`, an absent key from
-a present `undefined`, and instance state held outside enumerable properties.
+**Objects, arrays, and instances.** Non-primitive `FabricValue`s are compared
+by canonical content hash: `valueEqual(a, b)` holds exactly when
+`hashStringOf(a) === hashStringOf(b)` (Section 6.4). Because the content hash
+reflects logical content and carries the primitive-leaf distinctions above, a
+`-0`, `NaN`, or any other value nested arbitrarily deep inside a plain object,
+array, `FabricMap`, `FabricSet`, or other `FabricInstance` inherits the same
+equality. Deciding object equality by content hash (rather than by a naive
+property walk) is also what lets structurally distinct values be told apart —
+a sparse array hole vs. a stored `undefined`, a present `undefined` vs. an
+absent key (Section 6.4), and two distinct `FabricInstance`s of the same class
+that carry no enumerable own-properties.
+
 Instance identity and concrete wrapper class do not replace the codec's
 definition of content: an `UnknownValue` preserving an instance's type tag and
-state compares equally to that instance.
+state hashes, and so compares, equally to that instance.
 
-Available immutable hashes can settle a comparison without reading contents.
-Otherwise, an iterative comparison visits each distinct object pair once and
-skips identical descendants. Sharing is not itself content: one shared child can
-equal multiple independent copies. Cycles compare the contents reached through
-corresponding edges; a mismatch reachable after a back edge still makes the
-values unequal. Equality therefore supports cyclic values even when the hash
-encoding does not.
+**Sharing and cycles.** Equality follows the hash encoding's treatment of both
+(`2-hash-byte-format.md` Section 4.19). Sharing is not content: one shared
+child equals multiple independent copies of it. Where a cycle closes is:
+`a = {x: a}` and `b = {x: {x: b}}` are unequal, although no finite sequence of
+reads tells them apart.
 
-**UTF-8 representation.** Container equality preserves the hash encoding's
-replacement of lone UTF-16 surrogates with U+FFFD in strings, symbol registry
-keys, property names, and codec tags. Object keys retain the canonical sort
-order before replacement, including multiple keys that encode identically. For
-example, `{s: "\ud800"}` and `{s: "\ufffd"}` have equal content hashes and
-compare equally. The primitive arguments `"\ud800"` and `"\ufffd"` remain
-distinct under `Object.is()`. Freezing or caching a container's hash does not
-change its equality result.
+**String representation.** Equality and the hash encoding both treat a string
+as its exact sequence of UTF-16 code units, lone surrogates included. The hash
+encodes strings as WTF-8 (`2-hash-byte-format.md` Section 4.4), under which
+distinct strings have distinct bytes, so equality compares strings with
+`Object.is()` wherever they appear: as values at any depth, as symbol registry
+keys, and as property names. For example, `"\ud800"` and `"\ufffd"` are
+unequal and hash distinctly, as are `{s: "\ud800"}` and `{s: "\ufffd"}`.
+Freezing or caching a container's hash does not change its equality result.
 
 ---
 
@@ -4221,9 +4243,11 @@ export function fabricFromConvertibleJsValue(
 > and whatever the value's prototype names: an `Error` re-pointed at
 > `Object.prototype` is still `"JsError"`.
 > Then the `typeof` question, ahead of every object question: a primitive,
-> and `null`, is tagged by its `typeof` name, and a function comes back
-> `null`, whatever its prototype names, since a function is never asked an
-> object question.
+> and `null`, is tagged by its `typeof` name; a function comes back `null`,
+> whatever its prototype names, since a function is never asked an object
+> question; and a symbol is tagged `"symbol"` only when it is
+> registry-interned, a unique symbol coming back `null` for the reason
+> Section 1.3 gives.
 > An array is tagged next, by `Array.isArray()`, so a subclass instance, a
 > severed-prototype array, and a cross-realm array all reach array handling and
 > are handled by the array rule of Section 1.5, rather than being rejected as
@@ -4234,17 +4258,21 @@ export function fabricFromConvertibleJsValue(
 > lets the object rule of Section 1.5 reject the value by name rather than as
 > some unrecognized class. Then a `FabricPrimitive`, by the tag its instance
 > reports, one of `FABRIC_PRIMITIVE_VALUE_TAGS`, and a `FabricInstance`, by
-> class. What remains is a JS class instance, decided last by its class, read
-> from its prototype, by a `switch` on constructor identity; a
+> class. What remains is a JS class instance, decided last by its class, by a
+> `switch` on the identity of its prototype; a
 > recognized one is a value the conversion has yet to import, the heavier
 > path, so the lookup's cost sits on it alone. That `switch` names only the
 > classes no earlier question decides: an object merely built on a plain
 > object, or on the prototype of `Array` or of an `Error` class, is none of
 > those by the test that decides it, and comes back `null`, unrecognized
-> rather than misidentified. Constructor identity is a per-realm question, so
+> rather than misidentified. Prototype identity is a per-realm question, so
 > a `Map`, `Set`, `Date`, `Uint8Array`, or `RegExp` from another realm comes
 > back `null` the same way, where an array or an error from another realm is
-> decided by the earlier test that holds across realms. A
+> decided by the earlier test that holds across realms. The realm's global
+> constructor bindings do not enter into it: SES lockdown replaces the global
+> `Date` and `RegExp` with constructors of its own that keep the original
+> prototypes, so an instance made before lockdown, after it, or inside a
+> compartment is recognized alike. A
 > `FabricPrimitive` subclass that reports no tag of its own is tagged as its
 > parent, which is a defect in that subclass rather than one the dispatch
 > guards against.
