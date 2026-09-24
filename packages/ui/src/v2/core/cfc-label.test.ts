@@ -1,9 +1,19 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
-import { cfcLabelViewIsPublic, ownerPrincipalFromLabel } from "./cfc-label.ts";
+import {
+  authorPrincipalFromLabel,
+  cfcLabelViewIsPublic,
+  ownerPrincipalFromLabel,
+} from "./cfc-label.ts";
 
 const DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+const OTHER_DID = "did:key:z6MkoTHERoTHERoTHERoTHERoTHERoTHERoTHERoTHERoT";
+
+const representsAt = (path: string[], subject: string) => ({
+  path,
+  label: { integrity: [{ kind: "represents-principal", subject }] },
+});
 
 const view = (entries: CfcLabelView["entries"]): CfcLabelView => ({
   version: 1,
@@ -61,6 +71,68 @@ describe("ownerPrincipalFromLabel", () => {
   it("returns undefined for an empty or missing label", () => {
     expect(ownerPrincipalFromLabel(undefined)).toBeUndefined();
     expect(ownerPrincipalFromLabel(view([]))).toBeUndefined();
+  });
+});
+
+describe("authorPrincipalFromLabel", () => {
+  it("returns the DID a profile's field atoms name when the root has none", () => {
+    // A message's link to a Fabric profile: the root holds the message's own
+    // `authored-by`, and the profile's owner-protected fields their owner.
+    const label = view([
+      {
+        path: [],
+        label: { integrity: [{ kind: "authored-by", subject: OTHER_DID }] },
+      },
+      representsAt(["avatar"], DID),
+      representsAt(["bio"], DID),
+      representsAt(["elements"], DID),
+    ]);
+    expect(authorPrincipalFromLabel(label)).toBe(DID);
+  });
+
+  it("returns the root's DID over a different one on a field", () => {
+    const label = view([
+      representsAt(["name"], OTHER_DID),
+      representsAt([], DID),
+    ]);
+    expect(authorPrincipalFromLabel(label)).toBe(DID);
+  });
+
+  it("returns `undefined` when field atoms name two DIDs", () => {
+    const label = view([
+      representsAt(["name"], DID),
+      representsAt(["avatar"], OTHER_DID),
+    ]);
+    expect(authorPrincipalFromLabel(label)).toBeUndefined();
+  });
+
+  it("returns `undefined` when root atoms name two DIDs, whatever the fields name", () => {
+    const label = view([
+      representsAt([], DID),
+      representsAt([], OTHER_DID),
+      representsAt(["name"], DID),
+    ]);
+    expect(authorPrincipalFromLabel(label)).toBeUndefined();
+  });
+
+  it("returns the DID of string-form atoms", () => {
+    const label = view([
+      { path: ["name"], label: { integrity: [`represents-principal:${DID}`] } },
+      representsAt(["avatar"], DID),
+    ]);
+    expect(authorPrincipalFromLabel(label)).toBe(DID);
+  });
+
+  it("returns `undefined` for a label with no represents-principal atom", () => {
+    const label = view([
+      {
+        path: [],
+        label: { integrity: [{ kind: "authored-by", subject: DID }] },
+      },
+    ]);
+    expect(authorPrincipalFromLabel(label)).toBeUndefined();
+    expect(authorPrincipalFromLabel(view([]))).toBeUndefined();
+    expect(authorPrincipalFromLabel(undefined)).toBeUndefined();
   });
 });
 
