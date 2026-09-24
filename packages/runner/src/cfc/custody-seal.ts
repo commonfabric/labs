@@ -158,6 +158,20 @@ export interface PreparedCustodySeal {
   readonly consent: CustodySealConsent;
 }
 
+/** Host-supplied controls on one commit. */
+export interface CustodySealCommitOptions {
+  /**
+   * Aborted when whoever asked for the seal can no longer see it land, such
+   * as a host client that detached. The commit checks it before each write
+   * and until the entry's transaction is sent, and an aborted commit throws
+   * the signal's reason without writing the entry. It cannot recall a write
+   * already sent, and a commit aborted after its receipt is written leaves
+   * that receipt without an entry, which is how a seal that did not commit
+   * reads.
+   */
+  readonly signal?: AbortSignal;
+}
+
 /** What a committed seal wrote. */
 export interface CustodySealResult {
   /** The instance's box, in the room space. */
@@ -1092,13 +1106,16 @@ export async function prepareCustodySeal(
  * records a seal whose commit failed, or an entry lost afterwards.
  *
  * @throws If the consent is unknown or spent, the gesture is not the host's,
- *   anything reviewed changed, the anchor is withheld from this runtime, or
- *   the actor's entry exists.
+ *   anything reviewed changed, the anchor is withheld from this runtime, the
+ *   actor's entry exists, or `options.signal` aborted before the entry's
+ *   transaction was sent.
  */
 export async function commitCustodySeal(
   consent: CustodySealConsent,
   event: unknown,
+  options: CustodySealCommitOptions = {},
 ): Promise<CustodySealResult> {
+  const { signal } = options;
   const state = consents.get(consent);
   if (!state) {
     throw new Error("Custody seal consent is unknown or already consumed");
@@ -1113,6 +1130,7 @@ export async function commitCustodySeal(
   ) {
     throw new Error("Custody seal requires a trusted host seal gesture");
   }
+  signal?.throwIfAborted();
   const current = await inspect(
     state.draft,
     state.requestedRoom,
@@ -1134,6 +1152,7 @@ export async function commitCustodySeal(
   }
   const runtime = state.draft.runtime;
   const { actor, policy, instance, entryKey } = state;
+  signal?.throwIfAborted();
 
   // The anchor comes first, so a seal that cannot establish it has written
   // nothing durable. It is written only where absent, and its value is a
@@ -1142,26 +1161,30 @@ export async function commitCustodySeal(
   const anchor = anchorCell(runtime, policy, instance);
   await anchor.sync();
   const anchorLink = anchor.getAsNormalizedFullLink();
-  const anchored = await runtime.editWithRetry((tx) => {
-    if (
-      tx.readValueOrThrow(anchorLink, { meta: internalVerifierRead }) !==
-        undefined
-    ) {
-      // Checked here as well as in the entry transaction, so a squatted
-      // anchor is refused before the receipt makes anything durable.
-      if (!absentOrAnchor(tx, anchorLink, anchorClause(policy), instance)) {
-        throw new Error(
-          "Custody seal refuses an anchor the seal did not create",
-        );
+  const anchored = await runtime.editWithRetry(
+    (tx) => {
+      if (
+        tx.readValueOrThrow(anchorLink, { meta: internalVerifierRead }) !==
+          undefined
+      ) {
+        // Checked here as well as in the entry transaction, so a squatted
+        // anchor is refused before the receipt makes anything durable.
+        if (!absentOrAnchor(tx, anchorLink, anchorClause(policy), instance)) {
+          throw new Error(
+            "Custody seal refuses an anchor the seal did not create",
+          );
+        }
+        return;
       }
-      return;
-    }
-    tx.setCfcImplementationIdentity({
-      kind: "builtin",
-      builtinId: CUSTODY_SEAL_WRITER,
-    });
-    anchor.withTx(tx).set({ instance });
-  });
+      tx.setCfcImplementationIdentity({
+        kind: "builtin",
+        builtinId: CUSTODY_SEAL_WRITER,
+      });
+      anchor.withTx(tx).set({ instance });
+    },
+    undefined,
+    { signal },
+  );
   if (anchored.error) {
     const reason = "reason" in anchored.error
       ? anchored.error.reason
@@ -1172,6 +1195,7 @@ export async function commitCustodySeal(
     );
   }
 
+  signal?.throwIfAborted();
   const receiptTx = runtime.edit();
   let receipt: Cell<unknown>;
   try {
@@ -1201,6 +1225,7 @@ export async function commitCustodySeal(
       draftId: state.draftLink.id,
     });
     receiptTx.markCreateOnly?.(receipt.getAsNormalizedFullLink());
+    signal?.throwIfAborted();
     const result = await receiptTx.commit();
     if (result.error) {
       throw new Error(`Custody seal receipt failed: ${result.error.message}`);
@@ -1212,56 +1237,65 @@ export async function commitCustodySeal(
 
   // Every seal of an instance writes the one box document, so seals by
   // different actors conflict; each retry re-runs every check against the
-  // state that won, including whether this actor's entry now exists.
+  // state that won, including whether this actor's entry now exists. The
+  // signal is checked here and, by `editWithRetry`, at every step until the
+  // transaction is sent.
   let box: Cell<Record<string, JSONValue>> | undefined;
-  const sealed = await runtime.editWithRetry((tx) => {
-    if (tx.getCfcState().trustSnapshot?.actingPrincipal !== actor) {
-      throw new Error("Custody seal actor changed after review");
-    }
-    for (const read of current.evidence) {
-      const stored = tx.readOrThrow(read.address, {
-        meta: internalVerifierRead,
-      });
-      if (hashStringOf(stored) !== read.digest) {
-        throw new Error("Custody seal review changed before commit");
+  const sealed = await runtime.editWithRetry(
+    (tx) => {
+      signal?.throwIfAborted();
+      if (tx.getCfcState().trustSnapshot?.actingPrincipal !== actor) {
+        throw new Error("Custody seal actor changed after review");
       }
-    }
-    tx.setCfcImplementationIdentity({
-      kind: "builtin",
-      builtinId: CUSTODY_SEAL_WRITER,
-    });
-    if (!absentOrAnchor(tx, anchorLink, anchorClause(policy), instance)) {
-      throw new Error("Custody seal refuses an anchor the seal did not create");
-    }
-    box = boxCell(runtime, policy, instance, tx);
-    const boxLink = box.getAsNormalizedFullLink();
-    if (!absentOrSealed(tx, boxLink)) {
-      throw new Error("Custody seal refuses a box the seal did not create");
-    }
-    // The one labeled read in this transaction: it attributes the entry's
-    // writes to the seal. Every other read is a verifier read, so neither the
-    // draft's clauses nor anyone else's reach the entry.
-    try {
-      anchor.withTx(tx).get();
-    } catch (error) {
-      if (error instanceof CfcReadCeilingError) {
+      for (const read of current.evidence) {
+        const stored = tx.readOrThrow(read.address, {
+          meta: internalVerifierRead,
+        });
+        if (hashStringOf(stored) !== read.digest) {
+          throw new Error("Custody seal review changed before commit");
+        }
+      }
+      tx.setCfcImplementationIdentity({
+        kind: "builtin",
+        builtinId: CUSTODY_SEAL_WRITER,
+      });
+      if (!absentOrAnchor(tx, anchorLink, anchorClause(policy), instance)) {
         throw new Error(
-          "Custody seal requires a runtime whose read ceiling admits the room's custody",
-          { cause: error },
+          "Custody seal refuses an anchor the seal did not create",
         );
       }
-      throw error;
-    }
-    const entryLink = { ...boxLink, path: [entryKey] };
-    if (tx.readValueOrThrow(entryLink, { meta: internalVerifierRead })) {
-      throw new Error("Custody seal refuses a second entry for this actor");
-    }
-    box.key(entryKey).set({
-      instance,
-      terms: canonicalJson(state.terms),
-      stance: state.stance,
-    });
-  });
+      box = boxCell(runtime, policy, instance, tx);
+      const boxLink = box.getAsNormalizedFullLink();
+      if (!absentOrSealed(tx, boxLink)) {
+        throw new Error("Custody seal refuses a box the seal did not create");
+      }
+      // The one labeled read in this transaction: it attributes the entry's
+      // writes to the seal. Every other read is a verifier read, so neither the
+      // draft's clauses nor anyone else's reach the entry.
+      try {
+        anchor.withTx(tx).get();
+      } catch (error) {
+        if (error instanceof CfcReadCeilingError) {
+          throw new Error(
+            "Custody seal requires a runtime whose read ceiling admits the room's custody",
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      const entryLink = { ...boxLink, path: [entryKey] };
+      if (tx.readValueOrThrow(entryLink, { meta: internalVerifierRead })) {
+        throw new Error("Custody seal refuses a second entry for this actor");
+      }
+      box.key(entryKey).set({
+        instance,
+        terms: canonicalJson(state.terms),
+        stance: state.stance,
+      });
+    },
+    undefined,
+    { signal },
+  );
   if (sealed.error) {
     // A check that threw is the refusal to report; anything else is the
     // commit's own failure.

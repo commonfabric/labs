@@ -775,6 +775,10 @@ export function securityContextFrom(
   } satisfies EveryFieldOf<RuntimeSecurityContext>;
 }
 
+/** Why a custody seal refuses a client that detached, or a disposed runtime. */
+const custodySealingUnavailable = () =>
+  new Error("Custody sealing is unavailable");
+
 /** A prepared custody seal, held in the backend until its host confirms. */
 type PendingCustodySeal = {
   consent: CustodySealConsent;
@@ -849,6 +853,8 @@ export class RuntimeProcessor {
   >();
   #snapshotShares = new Map<string, SnapshotShareConsent>();
   #custodySeals = new Map<string, PendingCustodySeal>();
+  /** One abort per commit in flight, aborted when its client detaches. */
+  #custodySealCommits = new Map<string, AbortController>();
   #detachedClients = new WeakSet<WorkerClient>();
   #telemetry: RuntimeTelemetry;
 
@@ -1194,6 +1200,9 @@ export class RuntimeProcessor {
         this.#pieceSourceConfirmations.clear();
         this.#snapshotShares.clear();
         this.#custodySeals.clear();
+        for (const commit of this.#custodySealCommits.values()) {
+          commit.abort(custodySealingUnavailable());
+        }
 
         // Clean up VDOM mounts
         for (const { reconciler, cancel } of this.#vdomMounts.values()) {
@@ -1269,6 +1278,9 @@ export class RuntimeProcessor {
     }
     for (const key of this.#custodySeals.keys()) {
       if (key.startsWith(prefix)) this.#custodySeals.delete(key);
+    }
+    for (const [key, commit] of this.#custodySealCommits) {
+      if (key.startsWith(prefix)) commit.abort(custodySealingUnavailable());
     }
 
     for (const [key, cancel] of [...this.#subscriptions]) {
@@ -2025,7 +2037,8 @@ export class RuntimeProcessor {
    * Consumes one custody seal preview through the dedicated trusted host
    * transport. The trusted gesture is built here, never taken from the
    * request, and the actor's source policy is read again so that a narrowed
-   * policy makes the review stale.
+   * policy makes the review stale. The commit is aborted if its client
+   * detaches before the entry's transaction is sent.
    */
   async handleCustodySealCommit(
     request: CustodySealCommitRequest,
@@ -2053,8 +2066,18 @@ export class RuntimeProcessor {
       },
     };
     markRendererTrustedEvent(event);
-    const sealed = await commitCustodySeal(pending.consent, event);
-    return { cell: createCellRef(sealed.receipt) };
+    // A client that detaches at any point before the entry's transaction is
+    // sent aborts the commit, so nothing is sealed for a client that is gone.
+    const commit = new AbortController();
+    this.#custodySealCommits.set(key, commit);
+    try {
+      const sealed = await commitCustodySeal(pending.consent, event, {
+        signal: commit.signal,
+      });
+      return { cell: createCellRef(sealed.receipt) };
+    } finally {
+      this.#custodySealCommits.delete(key);
+    }
   }
 
   handleCellGetCfcLabel(

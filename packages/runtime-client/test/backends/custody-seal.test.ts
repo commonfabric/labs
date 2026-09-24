@@ -191,6 +191,38 @@ async function withFixture(
   }
 }
 
+/**
+ * Runs `step` at a point inside the runtime's `index`th `editWithRetry` call
+ * (counting from 0). A seal's commit runs its checks, then writes the anchor
+ * (call 0) and, after the receipt, the entry (call 1), so this reaches the
+ * commit past every check the worker makes before it. `"before"` runs `step`
+ * before the call starts; `"after"` runs it once the call's action has staged
+ * its writes and before the transaction commits.
+ */
+function atEditWithRetry(
+  runtime: Runtime,
+  index: number,
+  when: "before" | "after",
+  step: () => Promise<void> | void,
+) {
+  const original = runtime.editWithRetry.bind(runtime);
+  let calls = 0;
+  runtime.editWithRetry = (async (
+    ...[fn, ...rest]: Parameters<Runtime["editWithRetry"]>
+  ) => {
+    if (calls++ !== index) return await original(fn, ...rest);
+    if (when === "before") {
+      await step();
+      return await original(fn, ...rest);
+    }
+    return await original((tx) => {
+      const staged = fn(tx);
+      step();
+      return staged;
+    }, ...rest);
+  }) as Runtime["editWithRetry"];
+}
+
 /** Replaces a cell's value in its own committed transaction. */
 async function rewrite<T>(runtime: Runtime, cell: Cell<T>, value: T) {
   const tx = runtime.edit();
@@ -329,6 +361,33 @@ describe("custody-seal", () => {
       }, first)).rejects.toThrow(
         /review is stale|review changed before commit/,
       );
+    });
+  });
+
+  it("does not seal for a client that detached once the entry was staged", async () => {
+    await withFixture(async ({ processor, runtime, refs }) => {
+      const preview = await processor.handleCustodySealPrepare({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+      }, first);
+      // The client leaves after the anchor and the receipt are written and
+      // the entry's transaction has staged its write, before it commits.
+      atEditWithRetry(
+        runtime,
+        1,
+        "after",
+        () => processor.disposeClient(first),
+      );
+      await expect(processor.handleCustodySealCommit({
+        type: RequestType.CustodySealCommit,
+        id: preview.id,
+      }, first)).rejects.toThrow("Custody sealing is unavailable");
+      // No entry was written, so a fresh review from another client still
+      // prepares.
+      await processor.handleCustodySealPrepare({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+      }, second);
     });
   });
 
