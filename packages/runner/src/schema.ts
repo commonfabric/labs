@@ -1341,6 +1341,7 @@ export function validateAndTransform(
         effectiveSchema as JSONSchemaObj,
         valueSelectedSchema,
         readMaybeLink(tx, link)?.schema,
+        value,
       )
       : combineOptionalSchema(effectiveSchema, resolvedValueLink.schema) ??
         selector.schema;
@@ -1551,10 +1552,12 @@ function compoundCellSchema(
   }
   const allOfItems = (schema.allOf ?? []).map(removeAsCellFromSchema);
   const anyOfItems = (schema.anyOf ?? []).map(removeAsCellFromSchema);
+  const oneOfItems = (schema.oneOf ?? []).map(removeAsCellFromSchema);
   const combinedSchema = internSchema({
     ...schema,
     ...(allOfItems.length > 0) && { allOf: allOfItems },
     ...(anyOfItems.length > 0) && { anyOf: anyOfItems },
+    ...(oneOfItems.length > 0) && { oneOf: oneOfItems },
     ...(asCellValues.length > 0) && { asCell: asCellValues },
   });
   if (cacheKey !== undefined) {
@@ -1569,33 +1572,64 @@ function compoundCellSchema(
 }
 
 /**
- * The schema a view mints a handle with, where the value selected `branch`
- * of the compound `schema`: what an eager read's merge re-points the handle
- * at, since a handle outlives the read that minted it and carries the
- * reader's declaration rather than the mode's. Where every branch that can
- * mint a handle is bare and the hop the handle is minted over carries a
- * schema of its own, the handle adopts that schema under the branch's marker
- * — the merge keeps such a handle as it is — and the adoption is done here,
- * since the view re-enters from the resolved value rather than from the hop
- * the eager traverser crosses; otherwise the compound, markers removed, under
- * the branch's own `asCell` values. A `oneOf` admits one matching branch, so
- * an eager read mints its handle from that branch and merges nothing; the
- * branch stands for it here too.
+ * How many arms of the `anyOf` `schema` leads with admit `value`, each read
+ * with the keywords beside the combinator merged in as the handle candidates
+ * are; `undefined` where the schema leads with no `anyOf`. Traversal
+ * dispatches the `anyOf` first, so this is the number of matches its merge
+ * would see: a `oneOf` or an `allOf` beside it rides inside each arm.
+ */
+function matchingAnyOfArms(
+  schema: JSONSchemaObj,
+  value: unknown,
+): number | undefined {
+  if (!Array.isArray(schema.anyOf)) return undefined;
+  const { anyOf, ...base } = schema;
+  let count = 0;
+  for (const arm of anyOf) {
+    const withDefs = cfcSchemaWithInheritedDefs(arm, schema.$defs);
+    const resolved = resolveSchema(withDefs) ?? withDefs;
+    if (
+      matchesConcreteValue(
+        combineSchema(base as JSONSchemaObj, resolved),
+        value,
+      )
+    ) {
+      count++;
+    }
+  }
+  return count;
+}
+
+/**
+ * The schema a view mints a handle with, where `value` selected `branch` of
+ * the compound `schema`: what an eager read would give the handle, since a
+ * handle outlives the read that minted it and carries the reader's
+ * declaration rather than the mode's. An eager read mints from the branch
+ * and re-points the handle only when its merge sees more than one matching
+ * arm, so where the compound leads with no `anyOf` — a `oneOf` admits one
+ * branch — or one arm alone admits the value, the branch stands; so does it
+ * where every branch that can mint a handle is bare and the hop the handle
+ * is minted over carries a schema of its own, the one re-pointing the merge
+ * declines. A branch that stands is combined with the hop's schema the way
+ * the traverser combines it when it mints — a bare branch adopts it, a
+ * shaped one stands — and that is done here, since the view re-enters from
+ * the resolved value rather than from the hop; resolved for structure the
+ * way `createObject` resolves a minted link's schema, so a content-addressed
+ * reference reads the same either way. Otherwise the handle gets the
+ * compound, markers removed, under the branch's own `asCell` values.
  */
 function viewHandleSchema(
   schema: JSONSchemaObj,
   branch: JSONSchemaObj,
   adopted: JSONSchema | undefined,
+  value: unknown,
 ): JSONSchema {
+  const arms = matchingAnyOfArms(schema, value);
   if (
-    schema.oneOf !== undefined && schema.anyOf === undefined &&
-    schema.allOf === undefined
+    arms === undefined || arms <= 1 ||
+    (compoundMintsBareHandlesOnly(schema) && isNontrivialSchema(adopted))
   ) {
-    return branch;
-  }
-  if (compoundMintsBareHandlesOnly(schema) && isNontrivialSchema(adopted)) {
-    // Resolved for structure the way `createObject` resolves a minted link's
-    // schema, so a content-addressed reference reads the same either way.
+    if (adopted === undefined) return branch;
     const combined = combineSchemaForLink(branch, adopted);
     return isObjectNotArray(combined)
       ? resolveExternalRootRefForStructure(combined)

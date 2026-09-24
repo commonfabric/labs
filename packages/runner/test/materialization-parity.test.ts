@@ -613,6 +613,30 @@ describe("materialization-parity", () => {
       await handleReadsInBothModes("typed-handle-branch", shaped, stored);
     });
 
+    it("is minted from the one matching arm of an optional handle in both modes", async () => {
+      // `Cell<T> | undefined` generates as a union whose one arm admits the
+      // value; an eager read mints from that arm and merges nothing, and the
+      // handle carries the arm's own schema in both modes.
+      const optional: JSONSchema = {
+        type: "object",
+        properties: {
+          h: {
+            anyOf: [
+              {
+                type: "object",
+                properties: { id: { type: "number" } },
+                asCell: ["cell"],
+              },
+              { type: "undefined" },
+            ],
+          },
+        },
+      };
+      await handleReadsInBothModes("optional-handle-arm", optional, { id: 1 }, {
+        id: 1,
+      });
+    });
+
     it("is minted from the one matching branch of a `oneOf` in both modes", async () => {
       // A `oneOf` admits one branch, so an eager read mints from it and merges
       // nothing; a view does the same, and the handle reads the value rather
@@ -633,6 +657,31 @@ describe("materialization-parity", () => {
         },
       };
       await handleReadsInBothModes("oneof-handle-branch", oneOf, { id: 1 }, {
+        id: 1,
+      });
+    });
+
+    it("is minted from the branch where one `anyOf` arm carries a `oneOf` beside it", async () => {
+      // Traversal dispatches the `anyOf` first, and its one arm — `true`, with
+      // the `oneOf` riding inside it — is the one match its merge sees, so an
+      // eager read mints from the branch and merges nothing; so does a view.
+      const mixed: JSONSchema = {
+        type: "object",
+        properties: {
+          h: {
+            anyOf: [true],
+            oneOf: [
+              {
+                type: "object",
+                properties: { id: { type: "number" } },
+                asCell: ["cell"],
+              },
+              { type: "undefined" },
+            ],
+          },
+        },
+      };
+      await handleReadsInBothModes("mixed-handle-branch", mixed, { id: 1 }, {
         id: 1,
       });
     });
