@@ -55,20 +55,25 @@ admits, so `addPiece`, `addPanel`, and `duplicatePanel` are all bindings of it
 and take one event shape; an event names the profile in `as`. The contract names
 the handler, not its binding, so any binding of this module's `admitPanel` may
 write the field. Once the root has written a panel, a write to the field from
-any other handler is refused. `addPanel` refuses an occurrence that already
-names a profile: one `admitPanel` recorded carries the label of whoever added it
-then, to this Loom or to another, and admitting it again would attribute the new
-admission to them. So an occurrence that was removed is added back by
-duplicating it or by adding a new one, and the profile of an occurrence
-`addPanel` admits comes only from its event's `as`: an occurrence whose creator
-wrote the field itself is refused by the same check. The runtime links an
-unlabeled document passed as `as` into the field when the panel's document holds
-no stored write contract yet, as when the write creates the panel: it checks a
-new link's source only under a write contract outside a union branch, and this
-one sits inside each of `Panel`'s branches. That does not change whose principal
-the label names. `addPanel` does record `as` on an unattributed occurrence that
-another Loom also holds, and that Loom then shows the same adder for it: the
-field belongs to the occurrence, not to its place in a Loom.
+any other handler is refused, and so is a write of the whole panel that keeps
+the field, such as `panel.set({ ...panel.get(), titleOverride })`; a write to
+one of its other fields, such as `panel.key("titleOverride").set(...)`, is not.
+
+A profile is recorded only on an occurrence `admitPanel` creates, never on a
+document a caller passes in. `addPiece` creates the occurrence. `addPanel` with
+`as` admits a new occurrence copied from the one passed, with its target and
+title, as `duplicatePanel` does, and leaves the document passed as it was, so an
+occurrence another Loom holds keeps the adder it shows there. `addPanel` without
+`as` links the occurrence passed itself, and refuses one that already names a
+profile: its label names whoever added it then, to this Loom or to another, and
+linking it would attribute this admission to them. So a removed occurrence that
+names a profile is added back by adding a new occurrence, with `as` or through
+`addPiece`; `duplicatePanel` copies only an occurrence still in the Loom. The
+runtime links an unlabeled document passed as `as` into the field when the
+panel's document holds no stored write contract yet, as when the write creates
+the panel: it checks a new link's source only under a write contract outside a
+union branch, and this one sits inside each of `Panel`'s branches. That does not
+change whose principal the label names.
 
 `addedBy` is the DID of the person who added the panel, as its writer claims it.
 `addPiece` and `duplicatePanel` take it from their event, and `addPanel` from
@@ -88,15 +93,17 @@ with neither, the copy is attributed to the owner.
 `addPiece({piece, as?, addedBy?})` idempotently adds a registration occurrence;
 for a piece already registered it changes nothing, its adder included, though a
 malformed adder is still refused. `addPanel` deduplicates by occurrence
-identity. `movePanel` and `duplicatePanel` accept an optional `before`
-occurrence; an absent source or anchor refuses. Duplicating copies the
-occurrence's complete target link and its title. It takes its adder from its own
-event, never from the source: a copy is added by whoever duplicates it, and one
-made without an adder is attributed to the owner. The runtime invocation
-identifies the new occurrence, including when that delivery is retried.
-`removePanel` removes only one occurrence and its presentation references.
-`removePiece` unregisters every occurrence of the specified complete piece link.
-Neither operation deletes the target.
+identity: an occurrence already in the Loom is not added again, with or without
+`as`, while each `addPanel` with `as` of an occurrence outside it adds a new
+copy. `movePanel` and `duplicatePanel` accept an optional `before` occurrence;
+an absent source or anchor refuses. Duplicating copies the occurrence's complete
+target link and its title. It takes its adder from its own event, never from the
+source: a copy is added by whoever duplicates it, and one made without an adder
+is attributed to the owner. The runtime invocation identifies the new
+occurrence, including when that delivery is retried. `removePanel` removes only
+one occurrence and its presentation references. `removePiece` unregisters every
+occurrence of the specified complete piece link. Neither operation deletes the
+target.
 
 `setPresentation({stagedPanels, focusedPanel?})` replaces staging and focus in
 one transaction. Staged occurrences must belong to the current collection and be

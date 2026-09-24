@@ -19,6 +19,10 @@ type TestProfile = AddIntegrity<
   readonly ["loom-test-profile"]
 >;
 
+/** The address a URL panel shows, or `undefined` for another kind. */
+const urlOf = (panel: Panel): string | undefined =>
+  panel.kind === "url" ? panel.url : undefined;
+
 export default pattern(() => {
   const member = Writable.of<TestProfile>({ name: "Member" });
   const other = Writable.of<TestProfile>({ name: "Other" });
@@ -53,39 +57,48 @@ export default pattern(() => {
   const addClaimedAsMember = action(() =>
     loom.addPanel.send({ panel: claimed, as: member })
   );
+  // `as` admits a new occurrence copied from the one passed, and records the
+  // profile only there: the document the caller passed stays as it was.
   const addUrlAsMember = action(() =>
     loom.addPanel.send({ panel: url, as: member })
   );
-  // An occurrence that already records a profile names whoever added it
-  // first, so admitting it again, here or to another Loom, would attribute the
-  // new admission to them.
-  const readmitElsewhereAsOther = action(() =>
-    elsewhere.addPanel.send({ panel: url, as: other })
+  // Without `as`, the occurrence passed is linked itself.
+  const linked = new Writable<Panel>({
+    kind: "url",
+    url: "https://example.com/linked",
+  });
+  const addLinked = action(() => loom.addPanel.send({ panel: linked }));
+  // Another Loom admits an occurrence this one holds unattributed. Its adder
+  // is recorded on that Loom's own copy, never on the occurrence this Loom
+  // shows.
+  const admitLinkedElsewhereAsOther = action(() =>
+    elsewhere.addPanel.send({ panel: linked, as: other })
   );
-  const readmitElsewhere = action(() =>
-    elsewhere.addPanel.send({ panel: url })
+  // An occurrence that records a profile names whoever added it then, so it is
+  // not linked again without `as`; with `as` it is copied like any other.
+  const linkProfiledElsewhere = action(() =>
+    elsewhere.addPanel.send({ panel: loom.panels[1] })
   );
-  const removeUrl = action(() => loom.removePanel.send({ panel: url }));
-  const readmitAsOther = action(() =>
-    loom.addPanel.send({ panel: url, as: other })
+  const copyProfiledElsewhereAsOther = action(() =>
+    elsewhere.addPanel.send({ panel: loom.panels[1], as: other })
   );
   const duplicateAsOther = action(() =>
-    loom.duplicatePanel.send({ panel: url, as: other })
+    loom.duplicatePanel.send({ panel: linked, as: other })
   );
   const duplicateUnattributed = action(() =>
-    loom.duplicatePanel.send({ panel: url })
+    loom.duplicatePanel.send({ panel: linked })
   );
   // Writes that do not go through the root's handlers: one gives an
   // unattributed occurrence a profile, one replaces a recorded profile.
   const forgeOnUnattributed = action(() =>
-    loom.panels[3].key("addedByProfile").set(member)
+    loom.panels[4].key("addedByProfile").set(member)
   );
   const forgeOverRecorded = action(() =>
     loom.panels[0].key("addedByProfile").set(other)
   );
   // The other structural actions still write occurrences that carry a
   // profile.
-  const moveUrlLast = action(() => loom.movePanel.send({ panel: url }));
+  const moveLinkedLast = action(() => loom.movePanel.send({ panel: linked }));
   const stageAll = action(() =>
     loom.setPresentation.send({
       stagedPanels: [...loom.panels],
@@ -96,6 +109,23 @@ export default pattern(() => {
     loom.removePanel.send({ panel: loom.panels[0] })
   );
   const unregister = action(() => loom.removePiece.send({ piece }));
+  // A removed occurrence that records a profile is not linked back; its adder
+  // adds a new occurrence instead. The two events are delivered in order.
+  const removeAndRelinkProfiled = action(() => {
+    const panel = loom.panels[0];
+    loom.removePanel.send({ panel });
+    loom.addPanel.send({ panel });
+  });
+  // A panel that records a profile keeps it through a write of one field, but
+  // a write of the whole panel, even one that keeps the same profile, is not
+  // `admitPanel`'s and is refused.
+  const renameWhole = action(() => {
+    const panel = loom.panels[0];
+    panel.set({ ...panel.get(), titleOverride: "Renamed whole" });
+  });
+  const renameField = action(() =>
+    loom.panels[0].key("titleOverride").set("Renamed field")
+  );
   const claimMember = action(() =>
     loom.viewerState.key("actingProfile").set(member)
   );
@@ -108,7 +138,7 @@ export default pattern(() => {
     // refused event as a runtime error.
     allowConsoleWarnings: true,
     allowRuntimeErrors: true,
-    expectRuntimeErrors: 6,
+    expectRuntimeErrors: 5,
     [TESTS]: [
       { action: addPieceAsMember },
       {
@@ -130,16 +160,37 @@ export default pattern(() => {
       { action: addUrlAsMember },
       {
         assertion: assert(() =>
-          loom.panels.length === 2 && loom.panels[1].equals(url) &&
-          url.key("addedByProfile").equals(member)
+          loom.panels.length === 2 && !loom.panels[1].equals(url) &&
+          urlOf(loom.panels[1].get()) === urlOf(url.get()) &&
+          loom.panels[1].key("addedByProfile").equals(member) &&
+          url.get().addedByProfile === undefined
         ),
       },
-      { action: readmitElsewhereAsOther },
-      { action: readmitElsewhere },
+      { action: addLinked },
       {
         assertion: assert(() =>
-          elsewhere.panels.length === 0 &&
-          url.key("addedByProfile").equals(member)
+          loom.panels.length === 3 && loom.panels[2].equals(linked) &&
+          linked.get().addedByProfile === undefined
+        ),
+      },
+      { action: admitLinkedElsewhereAsOther },
+      {
+        assertion: assert(() =>
+          elsewhere.panels.length === 1 &&
+          !elsewhere.panels[0].equals(linked) &&
+          elsewhere.panels[0].key("addedByProfile").equals(other) &&
+          linked.get().addedByProfile === undefined &&
+          loom.panels[2].equals(linked)
+        ),
+      },
+      { action: linkProfiledElsewhere },
+      { action: copyProfiledElsewhereAsOther },
+      {
+        assertion: assert(() =>
+          elsewhere.panels.length === 2 &&
+          !elsewhere.panels[1].equals(loom.panels[1]) &&
+          elsewhere.panels[1].key("addedByProfile").equals(other) &&
+          loom.panels[1].key("addedByProfile").equals(member)
         ),
       },
       // A copy is added by whoever duplicates it.
@@ -147,17 +198,17 @@ export default pattern(() => {
       { action: duplicateUnattributed },
       {
         assertion: assert(() =>
-          loom.panels.length === 4 &&
-          loom.panels[2].key("addedByProfile").equals(other) &&
-          loom.panels[3].get().addedByProfile === undefined &&
-          url.key("addedByProfile").equals(member)
+          loom.panels.length === 5 &&
+          loom.panels[3].key("addedByProfile").equals(other) &&
+          loom.panels[4].get().addedByProfile === undefined &&
+          linked.get().addedByProfile === undefined
         ),
       },
       { action: forgeOnUnattributed },
       { action: forgeOverRecorded },
       {
         assertion: assert(() =>
-          loom.panels[3].get().addedByProfile === undefined &&
+          loom.panels[4].get().addedByProfile === undefined &&
           loom.panels[0].key("addedByProfile").equals(member)
         ),
       },
@@ -167,42 +218,57 @@ export default pattern(() => {
       { action: duplicateFromUI },
       {
         assertion: assert(() =>
-          loom.panels.length === 5 &&
+          loom.panels.length === 6 &&
           loom.panels[0].get().kind === "piece" &&
-          loom.panels[4].get().kind === "piece" &&
-          loom.panels[4].key("addedByProfile").equals(member)
+          loom.panels[5].get().kind === "piece" &&
+          loom.panels[5].key("addedByProfile").equals(member)
         ),
       },
-      { action: moveUrlLast },
+      { action: moveLinkedLast },
       { action: stageAll },
       {
         assertion: assert(() =>
-          loom.panels[4].equals(url) &&
-          loom.presentation.stagedPanels.length === 5 &&
+          loom.panels[5].equals(linked) &&
+          loom.presentation.stagedPanels.length === 6 &&
           loom.presentation.focusedPanel?.equals(loom.panels[0]) === true
         ),
       },
       { action: removeFirst },
       {
         assertion: assert(() =>
-          loom.panels.length === 4 &&
-          loom.presentation.stagedPanels.length === 4 &&
+          loom.panels.length === 5 &&
+          loom.presentation.stagedPanels.length === 5 &&
           loom.presentation.focusedPanel?.get() === undefined
         ),
       },
       { action: unregister },
       {
         assertion: assert(() =>
-          loom.panels.length === 3 && loom.pieceRegistry.length === 0
+          loom.panels.length === 4 && loom.pieceRegistry.length === 0
         ),
       },
-      { action: removeUrl },
-      { action: readmitAsOther },
+      { action: removeAndRelinkProfiled },
       {
         assertion: assert(() =>
-          loom.panels.length === 2 &&
-          !loom.panels.some((panel) => panel.equals(url)) &&
-          url.key("addedByProfile").equals(member)
+          loom.panels.length === 3 &&
+          !loom.panels.some((panel) =>
+            panel.get().addedByProfile !== undefined &&
+            panel.key("addedByProfile").equals(member)
+          )
+        ),
+      },
+      { action: renameWhole },
+      {
+        assertion: assert(() =>
+          loom.panels[0].get().titleOverride === undefined &&
+          loom.panels[0].key("addedByProfile").equals(other)
+        ),
+      },
+      { action: renameField },
+      {
+        assertion: assert(() =>
+          loom.panels[0].get().titleOverride === "Renamed field" &&
+          loom.panels[0].key("addedByProfile").equals(other)
         ),
       },
     ],

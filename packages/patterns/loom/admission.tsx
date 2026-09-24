@@ -31,7 +31,8 @@ export type PanelAdderProfile = RepresentsCurrentUser<
 
 /**
  * What an `admitPanel` binding does with its event: register a piece, add an
- * occurrence the caller made, or add a copy of an occurrence.
+ * occurrence the caller made (a copy of it when the event names a profile), or
+ * add a copy of an occurrence.
  */
 export type AdmissionMode = "piece" | "panel" | "duplicate";
 
@@ -163,13 +164,33 @@ function copyOf(source: Panel, event: PanelAdmission): Panel {
 }
 
 /**
+ * Inserts at `index` a new occurrence copied from `source` and attributed to
+ * the event's adder. The handler invocation supplies the cause, so replay
+ * addresses this same occurrence.
+ */
+function admitCopy(
+  panels: Writable<Writable<Panel>[]>,
+  list: readonly Writable<Panel>[],
+  index: number,
+  source: Panel,
+  event: PanelAdmission,
+): void {
+  const copy = copyOf(source, event);
+  validatePanel(copy);
+  const occurrence = new Writable<Panel>();
+  occurrence.set(copy);
+  panels.set(withInserted(list, index, occurrence));
+}
+
+/**
  * Admits one panel occurrence to the Loom and records who added it.
  *
  * It is the only handler that may write a panel's `addedByProfile`, so every
  * stream that adds a panel is a binding of it, and `mode` says which. An
  * event's `as` is the profile under which the person adding acts; it is
- * linked into the occurrence, and the runtime labels it with the principal
- * who acted. An event without `as` may still name the adder in `addedBy`,
+ * linked into an occurrence this handler creates, never into a document the
+ * caller passed, and the runtime labels it with the principal who acted. An
+ * event without `as` may still name the adder in `addedBy`,
  * which is a claim the handler checks only for DID syntax.
  *
  * The body touches the occurrences in `panels` only through helpers. Its
@@ -208,17 +229,22 @@ export const admitPanel = handler<
     if (event.as !== undefined && value.addedBy !== undefined) {
       throw new Error("A panel added under a profile takes no addedBy");
     }
-    // An occurrence that already names a profile is refused. One this handler
-    // recorded carries the label of whoever added it then, to this Loom or to
-    // another, so admitting it again would attribute this admission to them.
-    // The profile of an admitted occurrence comes only from the event's `as`.
+    if (event.as !== undefined) {
+      // A profile is recorded only on an occurrence this handler creates, so
+      // `as` admits a copy of the one passed, as `duplicate` does. Writing it
+      // into the document passed would change who added that occurrence
+      // wherever else it is shown, and the document may be another Loom's.
+      admitCopy(panels, list, index, value, event);
+      return;
+    }
+    // An occurrence that already names a profile is not linked again: one
+    // this handler recorded carries the label of whoever added it then, to
+    // this Loom or to another, so linking it would attribute this admission to
+    // them.
     if (value.addedByProfile !== undefined) {
       throw new Error(
         "A panel that already records its adder's profile cannot be added again",
       );
-    }
-    if (event.as !== undefined) {
-      panel.key("addedByProfile").set(event.as.resolveAsCell());
     }
     panels.set(withInserted(list, index, panel));
     return;
@@ -227,11 +253,5 @@ export const admitPanel = handler<
     throw new Error("The panel is no longer in this Loom");
   }
   const index = insertionIndex(list, event.before);
-  const copy = copyOf(panel.get(), event);
-  validatePanel(copy);
-  // The handler invocation supplies the cause, so replay addresses this same
-  // occurrence.
-  const occurrence = new Writable<Panel>();
-  occurrence.set(copy);
-  panels.set(withInserted(list, index, occurrence));
+  admitCopy(panels, list, index, panel.get(), event);
 });

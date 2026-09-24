@@ -116,7 +116,8 @@ export interface PanelAdder {
  * The event of every stream that adds a panel. Each is a binding of the one
  * handler that writes `addedByProfile`, so all three take this shape:
  * `addPiece` requires `piece`, and `addPanel` and `duplicatePanel` require
- * `panel` and accept `before`.
+ * `panel` and accept `before`. `addPanel` with `as` adds a copy of `panel`,
+ * never recording the profile on the document passed.
  */
 export interface PanelAdmission extends PanelAdder {
   piece?: Writable<unknown>;
