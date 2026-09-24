@@ -28,9 +28,17 @@ It accepts only a renderer-trusted DOM event whose `provenance.ui.pattern` is
 
 A room is its terms document and its policy. The terms document's space is the
 room space `S`. The terms are a JSON object that names `seats`, the DIDs that may
-seal, and `stanceSchema`, the schema every sealed value satisfies. Everything
-else in the terms is shown to the actor and sealed with the value. One instance
-of a room is `(P, D)`, where `D` is the digest of the terms.
+seal, and `stanceSchema`, the schema every sealed value satisfies. The seats
+must be distinct DIDs in the syntax of W3C DID Core (a lowercase method, then an
+identifier of letters, digits, `.`, `-`, `_`, percent-escapes and `:`, not
+ending in `:`), at most 256 characters long, so that the confirmation can show
+each one as it is. Two further fields are optional and only displayed:
+`question`, the question the room asks, and `answers`, the answers the room
+says it can give. The seal checks neither; in particular, nothing checks that
+the policy releases only the listed answers, and the confirmation presents both
+as what the terms say rather than as what was checked. Everything else in the
+terms is shown to the actor and sealed with the value. One instance of a room
+is `(P, D)`, where `D` is the digest of the terms.
 
 ## What the seal checks
 
@@ -68,7 +76,8 @@ established the checks are compared against the committing transaction.
   space; against that code, what holds is the confirmation, which shows the
   sources the value draws on.
 - **The room names its readers.** The room space's access list must exist and
-  name a concrete owner. The preview lists every principal it names, with its
+  name a concrete owner, and every principal it names must be `*` or a DID of
+  the form the seats take. The preview lists every principal it names, with its
   role, and the room space's own key, which the memory service treats as an
   owner whether or not the list names it, since whoever can read `S` is the
   audience of what the room releases.
