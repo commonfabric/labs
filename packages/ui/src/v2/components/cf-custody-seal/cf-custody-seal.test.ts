@@ -244,7 +244,7 @@ describe("CFCustodySeal workflow", () => {
     );
   });
 
-  it("shows the policy's digest as the checked fact and its names as room text", async () => {
+  it("shows the policy's digest as the checked fact, and its names and the sources as stripped text", async () => {
     using state = setup({
       prepare: () =>
         Promise.resolve({
@@ -254,12 +254,20 @@ describe("CFCustodySeal workflow", () => {
             policyRefKind: "module",
             moduleIdentity: "sha256:\u202eeludom",
             symbol: "custody\u2066Rules",
-            policyDigest: "policy-digest",
+            policyDigest: "policy\u202e-digest",
             subject: "did:key:verified-room",
           },
+          sources: [{
+            type: "https://commonfabric.org/cfc/atom/Context",
+            name: "cal\u202eendar",
+            subject: "did:key:actor",
+          }],
         }),
     });
     await state.element.accessForTestingOnly.prepare();
+    expect(interpolatedInto(state.element, "<li")).toContain(
+      "calendar (context)",
+    );
     expect(interpolatedInto(state.element, '<bdi class="digest"')).toEqual([
       "policy-digest",
       "custodyRules",

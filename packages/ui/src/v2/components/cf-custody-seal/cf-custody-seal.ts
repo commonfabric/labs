@@ -120,19 +120,25 @@ function describePolicy(policy: unknown) {
   const symbol = named(atom.symbol);
   const moduleIdentity = named(atom.moduleIdentity);
   return html`
-    <bdi class="digest" dir="ltr">${atom.policyDigest}</bdi>
+    <bdi class="digest" dir="ltr">${roomText(atom.policyDigest)}</bdi>
     <p class="note">A manifest you trust to decide what the room releases. The
       room's reference names it <bdi class="symbol">${symbol}</bdi> in
       <bdi class="module">${moduleIdentity}</bdi>.</p>
   `;
 }
 
-/** A source atom as a person reads it: its name or class, and its kind. */
+/**
+ * A source atom as a person reads it: its name or class, and its kind. The
+ * name and class are the actor's own, but they are text, so they are shown
+ * with the same stripping as room text.
+ */
 function describeSource(source: unknown): string {
   const atom = source as Record<string, unknown>;
-  if (typeof atom?.name === "string") return `${atom.name} (context)`;
-  if (typeof atom?.class === "string") return `${atom.class} (resource)`;
-  return JSON.stringify(source);
+  if (typeof atom?.name === "string") return `${roomText(atom.name)} (context)`;
+  if (typeof atom?.class === "string") {
+    return `${roomText(atom.class)} (resource)`;
+  }
+  return roomText(JSON.stringify(source));
 }
 
 /**
