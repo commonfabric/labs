@@ -80,6 +80,24 @@ staged in the transaction. The link carries its source's label and the
 `LinkReference` a link write mints, so a reader reaching the entry through the
 link sees the entry's own authorship.
 
+## Writes that leave a protected value as it is
+
+A runtime that starts a piece it did not create replays the setup of the
+sub-pieces its pattern composes, and the replay stages each argument document
+again with the bytes it already holds. Pattern code that sets a whole document
+does the same to every field it carries over. Such a transaction records an
+attempted write over a protected field without changing it.
+
+Preparation defers the field's writer requirement when no write the
+transaction recorded changes a byte at the field, at an ancestor where the
+difference reaches the field, or below it. The deferred requirement is waived
+only when the envelope the transaction would store leaves the field as it was
+too: the policy claims are the same throughout the document, and every label
+entry at the field, above it or below it is the same. The stored schema
+document is then kept, and labels elsewhere in the document persist as for any
+write. A changed byte, a changed label at the field, or a changed claim anywhere
+requires the field's ordinary writer.
+
 ## Authorization and transaction evidence
 
 An initialization policy input is authoritative only when the runtime records it
