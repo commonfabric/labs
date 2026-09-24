@@ -238,6 +238,55 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
     expect(await publishKeys("counts")).toBe(false);
   });
 
+  // The tally writes the whole object at once, so one derived value entry at
+  // the root labels the object and everything under it; a writer that read
+  // nothing then adds a key below that entry. Its transaction carries no
+  // labels, which is the case the persist loop used to skip.
+  const tallyWholeObject = async (cause: string): Promise<void> => {
+    const tx = runtime.edit();
+    tx.setCfcImplementationIdentity(TALLY);
+    const brief = runtime.getCell(space, "brief", briefSchema, tx).get();
+    runtime.getCell<Counts>(space, cause, undefined, tx).set({
+      approve: brief.vote === "approve" ? 1 : 0,
+      reject: brief.vote === "reject" ? 1 : 0,
+    });
+    expect((await tx.commit()).error).toBeUndefined();
+  };
+
+  const addKeyReadingNothing = async (
+    identity: ImplementationIdentity | undefined,
+    cause: string,
+  ): Promise<void> => {
+    const id = runtime.getCell(space, cause, undefined, runtime.edit())
+      .getAsNormalizedFullLink().id;
+    const tx = runtime.edit();
+    if (identity !== undefined) tx.setCfcImplementationIdentity(identity);
+    tx.writeOrThrow({
+      space,
+      scope: "space",
+      id,
+      path: ["value", "added"],
+    }, 2);
+    expect((await tx.commit()).error).toBeUndefined();
+  };
+
+  it("releases the key set of an object the named function wrote whole", async () => {
+    await tallyWholeObject("counts");
+    expect(await publishKeys("counts")).toBe(true);
+  });
+
+  it("refuses the key set of an object another function that read nothing added a key to", async () => {
+    await tallyWholeObject("counts");
+    await addKeyReadingNothing(HAND_COUNT, "counts");
+    expect(await publishKeys("counts")).toBe(false);
+  });
+
+  it("refuses the key set of an object a writer with no identity added a key to", async () => {
+    await tallyWholeObject("counts");
+    await addKeyReadingNothing(undefined, "counts");
+    expect(await publishKeys("counts")).toBe(false);
+  });
+
   it("refuses an object another function has overwritten a field of", async () => {
     await tallyInto("counts", TALLY);
     await writeKeyAs(HAND_COUNT, "counts", () => "reject");

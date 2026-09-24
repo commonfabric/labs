@@ -221,6 +221,16 @@ const isRuntimeMintedTemplate = (
   (entry.origin === "structure" || entry.origin === "derived") &&
   entry.path.includes("*");
 
+// The path whose writers a stamp's `TransformedBy` atom must agree with: the
+// stamp's own, or for a `*` template, its container's, since a write to any
+// slot changes what the template labels.
+const transformedByProbePath = (
+  entry: Pick<LabelMapEntry, "path" | "origin">,
+): readonly string[] =>
+  isRuntimeMintedTemplate(entry) && entry.path[entry.path.length - 1] === "*"
+    ? entry.path.slice(0, -1)
+    : entry.path;
+
 const labelForEntriesAtPath = (
   entries: readonly LabelMapEntry[],
   path: readonly string[],
@@ -7170,6 +7180,17 @@ export function* prepareBoundaryCommitSteps(
             entry.origin === "structure") &&
           writtenPrefixes.hasPrefixOf(entry.path)
         ) ||
+        // A stamp naming the function that computed what it labels stops
+        // naming it once anything else writes at, above, or below its path
+        // (`carriedStampLabel`), so a write BELOW such a stamp admits the
+        // document too, even from a transaction that read nothing: without
+        // this a writer with an empty join could add content under another
+        // function's `TransformedBy`.
+        existingEntries.some((entry) =>
+          (entry.origin === "derived" || entry.origin === "structure") &&
+          entry.label.integrity?.some(isTransformedByAtom) === true &&
+          writtenPrefixes.overlaps(transformedByProbePath(entry))
+        ) ||
         // Stage B healing, the template-ONLY arm (cubic P2 on the Stage B
         // PR): an envelope whose entries are ALL label-metadata templates
         // has no payload entry a written path could cover, so it would
@@ -7729,13 +7750,11 @@ export function* prepareBoundaryCommitSteps(
       ) {
         return entry.label;
       }
-      const probePath = isRuntimeMintedTemplate({
-          origin: entry.origin,
-          path: entryPath,
-        }) && entryPath[entryPath.length - 1] === "*"
-        ? entryPath.slice(0, -1)
-        : entryPath;
-      if (!flowWrittenPrefixes.overlaps(probePath)) {
+      if (
+        !flowWrittenPrefixes.overlaps(
+          transformedByProbePath({ origin: entry.origin, path: entryPath }),
+        )
+      ) {
         return entry.label;
       }
       const kept = integrity.filter((atom) =>
