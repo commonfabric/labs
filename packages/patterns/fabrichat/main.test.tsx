@@ -1,4 +1,10 @@
+/**
+ * The FabriChat room, as several viewers sharing one conversation: what a send
+ * stores, which sends and composers are refused, and who the participant strip
+ * lists.
+ */
 import {
+  action,
   type AddIntegrity,
   assert,
   equals,
@@ -24,6 +30,12 @@ type FabriChatRoomInputArg = Parameters<typeof FabriChatRoom>[0];
 // document that carries a label.
 type TestProfile = AddIntegrity<
   FabriChatProfile,
+  readonly ["fabrichat-test-profile"]
+>;
+
+// A document linking a profile, labeled for the same reason.
+type TestProfileHolder = AddIntegrity<
+  { profile?: Writable<TestProfile> },
   readonly ["fabrichat-test-profile"]
 >;
 
@@ -56,9 +68,23 @@ export default pattern(() => {
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
   const samOneProfile = Writable.of<TestProfile>({ name: "Sam" });
   const samTwoProfile = Writable.of<TestProfile>({ name: "Sam" });
+  const namelessProfile = Writable.of<TestProfile>({});
+  const aliceOtherProfile = Writable.of<TestProfile>({ name: "Alice" });
+
+  // Alice's room reaches her profile through a link, as a viewer's room reaches
+  // theirs through the `#profile` wish.
+  const aliceProfileHolder = Writable.of<TestProfileHolder>(
+    {} as TestProfileHolder,
+  );
+  const action_link_alice_profile = action(() =>
+    aliceProfileHolder.key("profile").set(aliceProfile)
+  );
+  const action_switch_alice_profile = action(() =>
+    aliceProfileHolder.key("profile").set(aliceOtherProfile)
+  );
 
   const alice = FabriChatRoom({
-    myProfile: aliceProfile,
+    myProfile: aliceProfileHolder.key("profile"),
     myName: "Alice",
     myAvatar: "",
     messages,
@@ -81,8 +107,16 @@ export default pattern(() => {
     myAvatar: "",
     messages,
   } as FabriChatRoomInputArg);
+  // One viewer whose name is known before their profile, and one whose
+  // profile is known before their name.
   const noProfile = FabriChatRoom({
     myProfile: undefined,
+    myName: "Pending",
+    myAvatar: "",
+    messages,
+  } as FabriChatRoomInputArg);
+  const noName = FabriChatRoom({
+    myProfile: namelessProfile,
     myName: "",
     myAvatar: "",
     messages,
@@ -96,6 +130,9 @@ export default pattern(() => {
   );
   const assert_composer_disabled_without_profile = assert(() =>
     composerDisabled(noProfile[UI]) === true
+  );
+  const assert_composer_disabled_without_name = assert(() =>
+    composerDisabled(noName[UI]) === true
   );
   const assert_alice_message_sent = assert(() => {
     const [message] = sentIn(messages);
@@ -131,12 +168,23 @@ export default pattern(() => {
   const assert_send_without_profile_refused = assert(() =>
     sentIn(messages).length === 5
   );
+  const assert_send_without_name_refused = assert(() =>
+    sentIn(messages).length === 5
+  );
+  const assert_sent_message_keeps_its_profile = assert(() => {
+    const [message] = sentIn(messages);
+    return message !== undefined &&
+      equals(message.authorProfile, aliceProfile) &&
+      !equals(message.authorProfile, aliceOtherProfile);
+  });
 
   return {
     [TESTS]: [
+      { action: action_link_alice_profile },
       { assertion: assert_starts_empty },
       { assertion: assert_composer_enabled_with_profile },
       { assertion: assert_composer_disabled_without_profile },
+      { assertion: assert_composer_disabled_without_name },
       {
         action: alice.sendMessage,
         event: submitted("  Hello, everyone  "),
@@ -178,6 +226,14 @@ export default pattern(() => {
         trustedUi: sendGesture,
       },
       { assertion: assert_send_without_profile_refused },
+      {
+        action: noName.sendMessage,
+        event: submitted("From someone unnamed"),
+        trustedUi: sendGesture,
+      },
+      { assertion: assert_send_without_name_refused },
+      { action: action_switch_alice_profile },
+      { assertion: assert_sent_message_keeps_its_profile },
     ],
   };
 });

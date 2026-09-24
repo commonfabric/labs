@@ -1,6 +1,7 @@
 /**
  * FabriChat: a group chat among the people in a space, each identified by
- * their own profile, with every message attested as written by its sender.
+ * their own profile, with every message labeled with the principal who sent
+ * it.
  *
  * This is the room from `chat.tsx`, given the viewer's real profile. The
  * messages are shared by everyone in the space. A viewer with no profile can
@@ -25,10 +26,12 @@ import {
 
 type FabriChatRoomInputArg = Parameters<typeof FabriChatRoom>[0];
 
+/** What FabriChat stores: the conversation, shared by the space. */
 export interface FabriChatInput {
   messages?: PerSpace<MessagesCell>;
 }
 
+/** What FabriChat provides. */
 export interface FabriChatOutput {
   [NAME]: string;
   [UI]: VNode;
@@ -36,6 +39,7 @@ export interface FabriChatOutput {
   sendMessage: Stream<SubmittedTextEvent>;
 }
 
+/** A FabriChat room whose viewer is the person looking at it. */
 export default pattern<FabriChatInput, FabriChatOutput>(({ messages }) => {
   const messagesCell: MessagesCell = messages!;
   const profileWish = wish<FabriChatProfile>({ query: "#profile" });

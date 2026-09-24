@@ -1,3 +1,7 @@
+/**
+ * FabriChat in a browser, with real profiles: two people each create one
+ * through the form FabriChat offers, send, and see each other's messages.
+ */
 import { env, Page } from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";

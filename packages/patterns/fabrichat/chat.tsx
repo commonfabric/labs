@@ -1,5 +1,6 @@
 /**
- * The FabriChat room: a single shared conversation whose messages are attested.
+ * The FabriChat room: a single shared conversation, each of whose messages is
+ * labeled with the principal who sent it.
  *
  * A message names its sender by linking the sender's profile, and it is written
  * only by `commitSend`, reached from the composer's reviewed surface. The
@@ -25,7 +26,10 @@ import {
   Writable,
 } from "commonfabric";
 
+/** The UI integrity the composer's reviewed surface gives the events in it. */
 export const FABRICHAT_SEND_SURFACE = "FabriChatSendSurface";
+
+/** The reviewed action a send is, on the composer's surface. */
 export const FABRICHAT_SEND_ACTION = "FabriChatSend";
 
 /** The fields of a profile that the room reads. */
@@ -50,7 +54,10 @@ export interface FabriChatMessage {
 
   body: string;
 
-  /** When the message was sent, in milliseconds since the epoch. */
+  /**
+   * When the message was sent, in milliseconds since the epoch, at the
+   * one-second resolution a handler's clock has.
+   */
   sentAt: number;
 }
 
@@ -64,7 +71,10 @@ export type SentMessage = AuthoredByCurrentUser<
   >
 >;
 
+/** A conversation's messages, oldest first. */
 export type MessagesValue = SentMessage[] | Default<[]>;
+
+/** The cell holding a conversation's messages. */
 export type MessagesCell = Writable<MessagesValue>;
 
 /**
@@ -104,12 +114,13 @@ export const participantsOf = (
 
 /**
  * Appends the submitted text as a message from the viewer. It refuses an empty
- * message, and it refuses to send before the viewer's profile is known.
+ * message, and it refuses to send before the viewer's profile and profile name
+ * are both known.
  */
 export const commitSend = handler<
   SubmittedTextEvent,
   {
-    // Absent until the viewer's profile resolves.
+    // Holds no value until the viewer's profile resolves.
     myProfile: ProfileCell | undefined;
     myName: string;
     myAvatar: string;
@@ -118,12 +129,11 @@ export const commitSend = handler<
 >((event, { myProfile, myName, myAvatar, messages }) => {
   const body = (event?.target?.value ?? "").trim();
   const authorName = (myName ?? "").trim();
-  if (!body || !authorName || myProfile === undefined) {
+  if (!body || !authorName || myProfile?.get() === undefined) {
     return;
   }
 
-  // The terminal cell is stored, so the message names this profile and not
-  // whatever the viewer's profile link later resolves to.
+  // The message stores the profile cell itself, not the link that reached it.
   messages.push({
     authorProfile: myProfile.resolveAsCell(),
     authorName,
@@ -132,15 +142,24 @@ export const commitSend = handler<
     sentAt: Date.now(),
   } as SentMessage);
 });
+
 type CommitSendInput = Parameters<typeof commitSend>[0];
 
+/** What a room needs: the viewer, and the conversation. */
 export interface FabriChatRoomInput {
+  /** The viewer's profile, which holds no value while it is unknown. */
   myProfile: ProfileCell | undefined;
+
+  /** The viewer's profile name, empty while it is unknown. */
   myName: string;
+
+  /** The viewer's profile avatar (a URL or a glyph), empty if none. */
   myAvatar: string;
+
   messages: MessagesCell;
 }
 
+/** What a room provides. */
 export interface FabriChatRoomOutput {
   [NAME]: string;
   [UI]: VNode;
@@ -149,6 +168,10 @@ export interface FabriChatRoomOutput {
   sendMessage: Stream<SubmittedTextEvent>;
 }
 
+/**
+ * A conversation among the people who send to it, with a composer that sends
+ * as the viewer.
+ */
 export const FabriChatRoom = pattern<FabriChatRoomInput, FabriChatRoomOutput>(
   ({ myProfile, myName, myAvatar, messages }) => {
     const sendMessage = commitSend({
@@ -162,7 +185,7 @@ export const FabriChatRoom = pattern<FabriChatRoomInput, FabriChatRoomOutput>(
     );
     const isEmpty = computed(() => (messages.get() ?? []).length === 0);
     const cannotSend = computed(() =>
-      myProfile === undefined || (myName ?? "") === ""
+      myProfile?.get() === undefined || (myName ?? "") === ""
     );
 
     return {
