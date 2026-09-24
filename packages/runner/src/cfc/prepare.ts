@@ -1277,25 +1277,26 @@ const writeLeavesPathUnchanged = (
   },
   path: readonly string[],
 ): boolean => {
-  const wildcard = path.indexOf("*");
+  // Everything before the first wildcard (the whole path when it has none).
   const protectedPath = [
     "value",
-    ...(wildcard === -1 ? path : path.slice(0, wildcard)),
+    ...path.slice(0, [...path, "*"].indexOf("*")),
   ];
   // An authoritative transaction commits each document it wrote whole, over
   // whatever the store holds by then, so bytes it found unchanged in its own
   // view are no evidence about what it leaves behind.
-  if (tx.isAuthoritativeWrites?.() === true) return false;
+  // A transaction that cannot list its writes proves nothing either.
   const details = tx.getWriteDetailsForTarget?.(target) ??
     tx.getWriteDetails?.(target.space);
-  if (details === undefined) return false;
+  if (tx.isAuthoritativeWrites?.() === true || details === undefined) {
+    return false;
+  }
   for (const detail of details) {
-    if (
-      detail.address.id !== target.id ||
-      normalizeCellScope(detail.address.scope) !== target.scope
-    ) continue;
+    // A space-wide listing holds other documents' writes too.
+    const sameDocument = detail.address.id === target.id &&
+      normalizeCellScope(detail.address.scope) === target.scope;
     const detailPath = detail.address.path.map(String);
-    if (concretePathHasPrefix(detailPath, protectedPath)) {
+    if (sameDocument && concretePathHasPrefix(detailPath, protectedPath)) {
       // The value layer keeps a member holding `undefined`, so two `undefined`
       // ends can still be a member removed or added. A write that changed
       // nothing records no detail at all, so a recorded one with both ends
@@ -1304,7 +1305,9 @@ const writeLeavesPathUnchanged = (
         (detail.value === undefined && detail.previousValue === undefined) ||
         !fabricAwareEqual(detail.value, detail.previousValue)
       ) return false;
-    } else if (concretePathHasPrefix(protectedPath, detailPath)) {
+    } else if (
+      sameDocument && concretePathHasPrefix(protectedPath, detailPath)
+    ) {
       const relative = protectedPath.slice(detailPath.length);
       if (
         hasValueAtPath(detail.value, relative) !==

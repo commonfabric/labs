@@ -300,9 +300,10 @@ describe("writer-policied inputs of a sub-piece", () => {
   describe("a transaction carrying the replay's record of its slots", () => {
     // The runtime's record of the slots a replay carries over is what makes a
     // refusal there a candidate for deferral, never what admits it: the
-    // commit still proves the transaction leaves each slot as it found it.
-    // These tests carry that record into transactions that do something
-    // else, and each must still be refused.
+    // commit still proves the transaction leaves each guarded slot as it
+    // found it. These tests carry that record into transactions that change
+    // a guarded slot, write authoritatively or relabel, and each is refused;
+    // one that changes only an unguarded slot is admitted.
     const replayingTx = async (runtime: Runtime, name: string) => {
       await storePiece(runtime, name);
       const cell = runtime.getCell<Piece>(space, name);
