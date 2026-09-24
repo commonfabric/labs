@@ -214,17 +214,14 @@ describe("unread-type-diagnostics", () => {
             ]),
           ]),
         ]);
-      const warnings = await warningsFor(referenceTo("MyProjection"), source);
+      for (const name of ["MyProjection", "Projection"]) {
+        const warnings = await warningsFor(referenceTo(name), source);
 
-      expect(warnings.map((warning) => warning.type)).toEqual([
-        "schema-type:unread",
-      ]);
-      expect(warnings[0]!.message).toContain("`MyProjection<");
-      expect(
-        (await warningsFor(referenceTo("Projection"), source)).map((warning) =>
-          warning.type
-        ),
-      ).toEqual(["schema-type:unread"]);
+        expect(warnings.map((warning) => warning.type)).toEqual([
+          "schema-type:unread",
+        ]);
+        expect(warnings[0]!.message).toContain(`\`${name}<`);
+      }
     });
 
     it("reports nothing for an intersection that accepts nothing", async () => {
