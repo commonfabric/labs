@@ -73,20 +73,17 @@ export abstract class BaseSmallChunkUpdatingHasher
   }
 
   /**
-   * The buffer small updates collect in, acquired from `smallsPool` if this
-   * instance holds none.
+   * The buffer small updates collect in. If this instance holds none, it first
+   * takes one from `smallsPool`, or allocates one if the pool is empty.
    */
   get #smalls(): Uint8Array {
-    return this.#smallsBuf ?? this.#acquireSmalls();
-  }
+    let smalls = this.#smallsBuf;
 
-  /**
-   * Takes a buffer from `smallsPool` for this instance to hold, or allocates
-   * one if the pool is empty, and returns it.
-   */
-  #acquireSmalls(): Uint8Array {
-    const smalls = smallsPool.pop() ?? new Uint8Array(SMALLS_SIZE);
-    this.#smallsBuf = smalls;
+    if (smalls === null) {
+      smalls = smallsPool.pop() ?? new Uint8Array(SMALLS_SIZE);
+      this.#smallsBuf = smalls;
+    }
+
     return smalls;
   }
 
