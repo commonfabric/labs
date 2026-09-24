@@ -4,7 +4,7 @@ import { serveDir } from "@std/http/file-server";
 const DEV_SOCKET = "DEV_SOCKET.js";
 
 export class DevServer {
-  #server: Deno.HttpServer;
+  #server: Deno.HttpServer<Deno.NetAddr>;
   #outDir: string;
   #sockets: WebSocket[] = [];
   #html: string;
@@ -48,13 +48,39 @@ export class DevServer {
     );
   }
 
+  /** The address the server listens on, with the port it bound. */
+  get addr(): Deno.NetAddr {
+    return this.#server.addr;
+  }
+
   reload() {
     for (const socket of this.#sockets) {
       socket.send("reload");
     }
   }
 
-  async #onRequest(req: Request) {
+  /** Closes the reload sockets and stops the server. */
+  async shutdown(): Promise<void> {
+    for (const socket of this.#sockets) {
+      socket.close();
+    }
+    await this.#server.shutdown();
+  }
+
+  async #onRequest(req: Request): Promise<Response> {
+    const response = await this.#respond(req);
+    // A build rewrites the served files in place under the same URLs, so a
+    // browser must check back before reusing a copy, or it runs code the
+    // server no longer serves. Each file's ETag and Last-Modified make that
+    // check a 304 when nothing changed. A websocket upgrade's headers cannot
+    // be changed, and it caches nothing.
+    if (response.status !== 101) {
+      response.headers.set("Cache-Control", "no-cache");
+    }
+    return response;
+  }
+
+  async #respond(req: Request): Promise<Response> {
     const url = new URL(req.url);
 
     if (req.headers.get("upgrade") === "websocket") {
