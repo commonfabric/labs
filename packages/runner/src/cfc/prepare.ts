@@ -8548,7 +8548,11 @@ export function* prepareBoundaryCommitSteps(
         // normative for it, so it carries the current J only, never the
         // pool. Labs-axis mapping note: the `observes` axis is read-op
         // shaped, so "enumerate" here approximates the spec's container-
-        // level `iterate.{order,count}` classes.
+        // level `iterate.{order,count}` classes. It carries J's
+        // confidentiality and, when the flow stage minted one, J's
+        // `TransformedBy`, so a reader of the node has the derivation
+        // evidence an exchange rule matches (`carriedStampLabel` withdraws
+        // it once another writer touches the container).
         if (flowHasLabels && flowConfidentiality.length > 0) {
           persistedLabelEntries.push(markFlowStampEntry({
             path,
@@ -8575,8 +8579,11 @@ export function* prepareBoundaryCommitSteps(
         //    was decided by it (inv-9) — while `shape`/`value` templates
         //    stay out of probes (readConsumesEntry), keeping blind
         //    pass-through clean of content taint. All three carry ONLY
-        //    the membership J (confidentiality-only, like every
-        //    structure stamp), never the container's content label.
+        //    the membership J's confidentiality, plus J's `TransformedBy`
+        //    when the flow stage minted one (like the enumerate stamp),
+        //    never the container's content label. They are minted only
+        //    when J has confidentiality: an integrity-only join has
+        //    nothing to release, so it leaves the container unstamped.
         // Same replace-from-criteria discipline as the enumerate stamp:
         // dropped + re-minted from the current J each reconcile, cleared
         // (never pooled — `poolsExistence` requires a class-less entry)
