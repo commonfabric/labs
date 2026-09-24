@@ -122,9 +122,9 @@ async function createProfile(page: Page, name: string): Promise<void> {
 
 /**
  * Sends `body` from the composer, and waits for it to appear. If it does not,
- * the error lists what the piece has stored, as `storedBodies` reads it through
- * the controller: a stored body that never appeared was not rendered, and one
- * that was never stored was refused or lost.
+ * the error lists what the piece has stored, as the controller's subscription
+ * has seen it through `storedBodies`: a stored body that never appeared was not
+ * rendered, and one that was never stored was refused or lost.
  */
 async function send(
   page: Page,

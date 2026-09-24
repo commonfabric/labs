@@ -50,7 +50,7 @@ export interface FabriChatMessage {
 
   /**
    * The sender's profile name when the message was sent, or empty when the
-   * name had not yet reached the handler.
+   * profile has no name or the name had not yet reached the handler.
    */
   authorName: string;
 
@@ -123,7 +123,8 @@ export const participantsOf = (
  * profile name is kept only as a snapshot, so it does not hold a send back: a
  * profile's name can reach the handler later than the profile does, when the
  * handler runs apart from the viewer's page, and the profile itself names the
- * sender.
+ * sender. The profile can lag the same way, and a send the handler refuses for
+ * want of it is spent, like any event a handler declines.
  */
 export const commitSend = handler<
   SubmittedTextEvent,
@@ -244,7 +245,7 @@ export const FabriChatRoom = pattern<FabriChatRoomInput, FabriChatRoomOutput>(
                 <cf-cfc-authorship
                   $value={message.body}
                   $author={message.authorProfile}
-                  authorName={message.authorName}
+                  authorName={message.authorName || undefined}
                   style={{ flex: "1", minWidth: "0" }}
                 >
                   <cf-text
