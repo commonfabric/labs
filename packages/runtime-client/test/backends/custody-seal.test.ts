@@ -455,6 +455,35 @@ describe("custody-seal", () => {
     });
   });
 
+  it("does not seal once the worker is disposed while the entry is staged", async () => {
+    await withFixture(async ({ processor, runtime, refs }) => {
+      const preview = await processor.handleCustodySealPrepare({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+      }, first);
+      atEditWithRetry(runtime, 1, "after", () => {
+        processor.dispose();
+      });
+      await expect(processor.handleCustodySealCommit({
+        type: RequestType.CustodySealCommit,
+        id: preview.id,
+      }, first)).rejects.toThrow("Custody sealing is unavailable");
+    });
+  });
+
+  it("keeps no review for a client that detached while it was preparing", async () => {
+    await withFixture(async ({ processor, refs }) => {
+      const preparing = processor.handleCustodySealPrepare({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+      }, first);
+      processor.disposeClient(first);
+      await expect(preparing).rejects.toThrow(
+        "Custody sealing is unavailable",
+      );
+    });
+  });
+
   it("does not seal for a client that detached while its commit was reading", async () => {
     await withFixture(async ({ processor, refs }) => {
       const preview = await processor.handleCustodySealPrepare({

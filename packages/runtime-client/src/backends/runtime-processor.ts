@@ -2036,11 +2036,10 @@ export class RuntimeProcessor {
     const key = clientScopedKey(client, request.id);
     const pending = this.#custodySeals.get(key);
     this.#custodySeals.delete(key);
+    // Detaching a client and disposing the processor both discard pending
+    // previews, so a preview found here belongs to a live client.
     if (pending === undefined) {
       throw new Error("Custody seal confirmation is unavailable");
-    }
-    if (this.#isDisposed || this.#detachedClients.has(client)) {
-      throw new Error("Custody sealing is unavailable");
     }
     const event = {
       type: "click",
