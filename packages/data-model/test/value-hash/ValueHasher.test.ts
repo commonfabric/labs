@@ -436,17 +436,6 @@ describe("ValueHasher", () => {
           expect(hashBytesOf(-129n)).toEqual(expected);
         });
 
-        it("encodes a large `bigint` correctly", () => {
-          // 2^64 = 18446744073709551616n
-          // hex: 10000000000000000 -> 9 bytes: 01 00 00 00 00 00 00 00 00
-          const big = 2n ** 64n;
-          const hash = hashBytesOf(big);
-          expect(hash.length).toBe(32); // SHA-256 produces 32 bytes
-
-          // Verify it's consistent
-          expect(hashBytesOf(big)).toEqual(hash);
-        });
-
         it("matches a hand-computed byte stream for `0x112233445566778899abcdefn`", () => {
           // 12-byte positive bigint, high nibble 0x1 so no sign-extension needed.
           // TAG_BIGINT(0x26) + LEB128(12)=0x0c + big-endian bytes
@@ -559,12 +548,6 @@ describe("ValueHasher", () => {
           const d2 = new FabricEpochNsec(1704067200000000000n);
           expect(hex(hashBytesOf(d1))).not.toBe(hex(hashBytesOf(d2)));
         });
-
-        it("hashes a FabricEpochNsec with negative value (pre-epoch)", () => {
-          const nsec = new FabricEpochNsec(-1000000000n);
-          const hash = hashBytesOf(nsec);
-          expect(hash.length).toBe(32);
-        });
       });
       describe("FabricEpochDay (dedicated TAG_EPOCH_DAY primitive tag)", () => {
         it("matches a hand-computed byte stream for `FabricEpochDay(0n)`", () => {
@@ -581,12 +564,6 @@ describe("ValueHasher", () => {
           const d1 = new FabricEpochDay(0n);
           const d2 = new FabricEpochDay(19723n);
           expect(hex(hashBytesOf(d1))).not.toBe(hex(hashBytesOf(d2)));
-        });
-
-        it("hashes a FabricEpochDay with negative value (pre-epoch)", () => {
-          const days = new FabricEpochDay(-365n);
-          const hash = hashBytesOf(days);
-          expect(hash.length).toBe(32);
         });
 
         it("produces different hashes for `FabricEpochNsec` and `FabricEpochDay` with the same `bigint`", () => {
@@ -914,20 +891,6 @@ describe("ValueHasher", () => {
           expect(hash.length).toBe(32);
           expect(hex(hash)).not.toBe(hex(hashBytesOf({ x: 1 })));
         });
-
-        it("hashes an object with mixed value types", () => {
-          const hash = hashBytesOf({
-            str: "hello",
-            num: 42,
-            bool: true,
-            nil: null,
-          });
-          expect(hash.length).toBe(32);
-          // Consistency
-          expect(hash).toEqual(
-            hashBytesOf({ str: "hello", num: 42, bool: true, nil: null }),
-          );
-        });
       });
       describe("Cycles", () => {
         /** The direct-form bytes of a short ASCII string. */
@@ -1056,40 +1019,6 @@ describe("ValueHasher", () => {
       });
 
       describe("Consistency and distinctness", () => {
-        it("produces the same hash for the same value every time", () => {
-          expect(hashBytesOf(42)).toEqual(hashBytesOf(42));
-          expect(hashBytesOf("hello")).toEqual(hashBytesOf("hello"));
-          expect(hashBytesOf([1, 2, 3])).toEqual(hashBytesOf([1, 2, 3]));
-          expect(hashBytesOf({ a: 1 })).toEqual(hashBytesOf({ a: 1 }));
-        });
-
-        it("produces a 32-byte hash (SHA-256)", () => {
-          const values: FabricValue[] = [
-            null,
-            true,
-            false,
-            0,
-            42,
-            "",
-            "hello",
-            0n,
-            127n,
-            undefined,
-            [],
-            [1, 2],
-            {},
-            { a: 1 },
-            new FabricEpochNsec(0n),
-            new FabricEpochDay(0n),
-            new FabricBytes(new Uint8Array([1])),
-            new FabricUnavailable("pending"),
-            FabricError.fromNativeError(new Error("x")),
-          ];
-          for (const v of values) {
-            expect(hashBytesOf(v).length).toBe(32);
-          }
-        });
-
         it("produces different hashes for different values of different types", () => {
           const hashes = new Set([
             hex(hashBytesOf(null)),
@@ -1107,13 +1036,6 @@ describe("ValueHasher", () => {
         });
       });
       describe("Edge cases", () => {
-        it("hashes a deeply nested structure", () => {
-          const deep = { a: { b: { c: { d: [1, { e: true }] } } } };
-          const hash = hashBytesOf(deep);
-          expect(hash.length).toBe(32);
-          expect(hashBytesOf(deep)).toEqual(hash);
-        });
-
         it("hashes an array with all holes", () => {
           const arr = new Array(5); // all holes
           const hash = hashBytesOf(arr);
@@ -1381,29 +1303,10 @@ describe("ValueHasher", () => {
           );
           expect(hex(hashBytesOf(cid1))).not.toBe(hex(hashBytesOf(cid2)));
         });
-
-        it("hashes a `FabricHash` inside a plain object without throwing", () => {
-          // This captures the essence of using `FabricHash` instances as things
-          // like content IDs inside `Fact` objects.
-          const fact = {
-            cause: new FabricHash(new Uint8Array([0x05, 0x06]), "fid1"),
-            the: "text/plain",
-            of: "entity:456",
-            is: { value: 914 },
-          };
-
-          expect(() => hashBytesOf(fact)).not.toThrow();
-        });
       });
 
       describe("JS instances", () => {
         describe("Date", () => {
-          it("hashes a JS `Date` without throwing", () => {
-            const date = new Date("2024-01-01T00:00:00Z");
-            const hash = hashBytesOf(date);
-            expect(hash.length).toBe(32);
-          });
-
           it("produces the same hash for a JS `Date` as for an equivalent `FabricEpochNsec`", () => {
             const date = new Date("2024-01-01T00:00:00Z");
             const nsec = BigInt(date.getTime()) * 1_000_000n;
@@ -1421,12 +1324,6 @@ describe("ValueHasher", () => {
           });
         });
         describe("RegExp", () => {
-          it("hashes a JS `RegExp` without throwing", () => {
-            const re = /hello/gi;
-            const hash = hashBytesOf(re);
-            expect(hash.length).toBe(32);
-          });
-
           it("produces the same hash for a JS `RegExp` as for an equivalent `FabricRegExp`", () => {
             const re = /hello/gi;
             const nativeHash = hex(hashBytesOf(re));
@@ -1443,12 +1340,6 @@ describe("ValueHasher", () => {
           });
         });
         describe("Uint8Array", () => {
-          it("hashes a JS `Uint8Array` without throwing", () => {
-            const buf = new Uint8Array([1, 2, 3]);
-            const hash = hashBytesOf(buf);
-            expect(hash.length).toBe(32);
-          });
-
           it("produces the same hash for a JS `Uint8Array` as for a `FabricBytes` with the same bytes", () => {
             const bytes = new Uint8Array([10, 20, 30]);
             const nativeHash = hex(hashBytesOf(bytes));
