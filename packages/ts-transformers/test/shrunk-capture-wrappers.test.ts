@@ -133,8 +133,6 @@ export default pattern<Input>(({ roster }) => ({
     });
 
     const ARRAY = "PerUser<Box<number>[]>";
-    const UNION = "PerUser<Box<number>[] | Box<string>[]>";
-    const INTERSECTION = "PerUser<Box<number>[] & { tag: string }>";
     for (
       const [form, declaration, wrapper] of [
         ["an alias of", `type Rec = ${ARRAY};`, ARRAY],
@@ -148,8 +146,6 @@ export default pattern<Input>(({ roster }) => ({
           "type Scoped<T> = PerUser<T[]>;\ntype Rec = Scoped<Box<number>>;",
           ARRAY,
         ],
-        ["an alias of", `type Rec = ${UNION};`, UNION],
-        ["an alias of", `type Rec = ${INTERSECTION};`, INTERSECTION],
       ]
     ) {
       it(`gives an array typed by ${form} ${wrapper} the schema of the wrapper written in place`, async () => {
@@ -164,6 +160,32 @@ export default pattern<Input>(({ roster }) => ({
         expect(aliased.c).toEqual(direct.c);
       });
     }
+
+    it("gives an array typed by an alias of a scope wrapper around a union one alternative per member", async () => {
+      // The brand a wrapper leaves on a union is distributed over its members,
+      // so each member is shrunk on its own. The wrapper written in place
+      // names the union itself, and shrinks it to a single array whose element
+      // type is the union of the members' element types.
+      const capture = await captureOf(readingElementsOf(
+        `type Rec = PerUser<Box<number>[] | Box<string>[]>;
+interface Input { c: Rec; }`,
+      ));
+
+      expect(capture.c).toEqual({
+        anyOf: [
+          { type: "array", items: VALUE_ONLY },
+          {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { value: { type: "string" } },
+              required: ["value"],
+            },
+          },
+        ],
+        scope: "user",
+      });
+    });
   });
 
   describe("a capture of a scoped cell", () => {

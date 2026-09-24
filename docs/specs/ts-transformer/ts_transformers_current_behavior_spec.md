@@ -1852,10 +1852,15 @@ adjustments:
   the shrunk value as `__cfHelpers.PerUser<...>` (or the wrapper of its scope)
   whether the type's alias names it or the type carries only its scope brand,
   as a wrapper reached through an alias of the author's own does
-  (`type Rec = PerUser<Inner>`, which the checker reports as `Rec`). Where the
-  brand gives no single payload type — a payload the checker flattened into
-  several intersection members, or a union whose members all carry the same
-  scope — the branded type itself is shrunk and wrapped. A default the type
+  (`type Rec = PerUser<Inner>`, which the checker reports as `Rec`). A brand
+  the checker distributed over a union is read from its members, each shrunk on
+  its own and wrapped as one union, except that a union of every literal of one
+  type — `boolean`, held as `false | true` — is wrapped as the type it was
+  written as. A brand over an alternative the checker flattened into several
+  intersection members restores no scope, having no type of its own to shrink:
+  the branded type is no substitute, since the node built from it carries the
+  brand into the wrapper, where schema generation refuses the scope it then
+  reads twice. A default the type
   carries in its `Default` brand wraps it as `__cfHelpers.Default<shrunk, V>`,
   with `V` printed from the brand's payload. Branded members that disagree on
   the value restore no default. A scope wrapper around a cell is not restored:
