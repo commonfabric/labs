@@ -569,6 +569,16 @@ export type WritePolicyInput =
   }
   | {
     /**
+     * A release of a piece names one of its stores and the modules of the
+     * program it installs, whose writer stamps the release's schema can adopt
+     * over unstamped stored claims. Authority is the runtime's mark.
+     */
+    readonly kind: "release-program";
+    readonly target: CfcAddress;
+    readonly modules: readonly string[];
+  }
+  | {
+    /**
      * A host's application of a schema to a document it does not write
      * (`applyCfcPolicyToExistingValue`). Authority is the runtime's mark.
      */

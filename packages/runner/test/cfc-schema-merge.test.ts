@@ -1180,7 +1180,8 @@ describe("mergeCfcSchemaEnvelopes", () => {
         ...(moduleIdentity !== undefined && { moduleIdentity }),
       },
     });
-    // In a release of the piece, which is the only writer that may adopt.
+    // `release` stands for a caller that vouches for the stamp (a release
+    // installing its module, or the writer the stamp names).
     type Claim = ReturnType<typeof claim>;
     const merge = (stored: Claim, candidate: Claim, release = true) =>
       (
@@ -1194,7 +1195,8 @@ describe("mergeCfcSchemaEnvelopes", () => {
           properties: {
             mru: { type: "array", ifc: { writeAuthorizedBy: candidate } },
           },
-        }, { release }) as JSONSchemaObj).properties?.mru as JSONSchemaObj
+        }, { adoptsStamp: release ? () => true : undefined }) as JSONSchemaObj)
+          .properties?.mru as JSONSchemaObj
       ).ifc?.writeAuthorizedBy;
 
     it("adopts the stamp for the same export below a pattern root", () => {

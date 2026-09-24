@@ -6365,12 +6365,98 @@ export const releaseMergeOptions = (
     scope: ReturnType<typeof normalizeCellScope>;
   },
   storedSchema: JSONSchema,
-): Pick<MergeCfcSchemaEnvelopeOptions, "beneathStoredLink" | "release"> => ({
-  beneathStoredLink: beneathForeignPosition(
-    storedForeignPositions(storedValuesAt(tx, target), storedSchema),
-  ),
-  release: true,
+  // The modules of the program the release installs (see
+  // `PatternManager.programModuleIdentities`).
+  programModules: Iterable<string>,
+): Pick<
+  MergeCfcSchemaEnvelopeOptions,
+  "beneathStoredLink" | "adoptsStamp"
+> => {
+  const modules = new Set(programModules);
+  return {
+    beneathStoredLink: beneathForeignPosition(
+      storedForeignPositions(storedValuesAt(tx, target), storedSchema),
+    ),
+    adoptsStamp: (claim) => {
+      const stamp = writerClaimStamp(claim);
+      return stamp !== undefined && modules.has(stamp.moduleIdentity);
+    },
+  };
+};
+
+/** A stamped writer claim's module identity and file, if it is one. */
+const writerClaimStamp = (
+  claim: unknown,
+): { moduleIdentity: string; file: string | undefined } | undefined => {
+  if (!isObjectOrArray(claim) || Array.isArray(claim)) return undefined;
+  const binding = (claim as Record<string, unknown>).__ctWriterIdentityOf;
+  if (!isObjectOrArray(binding) || Array.isArray(binding)) return undefined;
+  const { moduleIdentity, file } = binding as Record<string, unknown>;
+  return typeof moduleIdentity === "string"
+    ? { moduleIdentity, file: typeof file === "string" ? file : undefined }
+    : undefined;
+};
+
+/**
+ * Whether one of `identities` is the writer a stamp names: a verified identity
+ * whose module and source file are the stamp's own. Such a writer may bring
+ * its stamp over an unstamped claim naming it, in any transaction.
+ */
+const stampIsWriters = (
+  identities: Iterable<ImplementationIdentity | undefined>,
+) =>
+(claim: unknown): boolean => {
+  const stamp = writerClaimStamp(claim);
+  if (stamp === undefined) return false;
+  for (const identity of identities) {
+    if (
+      identity?.kind === "verified" &&
+      identity.moduleIdentity === stamp.moduleIdentity &&
+      normalizeIdentitySource(identity.sourceFile) !== undefined &&
+      normalizeIdentitySource(identity.sourceFile) ===
+        normalizeIdentitySource(stamp.file)
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/**
+ * A release's merge options, with the writers' own stamps adoptable besides:
+ * outside a release, the writer a stamp names is the only one that may.
+ */
+const mergeOptionsForWriters = (
+  release: Pick<
+    MergeCfcSchemaEnvelopeOptions,
+    "beneathStoredLink" | "adoptsStamp"
+  >,
+  writersOwnStamp: (claim: unknown) => boolean,
+): Pick<
+  MergeCfcSchemaEnvelopeOptions,
+  "beneathStoredLink" | "adoptsStamp"
+> => ({
+  ...release,
+  adoptsStamp: (claim) =>
+    release.adoptsStamp?.(claim) === true || writersOwnStamp(claim),
 });
+
+/** The program modules the runtime named for `target` in this release. */
+const releaseProgramModules = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): readonly string[] =>
+  tx.getCfcState().writePolicyInputs.flatMap((input) =>
+    input.kind === "release-program" && tx.isRuntimeWritePolicyInput(input) &&
+      sameDocument(input.target, target) &&
+      canonicalizeLogicalPath(input.target.path).length === 0
+      ? input.modules
+      : []
+  );
 
 /** Whether a logical path lies strictly beneath a foreign position. */
 const beneathForeignPosition =
@@ -7761,8 +7847,17 @@ export function* prepareBoundaryCommitSteps(
       try {
         mergedSchema = mergeStoredCfcEnvelope(storedSchema, schema, {
           generatedOutputPaths: generatedOutputPaths.get(key),
-          ...(foreignPositions !== undefined &&
-            releaseMergeOptions(tx, { space, id, scope }, storedSchema)),
+          ...mergeOptionsForWriters(
+            foreignPositions !== undefined
+              ? releaseMergeOptions(
+                tx,
+                { space, id, scope },
+                storedSchema,
+                releaseProgramModules(tx, { space, id, scope }),
+              )
+              : {},
+            stampIsWriters(writeAuthorIdentities.get(key)?.values() ?? []),
+          ),
         });
       } catch (error) {
         // Tag the additive-required migration incompatibility with a stable

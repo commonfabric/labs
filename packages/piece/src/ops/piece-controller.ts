@@ -5370,6 +5370,12 @@ function pieceSourceCfcEnvelopeIssue(
 ): string | undefined {
   // `readTx()` cannot write, so the two dry runs stay dry runs.
   const tx = pieces.runtime.readTx();
+  // The modules the release would install, as setup names them.
+  const patternManager = pieces.runtime.patternManager;
+  const entry = patternManager.getArtifactEntryRef(candidate);
+  const programModules = entry === undefined
+    ? []
+    : patternManager.programModuleIdentities(entry.identity) ?? [];
   const issues = [
     pieceDocumentCfcEnvelopeIssue(
       "argument",
@@ -5377,6 +5383,7 @@ function pieceSourceCfcEnvelopeIssue(
       candidate.argumentSchema,
       {},
       tx,
+      programModules,
     ),
     // Setup writes the result projection, and with it the schema input the
     // commit merges, only where the candidate's projection differs from the
@@ -5390,6 +5397,7 @@ function pieceSourceCfcEnvelopeIssue(
         candidate.resultSchema,
         { generatedOutputPaths: [[]] },
         tx,
+        programModules,
       )
       : undefined,
   ].filter((issue): issue is string => issue !== undefined);
@@ -5407,6 +5415,7 @@ function pieceDocumentCfcEnvelopeIssue(
   candidateSchema: JSONSchema,
   options: MergeCfcSchemaEnvelopeOptions,
   tx: IExtendedStorageTransaction,
+  programModules: Iterable<string>,
 ): string | undefined {
   const link = cell.getAsNormalizedFullLink();
   const stored = loadStoredCfcEnvelope(tx, {
@@ -5436,11 +5445,12 @@ function pieceDocumentCfcEnvelopeIssue(
     candidateSchema,
     {
       ...options,
-      ...releaseMergeOptions(tx, {
-        space: link.space,
-        id: link.id,
-        scope: link.scope,
-      }, stored.schema),
+      ...releaseMergeOptions(
+        tx,
+        { space: link.space, id: link.id, scope: link.scope },
+        stored.schema,
+        programModules,
+      ),
     },
   );
   if (issue === undefined) return undefined;
