@@ -900,11 +900,24 @@ describe("Schema - Basic Types and References", () => {
       const handle = holder.get().h;
       expect(isCell(handle)).toBe(true);
       expect(handle.get()).toEqual({ id: 1, name: "one", hidden: true });
+      expect(handle.schema).toEqual({
+        anyOf: [
+          { type: "object", properties: { id: { type: "number" } } },
+          {},
+          {
+            type: "object",
+            properties: { name: { type: "string" } },
+            required: ["name"],
+          },
+        ],
+      });
     });
 
     it("keeps the compound on a handle where a shaped `asCell` branch sits inside a nested `anyOf` beside a bare one", () => {
       // The shaped branch mints a typed handle from one level down, and the
       // merge can no more see that it did than it can for a direct branch.
+      // The merge strips the markers of the compound's own branches; a marker
+      // one combinator down stays, and the handle's schema says so.
       const holder = runtime.getCell<any>(
         space,
         "shaped-nested-anyof-beside-bare",
@@ -936,6 +949,22 @@ describe("Schema - Basic Types and References", () => {
       const handle = holder.get().h;
       expect(isCell(handle)).toBe(true);
       expect(handle.get()).toEqual({ id: 1, name: "one", hidden: true });
+      expect(handle.schema).toEqual({
+        anyOf: [
+          {
+            anyOf: [{
+              ...{ type: "object", properties: { id: { type: "number" } } },
+              asCell: ["cell"],
+            }],
+          },
+          {},
+          {
+            type: "object",
+            properties: { name: { type: "string" } },
+            required: ["name"],
+          },
+        ],
+      });
     });
 
     it("keeps the compound on a handle where a shaped `asCell` branch sits inside a nested `allOf` beside a bare one", () => {
@@ -972,6 +1001,22 @@ describe("Schema - Basic Types and References", () => {
       const handle = holder.get().h;
       expect(isCell(handle)).toBe(true);
       expect(handle.get()).toEqual({ id: 1, name: "one", hidden: true });
+      expect(handle.schema).toEqual({
+        anyOf: [
+          {
+            allOf: [{
+              ...{ type: "object", properties: { id: { type: "number" } } },
+              asCell: ["cell"],
+            }],
+          },
+          {},
+          {
+            type: "object",
+            properties: { name: { type: "string" } },
+            required: ["name"],
+          },
+        ],
+      });
     });
 
     it("keeps the compound on a handle where the shape sits beside a nested `anyOf` holding a bare `asCell` branch", () => {
@@ -1008,6 +1053,20 @@ describe("Schema - Basic Types and References", () => {
       const handle = holder.get().h;
       expect(isCell(handle)).toBe(true);
       expect(handle.get()).toEqual({ id: 1, name: "one", hidden: true });
+      expect(handle.schema).toEqual({
+        anyOf: [
+          {
+            ...{ type: "object", properties: { id: { type: "number" } } },
+            anyOf: [{ asCell: ["cell"] }],
+          },
+          {},
+          {
+            type: "object",
+            properties: { name: { type: "string" } },
+            required: ["name"],
+          },
+        ],
+      });
     });
 
     it("keeps the link's schema on a handle minted from an `allOf` of a bare `asCell` branch and a true one", () => {

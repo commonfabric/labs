@@ -579,16 +579,28 @@ describe("materialization-parity", () => {
       },
     };
 
+    const idBranch: JSONSchema = {
+      type: "object",
+      properties: { id: { type: "number" } },
+    };
+    const nameBranch: JSONSchema = {
+      type: "object",
+      properties: { name: { type: "string" } },
+      required: ["name"],
+    };
+
+    /** Reads `h` through `schema` in each mode, asserting each mode's handle
+     * reads `expected` and carries `expectedSchema`. */
     const handleReadsInBothModes = async (
       cause: string,
       schema: JSONSchema,
       expected: unknown,
+      expectedSchema: JSONSchema,
       h: FabricValue = stored,
     ) => {
       const write = runtime.edit();
       runtime.getCell(space, cause, undefined, write).setRaw({ h });
       await write.commit();
-      const schemas: unknown[] = [];
       for (const lazy of [false, true]) {
         const tx = runtime.edit();
         if (lazy) tx.markLazyMaterialize(true);
@@ -601,16 +613,17 @@ describe("materialization-parity", () => {
           ).get().h;
           expect(isCell(handle)).toBe(true);
           expect(handle.get()).toEqual(expected);
-          schemas.push(handle.schema);
+          expect(handle.schema).toEqual(expectedSchema);
         } finally {
           await tx.commit();
         }
       }
-      expect(schemas[1]).toEqual(schemas[0]);
     };
 
     it("carries the compound, and projects every branch, where a typed branch minted it", async () => {
-      await handleReadsInBothModes("typed-handle-branch", shaped, stored);
+      await handleReadsInBothModes("typed-handle-branch", shaped, stored, {
+        anyOf: [idBranch, {}, nameBranch],
+      });
     });
 
     it("is minted from the one matching arm of an optional handle in both modes", async () => {
@@ -632,9 +645,13 @@ describe("materialization-parity", () => {
           },
         },
       };
-      await handleReadsInBothModes("optional-handle-arm", optional, { id: 1 }, {
-        id: 1,
-      });
+      await handleReadsInBothModes(
+        "optional-handle-arm",
+        optional,
+        { id: 1 },
+        idBranch,
+        { id: 1 },
+      );
     });
 
     it("is minted from the one matching branch of a `oneOf` in both modes", async () => {
@@ -656,9 +673,13 @@ describe("materialization-parity", () => {
           },
         },
       };
-      await handleReadsInBothModes("oneof-handle-branch", oneOf, { id: 1 }, {
-        id: 1,
-      });
+      await handleReadsInBothModes(
+        "oneof-handle-branch",
+        oneOf,
+        { id: 1 },
+        idBranch,
+        { id: 1 },
+      );
     });
 
     it("is minted from the branch where one `anyOf` arm carries a `oneOf` beside it", async () => {
@@ -681,9 +702,13 @@ describe("materialization-parity", () => {
           },
         },
       };
-      await handleReadsInBothModes("mixed-handle-branch", mixed, { id: 1 }, {
-        id: 1,
-      });
+      await handleReadsInBothModes(
+        "mixed-handle-branch",
+        mixed,
+        { id: 1 },
+        idBranch,
+        { id: 1 },
+      );
     });
 
     it("projects a branch traversal keeps after dropping an invalid optional property, in both modes", async () => {
@@ -712,10 +737,18 @@ describe("materialization-parity", () => {
           },
         },
       };
-      await handleReadsInBothModes("filtered-handle-branch", filtering, {
-        id: 1,
-        x: true,
-      }, { id: 1, name: 123, x: true });
+      await handleReadsInBothModes(
+        "filtered-handle-branch",
+        filtering,
+        { id: 1, x: true },
+        {
+          anyOf: [idBranch, {
+            type: "object",
+            properties: { name: { type: "string" }, x: { type: "boolean" } },
+          }],
+        },
+        { id: 1, name: 123, x: true },
+      );
     });
 
     it("is minted from the branch where traversal rejects the sibling for an absent required key, in both modes", async () => {
@@ -741,13 +774,59 @@ describe("materialization-parity", () => {
           },
         },
       };
-      await handleReadsInBothModes("required-sibling-branch", requiring, {
-        id: 1,
-      }, { id: 1 });
+      await handleReadsInBothModes(
+        "required-sibling-branch",
+        requiring,
+        { id: 1 },
+        idBranch,
+        { id: 1 },
+      );
+    });
+
+    it("carries the compound where a sibling arm is told apart by a `const`, in both modes", async () => {
+      // Traversal admits a branch without reading its `const` and `enum`, so
+      // both arms of a tagged union match a value tagged for the first, and
+      // the handle carries the compound: a read through it projects the second
+      // arm's `label` too.
+      const tagged: JSONSchema = {
+        type: "object",
+        properties: {
+          h: {
+            anyOf: [
+              {
+                type: "object",
+                properties: { kind: { const: "a" }, id: { type: "number" } },
+                asCell: ["cell"],
+              },
+              {
+                type: "object",
+                properties: { kind: { const: "b" }, label: { type: "string" } },
+              },
+            ],
+          },
+        },
+      };
+      await handleReadsInBothModes(
+        "tagged-handle-branch",
+        tagged,
+        { kind: "a", id: 1, label: "L" },
+        {
+          anyOf: [{
+            type: "object",
+            properties: { kind: { const: "a" }, id: { type: "number" } },
+          }, {
+            type: "object",
+            properties: { kind: { const: "b" }, label: { type: "string" } },
+          }],
+        },
+        { kind: "a", id: 1, label: "L" },
+      );
     });
 
     it("carries the compound where only a bare branch could have minted it and the value is inline", async () => {
-      await handleReadsInBothModes("bare-handle-inline", bare, stored);
+      await handleReadsInBothModes("bare-handle-inline", bare, stored, {
+        anyOf: [{}, nameBranch],
+      });
     });
 
     it("keeps the link's schema where only a bare branch could have minted it over a link that carries one", async () => {
@@ -767,6 +846,10 @@ describe("materialization-parity", () => {
         "bare-handle-linked",
         bare,
         { x: 1, y: 2 },
+        {
+          type: "object",
+          properties: { x: { type: "number" }, y: { type: "number" } },
+        },
         target.getAsLink({ includeSchema: true }),
       );
     });
@@ -1157,6 +1240,41 @@ describe("materialization-parity", () => {
       }
     });
 
+    it("voids an array no element can satisfy eagerly, and refuses it where touched lazily", async () => {
+      // `items: false` is what the schema generator emits for a `never[]`, the
+      // type a bare `[]` literal infers. An eager read voids the whole array and
+      // drops the property; a view validates at the container what the
+      // container read shows and refuses at whichever element the reader
+      // touches — an `items` schema is not evaluated ahead of the elements,
+      // however little there is to evaluate. An empty array satisfies it in
+      // both modes.
+      const write = runtime.edit();
+      runtime.getCell(space, "never-items", undefined, write).setRaw({
+        tags: [1],
+        none: [],
+      });
+      await write.commit();
+      const read = readBothWays("never-items", {
+        type: "object",
+        properties: {
+          tags: { type: "array", items: false },
+          none: { type: "array", items: false },
+        },
+      });
+      try {
+        expect(snapshotQueryResult(read.eager.value)).toEqual({ none: [] });
+        const lazy = read.lazy.value as { tags: unknown[]; none: unknown[] };
+        expect(lazy.tags.length).toBe(1);
+        expect(() => lazy.tags[0]).toThrow();
+        expect(isSchemaMismatchError(read.lazy.tx.takeSchemaRefusal())).toBe(
+          true,
+        );
+        expect(snapshotQueryResult(lazy.none)).toEqual([]);
+      } finally {
+        await read.commit();
+      }
+    });
+
     it("runs a reader over an untouched mismatch lazily, and not eagerly", async () => {
       const write = runtime.edit();
       runtime.getCell(space, "untouched", undefined, write).setRaw({
@@ -1215,8 +1333,13 @@ describe("materialization-parity", () => {
   });
   describe("a union the reader declares over a link that carries its own schema", () => {
     // The link's schema lands on the selector; the reader's union survives
-    // only in the schema the view is given. Each row asserts the lazy read
-    // agrees with the eager one whether or not the link carries a schema.
+    // only in the schema the view is given. Each row names the keys the read
+    // yields, or `undefined` where the union rejects the value, and asserts the
+    // eager read yields them and the lazy read agrees, whether or not the link
+    // carries a schema. The link's own schema names every key, so the reader's
+    // union decides alone: a closed record admits its named key and drops the
+    // rest; a branch whose required child is invalid fails; two matching
+    // `oneOf` branches reject; an `allOf` part's failure fails the whole.
 
     const target = {
       type: "object",
@@ -1237,7 +1360,7 @@ describe("materialization-parity", () => {
         ...(required === undefined ? {} : { required }),
         ...(rest ?? {}),
       }) as JSONSchema;
-    const rows: Array<[string, JSONSchema]> = [
+    const rows: Array<[string, JSONSchema, readonly string[] | undefined]> = [
       [
         "an `anyOf` of a closed record and `null`",
         {
@@ -1248,6 +1371,7 @@ describe("materialization-parity", () => {
             { type: "null" },
           ],
         },
+        ["id"],
       ],
       [
         "an `anyOf` whose branches each match only part of the value",
@@ -1263,6 +1387,7 @@ describe("materialization-parity", () => {
             ]),
           ],
         },
+        undefined,
       ],
       [
         "an overlapping `oneOf`",
@@ -1272,6 +1397,7 @@ describe("materialization-parity", () => {
             record({ driver: { type: "string" } }, ["driver"]),
           ],
         },
+        undefined,
       ],
       [
         "a closed record beside an `allOf` naming a key",
@@ -1280,6 +1406,7 @@ describe("materialization-parity", () => {
           additionalProperties: false,
           allOf: [record({ id: { type: "string" } })],
         },
+        ["id"],
       ],
       [
         "an `allOf` with a part whose required child is invalid",
@@ -1289,6 +1416,7 @@ describe("materialization-parity", () => {
             record({ n: { type: "string" } }, ["n"]),
           ],
         },
+        undefined,
       ],
     ];
 
@@ -1297,7 +1425,7 @@ describe("materialization-parity", () => {
         ? Object.keys(value as object)
         : value;
 
-    for (const [index, [shape, union]] of rows.entries()) {
+    for (const [index, [shape, union, expectedKeys]] of rows.entries()) {
       for (const carries of [false, true]) {
         it(`agrees with an eager read under ${shape}, the link ${carries ? "carrying" : "without"} a schema`, async () => {
           const write = runtime.edit();
@@ -1337,6 +1465,7 @@ describe("materialization-parity", () => {
           const eager = read(false);
           const lazy = read(true);
           try {
+            expect(eager.p).toEqual(expectedKeys);
             expect(lazy.p).toEqual(eager.p);
           } finally {
             await eager.tx.commit();

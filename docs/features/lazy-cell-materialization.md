@@ -43,7 +43,8 @@ the child's link and lets the front door decide what the child is.
 ## What a view checks, and when
 
 At the container it is built over: the value's type against the schema's, and
-the schema's `required` keys — that the value carries each of them, and that the
+the schema's `required` keys — that the value carries each of them, and that
+the
 schema selects each one it requires. Both come off the container read a
 view takes anyway, so neither descends.
 
@@ -120,6 +121,14 @@ eager read".
   The same rule for an item whose schema permits `null` or `undefined`: an
   eager read substitutes for `{ n: "bad" }` under a required numeric `n`, and
   a view hands the element back and refuses at `n`.
+- **An array no element can satisfy reads as a view, not as nothing.**
+  `items: false` is what the schema generator emits for a `never[]`, the type
+  a bare `[]` literal infers, and an eager read of a non-empty array under it
+  voids the array, so the property holding it is absent. A view validates at
+  the container what the container read shows and hands the array back:
+  `length` reads, and an element refuses where the reader touches it. An
+  `items` schema is never evaluated ahead of the elements, however little
+  there is to evaluate; an empty array satisfies it in both modes.
 - **Unresolved input refuses instead of reading as absent.** A link chain that
   dead-ends at a document the replica cannot serve makes a view refuse with
   `UnresolvedInputError` where the schema declares no default. An eager read
@@ -132,7 +141,7 @@ eager read".
   does eagerly, the dead-end's read registered so the reader runs again when
   the document arrives.
 
-The first three share one reason: deciding a fallback by evaluating a present
+The first four share one reason: deciding a fallback by evaluating a present
 subtree registers every read below it, and a pattern's optional inputs are
 declared with defaults, so that rule would make every such input read eagerly.
 The Topics test named above is what holds the line.
@@ -143,7 +152,8 @@ The entry point takes the container's value without telling the scheduler, and
 lets whatever materializes it register reads as it walks. So every way a view
 returns without a value has to register the read it stands in for: a refusal, a
 key the container does not hold, and a value replaced by the schema's `default`.
-Miss one and the reader holds no dependency on the path it just found empty — it
+Miss one and the reader holds no dependency on the path it just found empty —
+it
 goes on reading its default however late the value arrives.
 
 ## Agreeing with an eager read
@@ -159,8 +169,9 @@ wrong. These rules hold that agreement:
   own schema does not name reads as one the schema does not select.
 - **A combinator the value's type does not settle uses eager branch
   evaluation at the accessed position.** Outer keywords, `$defs`, handle
-  selection, and merging of successful results are decided by the traverser. `oneOf` requires exactly one match; `allOf` requires
-  every branch to match. A failed branch cannot contribute properties to an
+  selection, and merging of successful results are decided by the traverser.
+  `oneOf` requires exactly one match; `allOf` requires every branch to match.
+  A failed branch cannot contribute properties to an
   `anyOf` result. The union classified this way, and the schema the traverser
   is handed, are the reader's: a link that carries a schema of its own puts
   that schema on the selector, and the union the reader asked for is what the
@@ -188,7 +199,7 @@ wrong. These rules hold that agreement:
   At the top level an absent value can take a `null` default. Both paths apply
   the same rule, which `getPropertyDefaultSchema` in `traverse.ts` states. What
   counts as rejected is where the two paths part, and that is listed under the
-  divergences below.
+  divergences above.
 - **Invalid array items take a permitted substitute.** `undefined` takes
   precedence over `null`; when neither is permitted, the mismatch refuses.
   Both paths use the same fallback selector. An unavailable linked document
@@ -203,12 +214,14 @@ wrong. These rules hold that agreement:
   elsewhere that link would follow whatever lands at the index next. Eager
   traversal rebases it onto a
   [`data:` identifier](data-uri-identifiers.md), and the view does the same. The
-  read stays on the slot, and recursively: the identity is derived from the whole
+  read stays on the slot, and recursively: the identity is derived from the
+  whole
   element value.
 - **A property the schema turns down is settled off the schema, not by reading
   it.** Declaring it `false` turns it down, and so does leaving it unnamed by a
   schema that refuses the properties it does not name. Either way it is absent
-  to a reader — from `in`, from enumeration and from a plain access alike — and
+  to a reader — from `in`, from enumeration and from a plain access alike —
+  and
   the link under it is never followed. Deciding it by reading and letting the
   read fail would fetch the document first, which is the cost the declaration
   was meant to avoid: a selection projection asks for a link's address that way,
@@ -309,7 +322,8 @@ value a reader is describing. Freezing puts that write on the cloning path.
 Deep-freezing what is already deep-frozen costs nothing, so this is paid only on
 what the transaction has thawed by writing.
 
-Before the first write there is nothing to resolve — every document still stands
+Before the first write there is nothing to resolve — every document still
+stands
 at the root it was loaded with, so every instant names the same state — and
 reads skip the machinery outright on that check.
 

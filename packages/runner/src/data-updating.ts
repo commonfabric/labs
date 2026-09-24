@@ -790,9 +790,11 @@ function anchorValueAsEntity(
     context,
   });
 
-  // This link is persisted, so it carries a schema only where the schema
-  // constrains something: a `true` or `{}` on the parent is left off rather
-  // than written into the stored link.
+  // This link is persisted, so it carries a schema only where the schema is a
+  // shape: a `true` or `{}` on the parent is left off rather than written into
+  // the stored link. `false` is left off by the same test, and cannot reach
+  // here in any case — the diff walk hands a child slot its schema through
+  // `getSchemaAtPath`, which reads a `false` slot as no schema.
   const entrySchema = resolveSchemaForValue(link.schema, content);
   const newEntryLink: NormalizedFullLink = {
     id: toURI(entityId),
