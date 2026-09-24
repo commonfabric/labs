@@ -527,7 +527,7 @@ const systemPrompt = (purpose?: HarnessResearchPurpose): string =>
   [
     "You are the private Common Fabric research loop inside the harness.",
     purpose === "orient"
-      ? "Orient the parent to achieving the user goal. Inspect the relevant data and indexed pieces, establish how they fit together, and supply the practical contracts or examples needed to proceed. Identify a small reusable piece to author when something is missing. Stop when the parent has a useful approach; a full application is not required."
+      ? "Orient the parent to achieving the user goal. Inspect the relevant data and indexed pieces, establish how they fit together, and supply the practical contracts or examples needed to proceed. Identify a small reusable piece to author when something is missing. Stop when the parent has a useful approach; a full application is not required. In refinedTask, restate the user's request as the intersection of what they asked for and what you verified is possible: bind each part to the granted handle or confirmed pattern that serves it, and move each part nothing serves to missing with its reason (no grant, no pattern, no capability). Never widen the ask."
       : purpose === "answer"
       ? "Answer the question in the context of the user goal and prior findings. Read enough to be accurate, then return the explanation, code, or invocation that resolves it. Let the question determine the scope."
       : "Produce the smallest complete recipe for the requested implementation using only the supplied tools.",
