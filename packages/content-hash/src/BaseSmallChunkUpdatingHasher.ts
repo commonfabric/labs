@@ -56,9 +56,7 @@ export abstract class BaseSmallChunkUpdatingHasher
 
       if (length <= (SMALLS_SIZE - smallsOffset)) {
         // The given `data` fits in the space available in `#smalls`.
-        const smalls = this.#smalls ??
-          (this.#smalls = smallsPool.pop() ?? new Uint8Array(SMALLS_SIZE));
-        smalls.set(data, smallsOffset);
+        this.#acquireSmalls().set(data, smallsOffset);
         this.#smallsOffset += length;
         return;
       }
@@ -89,6 +87,21 @@ export abstract class BaseSmallChunkUpdatingHasher
 
     this._rawUpdate(smallsFinal);
     this.#smallsOffset = 0;
+  }
+
+  /**
+   * Returns `#smalls`, first taking a buffer from `smallsPool` for it, or
+   * allocating one if the pool is empty, when this instance holds none.
+   */
+  #acquireSmalls(): Uint8Array {
+    let smalls = this.#smalls;
+
+    if (smalls === null) {
+      smalls = smallsPool.pop() ?? new Uint8Array(SMALLS_SIZE);
+      this.#smalls = smalls;
+    }
+
+    return smalls;
   }
 
   /** Gives `#smalls`, if this instance holds one, back to `smallsPool`. */
