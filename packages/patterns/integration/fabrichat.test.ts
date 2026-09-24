@@ -30,9 +30,16 @@ const SEND_ACTION = "FabriChatSend";
 
 /** What one rendered message's authorship element reports. */
 interface AuthorshipReport {
+  /** The element's authorship state: `verified`, `unverified` or `unknown`. */
   state: string | undefined;
+
+  /** The message text the element wraps. */
   text: string;
+
+  /** The label view read from the element's author claim. */
   authorLabel: unknown;
+
+  /** The label view read from the element's value, the message body. */
   valueLabel: unknown;
 }
 
@@ -121,6 +128,8 @@ async function waitForVerified(page: Page, body: string): Promise<void> {
     await waitForCondition(
       page,
       (_probe, text: string) => {
+        // Each page function is serialized into the page on its own, so it
+        // brings its own copy of `collect()`.
         function collect(root: Document | ShadowRoot, found: Element[]) {
           for (const element of root.querySelectorAll("*")) {
             if (element.tagName.toLowerCase() === "cf-cfc-authorship") {
