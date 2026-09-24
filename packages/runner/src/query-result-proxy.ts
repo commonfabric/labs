@@ -1055,7 +1055,9 @@ export function snapshotQueryResult<T>(value: T): T {
       const array: unknown[] = new Array(current.length);
       seen.set(current, array);
       for (let index = 0; index < current.length; index++) {
-        if (index in current) array[index] = snapshot(current[index]);
+        if (Object.hasOwn(current, index)) {
+          array[index] = snapshot(current[index]);
+        }
       }
       return array;
     }
