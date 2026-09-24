@@ -1296,16 +1296,39 @@ const writeLeavesPathUnchanged = (
     ) continue;
     const detailPath = detail.address.path.map(String);
     if (concretePathHasPrefix(detailPath, protectedPath)) {
-      if (!fabricAwareEqual(detail.value, detail.previousValue)) return false;
+      // The value layer keeps a member holding `undefined`, so two `undefined`
+      // ends can still be a member removed or added. A write that changed
+      // nothing records no detail at all, so a recorded one with both ends
+      // `undefined` is read as a change.
+      if (
+        (detail.value === undefined && detail.previousValue === undefined) ||
+        !fabricAwareEqual(detail.value, detail.previousValue)
+      ) return false;
     } else if (concretePathHasPrefix(protectedPath, detailPath)) {
       const relative = protectedPath.slice(detailPath.length);
       if (
+        hasValueAtPath(detail.value, relative) !==
+          hasValueAtPath(detail.previousValue, relative) ||
         !fabricAwareEqual(
           getValueAtPath(detail.value, relative),
           getValueAtPath(detail.previousValue, relative),
         )
       ) return false;
     }
+  }
+  return true;
+};
+
+/**
+ * Whether `value` holds a member at `path`, one holding `undefined` included.
+ */
+const hasValueAtPath = (value: unknown, path: readonly string[]): boolean => {
+  let current = value;
+  for (const key of path) {
+    if (!isObjectOrArray(current) || !Object.hasOwn(current, key)) {
+      return false;
+    }
+    current = (current as Record<string, unknown>)[key];
   }
   return true;
 };
@@ -6194,17 +6217,12 @@ const loadEnvelopeSchema = (
     return document;
   };
   if (declaresDefinitionScope(root)) {
-    // `load` throws on a document it cannot produce, so a miss here means the
-    // walk itself changed; refuse rather than read a partial closure.
-    const { missing } = walkSchemaDocumentClosure({
+    // `load` throws on a document it cannot produce, so the walk either
+    // reaches the whole closure or fails closed; it reports no misses.
+    walkSchemaDocumentClosure({
       roots: [metadata.schemaHash],
       load: (hash) => ({ kind: "verified", schema: load(hash) }),
     });
-    if (missing.size !== 0) {
-      throw new Error(
-        `CFC envelope ${metadata.schemaHash} has an incomplete closure`,
-      );
-    }
     return root;
   }
   return internSchema(

@@ -71,6 +71,16 @@ describe("an inline envelope that carries its own definitions and a reference", 
       expect(loaded.status === "unreadable" ? loaded.reason : undefined)
         .toBeUndefined();
       expect(loaded.status).toBe("loaded");
+      // As stored: its own definitions stay in its own map, and the reference
+      // into the other root keeps naming that root.
+      const schema = loaded.status === "loaded" ? loaded.schema : undefined;
+      expect(schema).toMatchObject({
+        properties: {
+          secret: { $ref: "#/$defs/Classified" },
+          stance: { $ref: `cid:${FOREIGN_HASH}#/$defs/Stance` },
+        },
+        $defs: { Classified: ENVELOPE.$defs.Classified },
+      });
 
       const second = runtime.edit();
       runtime.getCell(space, "own-definitions", ENVELOPE, second)

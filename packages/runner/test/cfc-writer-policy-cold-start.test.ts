@@ -338,6 +338,72 @@ describe("writer-policied inputs of a sub-piece", () => {
       }
     });
 
+    it("admits a whole-document write that leaves each guarded slot as it was", async () => {
+      // The replay writes the argument document whole, over slots a caller
+      // names and slots it carries over. A slot no writer policy guards may
+      // change; the guarded ones are compared inside the whole write.
+      const runtime = newRuntime();
+      try {
+        const { argument, tx } = await replayingTx(
+          runtime,
+          "writer-policy-replay-whole",
+        );
+        argument.withTx(tx).set({
+          ...argument.withTx(tx).get(),
+          topic: "lunch",
+        });
+        expect((await tx.commit()).error).toBeUndefined();
+        await runtime.idle();
+        expect(argument.get().topic).toBe("lunch");
+        expect(argument.get().frozen.digest).toBe("first");
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("refuses a whole-document write that changes a guarded slot inside it", async () => {
+      const runtime = newRuntime();
+      try {
+        const { argument, tx } = await replayingTx(
+          runtime,
+          "writer-policy-replay-whole-forge",
+        );
+        argument.withTx(tx).set({
+          ...argument.withTx(tx).get(),
+          frozen: { seat: 0, digest: "forged" },
+        });
+        expect((await tx.commit()).error?.message).toContain(
+          "writeAuthorizedBy",
+        );
+        await runtime.idle();
+        expect(argument.get().frozen.digest).toBe("first");
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("refuses one that replaces the document above the guarded slots", async () => {
+      // A write whose shape changes above a guarded slot records its detail
+      // there, not at the slot, so the slot is compared inside it.
+      const runtime = newRuntime();
+      try {
+        const { argument, tx } = await replayingTx(
+          runtime,
+          "writer-policy-replay-root",
+        );
+        (argument.withTx(tx) as unknown as { set(value: unknown): void }).set(
+          "replaced",
+        );
+        expect((await tx.commit()).error?.message).toContain(
+          "writeAuthorizedBy",
+        );
+        await runtime.idle();
+        expect(argument.get().frozen.digest).toBe("first");
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
     it("refuses an authoritative one, which commits the document whole", async () => {
       // An authoritative commit writes every document it touched over what
       // the store holds by then, so that it saw the bytes unchanged says
@@ -350,7 +416,9 @@ describe("writer-policied inputs of a sub-piece", () => {
         );
         // The extended transaction marks itself only where it serves a seal
         // destination; the mode itself lives on the transaction it wraps.
+        expect(tx.tx.markAuthoritativeWrites).toBeDefined();
         tx.tx.markAuthoritativeWrites!();
+        expect(tx.isAuthoritativeWrites?.()).toBe(true);
         const frozen = argument.withTx(tx).key("frozen");
         frozen.set({ ...frozen.get() });
         expect((await tx.commit()).error?.message).toContain(
