@@ -883,6 +883,27 @@ export function resolveSchemaRefsCanonical(
   return cached === null ? undefined : cached;
 }
 
+/** One reading of a schema's handle declaration by `declaresAsCell()`. */
+interface HandleReading {
+  /** The option lists being read further up. */
+  readonly open: Set<readonly JSONSchema[]>;
+
+  /**
+   * Whether every option of a list read so far declares a handle, with the
+   * definitions it was read against.
+   */
+  readonly verdicts: Map<
+    readonly JSONSchema[],
+    { readonly definitions: unknown; readonly every: boolean }
+  >;
+
+  /**
+   * The lists a union reached again while they were being read further up,
+   * and took there as declaring no handle.
+   */
+  readonly assumed: Set<readonly JSONSchema[]>;
+}
+
 /**
  * Helper for `SchemaObjectTraverser.hasAsCell()`, which reads the handle
  * declaration off `schema` with its root `$ref` resolved
@@ -890,14 +911,44 @@ export function resolveSchemaRefsCanonical(
  * every `anyOf` or every `oneOf` option declares. An option is read the same
  * way, against the definitions of the schema it sits in, so a union of
  * references to handle definitions declares a handle as the same union with
- * `asCell` at each reference does. `walking` holds the option lists being read
- * further up. A union that reaches itself through an option presents one of
- * them again, and reading it again proves nothing, so that list declares no
- * handle there.
+ * `asCell` at each reference does.
+ *
+ * A reading reads each option list once, so definitions the lists share are
+ * read once however many reach them. A union that reaches a list still being
+ * read further up takes it as declaring no handle, since reading it again
+ * proves nothing. Where a list taken that way turns out to declare a handle
+ * after all, what was read through it may have fallen short, so the reading
+ * runs again, keeping the lists found to declare one: those hold however the
+ * lists further up read. Each further run finds a list the ones before did
+ * not, so there are at most as many runs as lists, plus one.
  */
-function declaresAsCell(
+function declaresAsCell(schema: JSONSchema | undefined): boolean {
+  const reading: HandleReading = {
+    open: new Set(),
+    verdicts: new Map(),
+    assumed: new Set(),
+  };
+  for (;;) {
+    const declares = readsAsHandle(schema, reading);
+    let settled = true;
+    for (const options of reading.assumed) {
+      if (reading.verdicts.get(options)?.every === true) {
+        settled = false;
+        break;
+      }
+    }
+    if (settled) return declares;
+    for (const [options, verdict] of reading.verdicts) {
+      if (!verdict.every) reading.verdicts.delete(options);
+    }
+    reading.assumed.clear();
+  }
+}
+
+/** Whether `schema` declares a handle, within `reading`. */
+function readsAsHandle(
   schema: JSONSchema | undefined,
-  walking?: Set<readonly JSONSchema[]>,
+  reading: HandleReading,
 ): boolean {
   if (schema === undefined || typeof schema === "boolean") {
     return false;
@@ -907,22 +958,43 @@ function declaresAsCell(
     return true;
   }
   for (const options of [declaring.anyOf, declaring.oneOf]) {
-    if (!Array.isArray(options) || walking?.has(options)) continue;
-    const inWalk = walking ??= new Set();
-    inWalk.add(options);
-    try {
-      const every = options.every((option) =>
-        declaresAsCell(
-          cfcSchemaWithInheritedDefs(option, declaring.$defs),
-          inWalk,
-        )
-      );
-      if (every) return true;
-    } finally {
-      inWalk.delete(options);
+    if (
+      Array.isArray(options) &&
+      everyOptionReadsAsHandle(options, declaring.$defs, reading)
+    ) {
+      return true;
     }
   }
   return false;
+}
+
+/**
+ * Whether every option in `options` declares a handle, read against
+ * `definitions`, within `reading`.
+ */
+function everyOptionReadsAsHandle(
+  options: readonly JSONSchema[],
+  definitions: JSONSchemaObj["$defs"],
+  reading: HandleReading,
+): boolean {
+  const known = reading.verdicts.get(options);
+  if (known !== undefined && known.definitions === definitions) {
+    return known.every;
+  }
+  if (reading.open.has(options)) {
+    reading.assumed.add(options);
+    return false;
+  }
+  reading.open.add(options);
+  try {
+    const every = options.every((option) =>
+      readsAsHandle(cfcSchemaWithInheritedDefs(option, definitions), reading)
+    );
+    reading.verdicts.set(options, { definitions, every });
+    return every;
+  } finally {
+    reading.open.delete(options);
+  }
 }
 
 /**

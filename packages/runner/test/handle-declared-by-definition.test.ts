@@ -10,11 +10,13 @@
 
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { spy } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { isCell } from "../src/cell.ts";
+import { ContextualFlowControl } from "../src/cfc.ts";
 import { Runtime } from "../src/runtime.ts";
 import { txToReactivityLog } from "../src/scheduler.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -433,6 +435,52 @@ describe("handle declared by a definition", () => {
           $defs: { R: { anyOf: [{ $ref: "#/$defs/R" }] } },
         }),
       ).toBe(false);
+    });
+
+    it("returns `true` for a union whose option declares a handle only once a union read further up is found to", () => {
+      // `R` is `M` or `W`, and `W` is `M` alone. Reading `M`'s options
+      // reaches `W` through `P` while `M` is still being read, and takes `M`
+      // there as declaring no handle. `P` declares one through its `oneOf`
+      // all the same, so `M` does, and then so do `W` and `R`.
+
+      expect(
+        SchemaObjectTraverser.hasAsCell({
+          $ref: "#/$defs/R",
+          $defs: {
+            H: { type: "string", asCell: ["cell"] },
+            R: { anyOf: [{ $ref: "#/$defs/M" }, { $ref: "#/$defs/W" }] },
+            M: { anyOf: [{ $ref: "#/$defs/P" }, { $ref: "#/$defs/H" }] },
+            P: {
+              anyOf: [{ $ref: "#/$defs/W" }],
+              oneOf: [{ $ref: "#/$defs/H" }],
+            },
+            W: { anyOf: [{ $ref: "#/$defs/M" }] },
+          },
+        }),
+      ).toBe(true);
+    });
+
+    it("resolves each reference at most twice for definitions that each name the next two", () => {
+      // Every definition but the first two is reached from the two before
+      // it, so reading each path to it anew resolves exponentially often.
+
+      const count = 24;
+      const ref = (i: number) => ({ $ref: `#/$defs/R${i}` });
+      const $defs = Object.fromEntries(
+        Array.from({ length: count }, (_, i) => [
+          `R${i}`,
+          i >= count - 2
+            ? { type: "string", asCell: ["cell"] }
+            : { anyOf: [ref(i + 1), ref(i + 2)] },
+        ]),
+      );
+      const references = 1 + 2 * (count - 2);
+      using resolve = spy(ContextualFlowControl, "resolveSchemaRefs");
+
+      expect(
+        SchemaObjectTraverser.hasAsCell({ ...ref(0), $defs } as JSONSchema),
+      ).toBe(true);
+      expect(resolve.calls.length).toBeLessThanOrEqual(2 * references);
     });
   });
 });
