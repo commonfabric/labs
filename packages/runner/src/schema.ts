@@ -241,6 +241,12 @@ const labelViewForLink = (
   return baseView.rebase(link.path);
 };
 
+/** Whether a schema carries a combinator at its root. */
+const hasCombinator = (schema: JSONSchema | undefined): boolean =>
+  isObjectOrArray(schema) &&
+  (schema.anyOf !== undefined || schema.oneOf !== undefined ||
+    schema.allOf !== undefined);
+
 const matchesConcreteValue = (
   schema: JSONSchema,
   value: unknown,
@@ -1201,7 +1207,20 @@ export function validateAndTransform(
 
   // If our link is asCell/asStream, and we don't have any path portions, we
   // can just create the cell and mostly skip reading the value and traversal.
-  if (SchemaObjectTraverser.hasAsCell(effectiveSchema)) {
+  // A compound whose branches declare the handle, read at a view's child, is
+  // minted by the traverser from the hop rather than here: an eager read
+  // reaches the position inside its parent's traversal, where the compound is
+  // evaluated whole across the hop and the merge decides the handle, and the
+  // view does the same below so the handle it mints is the eager read's. A
+  // handle declared at the schema's root is not a merge's to decide.
+  const handleMintsThroughMerge = tx.isLazyMaterialize() &&
+    options?.viewChild === true && isObjectOrArray(effectiveSchema) &&
+    hasCombinator(effectiveSchema) &&
+    ContextualFlowControl.getAsCellValues(effectiveSchema).length === 0 &&
+    asCellCompoundCandidates(effectiveSchema).length > 0;
+  if (
+    SchemaObjectTraverser.hasAsCell(effectiveSchema) && !handleMintsThroughMerge
+  ) {
     const handleSourceSpace = link.space;
     // We check for a link value, since we will follow links one step in get
     // We've already followed all the writeRedirect links above.
@@ -1305,12 +1324,12 @@ export function validateAndTransform(
   // Get the full value without telling the scheduler. The traverse method will
   // notify the scheduler for shallow reads as they occur.
   const value = readValueAtResolvedLink(tx, resolvedValueLink, address);
-  const doc = { address, value: value };
+  let doc = { address, value: value };
   const valueSelectedSchema = isObjectOrArray(effectiveSchema)
     ? asCellCompoundSchemaForValue(effectiveSchema, value)
     : undefined;
   // If we have a ref with a schema, use that; otherwise, use the link's schema
-  const selector = {
+  let selector = {
     path: doc.address.path,
     schema: valueSelectedSchema ?? resolvedValueLink.schema ?? link.schema!,
   };
@@ -1324,7 +1343,24 @@ export function validateAndTransform(
   // list while writing into it stands on, and what an eager read gives, since
   // an eager read hands back a value built before the write. Seeing its own
   // write means taking the read again.
-  if (tx.isLazyMaterialize()) {
+  if (handleMintsThroughMerge) {
+    // A compound admitting a handle for the value, at a view's child. An eager
+    // read reaches this position inside its parent's traversal, where the
+    // compound is evaluated whole across the hop and the merge decides the
+    // handle — which arms match is decided by traversing them, an invalid
+    // optional property dropping out of a branch that still succeeds, a
+    // required property's deeper failure failing one that looked whole — and
+    // the handle it keeps adopts the hop's schema as it crosses. No reading of
+    // the schema alone reproduces that, and a handle outlives the read that
+    // minted it, so the view hands the hop to the traverser the same way and
+    // the merge mints the handle the eager read would.
+    const hopAddress = toMemorySpaceAddress(link);
+    doc = {
+      address: hopAddress,
+      value: readValueAtResolvedLink(tx, link, hopAddress),
+    };
+    selector = { path: hopAddress.path, schema: effectiveSchema! };
+  } else if (tx.isLazyMaterialize()) {
     // Crossing the last link is a hop the eager traverser combines schemas
     // across (`linkHopSelector`), because a link's own schema describes the
     // value at its target while the reader's schema describes what the reader
@@ -1333,18 +1369,9 @@ export function validateAndTransform(
     // alone is the link's schema, and a reader asking for a property the link's
     // schema does not name — `title` off a piece typed by its own
     // registration — would read as a property the schema does not select.
-    // A branch the value selected mints a handle here, through the entry
-    // point's `asCell` dispatch, and the handle carries what an eager read's
-    // merge would re-point it at (`viewHandleSchema`).
-    const viewSchema = valueSelectedSchema !== undefined
-      ? viewHandleSchema(
-        effectiveSchema as JSONSchemaObj,
-        valueSelectedSchema,
-        readMaybeLink(tx, link)?.schema,
-        value,
-      )
-      : combineOptionalSchema(effectiveSchema, resolvedValueLink.schema) ??
-        selector.schema;
+    const viewSchema = valueSelectedSchema ??
+      combineOptionalSchema(effectiveSchema, resolvedValueLink.schema) ??
+      selector.schema;
     // The RULED unresolved-input refusal (OW51, 2026-08-21): the walk
     // crossed a hop (or started from a data-derived handle) and
     // dead-ended at a doc this replica cannot serve (link-resolution's
@@ -1407,10 +1434,6 @@ export function validateAndTransform(
     // puts that schema on the selector, and the union the reader asked for
     // survives only in `viewSchema`. The traverser is handed the same
     // schema, for the same reason.
-    const hasCombinator = (schema: JSONSchema | undefined): boolean =>
-      isObjectOrArray(schema) &&
-      (schema.anyOf !== undefined || schema.oneOf !== undefined ||
-        schema.allOf !== undefined);
     let compound = hasCombinator(viewSchema) || hasCombinator(selector.schema);
     let lazySchema = viewSchema;
     // Where the value's type alone tells the branches apart — an array under
@@ -1569,76 +1592,6 @@ function compoundCellSchema(
     byKey.set(cacheKey, combinedSchema);
   }
   return combinedSchema;
-}
-
-/**
- * How many arms of the `anyOf` `schema` leads with admit `value`, each read
- * with the keywords beside the combinator merged in as the handle candidates
- * are; `undefined` where the schema leads with no `anyOf`. Traversal
- * dispatches the `anyOf` first, so this is the number of matches its merge
- * would see: a `oneOf` or an `allOf` beside it rides inside each arm.
- */
-function matchingAnyOfArms(
-  schema: JSONSchemaObj,
-  value: unknown,
-): number | undefined {
-  if (!Array.isArray(schema.anyOf)) return undefined;
-  const { anyOf, ...base } = schema;
-  let count = 0;
-  for (const arm of anyOf) {
-    const withDefs = cfcSchemaWithInheritedDefs(arm, schema.$defs);
-    const resolved = resolveSchema(withDefs) ?? withDefs;
-    if (
-      matchesConcreteValue(
-        combineSchema(base as JSONSchemaObj, resolved),
-        value,
-      )
-    ) {
-      count++;
-    }
-  }
-  return count;
-}
-
-/**
- * The schema a view mints a handle with, where `value` selected `branch` of
- * the compound `schema`: what an eager read would give the handle, since a
- * handle outlives the read that minted it and carries the reader's
- * declaration rather than the mode's. An eager read mints from the branch
- * and re-points the handle only when its merge sees more than one matching
- * arm, so where the compound leads with no `anyOf` — a `oneOf` admits one
- * branch — or one arm alone admits the value, the branch stands; so does it
- * where every branch that can mint a handle is bare and the hop the handle
- * is minted over carries a schema of its own, the one re-pointing the merge
- * declines. A branch that stands is combined with the hop's schema the way
- * the traverser combines it when it mints — a bare branch adopts it, a
- * shaped one stands — and that is done here, since the view re-enters from
- * the resolved value rather than from the hop; resolved for structure the
- * way `createObject` resolves a minted link's schema, so a content-addressed
- * reference reads the same either way. Otherwise the handle gets the
- * compound, markers removed, under the branch's own `asCell` values.
- */
-function viewHandleSchema(
-  schema: JSONSchemaObj,
-  branch: JSONSchemaObj,
-  adopted: JSONSchema | undefined,
-  value: unknown,
-): JSONSchema {
-  const arms = matchingAnyOfArms(schema, value);
-  if (
-    arms === undefined || arms <= 1 ||
-    (compoundMintsBareHandlesOnly(schema) && isNontrivialSchema(adopted))
-  ) {
-    if (adopted === undefined) return branch;
-    const combined = combineSchemaForLink(branch, adopted);
-    return isObjectNotArray(combined)
-      ? resolveExternalRootRefForStructure(combined)
-      : combined;
-  }
-  return compoundCellSchema(
-    schema,
-    ContextualFlowControl.getAsCellValues(branch),
-  );
 }
 
 /**

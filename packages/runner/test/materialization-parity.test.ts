@@ -686,6 +686,66 @@ describe("materialization-parity", () => {
       });
     });
 
+    it("projects a branch traversal keeps after dropping an invalid optional property, in both modes", async () => {
+      // Which arms match is decided by traversing them: an invalid optional
+      // `name` drops out of the second branch, which still succeeds and
+      // contributes `x`. No reading of the schema alone says so, so the
+      // handle is minted through the merge in both modes.
+      const filtering: JSONSchema = {
+        type: "object",
+        properties: {
+          h: {
+            anyOf: [
+              {
+                type: "object",
+                properties: { id: { type: "number" } },
+                asCell: ["cell"],
+              },
+              {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  x: { type: "boolean" },
+                },
+              },
+            ],
+          },
+        },
+      };
+      await handleReadsInBothModes("filtered-handle-branch", filtering, {
+        id: 1,
+        x: true,
+      }, { id: 1, name: 123, x: true });
+    });
+
+    it("is minted from the branch where traversal rejects the sibling for an absent required key, in both modes", async () => {
+      // The sibling's `required` is met by traversing it, not by reading the
+      // schema: with `name` absent the sibling is rejected, one arm matches,
+      // and the handle carries that arm's own schema in both modes.
+      const requiring: JSONSchema = {
+        type: "object",
+        properties: {
+          h: {
+            anyOf: [
+              {
+                type: "object",
+                properties: { id: { type: "number" } },
+                asCell: ["cell"],
+              },
+              {
+                type: "object",
+                properties: { name: { type: "string" } },
+                required: ["name"],
+              },
+            ],
+          },
+        },
+      };
+      await handleReadsInBothModes("required-sibling-branch", requiring, {
+        id: 1,
+      }, { id: 1 });
+    });
+
     it("carries the compound where only a bare branch could have minted it and the value is inline", async () => {
       await handleReadsInBothModes("bare-handle-inline", bare, stored);
     });

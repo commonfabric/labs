@@ -167,22 +167,21 @@ wrong. These rules hold that agreement:
   view was given. A union the value's type settles is not evaluated whole; the
   view is built over the one branch that can match, which is the branch the
   eager read would have selected.
-- **A handle branch the value selects is minted as a handle.** An optional
-  handle — `Cell<T> | undefined` — generates as a union whose one branch
-  declares `asCell`, and the entry point's dispatch sees the marker only at the
-  top of a schema. Where the value's type selects that branch, the view hands
-  the selected schema back to the entry point, whose dispatch mints the
-  handle, unwraps the consumed marker off the handle's own schema, and applies
-  the follow-scope cap. Where the type settles nothing, the traverser
-  evaluates the union whole and keeps the cell among its matches. A reader
-  gets the same `Cell` either way, carrying the same schema: a handle outlives
-  the read that minted it, so its schema is the reader's declaration and not
-  the mode's. Under a union whose typed branch declares `asCell`, that is the
-  compound with the branches' markers removed, and a read through the handle
-  projects every branch; where every branch that can mint a handle is bare,
-  it is the schema the handle adopted from its link, as
+- **A union whose branches declare a handle mints the handle an eager read
+  would.** An optional handle — `Cell<T> | undefined` — generates as a union
+  whose one branch declares `asCell`, and the entry point's dispatch sees the
+  marker only at the top of a schema. A handle outlives the read that minted
+  it and is read later by code that never knew which mode minted it, so its
+  schema is the reader's declaration and not the mode's: which branches match
+  is decided by traversing them, and the handle an eager read keeps carries
+  the branch's own schema where one branch matched, the schema adopted from
+  the hop where a bare branch was the one, and otherwise the compound with the
+  branches' markers removed, as
   [the traversal spec](../specs/space-model/8-traversal.md#merging-branch-results)
-  records.
+  records. No reading of the schema alone reproduces that, so at a view's
+  child such a union is handed to the traverser from the hop, exactly the
+  position the parent's eager traversal evaluates, and the merge mints the
+  handle. A reader gets the same `Cell` either way, carrying the same schema.
 - **Object property defaults follow filtering.** A missing or rejected
   declared property takes its non-null default, including when it is required.
   A property default of `null` does not fill an absent or rejected property.
