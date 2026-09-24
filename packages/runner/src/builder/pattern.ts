@@ -1155,19 +1155,29 @@ function anonymousSpaceName(frame: Frame): string {
 
 const frames: Frame[] = [];
 
+/**
+ * Pushes a frame that inherits the runtime, transaction, space and
+ * implementation identity of the frame beneath it, unless it is a
+ * module-evaluation frame. A module is evaluated whenever it is first needed,
+ * which can be while an action awaits with its own frame still on the stack; a
+ * module-evaluation frame inherits nothing from that frame, so the cells a
+ * pattern body mints are not bound to the waiting action's space or
+ * transaction.
+ */
 export function pushFrame(frame: Partial<Frame> = {}): Frame {
   const parent = getTopFrame();
+  const inherited = frame.moduleEvaluation ? undefined : parent;
 
   const result = {
     parent,
     reactives: new Set(),
     generatedIdCounter: 0,
-    ...(parent?.implementationIdentity && {
-      implementationIdentity: parent.implementationIdentity,
+    ...(inherited?.implementationIdentity && {
+      implementationIdentity: inherited.implementationIdentity,
     }),
-    ...(parent?.runtime && { runtime: parent.runtime }),
-    ...(parent?.tx && { tx: parent.tx }),
-    ...(parent?.space && { space: parent.space }),
+    ...(inherited?.runtime && { runtime: inherited.runtime }),
+    ...(inherited?.tx && { tx: inherited.tx }),
+    ...(inherited?.space && { space: inherited.space }),
     ...(parent?.moduleEvaluation && { moduleEvaluation: true as const }),
     ...frame,
   };

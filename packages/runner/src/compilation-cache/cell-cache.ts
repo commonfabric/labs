@@ -1057,10 +1057,12 @@ export function writeSourceDocs(
       recordUndeclarablePolicyStore(tx, baseCell);
       // Preserve product annotations on the entry doc only. Annotations are
       // only written there; reading every dependency doc here turns unrelated
-      // stale cache cells into writeback conflict preconditions.
-      const existing = baseCell.get();
+      // stale cache cells into writeback conflict preconditions. They carry
+      // over as stored: an annotation is typically a link to another document,
+      // and the raw write below has to keep it a link rather than a copy of
+      // what it reads through to.
       const existingAnnotations = identity === entryIdentity
-        ? existing?.annotations
+        ? baseCell.getRaw()?.annotations
         : undefined;
       const delegatedModuleIdentities = [
         ...(doc.delegatedModuleIdentities ?? []),

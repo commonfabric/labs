@@ -79,11 +79,25 @@ no child node is supplied to avoid mismatched type/node pairs.
 The consumer adds a second trigger of its own: `SchemaGeneratorTransformer`
 routes to `generateSchemaFromSyntheticTypeNode` when (a) the type arg is
 synthetic (`pos === -1 && end === -1`) and resolved to `any`, or (b) the
-real-position type arg *contains* an `any`/`unknown` keyword anywhere
+type arg, synthetic or not, *contains* an `any`/`unknown` keyword anywhere
 (`containsAnyOrUnknownTypeNode`), "so the checker does not recover a wider
-semantic type"
-(`ts-transformers/src/transformers/schema-generator.ts`). Both
+semantic type" (`ts-transformers/src/transformers/schema-generator.ts`). Both
 triggers are documented in the ts-transformers behavior spec §12.
+
+**Printed nodes.** A caller passes `printedFrom` in `SchemaGenerationOptions`:
+for a node it printed from a type, that type. The generator never reads such a
+node as a node. At the root, in `formatChildType`, and on entry to the
+node-based analyzer, a printed node gives way to the caller's own type at that
+position when that type carries something, and to the type the node was
+printed from when the caller's is `any`, `unknown`, or an unbound type
+parameter. The schema hints attached to the node still apply, through the
+context's `hintsNode`.
+
+A print can carry syntax its type does not: in place of printing a type, the
+checker writes a member's own annotation where it denotes the member's type,
+and an alias by its name. For CFC labels, whose bindings live only in syntax,
+the type path reads both, as §11 says, so a label a print carried is read
+from its type.
 
 **The node-based analyzer** (`analyzeTypeNodeStructure`,
 `src/schema-generator.ts`) handles: `TypeLiteral` nodes (properties
@@ -906,20 +920,55 @@ Mechanics:
   as usual. A chain entered with no argument nodes, as from a type whose print
   expands the alias, binds each parameter to its argument's type instead, by
   declaration: a bare reference to the parameter, as a payload, a label, a
-  label's element, or an argument of a nested alias, reads as that type. Any
-  other node holding one (`T[]`) is not rebuilt around the type: it keeps the
-  rest of its structure and metadata, the parameter's positions read as
-  accepting anything, and it is reported as not fully read. A `typeof` binding
+  label's element, or an argument of a nested alias, reads as that type. A
+  payload node holding one (`T[]`, `{ value: T }`) is read from the type the
+  chain instantiates. Every CFC alias adds its metadata to its payload as one
+  more member of an intersection, a carrier holding only `__ct_cfc__`, so the
+  intersection's other member is the innermost payload, the argument in
+  wherever the declaration wrote the parameter (`cfcPayloadOf`). A payload
+  that is itself an intersection or a union has no one other member, and is
+  read from its declaration with each parameter bound to its argument's type
+  (`GenerationContext.boundTypeParameters`): wherever the walk reaches a bound
+  parameter, in a union's member, an intersection's part, an array's element,
+  or an object's property, its argument's type is read. A union or an
+  intersection written in the declaration is read by its written members, as
+  a print of the instantiation was, since the checker folds a member that is
+  itself a union, a CFC alias over one among them, into the whole and loses
+  its boundary and labels. A recursive definition read under bindings is
+  named by its type and its bindings together, so two instantiations of one
+  declaration keep apart. A use the binding
+  cannot reach, one the checker defers such as `T["name"]` or a conditional
+  type, accepts any value there, and the payload is reported as not fully
+  read. A label reads a parameter it holds as its type wherever the label
+  reader pairs that position. A `typeof` binding
   supplied only as a type argument cannot be read from a type, so a
   `writeAuthorizedBy` claim whose binding arrives that way is not emitted; one
   written in the alias declaration itself is read from the declaration.
-- Metadata values come from type-level literals: literal nodes, tuples, type
-  literals, `typeof` value reads, alias-parameter substitution, and
-  tuple/object **types** via the checker when nodes are gone
-  (`extractLiteralLikeValue`). That extraction recognizes `AnyOf<X>` as
-  `{ anyOf: X }`, from its node or from its alias when only the type remains,
-  and `PolicyOf<typeof rules>`, from its node only, as a policy atom containing
-  `__ctPolicyIdentityOf: { file, path }`. Projection paths encode as JSON
+- Metadata values come from type-level literals (`extractLiteralLikeValue`).
+  Syntax says what a type cannot, such as which binding a `typeof` names, so
+  a label's syntax is read first, each node paired with the part of the type
+  it denotes: literal nodes, tuples, type literals, `readonly`, `typeof` value
+  reads, and alias references, with the alias's arguments substituted into its
+  body. Syntax the reader does not evaluate, such as a conditional or mapped
+  alias, a spread, rest, or optional tuple element, or a parameter an alias
+  leaves to its default, is read from the paired type instead, and so is a
+  label with no syntax at all. Read from nodes, the extraction recognizes
+  `AnyOf<X>` as
+  `{ anyOf: X }` and `PolicyOf<typeof rules>` as a policy atom containing
+  `__ctPolicyIdentityOf: { file, path }`. Read from a type, an object type's
+  member is read at its declared annotation, paired with its type, wherever
+  that annotation denotes the member's type apart from the `undefined` an
+  optional member's `?` adds (`readMemberAnnotation`,
+  `src/typescript/type-node.ts`). That is how a label written in a type
+  literal or an interface keeps a binding that only its syntax names. The same
+  member of a generic declaration, instantiated, is read from its type, as is
+  the value of an optional member with no such annotation. `AnyOf<X>` is
+  recognized by its brand, `{ readonly __ct_cfc_any_of__?: X }`, never by an
+  alias name, so an authored type named `AnyOf` is read as itself. A
+  `PolicyOf` reached from a type alone, with no annotation that denotes it,
+  has no binding to read: its brand is read as an ordinary object,
+  `{ __ct_cfc_policy_of__: undefined }`, not as a policy atom. Projection paths
+  encode as JSON
   Pointers with `~0`/`~1` escaping (`encodeJsonPointerPath`).
 - `ifc` combines with the base schema's existing `ifc` one key at a time
   (`combineIfcLabels`, `src/ifc-labels.ts`); boolean schemas become

@@ -313,10 +313,10 @@ describe("select-unheld-field", () => {
     );
     // The position may hold an array and holds an object, so the name belongs
     // to the position itself rather than to an element, and the element
-    // schema's vocabulary says nothing about it. The empty result is the
-    // concise read applying its field mask, not a refusal — the JSON spelling
-    // of the same request reaches the value.
-    expect(await selected(source, "extra")).toEqual({});
+    // schema's vocabulary says nothing about it: the gate passes the name
+    // through, and a schema that omits `type` admits the value at any key it
+    // names nothing about, in either spelling of the request.
+    expect(await selected(source, "extra")).toEqual({ extra: "kept" });
     expect(
       await deriveSelectedValue(runtime, space, source, {
         projection: await parseSelectionProjection(
@@ -401,7 +401,7 @@ describe("select-unheld-field", () => {
     );
   });
 
-  it("returns the empty projection for a field only a conjunction member declares", async () => {
+  it("reads a field only a conjunction member declares", async () => {
     const source = await sourceCell(
       "unheld-conjunction",
       {
@@ -416,10 +416,9 @@ describe("select-unheld-field", () => {
     );
     // A conjunction constrains one value from every member at once, so a field
     // any member declares is a field the position declares, and the gate lets
-    // it through. What comes back is empty because the read's own traversal
-    // does not reach a conjunction member's properties, which is a fact about
-    // the read rather than about the gate.
-    expect(await selected(source, "subtitle")).toEqual({});
+    // it through. The read reaches it too: traversal evaluates every member
+    // and merges what the members produced.
+    expect(await selected(source, "subtitle")).toEqual({ subtitle: "Second" });
     await expect(selected(source, "subtitel")).rejects.toThrow(
       'Did you mean "subtitle"? <root> declares "title", "subtitle"',
     );

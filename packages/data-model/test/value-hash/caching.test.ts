@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { hashOf } from "@";
+import { deepFreeze, type FabricValue, hashOf } from "@";
 
 import { hex } from "./hex.ts";
 
@@ -70,6 +70,17 @@ describe("value-hash/caching", () => {
       const a = hashOf("hello");
       const b = hashOf("world");
       expect(hex(a.bytes)).not.toEqual(hex(b.bytes));
+    });
+
+    it("caches the hash of a deep-frozen cyclic value", () => {
+      const self: Record<string, FabricValue> = {};
+      self.self = self;
+      const expected = hashOf(self);
+      deepFreeze(self);
+
+      const first = hashOf(self);
+      expect(first.bytes).toEqual(expected.bytes);
+      expect(hashOf(self)).toBe(first);
     });
   });
 });

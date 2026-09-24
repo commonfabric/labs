@@ -133,6 +133,8 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
           // generator only holds a checker, which cannot reach the program.
           isDefaultLibrarySourceFile: (file) =>
             context.isSourceFileDefaultLibrary(file),
+          // A node the pipeline printed from a type is read as that type.
+          printedFrom: (typeNode) => context.state.printedFrom(typeNode),
           // The schema-generator owns the general/nested CFC alias path. Give
           // it the same spelling and stamp source used by the direct
           // WriteAuthorizedBy special case below, including for bindings

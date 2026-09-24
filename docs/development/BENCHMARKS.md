@@ -1346,6 +1346,15 @@ lifts, in the same transaction:
 - `per-record`, assigned the graph counts of the thread cases, starts a lift
   for each comment position and each link position on every topic.
 
+Every limit is an upper bound, so the budget catches a change that reads more
+and is blind to one that reads differently. Lazy materialization turned back
+into eager traversal is the case that matters: it makes fewer proxy accesses,
+not more, while every topic's `backlinksOf` runs again on each mention edit.
+`packages/patterns/integration/topics-lazy-lookup-reruns.test.ts` holds that
+property directly, on the 32-topic `high-degree` `all-backlinks` case under
+lazy materialization: a mention edit re-runs the lookups of the topics whose
+pivot row changed, and no other.
+
 A case's test fails when a count exceeds its limit, when a measured count has no
 limit, or when a limit names a phase the case did not record. The failure names
 the workload, case, phase, count, observed value, and limit. Run one group from

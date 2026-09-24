@@ -1,4 +1,8 @@
-import { JSONSchemaObj, type JSONValue } from "@commonfabric/api";
+import {
+  JSONSchemaObj,
+  type JSONSchemaTypes,
+  type JSONValue,
+} from "@commonfabric/api";
 import { isDeepFrozen } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
@@ -282,6 +286,40 @@ const schemaAtPathKey = (
   for (const part of path) key += `|${part.length}:${part}`;
   return key;
 };
+
+/**
+ * The JSON types of the values an `enum` or `const` schema names, each once,
+ * in the order the members declare them; `undefined` where the schema names
+ * no values. Narrowing reads an enumeration for these types and no more.
+ */
+function enumeratedTypes(
+  schema: JSONSchemaObj,
+): readonly JSONSchemaTypes[] | undefined {
+  const members = Array.isArray(schema.enum)
+    ? schema.enum
+    : "const" in schema
+    ? [schema.const]
+    : undefined;
+  if (members === undefined) return undefined;
+  const types: JSONSchemaTypes[] = [];
+  for (const member of members) {
+    const type: JSONSchemaTypes = member === null
+      ? "null"
+      : Array.isArray(member)
+      ? "array"
+      : typeof member === "object"
+      ? "object"
+      : typeof member === "string"
+      ? "string"
+      : typeof member === "number"
+      ? "number"
+      : typeof member === "boolean"
+      ? "boolean"
+      : "undefined";
+    if (!types.includes(type)) types.push(type);
+  }
+  return types;
+}
 
 // The cfc rules. Every member is static: the derivations are pure functions of
 // their arguments, and what caching there is lives in module-level maps keyed
@@ -631,6 +669,10 @@ export class ContextualFlowControl {
       ? new Set<unknown>(extraConfidentiality)
       : new Set<unknown>();
     let cursor = schema;
+    // Whether the path descended through a wildcard: a true schema is what
+    // every child below it narrows to, markers and all, but its `default`
+    // describes the wildcard's own value and does not follow.
+    let throughWildcard = false;
     for (
       const [index, part] of path.map((value, index) =>
         [index, value] as [number, string]
@@ -649,13 +691,49 @@ export class ContextualFlowControl {
           defs = cursor.$defs;
         }
       }
+      // A false schema spelled as an object — `{ not: true }`, which is how a
+      // reference to a `false` definition resolves — admits nothing, and
+      // holds no children under either reading below.
+      if (ContextualFlowControl.isFalseSchema(cursor)) return false;
+      // An `enum` or `const` beside no `type` is read as the type list its
+      // members' types make — a string enumeration is a string, and holds no
+      // children — and nothing more of the members is read: traversal does
+      // not validate the keyword, and narrowing does not project it. That
+      // list then narrows as a declared one does, below.
+      if (isObjectOrArray(cursor) && cursor.type === undefined) {
+        const types = enumeratedTypes(cursor);
+        if (types !== undefined) {
+          cursor = internSchema({
+            ...cursor,
+            type: types.length === 1 ? types[0] : types,
+          });
+        }
+      }
+      // A cursor declaring no `type` admits every type, and which of its
+      // keywords apply is settled only by a value — `properties` and
+      // `additionalProperties` by an object, `prefixItems` and `items` by an
+      // array. Narrowing without one can say only what both readings admit,
+      // so such a cursor is read as the union of its object and array
+      // readings. A caller holding the value settles the type first. A
+      // conjunction is left out: this narrowing does not read a child out of
+      // `allOf` parts, and a reading that ignored them would admit a property
+      // a part constrains as anything, its schema and labels dropped.
+      const typeless = isObjectOrArray(cursor) && cursor.type === undefined &&
+        !("anyOf" in cursor) && !("oneOf" in cursor) &&
+        !("allOf" in cursor) && !ContextualFlowControl.isTrueSchema(cursor);
       if (
         isObjectOrArray(cursor) &&
-        (Array.isArray(cursor.type) || "anyOf" in cursor || "oneOf" in cursor)
+        (Array.isArray(cursor.type) || "anyOf" in cursor || "oneOf" in cursor ||
+          typeless)
       ) {
         const armSchemas: JSONSchema[] = [];
         const cursorObject = cursor;
-        const options = Array.isArray(cursorObject.type)
+        const options = typeless
+          ? [{ ...cursorObject, type: "object" as const }, {
+            ...cursorObject,
+            type: "array" as const,
+          }]
+          : Array.isArray(cursorObject.type)
           ? cursorObject.type.map((type) => ({ ...cursorObject, type }))
           : (cursorObject.anyOf && cursorObject.oneOf)
           ? [...cursorObject.anyOf, ...cursorObject.oneOf]
@@ -716,6 +794,7 @@ export class ContextualFlowControl {
         break;
       } else if (ContextualFlowControl.isTrueSchema(cursor)) {
         // wildcard schema -- equivalent to true, but we can add ifc tags
+        throughWildcard = true;
         break;
       } else if (cursor.type === "object") {
         if (cursor.ifc !== undefined) {
@@ -761,14 +840,12 @@ export class ContextualFlowControl {
         } else {
           return false;
         }
-      } else if (
-        cursor.type === "unknown" ||
-        Array.isArray(cursor.type) && cursor.type.includes("unknown")
-      ) {
+      } else if (cursor.type === "unknown") {
         // we can descend into unknown, but we just get more unknown
         cursor = { type: "unknown", ...(cursor.ifc && { ifc: cursor.ifc }) };
       } else {
-        // we can only descend into objects and arrays or unknown
+        // A declared type other than object, array or unknown holds no
+        // children.
         return false;
       }
     }
@@ -794,8 +871,33 @@ export class ContextualFlowControl {
       unknown
     >;
     delete result.$defs;
+    if (throughWildcard) delete result.default;
     if (selectedDefs !== undefined) result.$defs = selectedDefs;
     return result as JSONSchema;
+  }
+
+  /**
+   * `schema` with its `type` settled to `container`, for a reader holding a
+   * value of that shape. Narrowing without a value reads a schema declaring
+   * no `type` as the union of the readings it offers (`schemaAtPath`); a
+   * reader with the value in hand narrows through the one the value selects.
+   * The schema stands where it declares a type, refers elsewhere for one,
+   * names its values with `enum` or `const` — whose types narrowing reads as
+   * the declared type — or is true, the wildcard every child narrows to,
+   * markers and all.
+   */
+  static settledForContainer(
+    schema: JSONSchema,
+    container: "object" | "array",
+  ): JSONSchema {
+    if (
+      !isObjectOrArray(schema) || schema.type !== undefined ||
+      schema.$ref !== undefined || Array.isArray(schema.enum) ||
+      "const" in schema || ContextualFlowControl.isTrueSchema(schema)
+    ) {
+      return schema;
+    }
+    return internSchema({ ...schema, type: container });
   }
 
   /**

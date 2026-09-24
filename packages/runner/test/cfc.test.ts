@@ -88,6 +88,128 @@ describe("ContextualFlowControl.schemaAtPath", () => {
     expect(nested).toEqual({ type: "string" });
   });
 
+  it("narrows a schema that omits `type` to what its object and array readings both admit, and a declared non-container type to `false`", () => {
+    // A schema declaring no `type` admits every type, and without a value
+    // nothing says whether its `properties` or its `items` apply, so the
+    // narrowing is the union of the two readings: a named property beside an
+    // element schema gives both at an index, a key only one reading names
+    // gives that reading's answer, and a key the object reading leaves open
+    // admits anything. A declared type other than object, array or unknown
+    // holds no children.
+    const typeless: JSONSchema = {
+      properties: { title: { type: "string" }, "0": { type: "boolean" } },
+      items: { type: "number" },
+    };
+    expect(ContextualFlowControl.schemaAtPath(typeless, ["title"])).toEqual({
+      type: "string",
+    });
+    expect(ContextualFlowControl.schemaAtPath(typeless, ["0"])).toEqual({
+      anyOf: [{ type: "boolean" }, { type: "number" }],
+    });
+    expect(ContextualFlowControl.schemaAtPath(typeless, ["extra"])).toBe(
+      true,
+    );
+    expect(
+      ContextualFlowControl.schemaAtPath({ items: { type: "number" } }, ["1"]),
+    ).toBe(true);
+    // A conjunction is not narrowed here: a type-less `allOf` holds no
+    // children rather than admitting one a part constrains as anything.
+    expect(
+      ContextualFlowControl.schemaAtPath(
+        { allOf: [{ properties: { a: { type: "number" } } }] },
+        ["a"],
+      ),
+    ).toBe(false);
+    expect(
+      ContextualFlowControl.schemaAtPath(
+        { additionalProperties: { type: "boolean" } },
+        ["extra"],
+      ),
+    ).toEqual({ type: "boolean" });
+    expect(
+      ContextualFlowControl.schemaAtPath({ type: "string" }, ["extra"]),
+    ).toBe(false);
+    // A false schema spelled as an object holds no children under either
+    // reading.
+    expect(ContextualFlowControl.schemaAtPath({ not: true }, ["extra"])).toBe(
+      false,
+    );
+    // An `enum` or `const` beside no `type` is read as the type list of its
+    // members' types, and nothing more of the members is read, since
+    // traversal does not validate the keyword: a string enumeration holds no
+    // children, and an object member admits any key, one no member holds
+    // included. That last answer holds only for as long as the values go
+    // unread; an exact-match reading would narrow `extra` to `false` and `a`
+    // to what the members hold.
+    expect(
+      ContextualFlowControl.schemaAtPath({ enum: ["a", "b"] }, ["extra"]),
+    ).toBe(false);
+    expect(
+      ContextualFlowControl.schemaAtPath({ enum: [{ a: 1 }, "b"] }, ["extra"]),
+    ).toBe(true);
+    expect(
+      ContextualFlowControl.schemaAtPath({ const: [1, 2] }, ["0"]),
+    ).toBe(true);
+    expect(
+      ContextualFlowControl.schemaAtPath({ const: [1, 2] }, ["extra"]),
+    ).toBe(false);
+    expect(
+      ContextualFlowControl.schemaAtPath({
+        type: "object",
+        enum: [{}],
+        properties: { a: { type: "number", default: 1 } },
+      }, ["a"]),
+    ).toEqual({ type: "number", default: 1 });
+  });
+
+  it("settles a schema that omits `type` to the container a reader holds, and leaves the rest standing", () => {
+    // A reader that holds an object narrows through the object reading, so a
+    // type-less schema takes `type: "object"`. A declared type, a reference,
+    // an enumeration — typed by its members — and a true schema stand as
+    // they are.
+    const settle = ContextualFlowControl.settledForContainer;
+    expect(settle({ items: { type: "number" } }, "object")).toEqual({
+      items: { type: "number" },
+      type: "object",
+    });
+    expect(settle({ items: { type: "number" } }, "array")).toEqual({
+      items: { type: "number" },
+      type: "array",
+    });
+    for (
+      const standing of [
+        { type: "string" },
+        { $ref: "#/$defs/X", $defs: { X: { type: "object" } } },
+        { asCell: ["cell"] },
+        { enum: ["a", "b"] },
+      ] as JSONSchema[]
+    ) {
+      expect(settle(standing, "object")).toBe(standing);
+    }
+  });
+
+  it("hands a wildcard down to its children without its `default`", () => {
+    // A true schema is what every child below it narrows to, markers and
+    // labels included, but its `default` describes the wildcard's own value:
+    // an absent child under `{ default: {…} }` must not read the parent's
+    // default as its own. The schema itself, asked for at an empty path,
+    // keeps it.
+    const wildcard: JSONSchema = {
+      default: { a: 1 },
+      asCell: ["cell"],
+      ifc: { confidentiality: ["secret"] },
+    };
+    expect(ContextualFlowControl.schemaAtPath(wildcard, ["a"])).toEqual({
+      asCell: ["cell"],
+      ifc: { confidentiality: ["secret"] },
+    });
+    expect(ContextualFlowControl.schemaAtPath(wildcard, ["a", "b"])).toEqual({
+      asCell: ["cell"],
+      ifc: { confidentiality: ["secret"] },
+    });
+    expect(ContextualFlowControl.schemaAtPath(wildcard, [])).toEqual(wildcard);
+  });
+
   it("does not treat inherited property names as declared properties", () => {
     const schema: JSONSchema = {
       type: "object",

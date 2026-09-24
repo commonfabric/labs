@@ -68,6 +68,7 @@ import {
 import {
   defaultForAbsentValue,
   materializeSchemaView,
+  SchemaMismatchError,
   UnresolvedInputError,
 } from "./schema-view.ts";
 import { canFollowScopedLink, isCellScope } from "./scope.ts";
@@ -85,9 +86,11 @@ import {
   combineSchema,
   combineSchemaForLink,
   createDefaultTraversalContext,
+  getJsonType,
   IObjectCreator,
   isUnknownCellSchema,
   mergeAnyOfMatches,
+  schemaAcceptsType,
   SchemaObjectTraverser,
 } from "./traverse.ts";
 
@@ -238,6 +241,12 @@ const labelViewForLink = (
   return baseView.rebase(link.path);
 };
 
+/** Whether a schema carries a combinator at its root. */
+const hasCombinator = (schema: JSONSchema | undefined): boolean =>
+  isObjectOrArray(schema) &&
+  (schema.anyOf !== undefined || schema.oneOf !== undefined ||
+    schema.allOf !== undefined);
+
 const matchesConcreteValue = (
   schema: JSONSchema,
   value: unknown,
@@ -350,8 +359,9 @@ const matchesConcreteValue = (
  */
 
 /**
- * Resolve a schema to its canonical interned form, or `undefined` when the
- * input carries no usable information.
+ * Resolve a schema to its canonical interned form. `undefined` is returned for
+ * `undefined` alone — no schema was given — and every schema, a boolean or
+ * `{}` included, comes back as a schema.
  *
  * The return value is the **canonical interned reference** for the resolved
  * schema's structural content — produced by `internSchema()`. Concrete
@@ -369,9 +379,16 @@ const matchesConcreteValue = (
  * - When the caller supplies a schema that **is** itself the canonical
  *   interned instance, the same reference is returned (because
  *   `internSchema()` short-circuits on WeakMap hit).
- * - `undefined` is returned for trivial inputs (`undefined`, `null`, `{}`,
- *   non-object) and for `$ref`-chains that resolve to a boolean or
- *   trivial schema.
+ * - A boolean is returned as itself, whether written in place or reached
+ *   through a `$ref` chain, and so is `{}` (interned). `true` and `{}` admit
+ *   every value and `false` none; none of the three is the absence of a
+ *   schema, and a caller deciding "was a schema given" tests for `undefined`
+ *   alone. A `$ref` reaches a boolean only from a bare ref site: a local
+ *   `#/$defs/...` ref carries the `$defs` it resolves against, and merging
+ *   those siblings in returns an object instead (`{ not: true }` for a `false`
+ *   target, which likewise matches nothing).
+ * - `false` is also returned for a `$ref` naming a definition the schema does
+ *   not carry: a schema the runtime cannot read is one nothing matches.
  *
  * Callers that need a stable reference across calls should therefore rely
  * on structural canonicalization (same content yields same reference)
@@ -381,14 +398,18 @@ const matchesConcreteValue = (
 export function resolveSchema(
   schema: JSONSchema | undefined,
 ): JSONSchema | undefined {
-  // Treat undefined/null/{} or any other non-object as no schema
-  // We don't use ContextualFlowControl.isTrueSchema here, since we want to
-  // handle flags like default or ifc
-  if (!isNontrivialSchema(schema)) {
+  if (schema === undefined || schema === null) {
+    return undefined;
+  }
+  // A boolean is a complete schema: `true` admits every value, `false` none.
+  if (typeof schema === "boolean") {
+    return schema;
+  }
+  if (!isObjectOrArray(schema)) {
     return undefined;
   }
 
-  let resolvedSchema = schema;
+  let resolvedSchema: JSONSchema = schema;
   if (typeof schema.$ref === "string") {
     const resolved = ContextualFlowControl.resolveSchemaRefs(schema);
     if (resolved === undefined) {
@@ -404,21 +425,17 @@ export function resolveSchema(
       );
       return false;
     }
-    if (!isObjectOrArray(resolved)) {
-      // For boolean schema or the default `{}` schema, we don't have any
-      // meaningful information in the schema, so just return undefined.
-      return undefined;
+    if (typeof resolved === "boolean") {
+      return resolved;
     }
     resolvedSchema = resolved;
   }
 
-  // Return no schema if all it said is that this was a reference or an
-  // object without properties. Intern here (rather than just
-  // deep-freezing) so structurally-equal schemas collapse to a single
-  // canonical reference across calls — see the contract above.
-  return isNontrivialSchema(resolvedSchema)
-    ? internSchema(resolvedSchema)
-    : undefined;
+  // Intern rather than just deep-freeze, so structurally-equal schemas
+  // collapse to a single canonical reference across calls — see the contract
+  // above. `{}` is a schema like any other here: it constrains nothing, and it
+  // is not the absence of one.
+  return internSchema(resolvedSchema);
 }
 
 const selectMatchingCompoundBranch = (
@@ -442,6 +459,46 @@ const selectMatchingCompoundBranch = (
   });
 
   return matches.length === 1 ? matches[0] : undefined;
+};
+
+/**
+ * The one branch of an `anyOf` or `oneOf` that the value's type alone selects,
+ * with the keywords beside the union merged under it the way traversal merges
+ * them — shallowly, the branch's own winning — or `undefined` where the type
+ * settles nothing: no branch accepts the value's type, more than one does, a
+ * branch declares no `type` and so accepts every value, or the schema is an
+ * `allOf`, which is not a choice. A branch selected this way is one nothing
+ * below the value can undo in favor of another — every other branch has
+ * already refused the value's type — so what remains below is only whether
+ * the branch itself holds, and a view decides that where the reader touches
+ * it.
+ */
+const narrowUnionByValueType = (
+  schema: JSONSchemaObj,
+  value: unknown,
+): JSONSchema | undefined => {
+  const kind = Array.isArray(schema.anyOf)
+    ? "anyOf"
+    : Array.isArray(schema.oneOf)
+    ? "oneOf"
+    : undefined;
+  if (kind === undefined || schema.allOf !== undefined) return undefined;
+  const valueType = getJsonType(value);
+  if (valueType === null) return undefined;
+  const { [kind]: branches, ...rest } = schema;
+  let selected: JSONSchema | undefined;
+  for (const branch of branches as readonly JSONSchema[]) {
+    const withDefs = cfcSchemaWithInheritedDefs(branch, schema.$defs);
+    const resolved = resolveSchema(withDefs) ?? withDefs;
+    if (resolved === false) continue;
+    if (!isObjectOrArray(resolved) || resolved.type === undefined) {
+      return undefined;
+    }
+    if (!schemaAcceptsType(resolved, valueType)) continue;
+    if (selected !== undefined) return undefined;
+    selected = schemaWithProperties(rest as JSONSchemaObj, resolved);
+  }
+  return selected;
 };
 
 export function resolveSchemaForValue(
@@ -1096,13 +1153,16 @@ export function validateAndTransform(
     ...resolvedLink,
     ...(effectiveSchema !== undefined && { schema: effectiveSchema }),
   };
-  // If we don't have a schema, and we aren't asCell/asStream, use a proxy
+  // A schema that constrains nothing — absent, `true`, or `{}` — and carries
+  // no asCell/asStream hands the read to the schema-less proxy. `false` is
+  // not one of those: it constrains everything, and traversal below is what
+  // honors it.
   if (
     (
       effectiveSchema === undefined ||
       !SchemaObjectTraverser.hasAsCell(effectiveSchema)
     ) &&
-    filteredSchema === undefined
+    filteredSchema !== false && !isNontrivialSchema(filteredSchema)
   ) {
     return createQueryResultProxy(runtime, tx, link, 0, cfcLabelView);
   }
@@ -1147,7 +1207,20 @@ export function validateAndTransform(
 
   // If our link is asCell/asStream, and we don't have any path portions, we
   // can just create the cell and mostly skip reading the value and traversal.
-  if (SchemaObjectTraverser.hasAsCell(effectiveSchema)) {
+  // A compound whose branches declare the handle, read at a view's child, is
+  // minted by the traverser from the hop rather than here: an eager read
+  // reaches the position inside its parent's traversal, where the compound is
+  // evaluated whole across the hop and the merge decides the handle, and the
+  // view does the same below so the handle it mints is the eager read's. A
+  // handle declared at the schema's root is not a merge's to decide.
+  const handleMintsThroughMerge = tx.isLazyMaterialize() &&
+    options?.viewChild === true && isObjectOrArray(effectiveSchema) &&
+    hasCombinator(effectiveSchema) &&
+    ContextualFlowControl.getAsCellValues(effectiveSchema).length === 0 &&
+    asCellCompoundCandidates(effectiveSchema).length > 0;
+  if (
+    SchemaObjectTraverser.hasAsCell(effectiveSchema) && !handleMintsThroughMerge
+  ) {
     const handleSourceSpace = link.space;
     // We check for a link value, since we will follow links one step in get
     // We've already followed all the writeRedirect links above.
@@ -1251,17 +1324,17 @@ export function validateAndTransform(
   // Get the full value without telling the scheduler. The traverse method will
   // notify the scheduler for shallow reads as they occur.
   const value = readValueAtResolvedLink(tx, resolvedValueLink, address);
-  const doc = { address, value: value };
+  let doc = { address, value: value };
   const valueSelectedSchema = isObjectOrArray(effectiveSchema)
     ? asCellCompoundSchemaForValue(effectiveSchema, value)
     : undefined;
   // If we have a ref with a schema, use that; otherwise, use the link's schema
-  const selector = {
+  let selector = {
     path: doc.address.path,
     schema: valueSelectedSchema ?? resolvedValueLink.schema ?? link.schema!,
   };
-  // A marked transaction takes the lazy route from here. Everything above has
-  // run either way — link resolution, the `asCell` dispatch, schema
+  // A marked transaction selects its materialization strategy here. Everything
+  // above has run either way — link resolution, the `asCell` dispatch, schema
   // combination — so a view and an eager read start from the same link and the
   // same schema; only the materialization differs.
   //
@@ -1270,7 +1343,24 @@ export function validateAndTransform(
   // list while writing into it stands on, and what an eager read gives, since
   // an eager read hands back a value built before the write. Seeing its own
   // write means taking the read again.
-  if (tx.isLazyMaterialize()) {
+  if (handleMintsThroughMerge) {
+    // A compound admitting a handle for the value, at a view's child. An eager
+    // read reaches this position inside its parent's traversal, where the
+    // compound is evaluated whole across the hop and the merge decides the
+    // handle — which arms match is decided by traversing them, an invalid
+    // optional property dropping out of a branch that still succeeds, a
+    // required property's deeper failure failing one that looked whole — and
+    // the handle it keeps adopts the hop's schema as it crosses. No reading of
+    // the schema alone reproduces that, and a handle outlives the read that
+    // minted it, so the view hands the hop to the traverser the same way and
+    // the merge mints the handle the eager read would.
+    const hopAddress = toMemorySpaceAddress(link);
+    doc = {
+      address: hopAddress,
+      value: readValueAtResolvedLink(tx, link, hopAddress),
+    };
+    selector = { path: hopAddress.path, schema: effectiveSchema! };
+  } else if (tx.isLazyMaterialize()) {
     // Crossing the last link is a hop the eager traverser combines schemas
     // across (`linkHopSelector`), because a link's own schema describes the
     // value at its target while the reader's schema describes what the reader
@@ -1310,15 +1400,70 @@ export function validateAndTransform(
       tx.noteSchemaRefusal(refusal);
       throw refusal;
     }
-    return materializeSchemaView(
-      runtime,
-      tx,
-      { ...resolvedValueLink, schema: viewSchema },
-      value,
-      cfcLabelView,
-      options?.synced ?? false,
-      options?.mismatchThrows !== true,
-    );
+    // A handle branch the value selected carries the marker the dispatch above
+    // could not see under the union — `Cell<T> | undefined` generates as a
+    // union whose one branch declares `asCell`, and `hasAsCell` holds for a
+    // union only when every branch does. Hand the selected schema back
+    // through the front door rather than minting the handle here: the
+    // dispatch is where the consumed marker is unwrapped off the handle's own
+    // schema and where the follow-scope cap is applied, and it returns the
+    // handle without arriving here again.
+    if (SchemaObjectTraverser.hasAsCell(viewSchema)) {
+      return validateAndTransform(
+        runtime,
+        tx,
+        { link: { ...resolvedValueLink, schema: viewSchema }, cfcLabelView },
+        [],
+        {
+          synced: options?.synced,
+          mismatchThrows: options?.mismatchThrows,
+          viewChild: true,
+        },
+      );
+    }
+    // Combinators decide which entire branches validate before merging their
+    // results. Evaluating that boundary uses the traverser; a shallow schema
+    // union would admit values assembled from different, failing branches.
+    // That is the one shape a view hands to the traverser: a defaulted
+    // property or a nullable array item is decided by what the view can see
+    // at the container, never by evaluating a present subtree whole, since
+    // registering every read below it is the cost a view exists to avoid.
+    //
+    // The union is the reader's, so it is classified off `viewSchema` and
+    // not off the selector alone: a link that carries a schema of its own
+    // puts that schema on the selector, and the union the reader asked for
+    // survives only in `viewSchema`. The traverser is handed the same
+    // schema, for the same reason.
+    let compound = hasCombinator(viewSchema) || hasCombinator(selector.schema);
+    let lazySchema = viewSchema;
+    // Where the value's type alone tells the branches apart — an array under
+    // `Row[] | null` — exactly one branch can match, and nothing below the
+    // value decides which. The view is built over that branch and stays lazy;
+    // evaluating the union whole would materialize every row to answer
+    // `rows.length`. A union the type does not settle still goes to the
+    // traverser.
+    if (compound && value !== undefined && isObjectOrArray(viewSchema)) {
+      const narrowed = narrowUnionByValueType(viewSchema, value);
+      if (narrowed !== undefined && !hasCombinator(narrowed)) {
+        lazySchema = narrowed;
+        compound = false;
+      }
+    }
+    if (
+      !compound ||
+      (value === undefined && defaultForAbsentValue(viewSchema) !== undefined)
+    ) {
+      return materializeSchemaView(
+        runtime,
+        tx,
+        { ...resolvedValueLink, schema: lazySchema },
+        value,
+        cfcLabelView,
+        options?.synced ?? false,
+        options?.mismatchThrows !== true,
+      );
+    }
+    selector.schema = viewSchema;
   }
 
   // TODO(@ubik2): these constructor parameters are complex enough that we should
@@ -1334,26 +1479,60 @@ export function validateAndTransform(
   const runIdentity =
     waveRunContextOf(tx as IExtendedStorageTransaction)?.scopeKeyIdentity ??
       (tx as IExtendedStorageTransaction).tx?.scopeKeyIdentity;
-  const traverser = new SchemaObjectTraverser<any>(
-    tx!,
-    selector,
-    createDefaultTraversalContext(
-      runIdentity ?? runtime.scopeKeyIdentity,
-      options?.traverseCells ?? false,
-      undefined,
+  // A hop the traversal follows to a doc this replica cannot serve is the
+  // eager counterpart of `pendingHopDoc`: nothing about the value behind it is
+  // knowable yet. The first one is kept so that a failed traversal a view
+  // asked for refuses as unresolved input, which no default or array
+  // substitute may answer, rather than as a mismatch one may. Any unserved
+  // hop in the subtree counts, including one under a property the failure
+  // did not turn on; the refusal errs toward waiting, and the reader runs
+  // again when the doc arrives.
+  let unservedHop: NormalizedFullLink | undefined;
+  const kickAbsentTargetLoads = !usesLocalReads(tx);
+  const context = createDefaultTraversalContext(
+    runIdentity ?? runtime.scopeKeyIdentity,
+    options?.traverseCells ?? false,
+    undefined,
+    (missing, sourceSpace) => {
+      unservedHop ??= missing;
       // Absent link targets get an async load kicked (cross-space always;
       // same-space only when the replica has never seen the doc); the
       // tracked read re-runs the reader on arrival. A served per-instance
       // run's absent target loads AS that run's instance (stage A — the
       // runner's explicit-instance read).
-      usesLocalReads(tx)
-        ? undefined
-        : (missing, sourceSpace) =>
-          runtime.ensureLinkedDocLoaded(missing, sourceSpace, runIdentity),
-    ),
+      if (kickAbsentTargetLoads) {
+        runtime.ensureLinkedDocLoaded(missing, sourceSpace, runIdentity);
+      }
+    },
+  );
+  const traverser = new SchemaObjectTraverser<any>(
+    tx!,
+    selector,
+    context,
     objectCreator,
   );
-  const { ok: val, error: _err } = traverser.traverse(doc, link);
+  const { ok: val, error } = traverser.traverse(doc, link);
+  // A traversal a view asked for may cross such a hop and still succeed. Where
+  // a branch admits the `undefined` the hop reads as, the success stands, as an
+  // eager read's does, and the registered read runs the reader again when the
+  // doc arrives. Where a substitute stood in for what the hop hides — an array
+  // item's `null`, a default — nothing about that value is known, and a view
+  // may not publish the stand-in: the hop refuses as unresolved input, and the
+  // property boundary above decides what that refusal means where it lands.
+  if (
+    options?.mismatchThrows === true &&
+    (error !== undefined || context.substituteCoveredMissingTarget)
+  ) {
+    tx.readValueOrThrow(resolvedValueLink);
+    const refusal = unservedHop === undefined
+      ? new SchemaMismatchError(
+        resolvedValueLink,
+        "selected subtree does not match the schema",
+      )
+      : new UnresolvedInputError(unservedHop);
+    tx.noteSchemaRefusal(refusal);
+    throw refusal;
+  }
   // TODO(@ubik2): Now that undefined is a valid return value from traverse,
   // we need some other way to indicate success to our caller. For now, I'm
   // still just returning undefined in the error case.
@@ -1374,6 +1553,46 @@ const combinedCellSchemaCache = new WeakMap<
   JSONSchemaObj,
   Map<string, JSONSchema>
 >();
+
+/**
+ * The schema a handle minted from one branch of `schema` is re-pointed at:
+ * the whole compound with the branches' own `asCell` markers removed, under
+ * the handle's own `asCell` values, so the union the reader declared governs
+ * what a read through the handle returns. Interned, and memoized per
+ * deep-frozen compound so the `asSchema` interning that follows is an
+ * identity cache hit.
+ */
+function compoundCellSchema(
+  schema: JSONSchemaObj,
+  asCellValues: ReturnType<typeof ContextualFlowControl.getAsCellValues>,
+): JSONSchema {
+  const cacheKey = isDeepFrozen(schema)
+    ? JSON.stringify(asCellValues)
+    : undefined;
+  if (cacheKey !== undefined) {
+    const cached = combinedCellSchemaCache.get(schema)?.get(cacheKey);
+    if (cached !== undefined) return cached;
+  }
+  const allOfItems = (schema.allOf ?? []).map(removeAsCellFromSchema);
+  const anyOfItems = (schema.anyOf ?? []).map(removeAsCellFromSchema);
+  const oneOfItems = (schema.oneOf ?? []).map(removeAsCellFromSchema);
+  const combinedSchema = internSchema({
+    ...schema,
+    ...(allOfItems.length > 0) && { allOf: allOfItems },
+    ...(anyOfItems.length > 0) && { anyOf: anyOfItems },
+    ...(oneOfItems.length > 0) && { oneOf: oneOfItems },
+    ...(asCellValues.length > 0) && { asCell: asCellValues },
+  });
+  if (cacheKey !== undefined) {
+    let byKey = combinedCellSchemaCache.get(schema);
+    if (byKey === undefined) {
+      byKey = new Map();
+      combinedCellSchemaCache.set(schema, byKey);
+    }
+    byKey.set(cacheKey, combinedSchema);
+  }
+  return combinedSchema;
+}
 
 /**
  * The value an opaque (`type: "unknown"`) position projects to when something
@@ -1478,35 +1697,23 @@ class TransformObjectCreator
           // wouldn't have a cell. We will use the asCell used for creating
           // this cell, but change the rest of the schema to be the logical
           // combination schema.
-          const asCellValues = ContextualFlowControl.getAsCellValues(
-            cellMatch.schema,
-          );
-          const cacheKey = isDeepFrozen(schema)
-            ? JSON.stringify(asCellValues)
-            : undefined;
-          if (cacheKey !== undefined) {
-            const cached = combinedCellSchemaCache.get(schema)?.get(cacheKey);
-            if (cached !== undefined) return cellMatch.asSchema(cached) as any;
+          // A handle minted from a branch that is `asCell` and nothing more
+          // carries the schema of the link it was minted over: that branch is
+          // a true reader, and a true reader adopts the link's schema when it
+          // crosses it (`combineSchemaForLink`). The combined compound below
+          // would replace that with a union saying only what the reader
+          // admits, and the link's shape — the one answer reader precedence
+          // gave — would be lost. The handle keeps it.
+          if (
+            isNontrivialSchema(cellMatch.schema) &&
+            compoundMintsBareHandlesOnly(schema)
+          ) {
+            return cellMatch as any;
           }
-          const allOfItems = (schema.allOf ?? []).map(removeAsCellFromSchema);
-          const anyOfItems = (schema.anyOf ?? []).map(removeAsCellFromSchema);
-          // Intern here so the memo holds the canonical instance and the
-          // `asSchema` interning below is an identity cache hit.
-          const combinedSchema = internSchema({
-            ...schema,
-            ...(allOfItems.length > 0) && { allOf: allOfItems },
-            ...(anyOfItems.length > 0) && { anyOf: anyOfItems },
-            ...(asCellValues.length > 0) && { asCell: asCellValues },
-          });
-          if (cacheKey !== undefined) {
-            let byKey = combinedCellSchemaCache.get(schema);
-            if (byKey === undefined) {
-              byKey = new Map();
-              combinedCellSchemaCache.set(schema, byKey);
-            }
-            byKey.set(cacheKey, combinedSchema);
-          }
-          return cellMatch.asSchema(combinedSchema) as any;
+          return cellMatch.asSchema(compoundCellSchema(
+            schema,
+            ContextualFlowControl.getAsCellValues(cellMatch.schema),
+          )) as any;
         }
       }
     }
@@ -1804,4 +2011,64 @@ function removeAsCellFromSchema(schema: JSONSchema): JSONSchema {
     return restSchema;
   }
   return schema;
+}
+
+/**
+ * What the handles a schema can mint carry: `"none"` where it mints none,
+ * `"bare"` where every one adopted the schema of the link it was minted over,
+ * `"shaped"` where one may carry a shape of its own. A branch declaring
+ * `asCell` is bare where it is a true schema — the marker is an internal key
+ * a true schema may carry — so a reader that admits a handle over any value
+ * at all. A choice, `anyOf` or `oneOf`, is what its minting branches are, at
+ * any depth, since a merge cannot see which of them minted the handle it
+ * holds. An `allOf` is bare where its parts are all true, an `allOf` of true
+ * parts being its bare part; a part that constrains something, a nested
+ * combinator among them, is a constraint the handle must keep. A branch is
+ * read with the keywords beside its combinator merged in, the way traversal
+ * merges them before it mints a handle from the branch: a bare `asCell` arm
+ * under a `type` and `properties` mints a handle carrying that shape. A
+ * reference that does not resolve is taken as shaped.
+ */
+function handleProvenance(
+  schema: JSONSchema,
+  defs: JSONSchemaObj["$defs"],
+): "none" | "bare" | "shaped" {
+  const resolved = resolveSchema(cfcSchemaWithInheritedDefs(schema, defs));
+  if (resolved === false) return "shaped";
+  if (!isObjectOrArray(resolved)) return "none";
+  const isTrue = (part: JSONSchema): boolean =>
+    ContextualFlowControl.isTrueSchema(part);
+  if (ContextualFlowControl.getAsCellValues(resolved).length > 0) {
+    return isTrue(resolved) ? "bare" : "shaped";
+  }
+  const {
+    anyOf = [],
+    oneOf = [],
+    allOf = [],
+    $defs: branchDefs,
+    ...enclosing
+  } = resolved;
+  const withEnclosing = (branch: JSONSchema): JSONSchema =>
+    Object.keys(enclosing).length === 0
+      ? branch
+      : schemaWithProperties(enclosing as JSONSchemaObj, branch);
+  const parts = allOf.map(withEnclosing);
+  const kinds = [
+    ...anyOf.map(withEnclosing),
+    ...oneOf.map(withEnclosing),
+    ...parts,
+  ]
+    .map((branch) => handleProvenance(branch, branchDefs ?? defs));
+  if (kinds.includes("shaped")) return "shaped";
+  if (!kinds.includes("bare")) return "none";
+  return parts.every(isTrue) ? "bare" : "shaped";
+}
+
+/**
+ * Whether every handle a compound can mint adopted the schema of the link it
+ * was minted over, so that keeping a matched handle's schema is keeping what
+ * the reader allowed. A `oneOf` never reaches a merge with two matches.
+ */
+function compoundMintsBareHandlesOnly(schema: JSONSchemaObj): boolean {
+  return handleProvenance(schema, schema.$defs) === "bare";
 }

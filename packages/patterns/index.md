@@ -115,13 +115,15 @@ App and integration directories: `activity-log/`, `agent/`, `base/`,
 `card-piles/`, `collection-naming/` (the member-naming library and the board
 that exercises it; the library is the reference, the board is a demo),
 `contacts/`, `cozy-poll/`, `examples/`, `experimental/` (explicitly unhardened
-explorations), `file-share/` (a minimal file-sharing example: bytes go to the
-blob store, cells hold descriptors), `habit-tracker/`, `lobby/`, `lunch-poll/`,
-`profile-group-chat/`, `project-list/`,
-[`recommend-a-book/`](recommend-a-book/README.md) (personal reading shelf and
-private visitor recommendations), `router/`, `scoped-group-chat/`,
-`scoped-user-directory/`, `scrabble/`, `shared-profile-demo/`,
-`shared-profile-roster/`, `suggestable/`, `weekly-calendar/`.
+explorations), `fabrichat/` (a group chat among real profiles whose messages are
+written only through a reviewed send surface), `file-share/` (a minimal
+file-sharing example: bytes go to the blob store, cells hold descriptors),
+`habit-tracker/`, `lobby/`, `lunch-poll/`, `profile-group-chat/`,
+`project-list/`, [`recommend-a-book/`](recommend-a-book/README.md) (personal
+reading shelf and private visitor recommendations), `router/`,
+`scoped-group-chat/`, `scoped-user-directory/`, `scrabble/`,
+`shared-profile-demo/`, `shared-profile-roster/`, `suggestable/`,
+`weekly-calendar/`.
 
 Connector-owned patterns live with their connector families: the
 [agent debug view](../connectors/agents/debug-view/README.md) and

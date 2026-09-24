@@ -381,19 +381,17 @@ const resolveStoredCfcMetadata = (
 };
 
 /**
- * The paths a stored envelope labels, read without resolving any label:
- * paths are inline in every version, so a consumer that asks only where
- * policy applies pays no label-document read. Fails closed exactly as the
- * resolving reader does, and returns `undefined` for a document storing no
- * envelope.
+ * The path and origin of each entry a stored envelope holds, read without
+ * resolving any label: both are inline in every version, so a consumer that
+ * asks only where policy applies pays no label-document read. Fails closed
+ * exactly as the resolving reader does, and returns `undefined` for a
+ * document storing no envelope.
  */
 const readStoredCfcLabelPaths = (
   tx: IExtendedStorageTransaction,
   target: StoredCfcTarget,
-): readonly (readonly string[])[] | undefined =>
-  readStoredEnvelope(tx, target, DEPENDENT_READ)?.labelMap.entries.map(
-    (entry) => entry.path,
-  );
+): readonly Pick<StoredLabelMapEntry, "path" | "origin">[] | undefined =>
+  readStoredEnvelope(tx, target, DEPENDENT_READ)?.labelMap.entries;
 
 /**
  * The resolved envelope stored for `target`, or `undefined` when the
@@ -416,13 +414,29 @@ export const readStoredCfcMetadata = (
     : resolveStoredCfcMetadata(tx, target.space, stored, policy);
 };
 
+/**
+ * Whether the envelope stored for `target`'s document holds an entry at,
+ * above, or below `target.path`, which marks the path as one policy applies
+ * to. An envelope this build cannot read answers that it does.
+ *
+ * A link write passes `replacingLink`: the link-origin entries at and below
+ * the slot it writes then do not count. Each labels the pointer the slot
+ * holds now, which the write replaces, and the commit drops it with that
+ * pointer, so it describes the element leaving the slot rather than a policy
+ * of the position, and a list rewrite may move an unlabeled element into a
+ * position a labeled one left. Every other entry still counts: a declared
+ * label, a flow-derived one, and a link-origin entry above the slot.
+ */
 export const storedCfcMetadataAppliesToPath = (
   tx: IExtendedStorageTransaction,
   target: Pick<NormalizedFullLink, "space" | "id" | "scope" | "path">,
+  { replacingLink = false }: { replacingLink?: boolean } = {},
 ): boolean => {
-  let paths: readonly (readonly string[])[] | undefined;
+  let entries:
+    | readonly Pick<StoredLabelMapEntry, "path" | "origin">[]
+    | undefined;
   try {
-    paths = readStoredCfcLabelPaths(tx, target);
+    entries = readStoredCfcLabelPaths(tx, target);
   } catch (error) {
     // An envelope this build cannot produce labels from still marks the
     // document as policy-carrying: "applies" is the fail-closed answer, and
@@ -431,10 +445,16 @@ export const storedCfcMetadataAppliesToPath = (
     if (error instanceof StoredCfcMetadataError) return true;
     throw error;
   }
-  if (paths === undefined) {
+  if (entries === undefined) {
     return false;
   }
   const logicalPath = canonicalizeLogicalPath(target.path);
+  const paths = entries
+    .filter((entry) =>
+      !(replacingLink && entry.origin === "link" &&
+        isPrefix(logicalPath, entry.path))
+    )
+    .map((entry) => entry.path);
   // labelMap entries are persisted both for paths with confidentiality /
   // integrity values AND for paths whose schema carried a policy claim
   // (writeAuthorizedBy / uiContract / exactCopyOf — see

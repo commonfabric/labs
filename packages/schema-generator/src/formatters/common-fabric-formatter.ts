@@ -33,6 +33,7 @@ import {
 } from "../typescript/literal-value.ts";
 import {
   readAuthoredTypeNode,
+  readMemberAnnotation,
   unwrapTypeParentheses,
 } from "../typescript/type-node.ts";
 import { resolveWriterBinding } from "../typescript/writer-binding.ts";
@@ -50,9 +51,14 @@ import { combineIfcLabels } from "../ifc-labels.ts";
 
 type WrapperKind = CellWrapperKind;
 const CFC_ALIAS_NAMES: ReadonlySet<string> = new Set(CFC_CANONICAL_ALIAS_NAMES);
-
 /** The property `AnyOf<X>` is as a type (`@commonfabric/api/cfc`). */
 const CFC_ANY_OF_BRAND = "__ct_cfc_any_of__";
+/**
+ * What the literal reader returns for syntax it does not evaluate, so that the
+ * type paired with that syntax is read in its place. `undefined` is a value it
+ * reads (`undefined` written as a type), so it cannot stand for this.
+ */
+const UNREAD: unique symbol = Symbol("unread syntax");
 
 /**
  * The type of the value `member` holds, given `type`, its type: `type` less
@@ -93,6 +99,12 @@ type ResolvedCfcAlias = {
   readonly substituted?: readonly ts.TypeParameterDeclaration[];
   /** The parameters along the chain given a type and no node. */
   readonly parameterTypes?: ParameterTypes;
+  /**
+   * The type a chain entered from its type, with no argument nodes,
+   * instantiates. It holds the innermost payload with every argument in
+   * (`cfcPayloadOf()`).
+   */
+  readonly instantiated?: ts.Type;
 };
 
 /**
@@ -292,6 +304,26 @@ const holdsTypeParameter = (
     ) ?? false)) ||
   (ts.forEachChild(node, (child) =>
     holdsTypeParameter(child, checker, parameters) || undefined) ?? false);
+
+/**
+ * The innermost payload of `type`, a CFC alias chain's instantiation, or
+ * `undefined` where it cannot be told apart. Every CFC alias adds its metadata
+ * to its payload as one more member of an intersection, a carrier holding only
+ * `__ct_cfc__`, so the intersection's one other member is the payload, its
+ * arguments in wherever the declaration wrote a parameter. A payload that is
+ * itself an intersection, or a union, which the intersection distributes over,
+ * has no one other member.
+ */
+const cfcPayloadOf = (type: ts.Type): ts.Type | undefined => {
+  if (!type.isIntersection()) return undefined;
+  const carries = (member: ts.Type) => {
+    const properties = member.getProperties();
+    return properties.length === 1 && properties[0]!.name === "__ct_cfc__";
+  };
+  // An intersection has two members at least, so one left means a carrier.
+  const rest = type.types.filter((member) => !carries(member));
+  return rest.length === 1 ? rest[0] : undefined;
+};
 
 /**
  * The type `parameterTypes` gives `node` when `node` is a bare reference to one
@@ -735,8 +767,9 @@ export class CommonFabricFormatter implements TypeFormatter {
 
     // Keep schema-hint propagation behavior aligned with type-based wrapper formatting.
     let childContext = context;
-    if (context.schemaHints && context.typeNode) {
-      const hint = context.schemaHints.get(context.typeNode);
+    const hintsNode = context.typeNode ?? context.hintsNode;
+    if (context.schemaHints && hintsNode) {
+      const hint = context.schemaHints.get(hintsNode);
       if (hint?.items === false) {
         const itemsOverride = this.#createArrayItemsOverride(
           innerType,
@@ -984,8 +1017,9 @@ export class CommonFabricFormatter implements TypeFormatter {
     // This allows identity-only/property-only array access patterns to avoid
     // materializing full item schemas while preserving the wrapper on the array.
     let childContext = context;
-    if (context.schemaHints && context.typeNode) {
-      const hint = context.schemaHints.get(context.typeNode);
+    const hintsNode = context.typeNode ?? context.hintsNode;
+    if (context.schemaHints && hintsNode) {
+      const hint = context.schemaHints.get(hintsNode);
       if (hint?.items === false) {
         // Pass the inner node even when it isn't used to build the inner schema
         // (shouldPassTypeNode=false): the override only reads the element's
@@ -1365,8 +1399,8 @@ export class CommonFabricFormatter implements TypeFormatter {
     // A canonical alias reached by its own name resolves no argument nodes; the
     // reference's own arguments are its nodes, the payload's as much as the
     // labels'. Read from its type alone, a generic alias in the payload has no
-    // argument to bind, and a label nested in it no `typeof` binding or `AnyOf`
-    // to recognize.
+    // argument to bind, and a `typeof` binding nested in it is lost unless a
+    // member's annotation still names it.
     const reachedByName = resolved.aliasArgNodes === undefined;
     const argNodes = resolved.aliasArgNodes ??
       this.#getAliasTypeArgumentNodes(context);
@@ -1391,12 +1425,18 @@ export class CommonFabricFormatter implements TypeFormatter {
       // An authored node, formatted as the type it is, so a named type in the
       // payload stays a reference to its definition.
       ? this.#schemaGenerator.formatChildType(baseType, context, baseTypeNode)
-      : this.#formatCfcAliasTypeNode(baseTypeNode, context, parameterTypes) ??
+      : this.#formatCfcAliasTypeNode(
+        baseTypeNode,
+        context,
+        parameterTypes,
+        resolved.instantiated,
+      ) ??
         this.#formatDeclaredPayload(
           baseType,
           baseTypeNode,
           context,
           parameterTypes,
+          resolved.instantiated,
         );
 
     const ifc = this.#buildIfcMetadataForAlias(
@@ -1416,22 +1456,46 @@ export class CommonFabricFormatter implements TypeFormatter {
   /**
    * Helper for {@link #formatResolvedCfcAlias}, which formats a payload node
    * that is not itself a CFC alias. A node holding a parameter that has only a
-   * type, such as `T[]`, is not rebuilt around that type: it keeps the rest of
-   * its structure and metadata, the parameter's positions read as accepting
-   * any value, and it is reported as not fully read.
+   * type, such as `T[]`, is read from `instantiated`, the type the chain
+   * instantiates, which holds the payload with that parameter's argument in.
+   * Where that payload cannot be told apart, the declaration is read with each
+   * such parameter bound to its argument's type
+   * (`GenerationContext.boundTypeParameters`), and a use the binding cannot
+   * reach, such as `T["name"]`, is reported as not fully read.
    */
   #formatDeclaredPayload(
     baseType: ts.Type,
     baseTypeNode: ts.TypeNode,
     context: GenerationContext,
     parameterTypes: ParameterTypes,
+    instantiated: ts.Type | undefined,
   ): MutableJSONSchema {
     if (
       holdsTypeParameter(baseTypeNode, context.typeChecker, [
         ...parameterTypes.keys(),
       ])
     ) {
-      context.uninterpretedTypeNodes?.push(baseTypeNode);
+      const payload = instantiated && cfcPayloadOf(instantiated);
+      if (payload) {
+        return this.#schemaGenerator.formatChildType(
+          payload,
+          context,
+          undefined,
+        );
+      }
+      // Otherwise the declaration is read with each parameter bound to its
+      // argument's type, as the checker instantiates it.
+      return this.#schemaGenerator.formatChildType(
+        baseType,
+        {
+          ...context,
+          boundTypeParameters: {
+            types: parameterTypes,
+            declaredNode: baseTypeNode,
+          },
+        },
+        baseTypeNode,
+      );
     }
     return this.#schemaGenerator.formatChildType(
       baseType,
@@ -1444,6 +1508,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     typeNode: ts.TypeNode,
     context: GenerationContext,
     parameterTypes: ParameterTypes = NO_PARAMETER_TYPES,
+    instantiated?: ts.Type,
   ): MutableJSONSchema | undefined {
     if (
       ts.isParenthesizedTypeNode(typeNode) || ts.isTypeOperatorNode(typeNode)
@@ -1452,6 +1517,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         typeNode.type,
         context,
         parameterTypes,
+        instantiated,
       );
     }
     if (!ts.isTypeReferenceNode(typeNode)) {
@@ -1482,8 +1548,13 @@ export class CommonFabricFormatter implements TypeFormatter {
       [],
       parameterTypes,
     );
+    // A nested alias's payload is the chain's innermost payload, so the
+    // instantiated type holds it too.
     return resolved
-      ? this.#formatResolvedCfcAlias(resolved, context)
+      ? this.#formatResolvedCfcAlias(
+        instantiated ? { ...resolved, instantiated } : resolved,
+        context,
+      )
       : undefined;
   }
 
@@ -1533,13 +1604,17 @@ export class CommonFabricFormatter implements TypeFormatter {
       return undefined;
     }
 
-    return this.#resolveCfcAliasFromDeclaration(
+    const aliasArgNodes = this.#getAliasTypeArgumentNodes(context);
+    const resolved = this.#resolveCfcAliasFromDeclaration(
       aliasDeclaration,
       aliasArgs,
-      this.#getAliasTypeArgumentNodes(context),
+      aliasArgNodes,
       context,
       new Set([aliasDeclaration]),
     );
+    return resolved && !aliasArgNodes
+      ? { ...resolved, instantiated: typeWithAlias }
+      : resolved;
   }
 
   #resolveCfcAliasFromDeclaration(
@@ -1993,146 +2068,213 @@ export class CommonFabricFormatter implements TypeFormatter {
     return undefined;
   }
 
+  /**
+   * The value a label's type spells, read from `typeNode` where it is given
+   * and from `type` otherwise. Syntax says what a type cannot, such as which
+   * binding a `typeof` names, so it is read first, paired with the type it
+   * denotes. Where it is syntax this reader does not evaluate, such as a
+   * conditional or mapped alias, the paired type decides the value.
+   */
   #extractLiteralLikeValue(
     type: ts.Type | undefined,
     typeNode: ts.TypeNode | undefined,
     context: GenerationContext,
     parameterTypes: ParameterTypes = NO_PARAMETER_TYPES,
   ): unknown {
-    if (!typeNode && !type) {
-      return undefined;
-    }
-
-    // A parameter with a type and no node is read as that type.
-    const bound = typeNode &&
-      boundParameterType(typeNode, context.typeChecker, parameterTypes);
-    if (bound) return this.#extractLiteralLikeValue(bound, undefined, context);
-
     if (typeNode) {
-      if (ts.isParenthesizedTypeNode(typeNode)) {
-        return this.#extractLiteralLikeValue(
-          type,
-          typeNode.type,
+      // A parameter with a type and no node is read as that type.
+      const bound = boundParameterType(
+        typeNode,
+        context.typeChecker,
+        parameterTypes,
+      );
+      if (bound) {
+        return this.#extractLiteralLikeValue(bound, undefined, context);
+      }
+      const fromSyntax = this.#readLiteralSyntax(
+        type,
+        typeNode,
+        context,
+        parameterTypes,
+      );
+      if (fromSyntax !== UNREAD) return fromSyntax;
+    }
+    return type ? this.#readLiteralType(type, context) : undefined;
+  }
+
+  /**
+   * Helper for {@link #extractLiteralLikeValue}: the value `typeNode` spells,
+   * or `UNREAD` for syntax it does not evaluate. Each node it descends into is
+   * read paired with the part of `type` that node denotes, where `type` is
+   * given.
+   */
+  #readLiteralSyntax(
+    type: ts.Type | undefined,
+    typeNode: ts.TypeNode,
+    context: GenerationContext,
+    parameterTypes: ParameterTypes,
+  ): unknown {
+    const checker = context.typeChecker;
+    if (ts.isParenthesizedTypeNode(typeNode)) {
+      return this.#extractLiteralLikeValue(
+        type,
+        typeNode.type,
+        context,
+        parameterTypes,
+      );
+    }
+    if (
+      ts.isTypeOperatorNode(typeNode) &&
+      typeNode.operator === ts.SyntaxKind.ReadonlyKeyword
+    ) {
+      return this.#extractLiteralLikeValue(
+        type,
+        typeNode.type,
+        context,
+        parameterTypes,
+      );
+    }
+    if (ts.isTypeQueryNode(typeNode)) {
+      const symbol = checker.getSymbolAtLocation(typeNode.exprName);
+      const extracted = symbol && extractLiteralValueOfSymbol(symbol, checker);
+      return extracted ? extracted.value : UNREAD;
+    }
+    if (ts.isLiteralTypeNode(typeNode)) {
+      const literal = typeNode.literal;
+      if (ts.isStringLiteral(literal)) return literal.text;
+      if (ts.isNumericLiteral(literal)) return Number(literal.text);
+      if (literal.kind === ts.SyntaxKind.TrueKeyword) return true;
+      if (literal.kind === ts.SyntaxKind.FalseKeyword) return false;
+      if (literal.kind === ts.SyntaxKind.NullKeyword) return null;
+      return UNREAD;
+    }
+    if (ts.isTupleTypeNode(typeNode)) {
+      // A spread, optional, or rest element leaves no element-for-element
+      // reading of the tuple, which its type then decides.
+      if (
+        typeNode.elements.some((element) =>
+          ts.isRestTypeNode(element) || ts.isOptionalTypeNode(element) ||
+          (ts.isNamedTupleMember(element) &&
+            (element.dotDotDotToken || element.questionToken))
+        )
+      ) {
+        return UNREAD;
+      }
+      const elementTypes = type && checker.isTupleType(type)
+        ? checker.getTypeArguments(type as ts.TypeReference)
+        : undefined;
+      const paired = elementTypes?.length === typeNode.elements.length
+        ? elementTypes
+        : undefined;
+      return typeNode.elements.map((element, index) =>
+        this.#extractLiteralLikeValue(
+          paired?.[index],
+          ts.isNamedTupleMember(element) ? element.type : element,
+          context,
+          parameterTypes,
+        )
+      );
+    }
+    if (ts.isTypeReferenceNode(typeNode)) {
+      const referencedName = this.#resolveTypeReferenceName(
+        typeNode.typeName,
+        context,
+      );
+      if (referencedName === "AnyOf") {
+        const alternatives = this.#extractLiteralLikeValue(
+          type && this.#anyOfBrandPayload(type, context),
+          typeNode.typeArguments?.[0],
           context,
           parameterTypes,
         );
+        return Array.isArray(alternatives) ? { anyOf: alternatives } : UNREAD;
       }
-      if (ts.isTypeOperatorNode(typeNode)) {
-        return this.#extractLiteralLikeValue(
-          type,
-          typeNode.type,
-          context,
-          parameterTypes,
-        );
-      }
-      if (ts.isTypeQueryNode(typeNode)) {
-        return this.#extractValueFromTypeQuery(typeNode, context);
-      }
-      if (ts.isLiteralTypeNode(typeNode)) {
-        const literal = typeNode.literal;
-        if (ts.isStringLiteral(literal)) return literal.text;
-        if (ts.isNumericLiteral(literal)) return Number(literal.text);
-        if (literal.kind === ts.SyntaxKind.TrueKeyword) return true;
-        if (literal.kind === ts.SyntaxKind.FalseKeyword) return false;
-        if (literal.kind === ts.SyntaxKind.NullKeyword) return null;
-      }
-      if (ts.isTupleTypeNode(typeNode)) {
-        return typeNode.elements.map((element) =>
-          this.#extractLiteralLikeValue(
-            undefined,
-            element,
-            context,
-            parameterTypes,
-          )
-        );
-      }
-      if (ts.isTypeReferenceNode(typeNode)) {
-        const referencedName = this.#resolveTypeReferenceName(
-          typeNode.typeName,
-          context,
-        );
-        if (referencedName === "AnyOf") {
-          const alternativesNode = typeNode.typeArguments?.[0];
-          const alternatives = this.#extractLiteralLikeValue(
-            undefined,
-            alternativesNode,
-            context,
-            parameterTypes,
-          );
-          return Array.isArray(alternatives)
-            ? { anyOf: alternatives }
-            : undefined;
-        }
-        if (referencedName === "PolicyOf") {
-          const bindingNode = typeNode.typeArguments?.[0];
-          if (
-            bindingNode && ts.isTypeQueryNode(bindingNode) &&
-            ts.isIdentifier(bindingNode.exprName)
-          ) {
-            return {
-              type: CFC_ATOM_TYPE.Policy,
-              policyRefKind: "module",
-              __ctPolicyIdentityOf: this.#writeAuthorizedByIdentityForBinding(
-                context,
-                bindingNode.exprName,
-                false,
-              ),
-              subject: { __ctOwningSpace: true },
-            };
-          }
-          return undefined;
-        }
-        const aliasDeclaration = this.#getTypeAliasDeclarationForSymbol(
-          context.typeChecker.getSymbolAtLocation(typeNode.typeName),
-          context,
-        );
-        if (aliasDeclaration) {
-          const paramMap = new Map<string, ts.TypeNode>();
-          for (
-            let i = 0;
-            i < (aliasDeclaration.typeParameters?.length ?? 0);
-            i++
-          ) {
-            const paramName = aliasDeclaration.typeParameters?.[i]?.name.text;
-            const actualArgNode = typeNode.typeArguments?.[i];
-            if (paramName && actualArgNode) {
-              paramMap.set(paramName, actualArgNode);
-            }
-          }
-          return this.#extractLiteralLikeValue(
-            undefined,
-            substituteTypeNode(aliasDeclaration.type, paramMap),
-            context,
-            parameterTypes,
-          );
-        }
-      }
-      if (ts.isTypeLiteralNode(typeNode)) {
-        const obj: Record<string, unknown> = {};
-        for (const member of typeNode.members) {
-          if (ts.isPropertySignature(member) && member.name && member.type) {
-            const propName = getPropertyNameText(member.name);
-            if (!propName) continue;
-            obj[propName] = this.#extractLiteralLikeValue(
-              undefined,
-              member.type,
+      if (referencedName === "PolicyOf") {
+        const bindingNode = typeNode.typeArguments?.[0];
+        if (
+          bindingNode && ts.isTypeQueryNode(bindingNode) &&
+          ts.isIdentifier(bindingNode.exprName)
+        ) {
+          return {
+            type: CFC_ATOM_TYPE.Policy,
+            policyRefKind: "module",
+            __ctPolicyIdentityOf: this.#writeAuthorizedByIdentityForBinding(
               context,
-              parameterTypes,
-            );
+              bindingNode.exprName,
+              false,
+            ),
+            subject: { __ctOwningSpace: true },
+          };
+        }
+        return undefined;
+      }
+      const aliasDeclaration = this.#getTypeAliasDeclarationForSymbol(
+        checker.getSymbolAtLocation(typeNode.typeName),
+        context,
+      );
+      if (aliasDeclaration) {
+        const paramMap = new Map<string, ts.TypeNode>();
+        for (
+          let i = 0;
+          i < (aliasDeclaration.typeParameters?.length ?? 0);
+          i++
+        ) {
+          const paramName = aliasDeclaration.typeParameters?.[i]?.name.text;
+          const actualArgNode = typeNode.typeArguments?.[i];
+          if (paramName && actualArgNode) {
+            paramMap.set(paramName, actualArgNode);
           }
         }
-        return obj;
+        // The alias's body, with the reference's arguments in place of its
+        // parameters, denotes what the reference does.
+        return this.#extractLiteralLikeValue(
+          type,
+          substituteTypeNode(aliasDeclaration.type, paramMap),
+          context,
+          parameterTypes,
+        );
       }
-      if (typeNode.kind === ts.SyntaxKind.TrueKeyword) return true;
-      if (typeNode.kind === ts.SyntaxKind.FalseKeyword) return false;
-      if (typeNode.kind === ts.SyntaxKind.NullKeyword) return null;
-      if (typeNode.kind === ts.SyntaxKind.UndefinedKeyword) return undefined;
+      return UNREAD;
     }
-
-    if (!type) {
-      return undefined;
+    if (ts.isTypeLiteralNode(typeNode)) {
+      const obj: Record<string, unknown> = {};
+      for (const member of typeNode.members) {
+        // An object read without one of its members would be read short, so
+        // a member this reader cannot name from its syntax, such as a
+        // computed key, or one that is not a property with a written type,
+        // such as an accessor, leaves the whole object to its type. The type
+        // path reads each member at its annotation, as this reader would.
+        if (!ts.isPropertySignature(member) || !member.type) return UNREAD;
+        const propName = getPropertyNameText(member.name);
+        if (propName === undefined) return UNREAD;
+        const property = type && checker.getPropertyOfType(type, propName);
+        obj[propName] = this.#extractLiteralLikeValue(
+          property &&
+            memberValueType(
+              property,
+              checker.getTypeOfSymbol(property),
+              checker,
+            ),
+          member.type,
+          context,
+          parameterTypes,
+        );
+      }
+      return obj;
     }
+    if (typeNode.kind === ts.SyntaxKind.TrueKeyword) return true;
+    if (typeNode.kind === ts.SyntaxKind.FalseKeyword) return false;
+    if (typeNode.kind === ts.SyntaxKind.NullKeyword) return null;
+    if (typeNode.kind === ts.SyntaxKind.UndefinedKeyword) return undefined;
+    return UNREAD;
+  }
 
+  /**
+   * Helper for {@link #extractLiteralLikeValue}: the value `type` spells, for
+   * a label with no syntax to read, or syntax this reader does not evaluate.
+   */
+  #readLiteralType(type: ts.Type, context: GenerationContext): unknown {
+    const checker = context.typeChecker;
     if (type.flags & ts.TypeFlags.StringLiteral) {
       return (type as ts.StringLiteralType).value;
     }
@@ -2149,7 +2291,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       return undefined;
     }
 
-    const typeText = context.typeChecker.typeToString(type);
+    const typeText = checker.typeToString(type);
     if (
       typeText.length >= 2 &&
       ((typeText.startsWith('"') && typeText.endsWith('"')) ||
@@ -2172,40 +2314,42 @@ export class CommonFabricFormatter implements TypeFormatter {
       return Array.isArray(alternatives) ? { anyOf: alternatives } : undefined;
     }
 
-    if (context.typeChecker.isTupleType(type)) {
-      const tupleType = type as ts.TypeReference;
-      const elements = context.typeChecker.getTypeArguments(tupleType);
-      return elements.map((element) =>
-        this.#extractLiteralLikeValue(element, undefined, context)
-      );
-    }
-
     const objectFlags =
       (type as { objectFlags?: ts.ObjectFlags }).objectFlags ??
         0;
-    if ((objectFlags & ts.ObjectFlags.Tuple) !== 0) {
-      const tupleType = type as ts.TypeReference;
-      const elements = context.typeChecker.getTypeArguments(tupleType);
-      return elements.map((element) =>
-        this.#extractLiteralLikeValue(element, undefined, context)
-      );
+    if (
+      checker.isTupleType(type) || (objectFlags & ts.ObjectFlags.Tuple) !== 0
+    ) {
+      return checker.getTypeArguments(type as ts.TypeReference).map((
+        element,
+      ) => this.#extractLiteralLikeValue(element, undefined, context));
     }
 
     if ((type.flags & ts.TypeFlags.Object) !== 0) {
-      const properties = context.typeChecker.getPropertiesOfType(type);
+      const properties = checker.getPropertiesOfType(type);
       if (properties.length > 0) {
         const obj: Record<string, unknown> = {};
         for (const property of properties) {
-          const propType = context.typeChecker.getTypeOfSymbolAtLocation(
+          const propType = checker.getTypeOfSymbolAtLocation(
             property,
             property.valueDeclaration ?? property.declarations?.[0] ??
               context.typeNode ?? ({} as ts.Node),
           );
-          obj[property.getName()] = this.#extractLiteralLikeValue(
-            propType,
-            undefined,
-            context,
-          );
+          // A member's annotation says what its type cannot, such as the
+          // binding in `PolicyOf<typeof rules>`, and is read wherever it
+          // denotes the member's type, paired with that type.
+          const annotation = readMemberAnnotation(property, propType, checker);
+          obj[property.getName()] = annotation
+            ? this.#extractLiteralLikeValue(
+              checker.getTypeFromTypeNode(annotation),
+              annotation,
+              context,
+            )
+            : this.#extractLiteralLikeValue(
+              memberValueType(property, propType, checker),
+              undefined,
+              context,
+            );
         }
         return obj;
       }

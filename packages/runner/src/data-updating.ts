@@ -23,6 +23,7 @@ import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { getLogger } from "@commonfabric/utils/logger";
 import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isNontrivialSchema } from "@commonfabric/data-model-schema";
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 
 import { type CellScope, type JSONSchema } from "./builder/types.ts";
@@ -354,8 +355,11 @@ const recordLinkWritePolicyInput = (
   // under the claim once a commit has persisted it: otherwise the write that
   // creates a protected list admits a first entry every later one is refused.
   // A link AT the root is excluded — the document then aliases its source and
-  // stores no entry of its own.
-  const targetRelevant = storedCfcMetadataAppliesToPath(tx, target) ||
+  // stores no entry of its own. The stored labels that the pointer this write
+  // replaces brought to the slot do not count: they leave with it (see
+  // `storedCfcMetadataAppliesToPath`).
+  const targetRelevant =
+    storedCfcMetadataAppliesToPath(tx, target, { replacingLink: true }) ||
     hasPendingSchemaPolicyInput(tx, target) ||
     (target.path.length > 0 && hasPendingWriteAuthorization(tx, target));
   if (!sourceRelevant && !targetRelevant) {
@@ -873,12 +877,18 @@ function anchorValueAsEntity(
     context,
   });
 
+  // This link is persisted, so it carries a schema only where the schema is a
+  // shape: a `true` or `{}` on the parent is left off rather than written into
+  // the stored link. `false` is left off by the same test, and cannot reach
+  // here in any case — the diff walk hands a child slot its schema through
+  // `getSchemaAtPath`, which reads a `false` slot as no schema.
+  const entrySchema = resolveSchemaForValue(link.schema, content);
   const newEntryLink: NormalizedFullLink = {
     id: toURI(entityId),
     space: link.space,
     scope: link.scope,
     path: [],
-    schema: resolveSchemaForValue(link.schema, content),
+    schema: isNontrivialSchema(entrySchema) ? entrySchema : undefined,
   };
 
   state.seen.set(registerKey, newEntryLink);

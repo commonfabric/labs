@@ -105,6 +105,12 @@ export interface MultiRuntimeSessionSpec {
    */
   wsDelayMs?: number;
 
+  /**
+   * Test-only network shaping: make this session's inbound storage frames
+   * holdable, with `send()`'s `thenHoldInbound` and `releaseInbound()`.
+   */
+  inboundHold?: boolean;
+
   /** Routes this session through a test relay backed by the same storage server. */
   apiUrl?: URL;
   /**
@@ -330,27 +336,37 @@ export class MultiRuntimeSession {
    * Send an event to a handler stream exposed on the piece result. Pass
    * `trustedUi` to emulate a genuine user interaction on a trusted CFC
    * surface (required for trusted-action handlers).
+   *
+   * Pass `thenHoldInbound` to hold every storage frame this session receives
+   * from the moment the event has run here until `releaseInbound()`, on a
+   * session created with `inboundHold: true`. Its replica then stays as it
+   * is, whatever other sessions commit, and nothing the server sends back
+   * reaches it: no commit confirmation, and no consequence of an event it
+   * fired, so the speculative writes of the event's run here stand. What it
+   * sends goes out as usual.
    */
   async send(
     handler: string,
     event: FabricValue = {},
     trustedUi?: TrustedUiDescriptor,
-    opts: { idle?: boolean } = {},
+    opts: { idle?: boolean; thenHoldInbound?: boolean } = {},
   ): Promise<void> {
     await this.#client.call("send", {
       handler,
       event,
       trustedUi,
       idle: opts.idle,
+      thenHoldInbound: opts.thenHoldInbound,
     });
   }
 
   /**
-   * Set a cell reached from the piece result by `path`, exactly like a UI
-   * `$value` binding: one fresh edit tx and a single un-retried commit (the
-   * `handleCellSet` path). Returns the commit outcome so tests can observe
-   * conflicts. Pass `idle: false` to leave this runtime un-settled (preserves
-   * a stale local replica for own-write-race / no-op repros).
+   * Set a cell reached from the piece result by `path` with one attempt of the
+   * blind write a UI `$value` binding makes: one fresh edit tx and a single
+   * commit, without the retry `Runtime.commitUiCellWrite()` gives the UI's
+   * write. Returns the commit outcome so tests can observe conflicts. Pass
+   * `idle: false` to leave this runtime un-settled (preserves a stale local
+   * replica for own-write-race / no-op repros).
    */
   async set(
     path: (string | number)[],
@@ -365,10 +381,11 @@ export class MultiRuntimeSession {
   }
 
   /**
-   * Append `value` to the array cell reached by `path`, exactly like a
-   * `CellHandle.push`: read-modify-write that keeps its read as a compare-and-set
-   * precondition (the `handleCellPush` path), so a concurrent push conflicts
-   * rather than being clobbered — unlike the blind `set` above.
+   * Append `value` to the array cell reached by `path` as a read-modify-write
+   * that keeps its read as a compare-and-set precondition, so a concurrent
+   * push conflicts rather than being clobbered — unlike the blind `set` above.
+   * A UI's `CellHandle.push()` does not take this path: the runtime appends
+   * through `Cell.push()`'s mergeable operation instead.
    */
   async push(
     path: (string | number)[],
@@ -487,6 +504,22 @@ export class MultiRuntimeSession {
    */
   async awaitEventConsequences(): Promise<void> {
     await this.#client.call("awaitEventConsequences");
+  }
+
+  /**
+   * How many events this session fired whose consequence has yet to arrive
+   * back here, or `null` on the OFF arm, which does not track them.
+   */
+  async outstandingEventCount(): Promise<number | null> {
+    return await this.#client.call("outstandingEventCount") as number | null;
+  }
+
+  /**
+   * Deliver the frames held since a `send()` with `thenHoldInbound`, in the
+   * order they arrived, and settle this runtime's reactivity.
+   */
+  async releaseInbound(): Promise<void> {
+    await this.#client.call("releaseInbound");
   }
 
   /**
@@ -619,6 +652,7 @@ export class MultiRuntimeHarness {
           ...(normalized.wsDelayMs !== undefined
             ? { wsDelayMs: normalized.wsDelayMs }
             : {}),
+          ...(normalized.inboundHold === true ? { inboundHold: true } : {}),
           ...(cfcWriteFloor !== undefined ? { cfcWriteFloor } : {}),
         });
         sessions.push(
