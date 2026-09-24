@@ -569,7 +569,8 @@ export type WritePolicyInput =
   }
   | {
     /**
-     * A release of a piece names one of its stores and the modules of the
+     * The transaction is a release of a piece (setup, a pattern swap, a start
+     * repair): it names one of the piece's stores and the modules of the
      * program it installs, whose writer stamps the release's schema can adopt
      * over unstamped stored claims. Authority is the runtime's mark.
      */

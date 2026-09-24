@@ -1409,9 +1409,10 @@ strictly additive label evolution has no carve-out for re-describing what a
 store's schema says about other documents. Proposed clause: in the
 runtime-authorized transaction that installs a pattern over its own piece's
 stores (setup, a pattern swap, a start repair), (a) claims the stored schema
-describes beneath a position holding only links, or holding nothing under a
-position that itself carries a writer claim, belong to the linked documents
-and are re-described by the release; (b) a stamped claim may adopt a stored
+describes beneath a position that, as the document stood before the
+transaction, held only links, or held nothing under a position that itself
+carries a writer claim, belong to the linked documents and are re-described
+by the release; (b) a stamped claim may adopt a stored
 unstamped claim per SC-47. Every other writer is held to strict monotonicity.
 Note that both rules rest on swap authority (who may move a piece's pattern
 pointer), which §8.15 should name.
@@ -1423,6 +1424,6 @@ roots. An unstamped claim authorizes no writer. The runtime lets a stamped
 claim adopt one when both name the same export and the same file below a
 known pattern root, and only when the stamp is one the transaction can vouch
 for: a module of the program a release installs (SC-46), or the verified
-writer the stamp itself names. Proposed edit: state that adoption is a
+writer the stamp itself names (its module, source file and export). Proposed edit: state that adoption is a
 one-time authenticated migration of legacy claims, and that once stored claims
 are stamped the file-correspondence rules are retired.

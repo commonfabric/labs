@@ -7,10 +7,7 @@ import type { URI } from "@commonfabric/memory/interface";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { loadStoredCfcEnvelope } from "../src/cfc/prepare.ts";
-import {
-  CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
-  runtimeWritePolicyAuthorization,
-} from "../src/cfc/types.ts";
+import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -145,8 +142,9 @@ describe("stored write requirements", () => {
   };
 
   // What the runtime records in the transaction that sets a piece up, swaps
-  // its pattern or repairs its start: it names the piece's stores, under its
-  // own authorization. `authorized: false` is what pattern code could record.
+  // its pattern or repairs its start: the release marker for each of the
+  // piece's stores, under its own authorization. `authorized: false` is what
+  // pattern code could record.
   const markRelease = (
     runtime: Runtime,
     tx: IExtendedStorageTransaction,
@@ -154,18 +152,16 @@ describe("stored write requirements", () => {
     authorized = true,
   ) => {
     const target = runtime.getCell(space, id).getAsNormalizedFullLink();
-    const address = {
-      space: target.space,
-      id: target.id,
-      scope: target.scope,
-      path: [],
-    };
     tx.recordCfcWritePolicyInput(
       {
-        kind: "structural-provenance",
-        target: address,
-        claim: CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
-        sources: [address],
+        kind: "release-program",
+        target: {
+          space: target.space,
+          id: target.id,
+          scope: target.scope,
+          path: [],
+        },
+        modules: [],
       },
       authorized ? runtimeWritePolicyAuthorization : undefined,
     );

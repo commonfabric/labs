@@ -11,7 +11,6 @@ import {
   storedCfcEnvelopeMergeIssue,
 } from "../src/cfc/prepare.ts";
 import {
-  CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   type ImplementationIdentity,
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
@@ -116,7 +115,7 @@ describe("adopting an unstamped writer claim", () => {
   };
 
   // What the runtime records in the transaction that sets a piece up: the
-  // store it owns, and the modules of the program it installs.
+  // release marker naming the modules of the program it installs.
   const markRelease = (
     runtime: Runtime,
     tx: IExtendedStorageTransaction,
@@ -130,12 +129,6 @@ describe("adopting an unstamped writer claim", () => {
       scope: target.scope,
       path: [],
     };
-    tx.recordCfcWritePolicyInput({
-      kind: "structural-provenance",
-      target: address,
-      claim: CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
-      sources: [address],
-    }, runtimeWritePolicyAuthorization);
     tx.recordCfcWritePolicyInput({
       kind: "release-program",
       target: address,
@@ -298,6 +291,30 @@ describe("adopting an unstamped writer claim", () => {
         releaseMergeOptions(tx, target, storedSchema, ["home-module"]),
       )?.message,
     ).toContain("writeAuthorizedBy must remain stable at /name");
+  });
+
+  it("refuses a writer of the stamp's module that is not the export it names", async () => {
+    const runtime = await start("other-export");
+    const tx = runtime.edit();
+    trust(tx);
+    tx.setCfcImplementationIdentity({
+      kind: "verified",
+      moduleIdentity: PROFILE_MODULE,
+      sourceFile: RELEASE_FILE,
+      bindingPath: ["unrelated"],
+    });
+    writeOtherUnder(
+      runtime,
+      tx,
+      "other-export",
+      claim(RELEASE_FILE, PROFILE_MODULE),
+    );
+    expect(refusalOf(await tx.commit())).toContain(
+      "writeAuthorizedBy must remain stable at /name",
+    );
+    expect(storedNameClaim(runtime, "other-export")).toEqual(
+      claim(AGED_FILE),
+    );
   });
 
   it("adopts a stamp brought by the writer it names", async () => {

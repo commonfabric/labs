@@ -171,7 +171,6 @@ import {
 } from "./schema-refs.ts";
 import { createTrustResolver } from "./trust.ts";
 import {
-  CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
   cfcEnforcementStrictness,
@@ -6287,13 +6286,11 @@ const storedValuesAt = (
 
 /**
  * Whether this transaction is a release of the piece whose store `target`
- * is: one in which the runtime, under its own authorization, names the whole
- * document as a store it owns. It does so in the transaction that sets a
- * piece up, swaps its pattern or repairs its start, in each transaction that
- * instantiates a piece's nodes (a child piece's included), and where a
- * builtin mints a store of its own; every such store is minted from the
- * piece's cause in its own space. Pattern code can record the same marker,
- * but not the authorization.
+ * is: one in which the runtime, under its own authorization, records the
+ * release marker for the whole document, which it does only in the
+ * transaction that sets a piece up, swaps its pattern or repairs its start
+ * (`markPieceOwnedStores`). Pattern code can record the same marker, but not
+ * the authorization.
  */
 const transactionReleasesStore = (
   tx: IExtendedStorageTransaction,
@@ -6304,13 +6301,9 @@ const transactionReleasesStore = (
   },
 ): boolean =>
   tx.getCfcState().writePolicyInputs.some((input) =>
-    input.kind === "structural-provenance" &&
-    input.claim === CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE &&
-    tx.isRuntimeWritePolicyInput(input) &&
-    input.target.space === target.space && input.target.id === target.id &&
-    canonicalizeLogicalPath(input.target.path).length === 0 &&
-    // As the transaction's own reading of the marker requires.
-    input.sources?.[0]?.space === input.target.space
+    input.kind === "release-program" && tx.isRuntimeWritePolicyInput(input) &&
+    sameDocument(input.target, target) &&
+    canonicalizeLogicalPath(input.target.path).length === 0
   );
 
 /**
@@ -6387,20 +6380,27 @@ export const releaseMergeOptions = (
 /** A stamped writer claim's module identity and file, if it is one. */
 const writerClaimStamp = (
   claim: unknown,
-): { moduleIdentity: string; file: string | undefined } | undefined => {
+):
+  | { moduleIdentity: string; file: string | undefined; path: string[] }
+  | undefined => {
   const binding = isObjectNotArray(claim) &&
       isObjectNotArray(claim.__ctWriterIdentityOf)
     ? claim.__ctWriterIdentityOf
     : {};
-  const { moduleIdentity, file } = binding;
+  const { moduleIdentity, file, path } = binding;
   return typeof moduleIdentity === "string"
-    ? { moduleIdentity, file: typeof file === "string" ? file : undefined }
+    ? {
+      moduleIdentity,
+      file: typeof file === "string" ? file : undefined,
+      path: Array.isArray(path) ? path.map(String) : [],
+    }
     : undefined;
 };
 
 /**
  * Whether one of `identities` is the writer a stamp names: a verified identity
- * whose module and source file are the stamp's own. Such a writer may bring
+ * whose module, source file and export (§8.15.1: hash and symbol) are the
+ * stamp's own. Such a writer may bring
  * its stamp over an unstamped claim naming it, in any transaction.
  */
 const stampIsWriters = (
@@ -6412,6 +6412,7 @@ const stampIsWriters = (
     if (
       stamp !== undefined && identity?.kind === "verified" &&
       identity.moduleIdentity === stamp.moduleIdentity &&
+      arraysEqual(identity.bindingPath ?? [], stamp.path) &&
       normalizeIdentitySource(identity.sourceFile) !== undefined &&
       normalizeIdentitySource(identity.sourceFile) ===
         normalizeIdentitySource(stamp.file)
