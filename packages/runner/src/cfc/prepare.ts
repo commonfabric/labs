@@ -5882,16 +5882,27 @@ type DerivedLink = {
   reasons: string[];
 };
 
-/** Resolves a recorded link, optionally at a nested integrity-floor path. */
-type LinkLabelDeriver = (
-  input: LinkWritePolicyInput,
-  relativePath?: readonly string[],
-) => DerivedLink;
+/** Resolves recorded links through the references staged into their sources. */
+type LinkLabelDeriver = {
+  /** Derives the labels a recorded link persists at its receiving slot. */
+  persisted: (input: LinkWritePolicyInput) => DerivedLink;
+
+  /**
+   * Derives the label a recorded link carries at `relativePath` below its
+   * receiving slot, or `undefined` when the link cannot be derived there.
+   */
+  labelAt: (
+    input: LinkWritePolicyInput,
+    relativePath: readonly string[],
+  ) => IFCLabel | undefined;
+};
 
 /**
  * Resolves staged source references from transaction evidence, independently of
- * which document's metadata has been persisted by preparation. Cyclic pending
- * references refuse derivation rather than borrowing an unfinished label.
+ * which document's metadata has been persisted by preparation. A reference at
+ * or above a link's source path supplies the label there; one below it supplies
+ * the labels beneath it. Cyclic pending references refuse derivation rather
+ * than borrowing an unfinished label.
  */
 const createLinkLabelDeriver = (
   tx: IExtendedStorageTransaction,
@@ -5903,24 +5914,86 @@ const createLinkLabelDeriver = (
   metadataResolver: VerifierMetadataResolver,
 ): LinkLabelDeriver => {
   const active = new Set<LinkWritePolicyInput>();
-  const derive: LinkLabelDeriver = (recordedInput, relativePath = []) => {
-    const input = relativePath.length === 0 ? recordedInput : {
-      ...recordedInput,
-      source: {
-        ...recordedInput.source,
-        path: [
-          ...canonicalizeLogicalPath(recordedInput.source.path),
-          ...relativePath,
-        ],
-      },
-      target: {
-        ...recordedInput.target,
-        path: [
-          ...canonicalizeLogicalPath(recordedInput.target.path),
-          ...relativePath,
-        ],
-      },
-    };
+
+  // The labels the references staged into the source document bring to the
+  // source path, or the refusals of the first one that cannot be derived.
+  const pendingSourceView = (
+    input: LinkWritePolicyInput,
+  ): { view?: CfcLabelView; reasons: string[] } => {
+    const views: (CfcLabelView | undefined)[] = [];
+    const sourcePath = canonicalizeLogicalPath(input.source.path);
+    for (const upstream of linkWrites.get(targetKey(input.source)) ?? []) {
+      const upstreamPath = canonicalizeLogicalPath(upstream.target.path);
+      const covers = concretePathHasPrefix(sourcePath, upstreamPath);
+      if (
+        (!covers && !concretePathHasPrefix(upstreamPath, sourcePath)) ||
+        !pathHoldsStagedReference(tx, upstream.target, upstreamPath)
+      ) continue;
+      const final = parseLink(
+        tx.readValueOrThrow({
+          ...upstream.target,
+          id: upstream.target.id as URI,
+          path: [...upstreamPath],
+        }, { meta: INTERNAL_VERIFIER_META }),
+        {
+          ...upstream.target,
+          id: upstream.target.id as URI,
+          path: [...upstreamPath],
+        },
+      );
+      if (
+        final === undefined ||
+        targetKey(final) !== targetKey(upstream.source) ||
+        !arraysEqual(final.path, upstream.source.path)
+      ) continue;
+      const resolved = persisted(upstream);
+      if (resolved.reasons.length > 0) return { reasons: resolved.reasons };
+      // A downstream hop sees the representation the upstream hop persists,
+      // including protected fields when it crosses a space boundary.
+      const entries =
+        tx.getCfcState().labelMetadataProtectionMode === "enforce" &&
+          upstream.source.space !== upstream.target.space
+          ? resolved.entries.map((entry) => ({
+            ...entry,
+            label: transformCfcLabelForCrossSpacePersist(entry.label),
+          }))
+          : resolved.entries;
+      // Pending entries persist as `origin: "link"`, which stored link
+      // metadata exposes with the `followRef` observation class.
+      const linked: CfcLabelView["entries"] = entries.map((entry) => ({
+        ...entry,
+        observes: "followRef",
+      }));
+      if (!covers) {
+        // A reference below the source path lands beneath it, and leaves the
+        // label at the source path itself alone.
+        const prefix = upstreamPath.slice(sourcePath.length);
+        views.push({
+          version: 1,
+          entries: linked.map((entry) => ({
+            ...entry,
+            path: [...prefix, ...entry.path],
+          })),
+        });
+        continue;
+      }
+      // A reference covering the source path supplies its root by longest
+      // prefix, and its entries below the source path rebased onto it.
+      const relative = sourcePath.slice(upstreamPath.length);
+      const label = metadataResolver.cover(
+        { version: 1, entries },
+        relative,
+        undefined,
+      );
+      views.push(rebaseCfcLabelView({ version: 1, entries: linked }, relative));
+      if (label !== undefined) {
+        views.push({ version: 1, entries: [{ path: [], label }] });
+      }
+    }
+    return { view: mergeCfcLabelViews(views), reasons: [] };
+  };
+
+  const persisted = (input: LinkWritePolicyInput): DerivedLink => {
     if (active.has(input)) {
       return {
         entries: [],
@@ -5931,74 +6004,18 @@ const createLinkLabelDeriver = (
     }
     active.add(input);
     try {
-      const pendingViews: CfcLabelView[] = [];
-      const sourcePath = canonicalizeLogicalPath(input.source.path);
-      for (const upstream of linkWrites.get(targetKey(input.source)) ?? []) {
-        const upstreamPath = canonicalizeLogicalPath(upstream.target.path);
-        if (
-          !concretePathHasPrefix(sourcePath, upstreamPath) ||
-          !pathHoldsStagedReference(tx, upstream.target, upstreamPath)
-        ) continue;
-        const final = parseLink(
-          tx.readValueOrThrow({
-            ...upstream.target,
-            id: upstream.target.id as URI,
-            path: [...upstreamPath],
-          }, { meta: INTERNAL_VERIFIER_META }),
-          {
-            ...upstream.target,
-            id: upstream.target.id as URI,
-            path: [...upstreamPath],
-          },
-        );
-        if (
-          final === undefined ||
-          targetKey(final) !== targetKey(upstream.source) ||
-          !arraysEqual(final.path, upstream.source.path)
-        ) continue;
-        const resolved = derive(upstream);
-        if (resolved.reasons.length > 0) {
-          return { entries: [], reasons: resolved.reasons };
-        }
-        // A downstream hop sees the representation the upstream hop persists,
-        // including protected fields when it crosses a space boundary.
-        const entries =
-          tx.getCfcState().labelMetadataProtectionMode === "enforce" &&
-            upstream.source.space !== upstream.target.space
-            ? resolved.entries.map((entry) => ({
-              ...entry,
-              label: transformCfcLabelForCrossSpacePersist(entry.label),
-            }))
-            : resolved.entries;
-        const relative = sourcePath.slice(upstreamPath.length);
-        const sourceView: CfcLabelView = { version: 1, entries };
-        // Pending entries persist as `origin: "link"`: resolve their root by
-        // longest prefix, and rebase descendants with the same `followRef`
-        // observation class that stored link metadata exposes.
-        const label = metadataResolver.cover(sourceView, relative, undefined);
-        const view = mergeCfcLabelViews([
-          rebaseCfcLabelView({
-            version: 1,
-            entries: entries.map((entry) => ({
-              ...entry,
-              observes: "followRef",
-            })),
-          }, relative),
-          label === undefined ? undefined : {
-            version: 1,
-            entries: [{ path: [], label }],
-          },
-        ]);
-        if (view !== undefined) pendingViews.push(view);
+      const pending = pendingSourceView(input);
+      if (pending.reasons.length > 0) {
+        return { entries: [], reasons: pending.reasons };
       }
-      const identity = identityForInput(recordedInput);
+      const identity = identityForInput(input);
       const result = derivePersistedLinkLabel(
         tx,
         input,
         candidates,
         identity,
         metadataResolver,
-        mergeCfcLabelViews(pendingViews),
+        pending.view,
       );
       if (result.reason !== undefined) {
         return { entries: [], reasons: [result.reason] };
@@ -6018,7 +6035,38 @@ const createLinkLabelDeriver = (
       active.delete(input);
     }
   };
-  return derive;
+
+  // The label below the receiving slot is the source's own label at the
+  // matching path. The carried view is relative to the receiving slot, so its
+  // checks belong to `persisted`, which holds it against the source path.
+  const labelAt = (
+    input: LinkWritePolicyInput,
+    relativePath: readonly string[],
+  ): IFCLabel | undefined => {
+    const nested: LinkWritePolicyInput = {
+      ...input,
+      source: {
+        ...input.source,
+        path: [...canonicalizeLogicalPath(input.source.path), ...relativePath],
+      },
+      target: {
+        ...input.target,
+        path: [...canonicalizeLogicalPath(input.target.path), ...relativePath],
+      },
+    };
+    const pending = pendingSourceView(nested);
+    if (pending.reasons.length > 0) return undefined;
+    return derivePersistedLinkLabel(
+      tx,
+      nested,
+      candidates,
+      identityForInput(input),
+      metadataResolver,
+      pending.view,
+    ).label;
+  };
+
+  return { persisted, labelAt };
 };
 
 const cloneLabel = (label: IFCLabel): IFCLabel => ({
@@ -6959,7 +7007,7 @@ const verifyWriteFloor = (
       path: readonly string[],
     ) => ImplementationIdentity | undefined;
     linkWriteInputs: readonly LinkWritePolicyInput[];
-    deriveLinkLabel: LinkLabelDeriver;
+    linkLabels: LinkLabelDeriver;
     flowIntegrity: readonly CfcAtom[];
   },
 ): string[] => {
@@ -7045,7 +7093,7 @@ const verifyWriteFloor = (
     // when plain data was written (crediting the flow meet when available).
     const contributions: (readonly CfcAtom[])[] = [];
     for (const input of linksHere) {
-      const derived = ctx.deriveLinkLabel(input);
+      const derived = ctx.linkLabels.persisted(input);
       // An underivable link (`reasons` set, `label` undefined) contributes empty
       // integrity — it fails the floor, fail-closed, alongside the persist
       // loop's own missing-source reason (both reject).
@@ -7058,8 +7106,9 @@ const verifyWriteFloor = (
       // nested value passes; an unendorsed one fails, fail-closed).
       const linkPath = canonicalizeLogicalPath(input.target.path);
       const relative = entry.path.slice(linkPath.length);
-      const derived = ctx.deriveLinkLabel(input, relative);
-      contributions.push(derived.label?.integrity ?? []);
+      contributions.push(
+        ctx.linkLabels.labelAt(input, relative)?.integrity ?? [],
+      );
     }
     const written = writeValueForTarget(tx, { ...target, path: entry.path });
     // A value contribution exists when plain data lands at/under the floor
@@ -7398,7 +7447,7 @@ export function* prepareBoundaryCommitSteps(
     }
   }
   const metadataResolver = new VerifierMetadataResolver(tx);
-  const deriveLinkLabel = createLinkLabelDeriver(
+  const linkLabels = createLinkLabelDeriver(
     tx,
     candidates,
     linkWrites,
@@ -7599,7 +7648,7 @@ export function* prepareBoundaryCommitSteps(
         identityForPath: (path) =>
           identityForSchemaPath(writeAuthorIdentities.get(key), path),
         linkWriteInputs,
-        deriveLinkLabel,
+        linkLabels,
         // Only PERSISTED flow integrity may credit the floor: `observe` mode
         // computes the join for diagnostics but stores nothing on the value, so
         // crediting it would let a plain write pass a floor with integrity that
@@ -8059,7 +8108,7 @@ export function* prepareBoundaryCommitSteps(
       }
     }
     for (const input of linkWriteInputs) {
-      const result = deriveLinkLabel(input);
+      const result = linkLabels.persisted(input);
       reasons.push(...result.reasons);
       for (const entry of result.entries) {
         const persisted: LabelMapEntry = {

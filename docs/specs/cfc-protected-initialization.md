@@ -80,13 +80,15 @@ staged in the transaction. The link carries its source's label and the
 `LinkReference` a link write mints, so a reader reaching the entry through the
 link sees the entry's own authorship.
 
-When a reference's source is another reference staged in the same transaction,
-preparation derives the source's labels through the recorded chain. This does
-not depend on staging order or on the references occupying different documents.
-Each hop retains the source's nested labels and applies the ordinary evidence
-and carried-label checks. An integrity floor uses those same derived labels, so
-the source's real authorship can meet it. A cycle of pending references refuses
-label derivation.
+When a link's source is a reference staged in the same transaction, or a value
+holding one, preparation derives that reference's labels through the recorded
+chain. A reference at or above the source path supplies the label there. One
+held below it supplies the labels at the matching paths beneath the link, and
+none at the link itself. This does not depend on staging order or on the
+references occupying different documents. Each hop retains the source's nested
+labels and applies the ordinary evidence and carried-label checks. An integrity
+floor uses those same derived labels, so the source's real authorship can meet
+it. A cycle of pending references refuses label derivation.
 
 ## Authorization and transaction evidence
 

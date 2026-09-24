@@ -601,6 +601,66 @@ describe("reference-initialization", () => {
         .toEqual([signer.did()]);
     });
 
+    for (const linkFirst of [false, true]) {
+      it(`stores a staged reference's labels below a link to its argument when the ${linkFirst ? "link" : "reference"} is staged first`, async () => {
+        // The link covers the whole argument, so the reference's labels land at
+        // `element` beneath it and the argument slot gains none of them.
+
+        await initializeOwnersMessage({
+          type: "object",
+          properties: {
+            message: {
+              ...entrySchema,
+              default: { body: "a" },
+              ifc: { ...entrySchema.ifc, confidentiality: ["owner-secret"] },
+            },
+            note: { type: "string" },
+          },
+        });
+        actingPrincipal = stager.did();
+        const stage = runtime.edit();
+        const argument = runtime.getCell(space, "first", argumentSchema, stage);
+        const holder = runtime.getCell(space, "holder", {
+          type: "object",
+          properties: {
+            argument: { type: "object", ifc: { confidentiality: ["holder"] } },
+          },
+        }, stage);
+        const stageReference = () => {
+          argument.set({
+            element: runtime.getCell(space, "inbox", undefined, stage)
+              .key("message").asSchema(entrySchema),
+          });
+          recordReferencedArgumentFields(
+            stage,
+            argument.getAsNormalizedFullLink(),
+            ["element"],
+          );
+        };
+        const stageLink = () => holder.set({ argument });
+        if (linkFirst) {
+          stageLink();
+          stageReference();
+        } else {
+          stageReference();
+          stageLink();
+        }
+        runtime.prepareTxForCommit(stage);
+
+        expect((await stage.commit()).error).toBeUndefined();
+        const link = holder.getAsNormalizedFullLink();
+        expect(authorsAt(link, ["argument", "element"])).toEqual([
+          signer.did(),
+        ]);
+        expect(
+          (readStoredCfcMetadata(runtime.edit(), link)?.labelMap.entries ?? [])
+            .filter((entry) => entry.path.join("/") === "argument/element")
+            .flatMap((entry) => entry.label.confidentiality ?? []),
+        ).toContain("owner-secret");
+        expect(authorsAt(link, ["argument"])).toEqual([]);
+      });
+    }
+
     for (const endorsed of [true, false]) {
       it(`${endorsed ? "credits a nested integrity floor and carries nested confidentiality" : "refuses a nested floor credited only by an ancestor"} through a pending reference`, async () => {
         await initializeOwnersMessage({
