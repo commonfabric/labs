@@ -89,7 +89,9 @@ import {
 } from "@commonfabric/runner";
 import {
   cfcLabelViewForResolvedCell,
+  type CfcModulePolicySource,
   createRenderConfidentialityResolver,
+  createRuntimeCfcModulePolicySource,
   createRuntimeSpaceMembershipProvider,
   markRendererTrustedEvent,
   redactCaveatSourcesForDisplay,
@@ -543,10 +545,13 @@ export function browserWorkerParamsFromInitializationData(
  * runtime-backed `SpaceMembershipProvider` reads each other space's declared
  * ACL doc and mints a reader fact only when it grants the acting user READ+
  * (never from residency). Its cross-space guarantee is exactly as strong as
- * the deployment `MEMORY_ACL_MODE`. Service DIDs are NOT threaded to the
- * worker today (design §9), so `serviceDids` is `[]` and service principals —
- * which rarely render — fail closed. Returns undefined when no ceiling is
- * configured (no render gating — today's behavior).
+ * the deployment `MEMORY_ACL_MODE`. A label that selects a module policy
+ * (`PolicyOf<...>`) runs that module's exchange rules too, with its manifest
+ * read and verified through `modulePolicySource` from the space the label is
+ * stored in, and the policy's subject space's membership looked up like a
+ * `Space(...)` atom's. Service DIDs are NOT threaded to the worker today (design §9), so `serviceDids` is `[]` and
+ * service principals — which rarely render — fail closed. Returns undefined
+ * when no ceiling is configured (no render gating — today's behavior).
  */
 export function renderConfidentialityResolverFor(
   runtime: Runtime,
@@ -554,6 +559,7 @@ export function renderConfidentialityResolverFor(
   ceiling: RenderConfidentialityCeiling | undefined,
   sessionSpace?: string,
   membershipProvider?: SpaceMembershipProvider,
+  modulePolicySource?: CfcModulePolicySource,
 ): RenderConfidentialityResolver | undefined {
   if (ceiling === undefined) {
     return undefined;
@@ -577,6 +583,14 @@ export function renderConfidentialityResolverFor(
     // build a private one — both read the same underlying runtime documents.
     membershipProvider: membershipProvider ??
       createRuntimeSpaceMembershipProvider(runtime, actingPrincipal),
+    // A `PolicyOf` label's module rules run at the display boundary too,
+    // resolved through the runtime's verified manifest read; a manifest that
+    // is missing or fails verification leaves the label sealed. Shared with
+    // the reconciler like the membership provider, so the manifests it
+    // watches and the ones this resolves are one cache.
+    modulePolicyResolver:
+      (modulePolicySource ?? createRuntimeCfcModulePolicySource(runtime))
+        .resolve,
   });
 }
 
@@ -600,6 +614,23 @@ export function renderMembershipProviderFor(
   const actingPrincipal = runtime.trustSnapshotProvider()?.actingPrincipal ??
     identity.did();
   return createRuntimeSpaceMembershipProvider(runtime, actingPrincipal);
+}
+
+/**
+ * The module-policy manifest source for a worker's renders, shared like
+ * {@link renderMembershipProviderFor}'s provider: the resolver reads verified
+ * manifests through it, and the reconciler subscribes to a manifest a sealed
+ * `PolicyOf` cell is still waiting on. Undefined when no ceiling is
+ * configured.
+ */
+export function renderModulePolicySourceFor(
+  runtime: Runtime,
+  ceiling: RenderConfidentialityCeiling | undefined,
+): CfcModulePolicySource | undefined {
+  if (ceiling === undefined) {
+    return undefined;
+  }
+  return createRuntimeCfcModulePolicySource(runtime);
 }
 
 /**
@@ -875,6 +906,14 @@ export class RuntimeProcessor {
    * ceiling is in force.
    */
   #renderMembershipProvider?: SpaceMembershipProvider;
+
+  /**
+   * The module-policy manifest source shared with the resolver above and
+   * handed to every mount's reconciler, so a `PolicyOf` cell blocked before
+   * its manifest synced re-renders once it arrives. `undefined` when no
+   * ceiling is in force.
+   */
+  #renderModulePolicySource?: CfcModulePolicySource;
   #cancelSpaceAccessLoss?: Cancel;
 
   private constructor(
@@ -3289,6 +3328,7 @@ export class RuntimeProcessor {
       renderConfidentialityCeiling: this.#renderConfidentialityCeiling,
       resolveRenderConfidentiality: this.#renderConfidentialityResolver,
       membershipProvider: this.#renderMembershipProvider,
+      modulePolicySource: this.#renderModulePolicySource,
       spaceAccess: renderSpaceAccessProviderFor(this.#runtime),
       onOps: (ops: VDomOp[]) => {
         const batchId = this.#vdomBatchIdCounter++;
@@ -3558,12 +3598,17 @@ export class RuntimeProcessor {
       identity,
       processor.#renderConfidentialityCeiling,
     );
+    processor.#renderModulePolicySource = renderModulePolicySourceFor(
+      runtime,
+      processor.#renderConfidentialityCeiling,
+    );
     processor.#renderConfidentialityResolver = renderConfidentialityResolverFor(
       runtime,
       identity,
       processor.#renderConfidentialityCeiling,
       space,
       processor.#renderMembershipProvider,
+      processor.#renderModulePolicySource,
     );
     processor.#intentOutcomeCancel = subscribeEventAttentionNotifications(
       runtime,

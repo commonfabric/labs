@@ -800,10 +800,21 @@ export const buildCfcPolicyArtifactManifest = (
   });
 };
 
+/**
+ * The artifacts {@link validateCfcPolicyArtifactManifest} has returned. Each is
+ * deep-frozen, so one handed back for validation again is still exactly what
+ * passed, and is returned without recomputing its digest. The display
+ * boundary validates the same kept artifact on every render.
+ */
+const validatedArtifacts = new WeakSet<PolicyArtifactManifestV1>();
+
 /** Trusted-ingestion validation for a transported manifest envelope. */
 export const validateCfcPolicyArtifactManifest = (
   input: unknown,
 ): PolicyArtifactManifestV1 => {
+  if (validatedArtifacts.has(input as PolicyArtifactManifestV1)) {
+    return input as PolicyArtifactManifestV1;
+  }
   if (!isPlainRecord(input)) {
     throw new Error("cfcPolicyManifest: envelope must be an object");
   }
@@ -823,6 +834,7 @@ export const validateCfcPolicyArtifactManifest = (
       `cfcPolicyManifest: policyDigest mismatch (expected ${built.policyDigest})`,
     );
   }
+  validatedArtifacts.add(built);
   return built;
 };
 

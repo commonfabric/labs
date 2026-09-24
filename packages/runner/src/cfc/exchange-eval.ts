@@ -320,7 +320,8 @@ const isModulePolicyCandidate = (value: Record<string, unknown>): boolean =>
     Object.hasOwn(value, key)
   );
 
-const isExactModulePolicyRef = (
+/** A complete module-policy reference, with nothing missing or extra. */
+export const isExactModulePolicyRef = (
   value: unknown,
 ): value is CfcModulePolicyRefAtom => {
   if (!isObjectNotArray(value)) return false;

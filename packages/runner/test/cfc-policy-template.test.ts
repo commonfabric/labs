@@ -93,6 +93,17 @@ describe("CFC module policy templates", () => {
     ).toThrow(/policyDigest mismatch/);
   });
 
+  it("hands back an artifact it validated without validating it again", () => {
+    // A fresh, equal envelope is rebuilt; the rebuilt artifact, frozen as
+    // validation returns it, comes back as itself.
+    const artifact = buildCfcPolicyArtifactManifest(manifestBody());
+    const transported = JSON.parse(JSON.stringify(artifact));
+    const validated = validateCfcPolicyArtifactManifest(transported);
+    expect(validated).not.toBe(transported);
+    expect(Object.isFrozen(validated.manifest.template)).toBe(true);
+    expect(validateCfcPolicyArtifactManifest(validated)).toBe(validated);
+  });
+
   it("rejects unsupported versions, unknown keys, and duplicate rule names", () => {
     expect(() =>
       buildCfcPolicyArtifactManifest({
