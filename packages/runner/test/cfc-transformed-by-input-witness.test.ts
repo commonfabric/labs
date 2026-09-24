@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 
@@ -12,11 +12,21 @@ import {
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { AtomPattern } from "../src/cfc/atom-pattern.ts";
-import type { ImplementationIdentity } from "../src/cfc/types.ts";
+import type {
+  ImplementationIdentity,
+  LabelMapEntry,
+} from "../src/cfc/types.ts";
 import type { CfcPolicyRecordInput } from "../src/cfc/policy.ts";
+import {
+  INPUT_WITNESS_MAX_DEPTH,
+  inputWitnessDepth,
+  mintTransformedBy,
+  retainedInputWitnesses,
+} from "../src/cfc/input-witness.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 // An endorsed transformer's output is released by an exchange rule guarded on
 // the `TransformedBy` atom the runtime mints for it. Naming only the code that
@@ -123,37 +133,37 @@ const withRuntime = async (
   }
 };
 
-const idOf = (runtime: Runtime, cause: string): string => {
-  const tx = runtime.edit();
-  const id = runtime.getCell(space, cause, undefined, tx)
-    .getAsNormalizedFullLink().id;
-  tx.abort();
-  return id;
-};
-
-/** A room-confidential document holding one member's sealed note. */
-const seedSecret = async (
+/** A document seeded with exactly `entries` as its label map. */
+const seedLabeled = async (
   runtime: Runtime,
   cause: string,
-  note: string,
+  value: FabricValue,
+  entries: readonly LabelMapEntry[],
 ): Promise<void> => {
   const seed = runtime.edit();
   const id = runtime.getCell(space, cause, undefined, seed)
     .getAsNormalizedFullLink().id;
   writeSeedEnvelopeDoc(seed, space);
   seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
-    value: { note },
+    value,
     cfc: {
       version: 1,
       schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-      labelMap: {
-        version: 1,
-        entries: [{ path: [], label: { confidentiality: [ROOM] } }],
-      },
+      labelMap: { version: 1, entries: [...entries] },
     },
   });
   expect((await seed.commit()).ok).toBeDefined();
 };
+
+/** A room-confidential document holding one member's sealed note. */
+const seedSecret = (
+  runtime: Runtime,
+  cause: string,
+  note: string,
+): Promise<void> =>
+  seedLabeled(runtime, cause, { note }, [
+    { path: [], label: { confidentiality: [ROOM] } },
+  ]);
 
 /** A public document: no label at all. */
 const seedPublic = async (
@@ -169,9 +179,10 @@ const seedPublic = async (
 };
 
 /**
- * One transformation: a transaction under `identity` that reads every input
- * and writes what `compute` makes of them at `path` of the output. The write
- * is raw so the output's own prior value is not journaled as an input.
+ * One transformation: a transaction under `identity` that reads every input,
+ * lets `observe` consume anything else, and writes what `compute` makes of the
+ * inputs at `path` of the output. The write is raw so the output's own prior
+ * value is not journaled as an input.
  */
 const transform = async (
   runtime: Runtime,
@@ -180,6 +191,7 @@ const transform = async (
   output: string,
   compute: (values: unknown[]) => FabricValue,
   path: readonly string[] = [],
+  observe?: (tx: IExtendedStorageTransaction) => void | Promise<void>,
 ): Promise<void> => {
   const identities = Array.isArray(identity) ? identity : [identity];
   const tx = runtime.edit();
@@ -187,6 +199,7 @@ const transform = async (
   const values = inputs.map((cause) =>
     runtime.getCell(space, cause, undefined, tx).getRaw()
   );
+  await observe?.(tx);
   const id = runtime.getCell(space, output, undefined, tx)
     .getAsNormalizedFullLink().id;
   tx.writeOrThrow(
@@ -603,8 +616,237 @@ describe("TransformedBy input witnesses", () => {
           type: CFC_ATOM_TYPE.TransformedBy,
           identity: COMMIT,
         });
-        expect(idOf(runtime, "committed")).toBeDefined();
       });
     });
+  });
+
+  describe("what fails closed", () => {
+    // Each case pairs a control, where the witness is minted, with the same
+    // transformation over an input that violates one guard, where it must not
+    // be. The control keeps the refusal from passing for an unrelated reason.
+    const tb = (identity: ImplementationIdentity) => ({
+      type: CFC_ATOM_TYPE.TransformedBy,
+      identity,
+    });
+    const COMMITTED_VALUE = (integrity: CfcAtom[]): LabelMapEntry => ({
+      path: [],
+      origin: "derived",
+      observes: "value",
+      label: { confidentiality: [ROOM], integrity },
+    });
+    const DECLARED_ROOM: LabelMapEntry = {
+      path: [],
+      origin: "declared",
+      label: { confidentiality: [ROOM] },
+    };
+    const witnessesOf = (runtime: Runtime, cause: string): unknown[] =>
+      storedIntegrity(runtime, cause).flatMap((atom) => {
+        const witness = (atom as { inputWitness?: unknown }).inputWitness;
+        return witness === undefined ? [] : [witness];
+      });
+
+    it("a witnessed child does not vouch for an unwitnessed `*` slot beside it", async () => {
+      // The `*` slot stands for the children with no entry of their own, and
+      // its own resolution carries no witness. The concrete sibling's entry
+      // resolves at the sibling alone.
+      await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
+        const witnessed = [
+          DECLARED_ROOM,
+          COMMITTED_VALUE([tb(COMMIT)]),
+          {
+            path: ["items", "a"],
+            origin: "derived",
+            observes: "value",
+            label: { confidentiality: [ROOM], integrity: [tb(COMMIT)] },
+          },
+        ] satisfies LabelMapEntry[];
+        const value = { items: { a: "approve", b: "approve" } };
+        await seedLabeled(runtime, "slots-control", value, witnessed);
+        await seedLabeled(runtime, "slots", value, [...witnessed, {
+          path: ["items", "*"],
+          origin: "derived",
+          observes: "value",
+          label: { confidentiality: [ROOM] },
+        }]);
+        await transform(runtime, TALLY, ["slots-control"], "control", tally);
+        await transform(runtime, TALLY, ["slots"], "ballot", tally);
+
+        expect(witnessesOf(runtime, "control")).toEqual([tb(COMMIT)]);
+        expect(witnessesOf(runtime, "ballot")).toEqual([]);
+      });
+    });
+
+    it("a runtime-minted `*` template's integrity witnesses nothing", async () => {
+      // The template shadows the witnessed value above it in replace-down,
+      // and its own `TransformedBy` labels membership, not a written value.
+      await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
+        const witnessed = [DECLARED_ROOM, COMMITTED_VALUE([tb(COMMIT)])];
+        const value = { items: { a: "approve" } };
+        await seedLabeled(runtime, "template-control", value, witnessed);
+        await seedLabeled(runtime, "template", value, [...witnessed, {
+          path: ["items", "*"],
+          origin: "derived",
+          observes: "value",
+          label: { confidentiality: [ROOM], integrity: [tb(COMMIT)] },
+        }]);
+        await transform(runtime, TALLY, ["template-control"], "control", tally);
+        await transform(runtime, TALLY, ["template"], "ballot", tally);
+
+        expect(witnessesOf(runtime, "control")).toEqual([tb(COMMIT)]);
+        expect(witnessesOf(runtime, "ballot")).toEqual([]);
+      });
+    });
+
+    it("observing confidential label metadata empties the witnesses", async () => {
+      // Label metadata is a confidential input that carries no evidence. The
+      // observation is recorded through the transaction's channel directly,
+      // as `inspectStoredConfLabel` records one for a protected result.
+      await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
+        await seedRoom(runtime);
+        await commitStances(runtime);
+        await transform(runtime, TALLY, ["committed"], "control", tally);
+        await transform(
+          runtime,
+          TALLY,
+          ["committed"],
+          "ballot",
+          tally,
+          [],
+          (tx) => {
+            const { id } = runtime.getCell(space, "committed", undefined, tx)
+              .getAsNormalizedFullLink();
+            tx.recordCfcLabelMetadataObservation({
+              target: {
+                space,
+                id,
+                scope: "space",
+                path: ["cfc", "labels", "value", "votes"],
+              },
+              observes: "labelMetadata",
+              confidentiality: [ROOM],
+            });
+          },
+        );
+
+        expect(witnessesOf(runtime, "control")).toEqual([tb(COMMIT)]);
+        expect(witnessesOf(runtime, "ballot")).toEqual([]);
+      });
+    });
+
+    it("confidential external content without the witness empties it", async () => {
+      // A host-observed row is a confidential input like any read; the
+      // producer that records it is the transformer here.
+      const PRODUCER = "input-witness-producer";
+      const producer: ImplementationIdentity = {
+        kind: "builtin",
+        builtinId: PRODUCER,
+      };
+      const ROW_SCHEMA = {
+        type: "object",
+        properties: { title: { type: "string" } },
+        required: ["title"],
+        ifc: { confidentiality: [ROOM] },
+      } as const satisfies JSONSchema;
+      await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
+        await seedRoom(runtime);
+        await commitStances(runtime);
+        await transform(runtime, producer, ["committed"], "control", tally);
+        await transform(
+          runtime,
+          producer,
+          ["committed"],
+          "ballot",
+          tally,
+          [],
+          async (tx) => {
+            const receipt = await runtime.prepareExternalContentObservation({
+              targetTx: tx,
+              space,
+              cause: "input-witness-external-row",
+              schema: ROW_SCHEMA,
+              value: { title: "host row" },
+              producer: PRODUCER,
+            });
+            runtime.recordExternalContentObservation(tx, receipt, {
+              space,
+              producer: PRODUCER,
+            });
+            const [observation] = tx.getCfcState().externalContentObservations;
+            expect(observation.flow.confidentiality).toContainEqual(ROOM);
+          },
+        );
+
+        expect(witnessesOf(runtime, "control")).toEqual([tb(COMMIT)]);
+        expect(witnessesOf(runtime, "ballot")).toEqual([]);
+      });
+    });
+
+    it("a chain of five endorsed steps records at most three levels", async () => {
+      // Each step nests the previous step's atoms one level deeper, so an
+      // uncapped chain would carry four levels at the fifth step.
+      const steps = ["submit", "commit", "tally", "audit", "archive"].map((
+        symbol,
+      ) => verified("module:conclave", symbol));
+      await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
+        await seedSecret(runtime, "roster", "members");
+        let input = "roster";
+        for (const [index, step] of steps.entries()) {
+          await transform(runtime, step, [input], `step-${index}`, () => ({
+            votes: ["approve"],
+          }));
+          input = `step-${index}`;
+        }
+        const depths = storedIntegrity(runtime, input).map((atom) =>
+          inputWitnessDepth(atom as CfcAtom)
+        );
+        expect(Math.max(...depths)).toBe(INPUT_WITNESS_MAX_DEPTH);
+      });
+    });
+
+    it("stamps the same label whatever order the witnesses were read in", async () => {
+      await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
+        const SUBMIT = verified("module:conclave", "submitStance");
+        const value = { votes: ["approve"] };
+        await seedLabeled(runtime, "pair-ab", value, [
+          DECLARED_ROOM,
+          COMMITTED_VALUE([tb(COMMIT), tb(SUBMIT)]),
+        ]);
+        await seedLabeled(runtime, "pair-ba", value, [
+          DECLARED_ROOM,
+          COMMITTED_VALUE([tb(SUBMIT), tb(COMMIT)]),
+        ]);
+        await transform(runtime, TALLY, ["pair-ab", "pair-ba"], "ab", tally);
+        await transform(runtime, TALLY, ["pair-ba", "pair-ab"], "ba", tally);
+
+        expect(witnessesOf(runtime, "ab")).toHaveLength(2);
+        expect(JSON.stringify(storedIntegrity(runtime, "ba"))).toBe(
+          JSON.stringify(storedIntegrity(runtime, "ab")),
+        );
+      });
+    });
+  });
+});
+
+describe("mintTransformedBy", () => {
+  const A = { type: CFC_ATOM_TYPE.TransformedBy, identity: COMMIT };
+  const B = { type: CFC_ATOM_TYPE.TransformedBy, identity: OTHER };
+
+  it("orders witnesses canonically, not by arrival", () => {
+    expect(JSON.stringify(mintTransformedBy(TALLY, [B, A]))).toBe(
+      JSON.stringify(mintTransformedBy(TALLY, [A, B])),
+    );
+  });
+
+  it("mints one atom per distinct witness", () => {
+    expect(mintTransformedBy(TALLY, [A, { ...A }, B])).toHaveLength(3);
+  });
+
+  it("retains no witness at the depth cap", () => {
+    let atom: CfcAtom = A;
+    for (let depth = 0; depth < INPUT_WITNESS_MAX_DEPTH; depth++) {
+      atom = { ...B, inputWitness: atom };
+    }
+    expect(inputWitnessDepth(atom)).toBe(INPUT_WITNESS_MAX_DEPTH);
+    expect(retainedInputWitnesses([atom])).toEqual([]);
   });
 });
