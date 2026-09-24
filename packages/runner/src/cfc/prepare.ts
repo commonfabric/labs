@@ -5902,8 +5902,8 @@ type LinkLabelDeriver = {
  * Resolves staged source references from transaction evidence, independently of
  * which document's metadata has been persisted by preparation. A reference at
  * or above a link's source path supplies the label there; one below it supplies
- * the labels beneath it. Cyclic pending references refuse derivation rather
- * than borrowing an unfinished label.
+ * the labels beneath it. Object back-references have a finite label view;
+ * pointer chains that never reach an object or scalar refuse derivation.
  */
 const createLinkLabelDeriver = (
   tx: IExtendedStorageTransaction,
@@ -5914,12 +5914,43 @@ const createLinkLabelDeriver = (
   ) => ImplementationIdentity | undefined,
   metadataResolver: VerifierMetadataResolver,
 ): LinkLabelDeriver => {
-  const active = new Set<LinkWritePolicyInput>();
+  /** A finite projection and the source values waiting for it to resolve. */
+  type RequestedPath = {
+    /** Remaining path below the current source. */
+    path: readonly string[];
+
+    /** Links whose own source resolution depends on this projection. */
+    sources: ReadonlySet<LinkWritePolicyInput>;
+  };
+
+  const requestPath = (
+    path: readonly string[],
+    sources: ReadonlySet<LinkWritePolicyInput> = new Set(),
+  ): RequestedPath => ({ path, sources });
+
+  /** The pointer chain and object expansion for one source-label walk. */
+  type Walk = {
+    /** References since the last descent into a concrete object. */
+    aliases: ReadonlySet<LinkWritePolicyInput>;
+
+    /** References whose held children this branch has already expanded. */
+    expanded: ReadonlySet<LinkWritePolicyInput>;
+
+    /** Finite paths needed by a source projection, floor, or carried view. */
+    requested: readonly RequestedPath[];
+  };
+
+  const emptyWalk = (): Walk => ({
+    aliases: new Set(),
+    expanded: new Set(),
+    requested: [],
+  });
 
   // The labels the references staged into the source document bring to the
   // source path, or the refusals of the first one that cannot be derived.
   const pendingSourceView = (
     input: LinkWritePolicyInput,
+    walk: Walk,
   ): { view?: CfcLabelView; reasons: string[] } => {
     const views: (CfcLabelView | undefined)[] = [];
     const sourcePath = canonicalizeLogicalPath(input.source.path);
@@ -5947,7 +5978,32 @@ const createLinkLabelDeriver = (
         targetKey(final) !== targetKey(upstream.source) ||
         !arraysEqual(final.path, upstream.source.path)
       ) continue;
-      const resolved = persisted(upstream);
+      const relative = sourcePath.slice(upstreamPath.length);
+      const prefix = upstreamPath.slice(sourcePath.length);
+      const requested = covers
+        ? [
+          requestPath(relative, walk.aliases),
+          ...walk.requested.map((request) => ({
+            ...request,
+            path: [...relative, ...request.path],
+          })),
+        ]
+        : walk.requested.filter(({ path }) => pathPatternsOverlap(prefix, path))
+          .map((request) => ({
+            ...request,
+            path: request.path.slice(prefix.length),
+          }));
+      // Held references may lead back to an object already expanded. Follow
+      // that edge only as far as an explicitly requested path needs it; an
+      // actual read crosses the stored pointer and consumes its own labels.
+      if (!covers && walk.expanded.has(upstream) && requested.length === 0) {
+        continue;
+      }
+      const resolved = derive(upstream, {
+        aliases: covers ? walk.aliases : new Set(),
+        expanded: walk.expanded,
+        requested,
+      });
       if (resolved.reasons.length > 0) return { reasons: resolved.reasons };
       // A downstream hop sees the representation the upstream hop persists,
       // including protected fields when it crosses a space boundary.
@@ -5968,7 +6024,6 @@ const createLinkLabelDeriver = (
       if (!covers) {
         // A reference below the source path lands beneath it, and leaves the
         // label at the source path itself alone.
-        const prefix = upstreamPath.slice(sourcePath.length);
         views.push({
           version: 1,
           entries: linked.map((entry) => ({
@@ -5980,7 +6035,6 @@ const createLinkLabelDeriver = (
       }
       // A reference covering the source path supplies its root by longest
       // prefix, and its entries below the source path rebased onto it.
-      const relative = sourcePath.slice(upstreamPath.length);
       const label = metadataResolver.cover(
         { version: 1, entries },
         relative,
@@ -5994,8 +6048,22 @@ const createLinkLabelDeriver = (
     return { view: mergeCfcLabelViews(views), reasons: [] };
   };
 
-  const persisted = (input: LinkWritePolicyInput): DerivedLink => {
-    if (active.has(input)) {
+  const derive = (input: LinkWritePolicyInput, walk: Walk): DerivedLink => {
+    const requested = [
+      ...walk.requested,
+      ...(walk.expanded.has(input)
+        ? []
+        : input.cfcLabelView?.entries.map((entry) =>
+          requestPath(canonicalizeLogicalPath(entry.path))
+        ) ?? []),
+    ];
+    // Resolving a source through an ancestor link may require a projection
+    // back into that same source. It is a pointer loop if the source is still
+    // waiting for that projection, even when its path grows on each hop.
+    if (
+      walk.aliases.has(input) ||
+      requested.some(({ sources }) => sources.has(input))
+    ) {
       return {
         entries: [],
         reasons: [
@@ -6003,39 +6071,57 @@ const createLinkLabelDeriver = (
         ],
       };
     }
-    active.add(input);
-    try {
-      const pending = pendingSourceView(input);
-      if (pending.reasons.length > 0) {
-        return { entries: [], reasons: pending.reasons };
-      }
-      const identity = identityForInput(input);
-      const result = derivePersistedLinkLabel(
-        tx,
-        input,
-        candidates,
-        identity,
-        metadataResolver,
-        pending.view,
-      );
-      if (result.reason !== undefined) {
-        return { entries: [], reasons: [result.reason] };
-      }
-      const derived = persistedLinkEntries(
-        tx,
-        input,
-        result,
-        identity,
-        metadataResolver,
-      );
-      return {
-        ...derived,
-        label: derived.reasons.length === 0 ? result.label : undefined,
-      };
-    } finally {
-      active.delete(input);
+    const pending = pendingSourceView(input, {
+      aliases: new Set([...walk.aliases, input]),
+      expanded: new Set([...walk.expanded, input]),
+      requested,
+    });
+    if (pending.reasons.length > 0) {
+      return { entries: [], reasons: pending.reasons };
     }
+    const identity = identityForInput(input);
+    const result = derivePersistedLinkLabel(
+      tx,
+      input,
+      candidates,
+      identity,
+      metadataResolver,
+      pending.view,
+    );
+    if (result.reason !== undefined) {
+      return { entries: [], reasons: [result.reason] };
+    }
+    // A back-edge supplies only the finite projection its caller requested.
+    // Its complete carried view is checked at the first occurrence of this
+    // link, where all of that view's authoritative paths are expanded.
+    const carriedInput = walk.expanded.has(input) && input.cfcLabelView
+      ? {
+        ...input,
+        cfcLabelView: {
+          ...input.cfcLabelView,
+          entries: input.cfcLabelView.entries.filter((entry) =>
+            walk.requested.some(({ path }) =>
+              pathPatternsOverlap(canonicalizeLogicalPath(entry.path), path)
+            )
+          ),
+        },
+      }
+      : input;
+    const derived = persistedLinkEntries(
+      tx,
+      carriedInput,
+      result,
+      identity,
+      metadataResolver,
+    );
+    return {
+      ...derived,
+      label: derived.reasons.length === 0 ? result.label : undefined,
+    };
   };
+
+  const persisted = (input: LinkWritePolicyInput): DerivedLink =>
+    derive(input, emptyWalk());
 
   // The label below the receiving slot is the source's own label at the
   // matching path, credited only when the link itself derives. The carried
@@ -6045,7 +6131,10 @@ const createLinkLabelDeriver = (
     input: LinkWritePolicyInput,
     relativePath: readonly string[],
   ): IFCLabel | undefined => {
-    if (persisted(input).reasons.length > 0) return undefined;
+    if (
+      derive(input, { ...emptyWalk(), requested: [requestPath(relativePath)] })
+        .reasons.length > 0
+    ) return undefined;
     const nested: LinkWritePolicyInput = {
       ...input,
       source: {
@@ -6057,7 +6146,7 @@ const createLinkLabelDeriver = (
         path: [...canonicalizeLogicalPath(input.target.path), ...relativePath],
       },
     };
-    const pending = pendingSourceView(nested);
+    const pending = pendingSourceView(nested, emptyWalk());
     if (pending.reasons.length > 0) return undefined;
     return derivePersistedLinkLabel(
       tx,

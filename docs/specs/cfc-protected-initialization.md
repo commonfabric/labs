@@ -88,7 +88,14 @@ none at the link itself. This does not depend on staging order or on the
 references occupying different documents. Each hop retains the source's nested
 labels and applies the ordinary evidence and carried-label checks. An integrity
 floor uses those same derived labels, so the source's real authorship can meet
-it. A cycle of pending references refuses label derivation.
+it. A chain of pending references that never reaches a value refuses label
+derivation terminally. An object holding a reference back to itself or another
+object is valid. Preparation expands each held reference once per branch, then
+follows back-references only as far as a source path, floor, or carried view
+requires. This keeps the persisted view finite; reads beyond it follow the
+stored references and consume the labels at each hop. A carried view is checked
+in full at the link's first occurrence, and a repeated occurrence supplies the
+entries covering the requested paths.
 
 ## Authorization and transaction evidence
 

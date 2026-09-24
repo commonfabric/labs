@@ -745,6 +745,258 @@ describe("reference-initialization", () => {
       });
     }
 
+    it("commits an object whose staged reference points back to itself", async () => {
+      const tx = runtime.edit();
+      const argument = runtime.getCell(space, "argument", {
+        type: "object",
+        properties: { element: { type: "object" }, index: { type: "number" } },
+        ifc: { integrity: ["root-proof"] },
+      }, tx);
+      argument.set({ index: 7, element: argument });
+      recordReferencedArgumentFields(tx, argument.getAsNormalizedFullLink(), [
+        "element",
+      ]);
+      expect(argument.key("element").key("index").get()).toBe(7);
+      runtime.prepareTxForCommit(tx);
+
+      expect((await tx.commit()).error).toBeUndefined();
+      expect(
+        runtime.getCell(space, "argument").key("element")
+          .key("index").get(),
+      ).toBe(7);
+      const entries = readStoredCfcMetadata(
+        runtime.edit(),
+        argument.getAsNormalizedFullLink(),
+      )!.labelMap.entries;
+      expect(
+        entries.filter((entry) => entry.path.join("/") === "element")
+          .flatMap((entry) => entry.label.integrity ?? []),
+      )
+        .toContain("root-proof");
+    });
+
+    for (const secondFirst of [false, true]) {
+      for (const throughSlot of [false, true]) {
+        it(`commits mutually referring objects${throughSlot ? " through an intermediate reference" : ""} when the ${secondFirst ? "second" : "first"} is staged first`, async () => {
+          const tx = runtime.edit();
+          const schema: JSONSchema = {
+            type: "object",
+            properties: {
+              element: { type: "object" },
+              index: { type: "number" },
+            },
+            ifc: { integrity: ["root-proof"] },
+          };
+          const first = runtime.getCell(space, "first", schema, tx);
+          const second = runtime.getCell(space, "second", schema, tx);
+          const stageFirst = () => first.set({ index: 1, element: second });
+          const stageSecond = () =>
+            second.set({
+              index: 2,
+              element: throughSlot ? first.key("element") : first,
+            });
+          if (secondFirst) {
+            stageSecond();
+            stageFirst();
+          } else {
+            stageFirst();
+            stageSecond();
+          }
+          for (const argument of [first, second]) {
+            recordReferencedArgumentFields(
+              tx,
+              argument.getAsNormalizedFullLink(),
+              [
+                "element",
+              ],
+            );
+          }
+          runtime.prepareTxForCommit(tx);
+
+          expect((await tx.commit()).error).toBeUndefined();
+          expect(
+            runtime.getCell(space, "first").key("element").key("element")
+              .key("index").get(),
+          ).toBe(throughSlot ? 2 : 1);
+        });
+      }
+    }
+
+    for (const holderFirst of [false, true]) {
+      for (const endorsed of [false, true]) {
+        it(`${endorsed ? "credits the owner's floor and confidentiality" : "refuses the stager's floor"} through repeated object back-references when the ${holderFirst ? "holder" : "object"} is staged first`, async () => {
+          await initializeOwnersMessage({
+            ...inboxSchema,
+            properties: {
+              message: {
+                ...entrySchema,
+                default: { body: "a" },
+                ifc: { ...entrySchema.ifc, confidentiality: ["owner-secret"] },
+              },
+            },
+          });
+          actingPrincipal = stager.did();
+          const tx = runtime.edit();
+          const argument = runtime.getCell(space, "argument", {
+            type: "object",
+            properties: { element: { type: "object" }, message: entrySchema },
+            ifc: { integrity: ["object-proof"] },
+          }, tx);
+          const holder = runtime.getCell(space, "holder", {
+            type: "object",
+            properties: {
+              argument: {
+                type: "object",
+                ifc: { confidentiality: ["holder"] },
+                properties: {
+                  message: {
+                    type: "object",
+                    ifc: {
+                      requiredIntegrity: [{
+                        kind: "authored-by",
+                        subject: (endorsed ? signer : stager).did(),
+                      }],
+                    },
+                  },
+                },
+              },
+            },
+          }, tx);
+          const stageArgument = () => {
+            argument.set({
+              element: argument,
+              message: runtime.getCell(space, "inbox", undefined, tx)
+                .key("message").asSchema(entrySchema),
+            });
+            recordReferencedArgumentFields(
+              tx,
+              argument.getAsNormalizedFullLink(),
+              [
+                "element",
+                "message",
+              ],
+            );
+          };
+          const stageHolder = () => {
+            holder.set({
+              argument: argument.key("element").key("element").key("element")
+                .asSchema({
+                  type: "object",
+                  ifc: { confidentiality: ["holder"] },
+                }),
+            });
+            recordReferencedArgumentFields(
+              tx,
+              holder.getAsNormalizedFullLink(),
+              ["argument"],
+            );
+          };
+          if (holderFirst) {
+            stageHolder();
+            stageArgument();
+          } else {
+            stageArgument();
+            stageHolder();
+          }
+          runtime.prepareTxForCommit(tx);
+          const error = (await tx.commit()).error;
+          if (!endorsed) {
+            expect(error?.message).toContain(
+              "write floor failed at /argument/message",
+            );
+            return;
+          }
+          expect(error).toBeUndefined();
+          const link = holder.getAsNormalizedFullLink();
+          expect(authorsAt(link, ["argument", "message"])).toEqual([
+            signer.did(),
+          ]);
+          expect(authorsAt(link, ["argument"])).toEqual([]);
+          expect(
+            readStoredCfcMetadata(runtime.edit(), link)!.labelMap.entries
+              .filter((entry) => entry.path.join("/") === "argument/message")
+              .flatMap((entry) => entry.label.confidentiality ?? []),
+          )
+            .toContain("owner-secret");
+        });
+      }
+    }
+
+    for (const growing of [false, true]) {
+      it(`refuses a staged reference to ${growing ? "its own descendant" : "itself"} inside a linked object`, async () => {
+        const tx = runtime.edit();
+        const argument = runtime.getCell(space, "argument", argumentSchema, tx);
+        const holder = runtime.getCell(space, "holder", {
+          type: "object",
+          properties: {
+            argument: { type: "object", ifc: { confidentiality: ["holder"] } },
+          },
+        }, tx);
+        holder.set({ argument });
+        argument.set({});
+        const source = growing
+          ? argument.key("element").key("body")
+          : argument.key("element");
+        const target = {
+          ...argument.getAsNormalizedFullLink(),
+          path: ["element"],
+        };
+        tx.writeValueOrThrow(target, source.getAsLink());
+        tx.recordCfcWritePolicyInput({
+          kind: "link-write",
+          target,
+          source: source.getAsNormalizedFullLink(),
+        });
+        recordReferencedArgumentFields(tx, argument.getAsNormalizedFullLink(), [
+          "element",
+        ]);
+        runtime.prepareTxForCommit(tx);
+
+        expect((await tx.commit()).error?.message).toContain(
+          "cyclic staged reference in link label derivation",
+        );
+      });
+    }
+
+    it("resolves a repeated link whose source projection switches to a concrete sibling", async () => {
+      const tx = runtime.edit();
+      const first = runtime.getCell(space, "first", argumentSchema, tx);
+      const second = runtime.getCell(space, "second", {
+        type: "object",
+        properties: { element: entrySchema, body: { type: "string" } },
+        ifc: { integrity: ["object-proof"] },
+      }, tx);
+      first.set({ element: second });
+      second.set({ element: first.key("element").key("body"), body: "value" });
+      for (const cell of [first, second]) {
+        recordReferencedArgumentFields(tx, cell.getAsNormalizedFullLink(), [
+          "element",
+        ]);
+      }
+      expect(first.key("element").key("element").get()).toBe("value");
+      runtime.prepareTxForCommit(tx);
+
+      expect((await tx.commit()).error).toBeUndefined();
+    });
+
+    it("refuses a pointer loop whose path grows across linked objects", async () => {
+      const tx = runtime.edit();
+      const first = runtime.getCell(space, "first", argumentSchema, tx);
+      const second = runtime.getCell(space, "second", argumentSchema, tx);
+      first.set({ element: second });
+      second.set({ element: first.key("element").key("element").key("body") });
+      for (const cell of [first, second]) {
+        recordReferencedArgumentFields(tx, cell.getAsNormalizedFullLink(), [
+          "element",
+        ]);
+      }
+      runtime.prepareTxForCommit(tx);
+
+      expect((await tx.commit()).error?.message).toContain(
+        "cyclic staged reference in link label derivation",
+      );
+    });
+
     it("refuses a cycle of staged references without borrowing schema authorship", async () => {
       actingPrincipal = stager.did();
       const stage = runtime.edit();

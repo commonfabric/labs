@@ -208,53 +208,62 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
     );
 
   for (const mode of ["off", "observe", "enforce"] as const) {
-    it(`preserves ${mode} representation across a pending foreign reference followed by a local reference`, async () => {
-      const { storageManager, runtime } = makeRuntime(mode);
-      try {
-        await seedSource(runtime, spaceA, "chain-source");
-        const tx = runtime.edit();
-        const schema: JSONSchema = {
-          type: "object",
-          properties: {
-            field: { type: "object", ifc: { integrity: ["argument"] } },
-          },
-        };
-        const first = runtime.getCell(spaceB, "chain-first", schema, tx);
-        const second = runtime.getCell(spaceB, "chain-second", schema, tx);
-        second.set({ field: first.key("field") });
-        first.set({
-          field: runtime.getCell(spaceA, "chain-source", undefined, tx),
-        });
-        for (const cell of [second, first]) {
-          recordReferencedArgumentFields(tx, cell.getAsNormalizedFullLink(), [
-            "field",
-          ]);
-        }
-        runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
-        const entries = persistedEntriesFor(
-          storageManager,
-          spaceB,
-          second.getAsNormalizedFullLink().id,
-        )
-          .filter((entry) => entry.origin === "link");
-        expect(entryAt(entries, ["field"])!.label.confidentiality).toEqual([{
-          ...userAtom,
-          subject: mode === "enforce"
-            ? commitCfcFieldValue(userAtom.subject)
-            : userAtom.subject,
-        }]);
-        expect(entryAt(entries, ["field", "secret"])!.label.confidentiality)
-          .toEqual([{
-            ...caveatAtom,
-            source: mode === "enforce"
-              ? commitCfcFieldValue(fullSource)
-              : fullSource,
+    for (const backReference of [false, true]) {
+      it(`preserves ${mode} representation across a pending foreign reference followed by a local reference${backReference ? " through an object back-reference" : ""}`, async () => {
+        const { storageManager, runtime } = makeRuntime(mode);
+        try {
+          await seedSource(runtime, spaceA, "chain-source");
+          const tx = runtime.edit();
+          const schema: JSONSchema = {
+            type: "object",
+            properties: {
+              field: { type: "object", ifc: { integrity: ["argument"] } },
+              self: { type: "object", ifc: { integrity: ["object"] } },
+            },
+          };
+          const first = runtime.getCell(spaceB, "chain-first", schema, tx);
+          const second = runtime.getCell(spaceB, "chain-second", schema, tx);
+          second.set({
+            field: backReference
+              ? first.key("self").key("self").key("field")
+              : first.key("field"),
+          });
+          first.set({
+            field: runtime.getCell(spaceA, "chain-source", undefined, tx),
+            ...(backReference ? { self: first } : {}),
+          });
+          for (const cell of [second, first]) {
+            recordReferencedArgumentFields(tx, cell.getAsNormalizedFullLink(), [
+              "field",
+              "self",
+            ]);
+          }
+          runtime.prepareTxForCommit(tx);
+          expect((await tx.commit()).error).toBeUndefined();
+          const entries = persistedEntriesFor(
+            storageManager,
+            spaceB,
+            second.getAsNormalizedFullLink().id,
+          )
+            .filter((entry) => entry.origin === "link");
+          expect(entryAt(entries, ["field"])!.label.confidentiality).toEqual([{
+            ...userAtom,
+            subject: mode === "enforce"
+              ? commitCfcFieldValue(userAtom.subject)
+              : userAtom.subject,
           }]);
-      } finally {
-        await runtime.dispose();
-      }
-    });
+          expect(entryAt(entries, ["field", "secret"])!.label.confidentiality)
+            .toEqual([{
+              ...caveatAtom,
+              source: mode === "enforce"
+                ? commitCfcFieldValue(fullSource)
+                : fullSource,
+            }]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+    }
   }
 
   describe("enforce", () => {
