@@ -235,6 +235,11 @@ describe("writer-policied inputs of a sub-piece", () => {
         expect((await overwrite.commit()).error?.message).toContain(
           "writeAuthorizedBy",
         );
+        const empty = runtime.edit();
+        source.withTx(empty).key("entries").set([]);
+        expect((await empty.commit()).error?.message).toContain(
+          "writeAuthorizedBy",
+        );
       }
       await cell.pull();
       expect(cell.get().room.entries.map((entry) => entry.seat)).toEqual([1]);

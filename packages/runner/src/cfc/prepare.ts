@@ -1252,8 +1252,13 @@ const writeLeavesPathUnchanged = (
     "value",
     ...(wildcard === -1 ? path : path.slice(0, wildcard)),
   ];
+  // An authoritative transaction commits each document it wrote whole, over
+  // whatever the store holds by then, so bytes it found unchanged in its own
+  // view are no evidence about what it leaves behind.
+  if (tx.isAuthoritativeWrites?.() === true) return false;
   const details = tx.getWriteDetailsForTarget?.(target) ??
-    tx.getWriteDetails?.(target.space) ?? [];
+    tx.getWriteDetails?.(target.space);
+  if (details === undefined) return false;
   for (const detail of details) {
     if (
       detail.address.id !== target.id ||
@@ -8885,7 +8890,7 @@ export function* prepareBoundaryCommitSteps(
     let keepsStoredSchema = false;
     if (
       deferredWriterRefusal !== undefined && existing !== undefined &&
-      storedSchema !== undefined && existing.version === metadata.version &&
+      storedSchema !== undefined &&
       cfcSchemaPoliciesEqual(storedSchema, schemaAndHash.schema)
     ) {
       const storedEntries = canonicalizeCfcMetadata(existing).labelMap.entries;
@@ -8894,7 +8899,27 @@ export function* prepareBoundaryCommitSteps(
         entries: readonly LabelMapEntry[],
         path: readonly string[],
       ) => entries.filter((entry) => pathsOverlap(entry.path, path));
+      // The stored schema is the one kept, so the labels derived here must
+      // be the ones it declares. Equal claims can lay out differently — a
+      // rest claim is a label position only beside no named property — so
+      // the positions both schemas declare are compared whole, not at the
+      // deferred paths alone.
+      const declaredPositions = (schema: JSONSchema) =>
+        cfcSchemaEntries(schema).map((entry) => ({
+          path: encodePointer(canonicalizeLogicalPath(entry.path)),
+          ifc: JSON.parse(
+            JSON.stringify(
+              isObjectOrArray(entry.schema) ? entry.schema.ifc ?? null : null,
+            ),
+          ),
+        })).sort((left, right) =>
+          left.path < right.path ? -1 : left.path > right.path ? 1 : 0
+        );
       if (
+        deepEqual(
+          declaredPositions(storedSchema),
+          declaredPositions(schemaAndHash.schema),
+        ) &&
         deferredWriterPaths.every((path) =>
           deepEqual(
             entriesAt(storedEntries, path),
@@ -8904,7 +8929,13 @@ export function* prepareBoundaryCommitSteps(
       ) {
         deferredWriterRefusal = undefined;
         keepsStoredSchema = true;
-        metadata = { ...metadata, schemaHash: existing.schemaHash };
+        // The stored spelling is kept whole, its envelope version included;
+        // a version-1 store migrates on its next authorized write.
+        metadata = {
+          ...metadata,
+          version: existing.version,
+          schemaHash: existing.schemaHash,
+        };
         if (
           deepEqual(
             canonicalizeCfcMetadata(existing),
