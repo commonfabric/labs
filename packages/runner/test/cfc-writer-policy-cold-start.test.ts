@@ -5,6 +5,7 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
+import { runtimePresets } from "../src/runtime-presets.ts";
 
 // A writer policy says which handler may modify a path, from any runtime. A
 // runtime that starts a piece it did not create replays the piece's setup,
@@ -70,16 +71,20 @@ interface Input {
     WriteAuthorizedBy<Sealed<Entry>, typeof freeze>,
     { seat: -1; digest: "" }
   >;
+  // Room state no writer policy guards.
+  topic?: Default<string, "">;
 }
 
 interface Output {
+  topic: string;
   entries: Sealed<Entry>[];
   frozen: Sealed<Entry>;
   submit: Stream<{ seat: number }>;
   freeze: Stream<{ digest: string }>;
 }
 
-const Room = pattern<Input, Output>(({ entries, frozen }) => ({
+const Room = pattern<Input, Output>(({ entries, frozen, topic }) => ({
+  topic,
   entries,
   frozen,
   submit: submit({ entries }),
@@ -98,10 +103,11 @@ export default pattern<Record<string, never>, { room: Output }>(() => ({
 type Room = {
   entries: { seat: number; digest: string }[];
   frozen: { seat: number; digest: string };
+  topic: string;
 };
 type Piece = { room: Room };
 
-describe("a writer-policied input in a runtime that did not create the piece", () => {
+describe("writer-policied inputs of a sub-piece", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
 
   beforeEach(() => {
@@ -111,8 +117,14 @@ describe("a writer-policied input in a runtime that did not create the piece", (
     await storageManager?.close();
   });
 
+  // The posture a pattern runs under everywhere a member runs one: labels
+  // persist, and a member's own slots materialize per user.
   const newRuntime = () =>
-    new Runtime({ apiUrl: new URL(import.meta.url), storageManager });
+    new Runtime(runtimePresets.patternTest({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      experimental: {},
+    }));
 
   // `start()` resolves before its piece-start commit settles, so a refused
   // commit reaches a test only through the observer seam.
@@ -229,6 +241,47 @@ describe("a writer-policied input in a runtime that did not create the piece", (
       expect(cell.get().room.frozen.digest).toBe("first");
     } finally {
       await cold.dispose();
+      await creator.dispose();
+    }
+  });
+
+  it("admits a whole-document write that leaves the guarded fields as they are", async () => {
+    // Setting a whole document is how pattern code writes several fields at
+    // once. The writer policies guard two of them; a write that leaves both
+    // byte for byte as they were modifies nothing they guard, whatever it
+    // does beside them. Reading the sealed entries first puts a derived
+    // label on the field it does change, so the document's labels change
+    // too, just not at the guarded paths.
+    const creator = newRuntime();
+    try {
+      await storePiece(creator, "writer-policy-whole-document");
+      const cell = creator.getCell<Piece>(
+        space,
+        "writer-policy-whole-document",
+      );
+      await cell.sync();
+      const argument = cell.key("room").resolveAsCell().getArgumentCell<
+        Room
+      >()!;
+      const rewrite = creator.edit();
+      const current = argument.withTx(rewrite).get();
+      argument.withTx(rewrite).set({ ...current, topic: "lunch" });
+      expect((await rewrite.commit()).error).toBeUndefined();
+
+      const forge = creator.edit();
+      argument.withTx(forge).set({
+        ...argument.withTx(forge).get(),
+        frozen: { seat: 9, digest: "x" },
+      });
+      expect((await forge.commit()).error?.message).toContain(
+        "writeAuthorizedBy",
+      );
+
+      await creator.idle();
+      expect(argument.get().topic).toBe("lunch");
+      expect(argument.get().entries.map((entry) => entry.seat)).toEqual([1]);
+      expect(argument.get().frozen.digest).toBe("first");
+    } finally {
       await creator.dispose();
     }
   });

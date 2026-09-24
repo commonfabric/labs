@@ -7408,6 +7408,7 @@ export function* prepareBoundaryCommitSteps(
       : schema;
 
     let deferredWriterRefusal: string | undefined;
+    const deferredWriterPaths: (readonly string[])[] = [];
     const requirementFailure = verifyInputRequirements(
       tx,
       verificationSchema,
@@ -7423,6 +7424,7 @@ export function* prepareBoundaryCommitSteps(
             !writeLeavesPathUnchanged(tx, target, path)
           ) return false;
           deferredWriterRefusal ??= reason;
+          deferredWriterPaths.push(path);
           return true;
         }
         : undefined,
@@ -8817,7 +8819,7 @@ export function* prepareBoundaryCommitSteps(
     // each label above the inline limit by content-addressed document,
     // version 1 holds every label inline, and reading resolves either to
     // the same metadata (`docs/specs/content-addressed-cfc-labels.md`).
-    const metadata: CfcMetadata = {
+    let metadata: CfcMetadata = {
       version: state.contentAddressedLabels ? 2 : 1,
       schemaHash: envelopeRoot?.rootHash ?? schemaAndHash.taggedHashString,
       labelMap: {
@@ -8871,24 +8873,45 @@ export function* prepareBoundaryCommitSteps(
       continue;
     }
 
-    // A write whose writer refusal was deferred changed no protected bytes.
-    // It is admitted, and leaves the stored envelope exactly as it is, when
-    // the envelope it would store differs only in spelling: the same labels
-    // and the same policy claims, the schema around them spelled another way
+    // A write whose writer refusal was deferred changed no bytes at the
+    // protected paths. It modifies nothing there, and is admitted, when the
+    // envelope it would store leaves those paths as they were too: every
+    // label at, above or below each one unchanged, and the same policy
+    // claims throughout, the schema around them perhaps spelled another way
     // — as a runtime replaying a piece's setup spells what the creating
-    // runtime spelled inline. Writing that spelling would need the writer
-    // authority this transaction lacks, and keeping the stored one loses
-    // nothing a gate reads.
+    // runtime spelled inline. The stored schema is kept: writing another
+    // spelling of it is the writer's to do. Labels elsewhere in the document
+    // are not the writer policy's to guard, and persist as for any write.
+    let keepsStoredSchema = false;
     if (
       deferredWriterRefusal !== undefined && existing !== undefined &&
       storedSchema !== undefined && existing.version === metadata.version &&
-      deepEqual(
-        canonicalizeCfcMetadata(existing).labelMap,
-        canonicalizeCfcMetadata(metadata).labelMap,
-      ) &&
       cfcSchemaPoliciesEqual(storedSchema, schemaAndHash.schema)
     ) {
-      continue;
+      const storedEntries = canonicalizeCfcMetadata(existing).labelMap.entries;
+      const derivedEntries = canonicalizeCfcMetadata(metadata).labelMap.entries;
+      const entriesAt = (
+        entries: readonly LabelMapEntry[],
+        path: readonly string[],
+      ) => entries.filter((entry) => pathsOverlap(entry.path, path));
+      if (
+        deferredWriterPaths.every((path) =>
+          deepEqual(
+            entriesAt(storedEntries, path),
+            entriesAt(derivedEntries, path),
+          )
+        )
+      ) {
+        deferredWriterRefusal = undefined;
+        keepsStoredSchema = true;
+        metadata = { ...metadata, schemaHash: existing.schemaHash };
+        if (
+          deepEqual(
+            canonicalizeCfcMetadata(existing),
+            canonicalizeCfcMetadata(metadata),
+          )
+        ) continue;
+      }
     }
 
     // A repeated initializer may reuse its reference only when SC-11 proved
@@ -8899,7 +8922,10 @@ export function* prepareBoundaryCommitSteps(
       continue;
     }
 
-    if (envelopeRoot === undefined) {
+    if (keepsStoredSchema) {
+      // The stored schema document is already in place: it was loaded,
+      // content-verified, above.
+    } else if (envelopeRoot === undefined) {
       ensureSchemaDocument(
         tx,
         space,
