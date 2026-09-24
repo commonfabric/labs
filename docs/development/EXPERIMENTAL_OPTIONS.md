@@ -434,8 +434,8 @@ server](#clients-that-are-not-built-alongside-their-server).
   `remoteClient` runtimes (`listenServingMemoryServer`), with its serving
   runtimes built by the factory toolshed uses
   ([TESTING.md](TESTING.md#the-on-topology-in-one-process)). The ON
-  posture's unit coverage sets the flag explicitly over one (the
-  `executor-*` suites, the served-lifecycle verbs); the pattern
+  posture's unit coverage sets the flag explicitly on clients of such a
+  server (the `executor-*` suites, the served-lifecycle verbs); the pattern
   `MultiRuntimeHarness` and the CLI's agent-connections test resolve the
   posture as a deployed entry point does and host a serving server when it
   is ON, so they follow the default and the CI role; the rest of the

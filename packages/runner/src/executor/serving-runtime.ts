@@ -42,8 +42,8 @@ export type ServingRuntimeFactoryOptions = {
   /**
    * Called with each serving runtime's storage manager before the runtime
    * that uses it is constructed, so a test can replace one of its providers'
-   * methods. The returned function, if any, runs after the runtime and before
-   * the manager is closed.
+   * methods. The returned function, if any, runs once the runtime, and with
+   * it the manager, is disposed.
    */
   prepareStorageManager?: (
     manager: LoopbackStorageManager,
@@ -88,10 +88,13 @@ export function servingRuntimeFactory(
     });
     return Promise.resolve({
       runtime,
+      // The runtime's dispose closes the storage manager it was given.
       dispose: async () => {
-        await runtime.dispose();
-        release?.();
-        await storageManager.close();
+        try {
+          await runtime.dispose();
+        } finally {
+          release?.();
+        }
       },
     });
   };

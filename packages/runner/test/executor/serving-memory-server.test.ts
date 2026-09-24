@@ -35,19 +35,16 @@ describe("serving-memory-server", () => {
         apiUrl: new URL(import.meta.url),
       });
       const space = alice.did() as MemorySpace;
-      const clients = [0, 1].map(() => {
-        const storageManager = EmulatedStorageManager.connectTo(
-          serving.server,
-          { as: alice },
-        );
-        const runtime = new Runtime({
+      const runtimes = [0, 1].map(() =>
+        new Runtime({
           apiUrl: new URL(import.meta.url),
-          storageManager,
+          storageManager: EmulatedStorageManager.connectTo(serving.server, {
+            as: alice,
+          }),
           experimental: { serverExecution: true },
-        });
-        return { runtime, storageManager };
-      });
-      const [writer, reader] = clients.map(({ runtime }) => runtime);
+        })
+      );
+      const [writer, reader] = runtimes;
       const cancels: Array<() => void> = [];
       try {
         const pattern = await writer.patternManager.compilePattern({
@@ -79,10 +76,8 @@ describe("serving-memory-server", () => {
       } finally {
         for (const cancel of cancels) cancel();
         await serving.host.close();
-        for (const { runtime, storageManager } of clients) {
-          await runtime.dispose();
-          await storageManager.close();
-        }
+        // Each runtime's dispose closes its own storage manager.
+        for (const runtime of runtimes) await runtime.dispose();
       }
     });
 

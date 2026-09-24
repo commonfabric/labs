@@ -207,8 +207,11 @@ function attachServingLoop(params: {
   let closed: Promise<void> | undefined;
   const close = () =>
     closed ??= (async () => {
-      await host.close();
-      await params.close();
+      try {
+        await host.close();
+      } finally {
+        await params.close();
+      }
     })();
   return {
     server: params.server,
