@@ -902,6 +902,61 @@ describe("research", () => {
     });
   });
 
+  describe("reasoning effort", () => {
+    /** A read, a final answer citing a source it did not read, then a repair. */
+    const readThenRepair = () =>
+      new ScriptedModelClient([
+        () =>
+          assistant("", [{
+            id: "read",
+            name: "open_doc_section",
+            input: { sectionId: "section-0" },
+          }]),
+        (request) => {
+          const sourceId = String(
+            toolOutputs(request, "open_doc_section")[0].sourceId,
+          );
+          return finalResult({
+            status: "complete",
+            rules: [{
+              rule: "Use the documented pattern contract.",
+              sourceIds: [`${sourceId}-wrong`],
+            }],
+            sourceIds: [`${sourceId}-wrong`],
+            missing: [],
+          });
+        },
+        () => assistant("not repair JSON"),
+      ]);
+    const corpus = corpusWith([{
+      path: "docs/api.md",
+      heading: "Pattern contract",
+      text: "Use the exact documented pattern contract.",
+    }]);
+
+    it("sends the configured effort on every research call, the citation repair included", async () => {
+      const model = readThenRepair();
+      await createResearchRunner({
+        modelClient: model,
+        reasoningEffort: "high",
+      })(
+        requestFor({ corpus }),
+      );
+      expect(model.requests.map((request) => request.reasoningEffort))
+        .toEqual(["high", "high", "high"]);
+    });
+
+    it("names no effort when none is configured", async () => {
+      const model = readThenRepair();
+      await createResearchRunner({ modelClient: model })(
+        requestFor({ corpus }),
+      );
+      expect(model.requests).toHaveLength(3);
+      expect(model.requests.every((request) => !("reasoningEffort" in request)))
+        .toBe(true);
+    });
+  });
+
   describe("published pattern research", () => {
     it("returns a complete zero-handle direct-run kit from verified multi-file source", async () => {
       await ensureCompilerStack();

@@ -185,6 +185,7 @@ const CLI_STRING_FLAGS = [
   "model",
   "model-provider",
   "reasoning-effort",
+  "research-reasoning-effort",
   "compact-threshold",
   "prompt-cache-mode",
   "skills-root",
@@ -313,6 +314,7 @@ export interface CfHarnessCliCapabilities {
     modelUsage: true;
     promptCacheControls: true;
     reasoningEffort: true;
+    researchReasoningEffort: true;
     compactThreshold: true;
     persistentProviderConfig: true;
     structuredAuthControl: true;
@@ -533,6 +535,8 @@ Options:
                                 (no default; select one here, through
                                 CF_HARNESS_MODEL_PROVIDER, or with config set)
   --reasoning-effort <effort>   Provider reasoning effort (for example low, medium, high)
+  --research-reasoning-effort <effort>
+                                Reasoning effort for the research tool's own model
   --compact-threshold <n>       Token threshold for server-side compaction
                                 (default: 75% of the model input budget; 0 disables)
   --prompt-cache-mode <mode>    implicit | explicit (GPT-5.6 API gateway only)
@@ -603,6 +607,8 @@ Environment:
   CF_HARNESS_MODEL              Default value for --model (ignored on --resume-run)
   CF_HARNESS_MODEL_PROVIDER     Default value for --model-provider
   CF_HARNESS_REASONING_EFFORT   Default value for --reasoning-effort
+  CF_HARNESS_RESEARCH_REASONING_EFFORT
+                                Default value for --research-reasoning-effort
   CF_HARNESS_COMPACT_THRESHOLD  Default value for --compact-threshold
   CF_HARNESS_PROMPT_CACHE_MODE  Default value for --prompt-cache-mode
   CF_HARNESS_HOME               Local cf-harness credential/config directory
@@ -752,6 +758,7 @@ export const createCfHarnessCliCapabilities = (): CfHarnessCliCapabilities => ({
     modelUsage: true,
     promptCacheControls: true,
     reasoningEffort: true,
+    researchReasoningEffort: true,
     compactThreshold: true,
     persistentProviderConfig: true,
     structuredAuthControl: true,
@@ -1490,6 +1497,9 @@ export const parseCfHarnessCliArgs = async (
       CF_HARNESS_REASONING_EFFORT: Deno.env.get(
         "CF_HARNESS_REASONING_EFFORT",
       ),
+      CF_HARNESS_RESEARCH_REASONING_EFFORT: Deno.env.get(
+        "CF_HARNESS_RESEARCH_REASONING_EFFORT",
+      ),
       CF_HARNESS_PROMPT_CACHE_MODE: Deno.env.get(
         "CF_HARNESS_PROMPT_CACHE_MODE",
       ),
@@ -1590,6 +1600,16 @@ export const parseCfHarnessCliArgs = async (
     reasoningEffort === undefined
   ) {
     throw new Error("--reasoning-effort requires a non-empty value");
+  }
+  const researchReasoningEffort =
+    typeof args["research-reasoning-effort"] === "string"
+      ? nonEmptyEnvValue(args["research-reasoning-effort"])
+      : nonEmptyEnvValue(env.CF_HARNESS_RESEARCH_REASONING_EFFORT);
+  if (
+    args["research-reasoning-effort"] !== undefined &&
+    researchReasoningEffort === undefined
+  ) {
+    throw new Error("--research-reasoning-effort requires a non-empty value");
   }
   // 0 is meaningful (disables compaction), so an explicit 0 must survive.
   const rawCompactThreshold = typeof args["compact-threshold"] === "string"
@@ -1898,6 +1918,9 @@ export const parseCfHarnessCliArgs = async (
       : {}),
     ...(modelProvider !== undefined ? { modelProvider } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+    ...(researchReasoningEffort !== undefined
+      ? { researchReasoningEffort }
+      : {}),
     ...(compactThreshold !== undefined ? { compactThreshold } : {}),
     ...(promptCacheMode !== undefined ? { promptCacheMode } : {}),
     gatewayConfigurationExplicit,

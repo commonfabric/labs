@@ -1323,6 +1323,9 @@ export const createResearchRunner = (options: {
   /** Model transport used for the cheap loop. */
   modelClient: HarnessModelClient;
 
+  /** Reasoning effort for every research model call; unset, the provider's default. */
+  reasoningEffort?: string;
+
   /** Records each provider attempt in the parent run report. */
   onAttempt?: (attempt: HarnessModelAttemptDiagnostic) => void | Promise<void>;
 
@@ -1430,6 +1433,9 @@ async (request) => {
         tools: withholdTools ? [] : tools,
         nativeModelToolIds: [],
         runId: request.researchRunId,
+        ...(options.reasoningEffort !== undefined
+          ? { reasoningEffort: options.reasoningEffort }
+          : {}),
         ...(request.signal !== undefined ? { signal: request.signal } : {}),
         ...(options.onAttempt !== undefined
           ? { onAttempt: options.onAttempt }
@@ -1538,6 +1544,9 @@ async (request) => {
         tools: [],
         nativeModelToolIds: [],
         runId: request.researchRunId,
+        ...(options.reasoningEffort !== undefined
+          ? { reasoningEffort: options.reasoningEffort }
+          : {}),
         ...(request.signal !== undefined ? { signal: request.signal } : {}),
         ...(options.onAttempt !== undefined
           ? { onAttempt: options.onAttempt }
