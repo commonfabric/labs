@@ -1166,6 +1166,121 @@ describe("mergeCfcSchemaEnvelopes", () => {
     }
   });
 
+  describe("an unstamped stored claim meeting a stamped one from another root", () => {
+    // A claim stored before writer stamps existed carries only the file its
+    // compile spelled, relative to whatever root that compile used. A stamped
+    // claim from the pattern's next release adopts it when both name the same
+    // export of the same file below a known pattern root. Main replaced such
+    // claims outright, whatever they named.
+
+    const claim = (file: string, path: string[], moduleIdentity?: string) => ({
+      __ctWriterIdentityOf: {
+        file,
+        path,
+        ...(moduleIdentity !== undefined && { moduleIdentity }),
+      },
+    });
+    const merge = (stored: unknown, candidate: unknown) =>
+      (
+        (mergeCfcSchemaEnvelopes({
+          type: "object",
+          properties: {
+            mru: { type: "array", ifc: { writeAuthorizedBy: stored } },
+          },
+        }, {
+          type: "object",
+          properties: {
+            mru: { type: "array", ifc: { writeAuthorizedBy: candidate } },
+          },
+        }) as JSONSchemaObj).properties?.mru as JSONSchemaObj
+      ).ifc?.writeAuthorizedBy;
+
+    it("adopts the stamp for the same export below a pattern root", () => {
+      const stamped = claim(
+        "/packages/patterns/system/profile-create.tsx",
+        ["setMruProfile"],
+        "release-2",
+      );
+      for (
+        const stored of [
+          "/system/profile-create.tsx",
+          "/api/patterns/system/profile-create.tsx",
+          "/patterns/system/profile-create.tsx",
+        ]
+      ) {
+        expect(merge(claim(stored, ["setMruProfile"]), stamped)).toEqual(
+          stamped,
+        );
+      }
+    });
+
+    it("refuses the same file name in another directory", () => {
+      expect(() =>
+        merge(
+          claim("/system/profile-create.tsx", ["setMruProfile"]),
+          claim(
+            "/packages/patterns/other/profile-create.tsx",
+            ["setMruProfile"],
+            "release-2",
+          ),
+        )
+      ).toThrow("writeAuthorizedBy must remain stable at /mru");
+    });
+
+    it("refuses another export of the same file", () => {
+      expect(() =>
+        merge(
+          claim("/system/profile-create.tsx", ["setMruProfile"]),
+          claim(
+            "/packages/patterns/system/profile-create.tsx",
+            ["setDefaultProfile"],
+            "release-2",
+          ),
+        )
+      ).toThrow("writeAuthorizedBy must remain stable at /mru");
+    });
+
+    it("refuses a file with no directory below the root", () => {
+      // A temporary stage names the file alone. (A spelling one leading
+      // segment away, which the toolchain's old strip produced, corresponds
+      // by the rule that predates this one.)
+      for (
+        const [stored, candidate] of [
+          ["/profile-create.tsx", "/packages/patterns/profile-create.tsx"],
+          ["/profile-create.tsx", "/api/patterns/profile-create.tsx"],
+        ]
+      ) {
+        expect(() =>
+          merge(
+            claim(stored, ["setMruProfile"]),
+            claim(candidate, ["setMruProfile"], "release-2"),
+          )
+        ).toThrow("writeAuthorizedBy must remain stable at /mru");
+      }
+    });
+
+    it("keeps a stored stamp against another release's", () => {
+      // Stamped against stamped is a version boundary: the stored stamp stays,
+      // and the new release writes the field only with a delegation
+      // (module-delegation.test.ts).
+      const stored = claim(
+        "/api/patterns/system/profile-create.tsx",
+        ["setMruProfile"],
+        "release-1",
+      );
+      expect(
+        merge(
+          stored,
+          claim(
+            "/packages/patterns/system/profile-create.tsx",
+            ["setMruProfile"],
+            "release-2",
+          ),
+        ),
+      ).toEqual(stored);
+    });
+  });
+
   it("strips a legacy bundleId stamp from pre-migration claims", () => {
     // Backward compat: a pre-migration claim may carry a legacy `bundleId`
     // (alongside, or instead of, `moduleIdentity`). `bundleId` is inert under

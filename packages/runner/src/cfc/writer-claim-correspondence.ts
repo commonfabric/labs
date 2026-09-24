@@ -73,3 +73,39 @@ export const writerClaimFilesCorrespond = (
   }
   return dropFirstPathSegment(a) === b || dropFirstPathSegment(b) === a;
 };
+
+// The roots the pattern sources are compiled below: the toolshed's route, a
+// labs checkout, and the toolchain's old strip of either. Closed on purpose;
+// a root this list does not name leaves the spelling as it is.
+const PATTERN_ROOTS = ["/api/patterns/", "/packages/patterns/", "/patterns/"];
+
+// A spelling's path below its pattern root, or the spelling itself when no
+// known root starts it (a compile rooted at the patterns directory).
+const patternTail = (source: string): string => {
+  const root = PATTERN_ROOTS.find((prefix) => source.startsWith(prefix));
+  return root === undefined ? source : `/${source.slice(root.length)}`;
+};
+
+/**
+ * Whether an unstamped stored claim's file and a stamped claim's file name the
+ * same source below a known pattern root: the same path from the root down,
+ * at least a directory and a file name, so a file staged alone matches
+ * nothing.
+ *
+ * A claim stored before writer stamps existed carries only the spelling its
+ * compile gave, and compiles rooted differently (the toolshed route, a labs
+ * checkout, the patterns directory itself) spell one file differently by
+ * more than the one segment {@link writerClaimFilesCorrespond} allows. Used
+ * only where a stamped claim adopts an unstamped one, which authorized no
+ * writer.
+ */
+export const writerClaimPatternFilesCorrespond = (
+  unstamped: string | undefined,
+  stamped: string | undefined,
+): boolean => {
+  const a = normalizeIdentitySource(unstamped);
+  const b = normalizeIdentitySource(stamped);
+  if (a === undefined || b === undefined) return false;
+  const tail = patternTail(a);
+  return tail === patternTail(b) && tail.split("/").length >= 3;
+};

@@ -32,7 +32,10 @@ import {
   resolveCfcSchemaRefRoot,
   resolveCfcSchemaRefs,
 } from "./schema-refs.ts";
-import { writerClaimFilesCorrespond } from "./writer-claim-correspondence.ts";
+import {
+  writerClaimFilesCorrespond,
+  writerClaimPatternFilesCorrespond,
+} from "./writer-claim-correspondence.ts";
 
 /** Every `ifc` key the runtime understands. {@link IfcKey} names one of them. */
 const IFC_KEYS = [
@@ -192,15 +195,18 @@ const reconcileWriterClaimStamp = (
     // happens here in either direction.
     return existing;
   }
+  const existingFile = typeof existingIdentity.file === "string"
+    ? existingIdentity.file
+    : undefined;
+  const candidateFile = typeof candidateIdentity.file === "string"
+    ? candidateIdentity.file
+    : undefined;
   if (
-    !writerClaimFilesCorrespond(
-      typeof existingIdentity.file === "string"
-        ? existingIdentity.file
-        : undefined,
-      typeof candidateIdentity.file === "string"
-        ? candidateIdentity.file
-        : undefined,
-    )
+    !writerClaimFilesCorrespond(existingFile, candidateFile) &&
+    // A stamped claim may adopt an unstamped stored one spelled below another
+    // pattern root; nothing else widens.
+    !(!existingStamped && candidateStamped &&
+      writerClaimPatternFilesCorrespond(existingFile, candidateFile))
   ) {
     return undefined;
   }
