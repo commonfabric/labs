@@ -222,6 +222,9 @@ const withHandleDeclaredByDefinition = (
   schema: JSONSchemaObj,
 ): JSONSchemaObj => {
   if (ContextualFlowControl.getAsCellValues(schema).length > 0) return schema;
+  // `hasAsCell()` keeps its verdict per schema, so a position that declares
+  // no handle through its reference is settled without resolving it again.
+  if (!SchemaObjectTraverser.hasAsCell(schema)) return schema;
   const declaring = resolveRootRefForStructure(schema);
   return ContextualFlowControl.getAsCellValues(declaring).length > 0
     ? declaring

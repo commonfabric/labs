@@ -902,6 +902,39 @@ function declaresAsCellAsWritten(schema: JSONSchema | undefined): boolean {
 }
 
 /**
+ * `SchemaObjectTraverser.hasAsCell()` verdicts for memoizable schemas whose
+ * root is a `$ref`, which the traversal reads once for every property and
+ * every array element under it. A verdict reached through an external
+ * reference embeds registry content, so the registry clear swaps the cache.
+ */
+let _refHandleVerdicts = new WeakMap<JSONSchemaObj, boolean>();
+
+onSchemaRegistryClear(() => {
+  _refHandleVerdicts = new WeakMap();
+});
+
+/**
+ * Helper for `SchemaObjectTraverser.hasAsCell()`, which reads the handle a
+ * schema with a root `$ref` declares through the reference, memoized per
+ * schema identity where the schema is memoizable. A verdict reached while an
+ * external resolution missed is not kept, since the document can still
+ * arrive.
+ */
+function declaresAsCellThroughRef(schema: JSONSchemaObj): boolean {
+  if (!isMemoizableSchemaInput(schema)) {
+    return declaresAsCellAsWritten(resolveRootRefForStructure(schema));
+  }
+  const cached = _refHandleVerdicts.get(schema);
+  if (cached !== undefined) return cached;
+  const missesBefore = externalResolutionMissCount();
+  const verdict = declaresAsCellAsWritten(resolveRootRefForStructure(schema));
+  if (externalResolutionMissCount() === missesBefore) {
+    _refHandleVerdicts.set(schema, verdict);
+  }
+  return verdict;
+}
+
+/**
  * A data structure that maps keys to sets of values, allowing multiple values
  * to be associated with a single key without duplication.
  *
@@ -5542,7 +5575,9 @@ export class SchemaObjectTraverser<V extends FabricValue>
     if (schema === undefined || typeof schema === "boolean") {
       return false;
     }
-    return declaresAsCellAsWritten(resolveRootRefForStructure(schema));
+    return typeof schema.$ref === "string"
+      ? declaresAsCellThroughRef(schema)
+      : declaresAsCellAsWritten(schema);
   }
 
   #applyDefault(
