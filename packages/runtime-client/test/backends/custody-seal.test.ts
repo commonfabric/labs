@@ -196,9 +196,24 @@ async function withFixture(
  * (counting from 0). A seal's commit runs its checks, then writes the anchor
  * (call 0) and, after the receipt, the entry (call 1), so this reaches the
  * commit past every check the worker makes before it. `"before"` runs `step`
- * before the call starts; `"after"` runs it once the call's action has staged
- * its writes and before the transaction commits.
+ * before the call starts and awaits it, so a rewrite `step` commits first;
+ * `"after"` runs it once the call's action has staged its writes and before
+ * the transaction commits. The action is synchronous, so an `"after"` step
+ * must be too: one that returns a promise throws rather than racing the
+ * commit it was meant to precede.
  */
+function atEditWithRetry(
+  runtime: Runtime,
+  index: number,
+  when: "before",
+  step: () => Promise<void> | void,
+): void;
+function atEditWithRetry(
+  runtime: Runtime,
+  index: number,
+  when: "after",
+  step: () => void,
+): void;
 function atEditWithRetry(
   runtime: Runtime,
   index: number,
@@ -217,7 +232,9 @@ function atEditWithRetry(
     }
     return await original((tx) => {
       const staged = fn(tx);
-      step();
+      if (step() instanceof Promise) {
+        throw new Error("An after-staging step must be synchronous");
+      }
       return staged;
     }, ...rest);
   }) as Runtime["editWithRetry"];

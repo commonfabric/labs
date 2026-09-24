@@ -351,7 +351,9 @@ describe("CFCustodySeal workflow", () => {
     const pending = Promise.withResolvers<Preview>();
     using state = setup({ prepare: () => pending.promise });
     const preparing = state.element.accessForTestingOnly.prepare();
+    // A second click while the first preparation is pending starts nothing.
     await state.element.accessForTestingOnly.prepare();
+    expect(state.prepared).toHaveLength(1);
     state.element.terms = createMockCellHandle();
     state.element.willUpdate(new Map([["terms", state.terms]]));
     pending.resolve(preview);
