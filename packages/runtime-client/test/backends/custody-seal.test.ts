@@ -25,6 +25,7 @@ import { buildProcessor } from "./build-processor.ts";
 
 const alice = await Identity.fromPassphrase("custody seal IPC alice");
 const bob = await Identity.fromPassphrase("custody seal IPC bob");
+const carol = await Identity.fromPassphrase("custody seal IPC carol");
 const roomOwner = await Identity.fromPassphrase("custody seal IPC room");
 const S = roomOwner.did();
 const first: WorkerClient = { id: 1, post: () => true };
@@ -92,6 +93,8 @@ type Fixture = {
   runtime: Runtime;
   draft: Cell<{ choice: string }>;
   sources: Cell<unknown[]>;
+  policy: Cell<unknown>;
+  acl: ACLManager;
   refs: {
     draft: CellRef;
     terms: CellRef;
@@ -108,7 +111,7 @@ type Fixture = {
  */
 async function withFixture(
   body: (fixture: Fixture) => Promise<void>,
-  { sources = [] as unknown[] } = {},
+  { sources = [] as unknown[], withAcl = true } = {},
 ) {
   const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
   const managers: EmulatedStorageManager[] = [];
@@ -144,9 +147,11 @@ async function withFixture(
     terms.set(TERMS as never);
     expect((await install.commit()).error).toBeUndefined();
     const acl = new ACLManager(roomRuntime, S);
-    await acl.set(roomOwner.did(), "OWNER");
-    await acl.set(alice.did(), "WRITE");
-    await acl.set(bob.did(), "READ");
+    if (withAcl) {
+      await acl.set(roomOwner.did(), "OWNER");
+      await acl.set(alice.did(), "WRITE");
+      await acl.set(bob.did(), "READ");
+    }
 
     const home = alice.did();
     const tx = runtime.edit();
@@ -169,6 +174,8 @@ async function withFixture(
       runtime,
       draft: draft.withTx(undefined),
       sources: allowed.withTx(undefined),
+      policy: policy.withTx(undefined),
+      acl,
       refs: {
         draft: createCellRef(draft),
         terms: createCellRef(terms),
@@ -213,10 +220,15 @@ describe("custody-seal", () => {
       ]);
       expect(preview.actor).toBe(alice.did());
       expect(preview.room).toBe(S);
-      expect(preview.readers).toContainEqual({
-        principal: bob.did(),
-        role: "reader",
-      });
+      // Every principal the room's access list names, the room space's own
+      // key among them, ordered by principal.
+      expect(preview.readers).toEqual(
+        [
+          { principal: S, role: "owner" },
+          { principal: alice.did(), role: "writer" },
+          { principal: bob.did(), role: "reader" },
+        ].sort((a, b) => a.principal < b.principal ? -1 : 1),
+      );
       expect(preview.terms).toEqual(TERMS);
       expect(preview.policy).toEqual(P);
       expect(preview.stance).toEqual({ choice: "sushi" });
@@ -290,6 +302,34 @@ describe("custody-seal", () => {
         id: preview.id,
       }, first)).rejects.toThrow("review is stale");
     }, { sources: [calendar] });
+  });
+
+  it("refuses a room space with no access list", async () => {
+    await withFixture(async ({ processor, refs }) => {
+      await expect(processor.handleCustodySealPrepare({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+      }, first)).rejects.toThrow("access list names its readers");
+    }, { withAcl: false });
+  });
+
+  it("refuses a review whose room readers changed after preparation", async () => {
+    await withFixture(async ({ processor, acl, refs }) => {
+      const preview = await processor.handleCustodySealPrepare({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+      }, first);
+      await acl.set(carol.did(), "READ");
+      // The commit's own reading finds the new reader when this runtime has
+      // received the change by then, and the entry's transaction finds it
+      // otherwise; either refuses the review.
+      await expect(processor.handleCustodySealCommit({
+        type: RequestType.CustodySealCommit,
+        id: preview.id,
+      }, first)).rejects.toThrow(
+        /review is stale|review changed before commit/,
+      );
+    });
   });
 
   it("does not seal for a client that detached while its commit was reading", async () => {
