@@ -679,9 +679,10 @@ export class CFCFCAuthorship extends BaseElement {
       return false;
     }
 
-    // includeCfcLabel makes the worker read this cell's label (and its
-    // one-hop link target's) on the sink's tracked tx, so a label-only change
-    // re-fires this subscription and refreshLabel re-reads the new label.
+    // includeCfcLabel makes the worker read this cell's label (and that of
+    // the document its path resolves to) on the sink's tracked tx, so a
+    // label-only change re-fires this subscription and refreshLabel re-reads
+    // the new label.
     this._unsubscribeValue = value.subscribe(() => {
       void this.refreshLabel();
     }, { includeCfcLabel: true });

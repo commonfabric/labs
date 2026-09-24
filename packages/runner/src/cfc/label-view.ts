@@ -215,9 +215,10 @@ const resolvedMetadataForCell = (
  * {@link cfcLabelViewForCellWithStatus}, plus the label stored on the doc the
  * selected path RESOLVES to.
  *
- * For an inspection surface that answers "what is the label here" about a path
- * a person typed, the one-hop read is not enough: a path that crosses a link
- * part way through reports no label for a value that plainly carries one. This
+ * For an inspection or display surface that answers "what is the label here"
+ * about a path a person typed or a value a view is bound to, the one-hop read
+ * is not enough: a path that crosses a link part way through reports no label
+ * for a value that plainly carries one. This
  * merges the resolved doc's stored label into the same view, rebased so its
  * entries stay relative to the selected cell.
  *
