@@ -491,6 +491,15 @@ export interface MergeCfcSchemaEnvelopeOptions {
    * preserve older documents.
    */
   generatedOutputPaths?: readonly (readonly string[])[];
+
+  /**
+   * Whether a logical path lies beneath a position whose claims belong to
+   * another document: one where the stored document holds links (see
+   * `ForeignPositions` in claim-preservation.ts). A claim there describes
+   * the linked document, whose own envelope enforces it, so the merge takes
+   * the candidate's claims there rather than holding the two to agree.
+   */
+  beneathStoredLink?: (path: readonly string[]) => boolean;
 }
 
 const generatedOutputCovers = (
@@ -794,7 +803,9 @@ const mergeSchemaNode = (
     mergedPrefixItems = slots;
   }
 
-  const ifc = mergeIfc(left.ifc, right.ifc, path);
+  const ifc = options.beneathStoredLink?.(logicalPath)
+    ? right.ifc ?? left.ifc
+    : mergeIfc(left.ifc, right.ifc, path);
   const required = mergeRequired(
     left.required,
     right.required,

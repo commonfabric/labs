@@ -124,6 +124,28 @@ const arms = (schema: JSONSchemaObj): readonly JSONSchema[] => [
 ];
 
 /**
+ * Where the claims a document's schema describes beneath a position belong to
+ * another document: a position holding links, whose linked documents' own
+ * envelopes enforce them.
+ */
+export interface ForeignPositions {
+  /** Whether the claims beneath `path` (a logical path, `*` for items) belong elsewhere. */
+  holdsForeign(path: readonly string[]): boolean;
+
+  /**
+   * Whether the answer can differ anywhere at or below `path`. Past every
+   * position that decides it, the walk compares a pair of positions once,
+   * which is what ends it in a recursive definition.
+   */
+  variesBelow(path: readonly string[]): boolean;
+}
+
+const NO_FOREIGN_POSITIONS: ForeignPositions = {
+  holdsForeign: () => false,
+  variesBelow: () => false,
+};
+
+/**
  * The first write-side claim `stored` makes that `merged` does not keep, as a
  * refusal reason naming it and its path, or `undefined` when every one is
  * kept.
@@ -140,13 +162,16 @@ const arms = (schema: JSONSchemaObj): readonly JSONSchema[] => [
 export const droppedStoredClaim = (
   stored: JSONSchema,
   merged: JSONSchema,
+  // Positions whose own claims are kept but whose claims beneath belong to
+  // another document, so the walk does not descend there.
+  foreign: ForeignPositions = NO_FOREIGN_POSITIONS,
 ): string | undefined => {
   // Each pair of positions compared, and what comparing it found. A pair
   // still being compared further up the walk is a recursive definition
   // meeting itself; its claims are the ones being compared there.
   const compared = new Map<
     unknown,
-    Map<unknown, string | undefined | typeof IN_PROGRESS>
+    Map<unknown, Map<string, string | undefined | typeof IN_PROGRESS>>
   >();
   const walk = (
     storedAt: Located,
@@ -156,23 +181,30 @@ export const droppedStoredClaim = (
     // Positions are keyed as written, before their references resolve:
     // resolving can build a fresh node every time, while the position a
     // recursive definition returns to is the same object each time.
+    // Where a foreign position can lie at or below the path, what the walk
+    // finds depends on the path, so the pair is compared once per such path;
+    // past them it is compared once, which is what ends the walk through a
+    // recursive definition.
     const storedKey = storedAt.schema;
     const mergedKey = mergedAt.schema;
     if (!isObjectNotArray(storedKey)) return undefined;
+    const valueKey = foreign.variesBelow(path) ? path.join("\u0000") : "";
     let results = compared.get(storedKey);
     if (results === undefined) compared.set(storedKey, results = new Map());
-    if (results.has(mergedKey)) {
-      const result = results.get(mergedKey);
+    let byValue = results.get(mergedKey);
+    if (byValue === undefined) results.set(mergedKey, byValue = new Map());
+    if (byValue.has(valueKey)) {
+      const result = byValue.get(valueKey);
       return result === IN_PROGRESS ? undefined : result;
     }
-    results.set(mergedKey, IN_PROGRESS);
+    byValue.set(valueKey, IN_PROGRESS);
     const storedNode = resolveLocated(storedAt);
     const result = storedNode === undefined
       ? `a stored schema reference does not resolve at /${path.join("/")}`
       : isObjectNotArray(storedNode.schema)
       ? compare(storedNode, resolveLocated(mergedAt) ?? EMPTY, path)
       : undefined;
-    results.set(mergedKey, result);
+    byValue.set(valueKey, result);
     return result;
   };
   const compare = (
@@ -218,6 +250,8 @@ export const droppedStoredClaim = (
         }
       }
     }
+
+    if (foreign.holdsForeign(path)) return undefined;
 
     const mergedRest = isObjectNotArray(mObject.additionalProperties)
       ? mObject.additionalProperties

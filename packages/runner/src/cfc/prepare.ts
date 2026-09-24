@@ -42,7 +42,10 @@ import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { encodePointer } from "../../../memory/v2/path.ts";
 import type { JSONSchema } from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";
-import { droppedStoredClaim } from "./claim-preservation.ts";
+import {
+  droppedStoredClaim,
+  type ForeignPositions,
+} from "./claim-preservation.ts";
 import { entityKindOfIdString } from "../entity-kind.ts";
 import {
   decomposeSchema,
@@ -6147,6 +6150,120 @@ const storedEnvelopeUnchangedByCandidate = (
   storedSchemaCoversCandidateEnvelope(stored, candidate);
 
 /**
+ * What the document held at a logical path before this transaction, and at
+ * every position a `*` segment matches. A write at or above the path saw it;
+ * elsewhere the transaction left it as it was, so a read finds it.
+ */
+const storedValuesAt = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): (path: readonly string[]) => readonly FabricValue[] => {
+  const writes = [
+    ...(tx.getWriteDetailsForTarget?.(target) ??
+      tx.getWriteDetails?.(target.space) ?? []),
+  ].filter((write) =>
+    sameDocument(write.address, target) && write.address.path[0] === "value"
+  ).map((write) => ({
+    path: write.address.path.slice(1).map(String),
+    previousValue: write.previousValue,
+  }));
+  const valueAt = (path: readonly string[]): FabricValue | undefined => {
+    const covering =
+      writes.filter((write) => concretePathHasPrefix(path, write.path)).sort((
+        a,
+        b,
+      ) => a.path.length - b.path.length)[0];
+    if (covering !== undefined) {
+      return getValueAtPath(
+        covering.previousValue,
+        path.slice(covering.path.length),
+      ) as FabricValue | undefined;
+    }
+    try {
+      return tx.readValueOrThrow({ ...target, path }, {
+        meta: INTERNAL_VERIFIER_META,
+      });
+    } catch {
+      return undefined;
+    }
+  };
+  const expand = (
+    prefix: readonly string[],
+    rest: readonly string[],
+  ): FabricValue[] => {
+    if (rest.length === 0) {
+      const value = valueAt(prefix);
+      return value === undefined ? [] : [value];
+    }
+    const [head, ...tail] = rest;
+    if (head !== "*") return expand([...prefix, head], tail);
+    const container = valueAt(prefix);
+    if (
+      !isWalkableObjectOrArray(container) || isPrimitiveCellLink(container)
+    ) {
+      return [];
+    }
+    return Object.keys(container).flatMap((key) =>
+      expand([...prefix, key], tail)
+    );
+  };
+  const cache = new Map<string, readonly FabricValue[]>();
+  return (path) => {
+    const key = path.join("\u0000");
+    let values = cache.get(key);
+    if (values === undefined) cache.set(key, values = expand([], path));
+    return values;
+  };
+};
+
+/**
+ * The positions of a stored document whose claims beneath belong to another
+ * document: those where it holds links and nothing else, and those where it
+ * holds nothing but the stored schema puts a writer claim (`writeAuthorizedBy`
+ * or `uiContract`) at the position itself, which then decides what may come
+ * to be held there.
+ */
+const storedForeignPositions = (
+  valuesAt: (path: readonly string[]) => readonly FabricValue[],
+  storedSchema: JSONSchema | undefined,
+): ForeignPositions => {
+  const guarded = storedSchema === undefined ? [] : cfcSchemaEntries(
+    storedSchema,
+  ).filter((entry) =>
+    isObjectOrArray(entry.schema) && isObjectOrArray(entry.schema.ifc) &&
+    (entry.schema.ifc.writeAuthorizedBy !== undefined ||
+      entry.schema.ifc.uiContract !== undefined)
+  ).map((entry) => entry.path);
+  return {
+    holdsForeign: (path) => {
+      const values = valuesAt(path);
+      return values.length > 0
+        ? values.every(isPrimitiveCellLink)
+        : guarded.some((entry) => arraysEqual(entry, path));
+    },
+    variesBelow: (path) =>
+      valuesAt(path).length > 0 ||
+      guarded.some((entry) =>
+        entry.length >= path.length &&
+        path.every((segment, index) => segment === entry[index])
+      ),
+  };
+};
+
+/** Whether a logical path lies strictly beneath a foreign position. */
+const beneathForeignPosition =
+  (foreign: ForeignPositions) => (path: readonly string[]): boolean => {
+    for (let depth = 0; depth < path.length; depth++) {
+      if (foreign.holdsForeign(path.slice(0, depth))) return true;
+    }
+    return false;
+  };
+
+/**
  * The envelope a document stores after a write under `candidate`: the stored
  * envelope where the write leaves it unchanged, and the two merged otherwise.
  * Throws what {@link mergeCfcSchemaEnvelopes} throws.
@@ -7508,6 +7625,7 @@ export function* prepareBoundaryCommitSteps(
       continue;
     }
     const existing = stored.status === "loaded" ? stored.metadata : undefined;
+    const storedValues = storedValuesAt(tx, { space, id, scope });
     let storedSchema: JSONSchema | undefined;
     let mergedSchema = schema;
     if (stored.status === "loaded" && undefinedCandidate) {
@@ -7518,6 +7636,9 @@ export function* prepareBoundaryCommitSteps(
       try {
         mergedSchema = mergeStoredCfcEnvelope(storedSchema, schema, {
           generatedOutputPaths: generatedOutputPaths.get(key),
+          beneathStoredLink: beneathForeignPosition(
+            storedForeignPositions(storedValues, storedSchema),
+          ),
         });
       } catch (error) {
         // Tag the additive-required migration incompatibility with a stable
@@ -7552,7 +7673,11 @@ export function* prepareBoundaryCommitSteps(
     // The merged envelope is what this commit persists, so a stored claim it
     // lost would stop binding every later writer. Refuse the write instead.
     if (storedSchema !== undefined && mergedSchema !== storedSchema) {
-      const dropped = droppedStoredClaim(storedSchema, mergedSchema);
+      const dropped = droppedStoredClaim(
+        storedSchema,
+        mergedSchema,
+        storedForeignPositions(storedValues, storedSchema),
+      );
       if (dropped !== undefined) {
         reasons.push(verdictReason(dropped));
         continue;

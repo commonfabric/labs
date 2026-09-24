@@ -1045,6 +1045,408 @@ describe("stored write requirements", () => {
     });
   });
 
+  describe("claims beneath a link", () => {
+    // Where the document holds a link, the claims its schema describes beneath
+    // it are the linked document's, which that document's own envelope
+    // enforces. A new release of the linked pattern restamps them, and this
+    // document's envelope follows. Held inline, the same claims are this
+    // document's and stay bound.
+
+    const writerOf = (moduleIdentity: string) => ({
+      __ctWriterIdentityOf: {
+        file: "/profile.tsx",
+        path: ["setAvatar"],
+        moduleIdentity,
+      },
+    });
+    // The next release also adds a field, so the two envelopes merge rather
+    // than differing by writer stamps alone.
+    const profileSchema = (moduleIdentity: string) =>
+      ({
+        type: "object",
+        properties: {
+          avatar: {
+            type: "string",
+            ifc: { writeAuthorizedBy: writerOf(moduleIdentity) },
+          },
+          ...(moduleIdentity === "release-2" && { bio: { type: "string" } }),
+        },
+      }) as const;
+    // The shape the home pattern gives its default profile: absent, or one
+    // profile, whose release names the writer of its fields.
+    // `guarded` gives the profile position a writer claim of its own.
+    const holderSchema = (moduleIdentity: string, guarded = false) =>
+      ({
+        type: "object",
+        properties: {
+          profile: {
+            anyOf: [{ type: "undefined" }, { $ref: "#/$defs/Profile" }],
+            ...(guarded && { ifc: { writeAuthorizedBy: ["profile-picker"] } }),
+          },
+          profiles: { type: "array", items: { $ref: "#/$defs/Profile" } },
+          other: { type: "string" },
+        },
+        // A label, so the document stores an envelope.
+        ifc: { ...WRITER_LABEL },
+        $defs: { Profile: profileSchema(moduleIdentity) },
+      }) as JSONSchema;
+
+    const seedHolder = async (
+      runtime: Runtime,
+      id: string,
+      value: (profile: unknown) => Record<string, unknown>,
+      guarded = false,
+    ) => {
+      const profile = runtime.getCell(space, `${id}-profile`, {
+        type: "object",
+        ifc: { ...WRITER_LABEL },
+      });
+      {
+        const tx = runtime.edit();
+        profile.withTx(tx).set({ avatar: "a" } as never);
+        expect((await tx.commit()).error).toBeUndefined();
+      }
+      const tx = runtime.edit();
+      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+      tx.setCfcImplementationIdentity({
+        kind: "verified",
+        moduleIdentity: "release-1",
+        sourceFile: "/profile.tsx",
+        bindingPath: ["setAvatar"],
+      });
+      runtime.getCell(space, id, holderSchema("release-1", guarded), tx).set(
+        value(profile) as never,
+      );
+      expect((await tx.commit()).error).toBeUndefined();
+      return value(profile);
+    };
+
+    // The holder's own next release rewrites its document whole, as a
+    // pattern's setup does, changing only a field beside the profiles.
+    const rewriteUnderNextRelease = async (
+      runtime: Runtime,
+      id: string,
+      value: Record<string, unknown>,
+      guarded = false,
+    ) => {
+      const tx = runtime.edit();
+      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+      runtime.getCell(space, id, holderSchema("release-2", guarded), tx).set(
+        { ...value, other: "changed" } as never,
+      );
+      return await tx.commit();
+    };
+
+    it("follows a new release's claims beneath a linked profile", async () => {
+      const runtime = start();
+      const value = await seedHolder(runtime, "linked-profile", (profile) => ({
+        profile,
+        profiles: [],
+        other: "o",
+      }));
+      expect(
+        (await rewriteUnderNextRelease(runtime, "linked-profile", value))
+          .error,
+      ).toBeUndefined();
+    });
+
+    it("keeps the claims beneath an inline profile", async () => {
+      const runtime = start();
+      const value = await seedHolder(runtime, "inline-profile", () => ({
+        profile: { avatar: "a" },
+        profiles: [],
+        other: "o",
+      }));
+      expect(
+        refusalOf(
+          await rewriteUnderNextRelease(runtime, "inline-profile", value),
+        ),
+      ).toContain("writeAuthorizedBy");
+    });
+
+    it("follows a new release beneath a list of linked profiles", async () => {
+      const runtime = start();
+      const value = await seedHolder(runtime, "linked-list", (profile) => ({
+        profile,
+        profiles: [profile, profile],
+        other: "o",
+      }));
+      expect(
+        (await rewriteUnderNextRelease(runtime, "linked-list", value)).error,
+      ).toBeUndefined();
+    });
+
+    it("follows a new release beneath an absent profile whose position names its writer", async () => {
+      const runtime = start();
+      const value = await seedHolder(
+        runtime,
+        "absent-guarded",
+        () => ({ profiles: [], other: "o" }),
+        true,
+      );
+      expect(
+        (await rewriteUnderNextRelease(runtime, "absent-guarded", value, true))
+          .error,
+      ).toBeUndefined();
+
+      // What may later come to be held there answers to the position's own
+      // claim.
+      const tx = runtime.edit();
+      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+      tx.setCfcImplementationIdentity({
+        kind: "builtin",
+        builtinId: "mallory",
+      });
+      runtime.getCell(space, "absent-guarded", undefined, tx).key("profile")
+        .set({ avatar: "inline" } as never);
+      expect(refusalOf(await tx.commit())).toContain(
+        "writeAuthorizedBy failed at /profile",
+      );
+    });
+
+    it("keeps the claims beneath an absent profile whose position names no writer", async () => {
+      const runtime = start();
+      const value = await seedHolder(runtime, "absent-unguarded", () => ({
+        profiles: [],
+        other: "o",
+      }));
+      expect(
+        refusalOf(
+          await rewriteUnderNextRelease(runtime, "absent-unguarded", value),
+        ),
+      ).toContain("drops the stored writeAuthorizedBy at /profile/avatar");
+    });
+
+    it("keeps the claims beneath a list holding one inline profile", async () => {
+      const runtime = start();
+      const value = await seedHolder(runtime, "mixed-list", (profile) => ({
+        profile,
+        profiles: [profile, { avatar: "a" }],
+        other: "o",
+      }));
+      expect(
+        refusalOf(await rewriteUnderNextRelease(runtime, "mixed-list", value)),
+      ).toContain("writeAuthorizedBy");
+    });
+  });
+
+  describe("repointing a link", () => {
+    // A link position's own claims govern who may point it elsewhere.
+    // (`set` of an object at a link writes into the linked document, so the
+    // tests that replace a link in this one use `setRaw`.) The
+    // claims its schema describes beneath it belong to the linked document,
+    // so they bind this document only where it holds that data inline:
+    // replacing inline data with a link, or a link with inline data.
+
+    const REPOINTER = "profile-picker";
+    const AVATAR_WRITER = "profile-avatar";
+    // Named by every claim, so a seed can hold a profile inline.
+    const SEEDER = "holder-seed";
+    const PROFILE = {
+      type: "object",
+      properties: {
+        avatar: {
+          type: "string",
+          ifc: { writeAuthorizedBy: [AVATAR_WRITER, SEEDER] },
+        },
+      },
+    } as const satisfies JSONSchema;
+    const HOLDER = {
+      type: "object",
+      properties: {
+        profile: {
+          $ref: "#/$defs/Profile",
+          ifc: { writeAuthorizedBy: [REPOINTER, SEEDER] },
+        },
+        profiles: {
+          type: "array",
+          items: {
+            $ref: "#/$defs/Profile",
+            ifc: { writeAuthorizedBy: [REPOINTER, SEEDER] },
+          },
+        },
+      },
+      ifc: { ...WRITER_LABEL },
+      $defs: { Profile: PROFILE },
+    } as const satisfies JSONSchema;
+
+    const profileCell = async (runtime: Runtime, id: string) => {
+      const cell = runtime.getCell(space, id, {
+        type: "object",
+        ifc: { ...WRITER_LABEL },
+      });
+      const tx = runtime.edit();
+      cell.withTx(tx).set({ avatar: id } as never);
+      expect((await tx.commit()).error).toBeUndefined();
+      return cell;
+    };
+
+    const writeAs = async (
+      runtime: Runtime,
+      builtinIds: readonly string[],
+      write: (tx: IExtendedStorageTransaction) => void,
+    ) => {
+      const tx = runtime.edit();
+      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+      // A builtin list claim names builtins; one identity per transaction,
+      // so a write naming both writers runs as the one the test is about.
+      tx.setCfcImplementationIdentity({
+        kind: "builtin",
+        builtinId: builtinIds[0],
+      });
+      write(tx);
+      return await tx.commit();
+    };
+
+    const holder = (
+      runtime: Runtime,
+      id: string,
+      tx: IExtendedStorageTransaction,
+    ) => runtime.getCell(space, id, HOLDER, tx);
+
+    const seedHolder = async (
+      runtime: Runtime,
+      id: string,
+      value: Record<string, unknown>,
+    ) => {
+      const tx = runtime.edit();
+      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+      tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: SEEDER });
+      holder(runtime, id, tx).set(value as never);
+      expect((await tx.commit()).error).toBeUndefined();
+    };
+
+    it("lets the position's named writer point it at another profile", async () => {
+      const runtime = start();
+      const a = await profileCell(runtime, "repoint-a");
+      const b = await profileCell(runtime, "repoint-b");
+      await seedHolder(runtime, "repoint-named", { profile: a, profiles: [] });
+      expect(
+        (await writeAs(
+          runtime,
+          [REPOINTER],
+          (tx) =>
+            holder(runtime, "repoint-named", tx).key("profile").set(
+              b as never,
+            ),
+        )).error,
+      ).toBeUndefined();
+    });
+
+    it("refuses another writer pointing the position at another profile", async () => {
+      const runtime = start();
+      const a = await profileCell(runtime, "other-a");
+      const b = await profileCell(runtime, "other-b");
+      await seedHolder(runtime, "repoint-other", { profile: a, profiles: [] });
+      expect(
+        refusalOf(
+          await writeAs(
+            runtime,
+            ["mallory"],
+            (tx) =>
+              holder(runtime, "repoint-other", tx).key("profile").set(
+                b as never,
+              ),
+          ),
+        ),
+      ).toContain("writeAuthorizedBy failed at /profile");
+    });
+
+    it("lets the position's named writer set an absent position and clear it", async () => {
+      const runtime = start();
+      const a = await profileCell(runtime, "absent-a");
+      await seedHolder(runtime, "absent-to-link", { profiles: [] });
+      expect(
+        (await writeAs(
+          runtime,
+          [REPOINTER],
+          (tx) =>
+            holder(runtime, "absent-to-link", tx).key("profile").set(
+              a as never,
+            ),
+        )).error,
+      ).toBeUndefined();
+      expect(
+        (await writeAs(
+          runtime,
+          [REPOINTER],
+          (tx) =>
+            holder(runtime, "absent-to-link", tx).key("profile").setRaw(
+              undefined as never,
+            ),
+        )).error,
+      ).toBeUndefined();
+    });
+
+    it("refuses the position's writer replacing an inline profile with a link", async () => {
+      const runtime = start();
+      const a = await profileCell(runtime, "inline-to-link-a");
+      await seedHolder(runtime, "inline-to-link", {
+        profile: { avatar: "inline" },
+        profiles: [],
+      });
+      expect(
+        refusalOf(
+          await writeAs(
+            runtime,
+            [REPOINTER],
+            (tx) =>
+              holder(runtime, "inline-to-link", tx).key("profile").set(
+                a as never,
+              ),
+          ),
+        ),
+      ).toContain("writeAuthorizedBy failed at /profile/avatar");
+    });
+
+    it("refuses the position's writer replacing a link with an inline profile", async () => {
+      const runtime = start();
+      const a = await profileCell(runtime, "link-to-inline-a");
+      await seedHolder(runtime, "link-to-inline", { profile: a, profiles: [] });
+      expect(
+        refusalOf(
+          await writeAs(
+            runtime,
+            [REPOINTER],
+            (tx) =>
+              holder(runtime, "link-to-inline", tx).key("profile").setRaw(
+                { avatar: "inline" } as never,
+              ),
+          ),
+        ),
+      ).toContain("writeAuthorizedBy failed at /profile/avatar");
+    });
+
+    it("judges each item of a list of links on its own previous and new value", async () => {
+      const runtime = start();
+      const a = await profileCell(runtime, "items-a");
+      const b = await profileCell(runtime, "items-b");
+      await seedHolder(runtime, "items", { profiles: [a, a] });
+      expect(
+        (await writeAs(
+          runtime,
+          [REPOINTER],
+          (tx) =>
+            holder(runtime, "items", tx).key("profiles").key(0 as never).set(
+              b as never,
+            ),
+        )).error,
+      ).toBeUndefined();
+      expect(
+        refusalOf(
+          await writeAs(
+            runtime,
+            [REPOINTER],
+            (tx) =>
+              holder(runtime, "items", tx).key("profiles").setRaw(
+                [b.getAsLink(), { avatar: "inline" }] as never,
+              ),
+          ),
+        ),
+      ).toContain("writeAuthorizedBy failed at /profiles/*/avatar");
+    });
+  });
+
   describe("the persisted envelope", () => {
     it("stores a merged schema document that holds no key without a value and that its JSON form hashes to", async () => {
       // A schema document is addressed by its hash, and a reader verifies the
