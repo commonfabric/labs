@@ -1316,6 +1316,44 @@ describe("stored write requirements", () => {
       ).toContain("drops the stored writeAuthorizedBy at /profile/avatar");
     });
 
+    it("keeps the claims beneath a list a release wrote an item of before rewriting it", async () => {
+      // What the list held can't be told from the rewrite's own record once an
+      // item beneath it was written first, and what can't be told relaxes
+      // nothing.
+      const runtime = start();
+      const value = await seedHolder(runtime, "item-then-list", (profile) => ({
+        profile,
+        profiles: [profile],
+        other: "o",
+      }));
+      const tx = runtime.edit();
+      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+      markRelease(runtime, tx, "item-then-list");
+      const holder = runtime.getCell(
+        space,
+        "item-then-list",
+        holderSchema("release-2"),
+        tx,
+      );
+      tx.writeValueOrThrow(
+        {
+          ...holder.getAsNormalizedFullLink(),
+          path: ["profiles", "0"],
+        },
+        runtime.getCell(space, "another-profile").getAsLink() as never,
+      );
+      const link = (cell: unknown) =>
+        (cell as { getAsLink(): unknown }).getAsLink();
+      holder.setRaw({
+        profile: link(value.profile),
+        profiles: (value.profiles as unknown[]).map(link),
+        other: "changed",
+      } as never);
+      expect(refusalOf(await tx.commit())).toContain(
+        "drops the stored writeAuthorizedBy",
+      );
+    });
+
     it("keeps the claims beneath a list holding one inline profile", async () => {
       const runtime = start();
       const value = await seedHolder(

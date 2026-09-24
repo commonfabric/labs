@@ -6388,10 +6388,11 @@ export const releaseMergeOptions = (
 const writerClaimStamp = (
   claim: unknown,
 ): { moduleIdentity: string; file: string | undefined } | undefined => {
-  if (!isObjectOrArray(claim) || Array.isArray(claim)) return undefined;
-  const binding = (claim as Record<string, unknown>).__ctWriterIdentityOf;
-  if (!isObjectOrArray(binding) || Array.isArray(binding)) return undefined;
-  const { moduleIdentity, file } = binding as Record<string, unknown>;
+  const binding = isObjectNotArray(claim) &&
+      isObjectNotArray(claim.__ctWriterIdentityOf)
+    ? claim.__ctWriterIdentityOf
+    : {};
+  const { moduleIdentity, file } = binding;
   return typeof moduleIdentity === "string"
     ? { moduleIdentity, file: typeof file === "string" ? file : undefined }
     : undefined;
@@ -6407,10 +6408,9 @@ const stampIsWriters = (
 ) =>
 (claim: unknown): boolean => {
   const stamp = writerClaimStamp(claim);
-  if (stamp === undefined) return false;
   for (const identity of identities) {
     if (
-      identity?.kind === "verified" &&
+      stamp !== undefined && identity?.kind === "verified" &&
       identity.moduleIdentity === stamp.moduleIdentity &&
       normalizeIdentitySource(identity.sourceFile) !== undefined &&
       normalizeIdentitySource(identity.sourceFile) ===

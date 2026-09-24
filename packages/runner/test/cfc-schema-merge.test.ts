@@ -1272,6 +1272,19 @@ describe("mergeCfcSchemaEnvelopes", () => {
       }
     });
 
+    it("refuses a stored claim that names no file", () => {
+      expect(() =>
+        merge(
+          { __ctWriterIdentityOf: { path: ["setMruProfile"] } } as never,
+          claim(
+            "/packages/patterns/system/profile-create.tsx",
+            ["setMruProfile"],
+            "release-2",
+          ),
+        )
+      ).toThrow("writeAuthorizedBy must remain stable at /mru");
+    });
+
     it("refuses the same file name in another directory", () => {
       expect(() =>
         merge(

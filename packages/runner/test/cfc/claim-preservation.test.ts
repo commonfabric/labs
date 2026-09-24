@@ -185,6 +185,52 @@ describe("droppedStoredClaim()", () => {
     });
   });
 
+  it("returns a claim an `allOf` member or a tuple slot makes that the merged schema drops", () => {
+    expect(
+      droppedStoredClaim(
+        { type: "object", properties: { pin: { allOf: [PIN] } } },
+        { type: "object", properties: { pin: LABELED } },
+      ),
+    ).toBe("the merged schema drops the stored uiContract at /pin");
+    expect(
+      droppedStoredClaim(
+        { type: "array", prefixItems: [PIN] },
+        { type: "array", prefixItems: [LABELED] },
+      ),
+    ).toBe("the merged schema drops the stored uiContract at /0");
+    expect(
+      droppedStoredClaim(
+        { type: "array", prefixItems: [PIN] },
+        { type: "array", prefixItems: [PIN] },
+      ),
+    ).toBeUndefined();
+  });
+
+  it("returns a writer claim of another form the merged schema changes", () => {
+    const at = (writeAuthorizedBy: unknown): JSONSchema => ({
+      type: "object",
+      properties: { pin: { type: "string", ifc: { writeAuthorizedBy } } },
+    } as JSONSchema);
+    expect(droppedStoredClaim(at({ other: 1 }), at({ other: 1 })))
+      .toBeUndefined();
+    expect(droppedStoredClaim(at({ other: 1 }), at({ other: 2 }))).toBe(
+      "the merged schema drops the stored writeAuthorizedBy at /pin",
+    );
+  });
+
+  it("returns a dropped claim for a stored reference that only names itself", () => {
+    expect(
+      droppedStoredClaim(
+        {
+          type: "object",
+          properties: { pin: { $ref: "#/$defs/Loop" } },
+          $defs: { Loop: { $ref: "#/$defs/Loop" } },
+        } as JSONSchema,
+        { type: "object", properties: { pin: LABELED } },
+      ),
+    ).toBe("a stored schema reference does not resolve at /pin");
+  });
+
   it("returns the floor a merge lowers and `undefined` for one it raises", () => {
     const floor = (atoms: string[]): JSONSchema => ({
       type: "object",

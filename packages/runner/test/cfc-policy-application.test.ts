@@ -128,6 +128,15 @@ describe("a runtime policy application", () => {
     return { root: schema.ifc, at: schema.properties?.[key]?.ifc };
   };
 
+  it("needs a transaction", async () => {
+    const runtime = await start("no-transaction");
+    expect(() =>
+      applyCfcPolicyToExistingValue(
+        runtime.getCell(space, "no-transaction", OWNER_LABEL),
+      )
+    ).toThrow("Transaction required");
+  });
+
   it("labels a document whose writer and click claims it does not satisfy", async () => {
     const runtime = await start("applies");
     const tx = runtime.edit();
