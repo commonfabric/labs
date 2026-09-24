@@ -6992,34 +6992,6 @@ export function* prepareBoundaryCommitSteps(
       targetKeys.add(containerKey);
     }
   }
-  // A link-origin entry labels the pointer that stood at its path when the
-  // entry was minted, so a payload write at or above that path leaves it
-  // describing a pointer the document no longer holds. Such a document enters
-  // the persist loop whatever the flow-label mode, and the loop drops the
-  // entry there (`linkCleared`). With flow labels persisting the flow-target
-  // admission below covers the same documents.
-  if (!flowPersist) {
-    for (const [key, target] of valueTargets) {
-      if (targetKeys.has(key)) {
-        continue;
-      }
-      const existingEntries = storedMetadataFor(
-        tx,
-        target.space,
-        target.id,
-        target.scope,
-        target.type,
-      )?.labelMap.entries ?? [];
-      const writtenPrefixes = payloadWrittenPrefixes(target);
-      if (
-        existingEntries.some((entry) =>
-          entry.origin === "link" && writtenPrefixes.hasPrefixOf(entry.path)
-        )
-      ) {
-        targetKeys.add(key);
-      }
-    }
-  }
   if (flowPersist && flowTargets !== undefined) {
     // Flow targets enter the persist loop when there is taint to attach or
     // stale per-value components (derived/link) to replace under a written
@@ -7061,6 +7033,31 @@ export function* prepareBoundaryCommitSteps(
       ) {
         targetKeys.add(key);
       }
+    }
+  }
+  // A link-origin entry labels the pointer that stood at its path when the
+  // entry was minted, so a payload write at or above that path leaves it
+  // describing a pointer the document no longer holds. Such a document enters
+  // the persist loop whatever the flow-label mode and whatever the flow join,
+  // and the loop drops the entry there (`linkCleared`).
+  for (const [key, target] of valueTargets) {
+    if (targetKeys.has(key)) {
+      continue;
+    }
+    const existingEntries = storedMetadataFor(
+      tx,
+      target.space,
+      target.id,
+      target.scope,
+      target.type,
+    )?.labelMap.entries ?? [];
+    const writtenPrefixes = payloadWrittenPrefixes(target);
+    if (
+      existingEntries.some((entry) =>
+        entry.origin === "link" && writtenPrefixes.hasPrefixOf(entry.path)
+      )
+    ) {
+      targetKeys.add(key);
     }
   }
   const metadataResolver = new VerifierMetadataResolver(tx);
