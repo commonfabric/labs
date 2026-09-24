@@ -18,8 +18,10 @@ import {
   type CustodySealConsent,
   type CustodySealOptions,
   prepareCustodySeal as prepareWithOptions,
+  readCustodySourcePolicy,
   TRUSTED_DECLASSIFIER_CONCEPT,
 } from "../src/cfc/custody-seal.ts";
+import { ACLManager } from "../src/acl-manager.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import {
   buildCfcPolicyArtifactManifest,
@@ -166,7 +168,11 @@ type Fixture = Awaited<ReturnType<typeof setup>>;
  * installed there.
  */
 const setup = async (
-  options: { trust?: CfcTrustConfigInput | undefined; terms?: unknown } = {},
+  options: {
+    trust?: CfcTrustConfigInput | undefined;
+    terms?: unknown;
+    acl?: boolean;
+  } = {},
 ) => {
   const trust = "trust" in options ? options.trust : TRUST;
   const server: MemoryV2Server.Server = newSharedServer({
@@ -216,10 +222,20 @@ const setup = async (
   const terms = host.getCell(S, "custody-terms", undefined, install);
   terms.set((options.terms ?? TERMS) as never);
   expect((await install.commit()).error).toBeUndefined();
+  // The room space's access list: its identity owns it, and the members read
+  // and write it.
+  const roomAcl = new ACLManager(runtimeFor(roomOwner), S);
+  if (options.acl !== false) {
+    await roomAcl.set(roomOwner.did(), "OWNER");
+    for (const member of [alice, bob, carol, mallory]) {
+      await roomAcl.set(member.did(), "WRITE");
+    }
+  }
 
   const fixture = {
     runtimes,
     runtimeFor,
+    roomAcl,
     terms: terms.withTx(undefined),
     room(identity: Identity, policy = P): CustodyRoom {
       const runtime = runtimes.get(identity)!;
@@ -1275,6 +1291,124 @@ describe("cfc-custody-seal", () => {
           .rejects.toThrow(/second entry for this actor/);
         await expect(prepareCustodySeal(draft, fixture.room(alice)))
           .rejects.toThrow(/second entry for this actor/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+  });
+
+  describe("the room's readers", () => {
+    it("names the actor, the room, and the room's readers from its access list", async () => {
+      const fixture = await setup();
+      try {
+        const draft = await fixture.draft(alice, honestStance);
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        expect(prepared.actor).toBe(alice.did());
+        expect(prepared.room).toBe(S);
+        const expected = [
+          { principal: roomOwner.did(), role: "owner" },
+          ...[alice, bob, carol, mallory].map((member) => ({
+            principal: member.did(),
+            role: "writer",
+          })),
+        ].sort((a, b) => a.principal < b.principal ? -1 : 1);
+        expect(prepared.readers).toEqual(expected);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a room space with no access list", async () => {
+      const fixture = await setup({ acl: false });
+      try {
+        const draft = await fixture.draft(alice, honestStance);
+        await expect(prepareCustodySeal(draft, fixture.room(alice)))
+          .rejects.toThrow(/access list names its readers/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a seal whose room gained a reader after review", async () => {
+      const fixture = await setup();
+      try {
+        const draft = await fixture.draft(alice, honestStance);
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        const eve = await Identity.fromPassphrase("custody-seal-eve");
+        await fixture.roomAcl.set(eve.did(), "READ");
+        await expect(commitCustodySeal(prepared.consent, trustedClick()))
+          .rejects.toThrow(/review is stale/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+  });
+
+  describe("the actor's source policy", () => {
+    /** Writes a settings document holding `value` into `space`. */
+    const settings = async (
+      fixture: Fixture,
+      space: string,
+      value: unknown,
+      cause = "custody-sources",
+    ) => {
+      const runtime = fixture.runtimes.get(alice)!;
+      const tx = runtime.edit();
+      const cell = runtime.getCell(space as never, cause, {
+        ifc: { confidentiality: [cfcAtom.user(alice.did())] },
+      } as never, tx);
+      cell.set(value as never);
+      expect((await tx.commit()).error).toBeUndefined();
+      return cell.withTx(undefined);
+    };
+
+    it("reads the actor's own sources from the actor's home space", async () => {
+      const fixture = await setup();
+      try {
+        const sources = [
+          context(owner(alice), "calendar"),
+          resource(owner(alice)),
+        ];
+        const cell = await settings(fixture, alice.did(), sources);
+        expect(await readCustodySourcePolicy(cell)).toEqual(sources);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a policy outside the actor's home space", async () => {
+      const fixture = await setup();
+      try {
+        const cell = await settings(fixture, S, [context(owner(alice))]);
+        await expect(readCustodySourcePolicy(cell)).rejects.toThrow(
+          /only from the actor's home space/,
+        );
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a policy naming another principal's source or another shape", async () => {
+      const fixture = await setup();
+      try {
+        for (
+          const value of [
+            [context(owner(bob))],
+            [cfcAtom.user(alice.did())],
+            [{ ...context(owner(alice)), hash: "sha256:x" }],
+            { calendar: true },
+          ]
+        ) {
+          const cell = await settings(
+            fixture,
+            alice.did(),
+            value,
+            `custody-sources-${JSON.stringify(value)}`,
+          );
+          await expect(readCustodySourcePolicy(cell)).rejects.toThrow(
+            /the actor's own `Context` and `Resource` atoms/,
+          );
+        }
       } finally {
         await fixture.dispose();
       }

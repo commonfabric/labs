@@ -20,10 +20,11 @@ The cases are in `packages/runner/test/cfc-custody-seal.test.ts`.
 ## The operation
 
 `prepareCustodySeal(draft, room, options)` inspects the draft and the room and
-returns a preview together with a one-use consent. `commitCustodySeal(consent,
-event)` performs the seal. It accepts only a renderer-trusted DOM event whose
-`provenance.ui.pattern` is `CustodySeal`, and it inspects everything again
-before writing.
+returns a preview together with a one-use consent. The preview names the actor,
+the room space, the room's readers, the terms, the instance, the policy, the
+sources, and the stance. `commitCustodySeal(consent, event)` performs the seal.
+It accepts only a renderer-trusted DOM event whose `provenance.ui.pattern` is
+`CustodySeal`, and it inspects everything again before writing.
 
 A room is its terms document and its policy. The terms document's space is the
 room space `S`. The terms are a JSON object that names `seats`, the DIDs that may
@@ -60,7 +61,16 @@ established the checks are compared against the committing transaction.
   reads from the actor's private settings, and every `Context` and `Resource`
   the draft draws on must be among them. An empty list admits only a value
   labeled for the actor alone, as a value the actor typed in is. The preview
-  lists these sources.
+  lists these sources. `readCustodySourcePolicy(settings)` reads such a
+  setting: a list of the actor's own `Context` and `Resource` atoms in a
+  document in the actor's home space, and nowhere else, so that a room cannot
+  widen what the actor allows. Code running as the actor can write that
+  space; against that code, what holds is the confirmation, which shows the
+  sources the value draws on.
+- **The room names its readers.** The room space's access list must exist and
+  name a concrete owner. The preview lists every principal it names, with its
+  role, since whoever can read `S` is the audience of what the room releases.
+  A room whose readers change after the review makes the review stale.
 - **The value is instruction-inert.** `stanceSchema` may admit only booleans,
   `null`, numbers with a finite `minimum` and `maximum`, `const` and `enum`
   primitives, and closed objects of these, at most eight levels deep. It admits

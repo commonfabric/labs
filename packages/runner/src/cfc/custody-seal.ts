@@ -32,6 +32,7 @@ import {
 import { sha256 } from "@commonfabric/content-hash";
 import { debugStr, deepFreeze, hashStringOf } from "@commonfabric/data-model";
 import { isDID } from "@commonfabric/identity/did";
+import { aclDocId, hasConcreteOwner, isACL } from "@commonfabric/memory/acl";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
@@ -97,6 +98,18 @@ export interface CustodySealOptions {
   readonly allowedSources: readonly CfcAtom[];
 }
 
+/**
+ * A principal the room space's access list lets read the room, and so read
+ * what the room releases: a DID, or `*` for anyone.
+ */
+export interface CustodyRoomReader {
+  /** The principal's DID, or `*` for anyone. */
+  readonly principal: string;
+
+  /** The capability the access list gives it. */
+  readonly role: "owner" | "writer" | "reader";
+}
+
 /** Type-only brand for host-held consent objects. */
 declare const consentBrand: unique symbol;
 
@@ -108,6 +121,18 @@ export interface CustodySealConsent {
 
 /** Frozen preview for the trusted host's confirmation dialog. */
 export interface PreparedCustodySeal {
+  /** The authenticated actor whose value is sealed. */
+  readonly actor: string;
+
+  /** The room space `S`: the space the terms document lives in. */
+  readonly room: string;
+
+  /**
+   * Who can read the room, from the room space's access list, ordered by
+   * principal. The room's readers are the audience of anything it releases.
+   */
+  readonly readers: readonly CustodyRoomReader[];
+
   /** Exact value that enters custody. */
   readonly stance: JSONValue;
 
@@ -149,6 +174,7 @@ interface ReadEvidence {
 interface Inspection {
   readonly actor: string;
   readonly room: string;
+  readonly readers: readonly CustodyRoomReader[];
   readonly draftLink: NormalizedFullLink;
   readonly termsLink: NormalizedFullLink;
   readonly stance: JSONValue;
@@ -734,6 +760,83 @@ const trustsAsDeclassifier = (
     .conceptSatisfied(TRUSTED_DECLASSIFIER_CONCEPT, [policy], actor);
 };
 
+const ROLE_OF = { OWNER: "owner", WRITE: "writer", READ: "reader" } as const;
+
+/**
+ * The room's readers from its access list, ordered by principal.
+ *
+ * @throws If the room space has no access list, or one with no concrete
+ *   owner. Without one, who can read the room cannot be named, and the actor
+ *   would consent to an audience nobody showed them.
+ */
+const roomReaders = (acl: unknown): CustodyRoomReader[] => {
+  if (!isACL(acl) || !hasConcreteOwner(acl)) {
+    throw new Error(
+      "Custody seal requires a room space whose access list names its readers",
+    );
+  }
+  return Object.entries(acl)
+    .map(([principal, capability]) => ({
+      principal,
+      role: ROLE_OF[capability],
+    }))
+    .sort((a, b) =>
+      a.principal < b.principal ? -1 : a.principal > b.principal ? 1 : 0
+    );
+};
+
+/**
+ * Reads the actor's allowed sources for custody rooms from a settings
+ * document in the actor's home space: a list of the actor's own `Context` and
+ * `Resource` atoms. A host passes the result as
+ * {@link CustodySealOptions.allowedSources}.
+ *
+ * The document is read only from the actor's home space, so a room, or anyone
+ * else who can write a space the actor reads, cannot widen what the actor
+ * allows. Code running as the actor can write the actor's home space; what
+ * holds against that code is the confirmation, which shows the sources the
+ * value draws on.
+ *
+ * @throws If there is no authenticated actor, the document is not in the
+ *   actor's home space, or it holds anything other than a list of the actor's
+ *   own `Context` and `Resource` atoms.
+ */
+export async function readCustodySourcePolicy(
+  settings: Cell<unknown>,
+): Promise<CfcAtom[]> {
+  await settings.sync();
+  const tx = settings.runtime.edit();
+  try {
+    const actor = tx.getCfcState().trustSnapshot?.actingPrincipal;
+    if (!isDID(actor)) {
+      throw new Error("Custody seal requires an authenticated actor");
+    }
+    const link = settings.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
+    if (link.space !== actor) {
+      throw new Error(
+        "Custody seal reads the allowed sources only from the actor's home space",
+      );
+    }
+    const value = snapshotJsonValue(settings.withTx(tx).get());
+    if (
+      !Array.isArray(value) ||
+      !value.every((atom) =>
+        isObjectNotArray(atom) &&
+        (atom.type === CFC_ATOM_TYPE.Context ||
+          atom.type === CFC_ATOM_TYPE.Resource) &&
+        isActorOwnedAlternative(atom, actor)
+      )
+    ) {
+      throw new Error(
+        "Custody seal requires the allowed sources to be the actor's own `Context` and `Resource` atoms",
+      );
+    }
+    return value as unknown as CfcAtom[];
+  } finally {
+    tx.abort();
+  }
+}
+
 /** Reads the draft, the terms, and the room's state, and checks them all. */
 const inspect = async (
   draft: Cell<unknown>,
@@ -828,6 +931,24 @@ const inspect = async (
   } finally {
     manifestTx.abort();
   }
+  const acl = runtime.getCellFromLink({
+    space: room,
+    id: aclDocId(room),
+    path: [],
+  } as never);
+  await acl.sync();
+  const aclTx = runtime.edit();
+  let readers: CustodyRoomReader[];
+  try {
+    readers = roomReaders(
+      aclTx.readValueOrThrow({ ...acl.getAsNormalizedFullLink(), path: [] }, {
+        meta: internalVerifierRead,
+      }),
+    );
+    evidence.push(...readEvidence(aclTx));
+  } finally {
+    aclTx.abort();
+  }
   checkInertStance(checkTerms(terms, actor), stance);
   if (!trustsAsDeclassifier(runtime.cfcTrustConfig, policy, actor)) {
     throw new Error(
@@ -857,6 +978,7 @@ const inspect = async (
   return {
     actor,
     room: policy.subject as string,
+    readers,
     draftLink,
     termsLink,
     stance,
@@ -903,6 +1025,9 @@ export async function prepareCustodySeal(
     eventId: crypto.randomUUID(),
   });
   return Object.freeze({
+    actor: inspected.actor,
+    room: inspected.room,
+    readers: inspected.readers,
     stance: inspected.stance,
     terms: inspected.terms,
     instance: inspected.instance,
@@ -949,6 +1074,7 @@ export async function commitCustodySeal(
   );
   if (
     current.actor !== state.actor ||
+    !deepEqual(current.readers, state.readers) ||
     !deepEqual(current.stance, state.stance) ||
     !deepEqual(current.terms, state.terms) ||
     current.instance !== state.instance ||
