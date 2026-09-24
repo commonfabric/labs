@@ -645,6 +645,54 @@ describe("cfc-custody-seal", () => {
       }
     });
 
+    it("refuses an anchor other code created with the seal's own value and clause and integrity of its own", async () => {
+      // The anchor is the entry transaction's one labeled read, so integrity
+      // stored on it would reach the entries' labels; only its confidentiality
+      // is what the seal wrote.
+      const fixture = await setup();
+      try {
+        const instance = hashStringOf(TERMS);
+        const runtime = fixture.runtimes.get(mallory)!;
+        await syncManifest(runtime);
+        const tx = runtime.edit();
+        tx.setCfcImplementationIdentity({
+          kind: "verified",
+          moduleIdentity: "sha256:attacker",
+          symbol: "squat",
+          bindingPath: ["squat"],
+        });
+        const squat = runtime.getCell(
+          S,
+          { custodyAnchor: { policy: P, instance } },
+          {
+            type: "object",
+            ifc: {
+              confidentiality: [{
+                anyOf: [
+                  { ...P, subject: { __ctOwningSpace: true } },
+                  cfcAtom.space(S),
+                ],
+              }],
+              integrity: ["squatted-claim"],
+            },
+          } as never,
+          tx,
+        );
+        squat.set({ instance } as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        expect(
+          storedEntries(runtime, squat).flatMap((entry) =>
+            entry.label.integrity ?? []
+          ),
+        ).toContainEqual("squatted-claim");
+        await expect(fixture.seal(alice)).rejects.toThrow(
+          /anchor the seal did not create/,
+        );
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
     it("writes the actor-private receipt to the actor's home space", async () => {
       const fixture = await setup();
       try {
@@ -1182,6 +1230,16 @@ describe("cfc-custody-seal", () => {
               : outcome.status
           ),
         ).toEqual(["fulfilled", "fulfilled", "fulfilled"]);
+        const results = outcomes.map((outcome) =>
+          (outcome as PromiseFulfilledResult<
+            { box: Cell<unknown>; entryKey: string }
+          >).value
+        );
+        const box = results[results.length - 1].box;
+        await box.sync();
+        expect(Object.keys(box.getRaw() as object).sort()).toEqual(
+          results.map((result) => result.entryKey).sort(),
+        );
       } finally {
         await fixture.dispose();
       }

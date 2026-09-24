@@ -547,9 +547,12 @@ const absentOrSealed = (
 
 /**
  * Whether the anchor at `link` is absent, or holds exactly the value and the
- * clause the seal gives it and no other. An anchor some other code created
- * with another label, or holding a link whose target the seal's read would
- * follow, would taint every entry or leave it unattributed.
+ * label the seal gives it: one declared root clause and no integrity on any
+ * entry. An anchor some other code created with another clause, or holding a
+ * link whose target the seal's read would follow, would taint every entry or
+ * leave it unattributed; one carrying integrity would hand that integrity,
+ * and any `TransformedBy` witness in it, to every entry, since the anchor is
+ * the entry transaction's one labeled read.
  */
 const absentOrAnchor = (
   tx: IExtendedStorageTransaction,
@@ -562,8 +565,13 @@ const absentOrAnchor = (
   });
   if (stored === undefined) return true;
   if (!deepEqual(stored, { instance })) return false;
-  const labeled = (readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [])
-    .filter((entry) => (entry.label.confidentiality ?? []).length > 0);
+  const entries = readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [];
+  if (entries.some((entry) => (entry.label.integrity ?? []).length > 0)) {
+    return false;
+  }
+  const labeled = entries.filter((entry) =>
+    (entry.label.confidentiality ?? []).length > 0
+  );
   return labeled.length > 0 &&
     labeled.every((entry) =>
       entry.path.length === 0 && entry.origin === "declared" &&
@@ -879,9 +887,10 @@ export async function prepareCustodySeal(
 /**
  * Writes the reviewed entry after a host-trusted seal gesture: the
  * instance's anchor if it is absent, then the actor-private receipt in the
- * actor's home space, then the entry in the box. A transaction writes one space, so the two are separate commits, and
- * the receipt is written first so that no entry exists without one; a receipt
- * whose entry is absent records a seal whose commit failed.
+ * actor's home space, then the entry in the box. A transaction writes one
+ * space, so each is a separate commit, and the receipt is written before the
+ * entry so that no entry exists without one; a receipt whose entry is absent
+ * records a seal whose commit failed.
  *
  * @throws If the consent is unknown or spent, the gesture is not the host's,
  *   anything reviewed changed, the anchor is withheld from this runtime, or
@@ -937,7 +946,16 @@ export async function commitCustodySeal(
     if (
       tx.readValueOrThrow(anchorLink, { meta: internalVerifierRead }) !==
         undefined
-    ) return;
+    ) {
+      // Checked here as well as in the entry transaction, so a squatted
+      // anchor is refused before the receipt makes anything durable.
+      if (!absentOrAnchor(tx, anchorLink, anchorClause(policy), instance)) {
+        throw new Error(
+          "Custody seal refuses an anchor the seal did not create",
+        );
+      }
+      return;
+    }
     tx.setCfcImplementationIdentity({
       kind: "builtin",
       builtinId: CUSTODY_SEAL_WRITER,
@@ -945,6 +963,10 @@ export async function commitCustodySeal(
     anchor.withTx(tx).set({ instance });
   });
   if (anchored.error) {
+    const reason = "reason" in anchored.error
+      ? anchored.error.reason
+      : undefined;
+    if (reason instanceof Error) throw reason;
     throw new Error(
       `Custody seal could not create its anchor: ${anchored.error.message}`,
     );
