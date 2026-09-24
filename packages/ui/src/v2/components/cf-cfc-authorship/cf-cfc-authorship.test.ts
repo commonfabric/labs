@@ -62,6 +62,9 @@ const unloadedCell = (id?: string) => {
     },
     subscriberCount: () => subscribers.size,
 
+    /** How many times anything has subscribed. */
+    subscribeCalls: () => options.length,
+
     /** Whether every subscription asked for its updates to carry labels. */
     allAskedForLabels: () =>
       options.length > 0 &&
@@ -285,6 +288,7 @@ describe("CFCFCAuthorship", () => {
       await element.refreshLabel();
       await element.refreshLabel();
       expect(resolved.subscriberCount()).toBe(1);
+      expect(resolved.subscribeCalls()).toBe(1);
 
       await resolved.load(authoredByLabel("alice"));
 
