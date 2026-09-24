@@ -613,6 +613,30 @@ describe("materialization-parity", () => {
       await handleReadsInBothModes("typed-handle-branch", shaped, stored);
     });
 
+    it("is minted from the one matching branch of a `oneOf` in both modes", async () => {
+      // A `oneOf` admits one branch, so an eager read mints from it and merges
+      // nothing; a view does the same, and the handle reads the value rather
+      // than another handle.
+      const oneOf: JSONSchema = {
+        type: "object",
+        properties: {
+          h: {
+            oneOf: [
+              {
+                type: "object",
+                properties: { id: { type: "number" } },
+                asCell: ["cell"],
+              },
+              { type: "undefined" },
+            ],
+          },
+        },
+      };
+      await handleReadsInBothModes("oneof-handle-branch", oneOf, { id: 1 }, {
+        id: 1,
+      });
+    });
+
     it("carries the compound where only a bare branch could have minted it and the value is inline", async () => {
       await handleReadsInBothModes("bare-handle-inline", bare, stored);
     });

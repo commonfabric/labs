@@ -1578,13 +1578,21 @@ function compoundCellSchema(
  * — the merge keeps such a handle as it is — and the adoption is done here,
  * since the view re-enters from the resolved value rather than from the hop
  * the eager traverser crosses; otherwise the compound, markers removed, under
- * the branch's own `asCell` values.
+ * the branch's own `asCell` values. A `oneOf` admits one matching branch, so
+ * an eager read mints its handle from that branch and merges nothing; the
+ * branch stands for it here too.
  */
 function viewHandleSchema(
   schema: JSONSchemaObj,
   branch: JSONSchemaObj,
   adopted: JSONSchema | undefined,
 ): JSONSchema {
+  if (
+    schema.oneOf !== undefined && schema.anyOf === undefined &&
+    schema.allOf === undefined
+  ) {
+    return branch;
+  }
   if (compoundMintsBareHandlesOnly(schema) && isNontrivialSchema(adopted)) {
     // Resolved for structure the way `createObject` resolves a minted link's
     // schema, so a content-addressed reference reads the same either way.
