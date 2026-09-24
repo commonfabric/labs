@@ -80,13 +80,17 @@ Deno.test("cf-custody-seal presents the room, readers and answers the worker ver
       "Where should we eat?",
     );
     expect(
-      Array.from(root.querySelectorAll(".readers li")).map((item) =>
-        item.textContent
-      ),
+      Array.from(root.querySelectorAll(".readers li")).map((item) => [
+        item.querySelector(".principal")?.textContent,
+        ...Array.from(
+          item.querySelectorAll(".annotation"),
+          (annotation) => annotation.textContent,
+        ),
+      ]),
     ).toEqual([
-      "did:key:actor (you)",
-      "did:key:member",
-      "did:key:verified-room (no seat)",
+      ["did:key:actor", "you"],
+      ["did:key:member"],
+      ["did:key:verified-room", "no seat"],
     ]);
     expect(
       Array.from(root.querySelectorAll(".answers li")).map((item) =>

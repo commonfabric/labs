@@ -88,6 +88,25 @@ export function summarizeCustodyTerms(terms: unknown): SealSummary {
   };
 }
 
+/**
+ * A principal the runtime checked, in an element of its own: bidirectionally
+ * isolated, so nothing inside it reorders the dialog's text around it, and
+ * apart from the dialog's annotations, so a principal that ends in `(you)`
+ * still reads as one string. `*` is shown as `Anyone`.
+ */
+function principal(value: string) {
+  return value === "*"
+    ? html`<span class="annotation">Anyone</span>`
+    : html`<bdi class="principal" dir="ltr">${value}</bdi>`;
+}
+
+/** A host annotation beside a principal, never inside its text. */
+function annotation(text: string) {
+  return html`
+    <span class="annotation">${text}</span>
+  `;
+}
+
 /** The policy as a person can compare it: its symbol, module, and digest. */
 function describePolicy(policy: unknown): string {
   const atom = policy as Record<string, unknown> | undefined;
@@ -214,6 +233,19 @@ export class CFCustodySeal extends BaseElement {
       [role="alert"] {
         color: #932c22;
       }
+      .principal {
+        unicode-bidi: isolate;
+        font: 14px/1.5 monospace;
+      }
+      .annotation {
+        display: inline-block;
+        padding: 0 .4rem;
+        border: 1px solid #53655c;
+        border-radius: .75rem;
+        font-size: .8rem;
+        color: #203b2e;
+        background: #f3f5f3;
+      }
     `,
   ];
 
@@ -293,23 +325,25 @@ export class CFCustodySeal extends BaseElement {
         <h2 id="seal-title" tabindex="-1" autofocus>Join this room with these terms?</h2>
         <dl class="verified">
           <dt>Room</dt>
-          <dd class="room">${preview?.room ?? ""}</dd>
+          <dd class="room">${preview ? principal(preview.room) : nothing}</dd>
           <dt>Who can read the room now, and so see the answer</dt>
           <dd class="readers"><ul>${(preview?.readers ?? []).map((reader) =>
-            html`<li>${reader.principal === "*" ? "Anyone" : reader.principal}${
-              reader.principal === preview?.actor ? " (you)" : ""
+            html`<li>${principal(reader.principal)}${
+              reader.principal === preview?.actor ? annotation("you") : nothing
             }${
               reader.principal !== "*" &&
                 !summary?.seats.includes(reader.principal)
-                ? " (no seat)"
-                : ""
+                ? annotation("no seat")
+                : nothing
             }</li>`
           )}</ul>
             <p class="note">The room's owners can add readers later, and the
               service that hosts the room can read it.</p></dd>
           <dt>Seats</dt>
           <dd class="seats"><ul>${(summary?.seats ?? []).map((seat) =>
-            html`<li>${seat}${seat === preview?.actor ? " (you)" : ""}</li>`
+            html`<li>${principal(seat)}${
+              seat === preview?.actor ? annotation("you") : nothing
+            }</li>`
           )}</ul></dd>
           <dt>Policy that decides what comes out</dt>
           <dd class="policy">${describePolicy(preview?.policy)}</dd>

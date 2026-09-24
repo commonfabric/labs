@@ -122,6 +122,30 @@ function renderedText(element: CFCustodySeal): string {
   return parts.join("");
 }
 
+type Template = { strings: readonly string[]; values: readonly unknown[] };
+
+/** Every template the render produces, nested templates included. */
+function renderedTemplates(element: CFCustodySeal): Template[] {
+  const templates: Template[] = [];
+  const walk = (value: unknown): void => {
+    if (Array.isArray(value)) value.forEach(walk);
+    else if (value && typeof value === "object" && "values" in value) {
+      const template = value as Template;
+      templates.push(template);
+      template.values.forEach(walk);
+    }
+  };
+  walk(element.render());
+  return templates;
+}
+
+/** The values interpolated into templates whose markup opens with `tag`. */
+function interpolatedInto(element: CFCustodySeal, tag: string): unknown[] {
+  return renderedTemplates(element)
+    .filter((template) => template.strings[0]?.includes(tag))
+    .flatMap((template) => template.values);
+}
+
 /** Invokes the cancel action exposed by the component's rendered template. */
 function cancelReview(element: CFCustodySeal): void {
   const rendered = element.render();
@@ -154,9 +178,17 @@ describe("CFCustodySeal workflow", () => {
     expect(text).toContain("did:key:verified-room");
     expect(text).not.toContain("Fake question");
     expect(text).not.toContain("fake answer");
-    expect(text).toContain("did:key:member");
-    expect(text).toContain("did:key:actor (you)");
-    expect(text).not.toContain("did:key:member (no seat)");
+    expect(interpolatedInto(state.element, '<bdi class="principal"'))
+      .toEqual([
+        "did:key:verified-room",
+        "did:key:actor",
+        "did:key:member",
+        "did:key:actor",
+        "did:key:member",
+      ]);
+    // The actor is marked in the readers and in the seats, and no one else is.
+    expect(interpolatedInto(state.element, '<span class="annotation"'))
+      .toEqual(["you", "you"]);
     for (const answer of ["pizza", "sushi", "no agreement"]) {
       expect(text).toContain(answer);
     }
@@ -165,6 +197,51 @@ describe("CFCustodySeal workflow", () => {
       "If the room releases only these answers, each answer reveals at most ~1.6 bits about your values.",
     );
     expect(text).toContain("Where should we eat?");
+  });
+
+  it("isolates each principal from the dialog's own annotations", async () => {
+    const hostile = "did:key:member (you)\u202e)taes on(";
+    using state = setup({
+      prepare: () =>
+        Promise.resolve({
+          ...preview,
+          readers: [
+            { principal: "*", role: "reader" },
+            { principal: "did:key:actor", role: "writer" },
+            { principal: hostile, role: "reader" },
+          ],
+          terms: {
+            ...preview.terms as Record<string, unknown>,
+            seats: ["did:key:actor", hostile],
+          },
+        }),
+    });
+    await state.element.accessForTestingOnly.prepare();
+    const principals = interpolatedInto(
+      state.element,
+      '<bdi class="principal"',
+    );
+    // The hostile principal is interpolated whole, into an isolate of its own,
+    // once as a reader and once as a seat.
+    expect(principals.filter((value) => value === hostile)).toHaveLength(2);
+    // No other template carries it, so no annotation shares its text; the
+    // exact terms under Details are a JSON block of their own.
+    const elsewhere = renderedTemplates(state.element)
+      .filter((template) =>
+        !template.strings[0]?.includes('<bdi class="principal"')
+      )
+      .flatMap((template) => template.values)
+      .filter((value) =>
+        typeof value === "string" && value.includes(hostile) &&
+        !value.startsWith("{")
+      );
+    expect(elsewhere).toEqual([]);
+    // Only the actor is marked as you, and `*` is shown as Anyone.
+    expect(interpolatedInto(state.element, '<span class="annotation"'))
+      .toEqual(["you", "you"]);
+    expect(renderedText(state.element)).toContain(
+      '<span class="annotation">Anyone</span>',
+    );
   });
 
   for (
