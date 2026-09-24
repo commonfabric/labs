@@ -1708,9 +1708,8 @@ If schemas are not already present via type args:
 
 Inferred schema types are retained through `typeToTypeNodeWithRegistry()`,
 including its placeholder when the checker cannot print the type. Schema
-generation reads that placeholder through the preserved type, so an expanded
-array default keeps both its element schema and `default: []` rather than
-omitting injection.
+generation reads that placeholder through its `printedFrom` record, so an
+expanded array default keeps both its element schema and `default: []`.
 
 Injected behaviors:
 
@@ -1721,11 +1720,16 @@ Injected behaviors:
     expressions before falling back to the direct value type
   - direct semantic `any` values emit `true`
   - direct semantic `unknown` values emit `{ type: "unknown" }`
+  - contextual array defaults preserve the element schema and `default: []`,
+    together with any scope such as `PerUser<Writable<T[] | Default<[]>>>`
   - if the value type at a generic helper definition site is an uninstantiated
     type parameter, CTS degrades the emitted schema to `{ type: "unknown" }`
     instead of leaking `{}` or omitting the schema
 - `Cell.for(...)`-style calls:
   - wrap with `.asSchema(schema)` unless already wrapped
+  - contextual `Writable<Default<T[], []>>` and
+    `Writable<T[] | Default<[]>>` both preserve the array's element schema and
+    `default: []`
 - `wish(...)`:
   - append schema as second argument if missing
   - the schema describes `T`, the requested resource, never the `WishState<T>`

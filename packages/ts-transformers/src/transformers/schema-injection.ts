@@ -884,8 +884,8 @@ function typeToInjectableSchemaTypeNode(
   if (isUnresolvedSchemaType(type)) {
     return createUnknownSchemaTypeNode(factory);
   }
-  // The registered placeholder retains the type when the checker cannot print
-  // its expanded brands, so schema generation still reads the inferred type.
+  // `printedFrom` retains the type behind the placeholder when the checker
+  // cannot print its expanded brands, so schema generation reads that type.
   return typeToTypeNodeWithRegistry(
     type,
     { checker, factory, sourceFile, state },
