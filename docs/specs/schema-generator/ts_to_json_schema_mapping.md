@@ -857,7 +857,7 @@ inside those payloads.
 | `ExactCopy<T, S>` | `{ exactCopyOf: S }` |
 | `ProjectionPath<T, F, P>` | `{ projection: { from: F, path: P } }` |
 | `ProjectionOf<T, P>` | `{ projection: { from: "/", path: P } }` |
-| `Projection<SourceRef>` | `{ projection: { from: "/", path: Path } }` over the `Root` that `SourceRef`, a `Ref<Root, Path>`, carries; a source that carries no root is `never` |
+| `Projection<SourceRef>` | what the checker resolves it to: `ProjectionOf<Root, Path>` for a `Ref<Root, Path>`, `never` for anything else, member by member for a union |
 
 Mechanics:
 
@@ -874,8 +874,15 @@ Mechanics:
   own declaration as ordinary metadata.
   An authored wrapper around a library alias is also read from its declaration,
   preserving any binding fixed inside the wrapper.
+- `Projection` is a conditional type, so the lowering never follows it by
+  syntax: a user alias chain that reaches it stops there, and the type written
+  with it is read as the checker resolved it, as the direct spelling is.
 - A canonical alias reached by its own name reads its payload, like its
-  labels, from the reference's own argument nodes. A payload that is itself a
+  labels, from the reference's own argument nodes when that reference names
+  the same alias. A reference to another alias the checker resolved to it
+  (`MyProjection<R>` to `ProjectionOf<Root, Path>`, or a conditional alias to
+  `Confidential<…>`) holds that alias's arguments, so the canonical alias is
+  read from its type alone. A payload that is itself a
   CFC alias therefore lowers as it would if written on its own: a generic alias
   keeps its argument (`Integrity<Sec<string>, I>` is a string), a nested
   `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label keeps its

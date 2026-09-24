@@ -185,6 +185,42 @@ describe("unread-type-diagnostics", () => {
       ]);
     });
 
+    it("reports a reference to an alias of `Projection`, which it cannot read from arguments", async () => {
+      // `Projection` is a conditional type, so a reference that reaches it is
+      // not lowered from its own arguments, and its declared type leaves them
+      // unbound.
+      const warnings = await warningsFor(
+        f.createTypeReferenceNode("MyProjection", [
+          f.createTypeReferenceNode("Ref", [
+            f.createTypeReferenceNode("Item"),
+            f.createTupleTypeNode([
+              f.createLiteralTypeNode(f.createStringLiteral("title")),
+            ]),
+          ]),
+        ]),
+        `
+          type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+          type ProjectionPath<T, From extends string, Path extends readonly unknown[]> = Cfc<T, { projection: { from: From; path: Path } }>;
+          type ProjectionOf<Root, PathTuple extends readonly unknown[]> = ProjectionPath<Root, "/", PathTuple>;
+          type Ref<Root, Path extends readonly unknown[]> = {
+            readonly __ct_ref_root__?: Root;
+            readonly __ct_ref_path__?: Path;
+          };
+          type Projection<SourceRef> = SourceRef extends Ref<
+            infer Root,
+            infer Path extends readonly unknown[]
+          > ? ProjectionOf<Root, Path> : never;
+          type MyProjection<R> = Projection<R>;
+          interface Item { title: string }
+        `,
+      );
+
+      expect(warnings.map((warning) => warning.type)).toEqual([
+        "schema-type:unread",
+      ]);
+      expect(warnings[0]!.message).toContain("`MyProjection<");
+    });
+
     it("reports nothing for an intersection that accepts nothing", async () => {
       // Beside `never`, what the unread constituent accepts is moot.
       const warnings = await warningsFor(

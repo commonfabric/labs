@@ -279,6 +279,26 @@ describe("Schema: CFC authoring aliases", () => {
     });
   });
 
+  it("lowers a canonical alias a conditional user alias resolves to from its own arguments", async () => {
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Pick2<A, B> = A extends string ? Confidential<B, readonly ["x"]> : never;
+      interface SchemaRoot {
+        direct: Confidential<{ v: string }, readonly ["x"]>;
+        picked: Pick2<"s", { v: string }>;
+      }
+    `,
+      "SchemaRoot",
+    );
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+
+    expect(schema.properties?.picked).toEqual(schema.properties?.direct);
+  });
+
   it("formats a projection reached through a user alias over the root its reference carries", async () => {
     const { type, checker } = await getTypeFromCode(
       `
@@ -294,6 +314,7 @@ describe("Schema: CFC authoring aliases", () => {
         infer Path extends readonly unknown[]
       > ? ProjectionOf<Root, Path> : never;
       type MyProjection<R> = Projection<R>;
+      type TitleOf<T> = Projection<Ref<T, readonly ["title"]>>;
       declare const ref: Ref<{ title: string }, readonly ["nested", "path"]>;
 
       interface SchemaRoot {
@@ -303,6 +324,12 @@ describe("Schema: CFC authoring aliases", () => {
         aliasedFromValue: MyProjection<typeof ref>;
         directWithoutRoot: Projection<{ title: string }>;
         aliasedWithoutRoot: MyProjection<{ title: string }>;
+        directBuilt: Projection<Ref<{ title: string }, readonly ["title"]>>;
+        aliasedBuilt: TitleOf<{ title: string }>;
+        directUnion: Projection<Ref<{ title: string }, readonly ["title"]> | undefined>;
+        aliasedUnion: MyProjection<Ref<{ title: string }, readonly ["title"]> | undefined>;
+        directNullable: Projection<Ref<{ title: string } | null, readonly []>>;
+        aliasedNullable: MyProjection<Ref<{ title: string } | null, readonly []>>;
       }
     `,
       "SchemaRoot",
@@ -319,6 +346,15 @@ describe("Schema: CFC authoring aliases", () => {
       schema.properties?.directWithoutRoot,
     );
     expect(schema.properties?.directWithoutRoot).toBe(false);
+    for (const form of ["Built", "Union", "Nullable"]) {
+      expect(schema.properties?.[`aliased${form}`]).toEqual(
+        schema.properties?.[`direct${form}`],
+      );
+    }
+    expect(schema.properties?.aliasedBuilt).toEqual(
+      schema.properties?.aliasedUnion,
+    );
+
     expect(schema.properties?.directFromValue).toEqual(
       schema.properties?.direct,
     );
@@ -1118,6 +1154,7 @@ describe("Schema: CFC authoring aliases", () => {
         new SchemaGenerator().generateSchema(type, checker),
       );
       expect(schema.ifc).toEqual((authored.properties?.t as any)?.ifc);
+      expect(schema.ifc).toEqual({ confidentiality: [undefined] });
     });
 
     it("lowers a label holding a parameter", async () => {

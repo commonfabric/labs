@@ -54,8 +54,15 @@ const CFC_ALIAS_NAMES: ReadonlySet<string> = new Set(CFC_CANONICAL_ALIAS_NAMES);
 /** The property `AnyOf<X>` is as a type (`@commonfabric/api/cfc`). */
 const CFC_ANY_OF_BRAND = "__ct_cfc_any_of__";
 
-/** The member of `Ref<Root, Path>` (`@commonfabric/api/cfc`) that holds `Root`. */
-const CFC_REF_ROOT = "__ct_ref_root__";
+/**
+ * Whether `name` is a CFC alias the lowering reads from its syntax. That is
+ * every canonical alias but `Projection`, a conditional type: what it is
+ * depends on its argument (a `Ref<Root, Path>` projects to `ProjectionOf<Root,
+ * Path>`, anything else to `never`, a union member by member), so the lowering
+ * reads the type the checker resolves it to, as it does the direct spelling.
+ */
+const lowersFromSyntax = (name: string): boolean =>
+  CFC_ALIAS_NAMES.has(name) && name !== "Projection";
 
 /**
  * The type of the value `member` holds, given `type`, its type: `type` less
@@ -330,7 +337,8 @@ const lowersDownAliasChain = (
   checker: ts.TypeChecker,
   visited: ReadonlySet<string>,
 ): boolean => {
-  if (CFC_ALIAS_NAMES.has(declaration.name.text)) return true;
+  if (lowersFromSyntax(declaration.name.text)) return true;
+  if (CFC_ALIAS_NAMES.has(declaration.name.text)) return false;
   const aliased = declaration.type;
   if (
     !ts.isTypeReferenceNode(aliased) || !ts.isIdentifier(aliased.typeName) ||
@@ -424,7 +432,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       return true;
     }
 
-    if (aliasName && CFC_ALIAS_NAMES.has(aliasName)) {
+    if (aliasName && lowersFromSyntax(aliasName)) {
       return true;
     }
 
@@ -1360,7 +1368,8 @@ export class CommonFabricFormatter implements TypeFormatter {
     resolved: ResolvedCfcAlias,
     context: GenerationContext,
   ): MutableJSONSchema {
-    if (!resolved.aliasArgs[0]) {
+    const baseType = resolved.aliasArgs[0];
+    if (!baseType) {
       throw new Error(`${resolved.aliasName}<T> requires type argument`);
     }
 
@@ -1371,17 +1380,9 @@ export class CommonFabricFormatter implements TypeFormatter {
     // to recognize.
     const reachedByName = resolved.aliasArgNodes === undefined;
     const argNodes = resolved.aliasArgNodes ??
-      this.#getAliasTypeArgumentNodes(context);
+      this.#referenceArgumentNodes(resolved.aliasName, context);
     const parameterTypes = resolved.parameterTypes ?? NO_PARAMETER_TYPES;
-    // `Projection<SourceRef>` is the `Root` its `Ref<Root, Path>` carries, so
-    // that is the payload, as `#buildProjectionMetadata` reads `Path` from the
-    // same reference. A source that carries no root projects to `never`, as
-    // `Projection` resolves it.
-    const payload = resolved.aliasName === "Projection"
-      ? this.#projectionRoot(resolved.aliasArgs[0]!, argNodes?.[0], context)
-      : [resolved.aliasArgs[0]!, argNodes?.[0]] as const;
-    if (!payload) return false;
-    const [baseType, baseTypeNode] = payload;
+    const baseTypeNode = argNodes?.[0];
     // A payload still referring to a parameter that substitution had an
     // argument for but did not reach would be read with that parameter
     // unbound, so it is a guess.
@@ -1448,36 +1449,6 @@ export class CommonFabricFormatter implements TypeFormatter {
       context,
       baseTypeNode,
     );
-  }
-
-  /**
-   * The `Root` that `sourceRef`, a projection's `Ref<Root, Path>`, carries, read
-   * from its `__ct_ref_root__` member as the library's `Projection` infers it,
-   * with `Root`'s node where `sourceRefNode` writes it, and `undefined` for a
-   * source that carries no root.
-   */
-  #projectionRoot(
-    sourceRef: ts.Type,
-    sourceRefNode: ts.TypeNode | undefined,
-    context: GenerationContext,
-  ): readonly [ts.Type, ts.TypeNode | undefined] | undefined {
-    const checker = context.typeChecker;
-    const member = sourceRef.getProperty(CFC_REF_ROOT);
-    if (!member) return undefined;
-    const root = memberValueType(
-      member,
-      checker.getTypeOfSymbol(member),
-      checker,
-    );
-    const rootNode = sourceRefNode && ts.isTypeReferenceNode(sourceRefNode)
-      ? sourceRefNode.typeArguments?.[0]
-      : undefined;
-    return [
-      root,
-      rootNode && checker.getTypeFromTypeNode(rootNode) === root
-        ? rootNode
-        : undefined,
-    ];
   }
 
   #formatCfcAliasTypeNode(
@@ -1560,9 +1531,10 @@ export class CommonFabricFormatter implements TypeFormatter {
       return undefined;
     }
     const aliasArgs = typeWithAlias.aliasTypeArguments ?? [];
-    if (CFC_ALIAS_NAMES.has(aliasName)) {
+    if (lowersFromSyntax(aliasName)) {
       return { aliasName, aliasArgs };
     }
+    if (CFC_ALIAS_NAMES.has(aliasName)) return undefined;
 
     const aliasSymbol = typeWithAlias.aliasSymbol;
     const aliasDeclaration = this.#getTypeAliasDeclarationForSymbol(
@@ -1592,6 +1564,11 @@ export class CommonFabricFormatter implements TypeFormatter {
     parameterTypes: ParameterTypes = NO_PARAMETER_TYPES,
   ): ResolvedCfcAlias | undefined {
     const aliasName = aliasDeclaration.name.text;
+    // A chain that reaches `Projection` stops: the type it is written in is
+    // read as the checker resolves it.
+    if (CFC_ALIAS_NAMES.has(aliasName) && !lowersFromSyntax(aliasName)) {
+      return undefined;
+    }
     if (CFC_ALIAS_NAMES.has(aliasName)) {
       return {
         aliasName,
@@ -1822,17 +1799,6 @@ export class CommonFabricFormatter implements TypeFormatter {
             defaultFrom: "/",
           },
         );
-      case "Projection":
-        return this.#buildProjectionMetadata(
-          aliasArgs,
-          aliasArgNodes,
-          context,
-          {
-            fromIndex: 1,
-            pathIndex: 1,
-            defaultFrom: "/",
-          },
-        );
       default:
         return undefined;
     }
@@ -1860,33 +1826,14 @@ export class CommonFabricFormatter implements TypeFormatter {
     const directPath = this.#encodeJsonPointerPath(
       readValue(options.pathIndex),
     );
-    if (directPath !== undefined) {
-      return {
-        projection: {
-          from,
-          path: directPath,
-        },
-      };
-    }
-
-    const sourceRefType = aliasArgs[0] as TypeWithInternals | undefined;
-    const sourceRefNode = aliasArgNodes?.[0];
-    const nestedPathType = sourceRefType?.aliasTypeArguments?.[1];
-    const nestedPathNode =
-      sourceRefNode && ts.isTypeReferenceNode(sourceRefNode)
-        ? sourceRefNode.typeArguments?.[1]
-        : undefined;
-    const nestedPath = this.#encodeJsonPointerPath(
-      this.#extractLiteralLikeValue(nestedPathType, nestedPathNode, context),
-    );
-    if (nestedPath === undefined) {
+    if (directPath === undefined) {
       return undefined;
     }
 
     return {
       projection: {
         from,
-        path: nestedPath,
+        path: directPath,
       },
     };
   }
@@ -1990,6 +1937,26 @@ export class CommonFabricFormatter implements TypeFormatter {
    * holds the arguments that `Name` stands for, and a policy read from the
    * bare `Name` would find none and drop the writer binding without a word.
    */
+  /**
+   * Helper for {@link #formatResolvedCfcAlias}: the argument nodes of the
+   * context's reference when it names `aliasName`, the alias reached by its own
+   * name. A reference to another alias, one the checker resolved to
+   * `aliasName` (`MyProjection<R>` to `ProjectionOf<Root, Path>`), holds that
+   * alias's arguments, not these, so it gives none.
+   */
+  #referenceArgumentNodes(
+    aliasName: string,
+    context: GenerationContext,
+  ): readonly ts.TypeNode[] | undefined {
+    const reference = context.typeNode &&
+      readAuthoredTypeNode(context.typeNode, context.typeChecker);
+    if (!reference || !ts.isTypeReferenceNode(reference)) return undefined;
+    return this.#resolveTypeReferenceName(reference.typeName, context) ===
+        aliasName
+      ? this.#getAliasTypeArgumentNodes(context)
+      : undefined;
+  }
+
   #getAliasTypeArgumentNodes(
     context: GenerationContext,
   ): readonly ts.TypeNode[] | undefined {
