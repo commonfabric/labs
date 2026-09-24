@@ -37,10 +37,14 @@ Each check runs at prepare and runs again at commit. At commit, the reads that
 established the checks are compared against the committing transaction.
 
 - **Every clause of the draft's label is the actor's own.** Each alternative of
-  each clause must be one of four shapes: a bare DID equal to the actor;
-  `User{subject}`; `Context{name, subject}`; or `Resource{class, subject}`. The
-  subject must equal the acting principal exactly, and each shape is matched on
-  its exact key set. A `Context` that carries a `hash` is a named policy
+  each clause must be one of six shapes: a bare DID equal to the actor;
+  `User{subject}`; `Context{name, subject}`; `Resource{class, subject}`;
+  `Space{id}`; or `PersonalSpace{owner}`. The subject, `id`, or `owner` must
+  equal the acting principal exactly, and each shape is matched on its exact
+  key set. The two space shapes admit only the actor's home space, the space
+  whose DID is the actor's own, which is where a draft written at home is
+  labeled; a `Space` naming any other DID is refused, whether it is the room
+  or another member's home. A `Context` that carries a `hash` is a named policy
   reference, and an atom with any other extra field (a `scope`, a `role`) also
   belongs to someone else's policy, so neither counts as the actor's. The seal
   refuses:

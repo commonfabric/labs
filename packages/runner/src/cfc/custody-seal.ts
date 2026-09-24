@@ -225,6 +225,12 @@ const isActorOwnedAlternative = (atom: unknown, actor: string): boolean => {
     case CFC_ATOM_TYPE.Resource:
       return hasExactKeys(atom, ["type", "class", "subject"]) &&
         typeof atom.class === "string" && atom.subject === actor;
+    // The actor's home space is the space named by the actor's own DID, so
+    // its readers are the actor alone.
+    case CFC_ATOM_TYPE.Space:
+      return hasExactKeys(atom, ["type", "id"]) && atom.id === actor;
+    case CFC_ATOM_TYPE.PersonalSpace:
+      return hasExactKeys(atom, ["type", "owner"]) && atom.owner === actor;
     default:
       return false;
   }

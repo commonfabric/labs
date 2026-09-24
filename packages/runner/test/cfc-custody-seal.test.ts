@@ -580,9 +580,13 @@ describe("cfc-custody-seal", () => {
             symbol: "squat",
             bindingPath: ["squat"],
           });
+          // The anchor squat holds the seal's own constant, so only its
+          // label differs from what the seal would write.
           runtime.getCell(S, { [squatted]: { policy: P, instance } }, {
             type: "object",
-          }, tx).set({} as never);
+          }, tx).set(
+            (squatted === "custodyAnchor" ? { instance } : {}) as never,
+          );
           expect((await tx.commit()).error).toBeUndefined();
           const refusal = fixture.seal(alice);
           await expect(refusal).rejects.toThrow(
@@ -707,6 +711,60 @@ describe("cfc-custody-seal", () => {
           const refusal = prepareCustodySeal(draft, fixture.room(alice));
           await expect(refusal).rejects.toThrow(/identity mismatch/);
           await expect(refusal).rejects.toThrow(alice.did());
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("seals a draft labeled for the actor's home space", async () => {
+      // The actor's home space is the space whose DID is the actor's own, so
+      // its readers are the actor alone.
+      const fixture = await setup();
+      try {
+        for (
+          const [index, label] of [
+            [cfcAtom.space(alice.did())],
+            [cfcAtom.personalSpace(alice.did())],
+            [{
+              anyOf: [cfcAtom.space(alice.did()), cfcAtom.user(alice.did())],
+            }],
+          ].entries()
+        ) {
+          const draft = await fixture.draft(
+            alice,
+            honestStance,
+            label,
+            `home-draft-${index}`,
+          );
+          const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+          expect(prepared.sources).toEqual([]);
+        }
+        const draft = await fixture.draft(alice, honestStance, [
+          cfcAtom.space(alice.did()),
+        ], "home-draft-sealed");
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        await commitCustodySeal(prepared.consent, trustedClick());
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses another principal's space, including one whose id is another member's DID", async () => {
+      const fixture = await setup();
+      try {
+        for (
+          const clause of [
+            cfcAtom.space(bob.did()),
+            cfcAtom.space(S),
+            cfcAtom.personalSpace(bob.did()),
+            { ...cfcAtom.space(alice.did()), role: "reader" },
+            { ...cfcAtom.personalSpace(alice.did()), scope: "work" },
+          ]
+        ) {
+          const draft = await fixture.draft(alice, honestStance, [clause]);
+          await expect(prepareCustodySeal(draft, fixture.room(alice)))
+            .rejects.toThrow(/does not own/);
         }
       } finally {
         await fixture.dispose();
