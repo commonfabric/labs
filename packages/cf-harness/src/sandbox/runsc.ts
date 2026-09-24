@@ -71,6 +71,14 @@ import {
 export const DEFAULT_RUNSC_BINARY = "runsc";
 export const DEFAULT_RUNSC_WORKSPACE_MOUNT_PATH = "/workspace";
 export const DEFAULT_RUNSC_SHELL = "/bin/sh";
+/**
+ * The docker runtime defaults to `--network bridge`; this is the runsc
+ * spelling of the same posture (runsc's own netstack, which the darwin runsc
+ * runs as the VM's network), so a run that names no network mode has the
+ * same reach on either runtime. A lane that wants isolation says so, as the
+ * docker lanes do, through `CF_HARNESS_DOCKER_NETWORK_MODE=none`.
+ */
+export const DEFAULT_RUNSC_NETWORK_MODE: RunscNetworkMode = "sandbox";
 export const DEFAULT_RUNSC_FABRIC_MOUNT_PATH = "/fabric";
 export const RUNSC_ROOTFS_ENV = "CF_HARNESS_SANDBOX_ROOTFS";
 export const RUNSC_CFC_POLICY_ENV = "CF_HARNESS_RUNSC_CFC_POLICY";
@@ -283,7 +291,7 @@ export const resolveRunscSandboxConfig = (
     workspaceHostPath,
     workspaceMountPath,
     shellPath: options.shellPath ?? DEFAULT_RUNSC_SHELL,
-    networkMode: options.networkMode ?? "none",
+    networkMode: options.networkMode ?? DEFAULT_RUNSC_NETWORK_MODE,
     additionalMounts: Object.freeze(
       additionalMounts.map((mount) => Object.freeze(mount)),
     ),

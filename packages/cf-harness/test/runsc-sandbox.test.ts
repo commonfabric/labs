@@ -176,7 +176,11 @@ Deno.test("resolveRunscSandboxConfig defaults to the cfc-vm image on macOS", () 
     scratchDir: "/tmp/scratch",
   });
   assertEquals(c.rootfs, defaultDarwinRootfs("/Users/someone"));
-  assertEquals(c.networkMode, "none");
+  // The docker runtime defaults to `bridge`; the runsc runtime's default is
+  // the runsc spelling of the same posture, so a run that names no network
+  // mode gets the same reach on either runtime. `none` here would leave a
+  // chat session on runsc without the network the docker session has.
+  assertEquals(c.networkMode, "sandbox");
   assertEquals(c.runscBinary, "runsc");
   assertEquals(c.cfcPolicyPath, undefined);
 });
@@ -216,7 +220,7 @@ Deno.test("RunscSandboxRuntime runs a call as one container with the CFC transpo
   const globals = argv.slice(0, runAt);
   assert(globals.includes("--cfc"), "policy configured, so --cfc is passed");
   assertEquals(globals[globals.indexOf("--cfc-policy") + 1], "/policy.json");
-  assert(globals.includes("--network=none"));
+  assert(globals.includes("--network=sandbox"), "the default network mode");
   assert(globals.includes("--overlay2=root:memory"));
   const sub = argv.slice(runAt + 1);
   assertEquals(sub[sub.indexOf("--cfc-invocation-context-fd") + 1], "3");
@@ -542,7 +546,7 @@ Deno.test("RunscSandboxRuntime describes itself with its mounts and session supp
   assertEquals(d.cfc?.runtimeRequested, true);
   assertEquals(d.cfc?.invocationContextTransport, "fd");
   // The audit record names the network mode, as the Docker record does.
-  assertEquals(d.cfc?.networkMode, "none");
+  assertEquals(d.cfc?.networkMode, "sandbox");
   const mounts = d.cfc?.mounts ?? [];
   assertEquals(mounts.map((m) => m.sandboxPath), [
     "/workspace",
