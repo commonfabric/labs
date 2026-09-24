@@ -218,7 +218,9 @@ Normative behavior:
    way, such as one passed through a parameter the conditional checks, or one
    in a conditional with more than one such branch, must fail compilation with
    `cfc-write-authorized-by:unread` rather than yield a schema with no write
-   restriction. A reload of stored source reports it as a warning. A schema
+   restriction. A reload of stored source fails the same way: the error guards
+   a write restriction, not an authoring shape, and a pattern does not run
+   without the restriction its author wrote. A schema
    generated from a type alone, such as a computed's capture, has no reference
    to read a binding from: it carries no write claim, and nothing reports that.
 

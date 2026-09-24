@@ -768,7 +768,9 @@ export default pattern(() => {
     });
   });
 
-  it("refuses a writer it cannot read, and only warns over stored source", async () => {
+  it("refuses a writer it cannot read, stored source included", async () => {
+    // A reload of stored source is refused too: the error guards a write
+    // restriction, which a pattern does not run without.
     const severities = async (storedSource: boolean) => {
       const diagnostics: TransformationDiagnostic[] = [];
       await transformSource(
@@ -790,6 +792,6 @@ export default pattern(() => {
     };
 
     expect(await severities(false)).toEqual(["error"]);
-    expect(await severities(true)).toEqual(["warning"]);
+    expect(await severities(true)).toEqual(["error"]);
   });
 });

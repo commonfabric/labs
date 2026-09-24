@@ -1053,8 +1053,10 @@ report these through the same collector (deduplicated via §2.2's
   binding the schema generator cannot read: one passed through a parameter a
   conditional alias checks, say, or a conditional alias with more than one
   branch other than `never`. Its schema would carry no write restriction, so
-  compilation fails; over stored source (`storedSource`) it is a warning, as
-  the other authoring gates are. A policy written directly is not reported:
+  compilation fails. It fails over stored source (`storedSource`) too: unlike
+  the authoring-shape gates, which that mode demotes to warnings, it guards a
+  write restriction, and a reload that cannot read one does not run without
+  it. A policy written directly is not reported:
   the direct path (`toSchema<WriteAuthorizedBy<…>>()`, a cell constructor's
   type argument) mints its claim here, and the validator above refuses a
   binding that is not a direct `typeof`. A schema read from a type alone has
