@@ -124,7 +124,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-code-editor` | Code/prose editor with highlighting and `[[`-mention completion | `$value`, `$mentionable`, `$mentioned` |
 | `cf-collapsible` | Single collapsible section with trigger and content | |
 | `cf-copy-button` | Copy-to-clipboard button with visual feedback | |
-| `cf-custody-seal` | Native confirmation that seals the actor's draft into a custody room, showing the runtime-verified room, readers, answers and sources (see [custody seal](#cf-custody-seal)) | `$draft`, `$terms`, `$policy`, `$sources` |
+| `cf-custody-seal` | Native confirmation that seals the actor's draft into a custody room, showing the runtime-verified room, readers, seats, policy and sources beside what the terms say (see [custody seal](#cf-custody-seal)) | `$draft`, `$terms`, `$policy`, `$sources` |
 | `cf-dot-mark` | Scatter/dot mark rendered inside `cf-chart` | `$data` |
 | `cf-drag-source` | Wraps draggable content; pairs with `cf-drop-zone` (see [drag-and-drop](../patterns/meta/drag-and-drop.md)) | `$cell` |
 | `cf-draggable` | Absolutely-positioned draggable container (x/y) | |
@@ -1081,14 +1081,18 @@ document, `$policy` to a cell holding the room's custody policy reference, and
 `$sources` to the actor's source policy: a list of the actor's own `Context`
 and `Resource` atoms in the actor's home space.
 
-The button opens a native modal dialog that the host fills from what the
+The button opens a native modal dialog. Its first part comes from what the
 runtime read and checked, not from anything the pattern renders: the room
-space, who can read it and so see the answer, every answer the terms list,
-which of the actor's sources go in, and the bound on what one answer reveals,
-which for `k` distinct answers is `log₂ k` bits about any one input. The exact
-sealed values and the terms are under a collapsed details section. Terms name
-the room's possible outputs in `answers` and may carry a `question`; terms
-without `answers` show that they state no bound.
+space; who can read it now, and so see the answer, including the room space's
+own key; the seats; the policy that decides what comes out; and which of the
+actor's sources go in. The room's owners can add readers after the seal, and
+the dialog says so. Its second part, set apart, is what the room's terms say:
+the `question` and the `answers` the terms list, and, for `k` distinct answers,
+the bound of `log₂ k` bits on what one of them reveals. Nothing checks that the
+room's policy releases only the listed answers, so the dialog states the bound
+as conditional on it. Room-authored text is shown with control and
+direction-override characters removed and is capped in length. The exact sealed
+values and the terms are under a collapsed details section.
 
 The actor confirms with one trusted browser gesture on **Seal & consent**; a
 scripted click cannot seal. Changing a binding, dismissing the dialog, or

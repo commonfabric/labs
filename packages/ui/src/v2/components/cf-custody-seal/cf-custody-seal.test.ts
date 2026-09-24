@@ -56,7 +56,10 @@ function setup(overrides: Partial<{
   const element = new HeadlessSeal();
   const draft = createMockCellHandle<unknown>("sushi", { id: "of:draft" });
   // The pattern's own copy of the terms, which the dialog must not show.
-  const terms = createMockCellHandle<unknown>({ room: "Fake room" }, {
+  const terms = createMockCellHandle<unknown>({
+    question: "Fake question",
+    answers: ["fake answer"],
+  }, {
     id: "of:terms",
   });
   const policy = createMockCellHandle<unknown>({}, { id: "of:policy" });
@@ -149,15 +152,17 @@ describe("CFCustodySeal workflow", () => {
     await state.element.accessForTestingOnly.prepare();
     const text = renderedText(state.element);
     expect(text).toContain("did:key:verified-room");
-    expect(text).not.toContain("Fake room");
+    expect(text).not.toContain("Fake question");
+    expect(text).not.toContain("fake answer");
     expect(text).toContain("did:key:member");
     expect(text).toContain("did:key:actor (you)");
+    expect(text).not.toContain("did:key:member (no seat)");
     for (const answer of ["pizza", "sushi", "no agreement"]) {
       expect(text).toContain(answer);
     }
     expect(text).toContain("calendar (context)");
     expect(text).toContain(
-      "Each answer reveals at most ~1.6 bits about any one input.",
+      "If the room releases only these answers, each answer reveals at most ~1.6 bits about your values.",
     );
     expect(text).toContain("Where should we eat?");
   });
@@ -175,7 +180,7 @@ describe("CFCustodySeal workflow", () => {
     });
   }
 
-  it("does not seal after an untrusted confirmation event", async () => {
+  it("does not seal after a click that is not a browser mouse event", async () => {
     using state = setup();
     await state.element.accessForTestingOnly.prepare();
     await state.element.accessForTestingOnly.confirm(new Event("click"));
@@ -224,12 +229,26 @@ describe("summarizeCustodyTerms()", () => {
       .toEqual({
         question: undefined,
         answers: ["a", "b", "c", "d"],
+        seats: [],
         leakBits: "2",
       });
     expect(summarizeCustodyTerms({ answers: ["a", "a", "b"] }).leakBits)
       .toBe("1");
     expect(summarizeCustodyTerms({ answers: [1, true, null] }).answers)
       .toEqual(["1", "true", "null"]);
+    // The string "1" and the number 1 are two answers.
+    expect(summarizeCustodyTerms({ answers: ["1", 1] }).leakBits).toBe("1");
+  });
+
+  it("strips direction overrides and control characters from room text, and caps it", () => {
+    const summary = summarizeCustodyTerms({
+      question: "Room:\u202e ylimaf\u202c\u0007 " + "x".repeat(400),
+      answers: ["yes\u2066"],
+    });
+    expect(summary.question).not.toMatch(/[\u202a-\u202e\u2066-\u2069\u0007]/);
+    expect(summary.question?.startsWith("Room: ylimaf ")).toBe(true);
+    expect(summary.question?.length).toBe(281);
+    expect(summary.answers).toEqual(["yes"]);
   });
 
   it("states no bound for terms that list no answers", () => {

@@ -292,6 +292,29 @@ describe("custody-seal", () => {
     }, { sources: [calendar] });
   });
 
+  it("does not seal for a client that detached while its commit was reading", async () => {
+    await withFixture(async ({ processor, refs }) => {
+      const preview = await processor.handleCustodySealPrepare({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+      }, first);
+      const committing = processor.handleCustodySealCommit({
+        type: RequestType.CustodySealCommit,
+        id: preview.id,
+      }, first);
+      processor.disposeClient(first);
+      await expect(committing).rejects.toThrow(
+        "Custody sealing is unavailable",
+      );
+      // The actor has not sealed, so a fresh review from another client
+      // still prepares.
+      await processor.handleCustodySealPrepare({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+      }, second);
+    });
+  });
+
   it("refuses a source policy outside the actor's home space", async () => {
     await withFixture(async ({ processor, refs }) => {
       await expect(processor.handleCustodySealPrepare({

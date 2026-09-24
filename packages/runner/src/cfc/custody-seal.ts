@@ -768,19 +768,25 @@ const trustsAsDeclassifier = (
 const ROLE_OF = { OWNER: "owner", WRITE: "writer", READ: "reader" } as const;
 
 /**
- * The room's readers from its access list, ordered by principal.
+ * The room's readers, ordered by principal: every principal its access list
+ * names, and the room space's own key, which the memory service treats as an
+ * owner whether or not the list names it.
  *
  * @throws If the room space has no access list, or one with no concrete
  *   owner. Without one, who can read the room cannot be named, and the actor
  *   would consent to an audience nobody showed them.
  */
-const roomReaders = (acl: unknown): CustodyRoomReader[] => {
+const roomReaders = (acl: unknown, room: string): CustodyRoomReader[] => {
   if (!isACL(acl) || !hasConcreteOwner(acl)) {
     throw new Error(
       "Custody seal requires a room space whose access list names its readers",
     );
   }
-  return Object.entries(acl as Record<string, Capability>)
+  const listed: Record<string, Capability> = {
+    ...(acl as Record<string, Capability>),
+    [room]: "OWNER",
+  };
+  return Object.entries(listed)
     .map(([principal, capability]) => ({
       principal,
       role: ROLE_OF[capability],
@@ -949,6 +955,7 @@ const inspect = async (
       aclTx.readValueOrThrow({ ...acl.getAsNormalizedFullLink(), path: [] }, {
         meta: internalVerifierRead,
       }),
+      room,
     );
     evidence.push(...readEvidence(aclTx));
   } finally {

@@ -12,6 +12,7 @@ const preview: Preview = {
   readers: [
     { principal: "did:key:actor", role: "writer" },
     { principal: "did:key:member", role: "reader" },
+    { principal: "did:key:verified-room", role: "owner" },
   ],
   terms: {
     question: "Where should we eat?",
@@ -37,7 +38,10 @@ async function mountSeal(overrides: Partial<{
   element.addEventListener("cf-sealed", (event) => sealed.push(event));
   element.draft = createMockCellHandle<unknown>("sushi");
   // A pattern-controlled document claiming a room name the host never shows.
-  element.terms = createMockCellHandle<unknown>({ room: "Fake room" });
+  element.terms = createMockCellHandle<unknown>({
+    question: "Fake question",
+    answers: ["fake answer"],
+  });
   element.policy = createMockCellHandle<unknown>({});
   element.sources = createMockCellHandle<unknown>([]);
   element.runtime = {
@@ -70,20 +74,27 @@ Deno.test("cf-custody-seal presents the room, readers and answers the worker ver
       "did:key:verified-room",
     );
     expect(root.querySelector("dialog")?.textContent).not.toContain(
-      "Fake room",
+      "Fake question",
+    );
+    expect(root.querySelector(".question")?.textContent).toBe(
+      "Where should we eat?",
     );
     expect(
       Array.from(root.querySelectorAll(".readers li")).map((item) =>
         item.textContent
       ),
-    ).toEqual(["did:key:actor (you)", "did:key:member"]);
+    ).toEqual([
+      "did:key:actor (you)",
+      "did:key:member",
+      "did:key:verified-room (no seat)",
+    ]);
     expect(
       Array.from(root.querySelectorAll(".answers li")).map((item) =>
         item.textContent
       ),
     ).toEqual(["pizza", "sushi"]);
     expect(root.querySelector(".leak")?.textContent).toBe(
-      "Each answer reveals at most 1 bit about any one input.",
+      "If the room releases only these answers, each answer reveals at most 1 bit about your values.",
     );
     expect(root.querySelector("details")?.open).toBe(false);
     expect(root.querySelector(".stance")?.textContent).toBe(

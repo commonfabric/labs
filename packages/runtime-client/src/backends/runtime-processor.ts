@@ -2038,6 +2038,9 @@ export class RuntimeProcessor {
       throw new Error("Custody seal confirmation is unavailable");
     }
     const allowedSources = await readCustodySourcePolicy(pending.settings);
+    if (this.#isDisposed || this.#detachedClients.has(client)) {
+      throw new Error("Custody sealing is unavailable");
+    }
     if (!deepEqual(allowedSources, pending.allowedSources)) {
       throw new Error("Custody seal review is stale; review the value again");
     }

@@ -21,19 +21,41 @@ type SealBinding = {
   generation: number;
 };
 
-/** What the confirmation shows, derived only from the worker's preview. */
+/** What the room's terms state for the confirmation to show. */
 type SealSummary = {
   question: string | undefined;
   answers: string[] | undefined;
+  seats: string[];
   leakBits: string | undefined;
 };
+
+/** The longest room-authored string the confirmation shows, in characters. */
+const MAX_TERMS_TEXT = 280;
+
+/**
+ * Room-authored text made safe to place beside host-verified fields: control
+ * and bidirectional-override characters removed, so it cannot reorder the
+ * dialog's own text, and capped in length.
+ */
+function roomText(value: string): string {
+  const plain = value.replace(
+    // deno-lint-ignore no-control-regex
+    /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
+    "",
+  );
+  return plain.length > MAX_TERMS_TEXT
+    ? `${plain.slice(0, MAX_TERMS_TEXT)}…`
+    : plain;
+}
 
 /**
  * Reads the display fields of the terms the worker sealed. The terms are the
  * exact document the value is sealed under, so the confirmation shows them
- * rather than anything the pattern renders around it. `answers` is the list of
- * every answer the room can release; the bound on what one answer reveals is
- * the base-2 logarithm of its length.
+ * rather than anything the pattern renders around it. The room's author wrote
+ * `question` and `answers`, and nothing checks that the room's policy
+ * releases only the listed answers, so the confirmation presents them as what
+ * the terms say. For `k` distinct answers, an answer drawn from them carries
+ * at most `log₂ k` bits.
  */
 export function summarizeCustodyTerms(terms: unknown): SealSummary {
   const record = terms !== null && typeof terms === "object" &&
@@ -41,24 +63,38 @@ export function summarizeCustodyTerms(terms: unknown): SealSummary {
     ? terms as Record<string, unknown>
     : {};
   const question = typeof record.question === "string"
-    ? record.question
+    ? roomText(record.question)
     : undefined;
+  const seats = Array.isArray(record.seats)
+    ? record.seats.filter((seat): seat is string => typeof seat === "string")
+    : [];
   if (!Array.isArray(record.answers) || record.answers.length === 0) {
-    return { question, answers: undefined, leakBits: undefined };
+    return { question, answers: undefined, seats, leakBits: undefined };
   }
-  const answers = [
-    ...new Set(
-      record.answers.map((answer) =>
-        typeof answer === "string" ? answer : JSON.stringify(answer)
-      ),
-    ),
-  ];
+  // Distinct by their JSON, so the string "1" and the number 1 stay two.
+  const distinct = new Map<string, unknown>();
+  for (const answer of record.answers) {
+    distinct.set(JSON.stringify(answer), answer);
+  }
+  const answers = [...distinct.values()].map((answer) =>
+    roomText(typeof answer === "string" ? answer : JSON.stringify(answer))
+  );
   const bits = Math.log2(answers.length);
   return {
     question,
     answers,
+    seats,
     leakBits: Number.isInteger(bits) ? `${bits}` : `~${bits.toFixed(1)}`,
   };
+}
+
+/** The policy as a person can compare it: its symbol, module, and digest. */
+function describePolicy(policy: unknown): string {
+  const atom = policy as Record<string, unknown> | undefined;
+  if (typeof atom?.symbol !== "string") return "";
+  return `${atom.symbol} in ${String(atom.moduleIdentity)} (${
+    String(atom.policyDigest)
+  })`;
 }
 
 /** A source atom as a person reads it: its name or class, and its kind. */
@@ -71,10 +107,12 @@ function describeSource(source: unknown): string {
 
 /**
  * Seals the actor's draft into a custody room from a native host dialog. The
- * dialog shows what the worker read and checked: the room space, who can read
- * it, every answer the room can release and the bound on what one reveals,
- * and which of the actor's sources go in, with the exact values under
- * details. Only a trusted click on the dialog's own confirmation seals.
+ * dialog first shows what the worker read and checked: the room space, who
+ * can read it now, the seats, the policy that governs release, and which of
+ * the actor's sources go in. Below that, set apart, it shows what the room's
+ * terms say: the question, the answers they list, and the bound on what one of
+ * those answers reveals. The exact values are under details. Only a trusted
+ * click on the dialog's own confirmation seals.
  *
  * @element cf-custody-seal
  * @fires cf-sealed - The value is sealed; the event carries nothing
@@ -119,6 +157,16 @@ export class CFCustodySeal extends BaseElement {
         background: #fff;
         color: #18221c;
         font: 16px/1.5 system-ui, sans-serif;
+        direction: ltr;
+        unicode-bidi: isolate;
+      }
+      h3 {
+        font-size: 1.05rem;
+        margin: 1.25rem 0 0;
+      }
+      .note {
+        margin: .25rem 0 0;
+        font-size: .9rem;
       }
       dialog:not([open]) {
         display: none;
@@ -243,24 +291,28 @@ export class CFCustodySeal extends BaseElement {
       ${this.#error ? html`<p role="alert">${this.#error}</p>` : nothing}
       <dialog aria-labelledby="seal-title" @cancel=${this.#cancel}>
         <h2 id="seal-title" tabindex="-1" autofocus>Join this room with these terms?</h2>
-        ${summary?.question
-          ? html`<p class="question">${summary.question}</p>`
-          : nothing}
-        <dl>
+        <dl class="verified">
           <dt>Room</dt>
           <dd class="room">${preview?.room ?? ""}</dd>
-          <dt>Who can see the answer</dt>
+          <dt>Who can read the room now, and so see the answer</dt>
           <dd class="readers"><ul>${(preview?.readers ?? []).map((reader) =>
             html`<li>${reader.principal === "*" ? "Anyone" : reader.principal}${
               reader.principal === preview?.actor ? " (you)" : ""
+            }${
+              reader.principal !== "*" &&
+                !summary?.seats.includes(reader.principal)
+                ? " (no seat)"
+                : ""
             }</li>`
+          )}</ul>
+            <p class="note">The room's owners can add readers later, and the
+              service that hosts the room can read it.</p></dd>
+          <dt>Seats</dt>
+          <dd class="seats"><ul>${(summary?.seats ?? []).map((seat) =>
+            html`<li>${seat}${seat === preview?.actor ? " (you)" : ""}</li>`
           )}</ul></dd>
-          <dt>Every answer that can come out</dt>
-          <dd class="answers">${summary?.answers
-            ? html`<ul>${
-              summary.answers.map((answer) => html`<li>${answer}</li>`)
-            }</ul>`
-            : "These terms do not list the answers the room can give."}</dd>
+          <dt>Policy that decides what comes out</dt>
+          <dd class="policy">${describePolicy(preview?.policy)}</dd>
           <dt>What goes in from your sources</dt>
           <dd class="sources">${preview && preview.sources.length > 0
             ? html`<ul>${
@@ -270,10 +322,25 @@ export class CFCustodySeal extends BaseElement {
             }</ul>`
             : "Nothing beyond what you entered yourself."}</dd>
         </dl>
+        <h3>What the room's terms say</h3>
+        <dl class="stated">
+          ${summary?.question
+            ? html`
+              <dt>The room asks</dt>
+              <dd class="question">${summary.question}</dd>
+            `
+            : nothing}
+          <dt>Answers the terms list</dt>
+          <dd class="answers">${summary?.answers
+            ? html`<ul>${
+              summary.answers.map((answer) => html`<li>${answer}</li>`)
+            }</ul>`
+            : "These terms do not list the answers the room can give."}</dd>
+        </dl>
         <p class="leak">${summary?.leakBits !== undefined
-          ? `Each answer reveals at most ${summary.leakBits} ${
+          ? `If the room releases only these answers, each answer reveals at most ${summary.leakBits} ${
             summary.leakBits === "1" ? "bit" : "bits"
-          } about any one input.`
+          } about your values.`
           : "These terms state no bound on what an answer reveals."}</p>
         <details>
           <summary>Details</summary>

@@ -226,8 +226,9 @@ const setup = async (
   // and write it.
   const roomAcl = new ACLManager(runtimeFor(roomOwner), S);
   if (options.acl !== false) {
-    await roomAcl.set(roomOwner.did(), "OWNER");
-    for (const member of [alice, bob, carol, mallory]) {
+    // Carol owns the room's list; the room's own key is not on it.
+    await roomAcl.set(carol.did(), "OWNER");
+    for (const member of [alice, bob, mallory]) {
       await roomAcl.set(member.did(), "WRITE");
     }
   }
@@ -1305,9 +1306,11 @@ describe("cfc-custody-seal", () => {
         const prepared = await prepareCustodySeal(draft, fixture.room(alice));
         expect(prepared.actor).toBe(alice.did());
         expect(prepared.room).toBe(S);
+        // The room's key is an owner although the list does not name it.
         const expected = [
-          { principal: roomOwner.did(), role: "owner" },
-          ...[alice, bob, carol, mallory].map((member) => ({
+          { principal: S, role: "owner" },
+          { principal: carol.did(), role: "owner" },
+          ...[alice, bob, mallory].map((member) => ({
             principal: member.did(),
             role: "writer",
           })),
