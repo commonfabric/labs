@@ -29,7 +29,10 @@ const smallsPool: Uint8Array[] = [];
  */
 export abstract class BaseSmallChunkUpdatingHasher
   extends BaseIncrementalHasher {
-  #smalls: Uint8Array | null = null;
+  /** The buffer small updates collect in, while this instance holds one. */
+  #smallsBuf: Uint8Array | null = null;
+
+  /** How many bytes of `#smalls` are pending. */
   #smallsOffset: number = 0;
 
   /** @inheritDoc */
@@ -56,7 +59,7 @@ export abstract class BaseSmallChunkUpdatingHasher
 
       if (length <= (SMALLS_SIZE - smallsOffset)) {
         // The given `data` fits in the space available in `#smalls`.
-        this.#acquireSmalls().set(data, smallsOffset);
+        this.#smalls.set(data, smallsOffset);
         this.#smallsOffset += length;
         return;
       }
@@ -70,6 +73,36 @@ export abstract class BaseSmallChunkUpdatingHasher
   }
 
   /**
+   * The buffer small updates collect in, acquired from `smallsPool` if this
+   * instance holds none.
+   */
+  get #smalls(): Uint8Array {
+    return this.#smallsBuf ?? this.#acquireSmalls();
+  }
+
+  /**
+   * Takes a buffer from `smallsPool` for this instance to hold, or allocates
+   * one if the pool is empty, and returns it.
+   */
+  #acquireSmalls(): Uint8Array {
+    const smalls = smallsPool.pop() ?? new Uint8Array(SMALLS_SIZE);
+    this.#smallsBuf = smalls;
+    return smalls;
+  }
+
+  /** Gives the buffer this instance holds, if any, back to `smallsPool`. */
+  #releaseSmalls() {
+    const smalls = this.#smallsBuf;
+
+    if (smalls !== null) {
+      this.#smallsBuf = null;
+      if (smallsPool.length < SMALLS_POOL_MAX) {
+        smallsPool.push(smalls);
+      }
+    }
+  }
+
+  /**
    * Helper for `digest()` and `update()`, which flushes any pending
    * small-update bytes to the underlying `_rawUpdate()`.
    */
@@ -80,39 +113,12 @@ export abstract class BaseSmallChunkUpdatingHasher
       return;
     }
 
-    const smalls = this.#smalls!;
+    const smalls = this.#smalls;
     const smallsFinal = (smallsOffset === smalls.length)
       ? smalls
       : smalls.subarray(0, smallsOffset);
 
     this._rawUpdate(smallsFinal);
     this.#smallsOffset = 0;
-  }
-
-  /**
-   * Returns `#smalls`, first taking a buffer from `smallsPool` for it, or
-   * allocating one if the pool is empty, when this instance holds none.
-   */
-  #acquireSmalls(): Uint8Array {
-    let smalls = this.#smalls;
-
-    if (smalls === null) {
-      smalls = smallsPool.pop() ?? new Uint8Array(SMALLS_SIZE);
-      this.#smalls = smalls;
-    }
-
-    return smalls;
-  }
-
-  /** Gives `#smalls`, if this instance holds one, back to `smallsPool`. */
-  #releaseSmalls() {
-    const smalls = this.#smalls;
-
-    if (smalls !== null) {
-      this.#smalls = null;
-      if (smallsPool.length < SMALLS_POOL_MAX) {
-        smallsPool.push(smalls);
-      }
-    }
   }
 }
