@@ -20,6 +20,7 @@ import {
   type IExtendedStorageTransaction,
   type JSONSchema,
   Runtime,
+  snapshotQueryResult,
 } from "@commonfabric/runner";
 import { validateSchemaValue } from "@commonfabric/runner/cfc";
 import type { JSONSchemaObj } from "@commonfabric/api";
@@ -165,7 +166,11 @@ describe("schema-compatibility-default-reach", () => {
     await storageManager?.close();
   });
 
-  /** What `stored` reads back as when it is read through `schema`. */
+  /**
+   * What `stored` reads back as when it is read through `schema`, detached
+   * from the read: the validator compares what it is given, and takes a value
+   * rather than a view.
+   */
   function readThrough(schema: JSONSchema, stored: unknown): unknown {
     const cell = runtime.getCell<unknown>(
       space,
@@ -174,7 +179,7 @@ describe("schema-compatibility-default-reach", () => {
       tx,
     );
     cell.set(stored);
-    return cell.asSchema(schema).get();
+    return snapshotQueryResult(cell.asSchema(schema).get());
   }
 
   it("merges a default written under `allOf` into the value read", () => {

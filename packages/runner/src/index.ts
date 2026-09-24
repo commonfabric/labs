@@ -119,6 +119,7 @@ export {
   getCellOrThrow,
   isCellResult,
   isCellResultForDereferencing,
+  snapshotQueryResult,
 } from "./query-result-proxy.ts";
 export { effect } from "./reactivity.ts";
 export { type AddCancel, type Cancel, noOp, useCancelGroup } from "./cancel.ts";

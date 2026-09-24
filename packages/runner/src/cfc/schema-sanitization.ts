@@ -1650,6 +1650,15 @@ export function relaxDefaultedRequired(
   return relaxed as JSONSchema;
 }
 
+/**
+ * Validates `value` against `schema`, returning the failure's message, or
+ * `undefined` when it validates.
+ *
+ * An `enum` or `const` anywhere in `schema` compares the part of `value` it
+ * applies to with `fabricAwareEqual()`, which takes no query-result views, so
+ * a caller whose value may hold a view there validates a copy detached from it
+ * (`snapshotQueryResult()`).
+ */
 export const validateSchemaValue = (
   schema: JSONSchema,
   value: unknown,
@@ -1871,6 +1880,8 @@ const validateAgainstSchemaUncached = (
       }
     }
 
+    // `value` reaches `fabricAwareEqual()` here, so it is never a query-result
+    // view (see `validateSchemaValue()`).
     if (
       Array.isArray(schema.enum) &&
       !schema.enum.some((entry) => fabricAwareEqual(entry, value))
