@@ -364,6 +364,12 @@ describe("Schema: CFC authoring aliases", () => {
       required: ["title"],
       ifc: { projection: { from: "/", path: "/nested/path" } },
     });
+    expect(schema.properties?.directBuilt).toEqual({
+      type: "object",
+      properties: { title: { type: "string" } },
+      required: ["title"],
+      ifc: { projection: { from: "/", path: "/title" } },
+    });
   });
 
   it("expands nested aliases before lowering canonical Cfc metadata", async () => {
