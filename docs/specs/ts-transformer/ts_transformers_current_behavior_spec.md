@@ -1732,7 +1732,15 @@ Injected behaviors:
   - explicit or contextual unresolved generic type parameters degrade to
     `{ type: "unknown" }`
 - `generateObject(...)`:
-  - ensure options object has `schema` property (merge/spread as needed)
+  - inject a missing `schema` property into the options object (merge/spread as
+    needed), preserving an authored `schema` property on an options literal
+  - the schema describes `T`, the generated value. Without a type argument, use
+    the `T` TypeScript infers for the resolved call from its contextual type:
+    `const s: BuiltInLLMGenerateObjectState<X> = generateObject(...)` gets `X`'s
+    schema, without adding the optionality of the state's `result` field. A
+    contextual type that supplies no `T`, such as a pattern's returned object,
+    uses the call's default `any` and emits `true`, as `generateObject<any>(...)`
+    does. A call with no contextual type gets no inferred schema
   - explicit or contextual unresolved generic result types degrade to
     `{ type: "unknown" }`
 - `sqliteQuery<Row>(...)`:
