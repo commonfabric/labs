@@ -79,11 +79,17 @@ const unloadedCell = (id?: string) => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     },
 
-    /** Delivers a value with no label: a document that loaded unlabeled. */
-    loadWithoutLabel() {
+    /**
+     * Stores `next` as the label (`undefined` for a document with none) and
+     * delivers the value without it, as an update on a subscription that
+     * does not carry labels does; settles the reads it starts.
+     */
+    async loadWithoutDeliveringLabel(next: unknown) {
+      label = next;
       for (const callback of [...subscribers]) {
         callback({ loaded: true }, undefined);
       }
+      await new Promise((resolve) => setTimeout(resolve, 0));
     },
   };
 };
@@ -312,10 +318,61 @@ describe("CFCFCAuthorship", () => {
       await element.refreshLabel();
       expect(resolved.subscriberCount()).toBe(1);
 
-      resolved.loadWithoutLabel();
+      await resolved.loadWithoutDeliveringLabel(undefined);
 
       expect(resolved.subscriberCount()).toBe(0);
       expect(element.authorshipState).toBe("unknown");
+    } finally {
+      element.disconnectedCallback();
+    }
+  });
+
+  it("re-reads the label when an update brings the value without it", async () => {
+    // A subscription that is not the first on its backend key may carry no
+    // labels, so the label is read from the store once the value arrives.
+    const resolved = unloadedCell();
+    const element = connectedElement();
+
+    try {
+      element.author = "alice";
+      element.value = {
+        getCfcLabel: () => Promise.resolve(undefined),
+        resolveAsCell: () => Promise.resolve(resolved),
+      };
+
+      await element.refreshLabel();
+      expect(element.authorshipState).not.toBe("verified");
+
+      await resolved.loadWithoutDeliveringLabel(authoredByLabel("alice"));
+
+      expect(element.authorshipState).toBe("verified");
+      expect(resolved.subscriberCount()).toBe(0);
+    } finally {
+      element.disconnectedCallback();
+    }
+  });
+
+  it("moves the watch between resolved cells that have no ref", async () => {
+    const first = unloadedCell();
+    const second = unloadedCell();
+    let resolved = first;
+    const element = connectedElement();
+
+    try {
+      element.author = "alice";
+      element.value = {
+        getCfcLabel: () => Promise.resolve(undefined),
+        resolveAsCell: () => Promise.resolve(resolved),
+      };
+
+      await element.refreshLabel();
+      expect(first.subscriberCount()).toBe(1);
+
+      resolved = second;
+      await element.refreshLabel();
+
+      expect(first.subscriberCount()).toBe(0);
+      expect(second.subscriberCount()).toBe(1);
     } finally {
       element.disconnectedCallback();
     }

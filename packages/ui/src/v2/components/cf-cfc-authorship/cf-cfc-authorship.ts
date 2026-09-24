@@ -188,8 +188,14 @@ type LabelSource = "value" | "author";
 
 /** A watch on a resolved cell whose label read as missing. */
 interface LabelWatch {
-  /** Which cell is watched, as `cellTargetKey()` names it. */
-  readonly target: string | undefined;
+  /**
+   * Which cell is watched: the key `cellTargetKey()` gives it, or the cell
+   * object itself when it has no `ref()`.
+   */
+  readonly target: unknown;
+
+  /** Whether an update has delivered the cell's value, so it has loaded. */
+  loaded: boolean;
 
   /** Ends the subscription; unset until the subscription call returns. */
   cancel: (() => void) | undefined;
@@ -795,19 +801,20 @@ export class CFCFCAuthorship extends BaseElement {
 
   /**
    * Watches `unloadedCell`, the cell `source` resolves to, whose label read as
-   * missing, and runs `refresh` on each update that carries a label. A label
-   * read through `resolveAsCell()` is a one-time store read, and this
-   * component's own subscriptions are on `value` and `author`, not on the cells
-   * they resolve to, so nothing else would re-run the read when that cell's
-   * document loads. The watch ends when a re-read finds the label, on the
-   * first update that carries a value but no label (the document has loaded
-   * without one), when `source` resolves to a different cell or to none, and
-   * when the element disconnects. An element that is not connected starts
-   * none.
+   * missing, and runs `refresh` when an update shows the cell has loaded or
+   * carries its label. A label read through `resolveAsCell()` is a one-time
+   * store read, and this component's own subscriptions are on `value` and
+   * `author`, not on the cells they resolve to, so nothing else would re-run
+   * the read when that cell's document loads.
    *
-   * The update carries a label only if this is the first subscription on the
-   * cell's backend key: the connection lets the first subscriber decide
-   * whether that key's updates carry labels.
+   * An update carries a label only when this is the first subscription on the
+   * cell's backend key (the connection lets the first subscriber decide), so a
+   * value arriving without one does not show the cell has none. Instead it
+   * marks the cell loaded and runs `refresh`, whose store read does see the
+   * label; a read that still finds none once the cell has loaded ends the
+   * watch. The watch ends too when a read finds the label, when `source`
+   * resolves to a different cell or to none, and when the element
+   * disconnects. An element that is not connected starts none.
    */
   #watchUnloadedLabel(
     source: LabelSource,
@@ -818,23 +825,25 @@ export class CFCFCAuthorship extends BaseElement {
       this.#endLabelWatch(source);
       return;
     }
-    const target = cellTargetKey(unloadedCell);
+    const target = cellTargetKey(unloadedCell) ?? unloadedCell;
     const current = this.#labelWatches[source];
-    if (current !== undefined && current.target === target) {
+    if (current !== undefined && Object.is(current.target, target)) {
+      if (current.loaded) {
+        this.#endLabelWatch(source);
+      }
       return;
     }
     this.#endLabelWatch(source);
 
-    const watch: LabelWatch = { target, cancel: undefined };
+    const watch: LabelWatch = { target, loaded: false, cancel: undefined };
     this.#labelWatches[source] = watch;
     const cancel = unloadedCell.subscribe((value, cfcLabel) => {
       if (this.#labelWatches[source] !== watch) {
         return;
       }
-      if (cfcLabel !== undefined) {
+      if (cfcLabel !== undefined || value !== undefined) {
+        watch.loaded = true;
         refresh();
-      } else if (value !== undefined) {
-        this.#endLabelWatch(source);
       }
     }, { includeCfcLabel: true });
     // The first delivery is synchronous, and may already have ended the watch.
