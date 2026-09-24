@@ -586,6 +586,8 @@ export class MultiRuntimeSession {
 type HostedServer = {
   /** The server's `idle()`, which covers storage and not a serving loop. */
   idle(): Promise<void>;
+
+  /** Closes the server, and its serving loop first when it has one. */
   close(): Promise<void>;
 };
 
