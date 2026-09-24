@@ -8,6 +8,7 @@ import type { URI } from "@commonfabric/memory/interface";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { loadStoredCfcEnvelope } from "../src/cfc/prepare.ts";
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
+import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { EventHandler } from "../src/scheduler.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -842,6 +843,85 @@ describe("stored write requirements", () => {
         });
       });
     }
+  });
+
+  describe("a write to the document's metadata", () => {
+    // A document's `result` field is metadata beside its value, not a key of
+    // it, so writing it touches no claim on the value, not even one at a
+    // path spelled `result` or under a wildcard.
+
+    const WRITER = "metadata-builtin";
+    const CLAIM = { writeAuthorizedBy: [WRITER] };
+
+    const seed = async (
+      runtime: Runtime,
+      id: string,
+      schema: JSONSchema,
+      value: unknown,
+    ) => {
+      const tx = runtime.edit();
+      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+      tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: WRITER });
+      runtime.getCell(space, id, schema, tx).set(value as never);
+      expect((await tx.commit()).error).toBeUndefined();
+    };
+
+    const writeResult = (
+      runtime: Runtime,
+      tx: IExtendedStorageTransaction,
+      id: string,
+    ) =>
+      runtime.getCell(space, id, undefined, tx).setMetaRaw(
+        "result",
+        runtime.getCell(space, `${id}-result`).getAsLink(),
+        rawMetaWriteAuthorization,
+      );
+
+    it("commits beside a claim on every item of the value", async () => {
+      const runtime = start();
+      const schema = { type: "array", items: { type: "string", ifc: CLAIM } };
+      await seed(runtime, "metadata-beside-items", schema, []);
+      const tx = runtime.edit();
+      runtime.getCell(space, "metadata-beside-items", schema, tx).set([]);
+      writeResult(runtime, tx, "metadata-beside-items");
+      expect((await tx.commit()).error).toBeUndefined();
+    });
+
+    it("commits beside a claim on a value key named `result`", async () => {
+      const runtime = start();
+      const schema = {
+        type: "object",
+        properties: {
+          result: { type: "string", ifc: CLAIM },
+          other: { type: "string" },
+        },
+      } as const satisfies JSONSchema;
+      await seed(runtime, "metadata-beside-key", schema, {
+        result: "r",
+        other: "o",
+      });
+      const tx = runtime.edit();
+      runtime.getCell(space, "metadata-beside-key", schema, tx).key("other")
+        .set("changed");
+      writeResult(runtime, tx, "metadata-beside-key");
+      expect((await tx.commit()).error).toBeUndefined();
+      expect(runtime.getCell(space, "metadata-beside-key", schema).get())
+        .toEqual({ result: "r", other: "changed" });
+    });
+
+    it("still refuses a write to the claimed value key beside it", async () => {
+      const runtime = start();
+      const schema = {
+        type: "object",
+        properties: { result: { type: "string", ifc: CLAIM } },
+      } as const satisfies JSONSchema;
+      await seed(runtime, "metadata-and-key", schema, { result: "r" });
+      const tx = runtime.edit();
+      runtime.getCell(space, "metadata-and-key", schema, tx).key("result")
+        .set("mallory");
+      writeResult(runtime, tx, "metadata-and-key");
+      expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+    });
   });
 
   describe("the persisted envelope", () => {

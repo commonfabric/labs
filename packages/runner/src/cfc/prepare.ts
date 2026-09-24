@@ -4206,6 +4206,7 @@ const ifcEntryAppliesToAttemptedWrite = (
         if (write.space !== target.space) return false;
         if (write.id !== target.id) return false;
         if (normalizeCellScope(write.scope) !== target.scope) return false;
+        if (write.path[0] !== "value") return false;
         const writePath = canonicalizeLogicalPath(write.path);
         return concretePathHasPrefix(writePath, path) ||
           (ancestorTouches && concretePathHasPrefix(path, writePath));
@@ -4230,10 +4231,13 @@ const ifcEntryAppliesToAttemptedWrite = (
       matchesValue(value);
   }
 
+  // Only value-surface entries name a path of the value. A write to a
+  // metadata field such as `result` canonicalizes to a one-segment path that
+  // a wildcard would otherwise take for an item.
   const exactAttemptedPaths = [
     ...(tx.getReactivityLog?.().writes ?? []),
     ...(tx.getReactivityLog?.().attemptedWrites ?? []),
-  ].map((write) => ({
+  ].filter((write) => write.path[0] === "value").map((write) => ({
     write,
     path: canonicalizeLogicalPath(write.path),
   })).filter(({ write, path: writePath }) =>
