@@ -83,13 +83,11 @@ for (const row of items.get().filter((r) => r.name === name)) {
 items.addUnique(items.get().find((r) => r.name === name));
 ```
 
-The compiler reports both as well, as `mergeable-write:value-argument`, so the
-mistake shows before the handler runs. It reports the call whenever the
-collection's elements are objects and the argument is certainly not a cell, and
-it stays quiet where the value form is right: an argument it cannot decide, and
-a collection of scalars, which store inline rather than as links and so do
-compare by value. The type system cannot tell the two apart: the parameter is
-declared `U | AnyCell<U>`, so both forms type-check.
+Nothing reports the mistake before the handler runs: the parameter is declared
+`U | AnyCell<U>`, so both forms type-check. The value form is right for a
+collection of scalars, which store inline rather than as links and so compare by
+value; a scalar read back through `.get()` is the value itself, not a proxy, so
+the refusal leaves that form alone.
 
 Pass a cell instead — the cell from `elementById(key)`, or the element cell
 from `key(index)`:
