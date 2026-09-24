@@ -5230,8 +5230,10 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // If we've asked for cells in the array and we don't need to traverse cells,
       // add the created cell instead. We check asCellOrStream regardless of
       // whether the value is a link — inline objects should also become cells
-      // when the schema says asCell, to avoid reading nested data on the
-      // parent's reactive transaction.
+      // when the schema declares the handle at its root, to avoid reading
+      // nested data on the parent's reactive transaction. A union whose options
+      // declare the handles declares none there: it is traversed below, and the
+      // merge of its branches mints the handle.
       if (
         !this.traverseCells &&
         SchemaObjectTraverser.hasAsCell(curSelector.schema) &&
@@ -5369,7 +5371,10 @@ export class SchemaObjectTraverser<V extends FabricValue>
         path: appendToPath(doc.address.path, propKey),
       };
       // If we have a link, the traverseWithSchema will handle that for us.
-      // If we have a value, we instead need to handle it ourselves
+      // If we have a value, we instead need to handle it ourselves, where the
+      // schema declares the handle at its root. A union whose options declare
+      // the handles declares none there: it is traversed below, and the merge
+      // of its branches mints the handle.
       if (
         !this.traverseCells &&
         SchemaObjectTraverser.hasAsCell(propSchema) &&
