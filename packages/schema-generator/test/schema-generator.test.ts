@@ -3321,7 +3321,9 @@ type CalculatorRequest = {
       const { checker, sourceFile } = await createTestProgram(
         "interface Entry { host: string }\n" +
           'type Mode = "a" | "b";\n' +
-          "export type Keep = [Entry, Mode];",
+          "type Callable = (tags: string[]) => boolean;\n" +
+          "type MakesStream = () => Stream<number>;\n" +
+          "export type Keep = [Entry, Mode, Callable, MakesStream];",
       );
       const declared = (name: string) =>
         checker.getDeclaredTypeOfSymbol(
@@ -3333,6 +3335,8 @@ type CalculatorRequest = {
         sourceFile,
         entry: declared("Entry"),
         mode: declared("Mode"),
+        callable: declared("Callable"),
+        makesStream: declared("MakesStream"),
       };
     }
 
@@ -3377,6 +3381,62 @@ type CalculatorRequest = {
         properties: { entry: { $ref: "#/$defs/Entry" } },
         required: ["entry"],
         $defs: ENTRY_DEFS,
+      });
+    });
+
+    it("leaves a printed callable out of a type literal the caller built", async () => {
+      // The object type the literal stands for leaves the callable out, and
+      // so does the literal.
+      const { checker, sourceFile, callable } = await types();
+      const node = unresolvable();
+      const literal = ts.factory.createTypeLiteralNode([
+        ts.factory.createPropertySignature(undefined, "call", undefined, node),
+        ts.factory.createPropertySignature(
+          undefined,
+          "tags",
+          undefined,
+          ts.factory.createArrayTypeNode(
+            ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+          ),
+        ),
+      ]);
+
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        literal,
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+        printedFrom(new Map([[node, callable]])),
+      );
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: { tags: { type: "array", items: { type: "string" } } },
+        required: ["tags"],
+      });
+    });
+
+    it("reads a printed callable that makes a stream as a stream", async () => {
+      const { checker, sourceFile, makesStream } = await types();
+      const node = unresolvable();
+      const literal = ts.factory.createTypeLiteralNode([
+        ts.factory.createPropertySignature(undefined, "next", undefined, node),
+      ]);
+
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        literal,
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+        printedFrom(new Map([[node, makesStream]])),
+      );
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: { next: { asCell: ["stream"] } },
+        required: ["next"],
       });
     });
 
