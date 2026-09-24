@@ -4,7 +4,7 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { atomEntails } from "./atom-pattern.ts";
 import { isCfcFieldCommitment } from "./label-representation.ts";
-import { compareByCanonicalHash, uniqueCfcAtoms } from "./observation.ts";
+import { compareByCanonicalHash, uniqueCfcAtoms } from "./atoms.ts";
 
 /**
  * CNF confidentiality clauses (spec §3.1.8 / §4.2.1; Epic A of

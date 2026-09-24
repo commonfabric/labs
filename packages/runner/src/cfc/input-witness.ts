@@ -19,7 +19,7 @@ import { CFC_ATOM_TYPE, type CfcAtom } from "@commonfabric/api/cfc";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
-import { compareByCanonicalHash, uniqueCfcAtoms } from "./observation.ts";
+import { compareByCanonicalHash, uniqueCfcAtoms } from "./atoms.ts";
 import type { ImplementationIdentity } from "./types.ts";
 
 /**
