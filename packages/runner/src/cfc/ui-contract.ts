@@ -49,6 +49,12 @@ export type UiContractEntry = {
 
   /** The schema document that resolves local references inside `.schema`. */
   root?: JSONSchema;
+
+  /**
+   * Set when the contract sits inside an `anyOf` or `oneOf` branch, so it
+   * holds only for the values that branch matches.
+   */
+  conditional?: true;
 };
 
 const uiContractEntry = (
@@ -56,8 +62,15 @@ const uiContractEntry = (
   contract: UiContract,
   schema?: JSONSchema,
   root?: JSONSchema,
+  conditional = false,
 ): UiContractEntry => {
   const entry: UiContractEntry = { path, contract };
+  if (conditional) {
+    Object.defineProperty(entry, "conditional", {
+      value: true,
+      enumerable: false,
+    });
+  }
   if (schema !== undefined) {
     Object.defineProperty(entry, "schema", {
       value: schema,
@@ -277,6 +290,7 @@ const uiContractsFromSchemaInternal = (
   root: JSONSchema | undefined,
   path: string[],
   seenRefs: Set<string>,
+  conditional = false,
 ): UiContractEntry[] => {
   const branchRefs = new Set(seenRefs);
   const resolvedSchema = followSchemaRef(schema, root, branchRefs);
@@ -291,6 +305,7 @@ const uiContractsFromSchemaInternal = (
       resolvedRoot,
       path,
       seenRefsBelow(branchRefs, root, resolvedRoot),
+      conditional,
     );
   }
   if (!isObjectOrArray(resolvedSchema)) {
@@ -306,7 +321,13 @@ const uiContractsFromSchemaInternal = (
   );
   if (contract !== undefined) {
     entries.push(
-      uiContractEntry([...path], contract, resolvedSchema, childRoot),
+      uiContractEntry(
+        [...path],
+        contract,
+        resolvedSchema,
+        childRoot,
+        conditional,
+      ),
     );
   }
 
@@ -341,7 +362,15 @@ const uiContractsFromSchemaInternal = (
       )
       .map((entry) => entry.contract);
     if (definitionContracts.length === 1) {
-      entries.push(uiContractEntry([...path], definitionContracts[0]));
+      entries.push(
+        uiContractEntry(
+          [...path],
+          definitionContracts[0],
+          undefined,
+          undefined,
+          conditional,
+        ),
+      );
     }
   }
 
@@ -353,23 +382,31 @@ const uiContractsFromSchemaInternal = (
           childRoot,
           [...path, key],
           seenRefs,
+          conditional,
         ),
       );
     }
   }
 
-  const compound = [
+  const compound: [JSONSchema, boolean][] = [
     ...(Array.isArray(resolvedSchema.anyOf) ? resolvedSchema.anyOf : []),
     ...(Array.isArray(resolvedSchema.oneOf) ? resolvedSchema.oneOf : []),
-    ...(Array.isArray(resolvedSchema.allOf) ? resolvedSchema.allOf : []),
-  ];
-  for (const child of compound) {
+  ].map((child) => [child as JSONSchema, true]);
+  for (
+    const child of Array.isArray(resolvedSchema.allOf)
+      ? resolvedSchema.allOf
+      : []
+  ) {
+    compound.push([child as JSONSchema, conditional]);
+  }
+  for (const [child, childConditional] of compound) {
     entries.push(
       ...uiContractsFromSchemaInternal(
-        child as JSONSchema,
+        child,
         childRoot,
         path,
         seenRefs,
+        childConditional,
       ),
     );
   }
@@ -390,6 +427,7 @@ const uiContractsFromSchemaInternal = (
         childRoot,
         [...path, "*"],
         seenRefs,
+        conditional,
       ),
     );
   }
@@ -402,6 +440,7 @@ const uiContractsFromSchemaInternal = (
           childRoot,
           [...path, String(index)],
           seenRefs,
+          conditional,
         ),
       );
     }

@@ -3504,7 +3504,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
-  it("does not apply wildcard policy entries when item value shape mismatches", async () => {
+  it("applies a wildcard writer claim to an item whatever shape its value takes", async () => {
+    // Only a claim inside an `anyOf` or `oneOf` branch is selected by the
+    // value's shape; this one governs every item, so writing a value of
+    // another type there is a write the named writer must make.
+
     const { runtime, storageManager } = createRuntime();
     try {
       const tx = runtime.edit();
@@ -3532,7 +3536,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       cell.set({ items: ["not an object"] });
 
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      const result = await tx.commit();
+      expect(isCfcEnforcementRejection(result.error)).toBe(true);
+      expect(String((result.error as Error).message)).toContain(
+        "writeAuthorizedBy",
+      );
     } finally {
       await runtime.dispose();
       await storageManager.close();

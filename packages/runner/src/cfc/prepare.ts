@@ -4149,7 +4149,15 @@ const ifcEntryAppliesToAttemptedWrite = (
   // `cfcSchemaEntries()` entries, whose
   // captured ifc node lacks the document's `$defs`.
   root?: JSONSchema,
+  // Whether the entry sits inside an `anyOf` or `oneOf` branch. Only then does
+  // the written value decide whether it applies: the value's shape selects
+  // the branch. Any other entry governs its path whatever shape the new value
+  // takes, so a value of another type written over it is a change to it.
+  conditional = false,
 ): boolean => {
+  const matchesValue = (value: unknown): boolean =>
+    !conditional ||
+    wildcardPolicyMatchesValue(tx, target, schema, value, root);
   const wildcardIndex = path.indexOf("*");
   if (wildcardIndex === -1) {
     const writes = tx.getWriteDetailsForTarget?.(target) ??
@@ -4213,13 +4221,13 @@ const ifcEntryAppliesToAttemptedWrite = (
     const value = effectiveValueForTarget(tx, pathTarget);
     if (path.length === 0) {
       return value === undefined ||
-        wildcardPolicyMatchesValue(tx, target, schema, value, root);
+        matchesValue(value);
     }
     if (value === undefined) {
       return previousWriteValueForTarget(tx, pathTarget) !== undefined;
     }
     return value !== undefined &&
-      wildcardPolicyMatchesValue(tx, target, schema, value, root);
+      matchesValue(value);
   }
 
   const exactAttemptedPaths = [
@@ -4237,13 +4245,7 @@ const ifcEntryAppliesToAttemptedWrite = (
   ).map(({ path }) => path);
   if (exactAttemptedPaths.length > 0) {
     return exactAttemptedPaths.some((writePath) =>
-      wildcardPolicyMatchesValue(
-        tx,
-        target,
-        schema,
-        effectiveValueForTarget(tx, { ...target, path: writePath }),
-        root,
-      )
+      matchesValue(effectiveValueForTarget(tx, { ...target, path: writePath }))
     );
   }
 
@@ -4259,7 +4261,7 @@ const ifcEntryAppliesToAttemptedWrite = (
     const writePath = write.address.path.slice(1).map((entry) => String(entry));
     if (pathPatternMatches(path, writePath)) {
       return !fabricAwareEqual(write.value, write.previousValue) &&
-        wildcardPolicyMatchesValue(tx, target, schema, write.value, root);
+        matchesValue(write.value);
     }
     if (concretePathHasPrefix(prefix, writePath)) {
       const relativePrefix = prefix.slice(writePath.length);
@@ -4273,9 +4275,7 @@ const ifcEntryAppliesToAttemptedWrite = (
         path.slice(wildcardIndex),
       );
       if (
-        matches.some((match) =>
-          wildcardPolicyMatchesValue(tx, target, schema, match, root)
-        )
+        matches.some((match) => matchesValue(match))
       ) {
         return true;
       }
@@ -4291,9 +4291,7 @@ const ifcEntryAppliesToAttemptedWrite = (
     return false;
   }
   const matches = valuesAtPatternPath(value, path.slice(wildcardIndex));
-  return matches.some((match) =>
-    wildcardPolicyMatchesValue(tx, target, schema, match, root)
-  );
+  return matches.some((match) => matchesValue(match));
 };
 
 // Epic D4 — per-write read-prefix provenance
@@ -4767,6 +4765,7 @@ const verifyInputRequirements = (
         entry.path,
         entry.schema,
         entry.root,
+        entry.conditional === true,
       )
     ) {
       continue;
@@ -5050,6 +5049,7 @@ const verifyTrustedEventRequirements = (
         entry.path,
         entry.schema,
         entry.root,
+        entry.conditional === true,
       )
     ) {
       continue;
@@ -5111,6 +5111,7 @@ const verifyExactCopyRequirements = (
         entry.path,
         entry.schema,
         entry.root,
+        entry.conditional === true,
       )
     ) {
       continue;
@@ -5170,6 +5171,7 @@ const verifyProjectionRequirements = (
         entry.path,
         entry.schema,
         entry.root,
+        entry.conditional === true,
       )
     ) {
       continue;
@@ -6871,6 +6873,7 @@ const verifyWriteFloor = (
         entry.path,
         entry.schema,
         entry.root,
+        entry.conditional === true,
       )
     ) {
       continue;
@@ -7585,6 +7588,7 @@ export function* prepareBoundaryCommitSteps(
               entry.path,
               entry.schema,
               entry.root,
+              entry.conditional === true,
             )
           ) {
             return [];

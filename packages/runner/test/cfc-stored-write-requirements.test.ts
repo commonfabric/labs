@@ -788,6 +788,102 @@ describe("stored write requirements", () => {
     }
   });
 
+  describe("any change at, above or below a claimed path", () => {
+    // A writer claim governs the value at its path whatever shape the new
+    // value takes: a write beneath it, a value of another type over it, and
+    // removing it are all modifications.
+
+    const WRITER = "frozen-builtin";
+    const CLAIM = { writeAuthorizedBy: [WRITER] };
+    const STORED = {
+      type: "object",
+      properties: {
+        frozen: {
+          type: "object",
+          ifc: CLAIM,
+          properties: { digest: { type: "string" } },
+        },
+        list: { type: "array", items: { type: "string" }, ifc: CLAIM },
+        other: { type: "string" },
+      },
+    } as const satisfies JSONSchema;
+    const SEED = { frozen: { digest: "d" }, list: ["a"], other: "o" };
+
+    const seed = async (
+      runtime: Runtime,
+      id: string,
+      schema: JSONSchema,
+      value: unknown,
+    ) => {
+      const tx = runtime.edit();
+      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+      tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: WRITER });
+      runtime.getCell(space, id, schema, tx).set(value as never);
+      expect((await tx.commit()).error).toBeUndefined();
+    };
+
+    const ATTEMPTS = [
+      ["a write beneath the claimed object", ["frozen", "digest"], "mallory"],
+      ["a string over the claimed object", ["frozen"], "mallory"],
+      ["a number over the claimed list", ["list"], 7],
+      ["a replacement of the claimed object", ["frozen"], { digest: "x" }],
+      ["emptying the claimed list", ["list"], []],
+      ["removing the claimed object", [], { list: ["a"], other: "o" }],
+    ] as const;
+    const WRITERS = {
+      undeclared: undefined,
+      labeled: {
+        type: "object",
+        properties: {
+          frozen: { ifc: { ...WRITER_LABEL } },
+          list: { ifc: { ...WRITER_LABEL } },
+        },
+      },
+    } as const;
+
+    for (const [name, keys, value] of ATTEMPTS) {
+      for (const writer of Object.keys(WRITERS) as (keyof typeof WRITERS)[]) {
+        it(`refuses ${name} by an ${writer} writer`, async () => {
+          const runtime = start();
+          const id = `shape-change-${name}-${writer}`;
+          await seed(runtime, id, STORED, SEED);
+          const tx = runtime.edit();
+          let target = runtime.getCell(
+            space,
+            id,
+            WRITERS[writer] as JSONSchema | undefined,
+            tx,
+          );
+          for (const key of keys) {
+            target = target.key(key as never) as typeof target;
+          }
+          target.set(value as never);
+          expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+          expect(runtime.getCell(space, id, STORED).get()).toEqual(SEED);
+        });
+      }
+    }
+
+    for (
+      const [kind, root] of [
+        ["untyped", { ifc: CLAIM }],
+        ["typed", { type: "object", ifc: CLAIM }],
+      ] as const
+    ) {
+      it(`refuses a primitive written over an ${kind} claimed root`, async () => {
+        const runtime = start();
+        const id = `root-primitive-${kind}`;
+        await seed(runtime, id, root as JSONSchema, { a: 1 });
+        const tx = runtime.edit();
+        runtime.getCell(space, id, undefined, tx).set(5 as never);
+        expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+        expect(runtime.getCell(space, id, root as JSONSchema).get()).toEqual({
+          a: 1,
+        });
+      });
+    }
+  });
+
   describe("the persisted envelope", () => {
     it("stores a merged schema document that holds no key without a value and that its JSON form hashes to", async () => {
       // A schema document is addressed by its hash, and a reader verifies the
