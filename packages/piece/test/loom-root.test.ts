@@ -22,6 +22,8 @@ const signer = await Identity.fromPassphrase("loom-root-contract");
 const foreignSigner = await Identity.fromPassphrase("loom-root-foreign");
 const profileOwner = await Identity.fromPassphrase("loom-root-profile-owner");
 const thirdOwner = await Identity.fromPassphrase("loom-root-third-owner");
+const homeSpace = (await Identity.fromPassphrase("loom-root-home-space"))
+  .did() as MemorySpace;
 const rootSchema = {
   type: "object",
   required: [
@@ -143,6 +145,55 @@ const writeOwnedProfile = async (
   const result = await tx.commit();
   if (result.error) throw result.error;
   return profile;
+};
+
+/**
+ * Writes a string cell owned by `owner` through the trusted profile editor,
+ * as profile-home stores each owner-protected field in a cell of its own.
+ */
+const writeOwnedString = async (
+  runtime: Runtime,
+  space: MemorySpace,
+  id: string,
+  owner: string,
+): Promise<Cell<unknown>> => {
+  const tx = runtime.edit();
+  tx.setCfcTrustSnapshot({ id: `trust-${owner}`, actingPrincipal: owner });
+  tx.setCfcImplementationIdentity({
+    kind: "builtin",
+    builtinId: PROFILE_WRITER,
+  });
+  const cell = runtime.getCell(
+    space,
+    id,
+    ownerProtected({ type: "string" }, owner) as JSONSchema,
+    tx,
+  );
+  cell.set("Owner");
+  const target = cell.getAsNormalizedFullLink();
+  tx.recordCfcWritePolicyInput({
+    kind: "trusted-event",
+    target: {
+      space: target.space,
+      scope: target.scope,
+      id: target.id,
+      path: [],
+    },
+    eventId: `edit-${id}`,
+    provenance: {
+      origin: "dom",
+      trusted: true,
+      ui: {
+        pattern: "ProfileHome",
+        eventIntegrity: ["ProfileHome"],
+        uiContractDataset: { uiAction: "EditProfile" },
+      },
+    },
+  });
+  tx.prepareCfc();
+  const result = await tx.commit();
+  if (result.error) throw result.error;
+  return cell;
 };
 
 type LabelEntry = {
@@ -400,9 +451,13 @@ describe("loom-root", () => {
   /**
    * Deploys the real profile-home pattern, as `own_profile` names a person's
    * Fabric profile: its result document holds each field as a redirect link
-   * to the cell that stores it.
+   * to the cell that stores it. With `space`, it is deployed there, as a
+   * person's profile lives in their own home space.
    */
-  const deployProfileHome = async (cause: string): Promise<Cell<unknown>> => {
+  const deployProfileHome = async (
+    cause: string,
+    space: MemorySpace = pieces.getSpace(),
+  ): Promise<Cell<unknown>> => {
     const program = await resolveLocalProgram(
       runtime.harness.resolve.bind(runtime.harness),
       {
@@ -413,13 +468,15 @@ describe("loom-root", () => {
       },
     );
     const compiled = await runtime.patternManager.compilePattern(program, {
-      space: pieces.getSpace(),
+      space,
     });
-    const home = await pieces.runPersistent(
-      compiled,
-      { initialName: "Home" },
-      cause,
-    );
+    const home = space === pieces.getSpace()
+      ? await pieces.runPersistent(compiled, { initialName: "Home" }, cause)
+      : await runtime.runSynced(
+        runtime.getCell(space, cause),
+        compiled,
+        { initialName: "Home" },
+      );
     await runtime.idle();
     return home;
   };
@@ -450,12 +507,17 @@ describe("loom-root", () => {
     );
   };
 
-  it("labels the adder whether `as` names a plain document or a profile-home profile", async () => {
+  it("labels the adder whether `as` names a plain document or a profile-home profile, in the Loom's space or another", async () => {
     const plain = await writePlainProfile("loom-root-plain-control");
     const home = await deployProfileHome("loom-root-profile-home");
+    const elsewhere = await deployProfileHome(
+      "loom-root-profile-home-elsewhere",
+      homeSpace,
+    );
+    const profiles = [plain, home, elsewhere];
     const output = root.asSchema(rootSchema);
     const addPiece = await output.key("addPiece").pull();
-    for (const [index, profile] of [plain, home].entries()) {
+    for (const [index, profile] of profiles.entries()) {
       await sendAndSettle(
         addPiece,
         {
@@ -472,16 +534,55 @@ describe("loom-root", () => {
     const panels = (await output.key("panels").pull()).map((panel) =>
       panel.resolveAsCell()
     );
-    expect(panels.length).toBe(2);
-    // Both panels link the profile they were added under.
-    expect(panels[0].key("addedByProfile").resolveAsCell().equals(plain))
+    expect(panels.length).toBe(profiles.length);
+    for (const [index, profile] of profiles.entries()) {
+      // Each panel links the profile it was added under, and its declared
+      // entry names whoever acted.
+      expect(
+        panels[index].key("addedByProfile").resolveAsCell().equals(profile),
+      )
+        .toBe(true);
+      expect(declaredAdders(panels[index])).toEqual([signer.did()]);
+    }
+  });
+
+  it("names the actor, not the owner, when `as` names another person's profile whose fields are redirect links", async () => {
+    // Shaped as another person's profile-home result: each field is a
+    // redirect link to a cell its owner wrote through the trusted editor, so
+    // the cell carries the owner's `represents-principal`.
+    const nameCell = await writeOwnedString(
+      runtime,
+      homeSpace,
+      "loom-root-borrowed-name",
+      profileOwner.did(),
+    );
+    const tx = runtime.edit();
+    const borrowed = runtime.getCell(
+      homeSpace,
+      "loom-root-borrowed-profile",
+      profileSchema,
+      tx,
+    );
+    (borrowed as Cell<unknown>).setRaw({
+      name: nameCell.getAsWriteRedirectLink(),
+    });
+    const written = await tx.commit();
+    if (written.error) throw written.error;
+
+    const output = root.asSchema(rootSchema);
+    await sendAndSettle(
+      await output.key("addPiece").pull(),
+      {
+        piece: runtime.getCell(pieces.getSpace(), "loom-root-borrowed-target"),
+        as: borrowed,
+      },
+      "add-as-borrowed",
+    );
+    await runtime.idle();
+    const panel = (await output.key("panels").pull())[0].resolveAsCell();
+    expect(panel.key("addedByProfile").resolveAsCell().equals(borrowed))
       .toBe(true);
-    expect(panels[1].key("addedByProfile").resolveAsCell().equals(home))
-      .toBe(true);
-    // The control: a plain labeled document is stamped today.
-    expect(declaredAdders(panels[0])).toEqual([signer.did()]);
-    // The profile-home profile must be stamped the same way.
-    expect(declaredAdders(panels[1])).toEqual([signer.did()]);
+    expect(declaredAdders(panel)).toEqual([signer.did()]);
   });
 
   it("keeps each panel's adder and profile owner with that panel when an earlier panel is removed or the list is reordered", async () => {
