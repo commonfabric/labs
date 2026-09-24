@@ -4,6 +4,7 @@ import { Identity } from "@commonfabric/identity";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { Runtime } from "../src/runtime.ts";
+import type { CommitError } from "../src/storage/interface.ts";
 import type { EventHandler } from "../src/scheduler/types.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import {
@@ -173,6 +174,161 @@ describe("cfc-policy-manifest-shared-install", () => {
       (value) => value === "b-brief secret",
       { stuckLabel: "the second participant's labeled event write" },
     );
+  });
+
+  // A piece another participant set up is run here the way a shared setup
+  // is joined: the run names the stored piece and starts it in a transaction
+  // of its own once that name lands. That start re-stages the argument, whose
+  // labeled field installs the manifest this runtime has never loaded.
+  describe("a second participant's run of a shared piece whose argument is labeled", () => {
+    const program = {
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `/// <cts-enable />
+          import { Confidential, pattern } from "commonfabric";
+          import type { PolicyOf } from "commonfabric/cfc";
+          import {
+            cfcPattern, exchangeRule, exchangeRules, THIS_POLICY, v,
+          } from "commonfabric/cfc";
+          export const release = exchangeRule({
+            appliesTo: THIS_POLICY,
+            pre: { integrity: [cfcPattern.hasRole(v("user"), THIS_POLICY.subject, "reader")] },
+            post: { addAlternatives: [cfcPattern.user(v("user"))] },
+          });
+          export const rules = exchangeRules([release]);
+          type Brief = Confidential<string, [PolicyOf<typeof rules>]>;
+          export default pattern<{ brief: Brief }, { brief: Brief }>(
+            ({ brief }) => ({ brief }),
+          );
+        `,
+      }],
+    };
+
+    const runShared = async (runtime: Runtime, brief: string) => {
+      const compiled = await runtime.patternManager.compilePattern(program, {
+        space,
+      });
+      const tx = runtime.edit();
+      const piece = runtime.getCell<{ brief: string }>(
+        space,
+        "shared-piece",
+        undefined,
+        tx,
+      );
+      await piece.sync();
+      runtime.run(tx, compiled, { brief }, piece);
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit()).error).toBeUndefined();
+      return piece.withTx();
+    };
+
+    const setUpByFirstParticipant = async () => {
+      const piece = await runShared(rtA, "a-piece secret");
+      await rtA.idle();
+      await storageA.synced();
+      return piece;
+    };
+
+    const observeStartFailures = () => {
+      const failures: unknown[] = [];
+      rtB.pieceStartCommitFailureObserver = ({ error }) => failures.push(error);
+      return failures;
+    };
+
+    // Reports every start commit the second runtime makes as refused with
+    // `refusal`, and counts the attempts. The commit itself still goes
+    // through, so what the start installed stands as it would behind a real
+    // stale-read refusal, which leaves the install in place for the re-run:
+    // what these cases measure is how the start answers the verdict.
+    const refuseStarts = (refusal: () => CommitError) => {
+      const attempts = { count: 0 };
+      rtB.runner.accessForTestingOnly.deferredStartCommitter = async (
+        _tx,
+        _resultCell,
+        commit,
+      ) => {
+        attempts.count++;
+        await commit();
+        return { error: refusal() };
+      };
+      return attempts;
+    };
+
+    const staleReadOf = (id: string, readyToRetry?: () => Promise<void>) =>
+      ({
+        name: "ConflictError",
+        message: `stale confirmed read: ${id} at seq 0 conflicted with seq 1`,
+        conflict: { space, the: "application/json", of: id },
+        conflicts: [{ space, the: "application/json", of: id }],
+        ...(readyToRetry === undefined ? {} : { readyToRetry }),
+      }) as unknown as CommitError;
+
+    afterEach(() => {
+      rtB.runner.accessForTestingOnly.deferredStartCommitter = undefined;
+    });
+
+    it("starts it once the manifest another participant installed is read", async () => {
+      const pieceA = await setUpByFirstParticipant();
+      const failures = observeStartFailures();
+
+      await runShared(rtB, "b-piece secret");
+
+      await waitForCellValue<string>(
+        rtA,
+        pieceA.key("brief"),
+        (value) => value === "b-piece secret",
+        { stuckLabel: "the second participant's piece start" },
+      );
+      await rtB.idle();
+      expect(failures).toEqual([]);
+    });
+
+    it("reports a start refused over the piece's own documents without running it again", async () => {
+      await setUpByFirstParticipant();
+      const failures = observeStartFailures();
+      const attempts = refuseStarts(() => staleReadOf("of:not-a-manifest"));
+
+      await runShared(rtB, "b-piece secret");
+      await rtB.idle();
+
+      expect(attempts.count).toBe(1);
+      expect(failures).toHaveLength(1);
+    });
+
+    it("reports a start still refused over the manifest once its retries are spent", async () => {
+      await setUpByFirstParticipant();
+      const failures = observeStartFailures();
+      const attempts = refuseStarts(() => staleReadOf(manifestId));
+
+      await runShared(rtB, "b-piece secret");
+      await rtB.idle();
+
+      expect(attempts.count).toBe(6);
+      expect(failures).toHaveLength(1);
+    });
+
+    it("drops the retry without a report when the start is stopped while it waits", async () => {
+      await setUpByFirstParticipant();
+      const failures = observeStartFailures();
+      const waiting = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const attempts = refuseStarts(() =>
+        staleReadOf(manifestId, () => {
+          waiting.resolve();
+          return release.promise;
+        })
+      );
+
+      const piece = await runShared(rtB, "b-piece secret");
+      await waiting.promise;
+      rtB.runner.stop(piece);
+      release.resolve();
+      await rtB.idle();
+
+      expect(attempts.count).toBe(1);
+      expect(failures).toEqual([]);
+    });
   });
 
   it("refuses a second participant's write when a different manifest holds the digest", async () => {

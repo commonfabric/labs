@@ -77,6 +77,7 @@ import {
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
 import { recordNewProtectedDefaults } from "./cfc/default-initialization.ts";
+import { CFC_POLICY_MANIFEST_ID_PREFIX } from "./cfc/policy.ts";
 import {
   recordReferencedArgumentFields,
   recordReplayedArgumentSlots,
@@ -286,6 +287,37 @@ const RESULT_SHORTCUT_LIMIT = 4096;
  * held for it is diagnosable.
  */
 const NAMING_PROBE_BUDGET = 256;
+
+/**
+ * How many times a named piece's run starts again after its start transaction
+ * is refused retryably, matching the bound `Runtime.editWithRetry()` puts on
+ * any other retrying writer. Each attempt waits for the refusal's catch-up
+ * first, so the bound caps a basis that keeps moving rather than a spin.
+ */
+const PIECE_RUN_START_MAX_RETRIES = 5;
+
+/**
+ * Whether a commit refusal names a module-policy manifest document among the
+ * documents whose basis moved: a stale-read conflict listing one, or a local
+ * inconsistency at one. A manifest is content-addressed and never rewritten,
+ * so such a refusal is the transaction's own install meeting a manifest
+ * another participant installed first, and once the replica has caught up
+ * the install reads it as present and writes nothing.
+ */
+const refusalNamesPolicyManifest = (error: CommitError): boolean => {
+  const named = (id: unknown) =>
+    typeof id === "string" && id.startsWith(CFC_POLICY_MANIFEST_ID_PREFIX);
+  if (isStorageTransactionInconsistent(error)) {
+    return named((error as { address?: { id?: unknown } }).address?.id);
+  }
+  if (!isStaleReadConflict(error)) return false;
+  const { conflict, conflicts } = error as {
+    conflict?: { of?: unknown };
+    conflicts?: readonly { of?: unknown }[];
+  };
+  return named(conflict?.of) ||
+    (conflicts ?? []).some((entry) => named(entry?.of));
+};
 
 type InternalCellDescriptor = {
   partialCause: JSONValue;
@@ -6347,6 +6379,7 @@ export class Runner {
     );
     const work = (async () => {
       let toName = named;
+      let retriesLeft = PIECE_RUN_START_MAX_RETRIES;
       for (;;) {
         await this.#nameFamilyBeforeRun(resultCell, toName, argument);
         if (ownership.isCancelled()) return;
@@ -6422,6 +6455,20 @@ export class Runner {
         ) {
           return;
         }
+        const retry = retriesLeft > 0
+          ? await this.#retryPieceRunStart(
+            error,
+            resultCell,
+            startLifecycleEpoch,
+            ownership,
+            started.installedCancel,
+          )
+          : "terminal";
+        if (retry === "retry") {
+          retriesLeft--;
+          continue;
+        }
+        if (retry === "settled") return;
         ownership.cancel();
         this.#reportPieceStartCommitFailure(actionId, error);
         return;
@@ -6429,6 +6476,73 @@ export class Runner {
     })();
     this.#runtime.scheduler.trackBackgroundTask(work);
     return ownership.cancel;
+  }
+
+  /**
+   * Prepares a named piece's run for another attempt after its start
+   * transaction was refused over a policy manifest another participant
+   * installed first. Resolves `"retry"` when the caller should run it again,
+   * `"terminal"` when the caller's failure arm should run as it does for any
+   * other refusal, and `"settled"` when the start was stopped or the runtime
+   * torn down during the wait, so there is nothing left to report.
+   *
+   * The run is this participant's own setup of a piece set up elsewhere, and
+   * when its argument carries a PolicyOf label that setup installs the policy
+   * manifest, which a replica that never loaded it reads as absent. In a
+   * shared space that absence is ordinarily stale, and the refusal names the
+   * manifest ({@link refusalNamesPolicyManifest}). Only a fresh transaction
+   * lands the setup, so this is the retry `Runtime.editWithRetry()` gives any
+   * other retrying writer: wait for the refusal's catch-up, then prepare the
+   * run from the start, where the install reads the manifest as present.
+   * Every other refusal stays terminal, a stale read over the piece's own
+   * documents included: whether a re-commit converges against a serving
+   * side's derived writes is a different question, which
+   * `#catchUpAndStartOnStaleRead()` answers by committing nothing.
+   *
+   * The refused install is torn down only while it is still the key's current
+   * registration, and the ownership token goes back to pending for the wait,
+   * so a stop or a release during it cancels the retry the way it cancels a
+   * pending first attempt. An attempt that installed nothing is terminal, as
+   * is one whose key another start took during the wait: in both the key's
+   * registration is not this attempt's to replace.
+   */
+  async #retryPieceRunStart<T>(
+    error: CommitError,
+    resultCell: Cell<T>,
+    scheduledLifecycleEpoch: number,
+    ownership: DeferredCancelOwnership,
+    installedRegistration: Cancel | undefined,
+  ): Promise<"retry" | "terminal" | "settled"> {
+    if (!refusalNamesPolicyManifest(error)) return "terminal";
+    if (scheduledLifecycleEpoch !== this.#lifecycleEpoch) return "terminal";
+    if (ownership.isCancelled()) return "terminal";
+    const key = this.#getDocKey(resultCell);
+    if (
+      installedRegistration === undefined ||
+      this.#cancels.get(key) !== installedRegistration
+    ) {
+      return "terminal";
+    }
+    this.stop(resultCell);
+    ownership.markInstalled(undefined);
+    this.#registerPendingDeferredStart(key, ownership);
+    logger.info("piece-start-commit-retrying", () => [
+      `piece-run start for ${resultCell.getAsNormalizedFullLink().id} lost ` +
+      "a policy manifest install to another participant; running it again " +
+      "once storage has caught up",
+      error,
+    ]);
+    const teardown = this.#runtime.writeTeardownSignal;
+    await this.#runtime.awaitCommitRetryReadiness(error, teardown);
+    if (
+      ownership.isCancelled() || teardown.aborted ||
+      scheduledLifecycleEpoch !== this.#lifecycleEpoch
+    ) {
+      ownership.cancel();
+      return "settled";
+    }
+    if (this.#cancels.has(key)) return "terminal";
+    return "retry";
   }
 
   /**
@@ -6468,7 +6582,10 @@ export class Runner {
    *
    * ON-ONLY: under OFF a stale confirmed read on a deferred start means another
    * CLIENT raced, and the cross-tab mutex semantics own that story — the OFF
-   * arm stays terminal.
+   * arm of a commit-gated start stays terminal. A named piece's run refused
+   * over a policy manifest another participant installed first is not that
+   * story either: `#retryPieceRunStart()` runs it again in a fresh
+   * transaction, under either arm, when this recovery declines.
    *
    * WHAT stays terminal. Only the engine's stale-read family recovers —
    * `stale confirmed read` and its `stale pending read` sibling
