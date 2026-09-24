@@ -9,9 +9,9 @@
  *
  * The rest is what may be shared and what must be rebuilt. A value already in
  * the requested state comes back as it is unless a copy was forced,
- * inherently immutable values are never copied at all, and a record the value
- * type does not admit -- a null-prototype object, or one with an own
- * `__proto__` property -- is refused rather than copied into something else.
+ * inherently immutable values are never copied at all, and a null-prototype
+ * object, not being a shape the value type admits, is refused rather than
+ * copied into a record it is not.
  *
  * Cycles are detected on the deep paths, and the subclass matrix asks the same
  * questions of every concrete class rather than trusting one to stand in for
@@ -331,12 +331,10 @@ describe("cloneIfNecessary()", () => {
     });
   });
 
-  describe(`records that are not \`FabricPlainObject\`s`, () => {
-    // Neither shape here is a `FabricValue`, so none can arrive by any
-    // validating route. Should one reach this function anyway, it is refused
-    // rather than copied into something else: a null prototype has no clone
-    // that keeps it, and an own `__proto__` property has one only on some
-    // hosts.
+  describe(`null-prototype objects`, () => {
+    // A null-prototype object is not a `FabricValue`, so none can arrive by
+    // any validating route. Should one reach this function anyway, it is
+    // refused rather than copied into a record it is not.
 
     function nullProto(
       fields: Record<string, unknown>,
@@ -345,12 +343,6 @@ describe("cloneIfNecessary()", () => {
         Object.create(null) as Record<string, unknown>,
         fields,
       );
-    }
-
-    function withOwnProto(): Record<string, unknown> {
-      // `JSON.parse()` is one of the mechanisms that makes the name an own
-      // data property rather than routing it to the prototype's accessor.
-      return JSON.parse(`{"__proto__": {"x": 1}, "a": 2}`);
     }
 
     for (
@@ -371,31 +363,12 @@ describe("cloneIfNecessary()", () => {
           )
         ).toThrow("Cannot clone");
       });
-
-      it(`throws for an own \`__proto__\` property, ${label}`, () => {
-        const value = withOwnProto();
-        expect(Object.hasOwn(value, "__proto__")).toBe(true);
-
-        expect(() =>
-          cloneIfNecessary(
-            value as FabricValue,
-            opts as CloneOptions | undefined,
-          )
-        ).toThrow("reserves (`__proto__`)");
-      });
     }
 
     it("throws for a nested null-prototype object on a deep clone", () => {
       const value = { child: nullProto({ v: 42 }) };
       expect(() => cloneIfNecessary(value as FabricValue)).toThrow(
         "Cannot clone",
-      );
-    });
-
-    it("throws for a nested own `__proto__` property on a deep clone", () => {
-      const value = { child: withOwnProto() };
-      expect(() => cloneIfNecessary(value as FabricValue)).toThrow(
-        "reserves (`__proto__`)",
       );
     });
   });

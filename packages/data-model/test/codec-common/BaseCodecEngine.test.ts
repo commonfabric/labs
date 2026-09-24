@@ -129,6 +129,21 @@ describe("BaseCodecEngine", () => {
         .toThrow(/no applicable codec/);
     });
 
+    it("throws given a null-prototype object, at any depth", () => {
+      // A record is `Object.prototype`-rooted, so this is refused rather than
+      // written as one, and the refusal names it for what it is.
+
+      const { engine } = newProbeEngine();
+      const nullProto = Object.assign(Object.create(null), { a: 1 });
+
+      expect(() => engine.encode(nullProto))
+        .toThrow("Cannot encode null-prototype object");
+      expect(() => engine.encode({ nested: nullProto }))
+        .toThrow("Cannot encode null-prototype object");
+      expect(() => engine.encode([nullProto]))
+        .toThrow("Cannot encode null-prototype object");
+    });
+
     it("throws given a circular reference", () => {
       const { engine } = newProbeEngine();
       const value: Record<string, FabricValue> = { a: 1 };
