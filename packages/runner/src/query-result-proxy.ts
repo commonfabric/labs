@@ -1050,10 +1050,14 @@ export function snapshotQueryResult<T>(value: T): T {
     const existing = seen.get(current);
     if (existing !== undefined) return existing;
     if (Array.isArray(current)) {
-      const array: unknown[] = [];
+      // A hole stays a hole: a fabric value tells one from an element that
+      // holds `undefined`, and so does its hash.
+      const array: unknown[] = new Array(current.length);
       seen.set(current, array);
       for (let index = 0; index < current.length; index++) {
-        array[index] = snapshot(current[index]);
+        if (Object.hasOwn(current, index)) {
+          array[index] = snapshot(current[index]);
+        }
       }
       return array;
     }

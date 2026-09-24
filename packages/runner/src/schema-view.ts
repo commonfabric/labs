@@ -3,8 +3,8 @@
  *
  * Where `validateAndTransform` builds everything a schema selects in one pass,
  * a view resolves each path as the reader touches it, narrowing the schema by
- * that step. What the reader never asks for is never built, never link-resolved
- * and never registered as a reactive dependency.
+ * that step. Ordinary container children remain unbuilt and untracked until
+ * the reader asks for them.
  *
  * A view is reached only from a transaction marked with `markLazyMaterialize`;
  * `validateAndTransform` reads that mark and branches here after its own link
@@ -20,7 +20,10 @@
  *
  * Everything below that is checked where the reader touches it. A subtree the
  * reader never reads is never validated — the deliberate cost of not
- * materializing what nobody wants.
+ * materializing what nobody wants. One shape is the exception: a combinator
+ * (`anyOf`, `oneOf`, `allOf`) is decided by evaluating its subtree through the
+ * eager traverser, because whether a branch matches is a question about the
+ * whole branch.
  *
  * A mismatch the reader does touch surfaces at the nearest enclosing property,
  * which is where an eager read decides the same question. Under a `required`
@@ -28,39 +31,32 @@
  * reads as `undefined`, because an eager read leaves a property whose traversal
  * fails out of the object rather than voiding it. Either way the read that
  * failed is registered first, so whatever depends on it runs again when the
- * missing data arrives.
+ * missing data arrives. A non-null property default replaces a value the view
+ * rejects at the container it is built over, before the required-property
+ * decision; what fails deeper is decided where it is touched, and never by
+ * evaluating the property whole.
  *
  * The root is the exception: a mismatch there yields `undefined`, which is what
  * an eager read yields for the same data, so the runner's existing
  * "argument did not resolve" gate handles it unchanged.
  */
 
-import type {
-  JSONSchema,
-  JSONSchemaObj,
-  JSONSchemaTypes,
-} from "@commonfabric/api";
-import { FabricPrimitive } from "@commonfabric/data-model";
-import type { FabricValue } from "@commonfabric/data-model";
+import type { JSONSchema } from "@commonfabric/api";
+import { FabricPrimitive, type FabricValue } from "@commonfabric/data-model";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { readStatsActive, recordProxyAccess } from "./read-stats.ts";
 import { toCell } from "./back-to-cell.ts";
 import { type Cell, createCell } from "./cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";
-import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import {
   type CfcLabelView,
   rebaseCfcLabelView,
 } from "./cfc/label-view-state.ts";
 import { dataUriFromValueWithResolvedLinks } from "./data-uri.ts";
-import {
-  isSigilLink,
-  type NormalizedFullLink,
-  parseLink,
-} from "./link-utils.ts";
+import { declareStreamSchema, type NormalizedFullLink } from "./link-utils.ts";
 import { type Runtime } from "./runtime.ts";
 import {
   createOpaqueReference,
@@ -69,13 +65,13 @@ import {
 } from "./schema.ts";
 import { type IExtendedStorageTransaction } from "./storage/interface.ts";
 import {
-  canBranchMatch,
-  combineSchema,
+  arrayItemFallbackType,
+  arrayItemUsesValueIdentity,
+  getJsonType,
+  getPropertyDefaultSchema,
   isOpaquePosition,
-  mergeAnyOfBranchSchemas,
   opaqueLeafMissesRequired,
-  SchemaObjectTraverser,
-  schemaTypeMatchesValueType,
+  schemaAcceptsType,
 } from "./traverse.ts";
 
 const logger = getLogger("schema-view", { enabled: false, level: "warn" });
@@ -159,10 +155,10 @@ const EXCLUDED_MISSING: JSONSchema = Object.freeze({
  * document behind it, and reading first would resolve the link and fetch the
  * document the `false` was there to avoid.
  *
- * This is its own marker because `schemaAtPath` also returns `false` for a
- * shape it cannot read a child out of — an `allOf`, or an object schema that
- * omits `type` — where the schema has turned nothing down and the subschema is
- * still reachable below.
+ * This is its own marker because `schemaAtPath` also returns `false` where
+ * the schema has turned nothing down: for a declared type that holds no
+ * children, and for an `allOf`, which it does not read a child out of while
+ * the subschema is still reachable below.
  */
 const EXCLUDED_REJECTED: JSONSchema = Object.freeze({
   $comment: "rejectedProperty",
@@ -188,269 +184,62 @@ const isTurnedDown = (schema: JSONSchema): boolean =>
  */
 const MACHINERY_PROBED_KEYS: ReadonlySet<string> = new Set(["then", "toJSON"]);
 
-/**
- * The type name a schema's `type` keyword would use for this value.
- *
- * A `FabricPrimitive` returns its own concrete name (`FabricBytes` and the
- * rest), which is what a schema selecting one declares; `schemaTypeMatchesValueType`
- * still lets an `object` schema accept it through its subtype rule.
- */
-const jsonTypeOf = (value: unknown): string => {
-  if (value === null) return "null";
-  if (Array.isArray(value)) return "array";
-  if (value instanceof FabricPrimitive) {
-    return value.schemaType;
-  }
-  switch (typeof value) {
-    case "undefined":
-      return "undefined";
-    case "boolean":
-      return "boolean";
-    case "number":
-      return Number.isInteger(value) ? "integer" : "number";
-    case "string":
-      return "string";
-    default:
-      return "object";
-  }
-};
-
-const typeAccepts = (declared: unknown, actual: string): boolean => {
-  const types = Array.isArray(declared) ? declared : [declared];
-  return types.some((type) =>
-    type === "unknown" ||
-    // The same matcher eager traversal uses, so a `FabricBytes` value is
-    // accepted both by its own type name and by an `object` schema, and a
-    // "number" schema accepts an integer while "integer" refuses a fraction.
-    schemaTypeMatchesValueType(
-      type as JSONSchemaTypes,
-      actual as JSONSchemaTypes,
-    )
-  );
-};
-
-/**
- * The branch a union narrowed to, carrying the union's own keywords.
- *
- * A union sits inside a schema that constrains the value as well: its
- * `properties`, `required` and `default` apply to whichever branch matches. A
- * branch alone therefore accepts values the schema rejects — an outer
- * `properties.radius.type: "number"` beside a branch that only requires
- * `radius` would let `{ radius: "bad" }` through, where an eager read drops the
- * property. Eager traversal evaluates each branch against the schema around it;
- * combining here is that rule, decided on the schema instead of the value.
- *
- * The union's `$defs` ride along, over whatever the combination kept: a
- * branch is routinely a `$ref` into them, and the schema it resolves to can
- * hold further refs — `RenderNode` refers to itself — which have nowhere to
- * point once the definitions are gone. A name the branch carried of its own
- * yields to the union's, which is the definition the ref named all along;
- * names only the branch carries — a resolved view's namespaced ref-site
- * definitions — stay.
- */
-const branchWithOuter = (
-  schema: JSONSchemaObj,
-  branch: JSONSchema,
-): JSONSchema => {
-  const { anyOf: _anyOf, oneOf: _oneOf, ...outer } = schema;
-  const combined = combineSchema(outer as JSONSchemaObj, branch);
-  if (!isObjectOrArray(combined) || !isObjectOrArray(schema.$defs)) {
-    return combined;
-  }
-  return {
-    ...combined as JSONSchemaObj,
-    $defs: {
-      ...(isObjectOrArray(combined.$defs) ? combined.$defs : {}),
-      ...schema.$defs,
-    },
-  };
-};
-
-/**
- * Collapse a union onto a branch that declares `asCell`, when one does.
- *
- * An optional handle — `Cell<T> | undefined` — generates as a union whose one
- * branch carries the marker and whose other is the absent case. `hasAsCell`
- * holds for a union only when EVERY branch declares one, so that shape reads
- * as "not a cell" and the reader gets a plain value where the pattern declared
- * a handle. An eager read survives it by evaluating every branch and picking
- * the cell among the results (`mergeMatches`); collapsing to the branch is the
- * same answer, decided on the schema instead.
- */
-const preferAsCellBranch = (
-  schema: JSONSchema,
-  stored?: unknown,
-): JSONSchema => {
-  if (!isObjectOrArray(schema)) return schema;
-  const branches = schema.anyOf ?? schema.oneOf;
-  if (!Array.isArray(branches)) return schema;
-  const resolved = branches.map((branch) => resolveBranch(branch, schema));
-  return ontoHandleBranch(schema, resolved, stored) ?? schema;
-};
-
-/**
- * `schema` collapsed onto the one of `branches` that declares a handle, or
- * `undefined` when none does.
- *
- * The first such branch, unless what is stored at the position says
- * otherwise. A view node's prop offers both a `cell` and a `stream`, a stream
- * is declared by the link that names it, and a reader asking for a plain cell
- * there is a mismatch, so committing to the `cell` branch on the schema alone
- * would refuse a stream the union allows. `stored` is the value at the
- * position before any link is followed: when it is a link that declares a
- * stream, the branch that declares one is the branch that applies. An eager
- * read reaches the same answer by evaluating every branch.
- */
-const ontoHandleBranch = (
-  schema: JSONSchemaObj,
-  branches: readonly JSONSchema[],
-  stored: unknown,
-): JSONSchema | undefined => {
-  const handles = branches.filter((branch) =>
-    ContextualFlowControl.getAsCellValues(branch).length > 0
-  );
-  if (handles.length === 0) return undefined;
-  const namesStream = isSigilLink(stored) &&
-    ContextualFlowControl.declaresStream(parseLink(stored)?.schema);
-  const chosen = namesStream
-    ? handles.find((branch) => ContextualFlowControl.declaresStream(branch))
-    : undefined;
-  return branchWithOuter(schema, chosen ?? handles[0]);
-};
-
-/**
- * A branch with its `$ref` resolved against the union's `$defs`, which take
- * the place of any the branch declares of its own; a union declaring none
- * leaves the branch to resolve as the document it is.
- *
- * A branch that will not resolve narrows to `false` — nothing matches it. It
- * cannot be left as it was: a bare `$ref` declares no `type` and no `required`,
- * so it survives matching, becomes the narrowed schema, and then throws out of
- * `schemaAtPath` the moment the reader touches a property — a raw error, not
- * the refusal the runner knows how to dispose of. Failing the branch closed is
- * also where the eager path lands: its prefilter defers ("we'll properly
- * complain later" in `canBranchMatch`) and traversal then fails the branch it
- * cannot resolve. A view has no later, so it decides here.
- */
-const resolveBranch = (
-  branch: JSONSchema,
-  parent: JSONSchemaObj,
-): JSONSchema => {
-  if (!isObjectOrArray(branch) || !("$ref" in branch)) return branch;
-  try {
-    const resolved = ContextualFlowControl.resolveSchemaRefsOrThrow(
-      cfcSchemaWithInheritedDefs(branch, parent.$defs) as JSONSchemaObj,
-    );
-    // A boolean target is a resolution, not a failure to resolve: `true`
-    // matches everything and `false` matches nothing, which is what the
-    // definition said. The resolver throws rather than returning a boolean for
-    // a ref it cannot resolve.
-    if (isObjectOrArray(resolved) || typeof resolved === "boolean") {
-      return resolved;
-    }
-  } catch {
-    // The warning below covers a ref that does not resolve.
-  }
-  // Worth saying out loud: an unresolvable ref means a schema document that
-  // did not replicate, not data that happens not to match.
-  logger.warn(
-    "schema-view",
-    () => ["unresolvable $ref in a union branch", branch],
-  );
-  return false;
-};
-
-/**
- * Narrow a union against the value in front of it.
- *
- * `canBranchMatch` is a shallow prefilter — type plus required-key presence,
- * no descent — so this stays a decision about the container already read. One
- * surviving branch narrows to it; several merge the way an eager read merges
- * them; none is a mismatch.
- */
-const narrowForValue = (
-  schema: JSONSchema | undefined,
-  value: FabricValue,
-): JSONSchema | undefined => {
-  if (!isObjectOrArray(schema)) return schema;
-  const rawBranches = schema.anyOf ?? schema.oneOf;
-  if (!Array.isArray(rawBranches) || rawBranches.length === 0) return schema;
-  // Resolve `$ref` branches against this schema's `$defs`. A branch
-  // written as a bare `$ref` carries no `type`, no `required` and no `asCell`,
-  // so matching it decides nothing: every branch survives, the union never
-  // narrows, and whatever the branches declared — including a property the
-  // pattern declared as a `Cell` — is unreachable. `canBranchMatch` resolves a
-  // ref on its own but has no `$defs` to resolve it against, which is where the
-  // "Unresolved $ref in schema" warnings come from.
-  const branches = rawBranches.map((branch) => resolveBranch(branch, schema));
-  const matching = branches.filter((branch) => canBranchMatch(branch, value));
-  if (matching.length === 0) return false;
-  if (matching.length === 1) return branchWithOuter(schema, matching[0]);
-  // Prefer a branch that declares `asCell`. An eager read evaluates every
-  // matching branch and picks the cell among the results (`mergeMatches`);
-  // merging the SCHEMAS instead leaves the marker off the merged top level, so
-  // a property the pattern declared as a `Cell` — `authorProfile: ProfileCell`
-  // on a message union — comes back as a plain value and `.get()` is not a
-  // function. Preferring the branch keeps the two reads agreeing.
-  return ontoHandleBranch(schema, matching, value) ??
-    mergeAnyOfBranchSchemas(matching as JSONSchema[], schema) ?? schema;
-};
-
 const requiredKeys = (schema: JSONSchema | undefined): readonly string[] =>
   isObjectOrArray(schema) && Array.isArray(schema.required)
     ? schema.required as string[]
     : [];
 
+/**
+ * The schema of `key` under `schema`, narrowed for the `container` the view
+ * holds. A schema that declares no `type` is settled to that container first
+ * (`ContextualFlowControl.settledForContainer`): narrowing without a value
+ * reads it as the union of the readings it offers, and a view has the value
+ * in hand.
+ */
 const childSchema = (
   schema: JSONSchema | undefined,
   key: string,
-  // What is stored at `key`, before any link is followed; a union of handle
-  // kinds is settled by it (`ontoHandleBranch`).
-  stored?: unknown,
+  container: "object" | "array",
 ): JSONSchema => {
   if (schema === undefined) return true;
   const narrowed = ContextualFlowControl.schemaAtPath(
-    schema,
+    ContextualFlowControl.settledForContainer(schema, container),
     [key],
     undefined,
     EXCLUDED_EMPTY,
     EXCLUDED_MISSING,
   );
   if (narrowed !== false || !isObjectOrArray(schema)) {
-    return preferAsCellBranch(narrowed, stored);
+    return narrowed;
   }
-  // `schemaAtPath` decides which children exist from the schema's `type`, so a
-  // schema that declares `properties` or `items` and omits `type` narrows to
-  // `false` — no child selected. An eager read reaches those children, and the
-  // subschema is right there, so read it directly rather than refuse. Losing it
-  // costs more than a refusal: the child's `asCell` marker goes with it, and
-  // the reader gets a plain view where the pattern declared a `Cell`.
-  if (
-    isObjectOrArray(schema.properties) && Object.hasOwn(schema.properties, key)
-  ) {
-    const declared = (schema.properties as Record<string, JSONSchema>)[key];
-    // Except where the subschema is `false`, which turns the child down rather
-    // than describing one to read through.
-    return declared === false ? EXCLUDED_REJECTED : declared;
-  }
-  if (isArrayIndexPropertyName(key) && schema.items !== undefined) {
-    return schema.items as JSONSchema;
-  }
-  // A schema that refuses the properties it does not name has turned this key
-  // down, whether it names some or none. Without `additionalProperties`, one
-  // that names some reaches `schemaAtPath` as a missing property rather than as
-  // `false`, and an eager read drops the property either way.
+  // `schemaAtPath` narrows to `false` where the schema turns the child down —
+  // a property declared `false`, or a key left unnamed by a schema that
+  // refuses the properties it does not name — and where the schema's declared
+  // type holds no children at all. The first two are deliberate absences,
+  // settled off the schema: the child is absent to a reader, and the link
+  // under it is never followed. Without `additionalProperties`, a schema that
+  // names some properties reaches `schemaAtPath` as a missing property rather
+  // than as `false`, and an eager read drops the property either way.
   //
-  // One that names none and carries `allOf` parts has not: an eager read merges
-  // the keywords beside an `allOf` into each part before it looks at a key, so
-  // a part can name this one, and it is left to the read below. An `allOf`
-  // holding no parts names nothing, and an eager read passes over it.
+  // A schema that names no properties and carries `allOf` parts has turned
+  // nothing down: an eager read merges the keywords beside an `allOf` into
+  // each part before it looks at a key, so a part can name this one. An
+  // `allOf` holding no parts names nothing, and an eager read passes over it.
+  if (
+    isObjectOrArray(schema.properties) &&
+    Object.hasOwn(schema.properties, key) &&
+    (schema.properties as Record<string, JSONSchema>)[key] === false
+  ) {
+    return EXCLUDED_REJECTED;
+  }
   if (
     schema.additionalProperties === false &&
     (isObjectOrArray(schema.properties) || !schema.allOf?.length)
   ) {
     return EXCLUDED_REJECTED;
   }
+  // What remains is a type that holds no children, and an eager read selects
+  // nothing there either: the child reads as absent.
   return false;
 };
 
@@ -463,13 +252,9 @@ const declaredDefault = (schema: JSONSchema): FabricValue | undefined => {
 };
 
 /**
- * The default that stands in for a value which is not there.
- *
- * Only one the schema declares at its own top level, which is the rule an eager
- * read applies: a default sitting inside a branch of a union is reached by
- * evaluating that branch against a value, and an absent value gets no branch
- * evaluated. Reading one out anyway would return a value where an eager read
- * leaves it absent.
+ * Returns the schema's own default after resolving its root reference.
+ * Defaults inside combinator branches are decided by traversal of those
+ * branches and do not supply a top-level fallback here.
  */
 export const defaultForAbsentValue = (
   schema: JSONSchema | undefined,
@@ -514,10 +299,7 @@ export function materializeSchemaView(
     throw refusal;
   };
 
-  // A value that is not there takes the schema's declared default, which an
-  // eager read applies before it decides whether the type matches. Decided
-  // ahead of the narrowing verdict below: an absent value matches no branch of a
-  // union, so narrowing would refuse where the schema says what to read instead.
+  // An absent value takes the schema's own default before type validation.
   if (value === undefined) {
     const fallback = defaultForAbsentValue(link.schema);
     if (fallback !== undefined) {
@@ -539,40 +321,17 @@ export function materializeSchemaView(
     }
   }
 
-  const schema = narrowForValue(link.schema, value);
+  const schema = link.schema;
   if (schema === false) {
-    return mismatch("no branch of the schema matches this value");
+    return mismatch("the schema rejects this value");
   }
 
-  if (ContextualFlowControl.getAsCellValues(schema).length > 0) {
-    // `validateAndTransform` dispatches `asCell` before handing over, but only
-    // on what it can see at the top of the schema. Narrowing a union against
-    // the value can surface a branch that declares one, and the reader is owed
-    // the same handle either route would have produced.
-    //
-    // Hand it back rather than minting one here. Minting a handle is where the
-    // consumed `asCell` marker is unwrapped off the handle's own schema and
-    // where the follow-scope cap is applied — a read THROUGH the handle is
-    // exactly the hop that cap bounds — and that belongs in one place. Passing
-    // the narrowed schema back means the dispatch sees the marker it could not
-    // see before and takes that path; it returns the handle without arriving
-    // here again, so this does not recur.
-    return validateAndTransform(
-      runtime,
-      tx,
-      { link: { ...link, schema }, cfcLabelView },
-      [],
-      { synced, mismatchThrows: !isRoot, viewChild: true },
-    );
-  }
-
-  const actualType = jsonTypeOf(value);
-  if (isObjectOrArray(schema) && schema.type !== undefined) {
-    if (!typeAccepts(schema.type, actualType)) {
-      return mismatch(
-        `expected ${JSON.stringify(schema.type)}, found ${actualType}`,
-      );
-    }
+  const actualType = getJsonType(value);
+  if (
+    schema !== undefined && actualType !== null &&
+    !schemaAcceptsType(schema, actualType)
+  ) {
+    return mismatch(`schema does not accept ${actualType}`);
   }
 
   // An opaque leaf still owes the schema's `required` keys. A `FabricPrimitive`
@@ -591,7 +350,7 @@ export function materializeSchemaView(
   // same projection, so a reader cannot tell which path answered.
   if (
     value !== undefined && schema !== undefined &&
-    isOpaquePosition(schema, actualType as JSONSchemaTypes)
+    actualType !== null && isOpaquePosition(schema, actualType)
   ) {
     tx.readValueOrThrow(link, { nonRecursive: true });
     return createOpaqueReference(runtime, link, tx, synced, cfcLabelView);
@@ -634,13 +393,13 @@ export function materializeSchemaView(
   }
 
   for (const key of requiredKeys(schema)) {
-    const narrowed = childSchema(schema, key);
+    const narrowed = childSchema(schema, key, "object");
     if (!Object.hasOwn(value, key)) {
       // A declared default stands in for an absent required key, exactly as it
       // does for an eager read, and so does a declared stream: its handle is
       // minted from the schema alone.
       if (
-        declaredDefault(narrowed) !== undefined ||
+        getPropertyDefaultSchema(schema, key) !== undefined ||
         ContextualFlowControl.declaresStream(narrowed)
       ) continue;
       return mismatch(`missing required property ${JSON.stringify(key)}`);
@@ -678,15 +437,16 @@ const visibleKeys = (
   value: Record<string, FabricValue>,
 ): string[] => {
   const keys = Object.keys(value).filter((key) =>
-    !isExcluded(childSchema(schema, key))
+    !isExcluded(childSchema(schema, key, "object"))
   );
   if (isObjectOrArray(schema) && isObjectOrArray(schema.properties)) {
     for (const key of Object.keys(schema.properties)) {
       if (Object.hasOwn(value, key)) continue;
-      const narrowed = childSchema(schema, key);
       if (
-        declaredDefault(narrowed) === undefined &&
-        !ContextualFlowControl.declaresStream(narrowed)
+        getPropertyDefaultSchema(schema, key) === undefined &&
+        !ContextualFlowControl.declaresStream(
+          childSchema(schema, key, "object"),
+        )
       ) continue;
       keys.push(key);
     }
@@ -773,7 +533,7 @@ function createObjectView(
   const schema = link.schema;
   const required = new Set(requiredKeys(schema));
   const resolveChild = (key: string): unknown => {
-    const narrowed = childSchema(schema, key, value[key]);
+    const narrowed = childSchema(schema, key, "object");
     if (isExcluded(narrowed)) {
       // The data carries this key and the schema does not select it, so the
       // reader gets the `undefined` an absent key gives, and nothing at the
@@ -799,6 +559,16 @@ function createObjectView(
       }
       return undefined;
     }
+    const defaultSchema = getPropertyDefaultSchema(schema, key);
+    const applyDefault = () =>
+      defaultSchema === undefined ? undefined : processDefaultValue(
+        runtime,
+        tx,
+        { ...link, path: [...link.path, key], schema: defaultSchema },
+        defaultSchema.default as FabricValue,
+        synced,
+        rebaseCfcLabelView(cfcLabelView, [key]),
+      );
     if (!Object.hasOwn(value, key)) {
       // Register the read even though there is nothing there. An absent key is
       // usually a computed that has not produced yet, and the reader has to run
@@ -807,45 +577,52 @@ function createObjectView(
       // a refusal carries, for the case that is not a refusal: the schema does
       // not require this key, so reading it is an ordinary miss, not a mismatch.
       tx.readValueOrThrow({ ...link, path: [...link.path, key] });
+      // A declared stream's handle is minted from the schema alone, whether or
+      // not the data names the key. The declaration is restated at the
+      // schema's root, as the eager read restates it, since a union or a
+      // reference that declares it has no value here for its branches to be
+      // read against.
       if (ContextualFlowControl.declaresStream(narrowed)) {
         return readChild(
           runtime,
           tx,
           link,
           key,
-          narrowed,
+          declareStreamSchema(narrowed),
           cfcLabelView,
           synced,
         );
       }
-      const fallback = declaredDefault(narrowed);
-      if (fallback === undefined) return undefined;
-      return processDefaultValue(
-        runtime,
-        tx,
-        { ...link, path: [...link.path, key], schema: narrowed },
-        fallback,
-        synced,
-        rebaseCfcLabelView(cfcLabelView, [key]),
-      );
+      return applyDefault();
     }
-    if (required.has(key)) {
-      return readChild(runtime, tx, link, key, narrowed, cfcLabelView, synced);
-    }
-    // A property the schema does not require reads as `undefined` when the data
-    // underneath does not match it. That is what an eager read leaves behind: a
-    // property whose traversal fails is left out of the object, and only a
-    // `required` one takes the object down with it. Refusing here instead would
-    // stop a reader the eager path runs — a field waiting on a computed that has
-    // not produced is the ordinary case, not a fault.
     try {
+      // What arrives here is the child's own verdict: the container-level
+      // check a view makes when it is built, or a combinator's whole-branch
+      // evaluation. A mismatch deeper inside a child view is not decided here;
+      // it surfaces where the reader touches it.
       return readChild(runtime, tx, link, key, narrowed, cfcLabelView, synced);
     } catch (error) {
       if (!isSchemaMismatchError(error)) throw error;
-      // The view asked for this read and the view is answering for it, so the
-      // refusal never reaches the reader and must not survive on the
-      // transaction. The read it registered does survive, which is what brings
-      // the reader back when the data arrives.
+      // A child can dead-end at a doc the replica cannot serve — inside a
+      // combinator evaluated whole, or at its own target. Nothing in it is
+      // known to be invalid, so nothing may be published in its place: a
+      // declared default is refused rather than stood in, and a required
+      // property refuses below. A property with neither reads as absent, as
+      // an eager read reads it, with the dead-end's read registered by the
+      // entry point so the reader runs again when the document arrives. The
+      // property's own dead-end never arrives here with a default declared:
+      // the entry point stands the default in before it can refuse.
+      if (defaultSchema !== undefined && isUnresolvedInputError(error)) {
+        throw error;
+      }
+      if (defaultSchema !== undefined) {
+        const fallback = applyDefault();
+        if (fallback !== undefined) {
+          tx.clearSchemaRefusal(error);
+          return fallback;
+        }
+      }
+      if (required.has(key)) throw error;
       tx.clearSchemaRefusal(error);
       return ABSENT;
     }
@@ -931,24 +708,22 @@ function createArrayView(
   const resolveElement = (index: number): unknown => {
     const key = String(index);
     const item = value[index];
-    const itemSchema = childSchema(schema, key, item);
+    const itemSchema = childSchema(schema, key, "array");
     const slotLink: NormalizedFullLink = {
       ...link,
       path: [...link.path, key],
       schema: itemSchema,
     };
-    // An inline object element takes its identity from its own value, not from
-    // the slot it sits in. `toCell` on `xs[0]` would otherwise hand back a link
-    // to INDEX 0 of this array: write that anywhere and it names whatever lands
-    // there next rather than this object. Eager traversal rebases the same
-    // elements onto a `data:` URI, and the value is already in hand here, so
-    // the identity costs no read. An element that is itself a link already
-    // carries its own identity, and an `asCell` item is a handle whose link is
-    // the point of it.
-    if (
-      isObjectNotArray(item) && !isSigilLink(item) &&
-      !SchemaObjectTraverser.hasAsCell(itemSchema)
-    ) {
+    // An inline element that is a container — an object, or a nested array —
+    // takes its identity from its own value, not from the slot it sits in.
+    // `toCell` on `xs[0]` would otherwise hand back a link to INDEX 0 of this
+    // array: write that anywhere and it names whatever lands there next rather
+    // than this element. Eager traversal rebases the same elements onto a
+    // `data:` URI, and the value is already in hand here, so the identity
+    // costs no read. An element that is itself a link already carries its own
+    // identity, and an `asCell` item is a handle whose link is the point of
+    // it; `arrayItemUsesValueIdentity` is the one predicate both paths apply.
+    if (arrayItemUsesValueIdentity(item, itemSchema)) {
       // The read still belongs to the slot, and recursively: the identity is
       // derived from the whole element value, so anything inside it changing
       // changes what the reader was handed. Rebasing onto the URI moves where
@@ -977,12 +752,26 @@ function createArrayView(
   // transaction has written. See the note there for why it is entered by hand.
   const element = (index: number): unknown => {
     if (readStatsActive) recordProxyAccess(tx);
-    if (!tx.hasWrites()) return resolveElement(index);
-    const previous = tx.enterReadEpoch(epoch);
+    const hasWrites = tx.hasWrites();
+    const previous = hasWrites ? tx.enterReadEpoch(epoch) : undefined;
     try {
       return resolveElement(index);
+    } catch (error) {
+      if (!isSchemaMismatchError(error)) throw error;
+      // An unavailable hop target has no value to validate or substitute yet,
+      // whether it is the slot's own or one inside a combinator item evaluated
+      // whole. A substitute answers only for the element's own verdict: the
+      // container-level check of its view, or a combinator's evaluation. What
+      // fails deeper inside an element view is decided where it is touched.
+      if (isUnresolvedInputError(error)) throw error;
+      const fallbackType = arrayItemFallbackType(
+        childSchema(schema, String(index), "array"),
+      );
+      if (fallbackType === undefined) throw error;
+      tx.clearSchemaRefusal(error);
+      return fallbackType === "null" ? null : undefined;
     } finally {
-      tx.exitReadEpoch(previous);
+      if (hasWrites) tx.exitReadEpoch(previous);
     }
   };
 

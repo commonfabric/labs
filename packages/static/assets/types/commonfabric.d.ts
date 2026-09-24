@@ -1159,6 +1159,7 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
    * Add one or more values to an array cell as a set: each value is appended
    * only if no existing element equals it. Mergeable — concurrent adds of
    * distinct elements merge and a repeated add is a no-op against durable state.
+   * A value read back through `get()` is refused; pass the element's cell.
    */
   addUnique(
     this: IsThisArray,
@@ -1179,7 +1180,8 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
   /**
    * Remove every element equal to `ref` by stored value (a cell matches by its
    * link). Mergeable — resolved against durable state, so concurrent removes of
-   * distinct entries merge instead of clobbering via a whole-array rewrite.
+   * distinct entries merge instead of clobbering via a whole-array rewrite. A
+   * value read back through `get()` is refused; pass the element's cell.
    */
   removeByValue(
     this: IsThisArray,

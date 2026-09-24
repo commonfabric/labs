@@ -506,11 +506,12 @@ describe("schema-registry", () => {
       };
       const groupHash = internSchemaAsTaggedHashString(group);
       registerSchemaDocument(groupHash, group);
-      // A `true` member view resolves as the unconstrained schema, which
-      // `resolveSchema` reports as `undefined` — distinct from the `false`
-      // that closes resolution.
+      // A `true` member view resolves as the unconstrained schema, and
+      // `resolveSchema` returns it as `true`: a schema that admits every
+      // value, distinct from `undefined`, which says no schema was given, and
+      // from the `false` that closes resolution.
       expect(resolveSchema({ $ref: `cid:${groupHash}#/$defs/AlwaysTrue` }))
-        .toBe(undefined);
+        .toBe(true);
     });
   });
 });

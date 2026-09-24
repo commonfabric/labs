@@ -52,14 +52,14 @@ function sha256(bytes: number[] | Uint8Array): Uint8Array {
 }
 
 /** Returns the digest of a new `ValueHasher` fed `value` alone. */
-function digestOf(value: unknown): FabricHash {
+function digestOf(value: FabricValue): FabricHash {
   const hasher = new ValueHasher();
   hasher.feedValue(value);
   return hasher.digest();
 }
 
 /** Returns the raw bytes of `digestOf(value)`, for comparison. */
-function hashBytesOf(value: unknown): Uint8Array {
+function hashBytesOf(value: FabricValue): Uint8Array {
   return digestOf(value).bytes;
 }
 
@@ -573,6 +573,48 @@ describe("ValueHasher", () => {
           expect(hex(hashBytesOf(nsec))).not.toBe(hex(hashBytesOf(days)));
         });
       });
+      describe("FabricRegExp (dedicated TAG_REGEXP primitive tag)", () => {
+        it("matches a hand-computed byte stream for `FabricRegExp(/abc/gi)`", () => {
+          // TAG_REGEXP (0x2B), then source, flags, and flavor, each a direct
+          // string (TAG_STRING + length + UTF-8), fed positionally with no
+          // terminator. Mirrored in Section 7.12 of `2-hash-byte-format.md`,
+          // so the two have to be changed together.
+          const expected = sha256([
+            0x2b,
+            0x24,
+            0x03,
+            0x61,
+            0x62,
+            0x63,
+            0x24,
+            0x02,
+            0x67,
+            0x69,
+            0x24,
+            0x06,
+            0x65,
+            0x73,
+            0x32,
+            0x30,
+            0x32,
+            0x35,
+          ]);
+          expect(hashBytesOf(new FabricRegExp(/abc/gi))).toEqual(expected);
+        });
+
+        it("produces different hashes for different sources", () => {
+          const r1 = new FabricRegExp(/foo/);
+          const r2 = new FabricRegExp(/bar/);
+          expect(hex(hashBytesOf(r1))).not.toBe(hex(hashBytesOf(r2)));
+        });
+
+        it("produces different hashes for different flags", () => {
+          const r1 = new FabricRegExp(/foo/g);
+          const r2 = new FabricRegExp(/foo/i);
+          expect(hex(hashBytesOf(r1))).not.toBe(hex(hashBytesOf(r2)));
+        });
+      });
+
       describe("FabricUnavailable (dedicated TAG_UNAVAILABLE primitive tag)", () => {
         it('matches a hand-computed byte stream for `FabricUnavailable("pending")`', () => {
           // TAG_UNAVAILABLE (0x2D), the reason as a tagged string, then the
@@ -1305,83 +1347,57 @@ describe("ValueHasher", () => {
         });
       });
 
-      describe("JS instances", () => {
-        describe("Date", () => {
-          it("produces the same hash for a JS `Date` as for an equivalent `FabricEpochNsec`", () => {
-            const date = new Date("2024-01-01T00:00:00Z");
-            const nsec = BigInt(date.getTime()) * 1_000_000n;
-            const dateHash = hex(hashBytesOf(date));
-            const epochHash = hex(hashBytesOf(new FabricEpochNsec(nsec)));
-            expect(dateHash).toBe(epochHash);
-          });
-
-          it("produces different hashes for different Dates", () => {
-            const d1 = new Date("2024-01-01T00:00:00Z");
-            const d2 = new Date("2025-06-15T12:00:00Z");
-            expect(hex(hashBytesOf(d1))).not.toBe(
-              hex(hashBytesOf(d2)),
-            );
-          });
+      describe("values outside the data model", () => {
+        it("throws for a JS `Date`", () => {
+          const date = new Date("2024-01-01T00:00:00Z");
+          // @ts-expect-error A JS `Date` is not a `FabricValue`.
+          expect(() => hashBytesOf(date)).toThrow("Cannot hash value");
         });
-        describe("RegExp", () => {
-          it("produces the same hash for a JS `RegExp` as for an equivalent `FabricRegExp`", () => {
-            const re = /hello/gi;
-            const nativeHash = hex(hashBytesOf(re));
-            const fabricHash = hex(hashBytesOf(new FabricRegExp(re)));
-            expect(nativeHash).toBe(fabricHash);
-          });
 
-          it("produces different hashes for different RegExps", () => {
-            const r1 = /foo/;
-            const r2 = /bar/;
-            expect(hex(hashBytesOf(r1))).not.toBe(
-              hex(hashBytesOf(r2)),
-            );
-          });
+        it("throws for a JS `RegExp`", () => {
+          // @ts-expect-error A JS `RegExp` is not a `FabricValue`.
+          expect(() => hashBytesOf(/hello/gi)).toThrow("Cannot hash value");
         });
-        describe("Uint8Array", () => {
-          it("produces the same hash for a JS `Uint8Array` as for a `FabricBytes` with the same bytes", () => {
-            const bytes = new Uint8Array([10, 20, 30]);
-            const nativeHash = hex(hashBytesOf(bytes));
-            const fabricHash = hex(hashBytesOf(new FabricBytes(bytes)));
-            expect(nativeHash).toBe(fabricHash);
-          });
 
-          it("produces different hashes for different Uint8Arrays", () => {
-            const b1 = new Uint8Array([1, 2, 3]);
-            const b2 = new Uint8Array([4, 5, 6]);
-            expect(hex(hashBytesOf(b1))).not.toBe(
-              hex(hashBytesOf(b2)),
-            );
-          });
+        it("throws for a JS `Uint8Array`", () => {
+          const bytes = new Uint8Array([10, 20, 30]);
+          // @ts-expect-error A JS `Uint8Array` is not a `FabricValue`.
+          expect(() => hashBytesOf(bytes)).toThrow("Cannot hash value");
         });
-        describe("Deferred types (not yet handled — these document known gaps)", () => {
-          it("throws for `Map` (deferred — needs recursive translation)", () => {
-            expect(() => hashBytesOf(new Map([["a", 1]]))).toThrow(
-              "unsupported object type",
-            );
-          });
 
-          it("throws for `Set` (deferred — needs recursive translation)", () => {
-            expect(() => hashBytesOf(new Set([1, 2, 3]))).toThrow(
-              "unsupported object type",
-            );
-          });
+        it("throws for a `Date` nested in a container", () => {
+          const nested = { at: [new Date("2024-01-01T00:00:00Z")] };
+          // @ts-expect-error A JS `Date` is not a `FabricValue`.
+          expect(() => hashBytesOf(nested)).toThrow("Cannot hash value");
+        });
 
-          it("throws for `Error` (deferred — needs recursive translation)", () => {
-            expect(() => hashBytesOf(new Error("test"))).toThrow(
-              "unsupported object type",
-            );
-          });
+        it("throws for `Map`", () => {
+          // @ts-expect-error A `Map` is not a `FabricValue`.
+          expect(() => hashBytesOf(new Map([["a", 1]]))).toThrow(
+            "Cannot hash value",
+          );
+        });
 
-          it("throws for a member that is a function", () => {
-            // `toJSON` gets no special reading here either: it is a function-valued
-            // member, and functions have no hash.
-            const obj = { toJSON: () => "hello" };
-            expect(() => hashBytesOf(obj)).toThrow(
-              "unsupported type `function`",
-            );
-          });
+        it("throws for `Set`", () => {
+          // @ts-expect-error A `Set` is not a `FabricValue`.
+          expect(() => hashBytesOf(new Set([1, 2, 3]))).toThrow(
+            "Cannot hash value",
+          );
+        });
+
+        it("throws for `Error`", () => {
+          // @ts-expect-error A JS `Error` is not a `FabricValue`.
+          expect(() => hashBytesOf(new Error("test"))).toThrow(
+            "Cannot hash value",
+          );
+        });
+
+        it("throws for a member that is a function", () => {
+          // `toJSON` gets no special reading here either: it is a
+          // function-valued member, and functions have no hash.
+          const obj = { toJSON: () => "hello" };
+          // @ts-expect-error A function is not a `FabricValue`.
+          expect(() => hashBytesOf(obj)).toThrow("Cannot hash value");
         });
       });
 

@@ -1,3 +1,5 @@
+import type { FabricExecValue } from "@commonfabric/api";
+
 import { noteDerivedCopy } from "./builder/pattern-metadata.ts";
 import { replaceArtifacts, type WalkHooks } from "./encodable-form.ts";
 
@@ -6,11 +8,12 @@ import { replaceArtifacts, type WalkHooks } from "./encodable-form.ts";
  * form, on the way into the data model. The hooks are the walk's own; see
  * `WalkHooks` in `encodable-form.ts`.
  *
- * The result is `unknown` because that is what it is: an artifact comes out
- * as its encodable form, which has a different shape from what went in, and
- * anything the walk does not recognize comes out as itself. So the input's
- * type says nothing about the result's, and a caller has to check or convert
- * the result before treating it as fabric data.
+ * An artifact comes out as its encodable form, which has a different shape from
+ * what went in, and anything the walk does not recognize comes out as itself.
+ * So the input's type says little about the result's. A `FabricExecValue`
+ * comes back as one, which may still hold a function that is not an artifact.
+ * Any other value comes back as `unknown`, and a caller has to check or convert
+ * it before treating it as fabric data.
  *
  * The walk itself is `replaceArtifacts`; this names the one thing a storage
  * boundary adds to it -- carrying trust and the content-addressed entry ref
@@ -27,6 +30,14 @@ import { replaceArtifacts, type WalkHooks } from "./encodable-form.ts";
  * original. A copy of a trusted artifact being trusted is the property the
  * side tables exist to preserve; not carrying it was the bug.
  */
+export function flattenBuilderArtifacts(
+  value: FabricExecValue,
+  hooks?: { isLeaf?: WalkHooks["isLeaf"]; replaceOther?: undefined },
+): FabricExecValue;
+export function flattenBuilderArtifacts(
+  value: unknown,
+  hooks?: WalkHooks,
+): unknown;
 export function flattenBuilderArtifacts(
   value: unknown,
   hooks?: WalkHooks,

@@ -31,6 +31,10 @@ import {
 } from "../executor/wave.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
+  ignoreReadForScheduling,
+  writeDestinationRead,
+} from "../storage/reactivity-log.ts";
+import {
   isProtectedToolshedFirstPartyRoute,
   isToolshedApiOrigin,
   signFirstPartyHttpRequest,
@@ -47,6 +51,38 @@ import {
   effectTargetKey,
   markEffectCompletion,
 } from "../executor/effect-completion.ts";
+
+/**
+ * Metadata for a fetch builtin reading its own output cells to tell whether
+ * anything was committed to them: a read of a write destination, and no
+ * dependency of the request.
+ */
+const storedCellsRead = {
+  ...writeDestinationRead,
+  ...ignoreReadForScheduling,
+};
+
+/**
+ * A fetch builtin's four output cells as stored, read through `readTx` as
+ * write destinations: the reads are no dependency of the request.
+ */
+function storedFetchCells(
+  readTx: IExtendedStorageTransaction,
+  cells: {
+    pending: Cell<unknown>;
+    result: Cell<unknown>;
+    error: Cell<unknown>;
+    internal: Cell<unknown>;
+  },
+): Record<"pending" | "result" | "error" | "internal", FabricValue> {
+  const read = { meta: storedCellsRead };
+  return {
+    pending: cells.pending.withTx(readTx).getRawUntyped(read),
+    result: cells.result.withTx(readTx).getRawUntyped(read),
+    error: cells.error.withTx(readTx).getRawUntyped(read),
+    internal: cells.internal.withTx(readTx).getRawUntyped(read),
+  };
+}
 
 type FetchRequestOptions = {
   body?: any;
@@ -655,6 +691,14 @@ function fetchBuiltin(kind: FetchKind) {
         const currentPending = pending.withTx(tx).get();
         const currentResult = result.withTx(tx).get();
         const currentError = error.withTx(tx).get();
+        // Taken before this run writes to them, for an abandoned request's
+        // ending to compare with (see `cellsBeforeStage`).
+        const storedBeforeWrites = storedFetchCells(tx, {
+          pending,
+          result,
+          error,
+          internal,
+        });
 
         const inputsMatch = currentInternal?.inputHash === inputHash;
 
@@ -711,12 +755,11 @@ function fetchBuiltin(kind: FetchKind) {
           // four questions: a request that answers writes its result without
           // moving the claim id, and one that takes over moves the claim id
           // without writing a result.
-          const cellsBeforeStage = {
-            pending: currentPending,
-            result: currentResult,
-            error: currentError,
-            internal: currentInternal,
-          };
+          //
+          // Asked of the values as stored, which are compared whole, rather than
+          // of the views a read hands back, which would each be read through
+          // again.
+          const cellsBeforeStage = storedBeforeWrites;
           const effectKey = effectTargetKey(
             `${kind.name}:${inputHash}`,
             result,
@@ -883,8 +926,13 @@ function fetchBuiltin(kind: FetchKind) {
                       // a structural walk cannot see — every distinct instance of
                       // one compares equal to every other.
                       const writtenSinceStaged = !valueEqual(
-                        cellsBeforeStage as FabricValue,
-                        cellsNow as FabricValue,
+                        cellsBeforeStage,
+                        storedFetchCells(settleTx, {
+                          pending,
+                          result,
+                          error,
+                          internal,
+                        }),
                       );
                       if (inFlight || writtenSinceStaged) {
                         return;

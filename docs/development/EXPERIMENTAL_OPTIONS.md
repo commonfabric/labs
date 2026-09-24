@@ -580,6 +580,10 @@ server](#clients-that-are-not-built-alongside-their-server).
   nothing else; a reader that touches data the schema no longer describes
   refuses, and the run is disposed of as an argument that did not resolve.
   Unmarked transactions read exactly as they did before.
+- **Behavior.**
+  [`../features/lazy-cell-materialization.md`](../features/lazy-cell-materialization.md)
+  — what a view checks, where it diverges from an eager read, and where a
+  schema-less read takes over.
 - **Design, measurements and staging.**
   [`../plans/lazy-cell-materialization.md`](../plans/lazy-cell-materialization.md).
 

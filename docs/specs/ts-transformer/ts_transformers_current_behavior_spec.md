@@ -410,6 +410,13 @@ therefore retains its value type and cell capability when captured by `computed`
 or `assert`, even when the wrapper has a method with the same name. Inline
 object values in optional cell handles and optional stored values retain their
 requested fields and read-only capability while preserving nullish alternatives.
+Those alternatives join the cell's value, so where the value is a scope wrapper
+they go inside it: an optional `Writable<PerUser<T>>` read as `cell?.get()` is
+captured as `ReadonlyCell<PerUser<T | undefined>>`, and a scope wrapper reached
+through an alias is printed as the wrapper around its payload. A scope wrapper
+may not be a union member, since the write path reads a slot's scope only from
+the top level of its schema (`type-shrinking.ts`,
+`moveNullishIntoScopeWrapper()`; `captured-cell-field-names.test.ts`).
 A `.get()` whose result is not resolved to a specific member path retains the
 receiver's complete stored shape, including when the result passes through a
 helper. Optional member reads retain the receiver without imposing a full-shape
@@ -1493,6 +1500,15 @@ Result shape:
   method calls
 - callback schema includes `{ element, index?, array? }` and adds `params` only
   when captures exist
+- `element` is the element of the receiver's list. A receiver that is itself
+  a list — an array, a tuple, or a type indexed by number, as an interface
+  extending `Array<T>` is — has its own element: a row of a `T[][]`, the union
+  of a tuple's positions. A cell-like receiver wraps the list type, and the
+  element is read through a union or an intersection around the list —
+  `T[] | Default<[]>`, `Default<T[], V>`, `T[] | undefined`,
+  `Cfc<T[], Meta>` — so the callback schema is the same with or without an
+  explicit annotation on the pattern parameter (`ast/type-inference.ts`;
+  `test/array-method-element-schema.test.ts`)
 - computed destructuring keys are stabilized with generated key constants and
   lift-applied wrappers where needed
 

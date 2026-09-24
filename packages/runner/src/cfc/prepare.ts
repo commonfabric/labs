@@ -62,6 +62,7 @@ import {
   isCurrentPrincipalUserClause,
 } from "./current-principal-confidentiality.ts";
 import {
+  areLinksSame,
   isPrimitiveCellLink,
   isWriteRedirectLink,
   parseLink,
@@ -1144,6 +1145,41 @@ const writeIsRuntimeInitialization = (
     return false;
   });
   return absent && finalValueIsRecorded();
+};
+
+/**
+ * Whether `path` lies at or under a reference the runtime staged in this
+ * transaction, with the slot still holding it. Staging writes nothing the
+ * referenced value holds, so the integrity the receiving slot's schema would
+ * add describes content the stager did not write and is not minted for it.
+ */
+const pathHoldsStagedReference = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  const logicalPath = canonicalizeLogicalPath(path);
+  return tx.getCfcState().writePolicyInputs.some((input) =>
+    input.kind === "initialization" && input.mode === "reference" &&
+    tx.isRuntimeWritePolicyInput(input) &&
+    input.target.space === target.space && input.target.id === target.id &&
+    normalizeCellScope(input.target.scope) ===
+      normalizeCellScope(target.scope) &&
+    concretePathHasPrefix(logicalPath, input.target.path) &&
+    valueEqual(
+      tx.readValueOrThrow({
+        space: target.space,
+        id: target.id as URI,
+        scope: target.scope,
+        path: [...input.target.path],
+      }, { meta: INTERNAL_VERIFIER_META }),
+      input.value,
+    )
+  );
 };
 
 /** A single runtime output attempt may preserve an existing root reference. */
@@ -2252,6 +2288,86 @@ const isMetaSeamPath = (
   metaOnlyByPath: ReadonlyMap<string, boolean> | undefined,
   path: readonly string[],
 ): boolean => metaOnlyByPath?.get(pathKey(path)) === true;
+
+/** What one of {@link valueWriteTargets}' documents records of its writes. */
+type ValueWriteTarget = ReturnType<typeof valueWriteTargets> extends
+  Map<string, infer Target> ? Target : never;
+
+/**
+ * What stands at `rel` below `value`: the first link met on the way down,
+ * which the path then continues inside of and which is therefore what the
+ * path resolves through, else the value at `rel`, else nothing.
+ */
+const pointerAlongPath = (
+  value: unknown,
+  rel: readonly string[],
+): { link: unknown } | { value: unknown } | undefined => {
+  let current = value;
+  for (let depth = 0;; depth++) {
+    if (isPrimitiveCellLink(current)) return { link: current };
+    if (depth === rel.length) return { value: current };
+    if (!isObjectOrArray(current) || !Object.hasOwn(current, rel[depth])) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[rel[depth]];
+  }
+};
+
+/**
+ * Whether the transaction replaced the pointer a link-origin entry at
+ * `entryPath` labels: whether some payload write at or above that path left
+ * something other than the pointer that stood there when it began. The
+ * pointer is the first link on the way down to the entry's path, or the
+ * value there when no link is on the way.
+ *
+ * Matching is by exact segment, never `PathPrefixIndex`'s wildcard: a
+ * link-origin entry names a concrete path, and a payload key spelled `*` is
+ * a key like any other, not every sibling of it.
+ *
+ * Comparing the values is what keeps a write that stores the same pointer
+ * again, as a raw write that records no link write does, from clearing the
+ * labels nothing then re-mints. A meta-seam write replaces no payload
+ * pointer and is not consulted.
+ */
+const linkEntryPointerReplaced = (
+  tx: IExtendedStorageTransaction,
+  target: ValueWriteTarget,
+  entryPath: readonly string[],
+): boolean =>
+  target.paths.some((written) => {
+    if (
+      isMetaSeamPath(target.metaOnlyByPath, written) ||
+      written.length > entryPath.length ||
+      !written.every((segment, index) => segment === entryPath[index])
+    ) {
+      return false;
+    }
+    const rel = entryPath.slice(written.length);
+    const writtenKey = pathKey(written);
+    const before = target.previousPresentByPath.get(writtenKey) === false
+      ? undefined
+      : pointerAlongPath(target.previousValuesByPath.get(writtenKey), rel);
+    const after = pointerAlongPath(
+      writeDetailValueForTarget(tx, { ...target, path: written }, "value") ??
+        target.valuesByPath.get(writtenKey),
+      rel,
+    );
+    if (before === undefined || after === undefined) {
+      return before !== after;
+    }
+    const base = {
+      space: target.space,
+      id: target.id,
+      scope: target.scope,
+      type: target.type,
+      path: [],
+    };
+    if ("link" in before && "link" in after) {
+      return !areLinksSame(before.link, after.link, base);
+    }
+    return "link" in before || "link" in after ||
+      !deepEqual(before.value, after.value);
+  });
 
 /**
  * Whether `id` names a document of one of the two id classes no schema can
@@ -5023,7 +5139,9 @@ const derivePersistedLabel = (
   schemaLabel: IFCLabel,
   sourceEntryLabels?: Map<string, IFCLabel>,
   owningSpace?: MemorySpace,
+  options: { mintSchemaIntegrity?: boolean } = {},
 ): IFCLabel => {
+  const mintSchemaIntegrity = options.mintSchemaIntegrity ?? true;
   const ifc = isObjectOrArray(schema) ? schema.ifc : undefined;
   const actingPrincipal = tx.getCfcState().trustSnapshot?.actingPrincipal;
   const copiedInputLabel = sourceEntryLabels && exactCopySourcePath(schema)
@@ -5060,18 +5178,23 @@ const derivePersistedLabel = (
         | readonly CfcConfClause[]
         | undefined)?.map(normalizeClause),
     ),
-    integrity: mergeLabelValues(
-      resolveCurrentPrincipalLabelValues(
-        schemaLabel.integrity,
-        actingPrincipal,
+    integrity: mintSchemaIntegrity
+      ? mergeLabelValues(
+        resolveCurrentPrincipalLabelValues(
+          schemaLabel.integrity,
+          actingPrincipal,
+        ),
+        copiedInputLabel?.integrity,
+        projectedInputLabel?.integrity,
+        resolveCurrentPrincipalLabelValues(
+          Array.isArray(ifc?.addIntegrity) ? ifc.addIntegrity : undefined,
+          actingPrincipal,
+        ),
+      )
+      : mergeLabelValues(
+        copiedInputLabel?.integrity,
+        projectedInputLabel?.integrity,
       ),
-      copiedInputLabel?.integrity,
-      projectedInputLabel?.integrity,
-      resolveCurrentPrincipalLabelValues(
-        Array.isArray(ifc?.addIntegrity) ? ifc.addIntegrity : undefined,
-        actingPrincipal,
-      ),
-    ),
   };
 };
 
@@ -5314,6 +5437,7 @@ const persistedLabelFromSchemaAtPath = (
   schema: JSONSchema,
   path: readonly string[],
   owningSpace: MemorySpace,
+  options: { mintSchemaIntegrity?: boolean } = {},
 ): IFCLabel | undefined => {
   const logicalPath = canonicalizeLogicalPath(path);
   const entries = cfcSchemaEntries(schema);
@@ -5340,6 +5464,7 @@ const persistedLabelFromSchemaAtPath = (
     match.label,
     entryLabels,
     owningSpace,
+    options,
   );
 };
 
@@ -5377,6 +5502,7 @@ const rootLabelFromSchema = (
   tx: IExtendedStorageTransaction,
   schema: JSONSchema | undefined,
   owningSpace: MemorySpace,
+  options: { mintSchemaIntegrity?: boolean } = {},
 ): IFCLabel => {
   if (schema === undefined) {
     return {};
@@ -5384,9 +5510,14 @@ const rootLabelFromSchema = (
   const root = cfcSchemaEntries(schema).find((entry) =>
     entry.path.length === 0
   );
-  return root === undefined
-    ? {}
-    : derivePersistedLabel(tx, root.schema, root.label, undefined, owningSpace);
+  return root === undefined ? {} : derivePersistedLabel(
+    tx,
+    root.schema,
+    root.label,
+    undefined,
+    owningSpace,
+    options,
+  );
 };
 
 /**
@@ -5504,12 +5635,21 @@ const derivePersistedLinkLabel = (
       tx.getCfcState().trustSnapshot?.actingPrincipal,
     );
   }
+  // A source that is itself a reference staged in this transaction mints
+  // nothing for the principal staging it, as its own slot does not.
   let pendingSourceLabel = pendingSourceSchema !== undefined
     ? persistedLabelFromSchemaAtPath(
       tx,
       pendingSourceSchema,
       input.source.path,
       input.source.space,
+      {
+        mintSchemaIntegrity: !pathHoldsStagedReference(
+          tx,
+          input.source,
+          input.source.path,
+        ),
+      },
     )
     : undefined;
   if (pendingSourceSchema === undefined && sourceMetadata === undefined) {
@@ -5536,11 +5676,21 @@ const derivePersistedLinkLabel = (
           targetCandidate,
           tx.getCfcState().trustSnapshot?.actingPrincipal,
         );
+        // A reference the runtime staged at the target is not the inline
+        // value this derivation stands for, so it mints nothing for the
+        // principal staging it.
         pendingSourceLabel = persistedLabelFromSchemaAtPath(
           tx,
           pendingSourceSchema,
           input.target.path,
           input.target.space,
+          {
+            mintSchemaIntegrity: !pathHoldsStagedReference(
+              tx,
+              input.target,
+              input.target.path,
+            ),
+          },
         );
       }
     }
@@ -5549,6 +5699,13 @@ const derivePersistedLinkLabel = (
     tx,
     input.linkSchema,
     input.source.space,
+    {
+      mintSchemaIntegrity: !pathHoldsStagedReference(
+        tx,
+        input.target,
+        input.target.path,
+      ),
+    },
   );
   const hasCarriedLabel =
     input.cfcLabelView?.entries.some((entry) => hasLabelValues(entry.label)) ??
@@ -6657,6 +6814,13 @@ const verifyWriteFloor = (
         entry.label,
         entryLabels,
         target.space,
+        {
+          mintSchemaIntegrity: !pathHoldsStagedReference(
+            tx,
+            target,
+            entry.path,
+          ),
+        },
       ),
       ctx.identityForPath(entry.path),
     ).integrity ?? [];
@@ -6840,7 +7004,8 @@ export function* prepareBoundaryCommitSteps(
   // its cross-space eligibility, and the writer-fit measurement reads it to
   // decide whether a computed target's exemption applies.
   const labelProtectionMode = state.labelMetadataProtectionMode;
-  const flowTargets = flowMode === "off" ? undefined : valueWriteTargets(tx);
+  const valueTargets = valueWriteTargets(tx);
+  const flowTargets = flowMode === "off" ? undefined : valueTargets;
   const flowJoin = flowMode === "off"
     ? { confidentiality: [], integrity: [] }
     : deriveFlowJoin(tx, { collectLabeledSpaces: true });
@@ -6879,7 +7044,7 @@ export function* prepareBoundaryCommitSteps(
         `${flowTargets.size} written doc(s)`,
     );
   }
-  for (const [key, target] of valueWriteTargets(tx)) {
+  for (const [key, target] of valueTargets) {
     if (candidates.has(key)) {
       continue;
     }
@@ -7010,6 +7175,31 @@ export function* prepareBoundaryCommitSteps(
       ) {
         targetKeys.add(key);
       }
+    }
+  }
+  // A link-origin entry labels the pointer that stood at its path when the
+  // entry was minted, so a payload write that replaced that pointer leaves it
+  // describing one the document no longer holds. Such a document enters the
+  // persist loop whatever the flow-label mode and whatever the flow join, and
+  // the loop drops the entry there (`linkCleared`).
+  for (const [key, target] of valueTargets) {
+    if (targetKeys.has(key)) {
+      continue;
+    }
+    const existingEntries = storedMetadataFor(
+      tx,
+      target.space,
+      target.id,
+      target.scope,
+      target.type,
+    )?.labelMap.entries ?? [];
+    if (
+      existingEntries.some((entry) =>
+        entry.origin === "link" &&
+        linkEntryPointerReplaced(tx, target, entry.path)
+      )
+    ) {
+      targetKeys.add(key);
     }
   }
   const metadataResolver = new VerifierMetadataResolver(tx);
@@ -7248,6 +7438,7 @@ export function* prepareBoundaryCommitSteps(
     const flowWrittenPrefixes = new PathPrefixIndex();
     for (const path of flowWrittenPaths) flowWrittenPrefixes.add(path);
     const flowWrittenValues = flowTarget?.valuesByPath;
+    const valueTarget = valueTargets.get(key);
     // Pre-transaction snapshots (and slot presence at each recorded path)
     // per written path, for the §8.12.8 re-mint-on-recreation probe below.
     // Gated on flowPersist like the written paths: with nothing
@@ -7305,6 +7496,13 @@ export function* prepareBoundaryCommitSteps(
               entry.label,
               mergedSchemaEntryLabels,
               target.space,
+              {
+                mintSchemaIntegrity: !pathHoldsStagedReference(
+                  tx,
+                  target,
+                  entry.path,
+                ),
+              },
             ),
             identityForSchemaPath(writeAuthorIdentities.get(key), entry.path),
           );
@@ -7403,6 +7601,7 @@ export function* prepareBoundaryCommitSteps(
     );
     let flowCleared = false;
     let remintCleared = false;
+    let linkCleared = false;
     // Stage B: stored label-metadata templates this persist drops (they are
     // re-derived from the FINAL payload entry set below). Tracked so a
     // TEMPLATE-ONLY stale envelope — a mixed-version writer cleared the
@@ -7589,11 +7788,26 @@ export function* prepareBoundaryCommitSteps(
       if (isIngestTarget && entry.origin === "external-ingest") {
         continue;
       }
+      // A link-origin entry labels the pointer its slot held: a label of the
+      // element there rather than of the position. A payload write that
+      // replaced that pointer takes the entry with it whatever the flow-label
+      // mode (`linkEntryPointerReplaced`), so a rewritten list keeps no
+      // position carrying the labels of an element that has left it. The
+      // link write storing the element now at the position mints that
+      // element's own entries below, so an element keeps its labels at every
+      // position it moves to.
+      if (
+        entry.origin === "link" && valueTarget !== undefined &&
+        linkEntryPointerReplaced(tx, valueTarget, entryPath)
+      ) {
+        linkCleared = true;
+        continue;
+      }
       // Per-value components track the current value: a write at-or-above
-      // them replaced that value, so stale derived/link/structure entries
-      // under any written path are dropped (fresh ones for this tx are
-      // appended below / by the link machinery). Declared and legacy
-      // entries are never cleared here.
+      // them replaced that value, so stale derived/structure entries under
+      // any written path are dropped (fresh ones for this tx are appended
+      // below). Declared and legacy entries are never cleared here, and
+      // link-origin entries are cleared above.
       //
       // `*`-path templates clear only under a write that covers their
       // CONTAINER (template-population §3.1 "cleared on covering writes"):
@@ -7612,8 +7826,7 @@ export function* prepareBoundaryCommitSteps(
         : entryPath;
       if (
         flowPersist &&
-        (entry.origin === "derived" || entry.origin === "link" ||
-          entry.origin === "structure") &&
+        (entry.origin === "derived" || entry.origin === "structure") &&
         flowWrittenPrefixes.hasPrefixOf(clearProbePath)
       ) {
         flowCleared = true;
@@ -8496,7 +8709,7 @@ export function* prepareBoundaryCommitSteps(
 
     if (
       coalescedLabelEntries.length === 0 && !flowCleared && !remintCleared &&
-      !droppedLabelMetadataTemplates
+      !linkCleared && !droppedLabelMetadataTemplates
     ) {
       if (deferredWriterRefusal !== undefined) {
         reasons.push(verdictReason(deferredWriterRefusal));

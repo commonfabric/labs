@@ -17,10 +17,13 @@
  * CAS instead, the server rejects it with a ConflictError — the loss is
  * specific to the blind path, not to racing per se.
  *
- * These tests PASS today: they pin current semantics. If they start failing,
- * the blind-vs-CAS routing changed and the removeItem/updateItem story needs
- * re-deciding (mergeable remove-by-value / a CAS CellSet variant — see the
- * #4245 discussion thread).
+ * Every `push` here is the multi-runtime harness's own: a read-modify-write
+ * append that keeps compare-and-set. A UI's `CellHandle.push()` does not take
+ * that path; the runtime appends through `Cell.push()`'s mergeable operation,
+ * which these tests do not reach, so a change in how the UI's push is routed
+ * does not fail them. The removeItem/updateItem story against the UI's
+ * mergeable append is not pinned here (mergeable remove-by-value / a CAS
+ * CellSet variant — see the #4245 discussion thread).
  */
 
 import { assert, assertEquals } from "@std/assert";

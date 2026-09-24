@@ -62,10 +62,13 @@ the data has stopped matching.
 
 **Schema narrowing already exists.** `ContextualFlowControl.schemaAtPath`
 ([`cfc.ts`](../../packages/runner/src/cfc.ts)) narrows a schema by a path,
-resolves `$ref`, unions `anyOf` / `oneOf` branches, and caches per interned
-schema. `canBranchMatch`, in `traverse.ts`, is a shallow branch prefilter — type
-check plus required-key presence, no descent. Together these are the narrowing
-primitive a lazy proxy needs.
+resolves `$ref`, and caches per interned schema. That is the narrowing a view
+applies to an ordinary container child. It does not decide a combinator: the
+view defers `anyOf`, `oneOf` and `allOf` to the eager traverser at the position
+where they are accessed, because whether a branch matches is a question about
+the whole branch. `canBranchMatch`, in `traverse.ts`, stays a shallow prefilter
+on the eager path — type check plus required-key presence, no descent — and
+nothing in the view is decided by it.
 
 **The "argument did not resolve" path.** `readJavaScriptArgument`
 ([`runner.ts`](../../packages/runner/src/runner.ts)) computes `isValidArgument`
@@ -151,21 +154,24 @@ a computed that has not produced yet is the ordinary case rather than a fault.
 The read that failed is registered either way, so the reader comes back when the
 data arrives.
 
-State the delta plainly, because it is the one behavior change a pattern author
-can observe: **a mismatch in a subtree the reader never touches no longer stops
-the reader.** Today a broken field five levels down collapses the whole argument
-and the lift does not run. Under this contract the lift runs, because nothing
-ever asked. This is the deliberate cost of not materializing what nobody wants.
-It is bounded in the direction that matters — a reader that touches broken data
-still refuses — and it removes a class of whole-argument collapses caused by
-data the reader had no interest in.
+For ordinary containers, a mismatch in an untouched child does not stop the
+reader. Validation follows demand, with whole-subtree decisions made at the
+boundaries below. A reader that touches broken data still refuses unless the
+schema permits an omitted property or a fallback.
 
-**`anyOf` resolves at the point of access.** When the narrowed schema at a path
-is a union, the view reads the value at that path non-recursively and filters
-branches with `canBranchMatch`. One surviving branch narrows to it; several
-merge their property schemas the way `mergeAnyOfBranchSchemas` already does;
-none is a refusal. The prefilter is shallow by construction, so this stays a
-container-shaped read, not a descent.
+**Combinators resolve at the point of access.** `anyOf`, `oneOf`, and `allOf`
+use eager traversal for the selected subtree, preserving whole-branch validation
+and merging only successful results. One case stays lazy: a union the value's
+type alone settles — one branch accepting the value's type and every other
+refusing it — is built as a view over that branch, since nothing below the
+value can change which branch applies. Shallow candidate matching decides
+nothing else. Nothing else is evaluated whole: a property default and a
+nullable array-item substitute answer for what the view rejects at the
+container, and what fails deeper refuses where it is touched. The feature
+contract lists those as
+[deliberate divergences](../features/lazy-cell-materialization.md#where-a-view-deliberately-diverges),
+and `packages/patterns/integration/topics-lazy-lookup-reruns.test.ts` holds the
+cost they avoid.
 
 ### Snapshot semantics
 
@@ -370,8 +376,10 @@ the materialization differs.
       `Array.prototype` methods over element views built on demand. The
       reshaping methods refuse — a view is a read.
 - [x] `toCell` on every view.
-- [x] `anyOf` / `oneOf` narrowed at the point of access via `canBranchMatch`,
-      merged by `mergeAnyOfBranchSchemas` when several branches survive.
+- [x] `anyOf`, `oneOf`, and `allOf` evaluated through eager traversal at the
+      point of access, preserving whole-branch validation and result merging;
+      a union the value's type settles narrows to its one branch and stays
+      lazy.
 - [x] `SchemaMismatchError`, carrying link and reason.
 - [x] Root guard: type, `required` presence. A mismatch at the root is
       `undefined`, matching an eager read; below it, a refusal.

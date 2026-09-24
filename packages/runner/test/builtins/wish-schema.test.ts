@@ -50,4 +50,18 @@ describe("wish state schema", () => {
       items: { $ref: "#/$defs/Resource", asCell: ["cell"] },
     });
   });
+
+  it("keeps a requested schema's sparse default apart from one holding `undefined`", () => {
+    const requested = (defaultValue: unknown[]) =>
+      ({ type: "array", default: defaultValue }) as unknown as JSONSchema;
+    const sparse = wishStateSchemaForResult(requested(new Array(1)));
+    const dense = wishStateSchemaForResult(requested([undefined]));
+
+    expect(sparse).not.toBe(dense);
+    const [, resultSchema] = (stateProperties(sparse).result as {
+      anyOf: { default: unknown[] }[];
+    }).anyOf;
+    expect(resultSchema.default.length).toBe(1);
+    expect(Object.hasOwn(resultSchema.default, 0)).toBe(false);
+  });
 });

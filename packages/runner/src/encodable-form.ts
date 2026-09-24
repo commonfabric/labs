@@ -11,6 +11,7 @@
  * is left for the encoder to reject rather than being broken here.
  */
 
+import type { FabricExecValue } from "@commonfabric/api";
 import { isPlainObject } from "@commonfabric/utils/types";
 
 /**
@@ -184,16 +185,32 @@ type AnyFunction = (...args: never[]) => unknown;
  * A cycle is left for the conversion to reject. What it rejects it _by_ may be
  * the cycle or an artifact still raw inside the partial result: an ancestor is
  * returned as itself, so a copy's cycle edge points at the original.
+ *
+ * A `FabricExecValue` comes back as one, as long as nothing stands in for a
+ * value through `replaceOther`: an artifact's encodable form is itself a
+ * `FabricExecValue`, as the `toEncodableForm` protocol's type says, and nothing
+ * else changes kind. Any other value comes back as `unknown`, since the walk
+ * leaves whatever it does not recognize as it is.
  */
-export function replaceArtifacts<T>(
-  value: T,
+export function replaceArtifacts(
+  value: FabricExecValue,
+  onCopy: OnCopy,
+  hooks?: { isLeaf?: WalkHooks["isLeaf"]; replaceOther?: undefined },
+): FabricExecValue;
+export function replaceArtifacts(
+  value: unknown,
+  onCopy: OnCopy,
+  hooks?: WalkHooks,
+): unknown;
+export function replaceArtifacts(
+  value: unknown,
   onCopy: OnCopy,
   hooks: WalkHooks = {},
-): T {
+): unknown {
   return replace(value, new Map(), onCopy, {
     replaceOther: hooks.replaceOther ?? ((value) => value),
     isLeaf: hooks.isLeaf ?? (() => false),
-  }) as T;
+  });
 }
 
 /**

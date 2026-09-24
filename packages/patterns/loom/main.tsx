@@ -4,16 +4,20 @@ import {
   handler,
   NAME,
   pattern,
+  type Stream,
   UI,
   type VNode,
+  wish,
   Writable,
 } from "commonfabric";
+import { admitPanel, externalUrl, insertionIndex } from "./admission.tsx";
 import type {
   LoomInput,
   LoomOutput,
   Panel,
-  PanelDuplication,
+  PanelAdmission,
   PanelPosition,
+  ParticipantProfile,
   Presentation,
   ViewerState,
 } from "./schemas.tsx";
@@ -23,94 +27,6 @@ type State = {
   panels: Writable<Writable<Panel>[]>;
   presentation: Writable<Presentation>;
 };
-
-/** Locate an insertion anchor in the transaction's current collection. */
-function insertionIndex(
-  list: readonly Writable<Panel>[],
-  before?: Writable<Panel>,
-): number {
-  if (before === undefined) return list.length;
-  const index = list.findIndex((panel) => panel.equals(before));
-  if (index < 0) {
-    throw new Error("The insertion anchor is no longer in this Loom");
-  }
-  return index;
-}
-
-/** Return an absolute HTTP(S) URL that contains no embedded credentials. */
-function externalUrl(raw: string): string | undefined {
-  try {
-    const url = new URL(raw);
-    if (
-      (url.protocol !== "http:" && url.protocol !== "https:") ||
-      url.username !== "" || url.password !== ""
-    ) return undefined;
-    return url.href;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * A DID in W3C DID Core syntax: `did:`, a lowercase method, and a
- * method-specific identifier of colon-separated segments drawn from letters,
- * digits, `.`, `-`, `_` and percent-encodings, the last segment nonempty.
- */
-const DID_SYNTAX =
-  /^did:[a-z0-9]+:(?:(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})*:)*(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})+$/;
-
-/**
- * Whether `value` is a DID a panel may name as its adder: a DID of at most 195
- * characters, so that the adder's `peer:<did>` actor fits the service's
- * 200-character bound.
- */
-function isAdderDid(value: string): boolean {
-  return value.length <= 195 && DID_SYNTAX.test(value);
-}
-
-/** Refuse an `addedBy` that is present but is not a DID. */
-function validateAdder(addedBy: string | undefined): void {
-  if (addedBy !== undefined && !isAdderDid(addedBy)) {
-    throw new Error("A panel's addedBy must be a DID");
-  }
-}
-
-/** Validate a panel before admitting its occurrence to the shared composition. */
-function validatePanel(panel: Panel): void {
-  if (panel.kind === "url" && externalUrl(panel.url) === undefined) {
-    throw new Error("A URL panel requires an HTTP(S) URL without credentials");
-  }
-  validateAdder(panel.addedBy);
-}
-
-/** Compare piece membership by complete link identity, including scope and space. */
-function containsPiece(
-  list: readonly Writable<Panel>[],
-  piece: Writable<unknown>,
-): boolean {
-  return list.some((panel) => {
-    const value = panel.get();
-    return value.kind === "piece" && value.piece.equalLinks(piece);
-  });
-}
-
-const addPiece = handler<
-  { piece: Writable<unknown>; addedBy?: string },
-  State
->(
-  ({ piece, addedBy }, { panels }) => {
-    validateAdder(addedBy);
-    const list = panels.get();
-    if (containsPiece(list, piece)) return;
-    const panel = new Writable<Panel>();
-    panel.set({
-      kind: "piece",
-      piece,
-      ...(addedBy === undefined ? {} : { addedBy }),
-    });
-    panels.set([...list, panel]);
-  },
-);
 
 /** Return occurrences whose target differs from the complete piece link. */
 function withoutPiece(
@@ -140,20 +56,6 @@ const removePiece = handler<{ piece: Writable<unknown> }, State>(
   },
 );
 
-const addPanel = handler<PanelPosition, State>(
-  ({ panel, before }, { panels }) => {
-    const list = panels.get();
-    const index = insertionIndex(list, before);
-    // A panel already present is not admitted again, so there is nothing to
-    // validate; `addPiece` validates its own event's `addedBy` instead.
-    if (list.some((existing) => existing.equals(panel))) return;
-    validatePanel(panel.get());
-    const next = [...list];
-    next.splice(index, 0, panel);
-    panels.set(next);
-  },
-);
-
 const removePanel = handler<{ panel: Writable<Panel> }, State>(
   ({ panel }, { panels, presentation }) => {
     const list = panels.get();
@@ -180,37 +82,6 @@ const movePanel = handler<PanelPosition, State>(
     if (before?.equals(panel)) return;
     const next = list.filter((existing) => !existing.equals(panel));
     next.splice(insertionIndex(next, before), 0, panel);
-    panels.set(next);
-  },
-);
-
-const duplicatePanel = handler<PanelDuplication, State>(
-  ({ panel, before, addedBy }, { panels }) => {
-    const list = panels.get();
-    if (!list.some((existing) => existing.equals(panel))) {
-      throw new Error("The panel is no longer in this Loom");
-    }
-    const index = insertionIndex(list, before);
-    const source = panel.get();
-    // A copy is added by whoever duplicates it: `addedBy` comes from the
-    // event, never from the source.
-    const fields = {
-      ...(source.titleOverride === undefined
-        ? {}
-        : { titleOverride: source.titleOverride }),
-      ...(addedBy === undefined ? {} : { addedBy }),
-    };
-    const copy: Panel = source.kind === "piece"
-      ? { kind: "piece", piece: source.piece, ...fields }
-      : source.kind === "document"
-      ? { kind: "document", content: source.content, ...fields }
-      : { kind: "url", url: source.url, ...fields };
-    validatePanel(copy);
-    // The handler invocation supplies the cause, so replay addresses this same occurrence.
-    const occurrence = new Writable<Panel>();
-    occurrence.set(copy);
-    const next = [...list];
-    next.splice(index, 0, occurrence);
     panels.set(next);
   },
 );
@@ -314,11 +185,43 @@ export const PanelView = pattern<{ panel: Writable<Panel> }, { [UI]: VNode }>((
   [UI]: computed(() => renderPanel(panel)),
 }));
 
+/**
+ * The profile `cell` resolves to, or `undefined` when it holds none. A bound
+ * profile that has not resolved is an empty cell rather than `undefined`, and
+ * linking it would record no profile at all.
+ */
+function resolvedProfile(
+  cell: ParticipantProfile | undefined,
+): ParticipantProfile | undefined {
+  const target = cell?.resolveAsCell();
+  return target === undefined || target.get() === undefined
+    ? undefined
+    : target;
+}
+
+/**
+ * Duplicates `panel` under the profile this session acts as: the one it
+ * claimed in `viewerState`, or else the viewer's `#profile`. With neither, the
+ * copy is attributed to the Loom's owner.
+ */
+const duplicateAsViewer = handler<
+  void,
+  {
+    panel: Writable<Panel>;
+    duplicate: Stream<PanelAdmission>;
+    claimed: ParticipantProfile | undefined;
+    wished: ParticipantProfile | undefined;
+  }
+>((_, { panel, duplicate, claimed, wished }) => {
+  const profile = resolvedProfile(claimed) ?? resolvedProfile(wished);
+  duplicate.send({ panel, ...(profile === undefined ? {} : { as: profile }) });
+});
+
 const selectPanel = handler<
   void,
   { panel: Writable<Panel>; viewerState: Writable<ViewerState> }
 >((_, { panel, viewerState }) => {
-  viewerState.set({ selectedPanel: panel });
+  viewerState.key("selectedPanel").set(panel);
 });
 
 export default pattern<LoomInput, LoomOutput>(
@@ -334,7 +237,8 @@ export default pattern<LoomInput, LoomOutput>(
     const viewerState = new Writable.perSession<ViewerState>({});
     const remove = removePanel(state);
     const move = movePanel(state);
-    const duplicate = duplicatePanel(state);
+    const duplicate = admitPanel({ panels, mode: "duplicate" });
+    const viewerProfile = wish<ParticipantProfile>({ query: "#profile" });
     const present = setPresentation(state);
     return {
       [NAME]: title,
@@ -373,7 +277,14 @@ export default pattern<LoomInput, LoomOutput>(
                           ? "Selected in this session"
                           : "Select"}
                       </cf-button>
-                      <cf-button onClick={() => duplicate.send({ panel })}>
+                      <cf-button
+                        onClick={duplicateAsViewer({
+                          panel,
+                          duplicate,
+                          claimed: viewerState.key("actingProfile"),
+                          wished: viewerProfile.result,
+                        })}
+                      >
                         Duplicate
                       </cf-button>
                       <cf-button onClick={() => remove.send({ panel })}>
@@ -424,9 +335,9 @@ export default pattern<LoomInput, LoomOutput>(
       presentation,
       pieceRegistry,
       viewerState,
-      addPiece: addPiece(state),
+      addPiece: admitPanel({ panels, mode: "piece" }),
       removePiece: removePiece(state),
-      addPanel: addPanel(state),
+      addPanel: admitPanel({ panels, mode: "panel" }),
       removePanel: remove,
       movePanel: move,
       duplicatePanel: duplicate,

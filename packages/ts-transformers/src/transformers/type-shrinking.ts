@@ -1,4 +1,5 @@
 import ts from "typescript";
+import type { SchemaScope } from "@commonfabric/api";
 import {
   isCommonFabricSymbol,
   resolvesToCommonFabricSymbol,
@@ -6,6 +7,12 @@ import {
 import { getDefaultMarkerPayload } from "@commonfabric/schema-generator/default-brand";
 import { getPropertyNameText } from "@commonfabric/schema-generator/property-name";
 import {
+  getScopeBrand,
+  SCOPE_WRAPPER_FOR_SCOPE,
+  scopeForWrapperName,
+} from "@commonfabric/schema-generator/scope-brand";
+import {
+  entityNameRight,
   readAuthoredTypeNode,
   unwrapTypeParentheses,
 } from "@commonfabric/schema-generator/type-node";
@@ -2677,10 +2684,13 @@ function extractCellLikeInnerTypeNode(
   // capability wrapper. Read the narrowed syntax before consulting cached types.
   if (ts.isUnionTypeNode(node)) {
     const members: ts.TypeNode[] = [];
+    const nullish: ts.TypeNode[] = [];
+    const values: { node: ts.TypeNode; type: ts.Type | undefined }[] = [];
     let hasCell = false;
     for (const member of node.types) {
       if (isNullishTypeNode(member)) {
         members.push(member);
+        nullish.push(member);
         continue;
       }
       const memberType = getTypeFromTypeNodeWithFallback(
@@ -2700,8 +2710,26 @@ function extractCellLikeInnerTypeNode(
       if (!inner) return undefined;
       hasCell = true;
       members.push(inner);
+      values.push({
+        node: inner,
+        type: memberType && isCellLikeType(memberType, checker)
+          ? unwrapCellLikeType(memberType, checker)
+          : undefined,
+      });
     }
-    return hasCell ? factory.createUnionTypeNode(members) : undefined;
+    const scoped = values.length === 1 && nullish.length > 0
+      ? moveNullishIntoScopeWrapper(
+        values[0]!.node,
+        values[0]!.type,
+        nullish,
+        checker,
+        sourceFile,
+        factory,
+        typeRegistry,
+        state,
+      )
+      : undefined;
+    return hasCell ? scoped ?? factory.createUnionTypeNode(members) : undefined;
   }
 
   const semanticType = getTypeFromTypeNodeWithFallback(
@@ -2737,6 +2765,100 @@ function extractCellLikeInnerTypeNode(
     typeRegistry?.set(innerNode, semanticInner);
   }
   return innerNode;
+}
+
+/**
+ * Helper for `extractCellLikeInnerTypeNode()`, which returns the value of a
+ * nullable cell whose value is a scope wrapper as that wrapper around the
+ * payload and the nullish alternatives, `PerUser<T | undefined>` for
+ * `PerUser<T>` and `undefined`, or `undefined` for a value that is not a scope
+ * wrapper. A scope wrapper may not be a union member: its scope would sit in a
+ * branch the write path does not read.
+ *
+ * A wrapper written out is recognized by its name, as schema generation
+ * recognizes it, and names its payload. Otherwise the value's type is read,
+ * from the cell's type or, for a value node printed from a type, which the
+ * checker reads as `any`, by resolving the name it prints in `sourceFile`, and
+ * the payload is printed from the types the scope brand is intersected with,
+ * one alternative per member of a union the brand was distributed over.
+ */
+function moveNullishIntoScopeWrapper(
+  value: ts.TypeNode,
+  cellValueType: ts.Type | undefined,
+  nullish: readonly ts.TypeNode[],
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+  factory: ts.NodeFactory,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
+): ts.TypeNode | undefined {
+  const written = unwrapTypeParentheses(value);
+  const name = ts.isTypeReferenceNode(written)
+    ? entityNameRight(written.typeName)
+    : undefined;
+
+  const namedScope = name && scopeForWrapperName(name.text);
+  if (namedScope) {
+    const payload = (written as ts.TypeReferenceNode).typeArguments?.[0];
+    return payload && wrapInScope([payload], namedScope, nullish, factory);
+  }
+
+  const valueType = cellValueType ??
+    (name && ts.isIdentifier((written as ts.TypeReferenceNode).typeName) &&
+        !(written as ts.TypeReferenceNode).typeArguments?.length
+      ? declaredTypeInScope(name, sourceFile, checker)
+      : undefined);
+  const brand = valueType && getScopeBrand(valueType, checker);
+  if (!brand) return undefined;
+  const alternatives: ts.TypeNode[] = [];
+  for (const alternative of brand.payload) {
+    const parts = alternative.map((part) =>
+      typeToTypeNodeWithRegistry(
+        part,
+        { checker, factory, sourceFile, state },
+        typeRegistry,
+      )
+    );
+    alternatives.push(
+      parts.length === 1
+        ? parts[0]!
+        : factory.createIntersectionTypeNode(parts),
+    );
+  }
+  return wrapInScope(alternatives, brand.scope, nullish, factory);
+}
+
+/** `__cfHelpers.PerUser<A | B | ...nullish>` for the scope `user`. */
+function wrapInScope(
+  alternatives: readonly ts.TypeNode[],
+  scope: SchemaScope,
+  nullish: readonly ts.TypeNode[],
+  factory: ts.NodeFactory,
+): ts.TypeNode {
+  return createHelperWrapperTypeNode(
+    factory.createUnionTypeNode([...alternatives, ...nullish]),
+    SCOPE_WRAPPER_FOR_SCOPE[scope],
+    factory,
+  );
+}
+
+/**
+ * The declared type of the non-generic type `name` denotes in `sourceFile`'s
+ * scope, an import followed to what it imports.
+ */
+function declaredTypeInScope(
+  name: ts.Identifier,
+  sourceFile: ts.SourceFile,
+  checker: ts.TypeChecker,
+): ts.Type | undefined {
+  let symbol = checker.getSymbolAtLocation(name) ??
+    checker.resolveName(name.text, sourceFile, ts.SymbolFlags.Type, false);
+  if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
+    symbol = checker.getAliasedSymbol(symbol);
+  }
+  return symbol && (symbol.flags & ts.SymbolFlags.Type) !== 0
+    ? checker.getDeclaredTypeOfSymbol(symbol)
+    : undefined;
 }
 
 function selectCellPathCapability(

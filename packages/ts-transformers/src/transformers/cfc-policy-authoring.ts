@@ -4,7 +4,7 @@ import {
   type FabricValue,
   hashStringOf,
 } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray, isUnsafeObjectKey } from "@commonfabric/utils/types";
 import { TransformationContext, Transformer } from "../core/mod.ts";
 import type { CfcPolicyCompilerManifestV1 } from "../core/runtime-contract.ts";
 import { unwrapExpression } from "../utils/expression.ts";
@@ -105,6 +105,12 @@ const evaluateStatic = (
         throw new StaticAuthoringError(
           property.name,
           "computed policy declaration fields are not supported",
+        );
+      }
+      if (isUnsafeObjectKey(key)) {
+        throw new StaticAuthoringError(
+          property.name,
+          `reserved field "${key}"`,
         );
       }
       if (Object.hasOwn(result, key)) {

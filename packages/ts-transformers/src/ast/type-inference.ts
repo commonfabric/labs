@@ -870,6 +870,17 @@ function combineExtractedElementTypes(
 }
 
 /**
+ * Whether a type is itself a list: an array, a tuple, or an object type that
+ * is indexed by number, which is what an interface or a class extending
+ * `Array<T>` is. A cell is not one, whatever list it holds.
+ */
+function isListType(type: ts.Type, checker: ts.TypeChecker): boolean {
+  if (checker.isArrayType(type) || checker.isTupleType(type)) return true;
+  return (type.flags & ts.TypeFlags.Object) !== 0 &&
+    checker.getIndexTypeOfType(type, ts.IndexKind.Number) !== undefined;
+}
+
+/**
  * Extract element type from array-like types (T[] -> T), including unions,
  * intersections, and wrapped/reference forms used by reactive cell types.
  */
@@ -881,7 +892,7 @@ function extractElementFromArrayType(
   if (seen.has(type)) return undefined;
   seen.add(type);
 
-  if (checker.isArrayType(type) || checker.isTupleType(type)) {
+  if (isListType(type, checker)) {
     return checker.getIndexTypeOfType(type, ts.IndexKind.Number);
   }
 
@@ -944,7 +955,10 @@ function extractElementFromArrayType(
  * Handles:
  * - Reactive<T[]> → T[] → T (intersection type case)
  * - FactoryInput<T[]> → Reactive<T[]> → T[] → T (union type case)
- * - Plain Array<T> → T
+ * - Cell<T[] | Default<[]>>, Cell<Cfc<T[], Meta>> → the array inside the union
+ *   or intersection → T (wrapped list type case)
+ * - Plain Array<T>, a tuple, or a type derived from one → its own element,
+ *   which may itself be an array (a row of T[][])
  *
  * @param arrayExpr - Expression representing an array or array-like type
  * @param context - Context with checker, factory, and sourceFile
@@ -991,8 +1005,8 @@ export function inferArrayElementType(
     }
   }
 
-  // Extract type arguments from the reference type
-  let typeArgs: readonly ts.Type[] | undefined;
+  // Find the reference type whose type arguments describe the receiver
+  let reference: ts.TypeReference | undefined;
 
   // First check if actualType is an intersection (Reactive case)
   if (actualType.flags & ts.TypeFlags.Intersection) {
@@ -1002,7 +1016,7 @@ export function inferArrayElementType(
       if (member.flags & ts.TypeFlags.Object) {
         const objType = member as ts.ObjectType;
         if (objType.objectFlags & ts.ObjectFlags.Reference) {
-          typeArgs = checker.getTypeArguments(objType as ts.TypeReference);
+          reference = objType as ts.TypeReference;
           break;
         }
       }
@@ -1011,16 +1025,23 @@ export function inferArrayElementType(
     // Plain object/reference type case
     const objectType = actualType as ts.ObjectType;
     if (objectType.objectFlags & ts.ObjectFlags.Reference) {
-      typeArgs = checker.getTypeArguments(objectType as ts.TypeReference);
+      reference = objectType as ts.TypeReference;
     }
   }
 
-  if (typeArgs && typeArgs.length > 0) {
+  const typeArgs = reference && checker.getTypeArguments(reference);
+  if (reference && typeArgs && typeArgs.length > 0) {
     const innerType = typeArgs[0];
     if (innerType) {
-      // innerType is either T[] or T depending on the structure
+      // A receiver that is a list has its own element, even when that element
+      // is an array in turn. Any other reference wraps the list type: the
+      // array itself, or a union or an intersection around it —
+      // `T[] | Default<[]>`, `T[] | undefined`, `Cfc<T[], Meta>`.
       let elementType: ts.Type;
-      if (checker.isArrayType(innerType)) {
+      if (isListType(reference, checker)) {
+        elementType = extractElementFromArrayType(reference, checker) ??
+          innerType;
+      } else if (checker.isArrayType(innerType)) {
         // It's T[], extract T
         const extracted = extractElementFromArrayType(innerType, checker);
         if (extracted) {
@@ -1033,33 +1054,8 @@ export function inferArrayElementType(
           };
         }
       } else {
-        // Check for Default<T[]> brand union: aliasSymbol = Default from @commonfabric/api,
-        // aliasTypeArguments[0] = T[]. Default<T,V> expands to a branded union at the type
-        // level; the type object retains aliasSymbol so we can detect and unwrap it here.
-        const innerAlias = innerType as {
-          aliasSymbol?: ts.Symbol;
-          aliasTypeArguments?: readonly ts.Type[];
-        };
-        if (
-          isDefaultAliasSymbol(innerAlias.aliasSymbol) &&
-          innerAlias.aliasTypeArguments?.[0] &&
-          checker.isArrayType(innerAlias.aliasTypeArguments[0])
-        ) {
-          const baseArrayType = innerAlias.aliasTypeArguments[0];
-          const extracted = extractElementFromArrayType(baseArrayType, checker);
-          if (extracted) {
-            elementType = extracted;
-          } else {
-            return {
-              typeNode: factory.createKeywordTypeNode(
-                ts.SyntaxKind.UnknownKeyword,
-              ),
-            };
-          }
-        } else {
-          // It's already T
-          elementType = innerType;
-        }
+        elementType = extractElementFromArrayType(innerType, checker) ??
+          innerType;
       }
 
       // Convert Type to TypeNode

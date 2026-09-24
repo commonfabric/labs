@@ -43,6 +43,14 @@ export function unwrapTypeParentheses(node: ts.TypeNode): ts.TypeNode {
 }
 
 /**
+ * Returns the last identifier of `name`: `PerUser` for both `PerUser` and
+ * `cf.PerUser`.
+ */
+export function entityNameRight(name: ts.EntityName): ts.Identifier {
+  return ts.isIdentifier(name) ? name : name.right;
+}
+
+/**
  * Returns the declaration of the type alias that `reference` names, through
  * any import binding, or `undefined` for a reference to anything else. The
  * alias may be generic, in which case the node it declares is written in its

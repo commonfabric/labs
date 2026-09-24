@@ -317,9 +317,15 @@ Deno.test("inferArrayElementType: a branded Cell<string[]> yields the element ty
 });
 
 Deno.test("inferArrayElementType: a Default<string[]> alias yields the element type", () => {
-  // Drives the top-level Default-alias unwrap: the wrapped inner type keeps its
-  // Default alias whose first argument is `string[]`.
+  // Drives the wrapped-list read: the cell's argument is the union that
+  // `Default<string[]>` expands to, and both of its arms yield `string`.
   assertEquals(elementTypeText("cellDefaultArray"), "string");
+});
+
+Deno.test("inferArrayElementType: a Cell<Default<string[]> | undefined> yields the element type", () => {
+  // The cell's argument is a union around the array that keeps no alias, so
+  // only a read through the union's arms finds `string`.
+  assertEquals(elementTypeText("cellDefaultOrUndefined"), "string");
 });
 
 Deno.test("inferArrayElementType: a plain Default<string[]> reference yields the element type via the array fallback", () => {

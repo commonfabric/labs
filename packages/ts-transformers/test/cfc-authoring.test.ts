@@ -599,6 +599,18 @@ Deno.test("order-independent policy extraction covers the full static authoring 
       "duplicate field",
     ],
     [
+      rule('pre: { integrity: [{ kind: "x", __proto__: { y: 1 } }] },'),
+      'reserved field "__proto__"',
+    ],
+    [
+      rule('pre: { integrity: [{ kind: "x", "__proto__": { y: 1 } }] },'),
+      'reserved field "__proto__"',
+    ],
+    [
+      rule('pre: { integrity: [{ kind: "x", constructor: "y" }] },'),
+      'reserved field "constructor"',
+    ],
+    [
       `const release = exchangeRule({ appliesTo: THIS_POLICY, pre: { integrity: [{ kind: "x" }] }, post: { dropClause: true } }); export const rules = exchangeRules([release]);`,
       "must be exported",
     ],

@@ -2,16 +2,21 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { JSONSchema, JSONSchemaObj } from "../../src/builder/types.ts";
 import { recordNewProtectedDefaults } from "../../src/cfc/default-initialization.ts";
 import { readStoredCfcMetadata } from "../../src/cfc/metadata.ts";
 import { recordReferencedArgumentFields } from "../../src/cfc/reference-initialization.ts";
+import type { NormalizedFullLink } from "../../src/link-types.ts";
 import { runtimeWritePolicyAuthorization } from "../../src/cfc/types.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 
 const signer = await Identity.fromPassphrase("reference-initialization-owner");
+const stager = await Identity.fromPassphrase(
+  "reference-initialization-stager",
+);
 const space = signer.did();
 const writer = {
   __ctWriterIdentityOf: { file: "/trusted.tsx", path: ["send"] },
@@ -53,15 +58,18 @@ const sendProvenance = {
 describe("reference-initialization", () => {
   let runtime: Runtime;
   let manager: StorageManager;
+  // The principal each new transaction acts as.
+  let actingPrincipal: string;
 
   beforeEach(() => {
+    actingPrincipal = signer.did();
     manager = StorageManager.emulate({ as: signer });
     runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager: manager,
       trustSnapshotProvider: () => ({
-        id: "owner",
-        actingPrincipal: signer.did(),
+        id: actingPrincipal,
+        actingPrincipal,
       }),
     });
   });
@@ -370,6 +378,183 @@ describe("reference-initialization", () => {
       expect(runtime.getCell(space, "argument").key("element").get()).toEqual({
         body: "a",
       });
+    });
+  });
+
+  describe("labels of a staged reference", () => {
+    // The owner's message is initialized as a protected default, which mints
+    // the owner's authorship on it. Another principal then stages a reference
+    // to the message into a new argument, as a collection coordinator running
+    // for someone else does.
+
+    const inboxSchema: JSONSchema = {
+      type: "object",
+      properties: {
+        message: { ...entrySchema, default: { body: "a" } },
+        note: { type: "string" },
+      },
+    };
+
+    /** Initializes the owner's message and returns a link to it. */
+    async function initializeOwnersMessage() {
+      const seed = runtime.edit();
+      runtime.getCell(space, "inbox", undefined, seed).set({ note: "saved" });
+      runtime.prepareTxForCommit(seed);
+      expect((await seed.commit()).error).toBeUndefined();
+
+      const first = runtime.edit();
+      const inbox = runtime.getCell(space, "inbox", inboxSchema, first);
+      recordNewProtectedDefaults(
+        first,
+        inbox.getAsNormalizedFullLink(),
+        { type: "object", properties: { note: { type: "string" } } },
+        inboxSchema,
+        { message: { body: "a" } },
+        { message: { body: "a" }, note: "saved" },
+      );
+      inbox.set({ message: { body: "a" }, note: "saved" });
+      runtime.prepareTxForCommit(first);
+      expect((await first.commit()).error).toBeUndefined();
+    }
+
+    /** Stages a reference to the message as `stager`, and commits. */
+    async function stageAsStager(
+      schema: JSONSchema,
+      message: (tx: ReturnType<Runtime["edit"]>) => unknown,
+    ) {
+      actingPrincipal = stager.did();
+      const stage = runtime.edit();
+      const argument = runtime.getCell(space, "argument", schema, stage);
+      argument.set({ element: message(stage) });
+      recordReferencedArgumentFields(
+        stage,
+        argument.getAsNormalizedFullLink(),
+        ["element"],
+      );
+      runtime.prepareTxForCommit(stage);
+      return {
+        error: (await stage.commit()).error,
+        argument: argument.getAsNormalizedFullLink(),
+      };
+    }
+
+    /** The subjects of every `authored-by` claim stored at `path`. */
+    function authorsAt(
+      link: NormalizedFullLink,
+      path: readonly string[],
+    ): unknown[] {
+      return (readStoredCfcMetadata(runtime.edit(), link)?.labelMap.entries ??
+        [])
+        .filter((entry) => entry.path.join("/") === path.join("/"))
+        .flatMap((entry) => entry.label.integrity ?? [])
+        .filter((atom) => isObjectOrArray(atom) && atom.kind === "authored-by")
+        .map((atom) => (atom as { subject: unknown }).subject);
+    }
+
+    it("stores the entry's own authorship on a staged reference, and none for the principal that stages it", async () => {
+      await initializeOwnersMessage();
+      const { error, argument } = await stageAsStager(
+        argumentSchema,
+        (tx) =>
+          runtime.getCell(space, "inbox", undefined, tx).key("message")
+            .asSchema(entrySchema),
+      );
+
+      expect(error).toBeUndefined();
+      expect(authorsAt(argument, ["element"])).toEqual([signer.did()]);
+    });
+
+    /**
+     * As `stager`, stages the owner's message into a first argument, then that
+     * argument's `element` into a second one, in one transaction.
+     */
+    async function stageChainAsStager(secondSchema: JSONSchema) {
+      actingPrincipal = stager.did();
+      const stage = runtime.edit();
+      const first = runtime.getCell(space, "first", argumentSchema, stage);
+      first.set({
+        element: runtime.getCell(space, "inbox", undefined, stage)
+          .key("message").asSchema(entrySchema),
+      });
+      recordReferencedArgumentFields(
+        stage,
+        first.getAsNormalizedFullLink(),
+        ["element"],
+      );
+      const second = runtime.getCell(space, "second", secondSchema, stage);
+      second.set({ element: first.key("element") });
+      recordReferencedArgumentFields(
+        stage,
+        second.getAsNormalizedFullLink(),
+        ["element"],
+      );
+      runtime.prepareTxForCommit(stage);
+      return {
+        error: (await stage.commit()).error,
+        second: second.getAsNormalizedFullLink(),
+      };
+    }
+
+    it("stores the owner's authorship, and none for the staging principal, on a reference staged from another staged reference", async () => {
+      await initializeOwnersMessage();
+      const { error, second } = await stageChainAsStager(argumentSchema);
+
+      expect(error).toBeUndefined();
+      expect(authorsAt(second, ["element"])).toEqual([signer.did()]);
+    });
+
+    it("refuses an integrity floor that only the staging principal's authorship would meet on a reference staged from another staged reference", async () => {
+      await initializeOwnersMessage();
+      const { error } = await stageChainAsStager({
+        type: "object",
+        properties: {
+          element: {
+            ...entrySchema,
+            ifc: {
+              ...entrySchema.ifc,
+              requiredIntegrity: [{
+                kind: "authored-by",
+                subject: stager.did(),
+              }],
+            },
+          },
+        },
+      });
+
+      expect(error?.message).toContain("write floor failed at /element");
+    });
+
+    it("stores no authorship on a reference to an entry the staging principal created in the same transaction", async () => {
+      // The entry is written outside the slot's writer, so the slot's schema
+      // does not describe how it was written.
+
+      const { error, argument } = await stageAsStager(
+        argumentSchema,
+        (tx) => entryCell(tx, "fresh", "a"),
+      );
+
+      expect(error).toBeUndefined();
+      expect(authorsAt(argument, ["element"])).toEqual([]);
+    });
+
+    it("refuses an integrity floor at the slot that only authorship minted for the staging principal would meet", async () => {
+      await initializeOwnersMessage();
+      const flooredEntry: JSONSchemaObj = {
+        ...entrySchema,
+        ifc: {
+          ...entrySchema.ifc,
+          requiredIntegrity: [{ kind: "authored-by", subject: stager.did() }],
+        },
+      };
+      const { error } = await stageAsStager(
+        {
+          type: "object",
+          properties: { element: flooredEntry },
+        },
+        (tx) => runtime.getCell(space, "inbox", undefined, tx).key("message"),
+      );
+
+      expect(error?.message).toContain("write floor failed at /element");
     });
   });
 
