@@ -361,11 +361,12 @@ export class MultiRuntimeSession {
   }
 
   /**
-   * Set a cell reached from the piece result by `path`, exactly like a UI
-   * `$value` binding: one fresh edit tx and a single un-retried commit (the
-   * `handleCellSet` path). Returns the commit outcome so tests can observe
-   * conflicts. Pass `idle: false` to leave this runtime un-settled (preserves
-   * a stale local replica for own-write-race / no-op repros).
+   * Set a cell reached from the piece result by `path` with one attempt of the
+   * blind write a UI `$value` binding makes: one fresh edit tx and a single
+   * commit, without the retry `Runtime.commitUiCellWrite()` gives the UI's
+   * write. Returns the commit outcome so tests can observe conflicts. Pass
+   * `idle: false` to leave this runtime un-settled (preserves a stale local
+   * replica for own-write-race / no-op repros).
    */
   async set(
     path: (string | number)[],
@@ -380,10 +381,11 @@ export class MultiRuntimeSession {
   }
 
   /**
-   * Append `value` to the array cell reached by `path`, exactly like a
-   * `CellHandle.push`: read-modify-write that keeps its read as a compare-and-set
-   * precondition (the `handleCellPush` path), so a concurrent push conflicts
-   * rather than being clobbered — unlike the blind `set` above.
+   * Append `value` to the array cell reached by `path` as a read-modify-write
+   * that keeps its read as a compare-and-set precondition, so a concurrent
+   * push conflicts rather than being clobbered — unlike the blind `set` above.
+   * A UI's `CellHandle.push()` does not take this path: the runtime appends
+   * through `Cell.push()`'s mergeable operation instead.
    */
   async push(
     path: (string | number)[],

@@ -507,14 +507,15 @@ const handlers: Record<
     return {};
   },
 
-  // Faithful mirror of RuntimeProcessor.handleCellSet — the path a UI binding
-  // takes for a plain `set`: ONE fresh edit tx, a single un-retried commit,
-  // marked as a blind leaf write. The blind-vs-CAS choice is by METHOD, not value
-  // shape: a `set` is ALWAYS blind (last-write-wins); read-modify-write goes
-  // through `push` (below), which keeps compare-and-set. We await the commit so
-  // the test can observe the outcome (a conflict surfaces as a Result error).
-  // Pass `idle: false` to leave this runtime un-settled, so its local replica
-  // stays stale (own-write-race repro).
+  // One attempt of the write a UI binding's `set` makes, which the runtime
+  // makes through `Runtime.commitUiCellWrite()` with `blind: true`: ONE fresh
+  // edit tx, marked as a blind leaf write, committed once. Unlike that method,
+  // this does not retry a retryable rejection, keeps no supersede lane, and
+  // sets no renderer-input mark, so that a test sees the outcome of the single
+  // commit (a conflict surfaces as a Result error). A `set` is ALWAYS blind
+  // (last-write-wins), whatever the value's shape. Pass `idle: false` to leave
+  // this runtime un-settled, so its local replica stays stale
+  // (own-write-race repro).
   async set({ path, value, idle: doIdle }) {
     const runtime = controller().runtime;
     const tx = runtime.edit();
@@ -523,8 +524,8 @@ const handlers: Record<
       cell = cell.key(segment as never) as Cell<any>;
     }
     markUiInputBlindWriteTx(tx);
-    // Mirror handleCellSet: thread the cell's PARENT address as the structural
-    // existence/shape precondition for the blind write.
+    // As `commitUiCellWrite()` does, thread the cell's PARENT address as the
+    // structural existence/shape precondition for the blind write.
     const link = cell.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
     setBlindStructuralTarget(tx, {
       id: link.id,
@@ -547,12 +548,15 @@ const handlers: Record<
     };
   },
 
-  // Faithful mirror of RuntimeProcessor.handleCellPush / CellHandle.push: a
-  // read-modify-write append, NOT blind — the set's diff read of the current
-  // array is kept as a commit precondition (compare-and-set), so a concurrent
-  // push aborts rather than being clobbered by a blind overwrite. Reads the
-  // current value from the local replica (no pull), mirroring CellHandle.push
-  // reading its cache.
+  // A read-modify-write append, NOT blind: it `set`s the whole new array, and
+  // that set's diff read of the current array is kept as a commit
+  // precondition (compare-and-set), so a concurrent push aborts rather than
+  // being clobbered by a blind overwrite. Reads the current value from the
+  // local replica (no pull). This is not the path a UI's `CellHandle.push()`
+  // takes: that sends only the appended members, and the runtime appends them
+  // through `Cell.push()`'s mergeable operation.
+  // TODO(danfuzz): Append through `Cell.push()` as the runtime does, once the
+  // tests that pin this compare-and-set are reworked to that path.
   async push({ path, value, idle: doIdle }) {
     const runtime = controller().runtime;
     let cell = result();

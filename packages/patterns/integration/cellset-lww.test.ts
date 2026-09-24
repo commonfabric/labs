@@ -1,17 +1,20 @@
 /**
- * Regression test: a UI `set` is a blind last-write-wins leaf write; a `push` is
- * read-modify-write and keeps compare-and-set. The blind-vs-CAS choice is made by
- * METHOD (the request type the client sends), not by the value's shape.
+ * Regression test: a UI `set` is a blind last-write-wins leaf write, whatever
+ * the value's shape; the blind-vs-CAS choice is made by METHOD (the request
+ * type the client sends).
  *
  * `handleCellSet` marks its transaction as a blind-leaf-write, so the set's reads
  * carry no value-equality precondition (only a structural existence read at the
  * entity root survives, to catch a concurrent whole-doc delete/replace). Under
  * concurrent same-user edits a `set` therefore no longer hits the
  * "stale confirmed read" conflict that rolled the write back and silently dropped
- * a profile/draft edit — the cfc-group-chat-demo "Name not set" flake. A `push`
- * routes through `handleCellPush`, which is NOT blind, so concurrent list
- * mutations still cannot lose updates. (Supersedes the #4126 cellset-silent-
- * rollback queue work.)
+ * a profile/draft edit — the cfc-group-chat-demo "Name not set" flake.
+ * (Supersedes the #4126 cellset-silent-rollback queue work.)
+ *
+ * The push step exercises the harness's own `push`, a read-modify-write append
+ * that keeps compare-and-set. A UI's `CellHandle.push()` is not that: the
+ * runtime appends through `Cell.push()`'s mergeable operation, so the step pins
+ * the harness's append rather than the UI's.
  *
  * profileDraft is PerUser, so two sessions of the same identity share the doc
  * (≈ two browser tabs of one user): the own-write race.
@@ -113,11 +116,11 @@ describe("cellset last-write-wins for scalar $value (own-write race)", () => {
   });
 
   it("concurrent pushes retain compare-and-set (push keeps its read precondition)", async () => {
-    // A `push` is read-modify-write: it routes through CellPush/handleCellPush,
-    // which is NOT blind, so the read of the current array stays a commit
-    // precondition. Concurrent same-user pushes against the shared draft therefore
-    // still conflict (compare-and-set), guarding against lost updates — the safety
-    // the old value-type narrowing approximated, now keyed on the method.
+    // The harness's `push` is read-modify-write and NOT blind, so the read of
+    // the current array stays a commit precondition, and concurrent same-user
+    // pushes against the shared draft conflict (compare-and-set). A UI's
+    // `CellHandle.push()` takes the runtime's mergeable `Cell.push()` instead,
+    // which this step does not reach.
     await alice.set([...DRAFT], [], {}); // array baseline (itself a blind set)
     let conflicts = 0;
     for (let i = 0; i < 8; i++) {
