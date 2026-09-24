@@ -631,8 +631,8 @@ const mergeSchemaNode = (
   // are recursive definitions meeting themselves; resolving them again would
   // not terminate, so they merge as references from there down. Against an
   // inline schema a reference resolves at every depth, since the inline side
-  // runs out. A reference whose body declares no `ifc` has no claim to lose
-  // and stays a reference.
+  // runs out. Where neither side declares any `ifc`, there is no claim to
+  // lose, and references stay references.
   const bothReferences = typeof left.$ref === "string" &&
     typeof right.$ref === "string";
   const pair = `${left.$ref ?? ""}\u0000${right.$ref ?? ""}`;
@@ -641,11 +641,14 @@ const mergeSchemaNode = (
     references !== undefined &&
     !(bothReferences && references.active.has(pair))
   ) {
+    // Where either side's body declares a claim, every shadowed reference is
+    // resolved, so a reference declaring nothing cannot stand in for one
+    // that does on the merged node.
     const policyRoot = { $defs: references.definitions };
-    const resolveLeft = referenceIsShadowed(left, right) &&
-      hasReachableIfc(left, policyRoot);
-    const resolveRight = referenceIsShadowed(right, left) &&
+    const claims = hasReachableIfc(left, policyRoot) ||
       hasReachableIfc(right, policyRoot);
+    const resolveLeft = claims && referenceIsShadowed(left, right);
+    const resolveRight = claims && referenceIsShadowed(right, left);
     if (resolveLeft || resolveRight) {
       childReferences = bothReferences
         ? {

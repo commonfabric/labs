@@ -774,6 +774,31 @@ describe("mergeCfcSchemaEnvelopes", () => {
     });
   });
 
+  it("keeps the claims a reference carries when the candidate refers to a definition declaring nothing", () => {
+    const stored = {
+      type: "object",
+      properties: { pin: { $ref: "#/$defs/Pin" } },
+      $defs: {
+        Pin: {
+          type: "string",
+          ifc: { uiContract: { helper: "UiAction", action: "PinNote" } },
+        },
+      },
+    } as const;
+    const candidate = {
+      type: "object",
+      properties: { pin: { $ref: "#/$defs/Plain" } },
+      $defs: { Plain: { type: "string" } },
+    } as const;
+
+    const merged = mergeCfcSchemaEnvelopes(stored, candidate) as JSONSchemaObj;
+    const pin = merged.properties?.pin as JSONSchemaObj;
+    expect(pin.$ref).toBeUndefined();
+    expect(pin.ifc).toEqual({
+      uiContract: { helper: "UiAction", action: "PinNote" },
+    });
+  });
+
   it("rejects branch-local ifc labels in divergent schemas", () => {
     expect(() =>
       mergeCfcSchemaEnvelopes({
