@@ -55,7 +55,7 @@ describe("cellset last-write-wins for scalar $value (own-write race)", () => {
       programPath: PROGRAM_PATH,
       rootPath: ROOT_PATH,
       sessions: [
-        { label: "alice", identity: aliceId },
+        { label: "alice", identity: aliceId, inboundHold: true },
         // Same user as alice, separate session ≈ second browser tab.
         { label: "alice-tab2", identity: aliceId },
       ],
@@ -138,33 +138,62 @@ describe("cellset last-write-wins for scalar $value (own-write race)", () => {
   it(
     "end-to-end: a typed name survives the own-write race through save",
     async () => {
-      // The "Name not set" flake, end to end: a user
-      // types a profile name (a scalar `$value` write to the PerUser draft), then
-      // saves. The fixture's save handler reads the draft.
-      // Pre-fix, the draft `$value` write loses the own-write race, is rejected and
-      // rolled back to its prior (empty) value, so the save reads the wrong/empty
-      // draft and the profile name is not the one the user typed. With the fix the
-      // scalar write is precondition-free, lands, and the save reads it.
+      // The "Name not set" flake, end to end: alice types a profile name (a
+      // scalar `$value` write to the PerUser draft), then saves, and the
+      // fixture's save handler reads the draft. Each round forces two
+      // conditions on the typed write, then requires that it commits and that
+      // the save after it reads it.
       //
-      // Under the server-execution ON arm this step additionally pins the
-      // OW47 client own-write durability seam (the step was ON-skipped at
-      // the first ON CI gate, 2026-08-21, and lifted with the fix): the
-      // typed name's blind write races the PREVIOUS iteration's saveProfile
-      // handler ECHO — the save handler writes the trimmed name back into
-      // the draft cell, so its speculative echo stands on the same doc
-      // until the arrival gate retires it — and pre-fix the blind write's
-      // structural parent read named that process-local layer, so the
-      // whole write was refused terminally (`speculative-basis-refused`)
-      // and the user's input was silently dropped (storage/v2.ts
-      // buildReads; speculation-overlay.test.ts carries the unit pin).
+      // A stale baseline: tab2 writes the shared draft while alice's inbound
+      // frames are held, so alice's typed write commits from a replica that
+      // has not received tab2's. A blind `set`, carrying no value
+      // precondition, commits from there; a compare-and-set one is refused,
+      // as stale or, on the ON arm, for reading the echo below.
+      //
+      // A standing echo, on the server-execution ON arm: the save alice sends
+      // just before the hold has run here speculatively, writing the saved
+      // name into the draft's document, and its consequence is among the
+      // held frames, so that speculative layer still stands when she types.
+      // The blind write's structural read has to base on the document's
+      // non-speculative stack; naming the process-local layer gets the whole
+      // write refused (`speculative-basis-refused`), dropping the input
+      // (verification-coverage.md OW47; speculation-overlay.test.ts carries
+      // the unit pin). Each round saves a name the profile does not hold yet,
+      // so that the echo writes something. The warm-up save keeps any round
+      // from holding alice's first event, whose consequence can arrive back
+      // before the hold starts, and the round's first assertion catches one
+      // whose consequence did.
+      await alice.set([...DRAFT], "alice-warmup");
+      await alice.send("saveProfile");
       for (let i = 0; i < 5; i++) {
         await harness.settle();
-        // Another concurrent write bumps the shared PerUser draft's seq…
-        await aliceTab2.set([...DRAFT], `tab2-${i}`, { idle: false });
-        // …so alice's later typed name commits against a stale baseline.
+        await alice.set([...DRAFT], `alice-saved-${i}`);
+        await harness.settle();
+        await alice.send("saveProfile", {}, undefined, {
+          thenHoldInbound: true,
+        });
+        const outstanding = await alice.outstandingEventCount();
+        assert(
+          outstanding === null || outstanding > 0,
+          `alice's save must still await its consequence (iter ${i})`,
+        );
+        const other = await aliceTab2.set([...DRAFT], `tab2-${i}`);
+        assert(
+          other.ok,
+          debugStr`tab2's set must commit: $quote,long${other.error}`,
+        );
+        // The typed write's commit is built as the worker receives this call,
+        // and the release is delivered after it.
         const typed = `alice-typed-${i}`;
-        await alice.set([...DRAFT], typed, { idle: false });
-        // Save the profile (the handler reads the draft).
+        const typing = alice.set([...DRAFT], typed);
+        await alice.releaseInbound();
+        const typedCommit = await typing;
+        assert(
+          typedCommit.ok,
+          `the name alice typed must commit (iter ${i}): ` +
+            debugStr`$quote,long${typedCommit.error}`,
+        );
+        await harness.settle();
         await alice.send("saveProfile");
         await harness.settle();
         assertEquals(

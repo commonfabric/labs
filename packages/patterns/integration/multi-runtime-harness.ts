@@ -105,6 +105,12 @@ export interface MultiRuntimeSessionSpec {
    */
   wsDelayMs?: number;
 
+  /**
+   * Test-only network shaping: make this session's inbound storage frames
+   * holdable, with `send()`'s `thenHoldInbound` and `releaseInbound()`.
+   */
+  inboundHold?: boolean;
+
   /** Routes this session through a test relay backed by the same storage server. */
   apiUrl?: URL;
   /**
@@ -330,18 +336,27 @@ export class MultiRuntimeSession {
    * Send an event to a handler stream exposed on the piece result. Pass
    * `trustedUi` to emulate a genuine user interaction on a trusted CFC
    * surface (required for trusted-action handlers).
+   *
+   * Pass `thenHoldInbound` to hold every storage frame this session receives
+   * from the moment the event has run here until `releaseInbound()`, on a
+   * session created with `inboundHold: true`. Its replica then stays as it
+   * is, whatever other sessions commit, and nothing the server sends back
+   * reaches it: no commit confirmation, and no consequence of an event it
+   * fired, so the speculative writes of the event's run here stand. What it
+   * sends goes out as usual.
    */
   async send(
     handler: string,
     event: FabricValue = {},
     trustedUi?: TrustedUiDescriptor,
-    opts: { idle?: boolean } = {},
+    opts: { idle?: boolean; thenHoldInbound?: boolean } = {},
   ): Promise<void> {
     await this.#client.call("send", {
       handler,
       event,
       trustedUi,
       idle: opts.idle,
+      thenHoldInbound: opts.thenHoldInbound,
     });
   }
 
@@ -490,6 +505,22 @@ export class MultiRuntimeSession {
   }
 
   /**
+   * How many events this session fired whose consequence has yet to arrive
+   * back here, or `null` on the OFF arm, which does not track them.
+   */
+  async outstandingEventCount(): Promise<number | null> {
+    return await this.#client.call("outstandingEventCount") as number | null;
+  }
+
+  /**
+   * Deliver the frames held since a `send()` with `thenHoldInbound`, in the
+   * order they arrived, and settle this runtime's reactivity.
+   */
+  async releaseInbound(): Promise<void> {
+    await this.#client.call("releaseInbound");
+  }
+
+  /**
    * Force an ordered-after round trip on this runtime's open space connections,
    * so any subscription fan-out the server has already sent has landed here.
    * See `MultiRuntimeHarness.settle`.
@@ -619,6 +650,7 @@ export class MultiRuntimeHarness {
           ...(normalized.wsDelayMs !== undefined
             ? { wsDelayMs: normalized.wsDelayMs }
             : {}),
+          ...(normalized.inboundHold === true ? { inboundHold: true } : {}),
           ...(cfcWriteFloor !== undefined ? { cfcWriteFloor } : {}),
         });
         sessions.push(

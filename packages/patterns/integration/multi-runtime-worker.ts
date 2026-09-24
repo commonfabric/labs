@@ -153,15 +153,19 @@ async function attachPiece(next: PieceController): Promise<void> {
   };
 }
 
-// Test-only network shaping: wrap this realm's WebSocket so every frame (both
-// directions) is delayed by a fixed amount. Installed BEFORE the runtime opens
-// its storage session, so the whole client stack sees the added latency —
-// the in-process equivalent of the browser-harness WS shim used to reproduce
-// multiplayer contention (starvation / wedge) without a network.
-function installWsDelay(delayMs: number): void {
-  if (delayMs <= 0) return;
+/**
+ * Test-only network shaping: wraps this realm's WebSocket so that every
+ * inbound frame is handed to `inbound` as a thunk that delivers it, and every
+ * outbound frame to `outbound` as a thunk that sends it. Installed BEFORE the
+ * runtime opens its storage session, the shim reaches the whole client stack.
+ * A second install wraps the first.
+ */
+function installWsShim(
+  inbound: (deliver: () => void) => void,
+  outbound: (send: () => void) => void,
+): void {
   const Native = globalThis.WebSocket;
-  const Delayed = function (
+  const Shimmed = function (
     this: WebSocket,
     url: string | URL,
     protocols?: string | string[],
@@ -209,25 +213,77 @@ function installWsDelay(delayMs: number): void {
           fn.call(ws, ev);
         }
       };
-      setTimeout(deliver, delayMs);
+      inbound(deliver);
     });
     const nativeSend = ws.send.bind(ws);
     ws.send = (data: Parameters<WebSocket["send"]>[0]) => {
-      setTimeout(() => {
+      outbound(() => {
         try {
           nativeSend(data);
         } catch {
           // Socket closed while the frame was in flight; same as a network drop.
         }
-      }, delayMs);
+      });
     };
     return ws;
   } as unknown as typeof WebSocket;
-  Delayed.prototype = Native.prototype;
+  Shimmed.prototype = Native.prototype;
   for (const k of ["CONNECTING", "OPEN", "CLOSING", "CLOSED"] as const) {
-    (Delayed as unknown as Record<string, unknown>)[k] = Native[k];
+    (Shimmed as unknown as Record<string, unknown>)[k] = Native[k];
   }
-  globalThis.WebSocket = Delayed;
+  globalThis.WebSocket = Shimmed;
+}
+
+/**
+ * Delays every storage WebSocket frame, both directions, by `delayMs`: the
+ * in-process equivalent of the browser-harness WS shim used to reproduce
+ * multiplayer contention (starvation / wedge) without a network.
+ */
+function installWsDelay(delayMs: number): void {
+  if (delayMs <= 0) return;
+  installWsShim(
+    (deliver) => setTimeout(deliver, delayMs),
+    (send) => setTimeout(send, delayMs),
+  );
+}
+
+/** Whether `installInboundHold` has run in this realm. */
+let inboundHoldInstalled = false;
+
+/**
+ * Inbound frames held since a `send` with `thenHoldInbound`, in arrival
+ * order, or absent while inbound frames are delivered as they arrive.
+ */
+let heldInbound: (() => void)[] | undefined;
+
+/** Starts holding inbound frames, which `installInboundHold` must allow. */
+function startHoldingInbound(): void {
+  if (!inboundHoldInstalled) {
+    throw new Error(
+      "inbound frames are not holdable in this session; create it with " +
+        "`inboundHold: true`",
+    );
+  }
+  if (heldInbound !== undefined) {
+    throw new Error("inbound frames are already held");
+  }
+  heldInbound = [];
+}
+
+/**
+ * Makes the storage WebSocket's inbound frames holdable: while a hold is in
+ * effect, frames queue in arrival order, and `releaseInbound` delivers them.
+ * Outbound frames are never held.
+ */
+function installInboundHold(): void {
+  inboundHoldInstalled = true;
+  installWsShim(
+    (deliver) => {
+      if (heldInbound !== undefined) heldInbound.push(deliver);
+      else deliver();
+    },
+    (send) => send(),
+  );
 }
 
 // When the harness process runs under Deno's native OpenTelemetry
@@ -335,6 +391,7 @@ const handlers: Record<
       diagnostics,
       recordRejections,
       wsDelayMs,
+      inboundHold,
       cfcWriteFloor,
       cfc,
       watchPaths: requestedWatchPaths,
@@ -344,6 +401,7 @@ const handlers: Record<
       keyPair as FabricKeyPair,
     );
     if (typeof wsDelayMs === "number") installWsDelay(wsDelayMs);
+    if (inboundHold === true) installInboundHold();
     boundedReads =
       (cfc as MultiRuntimeCfcOptions | undefined)?.cfcReadMaxConfidentiality !==
         undefined;
@@ -398,7 +456,13 @@ const handlers: Record<
     return {};
   },
 
-  async send({ handler, event, trustedUi, idle: doIdle }) {
+  async send({ handler, event, trustedUi, idle: doIdle, thenHoldInbound }) {
+    if (thenHoldInbound === true && doIdle === false) {
+      throw new Error(
+        "`thenHoldInbound` holds after the event has run, which `idle: false` " +
+          "does not wait for",
+      );
+    }
     const trusted = trustedUi as TrustedUiDescriptor | undefined;
     let eventValue: unknown = event ?? {};
     if (trusted) {
@@ -434,6 +498,12 @@ const handlers: Record<
     // optimistic pipeline (the multiplayer-contention shape) instead of
     // serializing one settled commit per event.
     if (doIdle !== false) await idle();
+    // Held from the turn the event's run here settles: every consequence the
+    // server has yet to send back, the event's own among them, stays out of
+    // this runtime until `releaseInbound`. The event cannot run here with
+    // inbound frames held, since its run waits on the store confirming its
+    // commit, so the hold can only start after it.
+    if (thenHoldInbound === true) startHoldingInbound();
     return {};
   },
 
@@ -882,6 +952,25 @@ const handlers: Record<
   },
 
   async idle() {
+    await idle();
+    return {};
+  },
+
+  // How many events this runtime fired whose consequence has yet to arrive
+  // back here, or `null` where there is no speculation overlay to track them
+  // (the OFF arm). The handler table's contract is asynchronous.
+  // deno-lint-ignore require-await
+  async outstandingEventCount() {
+    return controller().runtime.speculationOverlay?.pendingIntentCount ?? null;
+  },
+
+  // Deliver the frames held since a `send` with `thenHoldInbound`, in arrival
+  // order, and deliver frames as they arrive from here on.
+  async releaseInbound() {
+    const held = heldInbound;
+    if (held === undefined) throw new Error("inbound frames are not held");
+    heldInbound = undefined;
+    for (const deliver of held) deliver();
     await idle();
     return {};
   },
