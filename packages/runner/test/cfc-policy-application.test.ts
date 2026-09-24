@@ -352,6 +352,26 @@ describe("a runtime policy application", () => {
     }
   });
 
+  it("refuses an application beside a schema recorded on the document that writes nothing", async () => {
+    // Rewriting the bytes a document holds leaves no write attempt, but it
+    // records its schema, which could install a claim of its own.
+
+    const runtime = await start("beside-schema");
+    const tx = runtime.edit();
+    trust(tx, APPLIER);
+    applyCfcPolicyToExistingValue(
+      runtime.getCell(space, "beside-schema", OWNER_LABEL, tx),
+    );
+    runtime.getCell(space, "beside-schema", {
+      type: "object",
+      properties: {
+        other: { type: "string", ifc: { writeAuthorizedBy: ["mallory"] } },
+      },
+    }, tx).setRaw(SEED as never);
+    expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+    expect(storedIfcAt(runtime, "beside-schema", "other").at).toBeUndefined();
+  });
+
   it("refuses an application whose schema would drop a stored claim", async () => {
     const stored = {
       type: "object",

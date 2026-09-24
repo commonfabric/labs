@@ -845,6 +845,27 @@ describe("stored write requirements", () => {
       });
     }
 
+    it("refuses a write beneath the claim that records no input, beside one by the named writer", async () => {
+      // The named writer's write beside it does not vouch for a write that
+      // names no schema of its own.
+
+      const runtime = start();
+      const id = "unrecorded-beside-named";
+      await seed(runtime, id, STORED, SEED);
+      const tx = runtime.edit();
+      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+      tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: WRITER });
+      const cell = runtime.getCell(space, id, undefined, tx);
+      cell.key("frozen").key("digest" as never).set("e" as never);
+      tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: "mallory" });
+      tx.writeValueOrThrow({
+        ...cell.getAsNormalizedFullLink(),
+        path: ["frozen", "note"],
+      }, "evil" as never);
+      expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+      expect(runtime.getCell(space, id, STORED).get()).toEqual(SEED);
+    });
+
     it("commits a write beneath a claimed root by its named writer", async () => {
       const runtime = start();
       const root = { type: "object", ifc: CLAIM } as const satisfies JSONSchema;

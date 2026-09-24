@@ -1262,11 +1262,36 @@ const writePreservesRuntimeOutput = (
     );
 };
 
+/** Whether the schemas recorded on `target` sit one at each of `paths`. */
+const schemasRecordedOnlyAt = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  paths: readonly (readonly string[])[],
+): boolean => {
+  const unmatched = [...paths];
+  for (const input of tx.getCfcState().writePolicyInputs) {
+    if (input.kind !== "schema" || !sameDocument(input.target, target)) {
+      continue;
+    }
+    const path = canonicalizeLogicalPath(input.target.path);
+    const index = unmatched.findIndex((candidate) =>
+      arraysEqual(candidate, path)
+    );
+    if (index === -1) return false;
+    unmatched.splice(index, 1);
+  }
+  return true;
+};
+
 /**
  * Whether the transaction's only business with `target` is a host's policy
  * application (`applyCfcPolicyToExistingValue`): the runtime marked it, a
- * builtin authored it, and nothing was written to the document. Such a
- * transaction leaves the document's writer and click claims to the writers
+ * builtin authored it, and nothing was written or recorded on the document
+ * beside it. Such a transaction leaves the document's writer and click claims to the writers
  * they name, since it makes no write for them to govern.
  */
 const writeIsPolicyApplication = (
@@ -1291,6 +1316,14 @@ const writeIsPolicyApplication = (
       identityForPath(input.target.path)?.kind === "builtin"
     ) &&
     attemptsOnlyApplicationsAt(
+      tx,
+      target,
+      applications.map((input) => input.target.path),
+    ) &&
+    // Rewriting the bytes a document holds attempts no write but records its
+    // schema, so the schemas recorded on the document must be the
+    // applications' own: one at each application's path.
+    schemasRecordedOnlyAt(
       tx,
       target,
       applications.map((input) => input.target.path),
@@ -1751,29 +1784,53 @@ const writePolicyIdentitiesByTarget = (
 
 /**
  * The authoring identities a claim at a field path answers to: that of the
- * input {@link identityForSchemaPath} finds, and that of every input beneath
- * the path, since a write beneath a claimed path changes the value the claim
- * governs. With no input at or around the path, the one identity is
- * `undefined`, which no claim accepts.
+ * input {@link identityForSchemaPath} finds, that of every input beneath the
+ * path, and, for every value write that overlaps the path, that of the input
+ * at or above the write, since a write beneath a claimed path changes the
+ * value the claim governs. A write with no input at or above it answers as
+ * `undefined`, which no claim accepts, and so does a claim with nothing at
+ * all around it.
  */
 const identitiesForClaimPath = (
   entries: Map<string, ImplementationIdentity | undefined> | undefined,
   path: readonly string[],
+  writtenPaths: readonly (readonly string[])[],
 ): readonly (ImplementationIdentity | undefined)[] => {
-  const identities: (ImplementationIdentity | undefined)[] = [];
-  for (let depth = path.length; depth >= 0; depth--) {
-    const key = encodePointer(path.slice(0, depth));
-    if (entries?.has(key)) {
-      identities.push(entries.get(key));
-      break;
+  const nearest = (at: readonly string[]) => {
+    for (let depth = at.length; depth >= 0; depth--) {
+      const key = encodePointer(at.slice(0, depth));
+      if (entries?.has(key)) return { found: true, identity: entries.get(key) };
     }
-  }
+    return { found: false, identity: undefined };
+  };
+  const identities: (ImplementationIdentity | undefined)[] = [];
+  const own = nearest(path);
+  if (own.found) identities.push(own.identity);
   const beneath = `${encodePointer(path)}/`;
   for (const [key, identity] of entries ?? []) {
     if (key.startsWith(beneath)) identities.push(identity);
   }
+  for (const writtenPath of writtenPaths) {
+    if (pathsOverlap(path, writtenPath)) {
+      identities.push(nearest(writtenPath).identity);
+    }
+  }
   return identities.length > 0 ? identities : [undefined];
 };
+
+/** The value paths the transaction attempted to write on `target`. */
+const valueWritePathsOf = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): readonly (readonly string[])[] =>
+  (getTransactionWriteAttempts(tx) ?? []).filter((write) =>
+    sameDocument(write, target) &&
+    (write.path.length === 0 || write.path[0] === "value")
+  ).map((write) => canonicalizeLogicalPath(write.path.map(String)));
 
 /**
  * The authoring identity for a field path: the schema input on this cell whose
@@ -4302,7 +4359,7 @@ const ifcEntryAppliesToAttemptedWrite = (
         if (write.space !== target.space) return false;
         if (write.id !== target.id) return false;
         if (normalizeCellScope(write.scope) !== target.scope) return false;
-        if (write.path[0] !== "value") return false;
+        if (write.path.length > 0 && write.path[0] !== "value") return false;
         const writePath = canonicalizeLogicalPath(write.path);
         return concretePathHasPrefix(writePath, path) ||
           (ancestorTouches && concretePathHasPrefix(path, writePath));
@@ -4327,13 +4384,15 @@ const ifcEntryAppliesToAttemptedWrite = (
       matchesValue(value);
   }
 
-  // Only value-surface entries name a path of the value. A write to a
-  // metadata field such as `result` canonicalizes to a one-segment path that
-  // a wildcard would otherwise take for an item.
+  // Only value-surface entries name a path of the value, and a whole-envelope
+  // write, which replaces the value too. A write to a metadata field such as
+  // `result` canonicalizes to a one-segment path that a wildcard would
+  // otherwise take for an item.
   const exactAttemptedPaths = [
     ...(tx.getReactivityLog?.().writes ?? []),
     ...(tx.getReactivityLog?.().attemptedWrites ?? []),
-  ].filter((write) => write.path[0] === "value").map((write) => ({
+  ].filter((write) => write.path.length === 0 || write.path[0] === "value")
+    .map((write) => ({
     write,
     path: canonicalizeLogicalPath(write.path),
   })).filter(({ write, path: writePath }) =>
@@ -7545,6 +7604,7 @@ export function* prepareBoundaryCommitSteps(
     };
 
     let deferredWriterRefusal: string | undefined;
+    const writtenValuePaths = valueWritePathsOf(tx, target);
     const policyApplication = writeIsPolicyApplication(
       tx,
       target,
@@ -7555,7 +7615,12 @@ export function* prepareBoundaryCommitSteps(
         tx,
         schema,
         target,
-        (path) => identitiesForClaimPath(writeAuthorIdentities.get(key), path),
+        (path) =>
+          identitiesForClaimPath(
+            writeAuthorIdentities.get(key),
+            path,
+            writtenValuePaths,
+          ),
         prefixBounds,
         metadataResolver,
         // The precision counters measure each protected write once.
