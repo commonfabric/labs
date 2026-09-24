@@ -9,6 +9,7 @@ import {
   storedCfcEnvelopeMergeIssue,
   storedSchemaCoversCandidateEnvelope,
 } from "../src/cfc/prepare.ts";
+import { cfcSchemaEntries } from "../src/cfc/schema-label-view.ts";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 
 describe("mergeCfcSchemaEnvelopes", () => {
@@ -671,6 +672,73 @@ describe("mergeCfcSchemaEnvelopes", () => {
     expect(
       (mergedObject.properties?.savedTitle as JSONSchemaObj).ifc?.uiContract,
     ).toEqual(uiContract);
+  });
+
+  it("keeps the claims a reference carries when the candidate declares a label at that position", () => {
+    // Resolving a reference lets an `ifc` beside it replace the referenced
+    // body's `ifc`, so the merge has to meet the two declarations rather than
+    // set the candidate's beside the stored reference.
+
+    const stored = {
+      type: "object",
+      properties: { pin: { $ref: "#/$defs/Pin" } },
+      $defs: {
+        Pin: {
+          type: "string",
+          ifc: {
+            uiContract: { helper: "UiAction", action: "PinNote" },
+            writeAuthorizedBy: ["pin-builtin"],
+            requiredIntegrity: ["pin-approved"],
+          },
+        },
+      },
+    } as const;
+    const candidate = {
+      type: "object",
+      properties: {
+        pin: { type: "string", ifc: { confidentiality: ["writer-clause"] } },
+      },
+    } as const;
+
+    const entries = cfcSchemaEntries(
+      mergeCfcSchemaEnvelopes(stored, candidate),
+    );
+    expect(entries.map((entry) => entry.path)).toEqual([["pin"]]);
+    expect((entries[0].schema as JSONSchemaObj).ifc).toEqual({
+      confidentiality: ["writer-clause"],
+      uiContract: { helper: "UiAction", action: "PinNote" },
+      writeAuthorizedBy: ["pin-builtin"],
+      requiredIntegrity: ["pin-approved"],
+    });
+  });
+
+  it("keeps the claims a reference carries when the candidate refers to another definition at that position", () => {
+    const stored = {
+      type: "object",
+      properties: { pin: { $ref: "#/$defs/Pin" } },
+      $defs: {
+        Pin: {
+          type: "string",
+          ifc: { uiContract: { helper: "UiAction", action: "PinNote" } },
+        },
+      },
+    } as const;
+    const candidate = {
+      type: "object",
+      properties: { pin: { $ref: "#/$defs/Endorsed" } },
+      $defs: {
+        Endorsed: { type: "string", ifc: { addIntegrity: ["endorsed"] } },
+      },
+    } as const;
+
+    const entries = cfcSchemaEntries(
+      mergeCfcSchemaEnvelopes(stored, candidate),
+    );
+    expect(entries.map((entry) => entry.path)).toEqual([["pin"]]);
+    expect((entries[0].schema as JSONSchemaObj).ifc).toEqual({
+      uiContract: { helper: "UiAction", action: "PinNote" },
+      addIntegrity: ["endorsed"],
+    });
   });
 
   it("rejects branch-local ifc labels in divergent schemas", () => {
