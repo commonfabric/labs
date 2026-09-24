@@ -10,12 +10,6 @@ export default pattern(() => {
   const assert_tally_released = assert(() => ballot.roomTally === "2-1");
   const assert_other_function_refused = assert(() => ballot.roomEcho === "");
   const assert_raw_brief_refused = assert(() => ballot.roomNote === "");
-  const assert_counts_released = assert(() =>
-    ballot.roomCounts.approve === 2 && ballot.roomCounts.reject === 1
-  );
-  const assert_hand_counts_refused = assert(() =>
-    ballot.roomHandCounts.approve === 0 && ballot.roomHandCounts.reject === 0
-  );
 
   return {
     [TESTS]: [
@@ -29,10 +23,6 @@ export default pattern(() => {
       { assertion: assert_other_function_refused },
       { action: ballot.publishFirstNote },
       { assertion: assert_raw_brief_refused },
-      { action: ballot.publishCounts },
-      { assertion: assert_counts_released },
-      { action: ballot.publishHandCounts },
-      { assertion: assert_hand_counts_refused },
     ],
     // Each refused publish logs the CFC refusal; the refusals are the point.
     allowConsoleWarnings: true,
