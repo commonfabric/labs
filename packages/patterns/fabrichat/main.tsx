@@ -3,7 +3,8 @@
  * their own profile, with every message attested as written by its sender.
  *
  * This is the room from `chat.tsx`, given the viewer's real profile. The
- * messages are shared by everyone in the space.
+ * messages are shared by everyone in the space. A viewer with no profile can
+ * read the conversation, and is offered the form that creates one.
  */
 import {
   computed,
@@ -48,9 +49,23 @@ export default pattern<FabriChatInput, FabriChatOutput>(({ messages }) => {
     messages: messagesCell,
   } as FabriChatRoomInputArg);
 
+  const hasProfile = computed(() => profileWish.result !== undefined);
+
   return {
     [NAME]: "FabriChat",
-    [UI]: room[UI],
+    [UI]: (
+      <cf-screen>
+        {room[UI]}
+        {hasProfile ? null : (
+          <div
+            id="fabrichat-profile-setup"
+            style={{ padding: "0 1rem 1rem", maxWidth: "640px" }}
+          >
+            {profileWish[UI]}
+          </div>
+        )}
+      </cf-screen>
+    ),
     messages: messagesCell as PerSpace<MessagesCell>,
     sendMessage: room.sendMessage,
   };

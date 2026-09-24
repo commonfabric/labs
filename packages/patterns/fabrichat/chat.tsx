@@ -170,86 +170,88 @@ export const FabriChatRoom = pattern<FabriChatRoomInput, FabriChatRoomOutput>(
     return {
       [NAME]: "FabriChat",
       [UI]: (
-        <cf-screen>
-          <cf-vstack gap="3" style={{ padding: "1rem", maxWidth: "640px" }}>
-            <cf-hstack justify="between" align="center" gap="4">
-              <cf-heading level={3}>FabriChat</cf-heading>
-              <cf-profile-badge $profile={myProfile} size="sm" />
-            </cf-hstack>
+        <cf-vstack gap="3" style={{ padding: "1rem", maxWidth: "640px" }}>
+          <cf-hstack justify="between" align="center" gap="4">
+            <cf-heading level={3}>FabriChat</cf-heading>
+            <cf-profile-badge $profile={myProfile} size="sm" />
+          </cf-hstack>
 
-            {
-              /* A plain flex row, not `cf-hstack`, whose host clips overflow
+          {
+            /* A plain flex row, not `cf-hstack`, whose host clips overflow
               and would cut off the badges' verified glow. */
-            }
-            <div
-              style={{
-                display: "flex",
-                gap: "0.5rem",
-                alignItems: "center",
-                flexWrap: "wrap",
-              }}
-            >
-              {participants.map((participant) => (
-                <cf-profile-badge
-                  variant="chip"
-                  $profile={participant.profile}
-                />
-              ))}
-            </div>
-
-            <cf-vstack gap="3" style={{ minHeight: "160px" }}>
-              {messages.map((message) => (
-                <div
-                  style={{
-                    display: "flex",
-                    gap: "0.5rem",
-                    alignItems: "flex-start",
-                  }}
-                >
-                  <cf-profile-badge
-                    variant="circle"
-                    size="sm"
-                    $profile={message.authorProfile}
-                  />
-                  <cf-cfc-authorship
-                    $value={message.body}
-                    $author={message.authorProfile}
-                    authorName={message.authorName}
-                    style={{ flex: "1", minWidth: "0" }}
-                  >
-                    <cf-text
-                      variant="body"
-                      block
-                      style={{
-                        whiteSpace: "pre-wrap",
-                        overflowWrap: "anywhere",
-                      }}
-                    >
-                      {message.body}
-                    </cf-text>
-                  </cf-cfc-authorship>
-                </div>
-              ))}
-              {isEmpty
-                ? <cf-empty-state message="No messages yet. Say hello!" />
-                : null}
-            </cf-vstack>
-
-            <div
-              data-ui-pattern={FABRICHAT_SEND_SURFACE}
-              data-ui-event-integrity={FABRICHAT_SEND_SURFACE}
-            >
-              <cf-submit-input
-                data-ui-action={FABRICHAT_SEND_ACTION}
-                inputId="fabrichat-message"
-                placeholder="Message"
-                buttonText="Send"
-                disabled={cannotSend}
-                onClick={sendMessage}
+          }
+          <div
+            style={{
+              display: "flex",
+              gap: "0.5rem",
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            {participants.map((participant) => (
+              <cf-profile-badge
+                variant="chip"
+                $profile={participant.profile}
               />
-            </div>
+            ))}
+          </div>
+
+          <cf-vstack
+            id="fabrichat-messages"
+            gap="3"
+            style={{ minHeight: "160px" }}
+          >
+            {messages.map((message) => (
+              <div
+                style={{
+                  display: "flex",
+                  gap: "0.5rem",
+                  alignItems: "flex-start",
+                }}
+              >
+                <cf-profile-badge
+                  variant="circle"
+                  size="sm"
+                  $profile={message.authorProfile}
+                />
+                <cf-cfc-authorship
+                  $value={message.body}
+                  $author={message.authorProfile}
+                  authorName={message.authorName}
+                  style={{ flex: "1", minWidth: "0" }}
+                >
+                  <cf-text
+                    variant="body"
+                    block
+                    style={{
+                      whiteSpace: "pre-wrap",
+                      overflowWrap: "anywhere",
+                    }}
+                  >
+                    {message.body}
+                  </cf-text>
+                </cf-cfc-authorship>
+              </div>
+            ))}
+            {isEmpty
+              ? <cf-empty-state message="No messages yet. Say hello!" />
+              : null}
           </cf-vstack>
-        </cf-screen>
+
+          <div
+            data-ui-pattern={FABRICHAT_SEND_SURFACE}
+            data-ui-event-integrity={FABRICHAT_SEND_SURFACE}
+          >
+            <cf-submit-input
+              data-ui-action={FABRICHAT_SEND_ACTION}
+              inputId="fabrichat-message"
+              placeholder="Message"
+              buttonText="Send"
+              disabled={cannotSend}
+              onClick={sendMessage}
+            />
+          </div>
+        </cf-vstack>
       ),
       messages,
       participants,
