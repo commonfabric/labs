@@ -123,8 +123,9 @@ async function createProfile(page: Page, name: string): Promise<void> {
 /**
  * Sends `body` from the composer, and waits for it to appear. If it does not,
  * the error lists what the piece has stored, as the controller's subscription
- * has seen it through `storedBodies`: a stored body that never appeared was not
- * rendered, and one that was never stored was refused or lost.
+ * has seen it through `storedBodies`, which can lag the server: a stored body
+ * that never appeared was not rendered, and one that was never stored was
+ * refused, lost, or not yet synced.
  */
 async function send(
   page: Page,
@@ -136,9 +137,17 @@ async function send(
   try {
     await waitForText(page, "#fabrichat-messages", body);
   } catch (cause) {
+    let stored: string[] | undefined;
+    try {
+      stored = storedBodies();
+    } catch {
+      // The timeout is the failure to report, whatever the read does.
+    }
     throw new Error(
       `"${body}" never appeared. ` +
-        debugStr`Stored message bodies: $quote,long${storedBodies()}`,
+        (stored === undefined
+          ? "The piece's stored messages could not be read."
+          : debugStr`Stored message bodies: $quote,long${stored}`),
       { cause },
     );
   }

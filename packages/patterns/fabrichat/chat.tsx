@@ -138,13 +138,15 @@ export const commitSend = handler<
 >((event, { myProfile, myName, myAvatar, messages }) => {
   const body = (event?.target?.value ?? "").trim();
   const authorName = (myName ?? "").trim();
-  if (!body || myProfile?.get() === undefined) {
+  // The message stores the profile cell itself, not the link that reached it,
+  // and it is that cell's value that decides whether the send goes ahead.
+  const profile = myProfile?.resolveAsCell();
+  if (!body || profile?.get() === undefined) {
     return;
   }
 
-  // The message stores the profile cell itself, not the link that reached it.
   messages.push({
-    authorProfile: myProfile.resolveAsCell(),
+    authorProfile: profile,
     authorName,
     authorAvatar: (myAvatar ?? "").trim(),
     body,
