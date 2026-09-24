@@ -29,6 +29,7 @@ import {
   cfcAtom,
   type CfcModulePolicyRefAtom,
 } from "@commonfabric/api/cfc";
+import { sha256 } from "@commonfabric/content-hash";
 import { debugStr, hashStringOf } from "@commonfabric/data-model";
 import { isDID } from "@commonfabric/identity/did";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
@@ -678,11 +679,7 @@ const blindedEntryKey = async (
         cause: error,
       });
     }
-    const digest = await crypto.subtle.digest(
-      "SHA-256",
-      new Uint8Array(ok),
-    );
-    return toUnpaddedBase64url(new Uint8Array(digest));
+    return toUnpaddedBase64url(sha256(new Uint8Array(ok)));
   };
   const first = await sign();
   if (first !== await sign()) {
