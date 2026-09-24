@@ -62,6 +62,7 @@ import {
   isCurrentPrincipalUserClause,
 } from "./current-principal-confidentiality.ts";
 import {
+  areLinksSame,
   isPrimitiveCellLink,
   isWriteRedirectLink,
   parseLink,
@@ -2253,27 +2254,85 @@ const isMetaSeamPath = (
   path: readonly string[],
 ): boolean => metaOnlyByPath?.get(pathKey(path)) === true;
 
+/** What one of {@link valueWriteTargets}' documents records of its writes. */
+type ValueWriteTarget = ReturnType<typeof valueWriteTargets> extends
+  Map<string, infer Target> ? Target : never;
+
 /**
- * The paths a transaction wrote in a document's payload, as a prefix index:
- * every path in `target.paths` except those only the meta seam reached. A
- * meta field and a payload field of the same name share a logical path, so
- * a meta write is left out rather than read as replacing the payload value
- * there. Empty for a document the transaction did not write.
+ * What stands at `rel` below `value`: the first link met on the way down,
+ * which the path then continues inside of and which is therefore what the
+ * path resolves through, else the value at `rel`, else nothing.
  */
-const payloadWrittenPrefixes = (
-  target:
-    | {
-      paths: readonly (readonly string[])[];
-      metaOnlyByPath: ReadonlyMap<string, boolean>;
+const pointerAlongPath = (
+  value: unknown,
+  rel: readonly string[],
+): { link: unknown } | { value: unknown } | undefined => {
+  let current = value;
+  for (let depth = 0;; depth++) {
+    if (isPrimitiveCellLink(current)) return { link: current };
+    if (depth === rel.length) return { value: current };
+    if (!isObjectOrArray(current) || !Object.hasOwn(current, rel[depth])) {
+      return undefined;
     }
-    | undefined,
-): PathPrefixIndex => {
-  const prefixes = new PathPrefixIndex();
-  for (const path of target?.paths ?? []) {
-    if (!isMetaSeamPath(target?.metaOnlyByPath, path)) prefixes.add(path);
+    current = (current as Record<string, unknown>)[rel[depth]];
   }
-  return prefixes;
 };
+
+/**
+ * Whether the transaction replaced the pointer a link-origin entry at
+ * `entryPath` labels: whether some payload write at or above that path left
+ * something other than the pointer that stood there when it began. The
+ * pointer is the first link on the way down to the entry's path, or the
+ * value there when no link is on the way.
+ *
+ * Matching is by exact segment, never `PathPrefixIndex`'s wildcard: a
+ * link-origin entry names a concrete path, and a payload key spelled `*` is
+ * a key like any other, not every sibling of it.
+ *
+ * Comparing the values is what keeps a write that stores the same pointer
+ * again, as a raw write that records no link write does, from clearing the
+ * labels nothing then re-mints. A meta-seam write replaces no payload
+ * pointer and is not consulted.
+ */
+const linkEntryPointerReplaced = (
+  tx: IExtendedStorageTransaction,
+  target: ValueWriteTarget,
+  entryPath: readonly string[],
+): boolean =>
+  target.paths.some((written) => {
+    if (
+      isMetaSeamPath(target.metaOnlyByPath, written) ||
+      written.length > entryPath.length ||
+      !written.every((segment, index) => segment === entryPath[index])
+    ) {
+      return false;
+    }
+    const rel = entryPath.slice(written.length);
+    const writtenKey = pathKey(written);
+    const before = target.previousPresentByPath.get(writtenKey) === false
+      ? undefined
+      : pointerAlongPath(target.previousValuesByPath.get(writtenKey), rel);
+    const after = pointerAlongPath(
+      writeDetailValueForTarget(tx, { ...target, path: written }, "value") ??
+        target.valuesByPath.get(writtenKey),
+      rel,
+    );
+    if (before === undefined || after === undefined) {
+      return before !== after;
+    }
+    const base = {
+      space: target.space,
+      id: target.id,
+      scope: target.scope,
+      type: target.type,
+      path: [],
+    };
+    if ("link" in before && "link" in after) {
+      return !areLinksSame(before.link, after.link, base);
+    }
+    return "link" in before || "link" in after ||
+      !deepEqual(before.value, after.value);
+  });
 
 /**
  * Whether `id` names a document of one of the two id classes no schema can
@@ -7036,10 +7095,10 @@ export function* prepareBoundaryCommitSteps(
     }
   }
   // A link-origin entry labels the pointer that stood at its path when the
-  // entry was minted, so a payload write at or above that path leaves it
-  // describing a pointer the document no longer holds. Such a document enters
-  // the persist loop whatever the flow-label mode and whatever the flow join,
-  // and the loop drops the entry there (`linkCleared`).
+  // entry was minted, so a payload write that replaced that pointer leaves it
+  // describing one the document no longer holds. Such a document enters the
+  // persist loop whatever the flow-label mode and whatever the flow join, and
+  // the loop drops the entry there (`linkCleared`).
   for (const [key, target] of valueTargets) {
     if (targetKeys.has(key)) {
       continue;
@@ -7051,10 +7110,10 @@ export function* prepareBoundaryCommitSteps(
       target.scope,
       target.type,
     )?.labelMap.entries ?? [];
-    const writtenPrefixes = payloadWrittenPrefixes(target);
     if (
       existingEntries.some((entry) =>
-        entry.origin === "link" && writtenPrefixes.hasPrefixOf(entry.path)
+        entry.origin === "link" &&
+        linkEntryPointerReplaced(tx, target, entry.path)
       )
     ) {
       targetKeys.add(key);
@@ -7296,9 +7355,7 @@ export function* prepareBoundaryCommitSteps(
     const flowWrittenPrefixes = new PathPrefixIndex();
     for (const path of flowWrittenPaths) flowWrittenPrefixes.add(path);
     const flowWrittenValues = flowTarget?.valuesByPath;
-    // What clears the link-origin entries below, whatever the flow-label
-    // mode.
-    const payloadPrefixes = payloadWrittenPrefixes(valueTargets.get(key));
+    const valueTarget = valueTargets.get(key);
     // Pre-transaction snapshots (and slot presence at each recorded path)
     // per written path, for the §8.12.8 re-mint-on-recreation probe below.
     // Gated on flowPersist like the written paths: with nothing
@@ -7642,15 +7699,16 @@ export function* prepareBoundaryCommitSteps(
         continue;
       }
       // A link-origin entry labels the pointer its slot held: a label of the
-      // element there rather than of the position. A payload write at or
-      // above the path replaced that pointer, so the entry goes whatever the
-      // flow-label mode, and a rewritten list keeps no position carrying the
-      // labels of an element that has left it. The link write storing the
-      // element now at the position mints that element's own entries below,
-      // so an element keeps its labels at every position it moves to. A
-      // meta-seam write replaces no payload pointer and clears nothing.
+      // element there rather than of the position. A payload write that
+      // replaced that pointer takes the entry with it whatever the flow-label
+      // mode (`linkEntryPointerReplaced`), so a rewritten list keeps no
+      // position carrying the labels of an element that has left it. The
+      // link write storing the element now at the position mints that
+      // element's own entries below, so an element keeps its labels at every
+      // position it moves to.
       if (
-        entry.origin === "link" && payloadPrefixes.hasPrefixOf(entryPath)
+        entry.origin === "link" && valueTarget !== undefined &&
+        linkEntryPointerReplaced(tx, valueTarget, entryPath)
       ) {
         linkCleared = true;
         continue;

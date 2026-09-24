@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 
@@ -34,6 +35,12 @@ const labeledSchema: JSONSchema = {
 const declaredListSchema: JSONSchema = {
   type: "array",
   items: { type: "object", ifc: { confidentiality: [LABEL] } },
+};
+
+// A document that declares a label at one field, which a link then fills.
+const declaredFieldSchema: JSONSchema = {
+  type: "object",
+  properties: { x: { type: "object", ifc: { confidentiality: [LABEL] } } },
 };
 
 const createRuntime = (flow: CfcFlowLabelsMode) => {
@@ -108,15 +115,36 @@ const setList = (
   });
 
 /**
- * The stored label entries of the list document, as `path: confidentiality`
- * strings sorted by path, so a comparison names each position's labels.
+ * One stored label, as a string that compares every clause it holds, its
+ * object keys sorted so that two spellings of one atom compare equal.
+ */
+const labelString = (
+  path: readonly string[],
+  confidentiality: readonly unknown[] = [],
+  integrity: readonly unknown[] = [],
+): string =>
+  `/${path.join("/")}: ${
+    JSON.stringify(
+      { confidentiality, integrity },
+      (_key, value) =>
+        value !== null && typeof value === "object" && !Array.isArray(value)
+          ? Object.fromEntries(
+            Object.entries(value).sort(([a], [b]) => a < b ? -1 : 1),
+          )
+          : value,
+    )
+  }`;
+
+/**
+ * The stored label entries of document `name` that hold a clause, confidentiality
+ * and integrity alike, sorted, so a comparison names each position's labels.
  */
 const storedLabels = (runtime: Runtime, name = "list"): string[] => {
   const tx = runtime.edit();
   try {
     const metadata = readStoredCfcMetadata(tx, {
       space,
-      id: runtime.getCell(space, name).getAsNormalizedFullLink().id,
+      id: idOf(runtime, name),
     });
     return (metadata?.labelMap.entries ?? [])
       .filter((entry) =>
@@ -124,9 +152,11 @@ const storedLabels = (runtime: Runtime, name = "list"): string[] => {
         (entry.label.integrity?.length ?? 0) > 0
       )
       .map((entry) =>
-        `/${entry.path.join("/")}: ${
-          JSON.stringify(entry.label.confidentiality ?? [])
-        }`
+        labelString(
+          entry.path,
+          entry.label.confidentiality,
+          entry.label.integrity,
+        )
       )
       .sort();
   } finally {
@@ -134,12 +164,26 @@ const storedLabels = (runtime: Runtime, name = "list"): string[] => {
   }
 };
 
-// Where the labeled element `a` sits at `index`, the list stores its label
-// at the slot and its `secret` label below it.
-const labelsOfAAt = (index: number): string[] =>
+const idOf = (runtime: Runtime, name: string): string =>
+  runtime.getCell(space, name).getAsNormalizedFullLink().id;
+
+/**
+ * The labels document `name` stores where the labeled element `a` is linked
+ * at `path`: `a`'s label and the reference from that position to `a` at the
+ * slot, and `a`'s `secret` label below it.
+ */
+const labelsOfAAt = (
+  runtime: Runtime,
+  path: readonly string[],
+  name = "list",
+): string[] =>
   [
-    `/${index}: ${JSON.stringify([LABEL])}`,
-    `/${index}/secret: ${JSON.stringify(["secret-note"])}`,
+    labelString(path, [LABEL], [{
+      type: CFC_ATOM_TYPE.LinkReference,
+      source: { space, id: idOf(runtime, "a"), path: [] },
+      target: { space, id: idOf(runtime, name), path },
+    }]),
+    labelString([...path, "secret"], ["secret-note"]),
   ].sort();
 
 describe("cfc-list-link-labels", () => {
@@ -150,7 +194,7 @@ describe("cfc-list-link-labels", () => {
         try {
           const { runtime, a, b } = fixture;
           expect((await setList(runtime, [a, b])).error).toBeUndefined();
-          expect(storedLabels(runtime)).toEqual(labelsOfAAt(0));
+          expect(storedLabels(runtime)).toEqual(labelsOfAAt(runtime, ["0"]));
         } finally {
           await tearDown(fixture);
         }
@@ -163,11 +207,11 @@ describe("cfc-list-link-labels", () => {
           expect((await setList(runtime, [a, b])).error).toBeUndefined();
 
           expect((await setList(runtime, [b, a])).error).toBeUndefined();
-          expect(storedLabels(runtime)).toEqual(labelsOfAAt(1));
+          expect(storedLabels(runtime)).toEqual(labelsOfAAt(runtime, ["1"]));
 
           // And back again.
           expect((await setList(runtime, [a, b])).error).toBeUndefined();
-          expect(storedLabels(runtime)).toEqual(labelsOfAAt(0));
+          expect(storedLabels(runtime)).toEqual(labelsOfAAt(runtime, ["0"]));
         } finally {
           await tearDown(fixture);
         }
@@ -211,7 +255,7 @@ describe("cfc-list-link-labels", () => {
           expect((await setList(runtime, [b, a])).error).toBeUndefined();
 
           expect((await setList(runtime, [b, c, a])).error).toBeUndefined();
-          expect(storedLabels(runtime)).toEqual(labelsOfAAt(2));
+          expect(storedLabels(runtime)).toEqual(labelsOfAAt(runtime, ["2"]));
         } finally {
           await tearDown(fixture);
         }
@@ -237,10 +281,90 @@ describe("cfc-list-link-labels", () => {
           expect((await setList(runtime, [a, b, c])).error).toBeUndefined();
 
           expect((await setList(runtime, [b, c, a])).error).toBeUndefined();
-          expect(storedLabels(runtime)).toEqual(labelsOfAAt(2));
+          expect(storedLabels(runtime)).toEqual(labelsOfAAt(runtime, ["2"]));
 
           expect((await setList(runtime, [b, a, c])).error).toBeUndefined();
-          expect(storedLabels(runtime)).toEqual(labelsOfAAt(1));
+          expect(storedLabels(runtime)).toEqual(labelsOfAAt(runtime, ["1"]));
+        } finally {
+          await tearDown(fixture);
+        }
+      });
+
+      it("keeps a labeled element's labels while the list around it changes", async () => {
+        const fixture = await setUp(flow);
+        try {
+          const { runtime, a, b, c } = fixture;
+          for (const elements of [[a, b], [a, b, c], [a], [a, b]]) {
+            expect((await setList(runtime, elements)).error).toBeUndefined();
+            expect(storedLabels(runtime)).toEqual(labelsOfAAt(runtime, ["0"]));
+          }
+        } finally {
+          await tearDown(fixture);
+        }
+      });
+
+      it("keeps a pointer's labels when a raw write rewrites the list around it", async () => {
+        // A raw write stores links without recording link writes, so nothing
+        // re-mints the labels of a pointer it leaves where it was.
+        const fixture = await setUp(flow);
+        try {
+          const { runtime, a, b, c } = fixture;
+          expect((await setList(runtime, [a, b])).error).toBeUndefined();
+
+          const written = await commit(runtime, (tx) => {
+            runtime.getCell(space, "list", undefined, tx).setRaw([
+              a.getAsLink(),
+              c.getAsLink(),
+            ]);
+          });
+          expect(written.error).toBeUndefined();
+          expect(storedLabels(runtime)).toEqual(labelsOfAAt(runtime, ["0"]));
+        } finally {
+          await tearDown(fixture);
+        }
+      });
+
+      it("keeps a sibling pointer's labels when a field named `*` is written", async () => {
+        const fixture = await setUp(flow);
+        try {
+          const { runtime, a } = fixture;
+          const holder = (value: number) =>
+            commit(runtime, (tx) => {
+              runtime.getCell(space, "holder", undefined, tx).set({
+                x: a,
+                "*": value,
+              });
+            });
+          expect((await holder(1)).error).toBeUndefined();
+          const labels = labelsOfAAt(runtime, ["x"], "holder");
+          expect(storedLabels(runtime, "holder")).toEqual(labels);
+
+          expect((await holder(2)).error).toBeUndefined();
+          expect(storedLabels(runtime, "holder")).toEqual(labels);
+        } finally {
+          await tearDown(fixture);
+        }
+      });
+
+      it("still refuses an unlabeled element at a position the document declares a label for", async () => {
+        // The declared entry sits at the slot itself, where the link-origin
+        // entries a link write disregards also sit.
+        const fixture = await setUp(flow);
+        try {
+          const { runtime, a, b } = fixture;
+          const declared = await commit(runtime, (tx) => {
+            runtime.getCell(space, "declared-holder", declaredFieldSchema, tx)
+              .set({ x: a });
+          });
+          expect(declared.error).toBeUndefined();
+
+          const refused = await commit(runtime, (tx) => {
+            runtime.getCell(space, "declared-holder", undefined, tx).key("x")
+              .set(b);
+          });
+          expect(refused.error?.message).toContain(
+            "missing link source metadata",
+          );
         } finally {
           await tearDown(fixture);
         }
@@ -257,10 +381,7 @@ describe("cfc-list-link-labels", () => {
           });
           expect(written.error).toBeUndefined();
           const labels = storedLabels(runtime, "holder");
-          expect(labels).toEqual([
-            `/schema/secret: ${JSON.stringify(["secret-note"])}`,
-            `/schema: ${JSON.stringify([LABEL])}`,
-          ]);
+          expect(labels).toEqual(labelsOfAAt(runtime, ["schema"], "holder"));
 
           const metaWritten = await commit(runtime, (tx) => {
             runtime.getCell(space, "holder", undefined, tx).setMetaRaw(
@@ -331,7 +452,7 @@ describe("cfc-list-link-labels", () => {
           expect(refused.error?.message).toContain(
             "missing link source metadata",
           );
-          expect(storedLabels(runtime)).toEqual(labelsOfAAt(0));
+          expect(storedLabels(runtime)).toEqual(labelsOfAAt(runtime, ["0"]));
         } finally {
           await tearDown(fixture);
         }
