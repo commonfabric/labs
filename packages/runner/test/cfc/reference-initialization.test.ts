@@ -495,12 +495,12 @@ describe("reference-initialization", () => {
       };
     }
 
-    it("stores no authorship for the staging principal on a reference staged from another staged reference", async () => {
+    it("stores the owner's authorship, and none for the staging principal, on a reference staged from another staged reference", async () => {
       await initializeOwnersMessage();
       const { error, second } = await stageChainAsStager(argumentSchema);
 
       expect(error).toBeUndefined();
-      expect(authorsAt(second, ["element"])).not.toContain(stager.did());
+      expect(authorsAt(second, ["element"])).toEqual([signer.did()]);
     });
 
     it("refuses an integrity floor that only the staging principal's authorship would meet on a reference staged from another staged reference", async () => {
@@ -524,7 +524,7 @@ describe("reference-initialization", () => {
       expect(error?.message).toContain("write floor failed at /element");
     });
 
-    it("stores no authorship for the staging principal on a reference to an entry created in the same transaction", async () => {
+    it("stores no authorship on a reference to an entry the staging principal created in the same transaction", async () => {
       // The entry is written outside the slot's writer, so the slot's schema
       // does not describe how it was written.
 
@@ -534,7 +534,7 @@ describe("reference-initialization", () => {
       );
 
       expect(error).toBeUndefined();
-      expect(authorsAt(argument, ["element"])).not.toContain(stager.did());
+      expect(authorsAt(argument, ["element"])).toEqual([]);
     });
 
     it("refuses an integrity floor at the slot that only authorship minted for the staging principal would meet", async () => {
