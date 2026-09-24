@@ -930,7 +930,13 @@ Mechanics:
   read from its declaration with each parameter bound to its argument's type
   (`GenerationContext.boundTypeParameters`): wherever the walk reaches a bound
   parameter, in a union's member, an intersection's part, an array's element,
-  or an object's property, its argument's type is read. A use the binding
+  or an object's property, its argument's type is read. A union or an
+  intersection written in the declaration is read by its written members, as
+  a print of the instantiation was, since the checker folds a member that is
+  itself a union, a CFC alias over one among them, into the whole and loses
+  its boundary and labels. A recursive definition read under bindings is
+  named by its type and its bindings together, so two instantiations of one
+  declaration keep apart. A use the binding
   cannot reach, one the checker defers such as `T["name"]` or a conditional
   type, accepts any value there, and the payload is reported as not fully
   read. A label reads a parameter it holds as its type wherever the label

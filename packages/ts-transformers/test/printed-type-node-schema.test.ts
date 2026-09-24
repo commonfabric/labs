@@ -417,6 +417,33 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
             }),
           ],
           [
+            "a union holding it",
+            'type Sec<T> = Confidential<T | number, ["secret"]>;',
+            `Integrity<Sec<string>, ["trusted"]>`,
+            labelled({ anyOf: [{ type: "string" }, { type: "number" }] }),
+          ],
+          [
+            "a union of an array and an object holding it",
+            'type Sec<T> = Confidential<T[] | { value: T }, ["secret"]>;',
+            `Integrity<Sec<string>, ["trusted"]>`,
+            labelled({ anyOf: [strings, value] }),
+          ],
+          [
+            "a union holding another generic alias over a union",
+            `type Inner<U> = Confidential<{ value: U } | number, ["inner"]>;
+type Sec<T> = Confidential<Inner<T> | boolean, ["secret"]>;`,
+            `Integrity<Sec<string>, ["trusted"]>`,
+            labelled({
+              anyOf: [
+                {
+                  anyOf: [value, { type: "number" }],
+                  ifc: { confidentiality: ["inner"] },
+                },
+                { type: "boolean" },
+              ],
+            }),
+          ],
+          [
             "another generic alias holding it",
             `type Sec<T> = Confidential<Integrity<T[], ["inner"]>, ["secret"]>;`,
             `MaxConfidentiality<Sec<string>, ["top"]>`,
@@ -443,40 +470,59 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
         });
       }
 
-      // A union's argument schema is read from its written node and its
-      // result schema from its type, which write the same schema in different
-      // forms: `anyOf` in the members' written order, or a type list.
-      for (
-        const [spelling, payload, input, output] of [
-          [
-            "a union holding it",
-            "T | number",
-            { anyOf: [{ type: "string" }, { type: "number" }] },
-            { type: ["number", "string"] },
-          ],
-          [
-            "a union of an array and an object holding it",
-            "T[] | { value: T }",
-            { anyOf: [strings, value] },
-            { anyOf: [value, strings] },
-          ],
-        ] as const
-      ) {
-        it(`keeps a payload that is ${spelling}`, async () => {
-          const files = await transformFiles({
-            "/main.tsx": `/// <cts-enable />
+      for (const order of [["a", "b"], ["b", "a"]] as const) {
+        it(
+          `reads each instantiation of a recursive payload apart, ${
+            order.join(" before ")
+          }`,
+          async () => {
+            // `Link<T>` is one declared type read under two bindings, so each
+            // binding stores its own recursive definition.
+            const fields = {
+              a: `a: Integrity<Sec<string>, ["trusted"]>`,
+              b: `b: Integrity<Sec<number>, ["trusted"]>`,
+            };
+            const files = await transformFiles({
+              "/main.tsx": `/// <cts-enable />
 import { Confidential, Integrity, pattern } from "commonfabric";
-type Sec<T> = Confidential<${payload}, ["secret"]>;
-export default pattern<{ a: Integrity<Sec<string>, ["trusted"]> }>(({ a }) => ({ a }));`,
-          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
-          const schemas = patternSchemas(parseModule(files["/main.tsx"]!));
-          expect((schemas.input.properties as Schema).a).toEqual(
-            labelled(input),
-          );
-          expect((schemas.output.properties as Schema).a).toEqual(
-            labelled(output),
-          );
-        });
+interface Link<U> { value: U; next?: Link<U> }
+type Sec<T> = Confidential<Link<T> & { tag: string }, ["secret"]>;
+export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
+  ({ a, b }) => ({ ${order[0]}, ${order[1]} }),
+);`,
+            }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+            const { output } = patternSchemas(parseModule(files["/main.tsx"]!));
+            const defs = output.$defs as Record<string, Schema>;
+            const valueTypes = (field: "a" | "b") => {
+              const link =
+                (output.properties as Record<string, Schema>)[field]!;
+              const properties = link.properties as Record<string, Schema>;
+              const next = (properties.next!.anyOf as Schema[]).find((arm) =>
+                arm.$ref
+              )!;
+              const def = defs[(next.$ref as string).split("/").pop()!]!;
+              const defProperties = def.properties as Record<string, Schema>;
+              const defNext = (defProperties.next!.anyOf as Schema[]).find((
+                arm,
+              ) => arm.$ref)!;
+              return {
+                value: properties.value,
+                recursive: defProperties.value,
+                self: defNext.$ref === next.$ref,
+              };
+            };
+            expect(valueTypes("a")).toEqual({
+              value: { type: "string" },
+              recursive: { type: "string" },
+              self: true,
+            });
+            expect(valueTypes("b")).toEqual({
+              value: { type: "number" },
+              recursive: { type: "number" },
+              self: true,
+            });
+          },
+        );
       }
     });
 

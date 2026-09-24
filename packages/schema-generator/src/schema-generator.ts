@@ -933,6 +933,22 @@ function boundArgumentType(
 }
 
 /**
+ * Whether `typeNode`, a union or an intersection written in a declaration read
+ * under type parameter bindings, is read by its written members. The checker
+ * folds a member that is itself a union into the whole, so a CFC alias over a
+ * union, as a member, would lose its boundary and its labels read from the
+ * type; its written reference keeps both.
+ */
+function readsWrittenMembers(
+  typeNode: ts.TypeNode | undefined,
+  context: GenerationContext,
+): boolean {
+  if (!context.boundTypeParameters || !typeNode) return false;
+  const written = unwrapTypeParentheses(typeNode);
+  return ts.isUnionTypeNode(written) || ts.isIntersectionTypeNode(written);
+}
+
+/**
  * Main schema generator that uses a chain of formatters
  */
 export class SchemaGenerator {
@@ -949,6 +965,19 @@ export class SchemaGenerator {
 
   /** Synthetic names for anonymous recursive types */
   #anonymousNames: WeakMap<ts.Type, string> = new WeakMap();
+
+  /**
+   * Synthetic names for anonymous recursive types read under type parameter
+   * bindings, by type and bindings (`#bindingKey()`): the same declared type
+   * read under two bindings is two types.
+   */
+  #boundAnonymousNames: Map<string, string> = new Map();
+
+  /** Identities of the types and declarations a binding key names. */
+  #bindingIds: WeakMap<object, number> = new WeakMap();
+
+  /** Counter for `#bindingIds`. */
+  #bindingIdCounter: number = 0;
 
   /** Counter to generate stable synthetic identifiers */
   #anonymousNameCounter: number = 0;
@@ -1194,11 +1223,13 @@ export class SchemaGenerator {
     const readType = readInPlace ?? type;
 
     // Auto-detect: Should we use node-based or type-based analysis?
-    const useNodeBased = !readInPlace && this.#shouldUseNodeBasedAnalysis(
-      readType,
-      typeNode,
-      context.typeChecker,
-    );
+    const useNodeBased = !readInPlace &&
+      (this.#shouldUseNodeBasedAnalysis(
+        readType,
+        typeNode,
+        context.typeChecker,
+      ) ||
+        readsWrittenMembers(typeNode, context));
     if (useNodeBased) {
       // Use node-based analysis (for synthetic nodes or when type is unreliable)
       return this.#applyNodeSchemaHints(
@@ -1253,13 +1284,53 @@ export class SchemaGenerator {
     return type;
   }
 
+  #bindingId(value: object): number {
+    let id = this.#bindingIds.get(value);
+    if (id === undefined) {
+      id = ++this.#bindingIdCounter;
+      this.#bindingIds.set(value, id);
+    }
+    return id;
+  }
+
+  /**
+   * The bindings `context` reads under, as a key, or `undefined` where it reads
+   * under none. A type's schema identity, the definition it is stored as and
+   * the reference a recursion makes to it, is its type together with this key.
+   */
+  #bindingKey(context: GenerationContext): string | undefined {
+    const bound = context.boundTypeParameters;
+    if (!bound) return undefined;
+    return [...bound.types].map(([parameter, argument]) =>
+      `${this.#bindingId(parameter)}=${this.#bindingId(argument)}`
+    ).sort().join(",");
+  }
+
+  #anonymousName(
+    type: ts.Type,
+    context: GenerationContext,
+  ): string | undefined {
+    const key = this.#bindingKey(context);
+    return key === undefined
+      ? this.#anonymousNames.get(type)
+      : this.#boundAnonymousNames.get(`${this.#bindingId(type)}|${key}`);
+  }
+
   #ensureSyntheticName(
     type: ts.Type,
+    context: GenerationContext,
   ): string {
-    const existing = this.#anonymousNames.get(type);
+    const existing = this.#anonymousName(type, context);
     if (existing) return existing;
     const synthetic = `AnonymousType_${++this.#anonymousNameCounter}`;
-    this.#anonymousNames.set(type, synthetic);
+    const key = this.#bindingKey(context);
+    if (key === undefined) this.#anonymousNames.set(type, synthetic);
+    else {
+      this.#boundAnonymousNames.set(
+        `${this.#bindingId(type)}|${key}`,
+        synthetic,
+      );
+    }
     return synthetic;
   }
 
@@ -1317,7 +1388,7 @@ export class SchemaGenerator {
 
     if (!namedKey && !isWrapperContext) {
       // Only use synthetic names if we're not processing a wrapper type
-      const synthetic = this.#anonymousNames.get(type);
+      const synthetic = this.#anonymousName(type, context);
       if (synthetic) namedKey = synthetic;
     }
 
@@ -1345,7 +1416,7 @@ export class SchemaGenerator {
         context.emittedRefs.add(namedKey);
         return { "$ref": `#/$defs/${namedKey}` };
       }
-      const syntheticKey = this.#ensureSyntheticName(type);
+      const syntheticKey = this.#ensureSyntheticName(type, context);
       context.inProgressNames.add(syntheticKey);
       context.emittedRefs.add(syntheticKey);
       return { "$ref": `#/$defs/${syntheticKey}` };
@@ -1366,7 +1437,7 @@ export class SchemaGenerator {
         // Only look up synthetic names if namedKey wasn't already set and we're
         // not in a wrapper context (to avoid storing wrapper results).
         const keyForDef = namedKey ??
-          (isWrapperContext ? undefined : this.#anonymousNames.get(type));
+          (isWrapperContext ? undefined : this.#anonymousName(type, context));
         if (keyForDef) {
           context.definitions[keyForDef] = result;
           context.inProgressNames.delete(keyForDef);
