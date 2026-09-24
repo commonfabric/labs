@@ -3,7 +3,7 @@ import { expect } from "@std/expect";
 import { join } from "@std/path/join";
 import { DevServer } from "./dev-server.ts";
 
-describe("dev-server", () => {
+describe("DevServer", () => {
   let outDir: string;
   let server: DevServer;
   let base: string;
@@ -38,17 +38,38 @@ describe("dev-server", () => {
     expect(response.headers.get("Cache-Control")).toBe("no-cache");
   });
 
-  it("marks the page and the reload script as needing revalidation", async () => {
-    for (const path of ["/", "/DEV_SOCKET.js"]) {
-      const response = await fetch(`${base}${path}`);
-      await response.body?.cancel();
+  it("marks the page as needing revalidation", async () => {
+    const response = await fetch(`${base}/`);
+    await response.body?.cancel();
 
-      expect(response.status).toBe(200);
-      expect(response.headers.get("Cache-Control")).toBe("no-cache");
-    }
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-cache");
   });
 
-  it("answers a revalidation of an unchanged file with 304", async () => {
+  it("marks the reload script as needing revalidation", async () => {
+    const response = await fetch(`${base}/DEV_SOCKET.js`);
+    await response.body?.cancel();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-cache");
+  });
+
+  it("redirects a directory path to its trailing-slash form", async () => {
+    const response = await fetch(`${base}/scripts`, { redirect: "manual" });
+    await response.body?.cancel();
+
+    expect(response.status).toBe(301);
+    expect(response.headers.get("Location")).toBe(`${base}/scripts/`);
+  });
+
+  it("serves the reload script that dials the port it bound", async () => {
+    const response = await fetch(`${base}/DEV_SOCKET.js`);
+    const script = await response.text();
+
+    expect(script).toContain(`port: ${server.addr.port}`);
+  });
+
+  it("returns 304 for a revalidation of an unchanged file", async () => {
     const first = await fetch(`${base}/scripts/index.js`);
     await first.body?.cancel();
     const etag = first.headers.get("ETag");
