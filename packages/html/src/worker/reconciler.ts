@@ -859,8 +859,8 @@ export class WorkerReconciler {
     if (!isCell(author)) {
       return undefined;
     }
-    // Text must be authored by every principal the author claim represents.
-    // A claim naming several has no single author, so no text can satisfy it.
+    // Text must carry `authored-by` for every principal the author claim
+    // represents, one atom per principal when it names several.
     const principals = this.#representedPrincipalsForCell(
       author as Cell<unknown>,
     );

@@ -35,20 +35,26 @@ const linkedProfileLabel = (sender: string, owner: string) => ({
 /**
  * A resolved cell whose document has not loaded: its label reads as missing
  * until `load()` delivers one to its subscribers, as the runtime does with an
- * update when the document arrives.
+ * update when the document arrives. Given `id`, it names that cell in its
+ * `ref()`, as a runtime cell handle does.
  */
-const unloadedCell = () => {
+const unloadedCell = (id?: string) => {
   let label: unknown;
   const subscribers = new Set<
     (value: unknown, cfcLabel?: unknown) => void
   >();
+  const options: ({ includeCfcLabel?: boolean } | undefined)[] = [];
   return {
+    ...(id === undefined
+      ? {}
+      : { ref: () => ({ space: "did:example:space", id, path: [] }) }),
     getCfcLabel: () => Promise.resolve(label),
     subscribe(
       callback: (value: unknown, cfcLabel?: unknown) => void,
-      _options?: { includeCfcLabel?: boolean },
+      subscribeOptions?: { includeCfcLabel?: boolean },
     ) {
       subscribers.add(callback);
+      options.push(subscribeOptions);
       callback(undefined, label);
       return () => {
         subscribers.delete(callback);
@@ -56,13 +62,25 @@ const unloadedCell = () => {
     },
     subscriberCount: () => subscribers.size,
 
+    /** Whether every subscription asked for its updates to carry labels. */
+    allAskedForLabels: () =>
+      options.length > 0 &&
+      options.every((option) => option?.includeCfcLabel === true),
+
     /** Delivers `next` as the label, and settles the reads it starts. */
     async load(next: unknown) {
       label = next;
       for (const callback of [...subscribers]) {
-        callback(undefined, label);
+        callback({ loaded: true }, label);
       }
       await new Promise((resolve) => setTimeout(resolve, 0));
+    },
+
+    /** Delivers a value with no label: a document that loaded unlabeled. */
+    loadWithoutLabel() {
+      for (const callback of [...subscribers]) {
+        callback({ loaded: true }, undefined);
+      }
     },
   };
 };
@@ -211,6 +229,7 @@ describe("CFCFCAuthorship", () => {
       await element.refreshLabel();
       expect(element.authorshipState).not.toBe("verified");
       expect(resolved.subscriberCount()).toBe(1);
+      expect(resolved.allAskedForLabels()).toBe(true);
 
       await resolved.load(cfcLabel);
 
@@ -239,6 +258,7 @@ describe("CFCFCAuthorship", () => {
       await element.refreshLabel();
       await element.refreshAuthorClaim();
       expect(element.authorshipState).not.toBe("verified");
+      expect(resolved.allAskedForLabels()).toBe(true);
 
       await resolved.load(
         linkedProfileLabel("did:example:alice", "did:example:alice"),
@@ -246,6 +266,78 @@ describe("CFCFCAuthorship", () => {
 
       expect(element.authorshipState).toBe("verified");
       expect(resolved.subscriberCount()).toBe(0);
+    } finally {
+      element.disconnectedCallback();
+    }
+  });
+
+  it("keeps one watch across reads while the resolved cell is unloaded", async () => {
+    const resolved = unloadedCell();
+    const element = connectedElement();
+
+    try {
+      element.author = "alice";
+      element.value = {
+        getCfcLabel: () => Promise.resolve(undefined),
+        resolveAsCell: () => Promise.resolve(resolved),
+      };
+
+      await element.refreshLabel();
+      await element.refreshLabel();
+      expect(resolved.subscriberCount()).toBe(1);
+
+      await resolved.load(authoredByLabel("alice"));
+
+      expect(resolved.subscriberCount()).toBe(0);
+    } finally {
+      element.disconnectedCallback();
+    }
+  });
+
+  it("stops watching a resolved cell that loads with no label", async () => {
+    const resolved = unloadedCell();
+    const element = connectedElement();
+
+    try {
+      element.author = "alice";
+      element.value = {
+        getCfcLabel: () => Promise.resolve(undefined),
+        resolveAsCell: () => Promise.resolve(resolved),
+      };
+
+      await element.refreshLabel();
+      expect(resolved.subscriberCount()).toBe(1);
+
+      resolved.loadWithoutLabel();
+
+      expect(resolved.subscriberCount()).toBe(0);
+      expect(element.authorshipState).toBe("unknown");
+    } finally {
+      element.disconnectedCallback();
+    }
+  });
+
+  it("moves the watch when the source resolves to a different cell", async () => {
+    const first = unloadedCell("first");
+    const second = unloadedCell("second");
+    let resolved = first;
+    const element = connectedElement();
+
+    try {
+      element.author = "alice";
+      element.value = {
+        getCfcLabel: () => Promise.resolve(undefined),
+        resolveAsCell: () => Promise.resolve(resolved),
+      };
+
+      await element.refreshLabel();
+      expect(first.subscriberCount()).toBe(1);
+
+      resolved = second;
+      await element.refreshLabel();
+
+      expect(first.subscriberCount()).toBe(0);
+      expect(second.subscriberCount()).toBe(1);
     } finally {
       element.disconnectedCallback();
     }

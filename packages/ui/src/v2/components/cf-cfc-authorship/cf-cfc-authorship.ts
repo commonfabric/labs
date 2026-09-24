@@ -176,12 +176,37 @@ interface LabelViewResult {
   /**
    * The resolved cell whose label the fallback `resolveAsCell()` path read and
    * got nothing back from, when that cell can be subscribed to. `getCfcLabel`
-   * is a non-blocking store read, so an empty result means the resolved cell's
-   * document is not loaded yet, and the caller watches this cell for the
-   * update that carries its label.
+   * is a non-blocking store read, so an empty result means either that the
+   * resolved cell's document is not loaded yet or that it carries no label,
+   * and the caller watches this cell to find out which.
    */
   readonly unloadedCell: CfcLabelSubscribableValue | undefined;
 }
+
+/** A source whose resolved cell's label the component can watch. */
+type LabelSource = "value" | "author";
+
+/** A watch on a resolved cell whose label read as missing. */
+interface LabelWatch {
+  /** Which cell is watched, as `cellTargetKey()` names it. */
+  readonly target: string | undefined;
+
+  /** Ends the subscription; unset until the subscription call returns. */
+  cancel: (() => void) | undefined;
+}
+
+/**
+ * The space, id and path of the cell `value` refers to, joined into one
+ * string, when it exposes a `ref()`; `undefined` otherwise.
+ */
+const cellTargetKey = (value: unknown): string | undefined => {
+  const ref = (value as { ref?: () => unknown }).ref?.();
+  if (!isObjectNotArray(ref)) {
+    return undefined;
+  }
+  const { space, id, path } = ref as Record<string, unknown>;
+  return JSON.stringify([space, id, path]);
+};
 
 const readLabelView = async (
   value: unknown,
@@ -541,11 +566,11 @@ export class CFCFCAuthorship extends BaseElement {
   private _unsubscribeValue: (() => void) | undefined;
   private _unsubscribeAuthor: (() => void) | undefined;
 
-  /** The subscription on `value`'s resolved cell while its label is unloaded. */
-  #valueLabelWatch: (() => void) | undefined;
-
-  /** The subscription on `author`'s resolved cell while its label is unloaded. */
-  #authorLabelWatch: (() => void) | undefined;
+  /** The watch on each source's resolved cell while its label reads as missing. */
+  #labelWatches: Record<LabelSource, LabelWatch | undefined> = {
+    value: undefined,
+    author: undefined,
+  };
 
   constructor() {
     super();
@@ -661,8 +686,7 @@ export class CFCFCAuthorship extends BaseElement {
     this._unsubscribeValue?.();
     this._unsubscribeValue = undefined;
     this._observedValue = undefined;
-    this.#valueLabelWatch?.();
-    this.#valueLabelWatch = undefined;
+    this.#endLabelWatch("value");
   }
 
   private observeAuthor(author: unknown): boolean {
@@ -693,8 +717,7 @@ export class CFCFCAuthorship extends BaseElement {
     this._unsubscribeAuthor?.();
     this._unsubscribeAuthor = undefined;
     this._observedAuthor = undefined;
-    this.#authorLabelWatch?.();
-    this.#authorLabelWatch = undefined;
+    this.#endLabelWatch("author");
   }
 
   async refreshLabel(): Promise<void> {
@@ -716,8 +739,8 @@ export class CFCFCAuthorship extends BaseElement {
       const previous = this.cfcLabel;
       this.cfcLabel = view;
       this.requestUpdate("cfcLabel", previous);
-      this.#valueLabelWatch = this.#watchUnloadedLabel(
-        this.#valueLabelWatch,
+      this.#watchUnloadedLabel(
+        "value",
         unloadedCell,
         () => void this.refreshLabel(),
       );
@@ -735,11 +758,7 @@ export class CFCFCAuthorship extends BaseElement {
       const previous = this._authorClaim;
       this._authorClaim = undefined;
       this.requestUpdate("author", previous);
-      this.#authorLabelWatch = this.#watchUnloadedLabel(
-        this.#authorLabelWatch,
-        undefined,
-        () => void this.refreshAuthorClaim(),
-      );
+      this.#endLabelWatch("author");
       return;
     }
 
@@ -766,8 +785,8 @@ export class CFCFCAuthorship extends BaseElement {
       const previous = this._authorClaim;
       this._authorClaim = authorClaim;
       this.requestUpdate("author", previous);
-      this.#authorLabelWatch = this.#watchUnloadedLabel(
-        this.#authorLabelWatch,
+      this.#watchUnloadedLabel(
+        "author",
         unloadedCell,
         () => void this.refreshAuthorClaim(),
       );
@@ -775,32 +794,62 @@ export class CFCFCAuthorship extends BaseElement {
   }
 
   /**
-   * The subscription that should watch `unloadedCell`, given `current`, the one
-   * in place. A label read through `resolveAsCell()` is a one-time store read,
-   * and this component's own subscriptions are on `value` and `author`, not on
-   * the cells they resolve to, so nothing else would re-run the read when that
-   * cell's document loads. While a cell is unloaded, the subscription re-runs
-   * `refresh` on the first update carrying a label, which ends the watch. It
-   * ends as well when the source changes or the element disconnects, and an
-   * element that is not connected starts none.
+   * Watches `unloadedCell`, the cell `source` resolves to, whose label read as
+   * missing, and runs `refresh` on each update that carries a label. A label
+   * read through `resolveAsCell()` is a one-time store read, and this
+   * component's own subscriptions are on `value` and `author`, not on the cells
+   * they resolve to, so nothing else would re-run the read when that cell's
+   * document loads. The watch ends when a re-read finds the label, on the
+   * first update that carries a value but no label (the document has loaded
+   * without one), when `source` resolves to a different cell or to none, and
+   * when the element disconnects. An element that is not connected starts
+   * none.
+   *
+   * The update carries a label only if this is the first subscription on the
+   * cell's backend key: the connection lets the first subscriber decide
+   * whether that key's updates carry labels.
    */
   #watchUnloadedLabel(
-    current: (() => void) | undefined,
+    source: LabelSource,
     unloadedCell: CfcLabelSubscribableValue | undefined,
     refresh: () => void,
-  ): (() => void) | undefined {
+  ): void {
     if (unloadedCell === undefined || !this.isConnected) {
-      current?.();
-      return undefined;
+      this.#endLabelWatch(source);
+      return;
     }
-    if (current !== undefined) {
-      return current;
+    const target = cellTargetKey(unloadedCell);
+    const current = this.#labelWatches[source];
+    if (current !== undefined && current.target === target) {
+      return;
     }
-    return unloadedCell.subscribe((_value, cfcLabel) => {
+    this.#endLabelWatch(source);
+
+    const watch: LabelWatch = { target, cancel: undefined };
+    this.#labelWatches[source] = watch;
+    const cancel = unloadedCell.subscribe((value, cfcLabel) => {
+      if (this.#labelWatches[source] !== watch) {
+        return;
+      }
       if (cfcLabel !== undefined) {
         refresh();
+      } else if (value !== undefined) {
+        this.#endLabelWatch(source);
       }
     }, { includeCfcLabel: true });
+    // The first delivery is synchronous, and may already have ended the watch.
+    if (this.#labelWatches[source] === watch) {
+      watch.cancel = cancel;
+    } else {
+      cancel();
+    }
+  }
+
+  /** Ends the watch on `source`'s resolved cell, if there is one. */
+  #endLabelWatch(source: LabelSource): void {
+    const watch = this.#labelWatches[source];
+    this.#labelWatches[source] = undefined;
+    watch?.cancel?.();
   }
 
   private renderAvatar(state: CfcAuthorshipState) {

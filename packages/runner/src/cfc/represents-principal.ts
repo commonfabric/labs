@@ -5,8 +5,8 @@
  * A trusted surface that checks an author claim asks this of the claim's
  * label: `cf-cfc-authorship` on the main thread, and the HTML renderer's text
  * integrity boundary in the worker. The module depends on nothing but the
- * label view's type, so that either can import it without the rest of the CFC
- * machinery.
+ * label view's type and `@commonfabric/utils`, so that either can import it
+ * without the rest of the CFC machinery.
  */
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { CfcLabelView } from "./label-view-core.ts";
