@@ -566,6 +566,7 @@ jobs:
             --junit-path=../../test-results/runner-${{ matrix.shard }}.xml \
             --allow-ffi \
             --allow-env \
+            --allow-net=127.0.0.1 \
             --allow-read \
             --allow-write=/tmp,/var/folders,$CF_TEST_RECORDS_DIR \
             --allow-run=git,deno,"$(deno eval "console.log(Deno.execPath())")" \
