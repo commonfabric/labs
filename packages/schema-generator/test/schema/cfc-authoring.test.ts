@@ -999,6 +999,25 @@ describe("Schema: CFC authoring aliases", () => {
     });
   });
 
+  it("lowers a parenthesized label", async () => {
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      interface SchemaRoot { t: Confidential<string, (readonly ["x"])> }
+    `,
+      "SchemaRoot",
+    );
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+
+    expect(schema.properties?.t).toEqual({
+      type: "string",
+      ifc: { confidentiality: ["x"] },
+    });
+  });
+
   describe("a canonical alias written as another's payload", () => {
     // A canonical alias reached by its own name reads its payload from the
     // reference's own argument node. Read from its type alone, the payload
@@ -1272,6 +1291,50 @@ describe("Schema: CFC authoring aliases", () => {
       );
       expect(schema.ifc).toEqual((authored.properties?.t as any)?.ifc);
       expect(schema.ifc).toEqual({ confidentiality: [undefined] });
+    });
+
+    it("reads an `AnyOf` brand whose member is required", async () => {
+      const { schema } = await generate(
+        `
+        type AnyOf<X extends readonly unknown[]> = { readonly __ct_cfc_any_of__: X };
+        type Labeled<L extends readonly unknown[]> = Confidential<string, L>;
+        interface Holder { value: Labeled<readonly [AnyOf<readonly ["x", "y"]>]> }
+      `,
+        BASE_ALIASES,
+      );
+      expect(schema.ifc).toEqual({
+        confidentiality: [{ anyOf: ["x", "y"] }],
+      });
+    });
+
+    it("reads a label element that is not a literal as its authored spelling does", async () => {
+      const { schema } = await generate(`
+        type Labeled<L extends readonly unknown[]> = Confidential<string, L>;
+        interface Holder { value: Labeled<readonly [string]> }
+      `);
+      const { type, checker } = await getTypeFromCode(
+        ALIASES + `
+        interface SchemaRoot { t: Confidential<string, readonly [string]> }
+      `,
+        "SchemaRoot",
+      );
+      const authored = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+      expect(schema.ifc).toEqual(
+        (authored.properties?.t as any)?.ifc,
+      );
+    });
+
+    it("keeps the type of a parenthesized alias payload", async () => {
+      const { schema } = await generate(`
+        type Outer<T> = Confidential<(Sec<T>), readonly ["b"]>;
+        interface Holder { value: Outer<string> }
+      `);
+      expect(schema).toEqual({
+        type: "string",
+        ifc: { confidentiality: ["a", "b"] },
+      });
     });
 
     it("lowers a label holding a parameter", async () => {
