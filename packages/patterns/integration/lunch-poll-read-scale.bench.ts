@@ -1,8 +1,8 @@
 /**
  * A rendered lunch-poll vote update across declared vote-list sizes.
  * Setup and an instrumented diagnostic vote are outside the timed interval;
- * timed votes run with read accounting disabled. This is the client-execution
- * arm and requires a matching local toolshed and shell.
+ * timed votes run with read accounting disabled. `EXPERIMENTAL_SERVER_EXECUTION`
+ * selects the arm and requires a matching local toolshed and shell.
  */
 
 import { debugStr } from "@commonfabric/data-model";
@@ -73,8 +73,18 @@ type DiagnosticGlobal = typeof globalThis & {
   lunchReadSample?: ReadSample;
 };
 
-/** Verifies that the server, served shell, and seeding process execute locally. */
+/**
+ * Verifies that the server, served shell, and seeding process all run the arm
+ * `EXPERIMENTAL_SERVER_EXECUTION` names, which must be set explicitly.
+ */
 async function verifyPosture(): Promise<void> {
+  const arm = Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION");
+  if (arm !== "true" && arm !== "false") {
+    throw new Error(
+      "Read-scale benchmark requires EXPERIMENTAL_SERVER_EXECUTION to be `true` or `false`",
+    );
+  }
+  const serving = arm === "true";
   const [metaResponse, statsResponse] = await Promise.all([
     fetch(new URL("api/meta", env.API_URL)),
     fetch(new URL("api/health/stats", env.API_URL)),
@@ -85,27 +95,27 @@ async function verifyPosture(): Promise<void> {
   const meta = await metaResponse.json();
   const stats = await statsResponse.json();
   if (
-    Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION") !== "false" ||
-    meta.experimental?.serverExecution !== false || stats.servingLoop != null
+    meta.experimental?.serverExecution !== serving ||
+    (stats.servingLoop != null) !== serving
   ) {
-    throw new Error("Read-scale benchmark requires explicit client execution");
+    throw new Error(`Toolshed does not run serverExecution=${arm}`);
   }
-  if (meta.shellServerExecutionDefine !== "false") {
+  if (meta.shellServerExecutionDefine !== arm) {
     const response = await fetch(new URL("scripts/index.js", env.FRONTEND_URL));
     const source = await response.text();
     if (
       !response.ok ||
       !source.includes(
-        'var EXPERIMENTAL_SERVER_EXECUTION_DEFINE = true ? "false" : void 0;',
+        `var EXPERIMENTAL_SERVER_EXECUTION_DEFINE = true ? "${arm}" : void 0;`,
       )
     ) {
       throw new Error(
-        "Cannot verify that the served shell selects client execution",
+        `Cannot verify that the served shell selects serverExecution=${arm}`,
       );
     }
   }
   note(
-    "[lunch-read-scale] verified toolshed, shell, and seed client: serverExecution=false",
+    `[lunch-read-scale] verified toolshed, shell, and seed client: serverExecution=${arm}`,
   );
 }
 
