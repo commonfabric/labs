@@ -5356,6 +5356,7 @@ const persistedLabelFromSchemaAtPath = (
   schema: JSONSchema,
   path: readonly string[],
   owningSpace: MemorySpace,
+  options: { mintSchemaIntegrity?: boolean } = {},
 ): IFCLabel | undefined => {
   const logicalPath = canonicalizeLogicalPath(path);
   const entries = cfcSchemaEntries(schema);
@@ -5382,6 +5383,7 @@ const persistedLabelFromSchemaAtPath = (
     match.label,
     entryLabels,
     owningSpace,
+    options,
   );
 };
 
@@ -5552,12 +5554,21 @@ const derivePersistedLinkLabel = (
       tx.getCfcState().trustSnapshot?.actingPrincipal,
     );
   }
+  // A source that is itself a reference staged in this transaction mints
+  // nothing for the principal staging it, as its own slot does not.
   let pendingSourceLabel = pendingSourceSchema !== undefined
     ? persistedLabelFromSchemaAtPath(
       tx,
       pendingSourceSchema,
       input.source.path,
       input.source.space,
+      {
+        mintSchemaIntegrity: !pathHoldsStagedReference(
+          tx,
+          input.source,
+          input.source.path,
+        ),
+      },
     )
     : undefined;
   if (pendingSourceSchema === undefined && sourceMetadata === undefined) {
@@ -5584,11 +5595,21 @@ const derivePersistedLinkLabel = (
           targetCandidate,
           tx.getCfcState().trustSnapshot?.actingPrincipal,
         );
+        // A reference the runtime staged at the target is not the inline
+        // value this derivation stands for, so it mints nothing for the
+        // principal staging it.
         pendingSourceLabel = persistedLabelFromSchemaAtPath(
           tx,
           pendingSourceSchema,
           input.target.path,
           input.target.space,
+          {
+            mintSchemaIntegrity: !pathHoldsStagedReference(
+              tx,
+              input.target,
+              input.target.path,
+            ),
+          },
         );
       }
     }

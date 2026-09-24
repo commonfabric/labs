@@ -464,6 +464,79 @@ describe("reference-initialization", () => {
       expect(authorsAt(argument, ["element"])).toEqual([signer.did()]);
     });
 
+    /**
+     * As `stager`, stages the owner's message into a first argument, then that
+     * argument's `element` into a second one, in one transaction.
+     */
+    async function stageChainAsStager(secondSchema: JSONSchema) {
+      actingPrincipal = stager.did();
+      const stage = runtime.edit();
+      const first = runtime.getCell(space, "first", argumentSchema, stage);
+      first.set({
+        element: runtime.getCell(space, "inbox", undefined, stage)
+          .key("message").asSchema(entrySchema),
+      });
+      recordReferencedArgumentFields(
+        stage,
+        first.getAsNormalizedFullLink(),
+        ["element"],
+      );
+      const second = runtime.getCell(space, "second", secondSchema, stage);
+      second.set({ element: first.key("element") });
+      recordReferencedArgumentFields(
+        stage,
+        second.getAsNormalizedFullLink(),
+        ["element"],
+      );
+      runtime.prepareTxForCommit(stage);
+      return {
+        error: (await stage.commit()).error,
+        second: second.getAsNormalizedFullLink(),
+      };
+    }
+
+    it("stores no authorship for the staging principal on a reference staged from another staged reference", async () => {
+      await initializeOwnersMessage();
+      const { error, second } = await stageChainAsStager(argumentSchema);
+
+      expect(error).toBeUndefined();
+      expect(authorsAt(second, ["element"])).not.toContain(stager.did());
+    });
+
+    it("refuses an integrity floor that only the staging principal's authorship would meet on a reference staged from another staged reference", async () => {
+      await initializeOwnersMessage();
+      const { error } = await stageChainAsStager({
+        type: "object",
+        properties: {
+          element: {
+            ...entrySchema,
+            ifc: {
+              ...entrySchema.ifc,
+              requiredIntegrity: [{
+                kind: "authored-by",
+                subject: stager.did(),
+              }],
+            },
+          },
+        },
+      });
+
+      expect(error?.message).toContain("write floor failed at /element");
+    });
+
+    it("stores no authorship for the staging principal on a reference to an entry created in the same transaction", async () => {
+      // The entry is written outside the slot's writer, so the slot's schema
+      // does not describe how it was written.
+
+      const { error, argument } = await stageAsStager(
+        argumentSchema,
+        (tx) => entryCell(tx, "fresh", "a"),
+      );
+
+      expect(error).toBeUndefined();
+      expect(authorsAt(argument, ["element"])).not.toContain(stager.did());
+    });
+
     it("refuses an integrity floor at the slot that only authorship minted for the staging principal would meet", async () => {
       await initializeOwnersMessage();
       const flooredEntry: JSONSchemaObj = {

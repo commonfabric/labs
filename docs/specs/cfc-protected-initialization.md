@@ -74,9 +74,11 @@ The receiving slot's schema is the entry's own, so it can declare integrity the
 entry's writer adds, such as authorship by the current principal. Staging a
 link writes none of that content, so preparation mints none of that integrity
 for the principal staging it: not on the slot's declared label, not on the
-link's label, and not toward an integrity floor at the slot. The link carries
-its source's label and the `LinkReference` a link write mints, so a reader
-reaching the entry through the link sees the entry's own authorship.
+link's label, and not toward an integrity floor at the slot. The same holds for
+a label derived for the link's source when that source is itself a reference
+staged in the transaction. The link carries its source's label and the
+`LinkReference` a link write mints, so a reader reaching the entry through the
+link sees the entry's own authorship.
 
 ## Authorization and transaction evidence
 
