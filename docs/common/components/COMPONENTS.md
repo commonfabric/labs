@@ -1082,22 +1082,23 @@ document, `$policy` to a cell holding the room's custody policy reference, and
 and `Resource` atoms in the actor's home space.
 
 The button opens a native modal dialog. Its first part comes from what the
-runtime read and checked, not from anything the pattern renders: the room
-space; who can read it now, and so see the answer, including the room space's
-own key; the seats; the policy that decides what comes out, shown by the
-manifest digest the actor's trust configuration names, beside the symbol and
-module the room's reference names; and which of the actor's sources go in. Each
-reader, seat and the room is shown in a bidirectionally isolated element of its
-own, with the dialog's annotations (`you`, `no seat`, `Anyone`) as separate
-elements beside it. The room's owners can add readers after the seal, and the
-dialog says so. Its second part, set apart, is what the room's terms say:
-the `question` and the `answers` the terms list, and, for `k` distinct answers,
-the bound of `log₂ k` bits on what one of them reveals. Nothing checks that the
-room's policy releases only the listed answers, so the dialog states the bound
-as conditional on it. Room-authored text is shown with control, format
-(direction overrides and zero-width characters among them) and line-separator
-characters removed and is capped in length. The exact sealed
-values and the terms are under a collapsed details section.
+runtime read and checked, not from anything the pattern renders: the room space;
+who can read it now, and so see the answer, including the room space's own key;
+the seats; the policy that decides what comes out, shown by the manifest digest
+a statement in the runtime's trust configuration names (the host declares it,
+and an attach cannot change it), beside the symbol and module the room's
+reference names; and which of the actor's sources go in. Each reader, seat and
+the room is shown in a bidirectionally isolated element of its own, with the
+dialog's annotations (`you`, `no seat`, `Anyone`) as separate elements beside
+it. The room's owners can add readers after the seal, and the dialog says so.
+Its second part, set apart, is what the room's terms say: the `question` and the
+`answers` the terms list, and, for `k` distinct answers, the bound of `log₂ k`
+bits on what one of them reveals. Nothing checks that the room's policy releases
+only the listed answers, so the dialog states the bound as conditional on it.
+Room-authored text is shown with control, format (direction overrides and
+zero-width characters among them) and line-separator characters removed and is
+capped in length. The exact sealed values and the terms are under a collapsed
+details section.
 
 The actor confirms with one trusted browser gesture on **Seal & consent**; a
 scripted click cannot seal. Changing a binding, dismissing the dialog, or

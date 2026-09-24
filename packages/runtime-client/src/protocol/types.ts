@@ -958,7 +958,10 @@ export type InitializeRequest = BaseRequest & {
  * one origin are one posture.
  *
  * **Every field here holds plain JSON-shaped values only.** They are compared
- * with `deepEqual`, which compares a class instance by its enumerable own
+ * with `deepEqual`, except `cfcTrustConfig`, which is compared by the digest
+ * the runner gives the configuration it normalizes (`buildCfcTrustConfig`), so
+ * key order and keys written as `undefined` do not refuse an attach. `deepEqual`
+ * compares a class instance by its enumerable own
  * properties -- so a `FabricValue`-carrying field would compare EQUAL between
  * two different values whose state lives in private fields, and an attach
  * asserting a different one would be accepted. A field that must carry such a

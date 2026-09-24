@@ -447,17 +447,17 @@ client API and wire shapes.
 
 ## 9. Custody seal and trust configuration
 
-A host declares the trust statements its worker runtime evaluates concept
-guards under with `RuntimeClientOptions.cfcTrustConfig`, which reaches the
-worker as `InitializationData.cfcTrustConfig` and the runtime as
+A host declares the trust statements its worker runtime evaluates concept guards
+under with `RuntimeClientOptions.cfcTrustConfig`, which reaches the worker as
+`InitializationData.cfcTrustConfig` and the runtime as
 `RuntimeOptions.cfcTrustConfig`. A default profile that trusts a reviewed
 custody policy as a trusted declassifier is one statement naming that policy's
 exact `policyDigest` and one delegation to its verifier. The configuration is
 part of the runtime's security context, so an attach asserting another one is
 refused. Configurations compare by the digest the runner gives the configuration
 it normalizes, so key order, a key written as `undefined`, and an empty list
-written out or left out do not refuse an attach. Absent, no concept guard is satisfied and every custody seal is
-refused.
+written out or left out do not refuse an attach. Absent a trust configuration,
+no concept guard is satisfied and every custody seal is refused.
 
 `RuntimeClient.prepareCustodySeal({ draft, terms, policy, allowedSources })`
 prepares a [custody seal](../specs/cfc-custody-seal.md). Each field is a cell
