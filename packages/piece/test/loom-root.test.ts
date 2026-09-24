@@ -397,6 +397,93 @@ describe("loom-root", () => {
     );
   }
 
+  /**
+   * Deploys the real profile-home pattern, as `own_profile` names a person's
+   * Fabric profile: its result document holds each field as a redirect link
+   * to the cell that stores it.
+   */
+  const deployProfileHome = async (cause: string): Promise<Cell<unknown>> => {
+    const program = await resolveLocalProgram(
+      runtime.harness.resolve.bind(runtime.harness),
+      {
+        root: fromFileUrl(new URL("../../patterns/", import.meta.url)),
+        main: fromFileUrl(
+          new URL("../../patterns/system/profile-home.tsx", import.meta.url),
+        ),
+      },
+    );
+    const compiled = await runtime.patternManager.compilePattern(program, {
+      space: pieces.getSpace(),
+    });
+    const home = await pieces.runPersistent(
+      compiled,
+      { initialName: "Home" },
+      cause,
+    );
+    await runtime.idle();
+    return home;
+  };
+
+  /** A plain document labeled with integrity only. */
+  const writePlainProfile = async (id: string): Promise<Cell<unknown>> => {
+    const tx = runtime.edit();
+    const profile = runtime.getCell(pieces.getSpace(), id, profileSchema, tx);
+    profile.set({ name: "Plain" });
+    const result = await tx.commit();
+    if (result.error) throw result.error;
+    return profile;
+  };
+
+  /** The subjects the panel's declared entry at exactly the field names. */
+  const declaredAdders = (panel: Cell<unknown>): string[] => {
+    const read = runtime.edit();
+    const entries = (readStoredCfcMetadata(
+      read,
+      panel.getAsNormalizedFullLink(),
+    )?.labelMap.entries ?? []) as readonly LabelEntry[];
+    read.abort();
+    return representedSubjects(
+      entries.filter((entry) =>
+        entry.origin !== "link" &&
+        entry.path.length === 1 && entry.path[0] === "addedByProfile"
+      ),
+    );
+  };
+
+  it("labels the adder whether `as` names a plain document or a profile-home profile", async () => {
+    const plain = await writePlainProfile("loom-root-plain-control");
+    const home = await deployProfileHome("loom-root-profile-home");
+    const output = root.asSchema(rootSchema);
+    const addPiece = await output.key("addPiece").pull();
+    for (const [index, profile] of [plain, home].entries()) {
+      await sendAndSettle(
+        addPiece,
+        {
+          piece: runtime.getCell(
+            pieces.getSpace(),
+            `loom-root-as-target-${index}`,
+          ),
+          as: profile,
+        },
+        `add-as-${index}`,
+      );
+      await runtime.idle();
+    }
+    const panels = (await output.key("panels").pull()).map((panel) =>
+      panel.resolveAsCell()
+    );
+    expect(panels.length).toBe(2);
+    // Both panels link the profile they were added under.
+    expect(panels[0].key("addedByProfile").resolveAsCell().equals(plain))
+      .toBe(true);
+    expect(panels[1].key("addedByProfile").resolveAsCell().equals(home))
+      .toBe(true);
+    // The control: a plain labeled document is stamped today.
+    expect(declaredAdders(panels[0])).toEqual([signer.did()]);
+    // The profile-home profile must be stamped the same way.
+    expect(declaredAdders(panels[1])).toEqual([signer.did()]);
+  });
+
   it("keeps each panel's adder and profile owner with that panel when an earlier panel is removed or the list is reordered", async () => {
     // The middle panel is added under no profile, so a label that stayed with
     // a list position instead of its element would show up on it.
