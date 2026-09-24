@@ -1049,7 +1049,9 @@ the per-epic implementation notes).
   byte-identical to before the dial existed; `observe` evaluates the gated
   labels to a fixpoint and emits diagnostics while still deciding on the
   un-rewritten label; `enforce` decides on the rewritten label and fails closed
-  when the evaluation runs out of fuel.
+  when the evaluation runs out of fuel. The dial governs the commit and sink
+  gates; the display boundary evaluates whenever `cfcRenderCeiling` is on, as
+  its own switch.
 - **Current default and planned end state.** `enforce` by default, which is
   where the dial rests.
 - **Status on 2026-09-17.** Implemented and rolled out.
@@ -1410,17 +1412,26 @@ the per-epic implementation notes).
 - **Purpose.** Populates the CFC render confidentiality ceiling in the shell's
   runtime. Display sinks admit the acting user's identity and personal-space
   atoms plus allow-listed influence-class caveat kinds. Before the fit check,
-  the worker resolves shared `Space` labels through verified reader membership;
-  a delegate's access to the session workspace requires its own membership
-  evidence. Confidentiality the ceiling does not satisfy stays blocked, and
-  author-supplied render-boundary declassification is denied.
+  the worker resolves shared `Space` labels through verified reader membership,
+  and runs the exchange rules of any module policy (`PolicyOf`) a label
+  selects, reading that policy's manifest from the space the label is stored
+  in and verifying its digest; a delegate's access to the session workspace requires its own
+  membership evidence. Confidentiality the ceiling does not satisfy stays
+  blocked, and author-supplied render-boundary declassification is denied.
 - **Current default and planned end state.** On by default; a browser profile
   opts out with `commonfabric.cfcRenderCeiling(false)`, which is what the
   `cfcRenderCeiling` localStorage key records. The end state is to remove the
   toggle and make the ceiling unconditional.
-- **Status on 2026-09-08.** Exchange resolution is implemented. Where reader
-  membership is required, missing or unsynced ACL evidence keeps the content
-  blocked; a reader grant admits it and a revocation blocks it again.
+- **Status on 2026-09-23.** Exchange resolution is implemented, including
+  module policies. Where reader membership is required, missing or unsynced
+  ACL evidence keeps the content blocked; a reader grant admits it and a
+  revocation blocks it again. A module policy whose manifest is missing, has
+  not synced, or fails verification keeps its content blocked until a
+  verifying manifest arrives. A rule guarded on reader membership of a subject
+  held in commitment form, as it is on a value copied across spaces, releases
+  only to a viewer whose membership in that subject the render boundary
+  already verified for another reason: the viewer's own or session space, or
+  a `Space` atom the same label names. The commitment is never opened.
 - **Path to removal.** Retire the opt-out once no profile needs it, then make
   the ceiling unconditional.
 

@@ -334,7 +334,11 @@ is off in the core preset and on in the maximum-enforcement bundle; the
 render ceiling, which mints that membership fact
 (`packages/runner/src/cfc/render-ceiling.ts`), is complete and ships as
 a browser toggle. Where the bundle is on, the rule above is consulted;
-in the core preset it is carried.
+in the core preset it is carried. The display boundary consults it
+wherever the render ceiling is on, reading the manifest the label pins
+from the space the label is stored in, so the owner and each verified
+reader of the policy's subject space see the value and nobody else does
+(`packages/runtime-client/test/backends/render-audience.test.ts`).
 
 The stored label never loosens. Under `cfcDeclaredMonotonicity: "enforce"`
 a re-mint that drops a clause is refused, naming the document, the path
