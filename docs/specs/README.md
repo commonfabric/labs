@@ -79,6 +79,7 @@ decision is reversed or superseded).
 - [Label-metadata confidentiality](cfc-label-metadata-confidentiality.md)
 - [Observation classes](cfc-observation-classes.md)
 - [Persisted declassification](cfc-persisted-declassification.md)
+- [Sealed custody](cfc-custody-seal.md)
 - [Range-scoped integrity](cfc-range-scoped-integrity.md)
 - [Render-boundary composition](cfc-render-boundary-composition.md)
 - [Runner future work](cfc-runner-future-work.md)

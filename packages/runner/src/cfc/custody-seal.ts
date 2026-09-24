@@ -1,0 +1,1032 @@
+/**
+ * Seals an actor's reviewed value into the custody of a trusted declassifier:
+ * a module policy `P` whose release rules admit only what that module's
+ * endorsed code computes over values this host operation wrote. This module is
+ * absent from authored pattern imports; the trusted host drives it from a
+ * confirmation dialog, as it drives `share-snapshot.ts`.
+ *
+ * One instance of a custody room is `(P, D)`: `P` names the room's policy with
+ * the room space `S` as its subject, and `D` is the digest of the room's
+ * terms. Each seal writes one entry into the instance's box, a single document
+ * in `S` whose every location carries `TransformedBy{builtin cfc-custody-seal}`,
+ * so a transformation that reads the whole box earns the input witness
+ * (`docs/specs/cfc-transformed-by-input-witnesses.md`) and a transformation
+ * that reads anything else beside it does not.
+ *
+ * Entries are keyed by a blinded key, a digest of the actor's signature over
+ * `(P, D)`, and neither the entry's value nor its label names the actor. The
+ * key is deterministic for one actor and unpredictable to anyone without the
+ * actor's signing key, which is what lets the seal refuse a second entry by
+ * the same actor without telling the room who sealed. What the blinding does
+ * not hide, and the rest of the contract, is
+ * `docs/specs/cfc-custody-seal.md`.
+ */
+
+import type { JSONValue } from "@commonfabric/api";
+import {
+  CFC_ATOM_TYPE,
+  type CfcAtom,
+  cfcAtom,
+  type CfcModulePolicyRefAtom,
+} from "@commonfabric/api/cfc";
+import { debugStr, hashStringOf } from "@commonfabric/data-model";
+import { isDID } from "@commonfabric/identity/did";
+import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { isObjectNotArray } from "@commonfabric/utils/types";
+
+import type { Cell } from "../cell.ts";
+import type { NormalizedFullLink } from "../link-utils.ts";
+import type {
+  IExtendedStorageTransaction,
+  IMemorySpaceAddress,
+} from "../storage/interface.ts";
+import { internalVerifierRead } from "../storage/reactivity-log.ts";
+import {
+  type CfcConfClause,
+  clauseAlternatives,
+  clausesEqual,
+} from "./clause.ts";
+import { readStoredCfcMetadata } from "./metadata.ts";
+import { cfcPolicyManifestDocId } from "./policy.ts";
+import { collectConsumedLabel } from "./prepare.ts";
+import { CfcReadCeilingError } from "./read-ceiling.ts";
+import { snapshotJsonValue } from "./share-snapshot-value.ts";
+import { createTrustResolver } from "./trust.ts";
+import { isRendererTrustedEvent } from "./ui-contract.ts";
+
+/** Builtin implementation identity that alone may write a custody box. */
+export const CUSTODY_SEAL_WRITER = "cfc-custody-seal";
+
+/**
+ * Trust concept a room's policy must satisfy, under the actor's own trust
+ * closure, before the actor's value may enter its custody.
+ */
+export const TRUSTED_DECLASSIFIER_CONCEPT =
+  "https://commonfabric.org/cfc/concepts/trusted-declassifier";
+
+/** The `provenance.ui.pattern` mark of the host's confirmation gesture. */
+export const CUSTODY_SEAL_GESTURE = "CustodySeal";
+
+/** The room a value is sealed into. */
+export interface CustodyRoom {
+  /**
+   * The room's write-once terms document. Its space is the room space `S`.
+   * The terms are a JSON object naming at least `seats`, the DIDs that may
+   * seal, and `stanceSchema`, the instruction-inert schema every sealed value
+   * satisfies; the rest is displayed to the actor and sealed with the value.
+   */
+  readonly terms: Cell<unknown>;
+
+  /** The room's custody policy; its subject must be the room space. */
+  readonly policy: CfcModulePolicyRefAtom;
+}
+
+/** Host-supplied bounds on what the actor may seal into this room. */
+export interface CustodySealOptions {
+  /**
+   * The actor's own `Context` and `Resource` sources this room may draw on,
+   * read by the host from actor-private settings. When present, a value
+   * whose label names any other source is refused.
+   */
+  readonly allowedSources?: readonly CfcAtom[];
+}
+
+/** Type-only brand for host-held consent objects. */
+declare const consentBrand: unique symbol;
+
+/** One-use seal authority held only by the trusted host. */
+export interface CustodySealConsent {
+  /** Nominal token whose identity is verified against a private registry. */
+  readonly [consentBrand]: true;
+}
+
+/** Frozen preview for the trusted host's confirmation dialog. */
+export interface PreparedCustodySeal {
+  /** Exact value that enters custody. */
+  readonly stance: JSONValue;
+
+  /** Terms the value is sealed under, exactly as they are sealed. */
+  readonly terms: JSONValue;
+
+  /** The instance `D`: the digest of the terms. */
+  readonly instance: string;
+
+  /** The room's custody policy, with the room space as its subject. */
+  readonly policy: CfcModulePolicyRefAtom;
+
+  /** The actor's `Context` and `Resource` sources the value draws on. */
+  readonly sources: readonly CfcAtom[];
+
+  /** One-use authority bound to this preview and authenticated actor. */
+  readonly consent: CustodySealConsent;
+}
+
+/** What a committed seal wrote. */
+export interface CustodySealResult {
+  /** The instance's box, in the room space. */
+  readonly box: Cell<unknown>;
+
+  /** The blinded key of the actor's entry in the box. */
+  readonly entryKey: string;
+
+  /** The actor-private receipt, in the actor's home space. */
+  readonly receipt: Cell<unknown>;
+}
+
+/** A read whose content the commit re-verifies. */
+interface ReadEvidence {
+  readonly address: IMemorySpaceAddress;
+  readonly digest: string;
+}
+
+/** Everything one inspection establishes. */
+interface Inspection {
+  readonly actor: string;
+  readonly room: string;
+  readonly draftLink: NormalizedFullLink;
+  readonly termsLink: NormalizedFullLink;
+  readonly stance: JSONValue;
+  readonly terms: JSONValue;
+  readonly instance: string;
+  readonly policy: CfcModulePolicyRefAtom;
+  readonly sources: readonly CfcAtom[];
+  readonly entryKey: string;
+  readonly evidence: readonly ReadEvidence[];
+}
+
+/** Runtime-owned state behind an opaque consent token. */
+interface ConsentState extends Inspection {
+  readonly draft: Cell<unknown>;
+  readonly requestedRoom: CustodyRoom;
+  readonly options: CustodySealOptions;
+  readonly eventId: string;
+}
+
+const consents = new WeakMap<CustodySealConsent, ConsentState>();
+
+const MODULE_POLICY_KEYS = [
+  "type",
+  "policyRefKind",
+  "moduleIdentity",
+  "symbol",
+  "policyDigest",
+  "subject",
+] as const;
+
+const STANCE_SCHEMA_MAX_DEPTH = 8;
+
+const STANCE_SCHEMA_KEYS = new Set([
+  "type",
+  "const",
+  "enum",
+  "properties",
+  "required",
+  "additionalProperties",
+  "minimum",
+  "maximum",
+  "title",
+  "description",
+]);
+
+const ENTRY_KEY_DOMAIN = "cfc-custody-seal/entry-key/v1\n";
+
+const SEALED_BY = {
+  type: CFC_ATOM_TYPE.TransformedBy,
+  identity: { kind: "builtin", builtinId: CUSTODY_SEAL_WRITER },
+};
+
+/** Whether `value` is a record with exactly the keys named. */
+const hasExactKeys = (
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean =>
+  Object.keys(value).length === keys.length &&
+  keys.every((key) => Object.hasOwn(value, key));
+
+/**
+ * Whether one confidentiality alternative stands for the actor alone. Each
+ * shape is matched on its exact key set, so an atom carrying any further
+ * field (a `hash` binding a named policy, a `scope`) is never the actor's.
+ */
+const isActorOwnedAlternative = (atom: unknown, actor: string): boolean => {
+  if (typeof atom === "string") return atom === actor;
+  if (!isObjectNotArray(atom)) return false;
+  switch (atom.type) {
+    case CFC_ATOM_TYPE.User:
+      return hasExactKeys(atom, ["type", "subject"]) &&
+        atom.subject === actor;
+    case CFC_ATOM_TYPE.Context:
+      return hasExactKeys(atom, ["type", "name", "subject"]) &&
+        typeof atom.name === "string" && atom.subject === actor;
+    case CFC_ATOM_TYPE.Resource:
+      return hasExactKeys(atom, ["type", "class", "subject"]) &&
+        typeof atom.class === "string" && atom.subject === actor;
+    default:
+      return false;
+  }
+};
+
+/**
+ * The DID an alternative would stand for if it were an actor-owned shape, for
+ * naming an identity mismatch, or `undefined` when it has no such shape.
+ */
+const ownerShapedSubject = (atom: unknown): string | undefined => {
+  if (typeof atom === "string") return isDID(atom) ? atom : undefined;
+  if (!isObjectNotArray(atom) || typeof atom.subject !== "string") {
+    return undefined;
+  }
+  const exact = atom.type === CFC_ATOM_TYPE.User
+    ? hasExactKeys(atom, ["type", "subject"])
+    : atom.type === CFC_ATOM_TYPE.Context
+    ? hasExactKeys(atom, ["type", "name", "subject"])
+    : atom.type === CFC_ATOM_TYPE.Resource
+    ? hasExactKeys(atom, ["type", "class", "subject"])
+    : false;
+  return exact && isDID(atom.subject) ? atom.subject : undefined;
+};
+
+/**
+ * Checks that every clause of the draft's label is the actor's own, and
+ * returns the `Context` and `Resource` sources it draws on.
+ *
+ * @throws If a clause is empty, carries a caveat, names another principal, or
+ *   holds any alternative that is not the actor's own.
+ */
+const actorOwnedSources = (
+  confidentiality: readonly CfcConfClause[],
+  actor: string,
+): CfcAtom[] => {
+  const sources: CfcAtom[] = [];
+  for (const clause of confidentiality) {
+    const alternatives = clauseAlternatives(clause);
+    if (alternatives.length === 0) {
+      throw new Error(
+        "Custody seal refuses an unsatisfiable clause; sealing it would open it",
+      );
+    }
+    if (
+      alternatives.some((atom) =>
+        isObjectNotArray(atom) && atom.type === CFC_ATOM_TYPE.Caveat
+      )
+    ) {
+      throw new Error(
+        debugStr`Custody seal refuses a value that still carries a caveat: $quote${clause}`,
+      );
+    }
+    if (alternatives.every((atom) => isActorOwnedAlternative(atom, actor))) {
+      for (const atom of alternatives) {
+        if (
+          isObjectNotArray(atom) &&
+          (atom.type === CFC_ATOM_TYPE.Context ||
+            atom.type === CFC_ATOM_TYPE.Resource) &&
+          !sources.some((source) => deepEqual(source, atom))
+        ) sources.push(atom as CfcAtom);
+      }
+      continue;
+    }
+    const other = alternatives.map(ownerShapedSubject)
+      .find((subject) => subject !== undefined && subject !== actor);
+    if (other !== undefined) {
+      throw new Error(
+        `Custody seal identity mismatch: the value is labeled for \`${other}\`, and this runtime acts as \`${actor}\``,
+      );
+    }
+    throw new Error(
+      debugStr`Custody seal refuses a clause the authenticated actor does not own: $quote,long${clause}`,
+    );
+  }
+  return sources;
+};
+
+/**
+ * Checks that `value` satisfies `schema`, and that `schema` admits only
+ * instruction-inert values: booleans, bounded numbers, constants, and
+ * enumerated primitives, composed by closed objects. Arrays are refused; a
+ * multiple choice is an object of booleans.
+ *
+ * @throws If the schema admits free text or any other open-ended leaf, or if
+ *   the value does not satisfy it.
+ */
+const checkInertStance = (
+  schema: unknown,
+  value: unknown,
+  path: readonly (string | number)[] = [],
+): void => {
+  const at = `/${path.join("/")}`;
+  const refuse = (reason: string): never => {
+    throw new Error(
+      `Custody seal requires an instruction-inert stance: ${reason} at \`${at}\``,
+    );
+  };
+  if (path.length > STANCE_SCHEMA_MAX_DEPTH) refuse("the schema is too deep");
+  if (!isObjectNotArray(schema)) refuse("the schema is not an object");
+  const node = schema as Record<string, unknown>;
+  for (const key of Object.keys(node)) {
+    if (!STANCE_SCHEMA_KEYS.has(key)) {
+      refuse(`the schema keyword \`${key}\` is not allowed`);
+    }
+  }
+  const isPrimitive = (entry: unknown) =>
+    entry === null || typeof entry === "string" ||
+    typeof entry === "boolean" ||
+    (typeof entry === "number" && Number.isFinite(entry));
+  if (Object.hasOwn(node, "const")) {
+    if (!isPrimitive(node.const)) refuse("`const` is not a primitive");
+    if (!deepEqual(value, node.const)) refuse("the value is not the constant");
+    return;
+  }
+  if (Object.hasOwn(node, "enum")) {
+    if (
+      !Array.isArray(node.enum) || node.enum.length === 0 ||
+      !node.enum.every(isPrimitive)
+    ) refuse("`enum` is not a list of primitives");
+    if (!(node.enum as unknown[]).some((entry) => deepEqual(entry, value))) {
+      refuse("the value is not one of the enumerated values");
+    }
+    return;
+  }
+  switch (node.type) {
+    case "boolean":
+      if (typeof value !== "boolean") refuse("the value is not a boolean");
+      return;
+    case "null":
+      if (value !== null) refuse("the value is not `null`");
+      return;
+    case "number":
+    case "integer": {
+      const { minimum, maximum } = node;
+      if (
+        typeof minimum !== "number" || typeof maximum !== "number" ||
+        !Number.isFinite(minimum) || !Number.isFinite(maximum)
+      ) refuse("a number needs a finite `minimum` and `maximum`");
+      if (
+        typeof value !== "number" || !Number.isFinite(value) ||
+        value < (minimum as number) || value > (maximum as number) ||
+        (node.type === "integer" && !Number.isInteger(value))
+      ) refuse("the value is outside the number's bounds");
+      return;
+    }
+    case "object": {
+      const { properties, required } = node;
+      if (!isObjectNotArray(properties)) refuse("an object needs `properties`");
+      if (node.additionalProperties !== false) {
+        refuse("an object needs `additionalProperties: false`");
+      }
+      if (
+        required !== undefined &&
+        (!Array.isArray(required) ||
+          !required.every((key) =>
+            typeof key === "string" &&
+            Object.hasOwn(properties as object, key)
+          ))
+      ) refuse("`required` names a key the object does not declare");
+      if (!isObjectNotArray(value)) refuse("the value is not an object");
+      const record = value as Record<string, unknown>;
+      for (const key of (required as string[] | undefined) ?? []) {
+        if (!Object.hasOwn(record, key)) refuse(`\`${key}\` is missing`);
+      }
+      for (const [key, entry] of Object.entries(record)) {
+        if (!Object.hasOwn(properties as object, key)) {
+          refuse(`\`${key}\` is not declared`);
+        }
+        checkInertStance(
+          (properties as Record<string, unknown>)[key],
+          entry,
+          [...path, key],
+        );
+      }
+      return;
+    }
+    default:
+      refuse(debugStr`the type $quote${node.type} admits open-ended values`);
+  }
+};
+
+/**
+ * Checks the terms' shape and the actor's seat, returning the stance schema.
+ *
+ * @throws If the terms name no seats or no stance schema, or if the actor
+ *   holds no seat.
+ */
+const checkTerms = (terms: JSONValue, actor: string): unknown => {
+  if (!isObjectNotArray(terms)) {
+    throw new Error("Custody terms must be an object");
+  }
+  const { seats, stanceSchema } = terms as Record<string, unknown>;
+  if (
+    !Array.isArray(seats) || seats.length === 0 ||
+    !seats.every((seat) => typeof seat === "string" && isDID(seat)) ||
+    new Set(seats).size !== seats.length
+  ) {
+    throw new Error("Custody terms must name `seats` as distinct DIDs");
+  }
+  if (!(seats as readonly string[]).includes(actor)) {
+    throw new Error(
+      `Custody seal refuses \`${actor}\`: the terms give it no seat`,
+    );
+  }
+  if (stanceSchema === undefined) {
+    throw new Error("Custody terms must name a `stanceSchema`");
+  }
+  return stanceSchema;
+};
+
+/**
+ * Validates the room's policy reference and pins its subject to the room
+ * space.
+ *
+ * @throws If the reference is not an exact module policy reference, or its
+ *   subject is not the room space.
+ */
+const checkPolicy = (
+  policy: unknown,
+  room: string,
+): CfcModulePolicyRefAtom => {
+  if (
+    !isObjectNotArray(policy) || !hasExactKeys(policy, MODULE_POLICY_KEYS) ||
+    policy.type !== CFC_ATOM_TYPE.Policy || policy.policyRefKind !== "module" ||
+    typeof policy.moduleIdentity !== "string" ||
+    typeof policy.symbol !== "string" ||
+    typeof policy.policyDigest !== "string"
+  ) {
+    throw new Error("Custody seal requires an exact module policy reference");
+  }
+  if (policy.subject !== room) {
+    throw new Error(
+      debugStr`Custody seal refuses a policy whose subject $quote${policy.subject} is not the room space $quote${room}`,
+    );
+  }
+  return cfcAtom.modulePolicyRef(
+    policy.moduleIdentity,
+    policy.symbol,
+    policy.policyDigest,
+    room,
+  );
+};
+
+/**
+ * The policy as a schema declares it: the runtime substitutes the owning
+ * space for the subject, so a declaration in the room space names the room.
+ */
+const declaredPolicy = (policy: CfcModulePolicyRefAtom) => ({
+  ...policy,
+  subject: { __ctOwningSpace: true },
+});
+
+/**
+ * `value` as JSON with every object's keys sorted, so equal terms serialize to
+ * equal bytes. Terms are sealed into each entry as this one string: a leaf,
+ * which no write below it can alter, and which a consumer compares across
+ * entries byte for byte.
+ */
+const canonicalJson = (value: JSONValue): string =>
+  JSON.stringify(
+    value,
+    (_key, entry: unknown) =>
+      isObjectNotArray(entry)
+        ? Object.fromEntries(
+          Object.keys(entry).sort().map((key) => [key, entry[key]]),
+        )
+        : entry,
+  );
+
+/** Records every read of an inspection transaction with its content digest. */
+const readEvidence = (tx: IExtendedStorageTransaction): ReadEvidence[] => {
+  const reads = tx.getReadActivities?.();
+  if (reads === undefined) {
+    throw new Error("Custody seal requires a verifiable read journal");
+  }
+  return [...reads].map((read) => {
+    const address: IMemorySpaceAddress = {
+      space: read.space,
+      id: read.id,
+      type: read.type,
+      scope: read.scope,
+      path: [...read.path],
+    };
+    return {
+      address,
+      digest: hashStringOf(
+        tx.readOrThrow(address, { meta: internalVerifierRead }),
+      ),
+    };
+  });
+};
+
+/**
+ * Whether the document at `link` is absent, or its root was written by the
+ * seal. Anyone can address a box, so a box some other code created first is
+ * refused rather than trusted to carry the seal's policy.
+ */
+const absentOrSealed = (
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+): boolean => {
+  if (
+    tx.readValueOrThrow({ ...link, path: [] }, {
+      meta: internalVerifierRead,
+    }) ===
+      undefined
+  ) return true;
+  return (readStoredCfcMetadata(tx, link)?.labelMap.entries ?? []).some(
+    (entry) =>
+      entry.path.length === 0 && entry.origin === "derived" &&
+      (entry.label.integrity ?? []).some((atom) => deepEqual(atom, SEALED_BY)),
+  );
+};
+
+/**
+ * Whether the anchor at `link` is absent, or carries exactly the clause the
+ * seal gives it and no other. An anchor some other code created with another
+ * label would taint every entry, or leave it unattributed.
+ */
+const absentOrAnchor = (
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  clause: CfcConfClause,
+): boolean => {
+  if (
+    tx.readValueOrThrow({ ...link, path: [] }, {
+      meta: internalVerifierRead,
+    }) ===
+      undefined
+  ) return true;
+  const labeled = (readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [])
+    .filter((entry) => (entry.label.confidentiality ?? []).length > 0);
+  return labeled.length > 0 &&
+    labeled.every((entry) =>
+      entry.path.length === 0 && entry.origin === "declared" &&
+      entry.label.confidentiality!.length === 1 &&
+      clausesEqual(entry.label.confidentiality![0] as CfcConfClause, clause)
+    );
+};
+
+/** The clause the anchor carries: the room's policy, or the room's readers. */
+const anchorClause = (policy: CfcModulePolicyRefAtom): CfcConfClause => ({
+  anyOf: [policy, cfcAtom.space(policy.subject as string)],
+});
+
+/** The instance's box, in the room space. */
+const boxCell = (
+  runtime: Cell<unknown>["runtime"],
+  policy: CfcModulePolicyRefAtom,
+  instance: string,
+  tx?: IExtendedStorageTransaction,
+) =>
+  runtime.getCell<Record<string, JSONValue>>(
+    policy.subject as never,
+    { custodyBox: { policy, instance } },
+    {
+      type: "object",
+      ifc: {
+        confidentiality: [declaredPolicy(policy)],
+        writeAuthorizedBy: [CUSTODY_SEAL_WRITER],
+      },
+      // Each entry repeats the writer claim, and names no type: a claim
+      // whose schema names a type governs only writes of values of that type.
+      additionalProperties: {
+        ifc: {
+          confidentiality: [declaredPolicy(policy)],
+          writeAuthorizedBy: [CUSTODY_SEAL_WRITER],
+        },
+      },
+    } as never,
+    tx,
+  );
+
+/**
+ * The instance's anchor: a seal-written constant each seal reads before it
+ * writes. The read makes the sealing transaction's flow join nonempty, which
+ * is what attributes its writes to the seal (`TransformedBy` is minted only
+ * over a nonempty join), and the anchor's clause admits nothing the box's own
+ * declared policy does not already bound.
+ */
+const anchorCell = (
+  runtime: Cell<unknown>["runtime"],
+  policy: CfcModulePolicyRefAtom,
+  instance: string,
+  tx?: IExtendedStorageTransaction,
+) =>
+  runtime.getCell<JSONValue>(
+    policy.subject as never,
+    { custodyAnchor: { policy, instance } },
+    {
+      additionalProperties: {
+        ifc: { writeAuthorizedBy: [CUSTODY_SEAL_WRITER] },
+      },
+      ifc: {
+        confidentiality: [{
+          anyOf: [
+            declaredPolicy(policy),
+            cfcAtom.space(policy.subject as string),
+          ],
+        }],
+        writeAuthorizedBy: [CUSTODY_SEAL_WRITER],
+      },
+    } as never,
+    tx,
+  );
+
+/**
+ * The actor's blinded entry key for an instance: a digest of the actor's
+ * signature over `(P, D)`. Ed25519 signatures are deterministic, so the key
+ * is stable for the actor across devices, and it is unpredictable to anyone
+ * without the actor's signing key, including other members who know the
+ * actor's DID.
+ *
+ * @throws If the runtime's storage signer is not the actor, or it signs the
+ *   same message two ways.
+ */
+const blindedEntryKey = async (
+  runtime: Cell<unknown>["runtime"],
+  actor: string,
+  policy: CfcModulePolicyRefAtom,
+  instance: string,
+): Promise<string> => {
+  const signer = runtime.storageManager.as;
+  if (signer.did() !== actor) {
+    throw new Error(
+      `Custody seal requires the storage signer \`${signer.did()}\` to be the acting principal \`${actor}\``,
+    );
+  }
+  const message = new TextEncoder().encode(
+    ENTRY_KEY_DOMAIN + hashStringOf({ policy, instance }),
+  );
+  const sign = async () => {
+    const { ok, error } = await signer.sign(message as never);
+    if (error || !ok) {
+      throw new Error("Custody seal could not sign its entry key", {
+        cause: error,
+      });
+    }
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new Uint8Array(ok),
+    );
+    return toUnpaddedBase64url(new Uint8Array(digest));
+  };
+  const first = await sign();
+  if (first !== await sign()) {
+    throw new Error("Custody seal requires a deterministic signer");
+  }
+  return first;
+};
+
+/** Reads the draft, the terms, and the room's state, and checks them all. */
+const inspect = async (
+  draft: Cell<unknown>,
+  requestedRoom: CustodyRoom,
+  options: CustodySealOptions,
+): Promise<Inspection> => {
+  const runtime = draft.runtime;
+  if (requestedRoom.terms.runtime !== runtime) {
+    throw new Error("Custody seal handles must belong to the same runtime");
+  }
+  await Promise.all([draft.sync(), requestedRoom.terms.sync()]);
+
+  const draftTx = runtime.edit();
+  let actor: string;
+  let draftLink: NormalizedFullLink;
+  let stance: JSONValue;
+  let sources: CfcAtom[];
+  const evidence: ReadEvidence[] = [];
+  try {
+    const acting = draftTx.getCfcState().trustSnapshot?.actingPrincipal;
+    if (!isDID(acting)) {
+      throw new Error("Custody seal requires an authenticated actor");
+    }
+    actor = acting;
+    draftLink = draft.withTx(draftTx).resolveAsCell().getAsNormalizedFullLink();
+    stance = snapshotJsonValue(draft.withTx(draftTx).get());
+    sources = actorOwnedSources(
+      collectConsumedLabel(draftTx).confidentiality,
+      actor,
+    );
+    evidence.push(...readEvidence(draftTx));
+  } finally {
+    draftTx.abort();
+  }
+  if (options.allowedSources !== undefined) {
+    const allowed = options.allowedSources;
+    const refused = sources.find((source) =>
+      !allowed.some((entry) => deepEqual(entry, source))
+    );
+    if (refused !== undefined) {
+      throw new Error(
+        debugStr`Custody seal refuses a source this room does not allow: $quote,long${refused}`,
+      );
+    }
+  }
+
+  const termsTx = runtime.edit();
+  let termsLink: NormalizedFullLink;
+  let terms: JSONValue;
+  let policy: CfcModulePolicyRefAtom;
+  let room: string;
+  try {
+    termsLink = requestedRoom.terms.withTx(termsTx).resolveAsCell()
+      .getAsNormalizedFullLink();
+    room = termsLink.space;
+    if (!isDID(room)) {
+      throw new Error("Custody terms must live in a space named by a DID");
+    }
+    policy = checkPolicy(requestedRoom.policy, room);
+    terms = snapshotJsonValue(requestedRoom.terms.withTx(termsTx).get());
+    // Terms are copied into every entry, so they may carry only what the
+    // room's readers already hold: a clause admitting the room space, or the
+    // room's own policy.
+    for (const clause of collectConsumedLabel(termsTx).confidentiality) {
+      if (
+        !clauseAlternatives(clause).some((atom) =>
+          deepEqual(atom, cfcAtom.space(room)) || deepEqual(atom, policy)
+        )
+      ) {
+        throw new Error(
+          debugStr`Custody terms carry a clause the room's readers do not hold: $quote,long${clause}`,
+        );
+      }
+    }
+    evidence.push(...readEvidence(termsTx));
+  } finally {
+    termsTx.abort();
+  }
+  const manifest = runtime.getCellFromEntityId(
+    room,
+    cfcPolicyManifestDocId(policy.policyDigest),
+  );
+  await manifest.sync();
+  const manifestTx = runtime.edit();
+  try {
+    if (!runtime.resolveCfcPolicyManifest(policy, manifestTx, room, false)) {
+      throw new Error(
+        debugStr`Custody seal refuses a policy not installed in the room space: $quote${policy.policyDigest}`,
+      );
+    }
+  } finally {
+    manifestTx.abort();
+  }
+  checkInertStance(checkTerms(terms, actor), stance);
+  if (
+    !createTrustResolver(runtime.cfcTrustConfig).conceptSatisfied(
+      TRUSTED_DECLASSIFIER_CONCEPT,
+      [policy],
+      actor,
+    )
+  ) {
+    throw new Error(
+      debugStr`Custody seal refuses a policy the actor does not trust as a declassifier: $quote,long${policy}`,
+    );
+  }
+
+  const instance = hashStringOf(terms);
+  const entryKey = await blindedEntryKey(runtime, actor, policy, instance);
+  const box = boxCell(runtime, policy, instance);
+  await box.sync();
+  const boxTx = runtime.edit();
+  try {
+    const entry = boxTx.readValueOrThrow({
+      ...box.getAsNormalizedFullLink(),
+      path: [entryKey],
+    }, { meta: internalVerifierRead });
+    if (entry !== undefined) {
+      throw new Error("Custody seal refuses a second entry for this actor");
+    }
+    if (!absentOrSealed(boxTx, box.getAsNormalizedFullLink())) {
+      throw new Error("Custody seal refuses a box the seal did not create");
+    }
+  } finally {
+    boxTx.abort();
+  }
+  return {
+    actor,
+    room: policy.subject as string,
+    draftLink,
+    termsLink,
+    stance,
+    terms,
+    instance,
+    policy,
+    sources,
+    entryKey,
+    evidence,
+  };
+};
+
+/**
+ * Prepares a seal of `draft` into `room` for the host's confirmation dialog.
+ * The preview is exactly what the commit writes; the consent it returns is
+ * good for one commit.
+ *
+ * @throws If the value is not entirely the actor's own, is not instruction
+ *   inert, draws on a source the room does not allow, or the room's policy is
+ *   malformed, untrusted, not the room space's, or not installed there, or the
+ *   actor holds no seat or has already sealed.
+ */
+export async function prepareCustodySeal(
+  draft: Cell<unknown>,
+  room: CustodyRoom,
+  options: CustodySealOptions = {},
+): Promise<PreparedCustodySeal> {
+  const inspected = await inspect(draft, room, options);
+  const consent = Object.freeze({}) as CustodySealConsent;
+  consents.set(consent, {
+    ...inspected,
+    draft: draft.withTx(undefined),
+    requestedRoom: room,
+    options: Object.freeze({
+      ...(options.allowedSources !== undefined && {
+        allowedSources: structuredClone(options.allowedSources),
+      }),
+    }),
+    eventId: crypto.randomUUID(),
+  });
+  return Object.freeze({
+    stance: inspected.stance,
+    terms: inspected.terms,
+    instance: inspected.instance,
+    policy: inspected.policy,
+    sources: inspected.sources,
+    consent,
+  });
+}
+
+/**
+ * Writes the reviewed entry after a host-trusted seal gesture: first the
+ * actor-private receipt in the actor's home space, then the entry in the
+ * box. A transaction writes one space, so the two are separate commits, and
+ * the receipt is written first so that no entry exists without one; a receipt
+ * whose entry is absent records a seal whose commit failed.
+ *
+ * @throws If the consent is unknown or spent, the gesture is not the host's,
+ *   anything reviewed changed, the anchor is withheld from this runtime, or
+ *   the actor's entry exists.
+ */
+export async function commitCustodySeal(
+  consent: CustodySealConsent,
+  event: unknown,
+): Promise<CustodySealResult> {
+  const state = consents.get(consent);
+  if (!state) {
+    throw new Error("Custody seal consent is unknown or already consumed");
+  }
+  consents.delete(consent);
+  if (
+    !isRendererTrustedEvent(event) || !isObjectNotArray(event) ||
+    !isObjectNotArray(event.provenance) || event.provenance.origin !== "dom" ||
+    event.provenance.trusted !== true ||
+    !isObjectNotArray(event.provenance.ui) ||
+    event.provenance.ui.pattern !== CUSTODY_SEAL_GESTURE
+  ) {
+    throw new Error("Custody seal requires a trusted host seal gesture");
+  }
+  const current = await inspect(
+    state.draft,
+    state.requestedRoom,
+    state.options,
+  );
+  if (
+    current.actor !== state.actor ||
+    !deepEqual(current.stance, state.stance) ||
+    !deepEqual(current.terms, state.terms) ||
+    current.instance !== state.instance ||
+    !deepEqual(current.policy, state.policy) ||
+    !deepEqual(current.sources, state.sources) ||
+    !deepEqual(current.draftLink, state.draftLink) ||
+    !deepEqual(current.termsLink, state.termsLink) ||
+    current.entryKey !== state.entryKey
+  ) {
+    throw new Error("Custody seal review is stale; review the value again");
+  }
+  const runtime = state.draft.runtime;
+  const { actor, policy, instance, entryKey } = state;
+
+  const receiptTx = runtime.edit();
+  let receipt: Cell<unknown>;
+  try {
+    receiptTx.setCfcImplementationIdentity({
+      kind: "builtin",
+      builtinId: CUSTODY_SEAL_WRITER,
+    });
+    receipt = runtime.getCell(actor as never, {
+      custodySealReceipt: state.eventId,
+    }, {
+      type: "object",
+      additionalProperties: {
+        ifc: { writeAuthorizedBy: [CUSTODY_SEAL_WRITER] },
+      },
+      ifc: {
+        confidentiality: [cfcAtom.user(actor)],
+        writeAuthorizedBy: [CUSTODY_SEAL_WRITER],
+      },
+    }, receiptTx);
+    receipt.set({
+      eventId: state.eventId,
+      policy,
+      instance,
+      entryKey,
+      sources: state.sources,
+      stanceDigest: hashStringOf(state.stance),
+      draftId: state.draftLink.id,
+    });
+    receiptTx.markCreateOnly?.(receipt.getAsNormalizedFullLink());
+    const result = await receiptTx.commit();
+    if (result.error) {
+      throw new Error(`Custody seal receipt failed: ${result.error.message}`);
+    }
+  } catch (error) {
+    receiptTx.abort();
+    throw error;
+  }
+
+  const anchor = anchorCell(runtime, policy, instance);
+  await anchor.sync();
+  const anchorLink = anchor.getAsNormalizedFullLink();
+  const anchorExists = () => {
+    const tx = runtime.edit();
+    try {
+      return tx.readValueOrThrow(anchorLink, { meta: internalVerifierRead }) !==
+        undefined;
+    } finally {
+      tx.abort();
+    }
+  };
+  if (!anchorExists()) {
+    const anchorTx = runtime.edit();
+    anchorTx.setCfcImplementationIdentity({
+      kind: "builtin",
+      builtinId: CUSTODY_SEAL_WRITER,
+    });
+    anchor.withTx(anchorTx).set({ instance });
+    anchorTx.markCreateOnly?.(anchorLink);
+    const created = await anchorTx.commit();
+    // A concurrent seal may have created it first; either way it now exists.
+    if (created.error && !anchorExists()) {
+      throw new Error(
+        `Custody seal could not create its anchor: ${created.error.message}`,
+      );
+    }
+  }
+
+  const tx = runtime.edit();
+  try {
+    if (tx.getCfcState().trustSnapshot?.actingPrincipal !== actor) {
+      throw new Error("Custody seal actor changed after review");
+    }
+    for (const read of current.evidence) {
+      const stored = tx.readOrThrow(read.address, {
+        meta: internalVerifierRead,
+      });
+      if (hashStringOf(stored) !== read.digest) {
+        throw new Error("Custody seal review changed before commit");
+      }
+    }
+    tx.setCfcImplementationIdentity({
+      kind: "builtin",
+      builtinId: CUSTODY_SEAL_WRITER,
+    });
+    if (!absentOrAnchor(tx, anchorLink, anchorClause(policy))) {
+      throw new Error("Custody seal refuses an anchor the seal did not create");
+    }
+    const box = boxCell(runtime, policy, instance, tx);
+    const boxLink = box.getAsNormalizedFullLink();
+    if (!absentOrSealed(tx, boxLink)) {
+      throw new Error("Custody seal refuses a box the seal did not create");
+    }
+    // The one labeled read in this transaction: it attributes the entry's
+    // writes to the seal. Every other read is a verifier read, so neither the
+    // draft's clauses nor anyone else's reach the entry.
+    try {
+      anchor.withTx(tx).get();
+    } catch (error) {
+      if (error instanceof CfcReadCeilingError) {
+        throw new Error(
+          "Custody seal requires a runtime whose read ceiling admits the room's custody",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    const entryLink = { ...boxLink, path: [entryKey] };
+    if (tx.readValueOrThrow(entryLink, { meta: internalVerifierRead })) {
+      throw new Error("Custody seal refuses a second entry for this actor");
+    }
+    box.key(entryKey).set({
+      instance,
+      terms: canonicalJson(state.terms),
+      stance: state.stance,
+    });
+    const result = await tx.commit();
+    if (result.error) {
+      throw new Error(`Custody seal failed: ${result.error.message}`);
+    }
+    return {
+      box: box.withTx(undefined) as Cell<unknown>,
+      entryKey,
+      receipt: receipt.withTx(undefined),
+    };
+  } catch (error) {
+    tx.abort();
+    throw error;
+  }
+}

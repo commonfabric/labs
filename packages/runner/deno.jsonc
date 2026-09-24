@@ -61,6 +61,7 @@
     "./toolshed-http-auth": "./src/toolshed-http-auth.ts",
     "./cfc": "./src/cfc/mod.ts",
     "./cfc/share-snapshot": "./src/cfc/share-snapshot.ts",
+    "./cfc/custody-seal": "./src/cfc/custody-seal.ts",
     "./cfc/owner-adoption": "./src/cfc/owner-adoption.ts",
     "./cfc/clause": "./src/cfc/clause.ts",
     "./cfc/label-view-core": "./src/cfc/label-view-core.ts",
