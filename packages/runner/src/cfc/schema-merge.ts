@@ -607,27 +607,34 @@ const mergeSchemaNode = (
   // are recursive definitions meeting themselves; resolving them again would
   // not terminate, so they merge as references from there down. Against an
   // inline schema a reference resolves at every depth, since the inline side
-  // runs out.
+  // runs out. A reference whose body declares no `ifc` has no claim to lose
+  // and stays a reference.
   const bothReferences = typeof left.$ref === "string" &&
     typeof right.$ref === "string";
   const pair = `${left.$ref ?? ""}\u0000${right.$ref ?? ""}`;
   let childReferences = references;
   if (
     references !== undefined &&
-    !(bothReferences && references.active.has(pair)) &&
-    (referenceIsShadowed(left, right) || referenceIsShadowed(right, left))
+    !(bothReferences && references.active.has(pair))
   ) {
-    childReferences = bothReferences
-      ? {
-        definitions: references.definitions,
-        active: new Set([...references.active, pair]),
+    const policyRoot = { $defs: references.definitions };
+    const resolveLeft = referenceIsShadowed(left, right) &&
+      hasReachableIfc(left, policyRoot);
+    const resolveRight = referenceIsShadowed(right, left) &&
+      hasReachableIfc(right, policyRoot);
+    if (resolveLeft || resolveRight) {
+      childReferences = bothReferences
+        ? {
+          definitions: references.definitions,
+          active: new Set([...references.active, pair]),
+        }
+        : references;
+      if (resolveLeft) {
+        left = resolveReferenceSide(left, references.definitions);
       }
-      : references;
-    if (typeof left.$ref === "string") {
-      left = resolveReferenceSide(left, references.definitions);
-    }
-    if (typeof right.$ref === "string") {
-      right = resolveReferenceSide(right, references.definitions);
+      if (resolveRight) {
+        right = resolveReferenceSide(right, references.definitions);
+      }
     }
   }
 
@@ -803,6 +810,25 @@ function hasReachableConfidentiality(
   schema: JSONSchema,
   root: JSONSchema,
 ): boolean {
+  return hasReachableIfc(
+    schema,
+    root,
+    (ifc) =>
+      Array.isArray(ifc.confidentiality) && ifc.confidentiality.length > 0,
+  );
+}
+
+/**
+ * Whether an `ifc` that `declares` accepts is reachable from `schema`,
+ * following references without unfolding their cycles. A reference that does
+ * not resolve counts as reaching one.
+ */
+function hasReachableIfc(
+  schema: JSONSchema,
+  root: JSONSchema,
+  declares: (ifc: Record<string, unknown>) => boolean = (ifc) =>
+    Object.keys(ifc).length > 0,
+): boolean {
   const pending = [{ schema, root }];
   const visited = new Map<object, Set<object>>();
   while (pending.length > 0) {
@@ -821,8 +847,7 @@ function hasReachableConfidentiality(
     if (!isObjectNotArray(resolved)) continue;
     if (
       isObjectNotArray(resolved.ifc) &&
-      Array.isArray(resolved.ifc.confidentiality) &&
-      resolved.ifc.confidentiality.length > 0
+      declares(resolved.ifc as Record<string, unknown>)
     ) return true;
     const childRoot = resolved !== schema
       ? cfcSchemaResolvedRoot(resolved, resolveCfcSchemaRefRoot(schema, root))
