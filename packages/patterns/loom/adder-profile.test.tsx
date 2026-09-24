@@ -44,6 +44,15 @@ export default pattern(() => {
   const addUrlNamingAdder = action(() =>
     loom.addPanel.send({ panel: url, addedBy: alice })
   );
+  // An occurrence that names its adder by DID takes no profile besides.
+  const claimed = new Writable<Panel>({
+    kind: "url",
+    url: "https://example.com/claimed-adder",
+    addedBy: alice,
+  });
+  const addClaimedAsMember = action(() =>
+    loom.addPanel.send({ panel: claimed, as: member })
+  );
   const addUrlAsMember = action(() =>
     loom.addPanel.send({ panel: url, as: member })
   );
@@ -99,7 +108,7 @@ export default pattern(() => {
     // refused event as a runtime error.
     allowConsoleWarnings: true,
     allowRuntimeErrors: true,
-    expectRuntimeErrors: 5,
+    expectRuntimeErrors: 6,
     [TESTS]: [
       { action: addPieceAsMember },
       {
@@ -111,7 +120,13 @@ export default pattern(() => {
       },
       { action: addPieceNamingBoth },
       { action: addUrlNamingAdder },
-      { assertion: assert(() => loom.panels.length === 1) },
+      { action: addClaimedAsMember },
+      {
+        assertion: assert(() =>
+          loom.panels.length === 1 &&
+          claimed.get().addedByProfile === undefined
+        ),
+      },
       { action: addUrlAsMember },
       {
         assertion: assert(() =>
