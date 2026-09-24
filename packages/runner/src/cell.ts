@@ -4487,10 +4487,14 @@ function maybeConvertArrayPathToDataURILink(
  * read back through `get()` is not, so matching one by content can never find
  * it: a removal would remove nothing and an add would add a duplicate.
  *
+ * A cell's Reactive proxy (`getAsReactiveProxy()`) carries the same `toCell`
+ * back-pointer a view does, but it is the cell itself and matches by link, so
+ * only a value that is not a cell is refused.
+ *
  * @throws For a query-result view, naming the cell forms to pass instead.
  */
 function refuseElementReadBack(method: string, value: unknown): void {
-  if (isCellResultForDereferencing(value)) {
+  if (!isCell(value) && isCellResultForDereferencing(value)) {
     throw new Error(
       `\`Cell.${method}()\` takes an element's cell or a plain value, not a ` +
         "value read back through `get()`\n" +
