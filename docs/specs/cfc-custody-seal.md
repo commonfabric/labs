@@ -52,9 +52,11 @@ established the checks are compared against the committing transaction.
   When an owner-shaped alternative names another DID, the refusal names both
   DIDs. That makes a stance labeled under a rotated key diagnosable: the seal
   never accepts an alternate or mapped DID.
-- **The sources are allowed.** When the host supplies `allowedSources`, which
-  it reads from the actor's private settings, every `Context` and `Resource`
-  the draft draws on must be among them. The preview lists these sources.
+- **The sources are allowed.** The host must supply `allowedSources`, which it
+  reads from the actor's private settings, and every `Context` and `Resource`
+  the draft draws on must be among them. An empty list admits only a value
+  labeled for the actor alone, as a value the actor typed in is. The preview
+  lists these sources.
 - **The value is instruction-inert.** `stanceSchema` may admit only booleans,
   `null`, numbers with a finite `minimum` and `maximum`, `const` and `enum`
   primitives, and closed objects of these, at most eight levels deep. It admits
@@ -67,7 +69,10 @@ established the checks are compared against the committing transaction.
   whose subject is `S`, and its manifest must be installed in `S`.
 - **The actor trusts `P`.** Under the actor's trust closure, `P` must satisfy
   the concept `https://commonfabric.org/cfc/concepts/trusted-declassifier`. The
-  closure is built from `RuntimeOptions.cfcTrustConfig`.
+  closure is built from `RuntimeOptions.cfcTrustConfig`, and only from the
+  statements whose pattern names `P`'s exact `policyDigest`. A manifest's
+  `moduleIdentity` and `symbol` are written by its author, so a statement that
+  leaves the digest open would be met by any manifest that copies them.
 - **The actor has not sealed this instance.**
 
 ## What the seal writes
@@ -83,9 +88,11 @@ A transaction writes one space, so the seal commits twice.
    `{instance: D, terms, stance}`. `terms` is the terms serialized as JSON with
    sorted keys, so that a consumer can compare entries byte for byte.
 
-The box and each entry declare the confidentiality `[P]`. The box is
-`writeAuthorizedBy` the builtin identity `cfc-custody-seal`, and each entry
-repeats that claim with no `type`. A claim whose schema names a type governs
+Each entry declares the confidentiality `[P]`. The box root's own label is the
+anchor's clause, `P ∨ Space(S)`, which the seal's read carries there when it
+creates the box; so the box's key set, and with it the number of seals, is
+readable by the room's readers. The box is `writeAuthorizedBy` the builtin
+identity `cfc-custody-seal`, and each entry repeats that claim with no `type`. A claim whose schema names a type governs
 only writes of values of that type, and a claim on the root alone does not
 reach writes below it.
 
@@ -99,7 +106,13 @@ D}}`, labeled `P ∨ Space(S)`. The anchor is created in a transaction of its
 own the first time it is needed. The read makes every location the seal writes
 carry `TransformedBy{builtin cfc-custody-seal}`, the root included when the
 seal creates the box. The anchor's clause fits the room space's residency
-ceiling and admits no reader the entry's declared `[P]` does not already bound.
+ceiling, and on an entry it sits beside the entry's declared `[P]`, which still
+bounds who reads the entry.
+
+Anyone who can read the terms can compute both addresses, so the seal refuses a
+box whose root the seal did not write, and an anchor whose value is not the
+seal's constant or whose label is not exactly `P ∨ Space(S)`. An anchor holding
+a link would otherwise carry its target's clauses into every entry.
 
 The consequence is the property a release rule relies on. A transformation that
 reads the whole box mints
@@ -146,6 +159,15 @@ of it.
   to read the same labels on every member's runtime.
 - **Retry.** Consent is in memory and single-use. A receipt without an entry is
   not resumed.
+- **Sealing into more than one instance.** One entry per actor holds per
+  instance. Anyone who can write in `S` can create further terms documents,
+  each a new instance under the same `P`, and an actor who seals into several
+  lets whoever controls those instances difference the releases. Showing the
+  actor their earlier seals, from their receipts, is the host dialog's job.
+- **Which seat wrote an entry.** The entries do not name their actors, so the
+  releasing code can compare the number of entries with the number of seats,
+  not the set of writers with the set of seats. That count is sound only while
+  each seat seals once and only seats can seal.
 - **Freezing the room's readers.** Whoever can read `S` when a released value
   is rendered is its audience. Keeping the audience at the seats, whether with
   a room access list fixed at the first seal or with a render fact that admits

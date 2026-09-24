@@ -16,7 +16,8 @@ import {
   commitCustodySeal,
   type CustodyRoom,
   type CustodySealConsent,
-  prepareCustodySeal,
+  type CustodySealOptions,
+  prepareCustodySeal as prepareWithOptions,
   TRUSTED_DECLASSIFIER_CONCEPT,
 } from "../src/cfc/custody-seal.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
@@ -118,6 +119,13 @@ const TERMS = {
 };
 
 const SEAL_IDENTITY = { kind: "builtin", builtinId: "cfc-custody-seal" };
+
+/** Prepares with no sources allowed beyond the actor's own `User` clauses. */
+const prepareCustodySeal = (
+  draft: Cell<unknown>,
+  room: CustodyRoom,
+  options: CustodySealOptions = { allowedSources: [] },
+) => prepareWithOptions(draft, room, options);
 
 const PROJECT: ImplementationIdentity = {
   kind: "verified",
@@ -500,7 +508,8 @@ describe("cfc-custody-seal", () => {
             "an entry's terms",
             (cell) => cell.key(entryKey).key("terms").set("{}"),
           ],
-          ["an entry, removed", (cell) => cell.set({})],
+          ["every entry, removed", (cell) => cell.set({})],
+          ["an entry, removed", (cell) => cell.key(entryKey).set(undefined)],
         ];
         const outcomes: Record<string, boolean> = {};
         for (const [where, write] of writes) {
@@ -584,6 +593,51 @@ describe("cfc-custody-seal", () => {
         } finally {
           await fixture.dispose();
         }
+      }
+    });
+
+    it("refuses an anchor other code created with the seal's own label but a link for its value", async () => {
+      // The anchor's label is right; its value redirects to a document
+      // labeled for another member, whose clause the seal's read would carry
+      // into every entry.
+      const fixture = await setup();
+      try {
+        const instance = hashStringOf(TERMS);
+        const runtime = fixture.runtimes.get(alice)!;
+        await syncManifest(runtime);
+        const tx = runtime.edit();
+        tx.setCfcImplementationIdentity({
+          kind: "verified",
+          moduleIdentity: "sha256:attacker",
+          symbol: "squat",
+          bindingPath: ["squat"],
+        });
+        const target = runtime.getCell(S, "bob-tagged", {
+          type: "object",
+          ifc: {
+            confidentiality: [{
+              anyOf: [cfcAtom.space(S), cfcAtom.user(bob.did())],
+            }],
+          },
+        } as never, tx);
+        target.set({ instance } as never);
+        runtime.getCell(S, { custodyAnchor: { policy: P, instance } }, {
+          type: "object",
+          ifc: {
+            confidentiality: [{
+              anyOf: [
+                { ...P, subject: { __ctOwningSpace: true } },
+                cfcAtom.space(S),
+              ],
+            }],
+          },
+        } as never, tx).setRaw(target.getAsWriteRedirectLink() as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        await expect(fixture.seal(alice)).rejects.toThrow(
+          /anchor the seal did not create/,
+        );
+      } finally {
+        await fixture.dispose();
       }
     });
 
@@ -772,6 +826,38 @@ describe("cfc-custody-seal", () => {
         } finally {
           await fixture.dispose();
         }
+      }
+    });
+
+    it("refuses a trust statement that leaves the manifest digest open", async () => {
+      // A manifest's module identity and symbol are its author's to write, so
+      // a statement naming only those two is met by anyone's manifest.
+      const concrete = { ...TRUST.statements![0].concrete as object };
+      delete (concrete as { policyDigest?: unknown }).policyDigest;
+      const fixture = await setup({
+        trust: {
+          ...TRUST,
+          statements: [{ ...TRUST.statements![0], concrete }],
+        },
+      });
+      try {
+        const draft = await fixture.draft(alice, honestStance);
+        await expect(prepareCustodySeal(draft, fixture.room(alice)))
+          .rejects.toThrow(/does not trust as a declassifier/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a preparation that names no allowed sources", async () => {
+      const fixture = await setup();
+      try {
+        const draft = await fixture.draft(alice, honestStance);
+        await expect(
+          prepareWithOptions(draft, fixture.room(alice), undefined as never),
+        ).rejects.toThrow(/allowed sources/);
+      } finally {
+        await fixture.dispose();
       }
     });
 
@@ -975,9 +1061,17 @@ describe("cfc-custody-seal", () => {
     it("writes one entry when the same actor commits two reviews at once", async () => {
       const fixture = await setup();
       try {
-        const draft = await fixture.draft(alice, honestStance);
-        const first = await prepareCustodySeal(draft, fixture.room(alice));
-        const second = await prepareCustodySeal(draft, fixture.room(alice));
+        // Two drafts with different values, as from two devices, so that a
+        // second write over the first would show in the stored entry.
+        const phone = await fixture.draft(alice, honestStance);
+        const laptop = await fixture.draft(
+          alice,
+          { choice: "tacos", budget: 9 },
+          [cfcAtom.user(alice.did())],
+          "laptop-draft",
+        );
+        const first = await prepareCustodySeal(phone, fixture.room(alice));
+        const second = await prepareCustodySeal(laptop, fixture.room(alice));
         const outcomes = await Promise.allSettled([
           commitCustodySeal(first.consent, trustedClick()),
           commitCustodySeal(second.consent, trustedClick()),
@@ -988,10 +1082,15 @@ describe("cfc-custody-seal", () => {
         ]);
         const sealed = outcomes.find((outcome) =>
           outcome.status === "fulfilled"
-        ) as PromiseFulfilledResult<{ box: Cell<unknown> }>;
+        ) as PromiseFulfilledResult<{ box: Cell<unknown>; entryKey: string }>;
+        const winner = outcomes[0].status === "fulfilled"
+          ? honestStance
+          : { choice: "tacos", budget: 9 };
         const box = sealed.value.box;
         await box.sync();
-        expect(Object.keys(box.getRaw() as object)).toHaveLength(1);
+        const entries = box.getRaw() as Record<string, { stance: unknown }>;
+        expect(Object.keys(entries)).toEqual([sealed.value.entryKey]);
+        expect(entries[sealed.value.entryKey].stance).toEqual(winner);
       } finally {
         await fixture.dispose();
       }

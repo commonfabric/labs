@@ -42,6 +42,7 @@ import type {
   IMemorySpaceAddress,
 } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
+import { matchAtomPattern } from "./atom-pattern.ts";
 import {
   type CfcConfClause,
   clauseAlternatives,
@@ -52,7 +53,7 @@ import { cfcPolicyManifestDocId } from "./policy.ts";
 import { collectConsumedLabel } from "./prepare.ts";
 import { CfcReadCeilingError } from "./read-ceiling.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
-import { createTrustResolver } from "./trust.ts";
+import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
 import { isRendererTrustedEvent } from "./ui-contract.ts";
 
 /** Builtin implementation identity that alone may write a custody box. */
@@ -86,10 +87,12 @@ export interface CustodyRoom {
 export interface CustodySealOptions {
   /**
    * The actor's own `Context` and `Resource` sources this room may draw on,
-   * read by the host from actor-private settings. When present, a value
-   * whose label names any other source is refused.
+   * read by the host from actor-private settings. A value whose label names
+   * any other source is refused; an empty list admits only values labeled for
+   * the actor alone (`User` or a bare DID), which is what a value the actor
+   * typed in carries.
    */
-  readonly allowedSources?: readonly CfcAtom[];
+  readonly allowedSources: readonly CfcAtom[];
 }
 
 /** Type-only brand for host-held consent objects. */
@@ -537,21 +540,22 @@ const absentOrSealed = (
 };
 
 /**
- * Whether the anchor at `link` is absent, or carries exactly the clause the
- * seal gives it and no other. An anchor some other code created with another
- * label would taint every entry, or leave it unattributed.
+ * Whether the anchor at `link` is absent, or holds exactly the value and the
+ * clause the seal gives it and no other. An anchor some other code created
+ * with another label, or holding a link whose target the seal's read would
+ * follow, would taint every entry or leave it unattributed.
  */
 const absentOrAnchor = (
   tx: IExtendedStorageTransaction,
   link: NormalizedFullLink,
   clause: CfcConfClause,
+  instance: string,
 ): boolean => {
-  if (
-    tx.readValueOrThrow({ ...link, path: [] }, {
-      meta: internalVerifierRead,
-    }) ===
-      undefined
-  ) return true;
+  const stored = tx.readValueOrThrow({ ...link, path: [] }, {
+    meta: internalVerifierRead,
+  });
+  if (stored === undefined) return true;
+  if (!deepEqual(stored, { instance })) return false;
   const labeled = (readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [])
     .filter((entry) => (entry.label.confidentiality ?? []).length > 0);
   return labeled.length > 0 &&
@@ -673,6 +677,28 @@ const blindedEntryKey = async (
   return first;
 };
 
+/**
+ * Whether the actor's trust closure holds `policy` as a trusted declassifier
+ * through a statement that names `policy`'s exact manifest digest. A
+ * manifest's `moduleIdentity` and `symbol` are fields its author writes, so a
+ * statement that leaves the digest open is satisfied by anyone's manifest
+ * that copies those two fields; such statements are not consulted here.
+ */
+const trustsAsDeclassifier = (
+  config: CfcTrustConfig | undefined,
+  policy: CfcModulePolicyRefAtom,
+  actor: string,
+): boolean => {
+  if (config === undefined) return false;
+  const pinning = config.statements.filter((statement) =>
+    isObjectNotArray(statement.concrete) &&
+    statement.concrete.policyDigest === policy.policyDigest &&
+    matchAtomPattern(statement.concrete, policy) !== null
+  );
+  return createTrustResolver({ ...config, statements: pinning })
+    .conceptSatisfied(TRUSTED_DECLASSIFIER_CONCEPT, [policy], actor);
+};
+
 /** Reads the draft, the terms, and the room's state, and checks them all. */
 const inspect = async (
   draft: Cell<unknown>,
@@ -707,16 +733,17 @@ const inspect = async (
   } finally {
     draftTx.abort();
   }
-  if (options.allowedSources !== undefined) {
-    const allowed = options.allowedSources;
-    const refused = sources.find((source) =>
-      !allowed.some((entry) => deepEqual(entry, source))
+  const allowed = options?.allowedSources;
+  if (!Array.isArray(allowed)) {
+    throw new Error("Custody seal requires the room's allowed sources");
+  }
+  const refused = sources.find((source) =>
+    !allowed.some((entry) => deepEqual(entry, source))
+  );
+  if (refused !== undefined) {
+    throw new Error(
+      debugStr`Custody seal refuses a source this room does not allow: $quote,long${refused}`,
     );
-    if (refused !== undefined) {
-      throw new Error(
-        debugStr`Custody seal refuses a source this room does not allow: $quote,long${refused}`,
-      );
-    }
   }
 
   const termsTx = runtime.edit();
@@ -767,13 +794,7 @@ const inspect = async (
     manifestTx.abort();
   }
   checkInertStance(checkTerms(terms, actor), stance);
-  if (
-    !createTrustResolver(runtime.cfcTrustConfig).conceptSatisfied(
-      TRUSTED_DECLASSIFIER_CONCEPT,
-      [policy],
-      actor,
-    )
-  ) {
+  if (!trustsAsDeclassifier(runtime.cfcTrustConfig, policy, actor)) {
     throw new Error(
       debugStr`Custody seal refuses a policy the actor does not trust as a declassifier: $quote,long${policy}`,
     );
@@ -826,7 +847,7 @@ const inspect = async (
 export async function prepareCustodySeal(
   draft: Cell<unknown>,
   room: CustodyRoom,
-  options: CustodySealOptions = {},
+  options: CustodySealOptions,
 ): Promise<PreparedCustodySeal> {
   const inspected = await inspect(draft, room, options);
   const consent = Object.freeze({}) as CustodySealConsent;
@@ -835,9 +856,7 @@ export async function prepareCustodySeal(
     draft: draft.withTx(undefined),
     requestedRoom: room,
     options: Object.freeze({
-      ...(options.allowedSources !== undefined && {
-        allowedSources: structuredClone(options.allowedSources),
-      }),
+      allowedSources: structuredClone(options.allowedSources),
     }),
     eventId: crypto.randomUUID(),
   });
@@ -985,7 +1004,7 @@ export async function commitCustodySeal(
       kind: "builtin",
       builtinId: CUSTODY_SEAL_WRITER,
     });
-    if (!absentOrAnchor(tx, anchorLink, anchorClause(policy))) {
+    if (!absentOrAnchor(tx, anchorLink, anchorClause(policy), instance)) {
       throw new Error("Custody seal refuses an anchor the seal did not create");
     }
     const box = boxCell(runtime, policy, instance, tx);
