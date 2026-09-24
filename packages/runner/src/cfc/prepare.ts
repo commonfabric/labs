@@ -2254,6 +2254,28 @@ const isMetaSeamPath = (
 ): boolean => metaOnlyByPath?.get(pathKey(path)) === true;
 
 /**
+ * The paths a transaction wrote in a document's payload, as a prefix index:
+ * every path in `target.paths` except those only the meta seam reached. A
+ * meta field and a payload field of the same name share a logical path, so
+ * a meta write is left out rather than read as replacing the payload value
+ * there. Empty for a document the transaction did not write.
+ */
+const payloadWrittenPrefixes = (
+  target:
+    | {
+      paths: readonly (readonly string[])[];
+      metaOnlyByPath: ReadonlyMap<string, boolean>;
+    }
+    | undefined,
+): PathPrefixIndex => {
+  const prefixes = new PathPrefixIndex();
+  for (const path of target?.paths ?? []) {
+    if (!isMetaSeamPath(target?.metaOnlyByPath, path)) prefixes.add(path);
+  }
+  return prefixes;
+};
+
+/**
  * Whether `id` names a document of one of the two id classes no schema can
  * declare a store policy on.
  *
@@ -6840,7 +6862,8 @@ export function* prepareBoundaryCommitSteps(
   // its cross-space eligibility, and the writer-fit measurement reads it to
   // decide whether a computed target's exemption applies.
   const labelProtectionMode = state.labelMetadataProtectionMode;
-  const flowTargets = flowMode === "off" ? undefined : valueWriteTargets(tx);
+  const valueTargets = valueWriteTargets(tx);
+  const flowTargets = flowMode === "off" ? undefined : valueTargets;
   const flowJoin = flowMode === "off"
     ? { confidentiality: [], integrity: [] }
     : deriveFlowJoin(tx, { collectLabeledSpaces: true });
@@ -6879,7 +6902,7 @@ export function* prepareBoundaryCommitSteps(
         `${flowTargets.size} written doc(s)`,
     );
   }
-  for (const [key, target] of valueWriteTargets(tx)) {
+  for (const [key, target] of valueTargets) {
     if (candidates.has(key)) {
       continue;
     }
@@ -6967,6 +6990,34 @@ export function* prepareBoundaryCommitSteps(
         canonicalizeLogicalPath(addr.path),
       );
       targetKeys.add(containerKey);
+    }
+  }
+  // A link-origin entry labels the pointer that stood at its path when the
+  // entry was minted, so a payload write at or above that path leaves it
+  // describing a pointer the document no longer holds. Such a document enters
+  // the persist loop whatever the flow-label mode, and the loop drops the
+  // entry there (`linkCleared`). With flow labels persisting the flow-target
+  // admission below covers the same documents.
+  if (!flowPersist) {
+    for (const [key, target] of valueTargets) {
+      if (targetKeys.has(key)) {
+        continue;
+      }
+      const existingEntries = storedMetadataFor(
+        tx,
+        target.space,
+        target.id,
+        target.scope,
+        target.type,
+      )?.labelMap.entries ?? [];
+      const writtenPrefixes = payloadWrittenPrefixes(target);
+      if (
+        existingEntries.some((entry) =>
+          entry.origin === "link" && writtenPrefixes.hasPrefixOf(entry.path)
+        )
+      ) {
+        targetKeys.add(key);
+      }
     }
   }
   if (flowPersist && flowTargets !== undefined) {
@@ -7248,6 +7299,9 @@ export function* prepareBoundaryCommitSteps(
     const flowWrittenPrefixes = new PathPrefixIndex();
     for (const path of flowWrittenPaths) flowWrittenPrefixes.add(path);
     const flowWrittenValues = flowTarget?.valuesByPath;
+    // What clears the link-origin entries below, whatever the flow-label
+    // mode.
+    const payloadPrefixes = payloadWrittenPrefixes(valueTargets.get(key));
     // Pre-transaction snapshots (and slot presence at each recorded path)
     // per written path, for the §8.12.8 re-mint-on-recreation probe below.
     // Gated on flowPersist like the written paths: with nothing
@@ -7403,6 +7457,7 @@ export function* prepareBoundaryCommitSteps(
     );
     let flowCleared = false;
     let remintCleared = false;
+    let linkCleared = false;
     // Stage B: stored label-metadata templates this persist drops (they are
     // re-derived from the FINAL payload entry set below). Tracked so a
     // TEMPLATE-ONLY stale envelope — a mixed-version writer cleared the
@@ -7589,11 +7644,25 @@ export function* prepareBoundaryCommitSteps(
       if (isIngestTarget && entry.origin === "external-ingest") {
         continue;
       }
+      // A link-origin entry labels the pointer its slot held: a label of the
+      // element there rather than of the position. A payload write at or
+      // above the path replaced that pointer, so the entry goes whatever the
+      // flow-label mode, and a rewritten list keeps no position carrying the
+      // labels of an element that has left it. The link write storing the
+      // element now at the position mints that element's own entries below,
+      // so an element keeps its labels at every position it moves to. A
+      // meta-seam write replaces no payload pointer and clears nothing.
+      if (
+        entry.origin === "link" && payloadPrefixes.hasPrefixOf(entryPath)
+      ) {
+        linkCleared = true;
+        continue;
+      }
       // Per-value components track the current value: a write at-or-above
-      // them replaced that value, so stale derived/link/structure entries
-      // under any written path are dropped (fresh ones for this tx are
-      // appended below / by the link machinery). Declared and legacy
-      // entries are never cleared here.
+      // them replaced that value, so stale derived/structure entries under
+      // any written path are dropped (fresh ones for this tx are appended
+      // below). Declared and legacy entries are never cleared here, and
+      // link-origin entries are cleared above.
       //
       // `*`-path templates clear only under a write that covers their
       // CONTAINER (template-population §3.1 "cleared on covering writes"):
@@ -7612,8 +7681,7 @@ export function* prepareBoundaryCommitSteps(
         : entryPath;
       if (
         flowPersist &&
-        (entry.origin === "derived" || entry.origin === "link" ||
-          entry.origin === "structure") &&
+        (entry.origin === "derived" || entry.origin === "structure") &&
         flowWrittenPrefixes.hasPrefixOf(clearProbePath)
       ) {
         flowCleared = true;
@@ -8496,7 +8564,7 @@ export function* prepareBoundaryCommitSteps(
 
     if (
       coalescedLabelEntries.length === 0 && !flowCleared && !remintCleared &&
-      !droppedLabelMetadataTemplates
+      !linkCleared && !droppedLabelMetadataTemplates
     ) {
       if (deferredWriterRefusal !== undefined) {
         reasons.push(verdictReason(deferredWriterRefusal));

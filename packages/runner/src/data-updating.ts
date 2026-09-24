@@ -355,8 +355,11 @@ const recordLinkWritePolicyInput = (
   // under the claim once a commit has persisted it: otherwise the write that
   // creates a protected list admits a first entry every later one is refused.
   // A link AT the root is excluded — the document then aliases its source and
-  // stores no entry of its own.
-  const targetRelevant = storedCfcMetadataAppliesToPath(tx, target) ||
+  // stores no entry of its own. The stored labels that the pointer this write
+  // replaces brought to the slot do not count: they leave with it (see
+  // `storedCfcMetadataAppliesToPath`).
+  const targetRelevant =
+    storedCfcMetadataAppliesToPath(tx, target, { replacingLink: true }) ||
     hasPendingSchemaPolicyInput(tx, target) ||
     (target.path.length > 0 && hasPendingWriteAuthorization(tx, target));
   if (!sourceRelevant && !targetRelevant) {
