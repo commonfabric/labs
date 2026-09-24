@@ -1706,6 +1706,12 @@ If schemas are not already present via type args:
 
 ### 10.5 Cell factories and related APIs
 
+Inferred schema types are retained through `typeToTypeNodeWithRegistry()`,
+including its placeholder when the checker cannot print the type. Schema
+generation reads that placeholder through the preserved type, so an expanded
+array default keeps both its element schema and `default: []` rather than
+omitting injection.
+
 Injected behaviors:
 
 - `cell(...)`, `new Cell(...)`, `new OpaqueCell(...)`, `new Stream(...)`, etc.:
@@ -1729,6 +1735,9 @@ Injected behaviors:
     pattern's returned object, whose context names no `T`, gets
     `{ type: "unknown" }`, as `wish<unknown>(...)` does. A call with no
     contextual type gets no schema
+  - contextual `WishState<Default<T[], []>>` and
+    `WishState<T[] | Default<[]>>` both inject the array's element schema and
+    `default: []`
   - explicit or contextual unresolved generic type parameters degrade to
     `{ type: "unknown" }`
 - `generateObject(...)`:
