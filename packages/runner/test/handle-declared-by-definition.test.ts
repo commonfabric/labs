@@ -19,6 +19,7 @@ import { Runtime } from "../src/runtime.ts";
 import { txToReactivityLog } from "../src/scheduler.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { SpaceReplica } from "../src/storage/v2.ts";
+import { SchemaObjectTraverser } from "../src/traverse.ts";
 
 const signer = await Identity.fromPassphrase("handle-declared-by-definition");
 const space = signer.did();
@@ -47,6 +48,34 @@ const atReference: Spelling = {
 const byDefinition: Spelling = {
   position: { $ref: "#/$defs/Profile" },
   $defs: { Profile: { ...profileBody, asCell: ["cell"] } },
+};
+
+const titledBody = {
+  type: "object",
+  properties: { title: { type: "string" } },
+  required: ["title"],
+} as const satisfies JSONSchema;
+
+/** A union of two handles, each written at its reference. */
+const unionAtReferences: Spelling = {
+  position: {
+    anyOf: [
+      { $ref: "#/$defs/Profile", asCell: ["cell"] },
+      { $ref: "#/$defs/Titled", asCell: ["cell"] },
+    ],
+  },
+  $defs: { Profile: profileBody, Titled: titledBody },
+};
+
+/** The same union, each handle declared by the definition it names. */
+const unionByDefinitions: Spelling = {
+  position: {
+    anyOf: [{ $ref: "#/$defs/Profile" }, { $ref: "#/$defs/Titled" }],
+  },
+  $defs: {
+    Profile: { ...profileBody, asCell: ["cell"] },
+    Titled: { ...titledBody, asCell: ["cell"] },
+  },
 };
 
 /** An object branch selected by `kind`, holding `profile` when given one. */
@@ -246,6 +275,28 @@ describe("handle declared by a definition", () => {
         ).toEqual(expected);
       });
 
+      it("reads a linked property typed as a union of handle definitions as the reference-site union does", async () => {
+        const profile = await storedProfile("union-profile", "Ada");
+        const read = (holder: { get(): unknown }) =>
+          (holder.get() as { profile: unknown }).profile;
+
+        const expected = await observe(
+          "at-references",
+          { kind: "a", profile },
+          profileHolder(unionAtReferences, false),
+          read,
+        );
+        expect(expected.returned).toEqual({ handle: "Ada", path: [] });
+        expect(
+          await observe(
+            "by-definitions",
+            { kind: "a", profile },
+            profileHolder(unionByDefinitions, false),
+            read,
+          ),
+        ).toEqual(expected);
+      });
+
       it("reads linked array elements as handles on the documents they name", async () => {
         const profiles = [
           await storedProfile("first-profile", "Ada"),
@@ -275,4 +326,32 @@ describe("handle declared by a definition", () => {
       });
     });
   }
+
+  describe("SchemaObjectTraverser.hasAsCell()", () => {
+    it("returns `true` for a union of references to handle definitions, as for the union with `asCell` at each reference", () => {
+      const union = (spelling: Spelling) => ({
+        ...(spelling.position as object),
+        $defs: spelling.$defs,
+      });
+
+      expect(SchemaObjectTraverser.hasAsCell(union(unionAtReferences))).toBe(
+        true,
+      );
+      expect(SchemaObjectTraverser.hasAsCell(union(unionByDefinitions))).toBe(
+        true,
+      );
+    });
+
+    it("returns `false` for a union that reaches itself through its only option", () => {
+      // Nothing declares a handle here except by way of the union itself, so
+      // reading the option again proves nothing.
+
+      expect(
+        SchemaObjectTraverser.hasAsCell({
+          $ref: "#/$defs/R",
+          $defs: { R: { anyOf: [{ $ref: "#/$defs/R" }] } },
+        }),
+      ).toBe(false);
+    });
+  });
 });

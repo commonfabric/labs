@@ -199,8 +199,8 @@ Defaults:
 external, and is true when:
 
 - schema object has `asCell` property
-- or schema has `anyOf` and every option has an `asCell` property, or a
-  composition of its own that does
+- or schema has `anyOf` and every option declares a handle, read the same way
+  against the definitions of the schema it sits in
 - or schema has `oneOf` and every option does, likewise
 
 Notes:
@@ -208,9 +208,11 @@ Notes:
 - A definition declares the handle for every position of its type: a position
   written `{ "$ref": "#/$defs/Profile" }` is a handle exactly when `Profile`
   declares `asCell`, as `{ "$ref": "#/$defs/Profile", "asCell": ["cell"] }` is
-  at the reference. The object creator reads a link's schema through its root
-  `$ref` the same way when it mints the handle.
-- This check is shallow for `anyOf`/`oneOf` options; refs inside options are not resolved, so a union that reaches itself through an option is read once.
+  at the reference. When the object creator mints a handle from a link whose
+  schema declares none itself, it reads the schema through its root `$ref` to
+  the handle the definition declares; a schema that declares its handle at the
+  reference, or declares none, it uses as written.
+- A union of references to handle definitions declares a handle as the same union with `asCell` at each reference does. A union that reaches itself through an option is read once, and declares no handle by way of itself.
 - This check determines traversal boundary behavior, not whether final output is a JS Cell object. Output shape still depends on the active `objectCreator`.
 
 ### Behavior by Value Shape

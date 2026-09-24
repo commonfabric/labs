@@ -885,51 +885,72 @@ export function resolveSchemaRefsCanonical(
 
 /**
  * Helper for `SchemaObjectTraverser.hasAsCell()`, which reads the handle
- * declaration off `schema` as written: its own `asCell` entry, or one that every
- * `anyOf` or every `oneOf` option declares. An option is read as written too,
- * its references left unresolved, so a union that reaches itself through one
- * is read once rather than without end.
+ * declaration off `schema` with its root `$ref` resolved
+ * ({@link resolveRootRefForStructure}): its own `asCell` entry, or one that
+ * every `anyOf` or every `oneOf` option declares. An option is read the same
+ * way, against the definitions of the schema it sits in, so a union of
+ * references to handle definitions declares a handle as the same union with
+ * `asCell` at each reference does. `walking` holds the option lists being read
+ * further up. A union that reaches itself through an option presents one of
+ * them again, and reading it again proves nothing, so that list declares no
+ * handle there.
  */
-function declaresAsCellAsWritten(schema: JSONSchema | undefined): boolean {
+function declaresAsCell(
+  schema: JSONSchema | undefined,
+  walking?: Set<readonly JSONSchema[]>,
+): boolean {
   if (schema === undefined || typeof schema === "boolean") {
     return false;
   }
-  return ContextualFlowControl.getAsCellValues(schema).length > 0 ||
-    (Array.isArray(schema.anyOf) &&
-      schema.anyOf.every((option) => declaresAsCellAsWritten(option))) ||
-    (Array.isArray(schema.oneOf) &&
-      schema.oneOf.every((option) => declaresAsCellAsWritten(option)));
+  const declaring = resolveRootRefForStructure(schema);
+  if (ContextualFlowControl.getAsCellValues(declaring).length > 0) {
+    return true;
+  }
+  for (const options of [declaring.anyOf, declaring.oneOf]) {
+    if (!Array.isArray(options) || walking?.has(options)) continue;
+    const inWalk = walking ??= new Set();
+    inWalk.add(options);
+    try {
+      const every = options.every((option) =>
+        declaresAsCell(
+          cfcSchemaWithInheritedDefs(option, declaring.$defs),
+          inWalk,
+        )
+      );
+      if (every) return true;
+    } finally {
+      inWalk.delete(options);
+    }
+  }
+  return false;
 }
 
 /**
- * `SchemaObjectTraverser.hasAsCell()` verdicts for memoizable schemas whose
- * root is a `$ref`, which the traversal reads once for every property and
- * every array element under it. A verdict reached through an external
- * reference embeds registry content, so the registry clear swaps the cache.
+ * `SchemaObjectTraverser.hasAsCell()` verdicts for memoizable schemas that
+ * take resolving to read — a root `$ref`, or `anyOf` or `oneOf` options — which
+ * the traversal reads once for every property and every array element under
+ * one. A verdict reached through an external reference embeds registry
+ * content, so the registry clear swaps the cache.
  */
-let _refHandleVerdicts = new WeakMap<JSONSchemaObj, boolean>();
+let _handleVerdicts = new WeakMap<JSONSchemaObj, boolean>();
 
 onSchemaRegistryClear(() => {
-  _refHandleVerdicts = new WeakMap();
+  _handleVerdicts = new WeakMap();
 });
 
 /**
- * Helper for `SchemaObjectTraverser.hasAsCell()`, which reads the handle a
- * schema with a root `$ref` declares through the reference, memoized per
- * schema identity where the schema is memoizable. A verdict reached while an
- * external resolution missed is not kept, since the document can still
- * arrive.
+ * Like {@link declaresAsCell}, except that the verdict is kept per schema
+ * identity where the schema is memoizable. A verdict reached while an external
+ * resolution missed is not kept, since the document can still arrive.
  */
-function declaresAsCellThroughRef(schema: JSONSchemaObj): boolean {
-  if (!isMemoizableSchemaInput(schema)) {
-    return declaresAsCellAsWritten(resolveRootRefForStructure(schema));
-  }
-  const cached = _refHandleVerdicts.get(schema);
+function declaresAsCellMemoized(schema: JSONSchemaObj): boolean {
+  if (!isMemoizableSchemaInput(schema)) return declaresAsCell(schema);
+  const cached = _handleVerdicts.get(schema);
   if (cached !== undefined) return cached;
   const missesBefore = externalResolutionMissCount();
-  const verdict = declaresAsCellAsWritten(resolveRootRefForStructure(schema));
+  const verdict = declaresAsCell(schema);
   if (externalResolutionMissCount() === missesBefore) {
-    _refHandleVerdicts.set(schema, verdict);
+    _handleVerdicts.set(schema, verdict);
   }
   return verdict;
 }
@@ -5563,21 +5584,21 @@ export class SchemaObjectTraverser<V extends FabricValue>
    *
    * This handling gets a little blurry with anyOf or oneOf schemas, and
    * in those cases, we base the value on whether every option has the flag.
+   * An option is read the same way, through its root `$ref` against the
+   * definitions of the schema it sits in, and a union that reaches itself
+   * through an option declares no handle by way of itself.
    *
    * A future improvement is to operate on pre-processed schemas, where the
    * asCell and asStream flags are factored out when possible.
-   *
-   * We do not resolve references in the anyOf or oneOf options, which means
-   * we don't need to worry about cycles, but it also means we may miss some
-   * references that should be asCell.
    */
   static hasAsCell(schema: JSONSchema | undefined): boolean {
     if (schema === undefined || typeof schema === "boolean") {
       return false;
     }
-    return typeof schema.$ref === "string"
-      ? declaresAsCellThroughRef(schema)
-      : declaresAsCellAsWritten(schema);
+    return typeof schema.$ref === "string" || Array.isArray(schema.anyOf) ||
+        Array.isArray(schema.oneOf)
+      ? declaresAsCellMemoized(schema)
+      : ContextualFlowControl.getAsCellValues(schema).length > 0;
   }
 
   #applyDefault(
