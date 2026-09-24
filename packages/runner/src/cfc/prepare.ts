@@ -1146,6 +1146,41 @@ const writeIsRuntimeInitialization = (
   return absent && finalValueIsRecorded();
 };
 
+/**
+ * Whether `path` lies at or under a reference the runtime staged in this
+ * transaction, with the slot still holding it. Staging writes nothing the
+ * referenced value holds, so the integrity the receiving slot's schema would
+ * add describes content the stager did not write and is not minted for it.
+ */
+const pathHoldsStagedReference = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  const logicalPath = canonicalizeLogicalPath(path);
+  return tx.getCfcState().writePolicyInputs.some((input) =>
+    input.kind === "initialization" && input.mode === "reference" &&
+    tx.isRuntimeWritePolicyInput(input) &&
+    input.target.space === target.space && input.target.id === target.id &&
+    normalizeCellScope(input.target.scope) ===
+      normalizeCellScope(target.scope) &&
+    concretePathHasPrefix(logicalPath, input.target.path) &&
+    valueEqual(
+      tx.readValueOrThrow({
+        space: target.space,
+        id: target.id as URI,
+        scope: target.scope,
+        path: [...input.target.path],
+      }, { meta: INTERNAL_VERIFIER_META }),
+      input.value,
+    )
+  );
+};
+
 /** A single runtime output attempt may preserve an existing root reference. */
 const writePreservesRuntimeOutput = (
   tx: IExtendedStorageTransaction,
@@ -5023,7 +5058,9 @@ const derivePersistedLabel = (
   schemaLabel: IFCLabel,
   sourceEntryLabels?: Map<string, IFCLabel>,
   owningSpace?: MemorySpace,
+  options: { mintSchemaIntegrity?: boolean } = {},
 ): IFCLabel => {
+  const mintSchemaIntegrity = options.mintSchemaIntegrity ?? true;
   const ifc = isObjectOrArray(schema) ? schema.ifc : undefined;
   const actingPrincipal = tx.getCfcState().trustSnapshot?.actingPrincipal;
   const copiedInputLabel = sourceEntryLabels && exactCopySourcePath(schema)
@@ -5060,18 +5097,23 @@ const derivePersistedLabel = (
         | readonly CfcConfClause[]
         | undefined)?.map(normalizeClause),
     ),
-    integrity: mergeLabelValues(
-      resolveCurrentPrincipalLabelValues(
-        schemaLabel.integrity,
-        actingPrincipal,
+    integrity: mintSchemaIntegrity
+      ? mergeLabelValues(
+        resolveCurrentPrincipalLabelValues(
+          schemaLabel.integrity,
+          actingPrincipal,
+        ),
+        copiedInputLabel?.integrity,
+        projectedInputLabel?.integrity,
+        resolveCurrentPrincipalLabelValues(
+          Array.isArray(ifc?.addIntegrity) ? ifc.addIntegrity : undefined,
+          actingPrincipal,
+        ),
+      )
+      : mergeLabelValues(
+        copiedInputLabel?.integrity,
+        projectedInputLabel?.integrity,
       ),
-      copiedInputLabel?.integrity,
-      projectedInputLabel?.integrity,
-      resolveCurrentPrincipalLabelValues(
-        Array.isArray(ifc?.addIntegrity) ? ifc.addIntegrity : undefined,
-        actingPrincipal,
-      ),
-    ),
   };
 };
 
@@ -5377,6 +5419,7 @@ const rootLabelFromSchema = (
   tx: IExtendedStorageTransaction,
   schema: JSONSchema | undefined,
   owningSpace: MemorySpace,
+  options: { mintSchemaIntegrity?: boolean } = {},
 ): IFCLabel => {
   if (schema === undefined) {
     return {};
@@ -5384,9 +5427,14 @@ const rootLabelFromSchema = (
   const root = cfcSchemaEntries(schema).find((entry) =>
     entry.path.length === 0
   );
-  return root === undefined
-    ? {}
-    : derivePersistedLabel(tx, root.schema, root.label, undefined, owningSpace);
+  return root === undefined ? {} : derivePersistedLabel(
+    tx,
+    root.schema,
+    root.label,
+    undefined,
+    owningSpace,
+    options,
+  );
 };
 
 /**
@@ -5549,6 +5597,13 @@ const derivePersistedLinkLabel = (
     tx,
     input.linkSchema,
     input.source.space,
+    {
+      mintSchemaIntegrity: !pathHoldsStagedReference(
+        tx,
+        input.target,
+        input.target.path,
+      ),
+    },
   );
   const hasCarriedLabel =
     input.cfcLabelView?.entries.some((entry) => hasLabelValues(entry.label)) ??
@@ -6657,6 +6712,13 @@ const verifyWriteFloor = (
         entry.label,
         entryLabels,
         target.space,
+        {
+          mintSchemaIntegrity: !pathHoldsStagedReference(
+            tx,
+            target,
+            entry.path,
+          ),
+        },
       ),
       ctx.identityForPath(entry.path),
     ).integrity ?? [];
@@ -7305,6 +7367,13 @@ export function* prepareBoundaryCommitSteps(
               entry.label,
               mergedSchemaEntryLabels,
               target.space,
+              {
+                mintSchemaIntegrity: !pathHoldsStagedReference(
+                  tx,
+                  target,
+                  entry.path,
+                ),
+              },
             ),
             identityForSchemaPath(writeAuthorIdentities.get(key), entry.path),
           );
