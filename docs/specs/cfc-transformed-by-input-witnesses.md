@@ -167,7 +167,12 @@ not rely on the witness without them.
   witness. Removing a path that never had an entry of its own leaves the label
   map unchanged. Both let a secret choose what the endorsed transformer counts.
   Declaring the committed documents `writeAuthorizedBy` the commit step confines
-  every write to them, removals included, to that code.
+  every write to them, removals included, to that code. The emptied-container
+  case also closes once structure stamps carry the writing transaction's
+  `TransformedBy` (L11 on the `conclave-policy-pins` branch): the emptied
+  location then resolves to the remover's stamp rather than to the committed
+  value above it, so a remover other than the committed writer leaves no
+  witness there.
 - **The bottom of a chain trusts its caller.** Every endorsed step mints its
   identity-only atom whatever it was fed, so the innermost level a rule pins is
   satisfied by crafted input to that step. Retaining only `TransformedBy`
