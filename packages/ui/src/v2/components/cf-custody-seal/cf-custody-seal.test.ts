@@ -2,7 +2,7 @@
 
 import type { CellHandle, RuntimeClient } from "@commonfabric/runtime-client";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import { summarizeCustodyTerms } from "./cf-custody-seal.ts";
@@ -21,6 +21,44 @@ class HeadlessSeal extends CFCustodySeal {
   override get updateComplete(): Promise<boolean> {
     return Promise.resolve(true);
   }
+}
+
+/**
+ * Stands in for the rendered dialog: its own confirm button and an open
+ * dialog, which is what the component checks a confirmation click against.
+ */
+class OpenDialogSeal extends HeadlessSeal {
+  readonly confirmButton = {};
+  readonly dialog = { open: true, close() {}, showModal() {} };
+
+  override get shadowRoot(): ShadowRoot {
+    return {
+      querySelector: (selector: string) =>
+        selector === "button.confirm"
+          ? this.confirmButton
+          : selector === "dialog"
+          ? this.dialog
+          : null,
+    } as unknown as ShadowRoot;
+  }
+}
+
+/**
+ * A click the browser marked trusted, on `target`. Deno has no DOM, so the
+ * test supplies the `MouseEvent` the component checks against; a real page's
+ * `MouseEvent` cannot be constructed with `isTrusted` set.
+ */
+function trustedClick(target: object): Event {
+  class TrustedMouseEvent extends Event {
+    override get currentTarget(): EventTarget {
+      return target as EventTarget;
+    }
+    override get isTrusted(): boolean {
+      return true;
+    }
+  }
+  (globalThis as { MouseEvent?: unknown }).MouseEvent = TrustedMouseEvent;
+  return new TrustedMouseEvent("click");
 }
 
 const preview: Preview = {
@@ -52,8 +90,9 @@ function setup(overrides: Partial<{
   prepare: RuntimeClient["prepareCustodySeal"];
   commit: (id: string) => Promise<CellHandle>;
   cancel: RuntimeClient["cancelCustodySeal"];
+  element: HeadlessSeal;
 }> = {}) {
-  const element = new HeadlessSeal();
+  const element = overrides.element ?? new HeadlessSeal();
   const draft = createMockCellHandle<unknown>("sushi", { id: "of:draft" });
   // The pattern's own copy of the terms, which the dialog must not show.
   const terms = createMockCellHandle<unknown>({
@@ -261,13 +300,18 @@ describe("CFCustodySeal workflow", () => {
             type: "https://commonfabric.org/cfc/atom/Context",
             name: "cal\u202eendar",
             subject: "did:key:actor",
-          }],
+          }, {
+            type: "https://commonfabric.org/cfc/atom/Resource",
+            class: "ma\u200bil",
+            subject: "did:key:actor",
+          }, "a\u202ebare-atom"] as Preview["sources"],
         }),
     });
     await state.element.accessForTestingOnly.prepare();
-    expect(interpolatedInto(state.element, "<li")).toContain(
-      "calendar (context)",
-    );
+    const text = renderedText(state.element);
+    expect(text).toContain("calendar (context)");
+    expect(text).toContain("mail (resource)");
+    expect(text).toContain('"abare-atom"');
     expect(interpolatedInto(state.element, '<bdi class="digest"')).toEqual([
       "policy-digest",
       "custodyRules",
@@ -317,6 +361,17 @@ describe("CFCustodySeal workflow", () => {
     expect(state.element.accessForTestingOnly.preview).toBeUndefined();
   });
 
+  it("shows no failure from a preparation whose binding changed", async () => {
+    const pending = Promise.withResolvers<Preview>();
+    using state = setup({ prepare: () => pending.promise });
+    const preparing = state.element.accessForTestingOnly.prepare();
+    state.element.terms = createMockCellHandle();
+    state.element.willUpdate(new Map([["terms", state.terms]]));
+    pending.reject(new Error("Room refused"));
+    await preparing;
+    expect(state.element.accessForTestingOnly.error).toBe("");
+  });
+
   for (const failure of [new Error("Room refused"), "opaque failure"]) {
     it(`reports ${failure instanceof Error ? "host" : "non-Error"} preparation failures`, async () => {
       using state = setup({ prepare: () => Promise.reject(failure) });
@@ -329,6 +384,100 @@ describe("CFCustodySeal workflow", () => {
       expect(state.element.accessForTestingOnly.preview).toBeUndefined();
     });
   }
+});
+
+describe("CFCustodySeal confirmation", () => {
+  // Each case installs the trusted MouseEvent stand-in; none outlives it.
+  const originalMouseEvent = (globalThis as { MouseEvent?: unknown })
+    .MouseEvent;
+  afterEach(() => {
+    (globalThis as { MouseEvent?: unknown }).MouseEvent = originalMouseEvent;
+  });
+
+  it("seals on a trusted click on its own open dialog, and announces it", async () => {
+    const element = new OpenDialogSeal();
+    using state = setup({ element });
+    const sealed: Event[] = [];
+    element.addEventListener("cf-sealed", (event) => sealed.push(event));
+    await element.accessForTestingOnly.prepare();
+    await element.accessForTestingOnly.confirm(
+      trustedClick(element.confirmButton),
+    );
+    expect(state.committed).toEqual([preview.id]);
+    expect(sealed).toHaveLength(1);
+    expect(element.accessForTestingOnly.preview).toBeUndefined();
+    expect(element.accessForTestingOnly.error).toBe("");
+  });
+
+  it("does not seal on a trusted click on anything but its own button", async () => {
+    const element = new OpenDialogSeal();
+    using state = setup({ element });
+    await element.accessForTestingOnly.prepare();
+    await element.accessForTestingOnly.confirm(trustedClick({}));
+    expect(state.committed).toEqual([]);
+  });
+
+  for (const failure of [new Error("Review is stale"), "opaque failure"]) {
+    it(`reports ${failure instanceof Error ? "host" : "non-Error"} seal failures and announces nothing`, async () => {
+      const element = new OpenDialogSeal();
+      using state = setup({ element, commit: () => Promise.reject(failure) });
+      const sealed: Event[] = [];
+      element.addEventListener("cf-sealed", (event) => sealed.push(event));
+      await element.accessForTestingOnly.prepare();
+      await element.accessForTestingOnly.confirm(
+        trustedClick(element.confirmButton),
+      );
+      expect(state.committed).toEqual([preview.id]);
+      expect(sealed).toEqual([]);
+      expect(element.accessForTestingOnly.error).toBe(
+        failure instanceof Error
+          ? failure.message
+          : "The value could not be sealed.",
+      );
+    });
+  }
+
+  it("does nothing on a trusted click with no review", async () => {
+    const element = new OpenDialogSeal();
+    using state = setup({ element });
+    await element.accessForTestingOnly.confirm(
+      trustedClick(element.confirmButton),
+    );
+    expect(state.committed).toEqual([]);
+  });
+
+  it("shows no failure from a seal whose binding changed while it committed", async () => {
+    const pending = Promise.withResolvers<CellHandle>();
+    const element = new OpenDialogSeal();
+    using state = setup({ element, commit: () => pending.promise });
+    await element.accessForTestingOnly.prepare();
+    const confirming = element.accessForTestingOnly.confirm(
+      trustedClick(element.confirmButton),
+    );
+    element.terms = createMockCellHandle();
+    element.willUpdate(new Map([["terms", state.terms]]));
+    pending.reject(new Error("Review is stale"));
+    await confirming;
+    expect(element.accessForTestingOnly.error).toBe("");
+  });
+
+  it("announces nothing when a binding changes while the seal commits", async () => {
+    const pending = Promise.withResolvers<CellHandle>();
+    const element = new OpenDialogSeal();
+    using state = setup({ element, commit: () => pending.promise });
+    const sealed: Event[] = [];
+    element.addEventListener("cf-sealed", (event) => sealed.push(event));
+    await element.accessForTestingOnly.prepare();
+    const confirming = element.accessForTestingOnly.confirm(
+      trustedClick(element.confirmButton),
+    );
+    element.terms = createMockCellHandle();
+    element.willUpdate(new Map([["terms", state.terms]]));
+    pending.resolve(createMockCellHandle<unknown>({}));
+    await confirming;
+    expect(state.committed).toEqual([preview.id]);
+    expect(sealed).toEqual([]);
+  });
 });
 
 describe("summarizeCustodyTerms()", () => {
