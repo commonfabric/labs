@@ -6,6 +6,12 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { runtimePresets } from "../src/runtime-presets.ts";
+import { recordReplayedArgumentSlots } from "../src/cfc/reference-initialization.ts";
+import { parseLink } from "../src/link-utils.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { recomposeSchema } from "../src/schema-decompose.ts";
+import { lookupSchemaDocument } from "../src/schema-registry.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 
 // A writer policy says which handler may modify a path, from any runtime. A
 // runtime that starts a piece it did not create replays the setup of the
@@ -289,5 +295,136 @@ describe("writer-policied inputs of a sub-piece", () => {
     } finally {
       await creator.dispose();
     }
+  });
+
+  describe("a transaction carrying the replay's record of its slots", () => {
+    // The runtime's record of the slots a replay carries over is what makes a
+    // refusal there a candidate for deferral, never what admits it: the
+    // commit still proves the transaction leaves each slot as it found it.
+    // These tests carry that record into transactions that do something
+    // else, and each must still be refused.
+    const replayingTx = async (runtime: Runtime, name: string) => {
+      await storePiece(runtime, name);
+      const cell = runtime.getCell<Piece>(space, name);
+      await cell.sync();
+      const argument = cell.key("room").resolveAsCell().getArgumentCell<
+        Room
+      >()!;
+      const tx = runtime.edit();
+      recordReplayedArgumentSlots(
+        tx,
+        argument.getAsNormalizedFullLink(),
+        {},
+        argument.withTx(tx).getRaw(),
+      );
+      return { argument, tx };
+    };
+
+    it("refuses one that changes a guarded byte", async () => {
+      const runtime = newRuntime();
+      try {
+        const { argument, tx } = await replayingTx(
+          runtime,
+          "writer-policy-replay-changes",
+        );
+        argument.withTx(tx).key("frozen").set({ seat: 0, digest: "forged" });
+        expect((await tx.commit()).error?.message).toContain(
+          "writeAuthorizedBy",
+        );
+        await runtime.idle();
+        expect(argument.get().frozen.digest).toBe("first");
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("refuses an authoritative one, which commits the document whole", async () => {
+      // An authoritative commit writes every document it touched over what
+      // the store holds by then, so that it saw the bytes unchanged says
+      // nothing about what it leaves behind.
+      const runtime = newRuntime();
+      try {
+        const { argument, tx } = await replayingTx(
+          runtime,
+          "writer-policy-replay-authoritative",
+        );
+        // The extended transaction marks itself only where it serves a seal
+        // destination; the mode itself lives on the transaction it wraps.
+        tx.tx.markAuthoritativeWrites!();
+        const frozen = argument.withTx(tx).key("frozen");
+        frozen.set({ ...frozen.get() });
+        expect((await tx.commit()).error?.message).toContain(
+          "writeAuthorizedBy",
+        );
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("refuses one that would store another label at the slot", async () => {
+      // Unchanged bytes are half of modifying nothing: a write that would
+      // store a different policy at the guarded slot, byte for byte the
+      // same value beneath it, still needs the slot's writer.
+      const runtime = newRuntime();
+      try {
+        const { argument, tx } = await replayingTx(
+          runtime,
+          "writer-policy-replay-relabels",
+        );
+        // The schema the replay writes with: the one the piece's argument
+        // link carries.
+        const room = runtime.getCell<Piece>(
+          space,
+          "writer-policy-replay-relabels",
+        ).key("room").resolveAsCell();
+        const link = parseLink(room.getMetaRaw("argument"));
+        const schema = recomposeSchema(
+          (link?.schema as { $ref: string }).$ref,
+          lookupSchemaDocument,
+        ) as Record<string, unknown>;
+        expect(schema.properties).toBeDefined();
+        const storedEnvelope = () => {
+          const read = runtime.edit();
+          const { space, id, scope } = argument.getAsNormalizedFullLink();
+          try {
+            return readStoredCfcMetadata(read, { space, id, scope });
+          } finally {
+            read.abort();
+          }
+        };
+        const before = storedEnvelope();
+        expect(before).toBeDefined();
+        const properties = schema.properties as Record<string, unknown>;
+        const frozenIfc = (properties.frozen as {
+          ifc: { confidentiality?: unknown[] };
+        }).ifc;
+        const relabeled = {
+          ...schema,
+          properties: {
+            ...properties,
+            frozen: {
+              ...(properties.frozen as Record<string, unknown>),
+              ifc: {
+                ...frozenIfc,
+                confidentiality: [
+                  ...(frozenIfc.confidentiality ?? []),
+                  "replay-secret",
+                ],
+              },
+            },
+          },
+        };
+        const frozen = argument.asSchema(relabeled as JSONSchema).withTx(tx)
+          .key("frozen");
+        frozen.set({ ...(frozen.get() as object) } as never);
+        expect((await tx.commit()).error?.message).toContain(
+          "writeAuthorizedBy",
+        );
+        await runtime.idle();
+        expect(storedEnvelope()).toEqual(before);
+      } finally {
+        await runtime.dispose();
+      }
+    });
   });
 });
