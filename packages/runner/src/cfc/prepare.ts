@@ -171,6 +171,7 @@ import {
 } from "./schema-refs.ts";
 import { createTrustResolver } from "./trust.ts";
 import {
+  CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
   cfcEnforcementStrictness,
@@ -6151,8 +6152,16 @@ const storedEnvelopeUnchangedByCandidate = (
 
 /**
  * What the document held at a logical path before this transaction, and at
- * every position a `*` segment matches. A write at or above the path saw it;
- * elsewhere the transaction left it as it was, so a read finds it.
+ * every position a `*` segment matches, or `undefined` where that can't be
+ * told.
+ *
+ * A write detail's `previousValue` is what the path held when that write was
+ * first made, so the shallowest write at or above the path saw the document
+ * as it was only if nothing overlapping the path beneath it was attempted
+ * first, which the attempt log orders.
+ * Elsewhere the transaction left the path as it was, and a read finds it.
+ * The answer only ever relaxes a check (see `storedForeignPositions`), so
+ * whatever it can't tell is unknown rather than guessed.
  */
 const storedValuesAt = (
   tx: IExtendedStorageTransaction,
@@ -6161,23 +6170,62 @@ const storedValuesAt = (
     id: URI;
     scope: ReturnType<typeof normalizeCellScope>;
   },
-): (path: readonly string[]) => readonly FabricValue[] => {
-  const writes = [
+): (path: readonly string[]) => readonly FabricValue[] | undefined => {
+  const details = [
     ...(tx.getWriteDetailsForTarget?.(target) ??
       tx.getWriteDetails?.(target.space) ?? []),
-  ].filter((write) =>
-    sameDocument(write.address, target) && write.address.path[0] === "value"
-  ).map((write) => ({
-    path: write.address.path.slice(1).map(String),
-    previousValue: write.previousValue,
+  ].filter((write) => sameDocument(write.address, target));
+  // A whole-envelope write replaces the value without a value path.
+  const envelopeWritten = details.some((write) =>
+    write.address.path.length === 0
+  );
+  const writes = details.filter((write) => write.address.path[0] === "value")
+    .map((write) => ({
+      path: write.address.path.slice(1).map(String),
+      previousValue: write.previousValue,
+    }));
+  const attempts = (getTransactionWriteAttempts(tx) ?? []).filter((attempt) =>
+    sameDocument(attempt, target) && attempt.path[0] === "value"
+  ).map((attempt) => ({
+    path: canonicalizeLogicalPath(attempt.path.map(String)),
+    journalIndex: attempt.journalIndex,
   }));
-  const valueAt = (path: readonly string[]): FabricValue | undefined => {
-    const covering =
-      writes.filter((write) => concretePathHasPrefix(path, write.path)).sort((
-        a,
-        b,
-      ) => a.path.length - b.path.length)[0];
-    if (covering !== undefined) {
+  const UNKNOWN = Symbol("unknown");
+  const valueAt = (
+    path: readonly string[],
+  ): FabricValue | undefined | typeof UNKNOWN => {
+    if (envelopeWritten) return UNKNOWN;
+    let index = -1;
+    for (const [candidate, write] of writes.entries()) {
+      if (
+        concretePathHasPrefix(path, write.path) &&
+        (index === -1 || write.path.length < writes[index].path.length)
+      ) {
+        index = candidate;
+      }
+    }
+    if (index !== -1) {
+      const covering = writes[index];
+      // The write details keep one entry per path, so the attempt log is
+      // what orders them.
+      const firstAt = (at: (write: readonly string[]) => boolean) =>
+        Math.min(
+          ...attempts.filter(({ path: attempted }) => at(attempted)).map((
+            { journalIndex },
+          ) => journalIndex),
+        );
+      const coveringAt = firstAt((attempted) =>
+        arraysEqual(attempted, covering.path)
+      );
+      const beneathAt = firstAt((attempted) =>
+        attempted.length > covering.path.length &&
+        concretePathHasPrefix(attempted, covering.path) &&
+        (concretePathHasPrefix(attempted, path) ||
+          concretePathHasPrefix(path, attempted))
+      );
+      if (!Number.isFinite(coveringAt) || beneathAt < coveringAt) {
+        return UNKNOWN;
+      }
       return getValueAtPath(
         covering.previousValue,
         path.slice(covering.path.length),
@@ -6188,37 +6236,65 @@ const storedValuesAt = (
         meta: INTERNAL_VERIFIER_META,
       });
     } catch {
-      return undefined;
+      return UNKNOWN;
     }
   };
   const expand = (
     prefix: readonly string[],
     rest: readonly string[],
-  ): FabricValue[] => {
+  ): FabricValue[] | undefined => {
     if (rest.length === 0) {
       const value = valueAt(prefix);
+      if (value === UNKNOWN) return undefined;
       return value === undefined ? [] : [value];
     }
     const [head, ...tail] = rest;
     if (head !== "*") return expand([...prefix, head], tail);
     const container = valueAt(prefix);
+    if (container === UNKNOWN) return undefined;
     if (
       !isWalkableObjectOrArray(container) || isPrimitiveCellLink(container)
     ) {
       return [];
     }
-    return Object.keys(container).flatMap((key) =>
-      expand([...prefix, key], tail)
-    );
-  };
-  const cache = new Map<string, readonly FabricValue[]>();
-  return (path) => {
-    const key = path.join("\u0000");
-    let values = cache.get(key);
-    if (values === undefined) cache.set(key, values = expand([], path));
+    const values: FabricValue[] = [];
+    for (const key of Object.keys(container)) {
+      const found = expand([...prefix, key], tail);
+      if (found === undefined) return undefined;
+      values.push(...found);
+    }
     return values;
   };
+  const cache = new Map<string, readonly FabricValue[] | undefined>();
+  return (path) => {
+    const key = path.join("\u0000");
+    if (!cache.has(key)) cache.set(key, expand([], path));
+    return cache.get(key);
+  };
 };
+
+/**
+ * Whether this transaction is a release of the piece whose store `target`
+ * is: the runtime names a piece's stores, under its own authorization, only
+ * in the transaction that sets the piece up, swaps its pattern, or repairs
+ * its start. Pattern code can record the same marker, but not the
+ * authorization.
+ */
+const transactionReleasesStore = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): boolean =>
+  tx.getCfcState().writePolicyInputs.some((input) =>
+    input.kind === "structural-provenance" &&
+    input.claim === CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE &&
+    tx.isRuntimeWritePolicyInput(input) &&
+    input.target.space === target.space && input.target.id === target.id &&
+    canonicalizeLogicalPath(input.target.path).length === 0
+  );
 
 /**
  * The positions of a stored document whose claims beneath belong to another
@@ -6228,7 +6304,7 @@ const storedValuesAt = (
  * to be held there.
  */
 const storedForeignPositions = (
-  valuesAt: (path: readonly string[]) => readonly FabricValue[],
+  valuesAt: (path: readonly string[]) => readonly FabricValue[] | undefined,
   storedSchema: JSONSchema | undefined,
 ): ForeignPositions => {
   const guarded = storedSchema === undefined ? [] : cfcSchemaEntries(
@@ -6241,12 +6317,13 @@ const storedForeignPositions = (
   return {
     holdsForeign: (path) => {
       const values = valuesAt(path);
+      if (values === undefined) return false;
       return values.length > 0
         ? values.every(isPrimitiveCellLink)
         : guarded.some((entry) => arraysEqual(entry, path));
     },
     variesBelow: (path) =>
-      valuesAt(path).length > 0 ||
+      valuesAt(path)?.length !== 0 ||
       guarded.some((entry) =>
         entry.length >= path.length &&
         path.every((segment, index) => segment === entry[index])
@@ -7625,7 +7702,14 @@ export function* prepareBoundaryCommitSteps(
       continue;
     }
     const existing = stored.status === "loaded" ? stored.metadata : undefined;
-    const storedValues = storedValuesAt(tx, { space, id, scope });
+    // Only a release of the piece relaxes claim preservation beneath its
+    // links; every other writer keeps each stored claim everywhere.
+    const foreignPositions = transactionReleasesStore(tx, { space, id, scope })
+      ? storedForeignPositions(
+        storedValuesAt(tx, { space, id, scope }),
+        stored.status === "loaded" ? stored.schema : undefined,
+      )
+      : undefined;
     let storedSchema: JSONSchema | undefined;
     let mergedSchema = schema;
     if (stored.status === "loaded" && undefinedCandidate) {
@@ -7636,9 +7720,10 @@ export function* prepareBoundaryCommitSteps(
       try {
         mergedSchema = mergeStoredCfcEnvelope(storedSchema, schema, {
           generatedOutputPaths: generatedOutputPaths.get(key),
-          beneathStoredLink: beneathForeignPosition(
-            storedForeignPositions(storedValues, storedSchema),
-          ),
+          ...(foreignPositions !== undefined && {
+            beneathStoredLink: beneathForeignPosition(foreignPositions),
+            release: true,
+          }),
         });
       } catch (error) {
         // Tag the additive-required migration incompatibility with a stable
@@ -7676,7 +7761,7 @@ export function* prepareBoundaryCommitSteps(
       const dropped = droppedStoredClaim(
         storedSchema,
         mergedSchema,
-        storedForeignPositions(storedValues, storedSchema),
+        foreignPositions,
       );
       if (dropped !== undefined) {
         reasons.push(verdictReason(dropped));

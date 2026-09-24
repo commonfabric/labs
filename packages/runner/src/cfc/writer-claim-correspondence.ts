@@ -107,5 +107,9 @@ export const writerClaimPatternFilesCorrespond = (
   const b = normalizeIdentitySource(stamped);
   if (a === undefined || b === undefined) return false;
   const tail = patternTail(a);
-  return tail === patternTail(b) && tail.split("/").length >= 3;
+  const segments = tail.split("/").slice(1);
+  return tail === patternTail(b) && segments.length >= 2 &&
+    segments.every((segment) =>
+      segment !== "" && segment !== "." && segment !== ".."
+    );
 };

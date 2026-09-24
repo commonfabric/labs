@@ -1180,7 +1180,8 @@ describe("mergeCfcSchemaEnvelopes", () => {
         ...(moduleIdentity !== undefined && { moduleIdentity }),
       },
     });
-    const merge = (stored: unknown, candidate: unknown) =>
+    // In a release of the piece, which is the only writer that may adopt.
+    const merge = (stored: unknown, candidate: unknown, release = true) =>
       (
         (mergeCfcSchemaEnvelopes({
           type: "object",
@@ -1192,7 +1193,7 @@ describe("mergeCfcSchemaEnvelopes", () => {
           properties: {
             mru: { type: "array", ifc: { writeAuthorizedBy: candidate } },
           },
-        }) as JSONSchemaObj).properties?.mru as JSONSchemaObj
+        }, { release }) as JSONSchemaObj).properties?.mru as JSONSchemaObj
       ).ifc?.writeAuthorizedBy;
 
     it("adopts the stamp for the same export below a pattern root", () => {
@@ -1211,6 +1212,55 @@ describe("mergeCfcSchemaEnvelopes", () => {
         expect(merge(claim(stored, ["setMruProfile"]), stamped)).toEqual(
           stamped,
         );
+      }
+    });
+
+    it("refuses to adopt outside a release", () => {
+      expect(() =>
+        merge(
+          claim("/system/profile-create.tsx", ["setMruProfile"]),
+          claim(
+            "/packages/patterns/system/profile-create.tsx",
+            ["setMruProfile"],
+            "release-2",
+          ),
+          false,
+        )
+      ).toThrow("writeAuthorizedBy must remain stable at /mru");
+    });
+
+    it("refuses an unstamped claim over a stamped one, and a root further in", () => {
+      expect(() =>
+        merge(
+          claim(
+            "/api/patterns/system/profile-create.tsx",
+            ["setMruProfile"],
+            "release-1",
+          ),
+          claim("/packages/patterns/system/profile-create.tsx", [
+            "setMruProfile",
+          ]),
+        )
+      ).toThrow("writeAuthorizedBy must remain stable at /mru");
+      for (
+        const [stored, candidate] of [
+          [
+            "/evil/api/patterns/system/profile-create.tsx",
+            "/packages/patterns/system/profile-create.tsx",
+          ],
+          ["//profile-create.tsx", "/packages/patterns//profile-create.tsx"],
+          [
+            "/system/../profile-create.tsx",
+            "/packages/patterns/system/../profile-create.tsx",
+          ],
+        ]
+      ) {
+        expect(() =>
+          merge(
+            claim(stored, ["setMruProfile"]),
+            claim(candidate, ["setMruProfile"], "release-2"),
+          )
+        ).toThrow("writeAuthorizedBy must remain stable at /mru");
       }
     });
 

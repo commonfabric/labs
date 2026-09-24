@@ -158,6 +158,7 @@ const writerClaimWithoutStampAndFile = (
 const reconcileWriterClaimStamp = (
   existing: unknown,
   candidate: unknown,
+  release: boolean,
 ): unknown | undefined => {
   if (!isWriterIdentityClaim(existing) || !isWriterIdentityClaim(candidate)) {
     return undefined;
@@ -203,9 +204,9 @@ const reconcileWriterClaimStamp = (
     : undefined;
   if (
     !writerClaimFilesCorrespond(existingFile, candidateFile) &&
-    // A stamped claim may adopt an unstamped stored one spelled below another
-    // pattern root; nothing else widens.
-    !(!existingStamped && candidateStamped &&
+    // In a release of the piece, a stamped claim may adopt an unstamped
+    // stored one spelled below another pattern root; nothing else widens.
+    !(release && !existingStamped && candidateStamped &&
       writerClaimPatternFilesCorrespond(existingFile, candidateFile))
   ) {
     return undefined;
@@ -221,6 +222,7 @@ const mergeSetLikeIfcArray = (
   existing: unknown,
   candidate: unknown,
   path: string,
+  release: boolean,
 ): unknown => {
   if (existing === undefined) {
     return candidate;
@@ -289,7 +291,11 @@ const mergeSetLikeIfcArray = (
           // boundary, never a rotation here). Different bindings still
           // conflict.
           if (key === "writeAuthorizedBy") {
-            const reconciled = reconcileWriterClaimStamp(existing, candidate);
+            const reconciled = reconcileWriterClaimStamp(
+              existing,
+              candidate,
+              release,
+            );
             if (reconciled !== undefined) {
               return reconciled;
             }
@@ -328,6 +334,7 @@ const mergeIfc = (
   existing: JSONSchemaObj["ifc"],
   candidate: JSONSchemaObj["ifc"],
   path: string,
+  release = false,
 ): JSONSchemaObj["ifc"] => {
   if (existing === undefined) {
     return candidate;
@@ -346,6 +353,7 @@ const mergeIfc = (
       existingIfc[key],
       candidateIfc[key],
       path,
+      release,
     );
     if (value !== undefined) merged[key] = value;
   }
@@ -506,6 +514,14 @@ export interface MergeCfcSchemaEnvelopeOptions {
    * the candidate's claims there rather than holding the two to agree.
    */
   beneathStoredLink?: (path: readonly string[]) => boolean;
+
+  /**
+   * Whether the write is a release of the piece: the transaction the runtime
+   * sets it up, swaps its pattern, or repairs its start in. Only a release may
+   * adopt an unstamped stored writer claim spelled below another pattern
+   * root.
+   */
+  release?: boolean;
 }
 
 const generatedOutputCovers = (
@@ -811,7 +827,7 @@ const mergeSchemaNode = (
 
   const ifc = options.beneathStoredLink?.(logicalPath)
     ? right.ifc ?? left.ifc
-    : mergeIfc(left.ifc, right.ifc, path);
+    : mergeIfc(left.ifc, right.ifc, path, options.release === true);
   const required = mergeRequired(
     left.required,
     right.required,
