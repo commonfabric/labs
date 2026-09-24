@@ -426,9 +426,20 @@ server](#clients-that-are-not-built-alongside-their-server).
   run the derive-and-commit model (which is why the flip does not reach
   the no-server pattern-tests lane and its `topics/multi-user.test.tsx`,
   the lane-posture item the topics measurement report recorded for the
-  flip decision); the ON posture's unit coverage sets the
-  flag explicitly (the `executor-*` suites) and its integration coverage
-  is whichever CI role resolves ON. In CI (testing.md §2), `default`
+  flip decision). A test that runs ON in one process needs a serving loop
+  beside its memory server, or the events its clients append are admitted
+  and never delivered;
+  `@commonfabric/runner/executor/serving-memory-server.deno` supplies one,
+  in-process (`startServingMemoryServer`) or on a localhost websocket for
+  `remoteClient` runtimes (`listenServingMemoryServer`), with its serving
+  runtimes built by the factory toolshed uses
+  ([TESTING.md](TESTING.md#the-on-topology-in-one-process)). The ON
+  posture's unit coverage sets the flag explicitly over one (the
+  `executor-*` suites, the served-lifecycle verbs); the pattern
+  `MultiRuntimeHarness` and the CLI's agent-connections test resolve the
+  posture as a deployed entry point does and host a serving server when it
+  is ON, so they follow the default and the CI role; the rest of the
+  integration coverage is whichever CI role resolves ON. In CI (testing.md §2), `default`
   follows the constant and `opposite` is its explicit inverse; both are
   probed through the shared role
   resolver; the opposite lane uses `build-toolshed-opposite`, whose shell

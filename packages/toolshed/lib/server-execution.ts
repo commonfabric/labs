@@ -11,29 +11,19 @@
 
 import {
   type EnvReader,
-  type ExperimentalOptions,
   experimentalOptionsFromEnv,
-  Runtime,
 } from "@commonfabric/runner";
 import { publishServingExperimentalOverrides } from "./experimental-posture.ts";
 import { serverExecutionEnabledFromEnv } from "./server-execution-flag.ts";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
-import { LoopbackStorageManager } from "@commonfabric/runner/executor/loopback-storage";
+import {
+  SERVING_RUNTIME_EXPERIMENTAL,
+  servingRuntimeFactory,
+} from "@commonfabric/runner/executor/serving-runtime";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import type { Identity } from "@commonfabric/identity";
 
 let host: ExecutorHost | undefined;
-
-/**
- * The flags a SERVING runtime runs regardless of the environment. Written
- * once because two consumers need the same answer: the runtime factory
- * below, and `/api/meta`, which reports the posture this deployment actually
- * serves at so a client adopting it does not run a flag the deployment
- * abandoned (docs/development/EXPERIMENTAL_OPTIONS.md).
- */
-const SERVING_RUNTIME_EXPERIMENTAL = {
-  serverExecution: true,
-} as const satisfies ExperimentalOptions;
 
 /** The production default for the per-space outstanding-network-effect
  * cap (serving-loop.md §5; README §3.8's multi-tenancy contract needs a
@@ -223,42 +213,15 @@ export function startServerExecutionHost(options: {
     ensureSpaceRoots,
     server: options.server,
     serviceIdentity: options.identity.did(),
-    createRuntime: (space, context) => {
-      const storageManager = LoopbackStorageManager.connect(options.server, {
-        as: options.identity,
-        // Phase 5 (protocol.md §2's grant-scoped read design): the
-        // serving manager's FOREIGN-space providers refuse scoped
-        // reads fail-closed — the producer half of the
-        // delegated-scoped-read precondition.
-        servingHomeSpace: space,
-      });
-      // Installed ahead of the runtime, so no read this factory could ever
-      // perform reaches the session.
-      if (context.storeReadThrough !== undefined) {
-        storageManager.installStoreReadThrough(
-          space,
-          context.storeReadThrough,
-        );
-      }
-      const runtime = new Runtime({
-        apiUrl: options.apiUrl,
-        storageManager,
-        // The SpaceServer's own runtime (serving-loop.md §3): never the
-        // Phase-2 speculation-overlay default — its factory-time loads
-        // commit through the loopback plane, and the wave destination
-        // takes over at activation.
-        servingPosture: true,
-        experimental: { ...experimental, ...SERVING_RUNTIME_EXPERIMENTAL },
-      });
-      void space;
-      return Promise.resolve({
-        runtime,
-        dispose: async () => {
-          await runtime.dispose();
-          await storageManager.close();
-        },
-      });
-    },
+    // The serving runtimes' own flags: the environment's, with the ones
+    // every serving runtime forces on top. `/api/meta` publishes those same
+    // forced flags below.
+    createRuntime: servingRuntimeFactory({
+      server: options.server,
+      identity: options.identity,
+      apiUrl: options.apiUrl,
+      experimental,
+    }),
   });
   // Only now, with the loop actually up: what `/api/meta` adds to the base
   // posture, so a client adopting this deployment's flags gets the ones the
