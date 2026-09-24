@@ -211,9 +211,9 @@ interface Input { c: Rec; }`,
   });
 
   describe("a capture of a scoped cell", () => {
-    it("keeps a scoped cell read for its length whole, with its scope", async () => {
-      // Only the scope wrapper names the scope, which a capability wrapper
-      // around a shrunk value would drop.
+    it("keeps the readonly narrowing, unread elements, and scope of a cell read for its length", async () => {
+      // Only the scope wrapper names the scope, so the narrowed and shrunk
+      // cell is put back inside it.
       const capture = await captureOf(`
 interface Input { c: PerUser<Writable<Box<number>[]>>; }
 export default pattern<Input>(({ c }) => ({
@@ -222,12 +222,23 @@ export default pattern<Input>(({ c }) => ({
 
       expect(capture.c).toEqual({
         type: "array",
-        items: {
-          type: "object",
-          properties: { value: { type: "number" }, extra: { type: "string" } },
-          required: ["value", "extra"],
-        },
-        asCell: [{ kind: "cell", scope: "user" }],
+        items: { type: "unknown" },
+        asCell: [{ kind: "readonly", scope: "user" }],
+      });
+    });
+
+    it("keeps the identity narrowing and scope of a cell whose elements are compared", async () => {
+      const capture = await captureOf(`import { equals } from "commonfabric";
+export default pattern<{ c: PerUser<Writable<Person[]>>; self: Person }>(
+  ({ c, self }) => ({
+    found: computed(() => c.get().some((p) => equals(p, self))),
+  }),
+);`);
+
+      expect(capture.c).toEqual({
+        type: "array",
+        items: { type: "unknown", asCell: ["comparable"] },
+        asCell: [{ kind: "readonly", scope: "user" }],
       });
     });
   });

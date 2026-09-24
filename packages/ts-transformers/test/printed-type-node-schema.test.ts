@@ -921,9 +921,9 @@ export default pattern<{ profiles: ProfileCell[] }>(({ profiles }) => {
       });
     });
 
-    it("keeps a scoped cell whole where its capture is narrowed", async () => {
-      // Only the scope wrapper names the scope, which a narrowed wrapper around
-      // the cell's value would drop.
+    it("narrows a scoped cell inside its scope wrapper", async () => {
+      // Only the scope wrapper names the scope, so the narrowed cell is put
+      // back inside it.
       const output = await transformSource(
         `import { computed, pattern, UI, Writable } from "commonfabric";
 export default pattern<Record<string, never>>(() => {
@@ -939,13 +939,45 @@ export default pattern<Record<string, never>>(() => {
       const confirming = captures.members.find(ts.isPropertySignature)!;
 
       expect(confirming.type!.getText(root)).toBe(
-        "__cfHelpers.PerSession<__cfHelpers.Cell<boolean>>",
+        "__cfHelpers.PerSession<__cfHelpers.ReadonlyCell<boolean>>",
       );
       expect((callSchemas(root, "lift")[0]!.properties as Schema).confirming)
         .toEqual({
           type: "boolean",
-          asCell: [{ kind: "cell", scope: "session" }],
+          asCell: [{ kind: "readonly", scope: "session" }],
         });
+    });
+
+    it("reads a scoped cell inside a printed value by its type", async () => {
+      // The optional member prints as a union holding the scoped cell: the
+      // union unfolds, and the scoped cell is kept whole rather than taken
+      // apart.
+      const [capture] = await liftSchemas(
+        `import { computed, pattern, wish, Writable, type PerUser } from "commonfabric";
+interface Note { title: string; }
+export default pattern<{ x: string }>(() => {
+  const found = wish<{ note?: PerUser<Writable<Note>>; count: number }>({
+    query: "#note",
+    headless: true,
+  });
+  return { title: computed(() => found.result?.note?.get()?.title) };
+});`,
+      );
+
+      expect((capture as Schema).properties).toMatchObject({
+        found: {
+          properties: {
+            result: {
+              properties: {
+                note: {
+                  $ref: "#/$defs/Note",
+                  asCell: [{ kind: "cell", scope: "user" }],
+                },
+              },
+            },
+          },
+        },
+      });
     });
 
     it("reads elements compared only by identity inside a printed value as comparable", async () => {

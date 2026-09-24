@@ -1929,22 +1929,31 @@ adjustments:
   candidate holds an authored `Default` (`getScopeWrapper` and
   `restoreDefault` in `transformers/type-shrinking.ts`;
   `test/shrunk-capture-wrappers.test.ts`)
-- a pass that reads the structure of a node printed from a type (node-driven
-  shrinking, the narrowing of cells to their observed capability, and the
-  application of identity-only paths) reads the print's unfolding in its
-  place: a node of the print's own kind built from the type it was printed
-  from, each type node below it printed afresh from its own type. A literal, a
-  union, an array (`T[]`, `readonly T[]`, `Array<T>`, `ReadonlyArray<T>`), and
-  a cell reference unfold, a union into one print for each of its members. A
-  print of any other kind is kept whole. A print thus goes through each pass
-  as the authored node for its type would, every part a pass keeps is read by
-  its type, and no pass builds a node from a piece of a print (`unfoldPrint` in
-  `transformers/type-shrinking.ts`; `test/printed-type-node-schema.test.ts`).
-  Three rules keep what a print says through the unfolding: a scoped cell is
-  not narrowed, as only its alias names its scope (narrowing it as well is in
-  the design deltas' backlog); a narrowed wrapper around a nullable cell's
-  value alternatives is not registered with the union's type, which schema
-  generation would read in the wrapper's place; and the declared
+- a pass that reads the structure of a node printed from a type reads the
+  print's unfolding in its place: a node of the print's own kind built from the
+  type it was printed from, each type node below it printed afresh from its own
+  type (`unfoldPrint` in `transformers/type-shrinking.ts`). Node-driven
+  shrinking and the application of identity-only paths unfold a literal, a union
+  (into one print for each of its members), an array (`T[]`, `readonly T[]`,
+  `Array<T>`, `ReadonlyArray<T>`), and a cell reference. The narrowing of cells
+  to their observed capability unfolds a literal, and reads the value of a
+  printed cell, or of each cell in a printed nullable union, printed from the
+  type arguments its wrapper was given. A union carrying a `Default` brand, and
+  an object with a property keyed by a symbol, say something only as a whole and
+  do not unfold; a print of any other kind does not either. A print that does
+  not unfold is kept whole. A print thus goes through each pass as the authored
+  node for its type would, every part a pass keeps is read by its type, and no
+  pass builds a node from a piece of a print
+  (`test/printed-type-node-schema.test.ts`). A scoped cell
+  (`PerUser<Writable<T>>`), whose scope only its alias names, is rebuilt by the
+  narrowing of cells: its cell, printed afresh, is narrowed inside a rebuilt
+  scope wrapper registered with the scoped cell's type, through which
+  node-driven shrinking and identity-only paths then reach the cell. Schema
+  generation reads the scope from the wrapper's name and the cell from the node
+  inside it. Node-driven shrinking keeps the print of a scoped cell whole. Two
+  rules keep what a print says through the unfolding: a narrowed wrapper around
+  a nullable cell's value alternatives is not registered with the union's type,
+  which schema generation would read in the wrapper's place; and the declared
   members of a generic declaration, written in terms of parameters an
   instantiation binds, do not shrink that instantiation
   (`resolveMembersFromDeclaration`)
