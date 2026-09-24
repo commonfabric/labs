@@ -563,9 +563,6 @@ describe("CFCFCAuthorship", () => {
   });
 
   it("verifies a message against a profile whose principal is on its fields", async () => {
-    // The shape a message's link to a Fabric profile reads as: the message's
-    // own `authored-by` at the root, the profile owner's `represents-principal`
-    // on each owner-protected field.
     const element = new CFCFCAuthorship();
     element.value = {
       getCfcLabel: () => Promise.resolve(authoredByLabel("did:example:alice")),

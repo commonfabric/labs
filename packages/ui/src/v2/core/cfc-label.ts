@@ -131,11 +131,11 @@ export const ownerPrincipalFromLabel = (
 
 /**
  * The principal the value labeled by `view` represents, as an author claim is
- * checked against. The root entries decide when any of them carries a
- * `represents-principal` atom; otherwise every other entry does, which is where
- * a profile's owner-protected fields carry theirs. Either way, the atoms that
- * decide must all name the same DID, and it is returned; when they name more
- * than one, or there are none, the result is `undefined`.
+ * checked against: the DID that every `represents-principal` atom at the root,
+ * or on a top-level field, names. A profile's owner-protected fields carry
+ * their owner's atom at their own top-level paths; atoms deeper down come from
+ * documents the value links, and do not decide. When the deciding atoms name
+ * more than one DID, or there are none, the result is `undefined`.
  */
 export const authorPrincipalFromLabel = (
   view: CfcLabelView | undefined,
@@ -143,11 +143,8 @@ export const authorPrincipalFromLabel = (
   if (view === undefined) {
     return undefined;
   }
-  const atRoot = representsPrincipalSubjects(
-    view.entries.filter((entry) => entry.path.length === 0),
-  );
-  const deciding = atRoot.length > 0 ? atRoot : representsPrincipalSubjects(
-    view.entries.filter((entry) => entry.path.length > 0),
+  const deciding = representsPrincipalSubjects(
+    view.entries.filter((entry) => entry.path.length <= 1),
   );
   const distinct = new Set(deciding);
   return distinct.size === 1 ? deciding[0] : undefined;

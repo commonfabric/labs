@@ -90,10 +90,28 @@ describe("authorPrincipalFromLabel", () => {
     expect(authorPrincipalFromLabel(label)).toBe(DID);
   });
 
-  it("returns the root's DID over a different one on a field", () => {
+  it("returns the root's DID for an author labeled only at its root", () => {
+    const label = view([representsAt([], DID)]);
+    expect(authorPrincipalFromLabel(label)).toBe(DID);
+  });
+
+  it("returns `undefined` when the root and a top-level field name different DIDs", () => {
+    // A link slot that is itself labeled with the principal who wrote it,
+    // holding a profile someone else owns.
     const label = view([
-      representsAt(["name"], OTHER_DID),
-      representsAt([], DID),
+      representsAt([], OTHER_DID),
+      representsAt(["name"], DID),
+    ]);
+    expect(authorPrincipalFromLabel(label)).toBeUndefined();
+  });
+
+  it("ignores atoms below the top-level fields", () => {
+    // A profile that pins a piece owned by someone else holds a copy of that
+    // piece's label below the field that links it.
+    const label = view([
+      representsAt(["name"], DID),
+      representsAt(["elements"], DID),
+      representsAt(["elements", "0", "cell"], OTHER_DID),
     ]);
     expect(authorPrincipalFromLabel(label)).toBe(DID);
   });
@@ -115,10 +133,9 @@ describe("authorPrincipalFromLabel", () => {
     expect(authorPrincipalFromLabel(label)).toBeUndefined();
   });
 
-  it("returns the DID of string-form atoms", () => {
+  it("returns the DID of a string-form atom", () => {
     const label = view([
       { path: ["name"], label: { integrity: [`represents-principal:${DID}`] } },
-      representsAt(["avatar"], DID),
     ]);
     expect(authorPrincipalFromLabel(label)).toBe(DID);
   });
