@@ -8,10 +8,13 @@ const DEV_SOCKET = "DEV_SOCKET.js";
  * Whether `response` takes the headers this server adds. A redirect from
  * `serveDir` does not: `Response.redirect()` makes its headers immutable, and
  * a redirect to the same file with a trailing slash stays true across builds.
- * Nor does a websocket upgrade, which carries nothing to cache.
+ * Nor does a websocket upgrade, which carries nothing to cache. A 304 does:
+ * `isRedirectStatus()` counts it, but it is not a redirect, and it is what
+ * refreshes the policy of a copy a browser already holds.
  */
 const takesAddedHeaders = (response: Response): boolean =>
-  !isRedirectStatus(response.status) && response.status !== 101;
+  response.status === 304 ||
+  (!isRedirectStatus(response.status) && response.status !== 101);
 
 export class DevServer {
   #server: Deno.HttpServer<Deno.NetAddr>;

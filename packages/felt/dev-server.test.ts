@@ -69,7 +69,7 @@ describe("DevServer", () => {
     expect(script).toContain(`port: ${server.addr.port}`);
   });
 
-  it("returns 304 for a revalidation of an unchanged file", async () => {
+  it("returns 304, marked for revalidation, for an unchanged file", async () => {
     const first = await fetch(`${base}/scripts/index.js`);
     await first.body?.cancel();
     const etag = first.headers.get("ETag");
@@ -81,5 +81,6 @@ describe("DevServer", () => {
     await second.body?.cancel();
 
     expect(second.status).toBe(304);
+    expect(second.headers.get("Cache-Control")).toBe("no-cache");
   });
 });
