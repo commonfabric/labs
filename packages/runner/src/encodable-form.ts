@@ -188,13 +188,14 @@ type AnyFunction = (...args: never[]) => unknown;
  *
  * A `FabricExecValue` comes back as one, as long as nothing stands in for a
  * value through `replaceOther`: an artifact's encodable form is itself a
- * `FabricExecValue`, and nothing else changes kind. Any other value comes back
- * as `unknown`, since the walk leaves whatever it does not recognize as it is.
+ * `FabricExecValue`, as the `toEncodableForm` protocol's type says, and nothing
+ * else changes kind. Any other value comes back as `unknown`, since the walk
+ * leaves whatever it does not recognize as it is.
  */
 export function replaceArtifacts(
   value: FabricExecValue,
   onCopy: OnCopy,
-  hooks?: Pick<WalkHooks, "isLeaf">,
+  hooks?: { isLeaf?: WalkHooks["isLeaf"]; replaceOther?: undefined },
 ): FabricExecValue;
 export function replaceArtifacts(
   value: unknown,

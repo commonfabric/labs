@@ -32,7 +32,7 @@ import { replaceArtifacts, type WalkHooks } from "./encodable-form.ts";
  */
 export function flattenBuilderArtifacts(
   value: FabricExecValue,
-  hooks?: Pick<WalkHooks, "isLeaf">,
+  hooks?: { isLeaf?: WalkHooks["isLeaf"]; replaceOther?: undefined },
 ): FabricExecValue;
 export function flattenBuilderArtifacts(
   value: unknown,
