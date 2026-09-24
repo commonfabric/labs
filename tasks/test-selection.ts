@@ -521,11 +521,6 @@ const LIVE: Sources = {
   topology: loadTopology,
 };
 
-/** Says, on the error stream, how the manifest's moment was chosen. */
-function note(line: string): void {
-  console.error(`test-selection: ${line}`);
-}
-
 /**
  * The manifest `root`'s commit resolves, or the one current `at` where a
  * moment is named. Returns `undefined`, having said why, where there is
@@ -539,7 +534,6 @@ async function commitManifest(
   const found = await resolveManifest(
     at === undefined ? { root } : { root, at },
     sources,
-    note,
   );
   if (found.manifest === undefined) {
     console.error(`no manifest: ${found.absent}`);
@@ -571,7 +565,6 @@ async function commitPlan(
     options,
     await sources.topology(root),
     sources,
-    note,
   );
   if (planned.fetched.absent !== undefined) {
     console.error(`no manifest: ${planned.fetched.absent}`);

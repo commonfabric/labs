@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import {
   listRunnerTests,
   selectRunnerTestFiles,
+  selectRunnerTestPaths,
 } from "./select-runner-test-files.ts";
 import { RUNNER_TEST_WEIGHTS } from "./test-timing-weights.ts";
 
@@ -47,6 +48,23 @@ describe("listRunnerTests", () => {
     } finally {
       await Deno.remove(directory, { recursive: true });
     }
+  });
+});
+
+describe("selectRunnerTestPaths", () => {
+  it("returns the shard's files under the test directory", () => {
+    expect(
+      selectRunnerTestPaths(
+        [{ name: "a.test.ts" }, { name: "executor/b.test.ts" }],
+        "1/1",
+        {},
+      ),
+    ).toEqual(["./test/a.test.ts", "./test/executor/b.test.ts"]);
+  });
+
+  it("throws for a shard that selects no file", () => {
+    expect(() => selectRunnerTestPaths([{ name: "a.test.ts" }], "2/2", {}))
+      .toThrow("No runner test files selected for 2/2");
   });
 });
 

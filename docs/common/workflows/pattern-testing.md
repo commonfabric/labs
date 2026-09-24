@@ -214,7 +214,11 @@ export default pattern(() => {
 ```
 
 `packages/patterns/map-demo.test.tsx` drives both an inline arrow and a bound
-handler this way.
+handler this way. `fireEvent(node, prop, event)` in the vnode helpers does the
+same for any event prop, and fails when the node binds nothing under it;
+`fireClick(node)` is its `onClick` case, with an empty event.
+`packages/patterns/scoped-group-chat/submit-on-enter.test.tsx` presses Enter in
+a `cf-input` by firing its `oncf-submit`.
 
 Prefer an exported `Stream<T>` when you own the pattern: it states the entry
 point in the output type. Use the tree walk when the handler belongs to the UI

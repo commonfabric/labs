@@ -140,6 +140,13 @@ self.onmessage = (ev: MessageEvent) => {
             ]
             : undefined,
           prefabIsThatRealmsPrefab: value.prefab === UNAVAILABLE_SYNCING,
+          loneString: value.loneString,
+          loneKeys: (value.loneKey !== undefined)
+            ? Object.keys(value.loneKey as object)
+            : undefined,
+          loneSymKey: (typeof value.loneSym === "symbol")
+            ? Symbol.keyFor(value.loneSym)
+            : undefined,
         },
       } satisfies EchoReport,
     );

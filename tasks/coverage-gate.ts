@@ -565,8 +565,9 @@ export async function main(
   const suites = await (deps.topology ?? loadTopology)(options.root);
   const changed = await changedFiles(options.root, options.base);
   const gate = coverageGateFor(suites, changed);
-  const moment = manifestMoment({ root: options.root });
-  const baselines = await (deps.baselines ?? publishedBaselines)(moment.at);
+  const baselines = await (deps.baselines ?? publishedBaselines)(
+    manifestMoment({ root: options.root }),
+  );
   let accepted: ReadonlyMap<string, number>;
   try {
     accepted = acceptedCoverageDebt(options.body);

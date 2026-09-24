@@ -63,8 +63,7 @@ interface DesktopStart {
   cwd: string;
   title: string | null;
   sentAt: number;
-  /** The sessions this driver had listed when the start was sent; none of
-   * them is the one the app makes for it. */
+  /** All sessions in a fresh inventory taken before opening the app. */
   knownSessionIds: ReadonlySet<string>;
 }
 
@@ -146,14 +145,9 @@ const promptKey = (text: string): string =>
 const listedPromptKey = (text: string): string =>
   promptKey(text.replace(/\s*…$/, ""));
 
-/** How much earlier than the start's sending a session may be created and
- * still be the one the app made for it: the app and the host share this
- * Mac's clock, so only a small skew between their timestamps is allowed. */
-const DESKTOP_START_CLOCK_SKEW_MS = 5_000;
-
 /** Whether a listed session could be the one a desktop start produced: not
- * one this driver had listed before the start was sent, in the start's
- * directory, made after the start was sent, opening with the start's text
+ * in its pre-launch inventory, in the start's directory, created at or after
+ * the launch boundary, and opening with the start's text
  * (the SDK may list a prefix of the first prompt). */
 const desktopStartMatches = (
   start: DesktopStart,
@@ -162,8 +156,8 @@ const desktopStartMatches = (
   if (start.knownSessionIds.has(info.sessionId)) return false;
   if (!info.cwd || resolve(info.cwd) !== resolve(start.cwd)) return false;
   if (
-    info.createdAt !== undefined &&
-    info.createdAt < start.sentAt - DESKTOP_START_CLOCK_SKEW_MS
+    info.createdAt === undefined || !Number.isFinite(info.createdAt) ||
+    info.createdAt < start.sentAt
   ) {
     return false;
   }
@@ -703,6 +697,29 @@ export class ClaudeAgentSdkDriver implements AgentDriver {
         },
       };
     }
+    let knownSessionIds: ReadonlySet<string>;
+    try {
+      knownSessionIds = await this.#withSourceEnvironment(async () => {
+        // No limit: the exclusion set covers the entire source inventory.
+        const sessions = await this.#sdk.listSessions({
+          ...(this.#config.cwd ? { dir: this.#config.cwd } : {}),
+        });
+        return new Set(sessions.map((info) => info.sessionId));
+      });
+    } catch (error) {
+      return { ...sessionLookupFailure(error), affectedSession: null };
+    }
+    const refusal = this.#refuseQuery(nativeSessionId);
+    if (refusal) return { ...refusal, affectedSession: null };
+    // Inventory may run while the opener is pending. Neither the exclusion
+    // set nor the creation boundary may move past the session it discovers.
+    const start: DesktopStart = {
+      text: input.text,
+      cwd,
+      title: input.title ?? null,
+      sentAt: this.#desktop.now(),
+      knownSessionIds,
+    };
     const url = new URL("claude://code/new");
     url.searchParams.set("folder", cwd);
     url.searchParams.set("q", input.text);
@@ -716,13 +733,7 @@ export class ClaudeAgentSdkDriver implements AgentDriver {
         },
       };
     }
-    this.#desktopStarts.set(nativeSessionId, {
-      text: input.text,
-      cwd,
-      title: input.title ?? null,
-      sentAt: this.#desktop.now(),
-      knownSessionIds: new Set(this.#sessionCwds.keys()),
-    });
+    this.#desktopStarts.set(nativeSessionId, start);
     return {
       status: "succeeded",
       result: {

@@ -1,7 +1,8 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertThrows } from "@std/assert";
 import {
   listGeneratedPatternTests,
   selectGeneratedPatternFiles,
+  selectGeneratedPatternPaths,
 } from "./select-generated-pattern-files.ts";
 
 const TOTAL_SHARDS = 2;
@@ -24,6 +25,21 @@ Deno.test("selectGeneratedPatternFiles round-robins sorted names", () => {
     "bravo.test.ts",
     "delta.test.ts",
   ]);
+});
+
+Deno.test("selectGeneratedPatternPaths prefixes the shard's files with their directory", () => {
+  assertEquals(
+    selectGeneratedPatternPaths(["bravo.test.ts", "alpha.test.ts"], "2/2"),
+    ["./integration/patterns/bravo.test.ts"],
+  );
+});
+
+Deno.test("selectGeneratedPatternPaths throws for a shard that selects no file", () => {
+  assertThrows(
+    () => selectGeneratedPatternPaths(["alpha.test.ts"], "2/2"),
+    Error,
+    "No generated pattern files selected for 2/2",
+  );
 });
 
 Deno.test("every real generated pattern file is covered exactly once across shards", async () => {

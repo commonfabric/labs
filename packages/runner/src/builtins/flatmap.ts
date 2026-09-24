@@ -29,6 +29,7 @@ import {
   trackListSetupRollback,
 } from "./list-element-rollback.ts";
 import { listInstanceCoordinator } from "./list-instance-coordinator.ts";
+import { LIST_OP_REFERENCED_ARGUMENT_FIELDS } from "./list-op-argument-usage.ts";
 import { resumeContainerWait } from "./list-result-container-seed.ts";
 import { issueResultContainerSetup } from "./list-result-container.ts";
 import {
@@ -463,6 +464,7 @@ function createFlatMapInstance(
                 doNotUpdateOnPatternChange: true,
                 awaitSyncBeforeInitialRun: elementAwaitSync,
                 parentPieceRootId,
+                referencedArgumentFields: LIST_OP_REFERENCED_ARGUMENT_FIELDS,
               },
             );
             // The whole setup, every time, because issuing it takes the debt
@@ -499,6 +501,7 @@ function createFlatMapInstance(
             doNotUpdateOnPatternChange: true,
             awaitSyncBeforeInitialRun: elementAwaitSync,
             parentPieceRootId,
+            referencedArgumentFields: LIST_OP_REFERENCED_ARGUMENT_FIELDS,
           },
         );
         linkElementCell(boundResultCell);

@@ -2,12 +2,14 @@ import {
   fabricAwareEqual,
   type FabricValue,
   isFabricPlainObject,
+  isFabricSpecialObject,
   isValidFabricPlainObject,
   isWalkableObjectOrArray,
   shallowMutableClone,
 } from "@commonfabric/data-model";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { internSchema } from "@commonfabric/data-model-schema";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
   isModule,
@@ -17,7 +19,9 @@ import {
 } from "./builder/types.ts";
 import { isCell, isStream } from "./cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";
+import { areNormalizedLinksSame } from "./link-types.ts";
 import { isCellLink } from "./link-utils.ts";
+import { getCellOrThrow, isCellResult } from "./query-result-proxy.ts";
 import { type SigilLink, type URI } from "./sigil-types.ts";
 import {
   cfcSchemaResolvedRoot,
@@ -33,23 +37,53 @@ import {
 } from "./scope.ts";
 
 /**
- * Whether a merged result is equivalent to the value it was built from, for
- * the four decisions in this file that return the original value when it is.
+ * Whether two candidates for a union's value are equivalent, for the two
+ * decisions in this file that take a union's candidate only when every valid
+ * candidate agrees on it.
  *
- * A value this cannot read compares unequal, so the merged snapshot is kept.
- * `mergeSchemaDefaults()` walks values that are only partly materialized: a
- * retained descendant may be a getter that throws rather than answering, and
- * the walk `fabricAwareEqual()` falls back to reads by property. The
- * comparison is an optimization -- it decides whether to hand back the
- * original object rather than the copy -- so a value it cannot read costs a
- * copy rather than an answer.
+ * The candidates for a present value are built from it by adding defaults, and
+ * a merge hands back each part of the value it added nothing to (see
+ * `mergeSchemaDefaults()`), so two candidates share every such part by
+ * reference and differ only in what was added. The walk stops at a shared
+ * reference, and never reads through a query-result view: a view reaches a
+ * whole stored graph through its links, and reading two of them to compare
+ * would expand every path through that graph. Two views are equal when they
+ * read the same location, which fixes what they hold within the one
+ * transaction a merge reads through.
+ *
+ * A pair this cannot compare reads as unequal, which leaves the union's value
+ * as it was rather than choosing between candidates.
  */
-function mergedValueEquals(left: unknown, right: unknown): boolean {
+function unionCandidatesEqual(left: unknown, right: unknown): boolean {
   try {
-    return fabricAwareEqual(left, right);
+    return deepEqual(left, right, unionCandidateObjectEqual);
   } catch {
     return false;
   }
+}
+
+/**
+ * Helper for {@link unionCandidatesEqual}, which decides the object pairs
+ * holding a query-result view or a `FabricSpecialObject`, and declines the
+ * rest.
+ */
+function unionCandidateObjectEqual(
+  left: object,
+  right: object,
+): boolean | undefined {
+  const leftIsView = isCellResult(left);
+  const rightIsView = isCellResult(right);
+  if (leftIsView || rightIsView) {
+    return leftIsView && rightIsView &&
+      areNormalizedLinksSame(
+        getCellOrThrow(left).getAsNormalizedFullLink(),
+        getCellOrThrow(right).getAsNormalizedFullLink(),
+      );
+  }
+  if (isFabricSpecialObject(left) || isFabricSpecialObject(right)) {
+    return fabricAwareEqual(left, right);
+  }
+  return undefined;
 }
 
 type ActiveDefaultMergePairs = WeakMap<
@@ -352,7 +386,7 @@ function extractDefaultValuesInternal(
       ).map((candidate) => candidate.value);
       return validCandidates.length > 0 &&
           validCandidates.every((candidate) =>
-            mergedValueEquals(candidate, validCandidates[0])
+            unionCandidatesEqual(candidate, validCandidates[0])
           )
         ? validCandidates[0]
         : NO_SCHEMA_DEFAULT;
@@ -492,6 +526,13 @@ export function foldStoredArgumentSlots<T>(
  * Reuses completed merges of shared acyclic values under the same contract
  * and defaults. Cyclic merges retain active-path semantics, so results that
  * depend on a back edge are not reused on other paths.
+ *
+ * A default only fills an absent value; a present one is never replaced. The
+ * result is `value` itself when no default was added anywhere in it, and every
+ * part of `value` that nothing was added below appears in the result as that
+ * same part, so a caller can tell whether anything was added by identity
+ * alone. Deciding this compares nothing by content, so the merge descends into
+ * a query-result view only where the schema leads it.
  */
 export function mergeSchemaDefaults<T>(
   value: T | undefined,
@@ -740,7 +781,7 @@ function mergeSchemaDefaultsUncached(
       if (
         acceptedCandidates.length > 0 &&
         acceptedCandidates.every((candidate) =>
-          mergedValueEquals(candidate, acceptedCandidates[0])
+          unionCandidatesEqual(candidate, acceptedCandidates[0])
         )
       ) {
         return acceptedCandidates[0];
@@ -813,14 +854,16 @@ function mergeSchemaDefaultsUncached(
         resolved.prefixItems !== undefined)
     ) {
       const result = value.slice();
+      let changed = false;
       for (let index = 0; index < value.length; index++) {
         if (!Object.hasOwn(value, index)) continue;
         const itemSchema = Array.isArray(resolved.prefixItems) &&
             index < resolved.prefixItems.length
           ? resolved.prefixItems[index]!
           : resolved.items ?? true;
-        result[index] = mergeSchemaDefaultsInternal(
-          value[index],
+        const item = value[index];
+        const merged = mergeSchemaDefaultsInternal(
+          item,
           defaultValuesForMerge(itemSchema, resolvedRoot, context),
           itemSchema,
           resolvedRoot,
@@ -830,8 +873,10 @@ function mergeSchemaDefaultsUncached(
           undefined,
           context,
         );
+        result[index] = merged;
+        if (!Object.is(merged, item)) changed = true;
       }
-      return mergedValueEquals(result, value) ? value : result;
+      return changed ? result : value;
     }
 
     const objectSchema = isObjectOrArray(resolved) &&
@@ -872,11 +917,13 @@ function mergeSchemaDefaultsUncached(
       ...Object.keys(existing),
       ...Object.keys(defaultObject),
     ]);
+    let changed = false;
     for (const key of keys) {
       const hasExistingValue = Object.hasOwn(existing, key);
       const hasDefaultValue = Object.hasOwn(defaultObject, key);
       const propertySchemas = schemasForObjectProperty(objectSchema, key);
-      let merged = existing[key];
+      const original = existing[key];
+      let merged = original;
       let mergedValuePresent = hasExistingValue;
       for (let index = 0; index < propertySchemas.length; index++) {
         const propertySchema = propertySchemas[index]!;
@@ -915,9 +962,10 @@ function mergeSchemaDefaultsUncached(
           configurable: true,
           writable: true,
         });
+        if (!hasExistingValue || !Object.is(merged, original)) changed = true;
       }
     }
-    return valuePresent && mergedValueEquals(result, value) ? value : result;
+    return valuePresent && !changed ? value : result;
   } finally {
     if (trackedSchema !== undefined) activeSchemas?.delete(trackedSchema);
   }

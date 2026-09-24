@@ -441,7 +441,7 @@ The activity tracking from Phase 2 enables intelligent reactive scheduling.
 | Area | Primary Files |
 |------|---------------|
 | Commit model | `packages/memory/v2.ts` |
-| Merkle hashing | `packages/data-model/src/value-hash.ts` |
+| Merkle hashing | `packages/data-model/src/value-hash/` |
 | Transaction interface | `packages/runner/src/storage/interface.ts` |
 | Transaction impl | `packages/runner/src/storage/v2-transaction.ts` |
 | Address operations | `packages/runner/src/storage/transaction/address.ts` |

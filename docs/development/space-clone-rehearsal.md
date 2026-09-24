@@ -161,6 +161,17 @@ guarantee: it cannot stop a server that opens the store in the instant between
 the check and the restore, and no external check can. **Stopping the server is
 what makes the reset correct.** Restart it (step 2) before the next pass.
 
+### Use one checkout for the whole rehearsal
+
+Clone, verify and reset with the same checkout's `cf`. A clone records the
+fingerprint scheme its baseline was computed under, and `cf space verify` and
+`cf space reset` refuse a clone recorded under a scheme other than their own,
+before reading or restoring anything: fingerprints computed two ways can differ
+with no change to the content, or agree across one. A checkout older than that
+record refuses such a clone for its manifest version alone, which also keeps its
+fixed defects away from the clone. A clone taken before the scheme was recorded
+still verifies, and its report says the baseline's scheme is unknown.
+
 ## Reading the verdict
 
 `cf space verify` compares the working copy against the manifest written at

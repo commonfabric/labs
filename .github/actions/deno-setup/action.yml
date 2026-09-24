@@ -113,14 +113,25 @@ runs:
       run: printf 'hash=%s\n' "$DEPENDENCY_HASH" >> "$GITHUB_OUTPUT"
 
     # Cache version: bump to invalidate all caches (e.g., v2 -> v3)
+    #
+    # V8's code cache (`v8_code_cache_*` in the Deno cache directory) holds the
+    # compiled code of every module a Deno process has run, repository modules
+    # included, and it changes what coverage reports: a Deno process that loads
+    # a module from it reports that module's top-level code as one range
+    # covering every line. The paths below list each directory's entries rather
+    # than the directory: `actions/cache` archives a matched directory whole,
+    # and applies an exclusion only to a path one of its inclusions matches.
     - name: 📦 Cache Deno dependencies
       if: inputs.cache == 'true'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
-          ~/.deno
-          ~/.cache/deno
-          ~/Library/Caches/deno
+          ~/.deno/*
+          ~/.cache/deno/*
+          ~/Library/Caches/deno/*
+          !~/.deno/v8_code_cache_*
+          !~/.cache/deno/v8_code_cache_*
+          !~/Library/Caches/deno/v8_code_cache_*
         key: deno-deps-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.resolve.outputs.version }}-${{ steps.dependency-hash.outputs.hash }}
         restore-keys: |
           deno-deps-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.resolve.outputs.version }}-

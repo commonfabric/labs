@@ -3584,3 +3584,88 @@ for (const serverExecution of [false, true]) {
     );
   }
 }
+
+Deno.test("a user-capped child slot does not follow a session cell relayed through a parent slot", async () => {
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const tx = runtime.edit();
+
+  try {
+    const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+
+    const profileBase = runtime.getCell<{ name: string }>(
+      space,
+      "relayed session profile",
+      undefined,
+      tx,
+    );
+    const profile = createCell<{ name: string }>(
+      runtime,
+      { ...profileBase.getAsNormalizedFullLink(), scope: "session" },
+      tx,
+    );
+    profile.set({ name: "Ada" });
+
+    const readName = lift(
+      ({ name }: { name?: string }) => name ?? "missing",
+      { type: "object", properties: { name: { type: "string" } } },
+      { type: "string" },
+    );
+
+    const Child = pattern<{ profile: { name: string } }>(
+      ({ profile }) => ({ name: readName({ name: profile.name }) }),
+      {
+        type: "object",
+        properties: {
+          profile: {
+            type: "object",
+            properties: { name: { type: "string" } },
+            asCell: [{ kind: "cell", scope: "user" }],
+          },
+        },
+        required: ["profile"],
+      },
+    );
+
+    // The parent slot caps nothing, so the child's own cap is the only thing
+    // standing between its read and the session cell the parent relays.
+    const Root = pattern<{ profile: { name: string } }>(
+      ({ profile }) => ({ child: Child({ profile }) }),
+      {
+        type: "object",
+        properties: {
+          profile: {
+            type: "object",
+            properties: { name: { type: "string" } },
+            asCell: ["cell"],
+          },
+        },
+        required: ["profile"],
+      },
+    );
+
+    const resultCell = runtime.getCell(
+      space,
+      "relayed session profile result",
+      undefined,
+      tx,
+    );
+    const result = runtime.run(tx, Root, { profile } as never, resultCell);
+    runtime.prepareTxForCommit(tx);
+    await tx.commit();
+    await runtime.idle();
+    await runtime.storageManager.synced();
+    await result.pull();
+
+    assertEquals(
+      result.key("child").key("name").get() as unknown,
+      "missing",
+    );
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});

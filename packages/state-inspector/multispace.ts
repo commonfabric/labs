@@ -32,6 +32,7 @@ import { openSpace, type SpaceDb } from "./db.ts";
 import { annotate, linksWithPaths, type LinkWalkBounds } from "./decode.ts";
 import {
   candidatesMatching,
+  type EntityDocument,
   getValueAt,
   owningLink,
   reconstructDocument,
@@ -54,7 +55,7 @@ export interface SpaceEntityView {
   lastWriteAt: string | null;
 
   /** Annotated value at the requested path (links/streams normalized). */
-  value?: unknown;
+  value?: FabricValue;
 
   /** Whether the requested path exists within a present entity. */
   pathExists?: boolean;
@@ -77,7 +78,7 @@ export type ExactConvergenceVerdict = ConvergenceVerdict | "unknown";
 
 export interface ValueCluster {
   valueKey: string;
-  value: unknown;
+  value: FabricValue;
   labels: string[];
 
   /** Whether this cluster represents values found at the requested path. */
@@ -384,7 +385,7 @@ export function buildCrossSpaceLinkIndex(
     });
     for (const id of candidates) {
       examinedEntities++;
-      let doc: unknown;
+      let doc: EntityDocument | undefined;
       try {
         doc = reconstructDocument(space, { id, scope, branch });
       } catch {

@@ -2853,6 +2853,51 @@ type CalculatorRequest = {
         expect(schema).toBe(true);
       });
 
+      describe("an alias whose body is one of its parameters", () => {
+        // `type Reactive<T> = T` denotes its argument, so the reference is
+        // read as that argument rather than left unread as a generic.
+
+        const IDENTITY = "export type Reactive<T> = T;";
+
+        it("reads the reference as its argument", async () => {
+          const schema = await generate(
+            { "/main.ts": IDENTITY },
+            generic(
+              "Reactive",
+              objectOf({ name: keyword(ts.SyntaxKind.StringKeyword) }),
+            ),
+          );
+
+          expect(schema).toEqual({
+            type: "object",
+            properties: { name: { type: "string" } },
+            required: ["name"],
+          });
+        });
+
+        it("reads the argument at the parameter's position", async () => {
+          const schema = await generate(
+            { "/main.ts": "export type Second<A, B> = (B);" },
+            generic(
+              "Second",
+              keyword(ts.SyntaxKind.StringKeyword),
+              keyword(ts.SyntaxKind.NumberKeyword),
+            ),
+          );
+
+          expect(schema).toEqual({ type: "number" });
+        });
+
+        it("returns `true` for a reference that leaves the argument out", async () => {
+          const schema = await generate(
+            { "/main.ts": IDENTITY },
+            reference("Reactive"),
+          );
+
+          expect(schema).toBe(true);
+        });
+      });
+
       it("returns `true` for a reference with no arguments", async () => {
         const schema = await generate({ "/main.ts": BOX }, reference("Box"));
 
@@ -3198,6 +3243,189 @@ type CalculatorRequest = {
 
           expect(schema).toBe(true);
         });
+      });
+    });
+  });
+
+  describe("nodes printed from a type", () => {
+    // A caller names the nodes it printed from a type, and the generator reads
+    // that type wherever such a node appears, never the node. Each node below
+    // names nothing in scope, so read as a node it would accept anything.
+
+    const ENTRY = {
+      type: "object",
+      properties: { host: { type: "string" } },
+      required: ["host"],
+    };
+    const ENTRY_DEFS = { Entry: ENTRY };
+
+    /** A node naming nothing in scope where the schema is generated. */
+    const unresolvable = () => ts.factory.createTypeReferenceNode("NotInScope");
+
+    async function types() {
+      const { checker, sourceFile } = await createTestProgram(
+        "interface Entry { host: string }\n" +
+          'type Mode = "a" | "b";\n' +
+          "export type Keep = [Entry, Mode];",
+      );
+      const declared = (name: string) =>
+        checker.getDeclaredTypeOfSymbol(
+          checker.getSymbolsInScope(sourceFile, ts.SymbolFlags.Type)
+            .find((symbol) => symbol.name === name)!,
+        );
+      return {
+        checker,
+        sourceFile,
+        entry: declared("Entry"),
+        mode: declared("Mode"),
+      };
+    }
+
+    function printedFrom(printed: ReadonlyMap<ts.Node, ts.Type>) {
+      return { printedFrom: (node: ts.TypeNode) => printed.get(node) };
+    }
+
+    it("reads a printed node as the type it was printed from", async () => {
+      const { checker, sourceFile, entry } = await types();
+      const node = unresolvable();
+
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        node,
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+        printedFrom(new Map([[node, entry]])),
+      );
+
+      expect(schema).toEqual(ENTRY);
+    });
+
+    it("reads a printed node inside a type literal the caller built", async () => {
+      const { checker, sourceFile, entry } = await types();
+      const node = unresolvable();
+      const literal = ts.factory.createTypeLiteralNode([
+        ts.factory.createPropertySignature(undefined, "entry", undefined, node),
+      ]);
+
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        literal,
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+        printedFrom(new Map([[node, entry]])),
+      );
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: { entry: { $ref: "#/$defs/Entry" } },
+        required: ["entry"],
+        $defs: ENTRY_DEFS,
+      });
+    });
+
+    it("reads a printed node that is a member of a union", async () => {
+      const { checker, sourceFile, entry } = await types();
+      const node = unresolvable();
+      const union = ts.factory.createUnionTypeNode([
+        node,
+        ts.factory.createLiteralTypeNode(ts.factory.createNull()),
+      ]);
+
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        union,
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+        printedFrom(new Map([[node, entry]])),
+      );
+
+      expect(schema).toEqual({
+        anyOf: [{ $ref: "#/$defs/Entry" }, { type: "null" }],
+        $defs: ENTRY_DEFS,
+      });
+    });
+
+    it("reads a printed node inside a node the caller built for a type", async () => {
+      // The printed node is a literal whose members disagree with its type, so
+      // reading the node would drop `host`.
+      const { checker, sourceFile } = await createTestProgram(
+        "interface Entry { host: string }\n" +
+          "interface Holder { entry: Entry }\n" +
+          "export type Keep = Holder;",
+      );
+      const declared = (name: string) =>
+        checker.getDeclaredTypeOfSymbol(
+          checker.getSymbolsInScope(sourceFile, ts.SymbolFlags.Type)
+            .find((symbol) => symbol.name === name)!,
+        );
+      const node = ts.factory.createTypeLiteralNode([
+        ts.factory.createPropertySignature(
+          undefined,
+          "other",
+          undefined,
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+        ),
+      ]);
+      const view = ts.factory.createTypeLiteralNode([
+        ts.factory.createPropertySignature(undefined, "entry", undefined, node),
+      ]);
+
+      const schema = new SchemaGenerator().generateSchema(
+        declared("Holder"),
+        checker,
+        view,
+        printedFrom(new Map([[node, declared("Entry")]])),
+        undefined,
+        sourceFile,
+      );
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: { entry: { $ref: "#/$defs/Entry" } },
+        required: ["entry"],
+        $defs: ENTRY_DEFS,
+      });
+    });
+
+    it("reads the caller's own type in place of a printed node", async () => {
+      const { checker, sourceFile, mode } = await types();
+      const node = ts.factory.createKeywordTypeNode(
+        ts.SyntaxKind.StringKeyword,
+      );
+
+      const schema = new SchemaGenerator().generateSchema(
+        mode,
+        checker,
+        node,
+        printedFrom(new Map([[node, checker.getStringType()]])),
+        undefined,
+        sourceFile,
+      );
+
+      expect(schema).toEqual({ enum: ["a", "b"] });
+    });
+
+    it("applies the hints attached to a printed node", async () => {
+      const { checker, sourceFile, entry } = await types();
+      const node = unresolvable();
+
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        node,
+        checker,
+        undefined,
+        new WeakMap([[node, {
+          cfcUiContract: { helper: "UiAction", action: "Go" },
+        }]]),
+        sourceFile,
+        printedFrom(new Map([[node, entry]])),
+      );
+
+      expect(schema).toEqual({
+        ...ENTRY,
+        ifc: { uiContract: { helper: "UiAction", action: "Go" } },
       });
     });
   });

@@ -941,8 +941,9 @@ and a test each plan put in the other's lanes would run in neither while
 the run passed. So a lane whose listing or read fails refuses to pack, and
 says why. A count of lanes planned from the same reading refuses too.
 
-A consumer with no commit to read falls back to the newest manifest there
-is and reports that it has done so. That is the answer for a tool invoked
-outside a checkout, where there is no tree under test and no other lane to
-agree with. A lane holds a checkout by construction, so the moment it
-resolves for comes from the commit rather than from this fallback.
+A lane that cannot read the committer date refuses for the same reason,
+and says why. A lane holds a checkout by construction, so failing to read
+the date is a fault in one lane rather than a property of the run. Its
+siblings may well have read the date, and no other moment the lane could
+take is one they are sure to share. A count of lanes planned from the same
+reading refuses too.

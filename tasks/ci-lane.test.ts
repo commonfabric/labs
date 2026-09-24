@@ -235,7 +235,7 @@ describe("the moment a lane resolves its manifest at", () => {
     // Git writes the committer's own offset and manifest names carry
     // UTC, so the two are only comparable once this one is normalized.
     const root = await repository("2026-09-01T10:41:59-07:00");
-    expect(manifestMoment({ ...lane, root }).at).toBe(
+    expect(manifestMoment({ ...lane, root })).toBe(
       "2026-09-01T17:41:59.000Z",
     );
   });
@@ -247,8 +247,7 @@ describe("the moment a lane resolves its manifest at", () => {
     const root = await repository("2026-09-01T10:41:59-07:00");
     const first = manifestMoment({ ...lane, root });
     const again = manifestMoment({ ...lane, root });
-    expect(again.at).toBe(first.at);
-    expect(first.note).toBeUndefined();
+    expect(again).toBe(first);
   });
 
   it("lets a caller ask about a moment that is not this tree's", async () => {
@@ -258,15 +257,68 @@ describe("the moment a lane resolves its manifest at", () => {
       root,
       at: "2026-08-01T00:00:00.000Z",
     });
-    expect(moment.at).toBe("2026-08-01T00:00:00.000Z");
+    expect(moment).toBe("2026-08-01T00:00:00.000Z");
   });
 
-  it("falls back to the newest manifest outside a repository, and says so", async () => {
+  it("throws where there is no commit to read the date of", async () => {
+    // Reading the date can fail in one lane of a run and not in the
+    // next, and no other moment is one the lanes would all share.
+
     const root = await Deno.makeTempDir({ prefix: "ci-lane-nogit-" });
     roots.push(root);
-    const moment = manifestMoment({ ...lane, root });
-    expect(moment.note).toContain("cannot read the commit's date");
-    expect(Number.isNaN(new Date(moment.at).getTime())).toBe(false);
+    expect(() => manifestMoment({ ...lane, root })).toThrow(
+      `cannot read the date of the commit checked out at \`${root}\``,
+    );
+  });
+
+  describe("as the lanes resolve it", () => {
+    /** A topology of one unit, and a store noting each moment asked of it. */
+    function recorded() {
+      const asked: string[] = [];
+      return {
+        asked,
+        deps: {
+          topology: () =>
+            Promise.resolve([
+              suite({ id: "workspace-unit", units: ["a.test.ts"] }),
+            ]),
+          manifest: ({ at }: { at: string }) => {
+            asked.push(at);
+            return Promise.resolve({
+              manifest: manifestOf([{ unit: "a.test.ts" }]),
+              objectName: "manifest-fixture.json.gz",
+            });
+          },
+        },
+      };
+    }
+    const count = { ...lane, of: 1, full: true, laneCount: true };
+
+    it("asks the store for the manifest of the commit's moment", async () => {
+      const root = await repository("2026-09-01T10:41:59-07:00");
+      const { asked, deps } = recorded();
+      expect(await fullLanes({ ...count, root }, deps)).toBe(1);
+      expect(asked).toEqual(["2026-09-01T17:41:59.000Z"]);
+    });
+
+    it("rejects a lane count without asking the store where there is no commit", async () => {
+      const root = await Deno.makeTempDir({ prefix: "ci-lane-nogit-" });
+      roots.push(root);
+      const { asked, deps } = recorded();
+      await expect(fullLanes({ ...count, root }, deps)).rejects.toThrow(
+        "cannot read the date of the commit",
+      );
+      expect(asked).toEqual([]);
+    });
+
+    it("rejects a lane without asking the store where there is no commit", async () => {
+      const root = await Deno.makeTempDir({ prefix: "ci-lane-nogit-" });
+      roots.push(root);
+      const { asked, deps } = recorded();
+      await expect(runLane({ ...lane, dryRun: true, root }, deps)).rejects
+        .toThrow("cannot read the date of the commit");
+      expect(asked).toEqual([]);
+    });
   });
 });
 
@@ -1962,6 +2014,7 @@ describe("the lane's own housekeeping", () => {
         dryRun: false,
         laneCount: false,
         root,
+        at: "2026-09-01T00:00:00Z",
       }, {
         topology: () => Promise.resolve([bare]),
         manifest: ({ at }) =>
@@ -2002,11 +2055,12 @@ describe("the lane's own housekeeping", () => {
         dryRun: false,
         laneCount: false,
         root,
+        at: "2026-09-01T00:00:00Z",
       }, {
         topology: () => Promise.resolve([wanting]),
         manifest: ({ at }) =>
           Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
-      })).rejects.toThrow();
+      })).rejects.toThrow("no such capability: nothing-opens-this");
     } finally {
       console.log = log;
       restore();
@@ -2103,7 +2157,15 @@ describe("the lane's own housekeeping", () => {
     console.log = () => {};
     try {
       return await runLane(
-        { lane: 1, of: 1, full: true, dryRun: false, laneCount: false, root },
+        {
+          lane: 1,
+          of: 1,
+          full: true,
+          dryRun: false,
+          laneCount: false,
+          root,
+          at: "2026-09-01T00:00:00Z",
+        },
         {
           topology: () => Promise.resolve(suites),
           manifest: ({ at }) =>
@@ -2209,7 +2271,7 @@ describe("the lane's own housekeeping", () => {
       // A lane that ended by throwing failed as well, whether a capability
       // would not open or a batch could not be run.
       await expect(onlyLane(root, refusing, { RUNNER_TEMP: temp })).rejects
-        .toThrow();
+        .toThrow("no such capability: nothing-opens-this");
       expect(await lanes()).toHaveLength(2);
       await expect(onlyLane(root, throwing, { RUNNER_TEMP: temp })).rejects
         .toThrow("the command could not be built");
@@ -3245,36 +3307,6 @@ describe("what a lane does with the batches it was given", () => {
     // that ran none of it, and an exit status of zero says otherwise.
     const { ok } = await run([Deno.execPath(), "eval", "0"]);
     expect(ok).toBe(false);
-  });
-
-  it("says it could not date the tree it is testing", async () => {
-    // Outside a repository there is no commit to resolve the manifest
-    // at, so the lane takes the newest manifest there is and prints
-    // that it did rather than appearing to have chosen one.
-    const outside = await Deno.makeTempDir({ prefix: "lane-nogit-" });
-    const lines: string[] = [];
-    const log = console.log;
-    console.log = (line: string) => lines.push(line);
-    try {
-      await runLane(
-        {
-          lane: 1,
-          of: 1,
-          full: false,
-          dryRun: true,
-          laneCount: false,
-          root: outside,
-        },
-        {
-          manifest: () => Promise.resolve({ absent: "nothing published" }),
-          topology: () => Promise.resolve([]),
-        },
-      );
-    } finally {
-      console.log = log;
-      await Deno.remove(outside, { recursive: true });
-    }
-    expect(lines.join("\n")).toContain("cannot read the commit's date");
   });
 });
 

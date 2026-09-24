@@ -352,6 +352,89 @@ export const mintReferentHandle = async (
   };
 };
 
+/**
+ * Folds the entries and referents of `incoming` into `current`, answering a
+ * table that holds everything either held. Both were minted from one run's
+ * table, and a mint only ever fills a field an entry left undefined, so an
+ * address present in both is merged field by field: each optional field is
+ * taken from whichever side defines it, and from `current` where both do. A
+ * writer's table carries a copy of every entry it read, so neither side's
+ * copy of an entry can simply stand; two writers that each extended the
+ * table they read both keep their additions, whichever recorded second.
+ *
+ * @throws Error when the tables carry different salts, since their tokens
+ * were then derived from different runs and cannot share a table; or when
+ * two writers minting from one base drew different tokens for one address,
+ * or one token for two different addresses or referents, none of which
+ * either writer could see of the other.
+ */
+export const mergeHarnessHandleTables = (
+  current: HarnessHandleTable,
+  incoming: HarnessHandleTable,
+): HarnessHandleTable => {
+  if (current.salt !== incoming.salt) {
+    throw new Error(
+      `handle tables of different runs cannot merge: ${current.salt} and ${incoming.salt}`,
+    );
+  }
+  const entries = [...current.entries];
+  for (const entry of incoming.entries) {
+    const index = entries.findIndex((held) =>
+      held.addressKey === entry.addressKey
+    );
+    if (index === -1) {
+      if (entries.some((held) => held.token === entry.token)) {
+        throw new Error(
+          `handle token ${entry.token} was minted for two different addresses`,
+        );
+      }
+      entries.push(entry);
+      continue;
+    }
+    const held = entries[index];
+    if (held.token !== entry.token) {
+      throw new Error(
+        `handle address ${held.addressKey} was recorded under two different tokens`,
+      );
+    }
+    const schemaSide = held.schema !== undefined ? held : entry;
+    const capability = held.capability ?? entry.capability;
+    const acquisition = held.acquisition ?? entry.acquisition;
+    entries[index] = {
+      token: held.token,
+      kind: held.kind,
+      ref: held.ref,
+      addressKey: held.addressKey,
+      ...(capability !== undefined ? { capability } : {}),
+      ...(schemaSide.schema !== undefined ? { schema: schemaSide.schema } : {}),
+      ...(schemaSide.schemaSource !== undefined
+        ? { schemaSource: schemaSide.schemaSource }
+        : {}),
+      ...(acquisition !== undefined ? { acquisition } : {}),
+    };
+  }
+  const referents = [...(current.referents ?? [])];
+  for (const referent of incoming.referents ?? []) {
+    const held = referents.find((candidate) =>
+      candidate.token === referent.token
+    );
+    if (held === undefined) {
+      referents.push(referent);
+    } else if (
+      referentIdentityKey(held) !== referentIdentityKey(referent)
+    ) {
+      throw new Error(
+        `handle token ${referent.token} was minted for two different referents`,
+      );
+    }
+  }
+  return {
+    ...current,
+    entries,
+    ...(referents.length > 0 ? { referents } : {}),
+  };
+};
+
 /** Returns the referent holding `token`, or `undefined` when none does. */
 export const resolveReferentToken = (
   table: HarnessHandleTable,

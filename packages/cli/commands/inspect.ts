@@ -11,6 +11,7 @@
 
 import { Command, ValidationError } from "@cliffy/command";
 import { Table } from "@cliffy/table";
+import type { FabricValue } from "@commonfabric/data-model";
 import {
   annotate,
   buildCrossSpaceLinkIndex,
@@ -260,7 +261,7 @@ function formatSelectedPath(segments: string[], exact: boolean): string {
 }
 
 function summarizeChangeValue(
-  value: unknown,
+  value: FabricValue,
   isUndefined?: true,
   valueKind?: string,
 ): string {

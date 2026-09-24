@@ -1,11 +1,12 @@
 /**
  * Reports whether every job the organization runs outside pull requests is
  * passing. It walks every repository the token can see that is not archived,
- * takes each active workflow in it, and reads that workflow's newest completed
- * runs on the repository's own default branch. Runs from pull requests are left
- * out, so what remains is the work that lands on the default branch and the
- * work a schedule or a manual start kicks off: the main build, the benchmarks,
- * the audits, and everything beside them.
+ * takes each active workflow in it, and reads that workflow's runs on the
+ * repository's own default branch, newest first, back to the one that decides
+ * the job. Runs from pull requests are left out, so what remains is the work
+ * that lands on the default branch and the work a schedule or a manual start
+ * kicks off: the main build, the benchmarks, the audits, and everything beside
+ * them.
  *
  * A run concluded `success` passes and a run concluded `failure`, `timed_out`,
  * or `startup_failure` fails. A `cancelled` run is either a queued run a newer
@@ -13,7 +14,8 @@
  * or was stopped while its jobs ran, which failed; an empty job listing is what
  * tells them apart. Every remaining conclusion — `skipped`, `neutral`, `stale`,
  * `action_required` — passes no judgment either, so the job is decided by the
- * newest run before it that does.
+ * newest run before it that does, however many runs came after that one. A
+ * pass stays a pass until a run gives the job another verdict.
  *
  * A failure counts only while the job, as it is configured now, would still
  * produce it. When the workflow's file has changed on the default branch since
@@ -21,7 +23,8 @@
  * job someone stopped rather than fixed, for example, by taking away the
  * trigger it failed under. Such a job has no verdict until a run under the
  * current definition gives it one, which for a job that still runs is its next
- * run and for one that no longer does is never.
+ * run and for one that no longer does is never. Only a failure is cleared this
+ * way; a job whose deciding run passed stays green whatever changed since.
  *
  * A job that has been failing for longer than CI_FAILURE_FRESH_HOURS is still
  * failing and still listed, but it goes orange: it is no longer the thing that
@@ -73,12 +76,6 @@ const INVENTORY_TTL_MS = 3_600_000;
 // together.
 const REQUEST_CONCURRENCY = 8;
 
-// Runs read per workflow, of any status. The newest completed one carrying a
-// verdict decides the job, the completed ones ahead of it cover a run of
-// conclusions that carry none, and one still going tells a run it replaced
-// from one that was stopped.
-const RUNS_PER_WORKFLOW = 5;
-
 const FAILING_CONCLUSIONS = new Set([
   "failure",
   "timed_out",
@@ -92,10 +89,9 @@ const PULL_REQUEST_EVENTS = new Set([
   "pull_request_review_comment",
 ]);
 
-// Runs asked for a page at a time. A pull request from a fork's branch named
-// after the default branch lands among the default branch's runs, so the pages
-// go on until the window holds enough runs that are not a pull request's; a
-// page this large almost always holds them.
+// Runs asked for a page at a time. The pages go on until they reach a run that
+// passed or failed outright, or runs an earlier collection already settled; a
+// page this large almost always does.
 const RUNS_PAGE = 20;
 
 interface OrgRepo {
@@ -118,11 +114,21 @@ interface RepoInventory {
   error?: string; // set when the workflow listing could not be read
 }
 
-// One workflow's newest completed runs, or why they could not be read.
+// What the runs of one workflow read so far say about its older runs. Every
+// run created at or before `through` had completed when it was read, and
+// `deciding` is the newest of them that carries a verdict, if any does.
+interface Settled {
+  through: Run;
+  deciding?: { run: Run; status: Status };
+}
+
+// One workflow's newest runs, and what is settled about the runs before them,
+// or why they could not be read.
 interface Listing {
   inventory: RepoInventory;
   workflow: Workflow;
   runs: Run[]; // newest first, none of them a pull request's
+  settled?: Settled;
   error?: string;
 }
 
@@ -241,19 +247,49 @@ async function readInventory(token: string): Promise<RepoInventory[]> {
   );
 }
 
+/** Whether `run` was created at or before the runs `settled` covers. */
+function isSettled(run: Run, settled: Settled | undefined): boolean {
+  return settled !== undefined &&
+    Date.parse(run.created_at) <= Date.parse(settled.through.created_at);
+}
+
+/**
+ * Whether the run `settled` says decided the job has been run again since it
+ * was read. `runs` carry it as it is now when they reach it, and otherwise it
+ * takes a request of its own.
+ */
+async function rerunSince(
+  repo: string,
+  settled: Settled,
+  runs: readonly Run[],
+  token: string,
+): Promise<boolean> {
+  const deciding = settled.deciding?.run;
+  if (deciding === undefined) return false;
+  const now = runs.find((run) => run.id === deciding.id) ??
+    await github<Run>(`repos/${repo}/actions/runs/${deciding.id}`, token);
+  return now.run_attempt !== deciding.run_attempt;
+}
+
 /**
  * One workflow's newest runs on its repository's default branch, leaving out
- * any a pull request started. A run that lands between two pages moves an
- * earlier one onto the next, so a run is taken once however many pages hold it.
+ * any a pull request started, down to the first that concluded `success` or
+ * failed, or into the runs `settled` covers, or to the end of the listing,
+ * whichever comes first. What `settled` says is dropped, and the pages go on,
+ * when the run it says decided the job has been run again since. A run that
+ * lands between two pages moves an earlier one onto the next, so a run is
+ * taken once however many pages hold it.
  */
 async function readRuns(
   inventory: RepoInventory,
   workflow: Workflow,
+  settled: Settled | undefined,
   token: string,
 ): Promise<Listing> {
   try {
     const runs = new Map<number, Run>();
-    for (let page = 1; runs.size < RUNS_PER_WORKFLOW; page++) {
+    let held = settled;
+    for (let page = 1;; page++) {
       const answer = await github<{ workflow_runs?: Run[] }>(
         `repos/${inventory.repo}/actions/workflows/${workflow.id}/runs` +
           `?branch=${encodeURIComponent(inventory.branch)}` +
@@ -264,13 +300,20 @@ async function readRuns(
       for (const run of batch) {
         if (!PULL_REQUEST_EVENTS.has(run.event)) runs.set(run.id, run);
       }
+      const read = [...runs.values()];
+      if (
+        read.some((run) =>
+          run.conclusion === "success" ||
+          FAILING_CONCLUSIONS.has(run.conclusion ?? "")
+        )
+      ) break;
+      if (held !== undefined && read.some((run) => isSettled(run, held))) {
+        if (!await rerunSince(inventory.repo, held, read, token)) break;
+        held = undefined;
+      }
       if (batch.length < RUNS_PAGE) break;
     }
-    return {
-      inventory,
-      workflow,
-      runs: [...runs.values()].slice(0, RUNS_PER_WORKFLOW),
-    };
+    return { inventory, workflow, runs: [...runs.values()], settled: held };
   } catch (error) {
     return { inventory, workflow, runs: [], error: messageOf(error) };
   }
@@ -308,6 +351,37 @@ async function verdictOf(
 }
 
 /**
+ * What `runs`, one workflow's newest runs as `readRuns` reads them, say about
+ * the workflow, carrying over what `settled` says about the runs before them.
+ * The verdict is the newest one any run carries, however many runs that
+ * judged nothing or are still going came after it. Rejects when a verdict
+ * cannot be read.
+ */
+async function settle(
+  runs: readonly Run[],
+  settled: Settled | undefined,
+  attempts: CompletedAttempts,
+): Promise<Settled | undefined> {
+  // The newest run that, like every run read after it, has completed.
+  let through: Run | undefined;
+  for (const run of runs) {
+    if (run.status !== "completed") {
+      through = undefined;
+      continue;
+    }
+    through ??= run;
+    const status = await verdictOf(run, runs, attempts);
+    if (status !== undefined) return { through, deciding: { run, status } };
+  }
+  // Nothing read carries a verdict. The runs stop either where the listing
+  // ends, and there is none, or among the runs already settled.
+  if (settled === undefined || !runs.some((run) => isSettled(run, settled))) {
+    return through === undefined ? undefined : { through };
+  }
+  return { through: through ?? settled.through, deciding: settled.deciding };
+}
+
+/**
  * Whether the workflow's file has changed on the default branch since `run`
  * was created, going by the newest commit there that touched the file. It is
  * asked only of a failing run, since a failure is what a stale definition can
@@ -341,13 +415,23 @@ async function redefinedSince(
   return Date.parse(date) > Date.parse(run.created_at);
 }
 
-/** The job one workflow's runs describe. */
+// A job, and what the runs that decided it settle for the next collection.
+interface Judged {
+  job: Job;
+  settled: Settled | undefined;
+}
+
+/**
+ * The job one workflow's runs describe, and what they settle for the next
+ * collection. A job that cannot be read settles nothing, so the next
+ * collection reads its runs afresh.
+ */
 async function jobOf(
   listing: Listing,
   attempts: CompletedAttempts,
   token: string,
   now: number,
-): Promise<Job> {
+): Promise<Judged> {
   const { inventory, workflow } = listing;
   const job = {
     repo: shortName(inventory.repo),
@@ -355,50 +439,63 @@ async function jobOf(
     pinned: isPinned(inventory.repo, workflow.path),
     href: workflowUrl(inventory.repo, workflow.path),
   };
-  const unreadable = (result: string): Job => ({
-    ...job,
-    status: "warn",
-    failing: false,
-    result,
+  const unreadable = (result: string): Judged => ({
+    job: { ...job, status: "warn", failing: false, result },
+    settled: undefined,
   });
   if (listing.error !== undefined) {
     return unreadable(friendlyError(listing.error));
   }
+  let next: Settled | undefined;
+  try {
+    next = await settle(listing.runs, listing.settled, attempts);
+  } catch (error) {
+    return unreadable(friendlyError(messageOf(error)));
+  }
 
-  for (const run of listing.runs) {
-    if (run.status !== "completed") continue;
-    let status: Status | undefined;
-    try {
-      status = await verdictOf(run, listing.runs, attempts);
-    } catch (error) {
-      return unreadable(friendlyError(messageOf(error)));
-    }
-    if (status === undefined) continue;
-    const startedAt = Number.isFinite(Date.parse(run.run_started_at))
-      ? Date.parse(run.run_started_at)
-      : undefined;
-    let failing = status === "bad";
-    let result = run.conclusion ?? "";
-    if (failing) {
-      let redefined: boolean;
-      try {
-        redefined = await redefinedSince(inventory, workflow, run, token);
-      } catch (error) {
-        // The failure stands, and the reason it could not be checked is
-        // logged with the collection's other unreadable reads.
-        console.error(
-          `ci: could not read ${job.repo} · ${job.workflow}'s history:`,
-          messageOf(error),
-        );
-        redefined = false;
-      }
-      if (redefined) {
-        status = "unknown";
-        failing = false;
-        result = "changed since it failed";
-      }
-    }
+  if (next?.deciding === undefined) {
+    // A job whose runs all passed over their work, as one gated off with a
+    // job-level `if:` does, has runs and no verdict among them.
+    const ran = next !== undefined ||
+      listing.runs.some((run) => run.status === "completed");
     return {
+      job: {
+        ...job,
+        status: "unknown",
+        failing: false,
+        result: ran ? "no run judged anything" : "no completed run",
+      },
+      settled: next,
+    };
+  }
+  const { run } = next.deciding;
+  let { status } = next.deciding;
+  const startedAt = Number.isFinite(Date.parse(run.run_started_at))
+    ? Date.parse(run.run_started_at)
+    : undefined;
+  let failing = status === "bad";
+  let result = run.conclusion ?? "";
+  if (failing) {
+    let redefined: boolean;
+    try {
+      redefined = await redefinedSince(inventory, workflow, run, token);
+    } catch (error) {
+      // The failure stands, and the reason it could not be checked is
+      // logged with the collection's other unreadable reads.
+      console.error(
+        `ci: could not read ${job.repo} · ${job.workflow}'s history:`,
+        messageOf(error),
+      );
+      redefined = false;
+    }
+    if (redefined) {
+      status = "unknown";
+      failing = false;
+      result = "changed since it failed";
+    }
+  }
+  return {
+    job: {
       ...job,
       // A failure nobody has fixed in two days is not the thing that just
       // broke. It stays in the list and stays a failure, in orange.
@@ -409,16 +506,8 @@ async function jobOf(
       startedAt,
       ranMs: runDurationMs(run),
       href: run.html_url,
-    };
-  }
-  // A job whose recent runs all passed over their work, as one gated off with
-  // a job-level `if:` does, has runs and no verdict among them.
-  const ran = listing.runs.some((run) => run.status === "completed");
-  return {
-    ...job,
-    status: "unknown",
-    failing: false,
-    result: ran ? "recent runs judged nothing" : "no completed run",
+    },
+    settled: next,
   };
 }
 
@@ -540,6 +629,9 @@ export function createCiHealth(): Tile {
     }
     return held;
   };
+  // What each workflow's runs settled, by workflow, held across collections so
+  // a verdict any number of runs back is read once rather than every time.
+  const settled = new Map<number, Settled>();
 
   return {
     label: "ci",
@@ -573,7 +665,7 @@ export function createCiHealth(): Tile {
         REQUEST_CONCURRENCY,
         readable.flatMap((repo) =>
           repo.workflows.map((workflow) => () =>
-            readRuns(repo, workflow, token)
+            readRuns(repo, workflow, settled.get(workflow.id), token)
           )
         ),
       );
@@ -592,7 +684,7 @@ export function createCiHealth(): Tile {
         }
       }
 
-      const jobs = await inParallel(
+      const judged = await inParallel(
         REQUEST_CONCURRENCY,
         listings.map((listing) => () =>
           jobOf(
@@ -603,6 +695,12 @@ export function createCiHealth(): Tile {
           )
         ),
       );
+      settled.clear();
+      listings.forEach((listing, index) => {
+        const held = judged[index].settled;
+        if (held !== undefined) settled.set(listing.workflow.id, held);
+      });
+      const jobs = judged.map(({ job }) => job);
       const unreadableRepos = repos.filter((repo) => repo.error !== undefined)
         .map((repo) => repo.repo);
       const unreadable = [

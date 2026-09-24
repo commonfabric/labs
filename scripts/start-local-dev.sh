@@ -441,6 +441,7 @@ if [[ "$CF_HARNESS" == "true" ]]; then
 
     echo ""
     echo "Starting cf-harness console on port $CONSOLE_PORT..."
+    [[ ! -f "$CONSOLE_LOG" ]] || mv -- "$CONSOLE_LOG" "$CONSOLE_LOG.previous"
     (
         cd "$SCRIPT_DIR/.."
         # The console resolves its own store from `--store` above; an inherited

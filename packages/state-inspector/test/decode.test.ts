@@ -6,6 +6,7 @@
 
 import { assert, assertEquals } from "@std/assert";
 
+import type { FabricValue } from "@commonfabric/data-model";
 import {
   resetModernCellRepConfig,
   setModernCellRepConfig,
@@ -58,7 +59,7 @@ Deno.test("decode: a modern encoded link round-trips to a recognized link", () =
   } finally {
     resetModernCellRepConfig();
   }
-  const decoded = decodeStored(encoded) as { value: { ref: unknown } };
+  const decoded = decodeStored(encoded);
   const links = linksWithPaths(decoded, UNBOUNDED).links;
   assert(links.some((l) => l.link.id === "of:x"), "modern link must be found");
   // and it must not throw when lowered for export
@@ -109,7 +110,7 @@ Deno.test("decode: inspector JSON matches ordinary pretty output", () => {
 
 Deno.test("decode: full-depth output survives deeply nested values", () => {
   const depth = 20_000;
-  let value: unknown = { leaf: "complete" };
+  let value: FabricValue = { leaf: "complete" };
   for (let index = 0; index < depth; index++) value = { child: value };
 
   const serialized = stringifyInspectorJson({
@@ -125,6 +126,7 @@ Deno.test("decode: full-depth output survives deeply nested values", () => {
 Deno.test("decode: full-depth annotation marks cycles", () => {
   const value: Record<string, unknown> = {};
   value.self = value;
+  // @ts-expect-error A cycle is not a `FabricValue`.
   assertEquals(annotate(value, Number.POSITIVE_INFINITY), { self: "…" });
 });
 
@@ -195,6 +197,7 @@ Deno.test("decode: sparse arrays keep holes without scanning their length", () =
     enumerable: true,
   });
 
+  // @ts-expect-error An array with a named property is not a `FabricValue`.
   const annotated = annotate(sparse) as {
     $sparseArray: {
       length: number;

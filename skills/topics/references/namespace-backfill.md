@@ -23,15 +23,13 @@ Topic stores — the two are different questions, and "Which read answers what"
 below gives each one its command. `deno task cf cell get /top/<n> title` answers
 either way, because a member's address is the namespace's and not the Topic's.
 
-**This procedure has not been rehearsed against a clone in this shape.** The two
-source legs below are unchanged, and were measured twice —
+**What a clone rehearsal of the whole procedure showed** is recorded in
+`docs/history/plans/topics-numbering-rehearsal-2026-09-22.md`, and the earlier
+measurements of the source legs in
 `docs/history/plans/collection-naming-s6-backfill-rehearsal-2026-09-05.md` and
-`docs/history/plans/collection-naming-s6-backfill-rehearsal-rerun-2026-09-06.md`
-record what each run cost and which of its figures scale. What stands behind the
-numbering step is pattern-test coverage in
-`packages/patterns/topics/naming.test.tsx`, not a clone run. Rehearse per
-`docs/development/space-clone-rehearsal.md` before running any of this against a
-space holding real data.
+`docs/history/plans/collection-naming-s6-backfill-rehearsal-rerun-2026-09-06.md`.
+Rehearse per `docs/development/space-clone-rehearsal.md` before running any of
+this against a space holding real data.
 
 ### The order
 
@@ -117,12 +115,14 @@ space holding real data.
    the number lives in the Topic's own input, and a Topic that declares no such
    input has nowhere to put one.
 
-3. **`backfillNames`, as many times as it takes.** It numbers every Topic the
+3. **`backfillNames` once, then the audit.** It numbers every Topic the
    namespace does not hold, in filing order, and asks every Topic reporting no
    number to store the one the namespace holds for it. Over Topics that all
    report their numbers it writes no key and sends no event — which, while
-   numbers are hidden, is no Topic at all. "What a re-run writes" below says
-   what each run costs instead.
+   numbers are hidden, is no Topic at all. While they are hidden its report
+   cannot say which asking landed, so follow the one run with the per-Topic
+   audit in "Telling when it is done", and repair only the Topics that audit
+   finds missing. "What a re-run writes" below says what a run costs.
 
 ### The command
 
@@ -131,11 +131,72 @@ deno task cf piece call --cell "$TOPICS_BOARD" --invocation '<id>' backfillNames
   '{"agentName":"Sol"}'
 ```
 
-One command for the whole board, where the shape this replaced cost one
-`cf piece link` per Topic. Step 2 is still one `setsrc` per Topic, serially, and
-on a board the size of the Estuary one that is the bulk-CLI shape
+`--invocation` needs an invocation session; set `CF_INVOCATION_SESSION` as
+`references/mutating.md` does. One command for the whole board, where the shape
+this replaced cost one `cf piece link` per Topic.
+
+Step 2 is still one source update per Topic. Drive it as a plan rather than a
+loop of `setsrc` calls (`docs/common/workflows/bulk-operations.md`). Attach the
+complete source package — one `--test` for every `*.test.tsx` beside the Topic
+source, since attached tests are part of the package the plan's identity is
+computed from — and expand the list from the directory rather than writing it
+out, so it cannot fall behind a test added later:
+
+```bash
+PLAN="$(mktemp -d)/topics-plan.jsonl"
+TESTS=()
+for t in packages/patterns/topics/*.test.tsx; do TESTS+=(--test "$t"); done
+deno task cf piece survey --piece "$TOPICS_BOARD" --path topics \
+  --retarget "topics=packages/patterns/topics/topic.tsx" --root . \
+  "${TESTS[@]}" --dangerously-allow-incompatible-schema --out "$PLAN"
+
+# dry: every row classified against its own reference pair, nothing written
+deno task cf piece retarget --plan "$PLAN"
+```
+
+Before the apply, take out the rows that need no move. A Topic filed through the
+board after step 1 runs the Topic code the board's own program carries, under a
+different identity from the standalone build the plan targets, and stores its
+number from creation. The apply cannot be undone ("Traps"), so settle these rows
+first. The test is the Topic's `shortName` input read, which **exits non-zero
+unless the Topic stores a number**. On a Topic whose source does not declare the
+input it refuses the path,
+`property "shortName" not found in the current
+pattern's input schema`; on one
+that declares it and stores none it reports `property "shortName" not found` and
+lists the keys the input does hold. Both exit 1. A stored number prints and
+exits 0:
+
+```bash
+: > "$PLAN.numbered"
+for p in $(jq -r 'select(.op) | .piece' "$PLAN"); do
+  if deno task cf cell get --cell "/of:$p" shortName --input >/dev/null 2>&1; then
+    echo "$p" >> "$PLAN.numbered"
+  fi
+done
+wc -l < "$PLAN.numbered"   # expect the Topics filed since step 1, and no others
+jq -c 'select(.op)' "$PLAN" | wc -l   # if the two counts match, stop: see below
+jq -c --rawfile skip "$PLAN.numbered" \
+  '.piece as $p | if .op and (($skip | split("\n")) | index($p)) then del(.op) else . end' \
+  "$PLAN" > "$PLAN.edited" && mv "$PLAN.edited" "$PLAN"
+deno task cf piece retarget --plan "$PLAN"   # dry again: the outstanding count drops by that many
+
+deno task cf piece retarget --plan "$PLAN" --group-size 25 --apply
+# the verdict: a second survey held against the plan
+deno task cf piece survey --piece "$TOPICS_BOARD" --path topics --diff "$PLAN"
+```
+
+If every row reads as numbered, the read is not behaving as described, and the
+edit would empty the plan so that the apply moves nothing and reports success.
+Stop and look at one row's read by hand before editing anything. A row without
+an operation is the plan format's own "leave this piece where it is", so the
+edited rows are reported as unchanged by the verdict rather than counted as
+missed. A run that stops partway is resumed by running the apply again, since a
+Topic already on the target reads as landed and is not rewritten. On a board the
+size of the Estuary one this is the bulk-CLI shape
 `docs/history/topics-board-migration-2026-08-28.md` found unreliable from a
-laptop; run it from somewhere that record vindicates.
+laptop over the network, so treat a stopped run as a reason to resume rather
+than start over.
 
 The report is three lists of numbers in filing order:
 
@@ -145,9 +206,11 @@ The report is three lists of numbers in filing order:
 - `pending` — the Topics this run asked. None of them is confirmed, because a
   send's effect is invisible to the transaction that makes it.
 
-An empty `pending` is the finished state, and a non-empty one is a reason to run
-the step again rather than a failure: the run after it reports whichever asking
-landed under `named` and asks for the rest.
+Once numbers are shown, an empty `pending` is the finished state, and a
+non-empty one is a reason to run the step again rather than a failure: the run
+after it reports whichever asking landed under `named` and asks for the rest.
+While they are hidden, `pending` never empties, so it is no reason to run again;
+the audit in "Telling when it is done" is.
 
 **While numbers are hidden, only `assigned` means anything.** The step reads a
 Topic's published `shortName` to tell a stored number from none, and
@@ -155,6 +218,44 @@ Topic's published `shortName` to tell a stored number from none, and
 however much it holds: `named` comes back empty and `pending` comes back holding
 every Topic on the board, run after run. What it cannot do is tell you it is
 done.
+
+### Telling when it is done
+
+While numbers are hidden, the step is finished when every Topic's own input
+stores a number, and only a read per Topic answers that. Read each one through
+the CLI, over the Topics the survey plan names:
+
+```bash
+deno task cf cell get --cell "$TOPIC" shortName --input
+```
+
+A Topic can come back without one after a run, and another run of the step does
+not necessarily reach it: in the rehearsal recorded in
+`docs/history/plans/topics-numbering-rehearsal-2026-09-22.md`, the same Topic
+missed in both passes and a second run changed nothing for it. So store its
+number directly. The numbers the namespace holds that no Topic reported storing
+are the ones to resolve. Read each entry as an address, since the map renders
+its members as `{}` otherwise, and confirm it is that Topic — by `createdAt`,
+for the reason `references/reading.md` gives — before sending:
+
+```bash
+deno task cf cell get --cell "$TOPICS_BOARD" names/<n> --input --select @
+# -> { "$link": "/of:fid1:..." }   compare its createdAt with the Topic's
+deno task cf piece call --cell "$TOPIC" --invocation '<unique-repair-id>' \
+  recordName '{"name":"<n>"}'
+deno task cf cell get --cell "$TOPIC" shortName --input
+# -> "<n>"
+```
+
+`recordName` stores whatever number it is handed, so resolving the entry first
+is what keeps the number the namespace's. The call is a mutation like any other:
+it takes an invocation id under `CF_INVOCATION_SESSION`, and its envelope is not
+the evidence — the read of `shortName` after it is (`references/mutating.md`).
+
+Every run also logs `Event dropped: speculative origin failed` once per Topic.
+That counts the step's sends, not the Topics that missed: in the same rehearsal
+all but one stored their number regardless. The per-Topic read above is the
+count to trust.
 
 ### What a re-run writes
 
@@ -191,12 +292,12 @@ asks every Topic again. Per case:
   written again on every run until that Topic's source moves. This is why step 2
   comes before step 3.
 
-So: re-run when something is outstanding, not as a matter of course. Each run
-costs one board transaction and one write per Topic; a handling for each Topic
-whose source declares the verb, and none for one that does not; and one logged
-failure per Topic in a state the verb refuses. After step 2 that is a handling
-for every Topic, which is the shape to plan for. None of it corrupts anything,
-and none of it is free.
+So: re-run when the audit finds something outstanding, not as a matter of
+course. Each run costs one board transaction and one write per Topic; a handling
+for each Topic whose source declares the verb, and none for one that does not;
+and one logged failure per Topic in a state the verb refuses. After step 2 that
+is a handling for every Topic, which is the shape to plan for. None of it
+corrupts anything, and none of it is free.
 
 Until the switch is on, read three things instead of `pending`:
 
@@ -267,12 +368,14 @@ which the verb works. It is untidy rather than damaging, and step 2 before step
 # the step's own report, run after run. While numbers are hidden it reads every
 # Topic as storing nothing, so `named` is empty and `pending` holds them all:
 # what moves between runs is `assigned`.
-deno task cf piece call --cell "$TOPICS_BOARD" backfillNames '{"agentName":"Sol"}'
+deno task cf piece call --cell "$TOPICS_BOARD" --invocation '<id>' backfillNames \
+  '{"agentName":"Sol"}'
 # -> { "assigned": [], "named": [], "pending": ["1","2"] }
 
 # what Topic 2 actually stores, which no switch gates
 deno task cf cell get --cell "$TOPIC2" shortName --input
-# -> (absent, for a Topic that has not stored one)
+# -> fails, exit 1: Cannot access path "shortName" - property "shortName" not
+#    found. Available keys: ...   (a Topic that has not stored one)
 
 # and the number addresses the Topic anyway
 deno task cf cell get //<space>/top/2 title
@@ -281,7 +384,8 @@ deno task cf cell get //<space>/top/2 title
 So the worst case is bounded: a number allocated, reachable, and permanently
 that Topic's, on a Topic that does not yet show it. No content is touched, no
 number is lost or reused, the board serves every Topic either way, and the
-repair is another run of the step. Nothing has to be undone.
+repair is another run of the step, or `recordName` on a Topic a run does not
+reach ("Telling when it is done"). Nothing has to be undone.
 
 ### Which read answers what
 
@@ -300,22 +404,22 @@ it.
 | board `index` row's `shortName` | absent for every Topic                                                                               | the number that Topic stores      |
 | board `names` map               | which Topics the namespace has numbered, and what each number is — never whether the Topic stores it | the same                          |
 | Topic's `shortName` input       | the number that Topic stores                                                                         | the same                          |
-| `recordName` on one Topic       | `wrote` says whether it had to write                                                                 | the same                          |
+| `recordName` on one Topic       | a write, not a read: the repair, whose `wrote` says whether it had to                                | the same                          |
 | `//<space>/top/<n>`             | resolves to the Topic                                                                                | the same                          |
 
 So while numbers are hidden, **the board's index answers nothing about storage**
 — it is the read to skip, not the survey — and there is no board-wide read of
-what Topics store. The two that work are one per Topic:
+what Topics store. The read that works is one per Topic:
 
 ```bash
 # what this Topic stores. No switch gates the durable input.
 deno task cf cell get --cell "$TOPIC" shortName --input
-
-# or ask the Topic, which answers for itself
-deno task cf piece call --cell "$TOPIC" recordName '{"name":"<n>"}'
-# -> { "name": "<n>", "wrote": false }   already stored; nothing written
-# -> { "name": "<n>", "wrote": true }    it had none and now stores this
 ```
+
+`recordName` also answers the question, but it is a mutation, not a read: on a
+Topic storing no number it writes the one it is handed. Use it only as the
+repair in "Telling when it is done", with its invocation id and the read-back
+that confirms it.
 
 Board-wide, the namespace is what can be surveyed, and it answers the other half
 of the question:
@@ -364,11 +468,29 @@ when it agrees. A targeted `deno task cf cell set --input` write to `shortName`
 carries no such guard and will overwrite or blank a stored number. The path
 check above does not stand in for it: that one asks whether the pattern declares
 `shortName` at all, and on a migrated Topic it passes and the write lands. So
-reach for the verb:
-
-```bash
-deno task cf piece call --cell "$TOPIC" recordName '{"name":"42"}'
-```
+reach for the verb, with the invocation id and read-back of the repair in
+"Telling when it is done".
 
 **A half-finished Topic is not an error state.** What it costs is above, under
-"What a half-finished Topic looks like"; the repair is another run of the step.
+"What a half-finished Topic looks like"; the repair is another run of the step,
+or `recordName` directly for a Topic a run does not reach.
+
+**A moved Topic does not move back.** `cf piece rollback` against the step-2
+plan refuses, `result.recordName: existing result field was removed`, because
+the old source publishes no `recordName`, and neither `rollback` nor
+`cf piece restore` takes an override. Treat step 2 as roll-forward only, and
+take what recovery would need immediately before a live run: a `VACUUM INTO`
+snapshot of the space (`docs/development/space-clone-rehearsal.md`) and an
+export with `scripts/topics-export.ts`.
+
+**On a clone, `top/<n>` may not resolve.** The address needs the space's `top`
+slug, and a clone that does not carry it answers `Slug "top" not found`. Read
+the entry off the board instead, with
+`deno task cf cell get --cell "$TOPICS_BOARD" names/<n> --input --select @`.
+
+**The clone's free-cell check does not see Topic inputs.** The fingerprint does
+not classify a Topic's input as a `free-cell`, so the authored-content reading
+in `docs/development/space-clone-rehearsal.md` — a changed free-cell is a
+clobber — passes a Topic whose title was overwritten as readily as one that only
+gained a `shortName`. Compare the authored fields directly, pristine against
+working: `title`, `body`, `comments`, `links`, `createdAt` and `createdBy`.

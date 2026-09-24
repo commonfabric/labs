@@ -79,11 +79,25 @@ no child node is supplied to avoid mismatched type/node pairs.
 The consumer adds a second trigger of its own: `SchemaGeneratorTransformer`
 routes to `generateSchemaFromSyntheticTypeNode` when (a) the type arg is
 synthetic (`pos === -1 && end === -1`) and resolved to `any`, or (b) the
-real-position type arg *contains* an `any`/`unknown` keyword anywhere
+type arg, synthetic or not, *contains* an `any`/`unknown` keyword anywhere
 (`containsAnyOrUnknownTypeNode`), "so the checker does not recover a wider
-semantic type"
-(`ts-transformers/src/transformers/schema-generator.ts`). Both
+semantic type" (`ts-transformers/src/transformers/schema-generator.ts`). Both
 triggers are documented in the ts-transformers behavior spec §12.
+
+**Printed nodes.** A caller passes `printedFrom` in `SchemaGenerationOptions`:
+for a node it printed from a type, that type. The generator never reads such a
+node as a node. At the root, in `formatChildType`, and on entry to the
+node-based analyzer, a printed node gives way to the caller's own type at that
+position when that type carries something, and to the type the node was
+printed from when the caller's is `any`, `unknown`, or an unbound type
+parameter. The schema hints attached to the node still apply, through the
+context's `hintsNode`.
+
+A print can carry syntax its type does not: in place of printing a type, the
+checker writes a member's own annotation where it denotes the member's type,
+and an alias by its name. For CFC labels, whose bindings live only in syntax,
+the type path reads both, as §11 says, so a label a print carried is read
+from its type.
 
 **The node-based analyzer** (`analyzeTypeNodeStructure`,
 `src/schema-generator.ts`) handles: `TypeLiteral` nodes (properties
@@ -103,20 +117,25 @@ detection first; then the default library's generic aliases — `Readonly`,
 `ReadonlyArray`, `Record` — applied structurally to their arguments when the
 name binds through the node or, for an unbindable synthetic reference,
 resolves lexically (`checker.resolveName`) to a library declaration, so an
-authored or imported shadow of the name keeps the general path; then the
-general path, which resolves the name the same way — bound through the node,
-else lexically from the module's scope, an import followed to what it
-imports — and formats the declared type, so a name the module declares,
-exported or not, or imports is read. A generic declared outside the default
-library is left unread: its declared type leaves the parameters unbound, and no
-reading of an unbound parameter stands in for the argument a reference supplies
-— the constraint drops the members an argument adds, the default is free to
-contradict one, and an operator over the parameter (`keyof T`, `T["name"]`) has
-no schema at all. The exceptions are the references `CommonFabricFormatter`
-lowers from their own arguments: a scope wrapper, whose payload it reads from
-the reference's argument, and an alias that is not itself a CFC alias and whose
-whole body references one, directly or through further such aliases, named with
-an argument for every parameter that has no default, which it substitutes down
+authored or imported shadow of the name keeps the general path; then an
+alias whose whole body is one of its own type parameters
+(`type Reactive<T> = T`), read as the argument the reference supplies for that
+parameter, since the reference denotes exactly that argument — except a scope
+wrapper, whose scope `CommonFabricFormatter` reads from the reference's name;
+then the general path, which resolves the name the same way — bound through
+the node, else lexically from the module's scope, an import followed to what
+it imports — and formats the declared type, so a name the module declares,
+exported or not, or imports is read. On the general path, a generic
+declared outside the default library is left unread: its declared type leaves
+the parameters unbound, and no reading of an unbound parameter stands in for
+the argument a reference supplies — the constraint drops the members an
+argument adds, the default is free to contradict one, and an operator over the
+parameter (`keyof T`, `T["name"]`) has no schema at all. The exceptions are the
+references `CommonFabricFormatter` lowers from their own arguments: a scope
+wrapper, whose payload it reads from the reference's argument, and an alias
+that is not itself a CFC alias and whose whole body references one, directly
+or through further such aliases, named with an argument for every parameter
+that has no default, which it substitutes down
 the chain — plus a `Date`-by-name special case), keyword types, and a final
 resolve-else-`true` fallback.
 
@@ -806,8 +825,9 @@ end-to-end in ts-transformers `aliased-binding-declared-type.test.ts` and
 
 A scope wrapper **as a union member throws** (`A scope wrapper cannot be a
 member of a union.`; tested, scope-wrappers.test.ts). The runtime reads a
-slot's scope from the top level of that slot's own schema
-(`ContextualFlowControl.getSchemaScopeCap`), so a declaration that lands in an
+slot's scope from that slot's own schema — its top level, or the definition a
+`$ref` there names (`ContextualFlowControl.getSchemaScopeCap`) — and from no
+compound branch, so a declaration that lands in an
 `anyOf` branch is invisible to the write path: no narrowing redirect is
 written, the value lands on the shared space row, and every principal reads
 the same instance. Write the union inside the wrapper
@@ -859,9 +879,35 @@ Mechanics:
   imports of `AnyOf` / `PolicyOf` work. A local declaration using a canonical
   name also lowers; unlike `Default`, there is no declaring-package guard
   (§7), so name collisions remain an untested foot-gun.
+- Qualified metadata references to `AnyOf` and `PolicyOf` receive their special
+  lowering only when the resolved symbol comes from Common Fabric. Provenance
+  follows import and re-export hops, including `commonfabric/cfc`, renamed
+  exports, and namespace re-exports, so companion declarations need no special
+  file path. An unrelated namespace member with the same name is read from its
+  own declaration as ordinary metadata.
+  An authored wrapper around a library alias is also read from its declaration,
+  preserving any binding fixed inside the wrapper.
+- A canonical alias reached by its own name reads its payload, like its
+  labels, from the reference's own argument nodes. A payload that is itself a
+  CFC alias therefore lowers as it would if written on its own: a generic alias
+  keeps its argument (`Integrity<Sec<string>, I>` is a string), a nested
+  `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label keeps its
+  `AnyOf` clauses. A named type in the payload stays a `$ref` to its
+  definition.
 - User alias chains are followed with type-parameter node substitution until a
   canonical name is reached (`resolveCfcAliasFromDeclaration` /
-  `substituteTypeNode`); unresolvable expansions fall back to
+  `substituteTypeNode`). Substitution starts at the authored reference's
+  declaration, including a function-local generic alias whose resolved type
+  reports an inner alias: the outer reference's arguments belong to the outer
+  declaration's parameters. Fixed writer bindings and default value arguments
+  are read from that declaration. References qualified through a namespace
+  import are followed by resolving their full type name, including within a
+  nested policy payload. Cycle detection tracks resolved declarations, so
+  aliases with the same name in different modules remain distinct. Qualified
+  metadata aliases such as `cf.CurrentPrincipal` resolve through the same
+  import. Type arguments are
+  converted to checker types only when the chain reaches a canonical policy
+  alias. Unresolvable expansions fall back to
   ordinary generation (tested). A subtree holding a substituted parameter is
   built afresh, with no original node, so the payload is read from the node
   and its arguments, never back through the checker as the declaration's
@@ -872,19 +918,73 @@ Mechanics:
   for but did not reach, through a kind it does not open (`T["name"]`), is a
   guess: the payload reads as accepting anything, and the labels are lowered
   as usual. A chain entered with no argument nodes, as from a type whose print
-  expands the alias, has nothing to substitute, and its payload is read from
-  the declaration.
-- Metadata values come from type-level literals: literal nodes, tuples, type
-  literals, `typeof` value reads, alias-parameter substitution, and
-  tuple/object **types** via the checker when nodes are gone
-  (`extractLiteralLikeValue`). That extraction recognizes
+  expands the alias, binds each parameter to its argument's type instead, by
+  declaration: a bare reference to the parameter, as a payload, a label, a
+  label's element, or an argument of a nested alias, reads as that type. A
+  payload node holding one (`T[]`, `{ value: T }`) is read from the type the
+  chain instantiates. Every CFC alias adds its metadata to its payload as one
+  more member of an intersection, a carrier holding only `__ct_cfc__`, so the
+  intersection's other member is the innermost payload, the argument in
+  wherever the declaration wrote the parameter (`cfcPayloadOf`). A payload
+  that is itself an intersection or a union has no one other member, and is
+  read from its declaration with each parameter bound to its argument's type
+  (`GenerationContext.boundTypeParameters`): wherever the walk reaches a bound
+  parameter, in a union's member, an intersection's part, an array's element,
+  or an object's property, its argument's type is read. A union or an
+  intersection written in the declaration is read by its written members, as
+  a print of the instantiation was, since the checker folds a member that is
+  itself a union, a CFC alias over one among them, into the whole and loses
+  its boundary and labels. A recursive definition read under bindings is
+  named by its type and its bindings together, so two instantiations of one
+  declaration keep apart. A use the binding
+  cannot reach, one the checker defers such as `T["name"]` or a conditional
+  type, accepts any value there, and the payload is reported as not fully
+  read. A label reads a parameter it holds as its type wherever the label
+  reader pairs that position. A `typeof` binding
+  supplied only as a type argument cannot be read from a type, so a
+  `writeAuthorizedBy` claim whose binding arrives that way is not emitted; one
+  written in the alias declaration itself is read from the declaration.
+- Metadata values come from type-level literals (`extractLiteralLikeValue`).
+  Syntax says what a type cannot, such as which binding a `typeof` names, so
+  a label's syntax is read first, each node paired with the part of the type
+  it denotes: literal nodes, tuples, type literals, `readonly`, `typeof` value
+  reads, and alias references, with the alias's arguments substituted into its
+  body. Syntax the reader does not evaluate, such as a conditional or mapped
+  alias, a spread, rest, or optional tuple element, or a parameter an alias
+  leaves to its default, is read from the paired type instead, and so is a
+  label with no syntax at all. Read from nodes, the extraction recognizes
   `AnyOf<X>` as
   `{ anyOf: X }` and `PolicyOf<typeof rules>` as a policy atom containing
-  `__ctPolicyIdentityOf: { file, path }`. Projection paths encode as JSON
+  `__ctPolicyIdentityOf: { file, path }`. Read from a type, an object type's
+  member is read at its declared annotation, paired with its type, wherever
+  that annotation denotes the member's type apart from the `undefined` an
+  optional member's `?` adds (`readMemberAnnotation`,
+  `src/typescript/type-node.ts`). That is how a label written in a type
+  literal or an interface keeps a binding that only its syntax names. The same
+  member of a generic declaration, instantiated, is read from its type, as is
+  the value of an optional member with no such annotation. `AnyOf<X>` is
+  recognized by its brand, `{ readonly __ct_cfc_any_of__?: X }`, never by an
+  alias name, so an authored type named `AnyOf` is read as itself. A
+  `PolicyOf` reached from a type alone, with no annotation that denotes it,
+  has no binding to read: its brand is read as an ordinary object,
+  `{ __ct_cfc_policy_of__: undefined }`, not as a policy atom. Projection paths
+  encode as JSON
   Pointers with `~0`/`~1` escaping (`encodeJsonPointerPath`).
-- `ifc` merges shallowly into the base schema's existing `ifc`
-  (`mergeIfcMetadata`); boolean schemas become `{ ifc }` /
-  `{ not: true, ifc }`.
+- `ifc` combines with the base schema's existing `ifc` one key at a time
+  (`combineIfcLabels`, `src/ifc-labels.ts`); boolean schemas become
+  `{ ifc }` / `{ not: true, ifc }`. Nested wrappers
+  (`Confidential<Confidential<T, A>, B>`) label one value twice.
+  `confidentiality` lists join, inner first, each atom kept once by value
+  equality. Every other key is kept from whichever wrapper declares it, and two
+  wrappers declaring it differently is a generation error: those keys have no
+  agreed combination, and keeping either one would drop the other silently.
+- A wrapper around a named type whose definition carries `ifc` writes its label
+  beside the `$ref`, and the runtime's resolver lets a keyword beside a `$ref`
+  replace the definition's, `ifc` as a whole. So after formatting,
+  `stateReferencedIfcLabels` rewrites the `ifc` beside each local `$ref` as
+  the labels of every definition along its root-reference chain, farthest
+  first, combined with its own by the same rule. A definition keeps its own
+  `ifc`, which is all a reference without one resolves to.
 - `WriteAuthorizedBy` writer identity resolves through import aliases to the
   declaring file. A transformer caller supplies
   `writerIdentityForSourceFile`, which maps that compile name to its authored
@@ -921,7 +1021,8 @@ Mechanics:
   `ts-transformers/src/transformers/ui-helper-lowering.ts`.
 
 In-package coverage: `test/schema/cfc-authoring.test.ts` (13 tests), including
-renamed `AnyOf` / `PolicyOf` imports. Transformer-side policy compilation and
+renamed `AnyOf` / `PolicyOf` imports, and `test/ifc-labels.test.ts` for how
+labels combine. Transformer-side policy compilation and
 diagnostics are pinned by `packages/ts-transformers/test/cfc-authoring.test.ts`.
 
 The collection/opaque helpers `LengthPreservedFrom`, `FilteredFrom`,
@@ -1041,6 +1142,7 @@ Everything that throws, with source (test-pinned unless noted):
 | `DeepDefault` unknown key | `DeepDefault key "…" does not exist on the target object type.` | `union-formatter.ts` |
 | Nested scope wrappers | `Nested scope wrappers require a cell boundary between scopes.` | `common-fabric-formatter.ts` |
 | Scope wrapper as a union member | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
+| An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |
 | Wrapper/scope/CFC alias without type argument | `<Kind><T> requires type argument` | `common-fabric-formatter.ts` (untested) |

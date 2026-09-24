@@ -1562,7 +1562,8 @@ foreignEngineFailures, warmRequests, watermarkLag, demandArrivals,
 undemandedNarrowingRuns, earlyEmitRefusals, demand: {demandedRows,
 demandedInstances, demandedInstancesMax, demandedPairs, demandedWriters,
 demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
-demandPasses, demandPassMs, pushGrowthWakes, watchWakes, warmWakes}, settle:
+demandPasses, demandPassMs, structureRootsPreloaded, pushGrowthWakes,
+watchWakes, warmWakes}, settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
 drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
@@ -1681,6 +1682,20 @@ time — which INCLUDES the awaited structure-load segments
 (`ensurePieceRunning`) for first-demand/pending root keys, NOT only the
 O(rows) reconcile (the reconcile does no per-row engine read and runs on
 registry deltas; the label is wall time, review MINOR-3);
+`structureRootsPreloaded` counts the root-document addresses the pass requests
+TOGETHER before those segments run — the instance a demand names and, for
+every scoped demand, the space instance as well. A segment syncs that space
+instance only when the scoped read finds no pattern pointer and starts
+nothing, which the pull cannot know in advance, so a scoped root whose own
+instance resolves has one address requested that its segment never syncs.
+Issuing them in one pull is what lets the replica's refresh queue coalesce
+them into a single `session.watch.add` rather than one per address inside the
+settle. It is counted per address requested per pass, and most requested
+addresses are already watched and cost no round trip, so it runs well above
+the adds the pull saves. The pull is also where the pass opens the
+changed-document collection its terminal arm invalidates against, because a
+root's reading is taken over the span from that pull to the root's own
+segment;
 `pushGrowthWakes`/`watchWakes`/`warmWakes` count NOTIFIES (the push-time
 `demandChanged`, the `session.watch.set`/`.add` notifies, and the warm
 request's staged-instance captures — the third kept apart so

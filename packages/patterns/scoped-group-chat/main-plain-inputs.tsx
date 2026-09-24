@@ -31,7 +31,10 @@ export interface SelectedRoom {
   room?: Room;
 }
 
-export type SendMessageEvent = Record<PropertyKey, never>;
+// The Send button delivers the serialized DOM click (`type`, `provenance`,
+// target scalars), which a closed event schema refuses before the handler runs.
+// The handler reads nothing from its event, so it declares none.
+export type SendMessageEvent = void;
 
 export interface AddRoomEvent {
   name?: string;
@@ -233,7 +236,7 @@ export default pattern<ScopedGroupChatInput, ScopedGroupChatOutput>(
                     $value={name}
                     placeholder="Ada Lovelace"
                     aria-label="Your name"
-                    timing-strategy="immediate"
+                    timingStrategy="immediate"
                   />
                 </cf-vstack>
               </cf-hstack>
@@ -258,7 +261,8 @@ export default pattern<ScopedGroupChatInput, ScopedGroupChatOutput>(
                       $value={newRoomName}
                       placeholder="Room name"
                       aria-label="Room name"
-                      timing-strategy="immediate"
+                      timingStrategy="immediate"
+                      oncf-submit={boundAddRoom}
                     />
                     <cf-button onClick={boundAddRoom}>
                       Add
@@ -345,7 +349,8 @@ export default pattern<ScopedGroupChatInput, ScopedGroupChatOutput>(
                   $value={draft}
                   placeholder={`Message ${displayedRoomLabel}`}
                   aria-label="Message"
-                  timing-strategy="immediate"
+                  timingStrategy="immediate"
+                  oncf-submit={send}
                 />
               </cf-vstack>
               <cf-button onClick={send}>

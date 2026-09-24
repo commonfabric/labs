@@ -34,14 +34,27 @@ export function requestedSeed(args: readonly string[], now: Date): number {
   );
 }
 
-if (import.meta.main) {
+/**
+ * Runs the command line `args` at `now`, and returns the status to exit
+ * with. The seed goes to `print` and the line naming it to `announce`; a
+ * command line this refuses prints nothing and says why to `announce`.
+ */
+export function main(
+  args: readonly string[],
+  now: Date,
+  print: (line: string) => void = console.log,
+  announce: (line: string) => void = console.error,
+): number {
   let seed: number;
   try {
-    seed = requestedSeed(Deno.args, new Date());
+    seed = requestedSeed(args, now);
   } catch (error) {
-    console.error(error instanceof Error ? error.message : error);
-    Deno.exit(2);
+    announce(error instanceof Error ? error.message : String(error));
+    return 2;
   }
-  console.error(shuffleNotice(seed));
-  console.log(seed);
+  announce(shuffleNotice(seed));
+  print(String(seed));
+  return 0;
 }
+
+if (import.meta.main) Deno.exitCode = main(Deno.args, new Date());

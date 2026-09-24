@@ -231,8 +231,7 @@ describe("research", () => {
       expect(invoked).toBe(false);
       expect(output).toMatchObject({
         status: "error",
-        message:
-          "followUpTo must name an admitted research result available to this run",
+        message: "followUpTo must name a research handle this run holds",
       });
     });
 
@@ -307,8 +306,7 @@ describe("research", () => {
       expect(invoked).toBe(false);
       expect(output).toMatchObject({
         status: "error",
-        message:
-          "followUpTo must name an admitted research result available to this run",
+        message: "followUpTo must name a research handle this run holds",
         cfc: { outputLabel: { confidentiality: ["task-influence"] } },
       });
       expect(output).not.toHaveProperty("researchRecord");

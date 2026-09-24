@@ -105,7 +105,11 @@ export interface StartInput {
   cwd?: string;
   /** Title given to the session once it exists. */
   title?: string;
-  /** A mode the driver advertises, applied to the session's first turn. */
+  /**
+   * Driver-advertised mode for a headless session's first turn and later
+   * connector-owned prompts. A desktop start rejects a mode because the app
+   * supplies its own permission setting.
+   */
   mode?: string;
   /**
    * Where the session runs. `headless` (the default) runs the first prompt
@@ -120,7 +124,14 @@ export interface StartInput {
 
 export interface CommandExecutionOptions {
   force?: boolean;
+
+  /**
+   * Callback reporting when `cancel()` can address a prompt or headless
+   * start. A desktop start never reports readiness: it reads provider
+   * inventory but starts no prompt or turn in the connector.
+   */
   onCancellationReady?: () => void;
+
   onSessionActive?: () => Promise<void>;
 }
 
@@ -157,10 +168,11 @@ export interface AgentDriver {
    * Starts a new session whose provider identity is `nativeSessionId`, chosen
    * by the caller. A headless start (the default surface) runs `input.text`
    * as the session's first prompt here. A start on the `desktop` surface
-   * opens the Claude Code desktop app with `input.text` ready to send and
-   * runs nothing: the session exists once the person sends it, under an id
-   * the app mints, and the driver pairs it with this start afterwards
-   * (`SessionSummary.startedAs`), answering with `affectedSession: null`.
+   * reads provider inventory and opens the Claude Code desktop app with
+   * `input.text` ready to send, but starts no prompt or turn here: the session
+   * exists once the person sends it, under an id the app mints, and the driver
+   * pairs it with this start afterwards (`SessionSummary.startedAs`), answering
+   * with `affectedSession: null` without reporting cancellation readiness.
    */
   startSession(
     nativeSessionId: string,

@@ -103,7 +103,9 @@ separate prompt milestones to the command worker. A driver calls
 `onCancellationReady` as soon as its `cancel()` method can address the admitted
 prompt. Claude reaches this point before session metadata lookup because its
 pending-prompt record accepts cancellation. ACP and Codex reach it after their
-provider prompt or turn has started.
+provider prompt or turn has started. A Claude desktop start is the exception: it
+reads provider inventory but starts no provider prompt or turn in the connector,
+and never calls `onCancellationReady` or `onSessionActive`.
 
 A driver calls and awaits the asynchronous `onSessionActive` callback only after
 the provider operation has started. This callback refreshes every command target
@@ -181,21 +183,21 @@ initial synchronization.
 
 The target exposes these orchestration methods:
 
-| Method                                      | Behavior                                                                                                                                            |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `publishedSessions()`                       | Reads the complete index without transcripts and returns each session's driver, update time, lifecycle state, and status, by key.                   |
-| `beginSessionObservation()`                 | Allocates the ordering value that a caller records before it begins a full provider collection.                                                     |
-| `publish(collected, options?)`              | Publishes changed session graphs and replaces both indexes. Returns the number of non-deleted sessions.                                             |
-| `publishHealth(value)`                      | Publishes a host-defined health record under the connector-owned health schema.                                                                     |
-| `subscribeCommands(callback)`               | Subscribes to every bound queue once at least one has been bound to its owner and verified writer; each delivery carries its queue's producer.      |
-| `pollCommands()`                            | Pulls every bound queue's pending commands without their queues, once at least one has been bound; a diagnostic read.                               |
-| `bindCommandCell(cell, writer)`             | Verifies the exact owner-scoped command queue and applies its owner and verified-writer policy.                                                     |
-| `bindProducerCommandCell(producer, writer)` | Creates the deterministic queue for one producer pattern, applies the same policy with that producer's handler as the writer, and returns the cell. |
-| `publishReceipt(receipt)`                   | Publishes one durable receipt cell and updates the bounded receipt index.                                                                           |
-| `readReceipt(commandId, producer?)`         | Reads the deterministic individual receipt cell used as the shared command claim, the producer's when one is named.                                 |
-| `refreshSession(driver, nativeSessionId)`   | Reads and publishes one session without changing untouched session statuses.                                                                        |
-| `commandCellId()`                           | Returns the command cell ID without the `of:` link prefix.                                                                                          |
-| `receiptCellId()`                           | Returns the receipt-index cell ID without the `of:` link prefix.                                                                                    |
+| Method                                      | Behavior                                                                                                                                                         |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `publishedSessions()`                       | Reads the complete index without transcripts and returns each session's driver, update time, lifecycle state, status, and durable desktop-start pairing, by key. |
+| `beginSessionObservation()`                 | Allocates the ordering value that a caller records before it begins a full provider collection.                                                                  |
+| `publish(collected, options?)`              | Publishes changed session graphs and replaces both indexes. Returns the number of non-deleted sessions.                                                          |
+| `publishHealth(value)`                      | Publishes a host-defined health record under the connector-owned health schema.                                                                                  |
+| `subscribeCommands(callback)`               | Subscribes to every bound queue once at least one has been bound to its owner and verified writer; each delivery carries its queue's producer.                   |
+| `pollCommands()`                            | Pulls every bound queue's pending commands without their queues, once at least one has been bound; a diagnostic read.                                            |
+| `bindCommandCell(cell, writer)`             | Verifies the exact owner-scoped command queue and applies its owner and verified-writer policy.                                                                  |
+| `bindProducerCommandCell(producer, writer)` | Creates the deterministic queue for one producer pattern, applies the same policy with that producer's handler as the writer, and returns the cell.              |
+| `publishReceipt(receipt)`                   | Publishes one durable receipt cell and updates the bounded receipt index.                                                                                        |
+| `readReceipt(commandId, producer?)`         | Reads the deterministic individual receipt cell used as the shared command claim, the producer's when one is named.                                              |
+| `refreshSession(driver, nativeSessionId)`   | Reads and publishes one session without changing untouched session statuses.                                                                                     |
+| `commandCellId()`                           | Returns the command cell ID without the `of:` link prefix.                                                                                                       |
+| `receiptCellId()`                           | Returns the receipt-index cell ID without the `of:` link prefix.                                                                                                 |
 
 The optional `publish()` setting `preserveUntouchedStatus` defaults to false.
 Normal full collections should use the default. A targeted refresh should set it
@@ -242,7 +244,10 @@ Commands other than cancellation run in admission order for each source and
 native session. A cancellation admitted after a prompt waits until the driver
 reports that its cancellation method can address that prompt. It then bypasses
 the remaining session queue. If the prompt fails before reaching that milestone,
-the cancellation starts after the prompt has produced its terminal outcome.
+the cancellation starts after the prompt has produced its terminal outcome. A
+headless start follows the same rule. A desktop start never reaches the
+milestone, so a cancellation admitted while its app link is opening waits for
+the start's terminal outcome and cannot interrupt the opener.
 
 The optional receipt callback is an observer. It runs after the receipt is
 durable in every target and the ledger publication marker is clear. A callback
@@ -390,20 +395,33 @@ prompt. A prompt submitted after the driver stops fails without calling the SDK.
 The final SDK result determines the command status. Cancellation calls
 `interrupt()` only for a query started by this connector instance.
 
-A start runs `query()` with `sessionId` set to the caller-chosen native session
-ID, which must be a UUID, `cwd` set to the directory the start runs in, and
-`title` set to the start's title when it names one, so the session carries its
-title from its first message. A start runs where its source lists: in the
-source's configured `cwd`, and a start naming any other directory fails; a
-source without one runs the start in the directory it names, which is then
-required and made absolute. A start for a session the SDK reports information
-for fails. The driver reads the session information first, so cancellation
-during that lookup behaves as it does for a prompt. The session becomes
-observable, and its first refresh runs, once the SDK has emitted its first
-message. A successful start records the directory for later prompts. A start's
-`mode` is one the driver advertises; it is applied to the first turn and kept
-for later connector-owned prompts, a start that fails keeps no mode, and a mode
-the driver does not advertise makes the start unsupported.
+A start runs where its source lists: in the source's configured `cwd`, and a
+start naming any other directory fails; a source without one runs the start in
+the directory it names, which is then required and made absolute. The native
+session ID must be a UUID.
+
+A headless start runs `query()` with `sessionId` set to that caller-chosen ID,
+`cwd` set to the directory the start runs in, and `title` set to the start's
+title when it names one, so the session carries its title from its first
+message. A start for a session the SDK reports information for fails. The driver
+reads the session information first, so cancellation during that lookup behaves
+as it does for a prompt. The session becomes observable, and its first refresh
+runs, once the SDK has emitted its first message. A successful start records the
+directory for later prompts. Its `mode` is one the driver advertises; it is
+applied to the first turn and kept for later connector-owned prompts, a start
+that fails keeps no mode, and a mode the driver does not advertise makes the
+start unsupported.
+
+A desktop start instead snapshots the complete SDK inventory, records its
+creation-time boundary, and opens `claude://code/new` with the directory and
+prompt. It starts no provider prompt or turn in the connector, calls neither
+command milestone callback, and returns `affectedSession: null` once the opener
+succeeds. The person sends the prompt in the app, which mints a different
+session ID. A later inventory pairs that session with the start only when it was
+absent from the snapshot, has a finite creation time at or after the boundary,
+names the same directory, and opens with the start's prompt. The summary then
+carries the caller-chosen ID as `startedAs`. A desktop start takes no `mode`;
+the app's own permission setting applies.
 
 Mode and model settings are kept in process memory per session. They apply to
 connector-owned prompts. `bypassPermissions` is advertised only when

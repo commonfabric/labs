@@ -137,6 +137,14 @@ present; no stage handles a missing one.
      is a plain identity lookup with **no** `getOriginalNode` fallback: the
      marker sits on the synthetic call SchemaInjection built, and that node
      reaches SchemaGeneration as the same object.
+   - `printedFrom` — for a type node printed from a type, that type. Both
+     printers record it: `typeToTypeNodeWithRegistry()`, including the
+     `unknown` it puts in place of a type the checker will not print, and the
+     `typeToTypeNode()` behind `typeToSchemaTypeNode()`. SchemaGeneration hands
+     the lookup to the schema generator as its `printedFrom` option, and a
+     printed node is read as its type and never as a node (§12). It is a plain
+     identity lookup with **no** `getOriginalNode` fallback, since a node
+     derived from a printed one says whatever its deriving changed.
 3. **Marker family** — node/symbol-keyed `WeakSet`s whose membership checks fall
    back through `getOriginalNode`, and whose mutators are coupled to the
    context's reactive-analysis cache invalidation (invalidation is a
@@ -849,7 +857,10 @@ claims.
 It scans `toSchema<T>()` (one type arg), `pattern<I, R>()` (the result type
 arg), and cell constructors (every type argument, since a constructed cell's
 policy is written there; a foreign constructor such as `new Map<…>()` is not
-scanned) for `WriteAuthorizedBy<T, typeof binding>` references. It runs after
+scanned) for `WriteAuthorizedBy<T, typeof binding>` references — recognized
+by the spelled name or by the declared name behind a renamed import or a
+namespace import (`cf.WriteAuthorizedBy`), as the schema generator reads them.
+It runs after
 the stages that lower expressions, so it resolves type declarations and
 bindings through the checker rather than by scanning the rewritten file. It
 resolves through type aliases and interfaces wherever they are declared (this
@@ -1829,9 +1840,12 @@ adjustments:
   restore no default, and a scope the type carries only as its brand, with no
   alias left to name it, is not restored. Neither is a scope wrapper around a
   cell: schema generation reads the wrapper by the scoped type it is registered
-  with, which would undo the capability narrowing of the cell inside it. A restored `Default` does not count
-  toward the preference for the node-driven candidate, which applies where only
-  that candidate holds an authored `Default` (`getScopeWrapper` and
+  with, which would undo the capability narrowing of the cell inside it. A
+  default restored on a value that a union also lets be `undefined` or `null`
+  wraps the whole union, since the runtime reads a missing property's default
+  only from the top of the property's schema. A restored `Default` does not
+  count toward the preference for the node-driven candidate, which applies where
+  only that candidate holds an authored `Default` (`getScopeWrapper` and
   `restoreDefault` in `transformers/type-shrinking.ts`;
   `test/shrunk-capture-wrappers.test.ts`)
 - tuple types and numeric-indexed object types are not rewritten to
@@ -2192,7 +2206,16 @@ file's `typeof`, such as a brand key, names no writer. The schema generator
 reads the type arguments of the reference that carries a policy through
 parentheses and plain aliases (`readAuthoredTypeNode`), so a pattern-local
 `type Name = Owned<string, typeof setName>` names the writer that the same
-syntax written in place names. The binding itself stays a direct `typeof`
+syntax written in place names. Pattern-local generic policy aliases also retain
+their writer bindings: each reference's arguments and defaults are substituted
+from its authored declaration, even when TypeScript reports the resolved type
+under an inner alias's name. A generic alias may name its policy through a
+namespace import (`cf.WriteAuthorizedBy<T, typeof setName>`) at module scope or
+inside the pattern, including through alias chains and nested policy wrappers.
+An outer alias and an imported alias may share a name: the chain is followed
+by declaration identity, so `type Owned<T> = ns.Owned<T, typeof save>` retains
+the imported policy and writer.
+The binding itself stays a direct `typeof`
 (§6.8): `type Binding = typeof setName` is refused, on a constructor's type
 arguments as on a declared field. `protected-cell-policy.test.ts` pins the
 generated schemas and the refusals.
@@ -2234,11 +2257,24 @@ Behavior:
 
 Special path:
 
+- a node printed from a type is read as that type and never as a node. The
+  transformer passes `CrossStageState.printedFrom()` to the generator as its
+  `printedFrom` option, and wherever a printed node appears (the whole type
+  argument, a member of a node the transformer built, or a union member) the
+  generator reads the caller's own type at that position when it carries
+  something, and the type the node was printed from when the caller's is
+  `any`, `unknown`, or an unbound type parameter. Schema hints attached to the
+  node still apply. A name the node writes that the emitting module cannot
+  resolve, an `import("…")` type, or the brand of an expanded `Default` never
+  reaches node analysis, and a type the checker will not print is read from
+  that type rather than from its `unknown` placeholder
+  (`test/printed-type-node-schema.test.ts`).
 - the generator uses its node-based path when the resolved type is `any` and
-  the type-argument node is synthetic (`pos=-1,end=-1`), or when a
-  real-position type argument contains any `any` / `unknown` keyword. The
-  latter avoids letting the checker recover a wider semantic type and erase
-  the authored unknown boundary.
+  the type-argument node is synthetic (`pos=-1,end=-1`), or when a type
+  argument, synthetic or not, contains an `any` or `unknown` keyword anywhere,
+  a printed node included. The keyword cases keep the checker from recovering
+  a wider semantic type, and the `unknown` case keeps the authored unknown
+  boundary. A printed node inside such an argument is still read as its type.
 - synthetic union handling preserves `undefined` members (for example
   `string | undefined` retains an explicit `undefined` branch in generated
   schema).
@@ -2287,7 +2323,12 @@ Special path:
   aliases lower to `ifc.*` metadata through the schema generator;
   `AnyOf<...>` becomes an IFC `anyOf` atom, and `PolicyOf<typeof policy>`
   becomes a policy-reference marker that `SchemaGeneratorTransformer`
-  resolves to module identity, symbol, and digest. `WriteAuthorizedBy`
+  resolves to module identity, symbol, and digest. Qualified references to
+  these metadata types follow Common Fabric import and re-export provenance,
+  including the `commonfabric/cfc` companion module, renamed exports, and
+  namespace re-exports. Authored types sharing their names retain their own
+  declarations. `test/qualified-cfc-metadata.test.ts` pins both input and output
+  schemas against the shipped library types. `WriteAuthorizedBy`
   rehydrates as `ifc.writeAuthorizedBy.__ctWriterIdentityOf = { file, path }`
   (plus a mint-time `moduleIdentity` stamp when the compiler was given
   `moduleIdentities` — see §17.3 file normalization),

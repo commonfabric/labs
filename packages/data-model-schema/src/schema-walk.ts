@@ -442,16 +442,16 @@ export interface SchemaNode {
   readonly path: ReadonlyArray<string | number>;
 
   /** The keyword the edge from the parent used; undefined at the root. */
-  readonly keyword?: SubschemaKeyword;
+  readonly keyword?: SubschemaKeyword | undefined;
 
   /** Record edge: the property / definition name. */
-  readonly key?: string;
+  readonly key?: string | undefined;
 
   /** Array edge: the index. */
-  readonly index?: number;
+  readonly index?: number | undefined;
 
   /** The parent subschema; undefined at the root. */
-  readonly parent?: JSONSchemaObj;
+  readonly parent?: JSONSchemaObj | undefined;
 
   /**
    * True when this node is a `$ref` target reached via
@@ -567,6 +567,7 @@ export function findSchema(
       found = node;
       return "stop";
     }
+    return undefined;
   }, opts);
   return found;
 }

@@ -152,6 +152,18 @@ describe("unread-type-diagnostics", () => {
       expect(warnings).toEqual([]);
     });
 
+    it("reports nothing for an alias whose body is its argument", async () => {
+      // `Reactive<any>` is `any`, a reading, not a guess.
+      const warnings = await warningsFor(
+        f.createTypeReferenceNode(f.createIdentifier("Reactive"), [
+          f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword),
+        ]),
+        "export {};\ntype Reactive<T> = T;",
+      );
+
+      expect(warnings).toEqual([]);
+    });
+
     it("reports nothing for a name declared as `any`", async () => {
       const warnings = await warningsFor(
         unresolvable("Deliberate"),

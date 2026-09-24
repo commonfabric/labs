@@ -46,7 +46,7 @@ import type {
   NativeSessionSnapshot,
   SourceDescriptor,
 } from "../src/types.ts";
-import { commandReceiptCause } from "../src/session-contract.ts";
+import { commandReceiptCause, sessionKey } from "../src/session-contract.ts";
 import {
   type GitCommandRunner,
   GitContextResolver,
@@ -2694,6 +2694,10 @@ Deno.test("a published pairing with a desktop start survives a driver that no lo
       complete: true,
     }], { observationSequence: target.beginSessionObservation() });
     assertEquals((await rowOf()).startedAs, "the-start-id");
+    expect(
+      (await target.publishedSessions()).get(sessionKey(source.id, "app-made"))
+        ?.startedAs,
+    ).toBe("the-start-id");
 
     // After a host restart the driver reads the session without the pairing
     // it no longer holds; the row keeps the one it was published with, so
@@ -2717,6 +2721,10 @@ Deno.test("a published pairing with a desktop start survives a driver that no lo
     const refreshed = await rowOf();
     assertEquals(refreshed.startedAs, "the-start-id");
     assertEquals(refreshed.updatedAt, "2026-09-22T20:03:00.000Z");
+    expect(
+      (await target.publishedSessions()).get(sessionKey(source.id, "app-made"))
+        ?.startedAs,
+    ).toBe("the-start-id");
   } finally {
     await runtime.dispose();
     await storageManager.close();
