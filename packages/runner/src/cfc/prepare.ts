@@ -633,54 +633,66 @@ const labelForConsumedEntries = (
 };
 
 /**
- * Whether `entry` resolves at `location` when the input witnesses of a read
- * are computed. An entry's `*` segment stands for every concrete child, so it
- * applies at any location beneath it; a location's `*` stands for the children
- * that carry no entry of their own, so a concrete sibling's entry does not
- * apply there. `isPrefix` matches `*` on either side, which would let one
- * witnessed child vouch for an unwitnessed one.
+ * The label-map entries of one read, arranged by path segment so the entries
+ * that resolve at a location are found by walking that location's segments
+ * rather than by scanning every entry. Each entry keeps its position in the
+ * read's entry list, so a resolution sees its entries in their original order.
  */
-const entryResolvesAtLocation = (
-  entryPath: readonly string[],
-  location: readonly string[],
-): boolean =>
-  entryPath.length <= location.length &&
-  entryPath.every((segment, index) =>
-    segment === "*" || segment === location[index]
-  );
+type WitnessTrieNode = {
+  /** The next segment of each entry path, `*` included as a segment. */
+  children: Map<string, WitnessTrieNode>;
+
+  /** Entries whose path ends at this node, with their list positions. */
+  entries: { entry: LabelMapEntry; ordinal: number }[];
+};
+
+const witnessTrieNode = (): WitnessTrieNode => ({
+  children: new Map(),
+  entries: [],
+});
 
 /**
- * The input witnesses one read carries: the retained atoms that hold at EVERY
- * confidential location of the value it read, or `undefined` when no location
- * of it is confidential (a public input bears on no release).
- *
- * A location is the read's own path and, for a recursive read, the path of
- * each consumed entry below it; any other position resolves exactly as its
- * nearest enclosing location does. Each location's integrity is its own
- * resolution (per-component longest prefix, joined across components). A
- * value written by other code beside a witnessed one is its own location,
- * and its resolution lacks the witness; the union `labelForConsumedEntries`
- * takes would carry the neighbor's witness to it.
- *
- * The witness covers VALUES written, not removals or membership changes.
- * Structure stamps carry no integrity, so a container another writer emptied
- * resolves to the witnessed value ancestor it sits under, and removing a
- * never-labeled path leaves no entry at all. An input whose witness a rule
- * relies on needs a writer policy (`writeAuthorizedBy`) confining its writes
- * to the endorsed code; `docs/specs/cfc-transformed-by-input-witnesses.md`
- * covers this.
- *
- * Integrity a runtime-minted `*` template contributes is not counted. A
- * template labels membership and slots rather than a written value, and it
- * still takes its place in replace-down, so the ancestor it shadows does not
- * show through either. Both omissions under-claim, which is the safe
- * direction for evidence.
+ * The entries of `root` that resolve at `location` when the input witnesses
+ * of a read are computed, in their original order. An entry's `*` segment
+ * stands for every concrete child, so it applies at any location beneath it;
+ * a location's `*` stands for the children that carry no entry of their own,
+ * so a concrete sibling's entry does not apply there. `isPrefix` matches `*`
+ * on either side, which would let one witnessed child vouch for an unwitnessed
+ * one.
  */
+const entriesResolvingAtLocation = (
+  root: WitnessTrieNode,
+  location: readonly string[],
+): LabelMapEntry[] => {
+  const found = [...root.entries];
+  let frontier = [root];
+  for (const segment of location) {
+    const next: WitnessTrieNode[] = [];
+    for (const node of frontier) {
+      const exact = node.children.get(segment);
+      if (exact !== undefined) next.push(exact);
+      const wildcard = segment === "*" ? undefined : node.children.get("*");
+      if (wildcard !== undefined) next.push(wildcard);
+    }
+    if (next.length === 0) break;
+    for (const node of next) found.push(...node.entries);
+    frontier = next;
+  }
+  return found.sort((a, b) => a.ordinal - b.ordinal).map(({ entry }) => entry);
+};
+
 const observationInputWitnesses = (
   entries: readonly LabelMapEntry[],
   path: readonly string[],
   nonRecursive: boolean | undefined,
 ): CfcAtom[] | undefined => {
+  // A location's confidentiality comes only from these entries, so a read
+  // none of them makes confidential has no confidential location.
+  if (
+    !entries.some((entry) => (entry.label.confidentiality?.length ?? 0) > 0)
+  ) {
+    return undefined;
+  }
   const locations = new Map<string, readonly string[]>([
     [pathKey(path), path],
   ]);
@@ -691,18 +703,26 @@ const observationInputWitnesses = (
       locations.set(pathKey(entry.path), entry.path);
     }
   }
-  const evidence = entries.map((entry) =>
-    isRuntimeMintedTemplate(entry)
-      ? {
-        ...entry,
-        label: { confidentiality: entry.label.confidentiality },
+  const root = witnessTrieNode();
+  for (const [ordinal, entry] of entries.entries()) {
+    const evidence = isRuntimeMintedTemplate(entry)
+      ? { ...entry, label: { confidentiality: entry.label.confidentiality } }
+      : entry;
+    let node = root;
+    for (const segment of entry.path) {
+      let child = node.children.get(segment);
+      if (child === undefined) {
+        child = witnessTrieNode();
+        node.children.set(segment, child);
       }
-      : entry
-  );
+      node = child;
+    }
+    node.entries.push({ entry: evidence, ordinal });
+  }
   let witnesses: CfcAtom[] | undefined;
   for (const location of locations.values()) {
     const label = labelForEntriesAtPath(
-      evidence.filter((entry) => entryResolvesAtLocation(entry.path, location)),
+      entriesResolvingAtLocation(root, location),
       location,
     );
     if ((label?.confidentiality?.length ?? 0) === 0) continue;
@@ -710,6 +730,8 @@ const observationInputWitnesses = (
     witnesses = witnesses === undefined
       ? held
       : meetInputWitnesses(witnesses, held);
+    // Nothing survives a meet with the empty set.
+    if (witnesses.length === 0) return witnesses;
   }
   return witnesses;
 };
@@ -3081,9 +3103,13 @@ const deriveFlowJoinImpl = (
           observation.nonRecursive,
         );
         document.labels.set(labelKey, label);
+        // Skipped once the meet is empty, which no later observation can
+        // refill; the `undefined` cached then is never read into a nonempty
+        // meet.
         document.witnesses.set(
           labelKey,
-          entries === undefined || identity === undefined
+          entries === undefined || identity === undefined ||
+            inputWitnesses?.length === 0
             ? undefined
             : observationInputWitnesses(
               entries,
