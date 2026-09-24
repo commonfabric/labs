@@ -134,8 +134,8 @@ export default pattern(() => {
   const assert_composer_disabled_without_profile = assert(() =>
     composerDisabled(noProfile[UI]) === true
   );
-  const assert_composer_disabled_without_name = assert(() =>
-    composerDisabled(noName[UI]) === true
+  const assert_composer_enabled_without_name = assert(() =>
+    composerDisabled(noName[UI]) === false
   );
   const assert_alice_message_sent = assert(() => {
     const [message] = sentIn(messages);
@@ -171,9 +171,13 @@ export default pattern(() => {
   const assert_send_without_profile_refused = assert(() =>
     sentIn(messages).length === 5
   );
-  const assert_send_without_name_refused = assert(() =>
-    sentIn(messages).length === 5
-  );
+  const assert_send_without_name_stored = assert(() => {
+    const message = sentIn(messages)[5];
+    return sentIn(messages).length === 6 &&
+      equals(message.authorProfile, namelessProfile) &&
+      message.authorName === "" &&
+      message.body === "From someone unnamed";
+  });
   const assert_sent_message_keeps_its_profile = assert(() => {
     const [message] = sentIn(messages);
     return message !== undefined &&
@@ -190,7 +194,7 @@ export default pattern(() => {
       { assertion: assert_starts_empty },
       { assertion: assert_composer_enabled_with_profile },
       { assertion: assert_composer_disabled_without_profile },
-      { assertion: assert_composer_disabled_without_name },
+      { assertion: assert_composer_enabled_without_name },
       {
         action: alice.sendMessage,
         event: submitted("  Hello, everyone  "),
@@ -237,7 +241,7 @@ export default pattern(() => {
         event: submitted("From someone unnamed"),
         trustedUi: sendGesture,
       },
-      { assertion: assert_send_without_name_refused },
+      { assertion: assert_send_without_name_stored },
       { action: action_switch_alice_profile },
       { assertion: assert_sent_message_keeps_its_profile },
     ],

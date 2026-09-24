@@ -48,7 +48,10 @@ export interface FabriChatMessage {
   /** The profile the sender sent under. */
   authorProfile: ProfileCell;
 
-  /** The sender's profile name when the message was sent. */
+  /**
+   * The sender's profile name when the message was sent, or empty when the
+   * name had not yet reached the handler.
+   */
   authorName: string;
 
   /** The sender's profile avatar (a URL or a glyph) when the message was sent. */
@@ -116,8 +119,11 @@ export const participantsOf = (
 
 /**
  * Appends the submitted text as a message from the viewer. It refuses an empty
- * message, and it refuses to send before the viewer's profile and profile name
- * are both known.
+ * message, and it refuses to send before the viewer's profile is known. The
+ * profile name is kept only as a snapshot, so it does not hold a send back: a
+ * profile's name can reach the handler later than the profile does, when the
+ * handler runs apart from the viewer's page, and the profile itself names the
+ * sender.
  */
 export const commitSend = handler<
   SubmittedTextEvent,
@@ -131,7 +137,7 @@ export const commitSend = handler<
 >((event, { myProfile, myName, myAvatar, messages }) => {
   const body = (event?.target?.value ?? "").trim();
   const authorName = (myName ?? "").trim();
-  if (!body || !authorName || myProfile?.get() === undefined) {
+  if (!body || myProfile?.get() === undefined) {
     return;
   }
 
@@ -152,7 +158,7 @@ export interface FabriChatRoomInput {
   /** The viewer's profile, which holds no value while it is unknown. */
   myProfile: ProfileCell | undefined;
 
-  /** The viewer's profile name, empty while it is unknown. */
+  /** The viewer's profile name, empty while it is unknown or unset. */
   myName: string;
 
   /** The viewer's profile avatar (a URL or a glyph), empty if none. */
@@ -186,9 +192,7 @@ export const FabriChatRoom = pattern<FabriChatRoomInput, FabriChatRoomOutput>(
       participantsOf(messages.get() as FabriChatMessage[])
     );
     const isEmpty = computed(() => (messages.get() ?? []).length === 0);
-    const cannotSend = computed(() =>
-      myProfile?.get() === undefined || (myName ?? "") === ""
-    );
+    const cannotSend = computed(() => myProfile?.get() === undefined);
 
     return {
       [NAME]: "FabriChat",

@@ -52,6 +52,7 @@ describe("fabrichat integration test", () => {
   let cc: PiecesController;
   let pieceId: string;
   let pieceSinkCancel: (() => void) | undefined;
+  let storedBodies: () => string[];
 
   beforeAll(async () => {
     firstIdentity = await Identity.generate({ implementation: "noble" });
@@ -72,7 +73,11 @@ describe("fabrichat integration test", () => {
     );
     const piece = await cc.create(program, { start: true });
     pieceId = piece.id;
-    pieceSinkCancel = cc.getResult(piece.getCell()).sink(() => {});
+    const result = cc.getResult(piece.getCell());
+    pieceSinkCancel = result.sink(() => {});
+    storedBodies = () =>
+      ((result.get() as { messages?: { body?: string }[] } | undefined)
+        ?.messages ?? []).map((message) => message?.body ?? "");
   });
 
   afterAll(async () => {
@@ -89,7 +94,7 @@ describe("fabrichat integration test", () => {
       identity: firstIdentity,
     });
     await createProfile(page, "Ada Lovelace");
-    await send(page, "Hello from Ada");
+    await send(page, "Hello from Ada", storedBodies);
     await waitForVerified(page, "Hello from Ada");
 
     await shell.goto({
@@ -99,7 +104,7 @@ describe("fabrichat integration test", () => {
     });
     await waitForText(page, "#fabrichat-messages", "Hello from Ada");
     await createProfile(page, "Grace Hopper");
-    await send(page, "Hi Ada, Grace here");
+    await send(page, "Hi Ada, Grace here", storedBodies);
     await waitForText(page, "#fabrichat-messages", "Ada Lovelace");
     await waitForText(page, "#fabrichat-messages", "Grace Hopper");
     await waitForVerified(page, "Hi Ada, Grace here");
@@ -115,11 +120,28 @@ async function createProfile(page: Page, name: string): Promise<void> {
   await waitForRuntimeIdle(page);
 }
 
-/** Sends `body` from the composer, and waits for it to appear. */
-async function send(page: Page, body: string): Promise<void> {
+/**
+ * Sends `body` from the composer, and waits for it to appear. If it does not,
+ * the error lists what the piece has stored, as `storedBodies` reads it through
+ * the controller: a stored body that never appeared was not rendered, and one
+ * that was never stored was refused or lost.
+ */
+async function send(
+  page: Page,
+  body: string,
+  storedBodies: () => string[],
+): Promise<void> {
   await fillCfInput(page, "#fabrichat-message", body);
   await clickTrustedAction(page, SEND_ACTION);
-  await waitForText(page, "#fabrichat-messages", body);
+  try {
+    await waitForText(page, "#fabrichat-messages", body);
+  } catch (cause) {
+    throw new Error(
+      `"${body}" never appeared. ` +
+        debugStr`Stored message bodies: $quote,long${storedBodies()}`,
+      { cause },
+    );
+  }
 }
 
 /** Waits until the message whose text includes `body` reads as verified. */
