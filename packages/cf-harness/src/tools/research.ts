@@ -198,7 +198,7 @@ export const researchKitGuidance = (kit: HarnessResearchResult): string =>
     ? "This research is incomplete. Do not present or implement unsupported parts as complete. "
     : "") +
   (kit.purpose === "orient"
-    ? "Use this orientation to achieve the user goal with existing data and composable pieces. Patterns were inspected; leads remain unverified. Use supported contracts and examples directly, and ask follow-up questions only where needed. Honor missing items and syntax diagnostics; syntax checks do not establish types or runtime behavior. A candidate's input requirements do not establish requirements for the entire task."
+    ? "Use this orientation to achieve the user goal with existing data and composable pieces. Work from kit.refinedTask when present: it is the request narrowed to what research verified is possible, so write a delegation's goal from it rather than from the original ask, and tell the user about the parts under missing. Patterns were inspected; leads remain unverified. Use supported contracts and examples directly, and ask follow-up questions only where needed. Honor missing items and syntax diagnostics; syntax checks do not establish types or runtime behavior. A candidate's input requirements do not establish requirements for the entire task."
     : kit.purpose === "answer"
     ? "Use the supported answer and optional example within the user goal. Honor missing items and syntax diagnostics; syntax checks do not establish types or runtime behavior. Ask another question only when it would resolve something still unclear."
     : kit.status === "complete"

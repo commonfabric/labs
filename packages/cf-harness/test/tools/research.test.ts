@@ -6,6 +6,7 @@ import type { IFCLabel } from "@commonfabric/runner/cfc";
 import { createToolOutputId } from "../../src/contracts/tool-result.ts";
 import {
   isResearchToolSuccessOutput,
+  researchKitGuidance,
   researchTool,
 } from "../../src/tools/research.ts";
 import type { HarnessToolContext } from "../../src/tools/types.ts";
@@ -71,6 +72,28 @@ const researchReferent: HarnessHandleReferentDraft = {
 };
 
 describe("research", () => {
+  describe("researchKitGuidance()", () => {
+    it("tells the caller to work and delegate from an orientation's refined task", () => {
+      const guidance = researchKitGuidance({
+        purpose: "orient",
+        status: "complete",
+        task: "Orient",
+        summary: "A table fits.",
+        refinedTask: "Show the table.",
+        inputs: [],
+        patterns: [],
+        rules: [],
+        sources: [],
+        missing: [],
+        leads: [],
+        questions: [],
+        availableHandleTokens: [],
+      });
+      expect(guidance).toContain("Work from kit.refinedTask");
+      expect(guidance).toContain("write a delegation's goal from it");
+    });
+  });
+
   describe("isResearchToolSuccessOutput()", () => {
     it("returns false for values that are not result objects", () => {
       for (const output of [null, undefined, "ok", 1, []]) {

@@ -1564,8 +1564,13 @@ orientation establishes a supported approach; it does not claim that the
 application has been built. Both purposes can inspect pattern source, describe
 handles, and return examples. Orientation's `leads` are host-observed metadata,
 usable as search references for delegation, and remain separate from inspected
-`patterns`. The current user goal accompanies narrower research questions and
-delegated tasks so they retain the original context.
+`patterns`. Orientation's `refinedTask` restates the request as the intersection
+of what was asked and what research verified is possible, each part bound to the
+grant or confirmed pattern that serves it, with the parts nothing serves left
+under `missing`; the parent works, and writes a delegation's goal, from it. An
+orientation that omits it is still admitted. The current user goal accompanies
+narrower research questions and delegated tasks so they retain the original
+context.
 
 Orientation and the parent distinguish inputs already given, inputs findable
 within the granted scope, and actions the available capabilities cannot perform.
