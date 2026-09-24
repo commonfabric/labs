@@ -3,9 +3,7 @@
  *
  * A message names its sender by linking the sender's profile, and it is written
  * only by `commitSend`, reached from the composer's reviewed surface. The
- * runtime labels each stored message `authored-by` the principal who sent it,
- * and `cf-cfc-authorship` marks the message verified when that principal is
- * the one the linked profile represents.
+ * runtime labels each stored message `authored-by` the principal who sent it.
  *
  * The room takes the viewer's profile as an input rather than wishing for it,
  * so that `main.tsx` supplies the real `#profile` and a test can supply a
@@ -214,12 +212,8 @@ export const FabriChatRoom = pattern<FabriChatRoomInput, FabriChatRoomOutput>(
                   size="sm"
                   $profile={message.authorProfile}
                 />
-                <cf-cfc-authorship
-                  $value={message.body}
-                  $author={message.authorProfile}
-                  authorName={message.authorName}
-                  style={{ flex: "1", minWidth: "0" }}
-                >
+                <cf-vstack gap="0" style={{ flex: "1", minWidth: "0" }}>
+                  <cf-text variant="body-compact">{message.authorName}</cf-text>
                   <cf-text
                     variant="body"
                     block
@@ -230,7 +224,7 @@ export const FabriChatRoom = pattern<FabriChatRoomInput, FabriChatRoomOutput>(
                   >
                     {message.body}
                   </cf-text>
-                </cf-cfc-authorship>
+                </cf-vstack>
               </div>
             ))}
             {isEmpty
