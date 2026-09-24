@@ -69,6 +69,21 @@ function profileHolder(spelling: Spelling, union: boolean): JSONSchema {
     : { $defs: spelling.$defs, ...(object as object) };
 }
 
+/**
+ * The schema for `{ inner: { profile } }`, where `inner` is only `type` and
+ * `properties`, the shape the traversal's plain-schema path takes, and the
+ * definitions sit at the root.
+ */
+function nestedProfileHolder(spelling: Spelling): JSONSchema {
+  return {
+    $defs: spelling.$defs,
+    type: "object",
+    properties: {
+      inner: { type: "object", properties: { profile: spelling.position } },
+    },
+  };
+}
+
 /** The schema for `{ profiles }`, an array of the position. */
 function profileList(spelling: Spelling): JSONSchema {
   return {
@@ -205,6 +220,31 @@ describe("handle declared by a definition", () => {
           ).toEqual(expected);
         });
       }
+
+      it("reads a linked property under an object of only `type` and `properties` as a handle", async () => {
+        // The root's definitions reach `profile` through `inner`, a schema
+        // that on its own carries no `$defs` for the reference to resolve in.
+
+        const profile = await storedProfile("nested-profile", "Ada");
+        const read = (holder: { get(): unknown }) =>
+          (holder.get() as { inner: { profile: unknown } }).inner.profile;
+
+        const expected = await observe(
+          "at-reference",
+          { inner: { profile } },
+          nestedProfileHolder(atReference),
+          read,
+        );
+        expect(expected.returned).toEqual({ handle: "Ada", path: [] });
+        expect(
+          await observe(
+            "by-definition",
+            { inner: { profile } },
+            nestedProfileHolder(byDefinition),
+            read,
+          ),
+        ).toEqual(expected);
+      });
 
       it("reads linked array elements as handles on the documents they name", async () => {
         const profiles = [
