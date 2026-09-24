@@ -44,7 +44,7 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { utf8Compare, utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
-import type { Cell } from "../cell.ts";
+import { type Cell, isCell } from "../cell.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import type {
   IExtendedStorageTransaction,
@@ -95,13 +95,20 @@ export interface CustodyRoom {
 /** Host-supplied bounds on what the actor may seal into this room. */
 export interface CustodySealOptions {
   /**
-   * The actor's own `Context` and `Resource` sources this room may draw on,
-   * read by the host from actor-private settings. A value whose label names
-   * any other source is refused; an empty list admits only values labeled for
-   * the actor alone (`User` or a bare DID), which is what a value the actor
-   * typed in carries.
+   * The actor's own `Context` and `Resource` sources this room may draw on. A
+   * value whose label names any other source is refused; an empty list admits
+   * only values labeled for the actor alone (`User` or a bare DID), which is
+   * what a value the actor typed in carries.
+   *
+   * A host passes the actor-private settings cell that holds the list, in the
+   * form {@link readCustodySourcePolicy} reads, rather than a list it read
+   * itself: the seal then reads the cell at prepare and again at commit, and
+   * the transaction that writes the entry verifies that the cell still holds
+   * what the commit read. A list read before the commit cannot be bound to
+   * the write, so a policy narrowed in between would seal under the allowance
+   * it withdrew. A fixed list is for a caller whose allowance is not stored.
    */
-  readonly allowedSources: readonly CfcAtom[];
+  readonly allowedSources: readonly CfcAtom[] | Cell<unknown>;
 }
 
 /**
@@ -193,6 +200,7 @@ interface ReadEvidence {
 /** Everything one inspection establishes. */
 interface Inspection {
   readonly actor: string;
+  readonly allowedSources: readonly CfcAtom[];
   readonly room: string;
   readonly readers: readonly CustodyRoomReader[];
   readonly draftLink: NormalizedFullLink;
@@ -847,8 +855,9 @@ const roomReaders = (acl: unknown, room: string): CustodyRoomReader[] => {
 /**
  * Reads the actor's allowed sources for custody rooms from a settings
  * document in the actor's home space: a list of the actor's own `Context` and
- * `Resource` atoms. A host passes the result as
- * {@link CustodySealOptions.allowedSources}.
+ * `Resource` atoms. This is how a seal reads the settings cell a host passes
+ * as {@link CustodySealOptions.allowedSources}; a host calls it only to show
+ * the allowance outside a seal.
  *
  * The document is read only from the actor's home space, so a room, or anyone
  * else who can write a space the actor reads, cannot widen what the actor
@@ -866,41 +875,89 @@ export async function readCustodySourcePolicy(
   await settings.sync();
   const tx = settings.runtime.edit();
   try {
-    const actor = tx.getCfcState().trustSnapshot?.actingPrincipal;
-    if (!isDID(actor)) {
-      throw new Error("Custody seal requires an authenticated actor");
-    }
-    const link = settings.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
-    if (link.space !== actor) {
-      throw new Error(
-        "Custody seal reads the allowed sources only from the actor's home space",
-      );
-    }
-    const value = snapshotJsonValue(settings.withTx(tx).get());
-    if (
-      !Array.isArray(value) ||
-      !value.every((atom) =>
-        isObjectNotArray(atom) &&
-        (atom.type === CFC_ATOM_TYPE.Context ||
-          atom.type === CFC_ATOM_TYPE.Resource) &&
-        isActorOwnedAlternative(atom, actor)
-      )
-    ) {
-      throw new Error(
-        "Custody seal requires the allowed sources to be the actor's own `Context` and `Resource` atoms",
-      );
-    }
-    return value as unknown as CfcAtom[];
+    return sourcePolicyIn(settings, tx);
   } finally {
     tx.abort();
   }
 }
 
-/** Reads the draft, the terms, and the room's state, and checks them all. */
+/**
+ * Reads the actor's allowed sources from `settings` in `tx`, as
+ * {@link readCustodySourcePolicy} describes.
+ */
+const sourcePolicyIn = (
+  settings: Cell<unknown>,
+  tx: IExtendedStorageTransaction,
+): CfcAtom[] => {
+  const actor = tx.getCfcState().trustSnapshot?.actingPrincipal;
+  if (!isDID(actor)) {
+    throw new Error("Custody seal requires an authenticated actor");
+  }
+  const link = settings.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
+  if (link.space !== actor) {
+    throw new Error(
+      "Custody seal reads the allowed sources only from the actor's home space",
+    );
+  }
+  const value = snapshotJsonValue(settings.withTx(tx).get());
+  if (
+    !Array.isArray(value) ||
+    !value.every((atom) =>
+      isObjectNotArray(atom) &&
+      (atom.type === CFC_ATOM_TYPE.Context ||
+        atom.type === CFC_ATOM_TYPE.Resource) &&
+      isActorOwnedAlternative(atom, actor)
+    )
+  ) {
+    throw new Error(
+      "Custody seal requires the allowed sources to be the actor's own `Context` and `Resource` atoms",
+    );
+  }
+  return value as unknown as CfcAtom[];
+};
+
+const STALE_REVIEW = "Custody seal review is stale; review the value again";
+
+/**
+ * The allowed sources `options` names: its list, or what its settings cell
+ * holds. A cell's read is added to `evidence`, so the entry's transaction
+ * verifies it.
+ */
+const allowedSourcesOf = async (
+  runtime: Cell<unknown>["runtime"],
+  options: CustodySealOptions,
+  evidence: ReadEvidence[],
+): Promise<readonly CfcAtom[]> => {
+  const allowed = options?.allowedSources;
+  if (Array.isArray(allowed)) return structuredClone(allowed);
+  if (!isCell(allowed)) {
+    throw new Error("Custody seal requires the room's allowed sources");
+  }
+  if (allowed.runtime !== runtime) {
+    throw new Error("Custody seal handles must belong to the same runtime");
+  }
+  await allowed.sync();
+  const tx = runtime.edit();
+  try {
+    const sources = sourcePolicyIn(allowed, tx);
+    evidence.push(...readEvidence(tx));
+    return sources;
+  } finally {
+    tx.abort();
+  }
+};
+
+/**
+ * Reads the draft, the terms, and the room's state, and checks them all. At
+ * commit, `reviewed` is what the prepare established, and a stored input that
+ * no longer holds it is refused as stale before anything is checked against
+ * it.
+ */
 const inspect = async (
   draft: Cell<unknown>,
   requestedRoom: CustodyRoom,
   options: CustodySealOptions,
+  reviewed?: Inspection,
 ): Promise<Inspection> => {
   const runtime = draft.runtime;
   if (requestedRoom.terms.runtime !== runtime) {
@@ -908,12 +965,17 @@ const inspect = async (
   }
   await Promise.all([draft.sync(), requestedRoom.terms.sync()]);
 
+  const evidence: ReadEvidence[] = [];
+  const allowed = await allowedSourcesOf(runtime, options, evidence);
+  if (reviewed && !deepEqual(allowed, reviewed.allowedSources)) {
+    throw new Error(STALE_REVIEW);
+  }
+
   const draftTx = runtime.edit();
   let actor: string;
   let draftLink: NormalizedFullLink;
   let stance: JSONValue;
   let sources: CfcAtom[];
-  const evidence: ReadEvidence[] = [];
   try {
     const acting = draftTx.getCfcState().trustSnapshot?.actingPrincipal;
     if (!isDID(acting)) {
@@ -929,10 +991,6 @@ const inspect = async (
     evidence.push(...readEvidence(draftTx));
   } finally {
     draftTx.abort();
-  }
-  const allowed = options?.allowedSources;
-  if (!Array.isArray(allowed)) {
-    throw new Error("Custody seal requires the room's allowed sources");
   }
   const refused = sources.find((source) =>
     !allowed.some((entry) => deepEqual(entry, source))
@@ -1037,6 +1095,7 @@ const inspect = async (
   }
   return {
     actor,
+    allowedSources: allowed,
     room: policy.subject as string,
     readers,
     draftLink,
@@ -1074,13 +1133,16 @@ export async function prepareCustodySeal(
   deepFreeze(inspected.terms);
   deepFreeze(inspected.policy);
   deepFreeze(inspected.sources);
+  deepFreeze(inspected.allowedSources);
   const consent = Object.freeze({}) as CustodySealConsent;
   consents.set(consent, {
     ...inspected,
     draft: draft.withTx(undefined),
     requestedRoom: room,
     options: Object.freeze({
-      allowedSources: structuredClone(options.allowedSources),
+      allowedSources: isCell(options.allowedSources)
+        ? options.allowedSources.withTx(undefined)
+        : structuredClone(options.allowedSources),
     }),
     eventId: crypto.randomUUID(),
   });
@@ -1135,6 +1197,7 @@ export async function commitCustodySeal(
     state.draft,
     state.requestedRoom,
     state.options,
+    state,
   );
   if (
     current.actor !== state.actor ||
@@ -1148,7 +1211,7 @@ export async function commitCustodySeal(
     !deepEqual(current.termsLink, state.termsLink) ||
     current.entryKey !== state.entryKey
   ) {
-    throw new Error("Custody seal review is stale; review the value again");
+    throw new Error(STALE_REVIEW);
   }
   const runtime = state.draft.runtime;
   const { actor, policy, instance, entryKey } = state;

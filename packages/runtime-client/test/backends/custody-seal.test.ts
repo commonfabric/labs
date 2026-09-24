@@ -336,6 +336,32 @@ describe("custody-seal", () => {
     }, { sources: [calendar] });
   });
 
+  it("refuses a seal whose source policy changed after the commit's checks", async () => {
+    await withFixture(async ({ processor, runtime, sources, refs }) => {
+      const preview = await processor.handleCustodySealPrepare({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+      }, first);
+      // The policy narrows after every check that precedes the anchor, and
+      // before the transaction that writes the entry.
+      atEditWithRetry(
+        runtime,
+        0,
+        "before",
+        () => rewrite(runtime, sources, []),
+      );
+      await expect(processor.handleCustodySealCommit({
+        type: RequestType.CustodySealCommit,
+        id: preview.id,
+      }, first)).rejects.toThrow("review changed before commit");
+      // No entry was written, so a fresh review still prepares.
+      await processor.handleCustodySealPrepare({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+      }, second);
+    }, { sources: [calendar] });
+  });
+
   it("refuses a room space with no access list", async () => {
     await withFixture(async ({ processor, refs }) => {
       await expect(processor.handleCustodySealPrepare({

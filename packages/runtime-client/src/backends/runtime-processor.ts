@@ -107,7 +107,6 @@ import {
   CUSTODY_SEAL_GESTURE,
   type CustodySealConsent,
   prepareCustodySeal,
-  readCustodySourcePolicy,
 } from "@commonfabric/runner/cfc/custody-seal";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
 import {
@@ -126,7 +125,6 @@ import {
   resetAllCountBaselines,
   resetAllTimingBaselines,
 } from "@commonfabric/utils/logger";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { backtickQuote } from "@commonfabric/utils/markdown";
 import {
   isObjectNotArray,
@@ -782,12 +780,6 @@ const custodySealingUnavailable = () =>
 /** A prepared custody seal, held in the backend until its host confirms. */
 type PendingCustodySeal = {
   consent: CustodySealConsent;
-
-  /** The actor's source policy document, read again at commit. */
-  settings: Cell<unknown>;
-
-  /** The allowed sources the preview was prepared under. */
-  allowedSources: readonly unknown[];
 };
 
 type RuntimeOperationTarget = {
@@ -1991,8 +1983,9 @@ export class RuntimeProcessor {
   /**
    * Prepares a custody seal and keeps its consent in this backend while the
    * host shows the preview. The policy reference is read from the cell the
-   * host names and is checked by the seal itself; the allowed sources are
-   * read only from the actor's home space.
+   * host names and is checked by the seal itself. The allowed sources are
+   * read by the seal from the settings cell the host names, only in the
+   * actor's home space, at prepare and again inside the commit.
    */
   async handleCustodySealPrepare(
     request: CustodySealPrepareRequest,
@@ -2007,18 +2000,15 @@ export class RuntimeProcessor {
     const settings = this.#hostSelectedCell(request.allowedSources);
     await policyCell.sync();
     const policy = policyCell.get();
-    const allowedSources = await readCustodySourcePolicy(settings);
     if (unavailable()) throw new Error("Custody sealing is unavailable");
     const prepared = await prepareCustodySeal(draft, {
       terms,
       policy: policy as never,
-    }, { allowedSources });
+    }, { allowedSources: settings });
     if (unavailable()) throw new Error("Custody sealing is unavailable");
     const id = crypto.randomUUID();
     this.#custodySeals.set(clientScopedKey(client, id), {
       consent: prepared.consent,
-      settings,
-      allowedSources,
     });
     return {
       id,
@@ -2036,9 +2026,11 @@ export class RuntimeProcessor {
   /**
    * Consumes one custody seal preview through the dedicated trusted host
    * transport. The trusted gesture is built here, never taken from the
-   * request, and the actor's source policy is read again so that a narrowed
-   * policy makes the review stale. The commit is aborted if its client
-   * detaches before the entry's transaction is sent.
+   * request. The seal reads the actor's source policy again, and the
+   * transaction that writes the entry verifies that read, so a policy
+   * narrowed at any point before the entry commits refuses the seal. The
+   * commit is aborted if its client detaches before the entry's transaction
+   * is sent.
    */
   async handleCustodySealCommit(
     request: CustodySealCommitRequest,
@@ -2050,12 +2042,8 @@ export class RuntimeProcessor {
     if (pending === undefined) {
       throw new Error("Custody seal confirmation is unavailable");
     }
-    const allowedSources = await readCustodySourcePolicy(pending.settings);
     if (this.#isDisposed || this.#detachedClients.has(client)) {
       throw new Error("Custody sealing is unavailable");
-    }
-    if (!deepEqual(allowedSources, pending.allowedSources)) {
-      throw new Error("Custody seal review is stale; review the value again");
     }
     const event = {
       type: "click",
