@@ -82,6 +82,28 @@ export default pattern<Input>(({ roster }) => ({
       });
     });
 
+    it("shrinks an array declared through an alias to the element fields read", async () => {
+      const output = await transformSource(
+        `import { lift } from "commonfabric";
+type Item = { name: string; extra: string };
+type Items = Item[];
+export const names = lift((input: { items: Items }) =>
+  input.items.map((item) => item.name)
+);`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const [input] = callSchemas(parseModule(output), "lift");
+
+      expect((input!.properties as Schema).items).toEqual({
+        type: "array",
+        items: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        },
+      });
+    });
+
     it("keeps the default of each element", async () => {
       const capture = await captureOf(readingElementsOf(
         `interface Input { c: (Box<number> | Default<{ value: 0; extra: "" }>)[]; }`,

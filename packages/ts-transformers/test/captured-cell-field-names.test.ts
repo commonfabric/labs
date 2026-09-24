@@ -186,6 +186,44 @@ describe("captured cell value fields", () => {
     }]);
   });
 
+  it("keeps the scope of an authored nullable cell of a scoped value at the input's top level", async () => {
+    // A lift's declared parameter type is written out, not printed.
+
+    const output = await transformSource(
+      `import { lift, Writable, type PerUser } from "commonfabric";
+      type Data = { count: number; unused: string };
+      export const read = lift(
+        (input: { held: Writable<PerUser<Data>> | undefined }) =>
+          input.held?.get()?.count ?? 0,
+      );`,
+      { types: COMMONFABRIC_TYPES, typeCheck: true },
+    );
+
+    const [input] = emittedSchemas(parseModule(output));
+    expect((input!.properties as Record<string, unknown>).held).toEqual({
+      anyOf: [{ type: "undefined" }, { $ref: "#/$defs/Data" }],
+      scope: "user",
+      asCell: ["readonly"],
+    });
+  });
+
+  it("keeps an authored nullable stream a stream", async () => {
+    const output = await transformSource(
+      `import { lift, type Stream } from "commonfabric";
+      export const send = lift((input: { s: Stream<number> | undefined }) => {
+        input.s?.send(1);
+        return 1;
+      });`,
+      { types: COMMONFABRIC_TYPES, typeCheck: true },
+    );
+
+    const [input] = emittedSchemas(parseModule(output));
+    expect((input!.properties as Record<string, unknown>).s).toEqual({
+      type: "number",
+      asCell: ["stream"],
+    });
+  });
+
   for (
     const { declaration, read } of [
       { declaration: "value?: Writable<Data>", read: "value!.get().count" },

@@ -60,6 +60,36 @@ async function liftSchemas(source: string): Promise<unknown[]> {
     .map((argument) => literalToValue(argument.expression));
 }
 
+/**
+ * The element schema of a list `computed()` declares as `element[]`, whose
+ * `profile` cell the view reads only for display, so narrowing unfolds each
+ * printed element.
+ */
+async function narrowedElement(
+  element: string,
+  declarations = "",
+): Promise<unknown> {
+  const output = await transformSource(
+    `import { type Cell, computed, pattern, type Stream, UI } from "commonfabric";
+type ProfileCell = Cell<{ name?: string }>;
+${declarations}
+export default pattern<{ profiles: ProfileCell[] }>(({ profiles }) => {
+  const participants = computed<${element}[]>(() =>
+    profiles.map((profile) => ({ name: "someone", profile } as ${element}))
+  );
+  return {
+    [UI]: <div>{participants.map((p) => <cf-profile-badge $profile={p.profile} />)}</div>,
+  };
+});`,
+    { types: COMMONFABRIC_TYPES, typeCheck: true },
+  );
+  return emittedSchemas(parseModule(output))
+    .map((schema) =>
+      (schema.properties as Schema | undefined)?.element as Schema | undefined
+    )
+    .find((found) => found !== undefined);
+}
+
 /** The schema of a `Box` whose `value` has the schema `value`. */
 function box(value: unknown): Schema {
   return {
@@ -1067,6 +1097,112 @@ export default pattern<{ list: Writable<Item>[] }>(({ list }) => ({
         list: {
           type: "array",
           items: { anyOf: [kindOnly("a"), kindOnly("b")], asCell: ["cell"] },
+        },
+      });
+    });
+
+    it("keeps a printed literal with a symbol-keyed property whole", async () => {
+      // A symbol-keyed property says something only as a whole, so the print
+      // is not shrunk to the member read.
+      const [capture] = await liftSchemas(
+        `import { computed, pattern, Writable } from "commonfabric";
+declare const tag: unique symbol;
+export default pattern<{
+  doc: Writable<{ name: string; extra: string; [tag]: number }>;
+}>(({ doc }) => ({
+  n: computed(() => doc.get().name),
+}));`,
+      );
+
+      expect((capture as Schema).properties).toEqual({
+        doc: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            extra: { type: "string" },
+          },
+          required: ["name", "extra"],
+          asCell: ["readonly"],
+        },
+      });
+    });
+
+    it("keeps a symbol-keyed printed literal whole where a cell in it would be narrowed", async () => {
+      const element = await narrowedElement(
+        `{ name: string; profile: ProfileCell; [tag]: number }`,
+        "declare const tag: unique symbol;",
+      );
+
+      expect(element).toMatchObject({
+        properties: { profile: { asCell: ["cell"] } },
+      });
+    });
+
+    it("keeps a symbol-keyed printed literal whole where identity paths reach inside", async () => {
+      const [capture] = await liftSchemas(
+        `import { computed, equals, pattern, Writable } from "commonfabric";
+declare const tag: unique symbol;
+interface Note { title: string; body: string; }
+export default pattern<{
+  doc: Writable<{ notes: Note[]; title: string; [tag]: number }>;
+  self: Note;
+}>(({ doc, self }) => ({
+  found: computed(() =>
+    doc.get().title + String(doc.get().notes.some((n) => equals(n, self)))
+  ),
+}));`,
+      );
+
+      expect((capture as Schema).properties).toMatchObject({
+        doc: {
+          properties: { notes: { items: { $ref: "#/$defs/Note" } } },
+        },
+      });
+    });
+
+    it("keeps the index signature of a printed literal a cell is narrowed in", async () => {
+      const element = await narrowedElement(
+        `{ name: string; profile: ProfileCell; [key: string]: unknown }`,
+      );
+
+      expect(element).toMatchObject({
+        properties: { profile: { asCell: ["readonly"] } },
+        additionalProperties: { type: "unknown" },
+      });
+    });
+
+    it("leaves a method out of a printed literal a cell is narrowed in", async () => {
+      const element = await narrowedElement(
+        `{ name: string; profile: ProfileCell; send(): Stream<number> }`,
+      );
+
+      expect(Object.keys((element as Schema).properties as Schema)).toEqual([
+        "name",
+        "profile",
+      ]);
+    });
+
+    it("holds a printed nullable scoped value's nullish alternatives inside its scope wrapper", async () => {
+      const [capture] = await liftSchemas(
+        `import { pattern, wish, Writable, type PerUser } from "commonfabric";
+interface Named { name: string; }
+export default pattern<{ x: string }>(() => {
+  const found = wish<Writable<PerUser<Named>>>({ query: "#named", headless: true });
+  const name = found.result?.get()?.name;
+  return { name };
+});`,
+      );
+
+      expect((capture as Schema).properties).toEqual({
+        found: {
+          type: "object",
+          properties: {
+            result: {
+              anyOf: [{ type: "undefined" }, { $ref: "#/$defs/Named" }],
+              scope: "user",
+              asCell: ["readonly"],
+            },
+          },
         },
       });
     });
