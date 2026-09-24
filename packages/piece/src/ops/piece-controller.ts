@@ -58,6 +58,7 @@ import {
   cfcSchemaResolvedRoot,
   loadStoredCfcEnvelope,
   type MergeCfcSchemaEnvelopeOptions,
+  releaseMergeOptions,
   resolveCfcSchemaRefRoot,
   resolveCfcSchemaRefs,
   storedCfcEnvelopeMergeIssue,
@@ -5428,10 +5429,19 @@ function pieceDocumentCfcEnvelopeIssue(
       `document could not be read (${stored.reason}); applying a source ` +
       `would be rejected over the same failure`;
   }
+  // The update the check gates is a release of the piece, which merges with
+  // the release's options (see `releaseMergeOptions`).
   const issue = storedCfcEnvelopeMergeIssue(
     stored.schema,
     candidateSchema,
-    options,
+    {
+      ...options,
+      ...releaseMergeOptions(tx, {
+        space: link.space,
+        id: link.id,
+        scope: link.scope,
+      }, stored.schema),
+    },
   );
   if (issue === undefined) return undefined;
   return issue.migration

@@ -1344,6 +1344,64 @@ describe("stored write requirements", () => {
     });
   });
 
+  describe("a release over a recursive definition", () => {
+    // A release whose writes leave what the document held unknown along a
+    // recursive definition compares it once per definition, as any write does.
+
+    const NODE_WRITER = "node-writer";
+    const NODE = {
+      type: "object",
+      properties: {
+        label: { type: "string", ifc: { writeAuthorizedBy: [NODE_WRITER] } },
+        next: { anyOf: [{ type: "null" }, { $ref: "#/$defs/Node" }] },
+      },
+      ifc: { ...WRITER_LABEL },
+      $defs: {
+        Node: {
+          type: "object",
+          properties: {
+            label: {
+              type: "string",
+              ifc: { writeAuthorizedBy: [NODE_WRITER] },
+            },
+            next: { anyOf: [{ type: "null" }, { $ref: "#/$defs/Node" }] },
+          },
+        },
+      },
+    } as const satisfies JSONSchema;
+    const SEED = { label: "a", next: { label: "b", next: null } };
+
+    it("commits a release that writes beneath the document before rewriting it", async () => {
+      const runtime = start();
+      {
+        const tx = runtime.edit();
+        tx.setCfcTrustSnapshot({
+          id: `trust-${space}`,
+          actingPrincipal: space,
+        });
+        tx.setCfcImplementationIdentity({
+          kind: "builtin",
+          builtinId: NODE_WRITER,
+        });
+        runtime.getCell(space, "recursive-release", NODE, tx).set(
+          SEED as never,
+        );
+        expect((await tx.commit()).error).toBeUndefined();
+      }
+      const tx = runtime.edit();
+      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+      tx.setCfcImplementationIdentity({
+        kind: "builtin",
+        builtinId: NODE_WRITER,
+      });
+      markRelease(runtime, tx, "recursive-release");
+      const cell = runtime.getCell(space, "recursive-release", NODE, tx);
+      cell.key("next").setRaw({ label: "c", next: null } as never);
+      cell.setRaw({ label: "a", next: { label: "d", next: null } } as never);
+      expect((await tx.commit()).error).toBeUndefined();
+    });
+  });
+
   describe("repointing a link", () => {
     // A link position's own claims govern who may point it elsewhere.
     // (`set` of an object at a link writes into the linked document, so the

@@ -37,6 +37,12 @@
  * one leading path segment apart (the transformer's strip). Stored claims
  * keep their mint-time spelling forever, so this is permanent aged-store
  * compat.
+ *
+ * One wider rule, {@link writerClaimPatternFilesCorrespond}, lets a stamped
+ * claim adopt an unstamped one spelled below another known pattern root. It
+ * applies only in a release of the piece whose document holds the claim
+ * (schema-merge.ts `release`), where the release's own schema is what
+ * describes the document from then on.
  */
 
 /** Leading-slash-normalize a claim/identity source-file spelling. */
@@ -106,6 +112,9 @@ export const writerClaimPatternFilesCorrespond = (
   const a = normalizeIdentitySource(unstamped);
   const b = normalizeIdentitySource(stamped);
   if (a === undefined || b === undefined) return false;
+  // The stamp comes from the current compile, which spells a pattern below
+  // one of the roots; a spelling that names none could be anything.
+  if (!PATTERN_ROOTS.some((root) => b.startsWith(root))) return false;
   const tail = patternTail(a);
   const segments = tail.split("/").slice(1);
   return tail === patternTail(b) && segments.length >= 2 &&

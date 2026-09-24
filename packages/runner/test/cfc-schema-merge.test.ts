@@ -1254,6 +1254,11 @@ describe("mergeCfcSchemaEnvelopes", () => {
             "/system/../profile-create.tsx",
             "/packages/patterns/system/../profile-create.tsx",
           ],
+          // A stamp spelled below no known root.
+          [
+            "/api/patterns/system/profile-create.tsx",
+            "/system/profile-create.tsx",
+          ],
         ]
       ) {
         expect(() =>

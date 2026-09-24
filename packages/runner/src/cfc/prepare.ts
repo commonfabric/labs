@@ -6265,20 +6265,35 @@ const storedValuesAt = (
     }
     return values;
   };
+  // What is unknown at a path is unknown beneath it as well, so the answer
+  // never turns known again deeper down a recursive definition.
   const cache = new Map<string, readonly FabricValue[] | undefined>();
-  return (path) => {
+  const valuesAt = (
+    path: readonly string[],
+  ): readonly FabricValue[] | undefined => {
     const key = path.join("\u0000");
-    if (!cache.has(key)) cache.set(key, expand([], path));
+    if (!cache.has(key)) {
+      cache.set(
+        key,
+        path.length > 0 && valuesAt(path.slice(0, -1)) === undefined
+          ? undefined
+          : expand([], path),
+      );
+    }
     return cache.get(key);
   };
+  return valuesAt;
 };
 
 /**
  * Whether this transaction is a release of the piece whose store `target`
- * is: the runtime names a piece's stores, under its own authorization, only
- * in the transaction that sets the piece up, swaps its pattern, or repairs
- * its start. Pattern code can record the same marker, but not the
- * authorization.
+ * is: one in which the runtime, under its own authorization, names the whole
+ * document as a store it owns. It does so in the transaction that sets a
+ * piece up, swaps its pattern or repairs its start, in each transaction that
+ * instantiates a piece's nodes (a child piece's included), and where a
+ * builtin mints a store of its own; every such store is minted from the
+ * piece's cause in its own space. Pattern code can record the same marker,
+ * but not the authorization.
  */
 const transactionReleasesStore = (
   tx: IExtendedStorageTransaction,
@@ -6293,7 +6308,9 @@ const transactionReleasesStore = (
     input.claim === CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE &&
     tx.isRuntimeWritePolicyInput(input) &&
     input.target.space === target.space && input.target.id === target.id &&
-    canonicalizeLogicalPath(input.target.path).length === 0
+    canonicalizeLogicalPath(input.target.path).length === 0 &&
+    // As the transaction's own reading of the marker requires.
+    input.sources?.[0]?.space === input.target.space
   );
 
 /**
@@ -6322,14 +6339,38 @@ const storedForeignPositions = (
         ? values.every(isPrimitiveCellLink)
         : guarded.some((entry) => arraysEqual(entry, path));
     },
-    variesBelow: (path) =>
-      valuesAt(path)?.length !== 0 ||
-      guarded.some((entry) =>
-        entry.length >= path.length &&
-        path.every((segment, index) => segment === entry[index])
-      ),
+    variesBelow: (path) => {
+      const values = valuesAt(path);
+      // Where they are unknown, nothing at or beneath is foreign.
+      if (values === undefined) return false;
+      return values.length > 0 ||
+        guarded.some((entry) =>
+          entry.length >= path.length &&
+          path.every((segment, index) => segment === entry[index])
+        );
+    },
   };
 };
+
+/**
+ * The merge options of a release of the piece whose store `target` is: what
+ * the commit merges a release's candidate with, and what the `setsrc`
+ * preflight, which gates the release, has to merge it with too.
+ */
+export const releaseMergeOptions = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  storedSchema: JSONSchema,
+): Pick<MergeCfcSchemaEnvelopeOptions, "beneathStoredLink" | "release"> => ({
+  beneathStoredLink: beneathForeignPosition(
+    storedForeignPositions(storedValuesAt(tx, target), storedSchema),
+  ),
+  release: true,
+});
 
 /** Whether a logical path lies strictly beneath a foreign position. */
 const beneathForeignPosition =
@@ -7720,10 +7761,8 @@ export function* prepareBoundaryCommitSteps(
       try {
         mergedSchema = mergeStoredCfcEnvelope(storedSchema, schema, {
           generatedOutputPaths: generatedOutputPaths.get(key),
-          ...(foreignPositions !== undefined && {
-            beneathStoredLink: beneathForeignPosition(foreignPositions),
-            release: true,
-          }),
+          ...(foreignPositions !== undefined &&
+            releaseMergeOptions(tx, { space, id, scope }, storedSchema)),
         });
       } catch (error) {
         // Tag the additive-required migration incompatibility with a stable

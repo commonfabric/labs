@@ -242,6 +242,7 @@ export {
   gatedSinkRequestExists,
   loadStoredCfcEnvelope,
   prepareBoundaryCommit,
+  releaseMergeOptions,
   storedCfcEnvelopeMergeIssue,
 } from "./prepare.ts";
 export type {
