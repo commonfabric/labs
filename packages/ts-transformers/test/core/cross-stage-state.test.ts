@@ -83,6 +83,18 @@ describe("CrossStageState", () => {
         state.recordPrintedFrom(root, printedType);
         return root;
       };
+      const printedMembers = (state: CrossStageState) => {
+        const root = f.createTypeLiteralNode([
+          f.createPropertySignature(
+            undefined,
+            "name",
+            undefined,
+            f.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+          ),
+        ]);
+        state.recordPrintedFrom(root, printedType);
+        return root.members as ts.NodeArray<ts.PropertySignature>;
+      };
       const literalHolding = (type: ts.TypeNode) =>
         f.createTypeLiteralNode([
           f.createPropertySignature(undefined, "held", undefined, type),
@@ -94,6 +106,32 @@ describe("CrossStageState", () => {
 
         expect(state.printPieceIn(literalHolding(root.elementType)))
           .toBe(root.elementType);
+      });
+
+      it("returns a literal built below a print that a node outside it holds", () => {
+        const state = new CrossStageState();
+        const root = f.createLiteralTypeNode(f.createStringLiteral("a"));
+        state.recordPrintedFrom(root, printedType);
+        const rebuilt = f.createLiteralTypeNode(
+          root.literal as ts.StringLiteral,
+        );
+
+        expect(state.printPieceIn(literalHolding(rebuilt))).toBe(root.literal);
+      });
+
+      it("returns a name built below a print that a node outside it holds", () => {
+        const state = new CrossStageState();
+        const [member] = printedMembers(state);
+        const rebuilt = f.createTypeLiteralNode([
+          f.createPropertySignature(
+            undefined,
+            member!.name,
+            undefined,
+            f.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword),
+          ),
+        ]);
+
+        expect(state.printPieceIn(rebuilt)).toBe(member!.name);
       });
 
       it("returns `undefined` for a print held whole", () => {

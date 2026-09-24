@@ -308,16 +308,17 @@ export class CrossStageState {
   }
 
   /**
-   * Returns a type node the printer built below the root of a print that
-   * `typeNode` holds outside that root, or `undefined` when it holds none. A
-   * print is read as a whole, so what is below a root `typeNode` holds is not
-   * searched.
+   * Returns a node the printer built below the root of a print that
+   * `typeNode` holds outside that root, of whatever kind: a type node, or a
+   * name or a literal a node was rebuilt around. Returns `undefined` when it
+   * holds none. A print is read as a whole, so what is below a root
+   * `typeNode` holds is not searched.
    */
-  printPieceIn(typeNode: ts.TypeNode): ts.TypeNode | undefined {
-    let piece: ts.TypeNode | undefined;
+  printPieceIn(typeNode: ts.TypeNode): ts.Node | undefined {
+    let piece: ts.Node | undefined;
     const visit = (node: ts.Node): void => {
       if (piece || this.printedFrom(node)) return;
-      if (ts.isTypeNode(node) && this.printedWithin(node)) {
+      if (this.printedWithin(node)) {
         piece = node;
         return;
       }
