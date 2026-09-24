@@ -188,6 +188,28 @@ describe("ContextualFlowControl.schemaAtPath", () => {
     }
   });
 
+  it("hands a wildcard down to its children without its `default`", () => {
+    // A true schema is what every child below it narrows to, markers and
+    // labels included, but its `default` describes the wildcard's own value:
+    // an absent child under `{ default: {…} }` must not read the parent's
+    // default as its own. The schema itself, asked for at an empty path,
+    // keeps it.
+    const wildcard: JSONSchema = {
+      default: { a: 1 },
+      asCell: ["cell"],
+      ifc: { confidentiality: ["secret"] },
+    };
+    expect(ContextualFlowControl.schemaAtPath(wildcard, ["a"])).toEqual({
+      asCell: ["cell"],
+      ifc: { confidentiality: ["secret"] },
+    });
+    expect(ContextualFlowControl.schemaAtPath(wildcard, ["a", "b"])).toEqual({
+      asCell: ["cell"],
+      ifc: { confidentiality: ["secret"] },
+    });
+    expect(ContextualFlowControl.schemaAtPath(wildcard, [])).toEqual(wildcard);
+  });
+
   it("does not treat inherited property names as declared properties", () => {
     const schema: JSONSchema = {
       type: "object",

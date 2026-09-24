@@ -666,6 +666,10 @@ export class ContextualFlowControl {
       ? new Set<unknown>(extraConfidentiality)
       : new Set<unknown>();
     let cursor = schema;
+    // Whether the path descended through a wildcard: a true schema is what
+    // every child below it narrows to, markers and all, but its `default`
+    // describes the wildcard's own value and does not follow.
+    let throughWildcard = false;
     for (
       const [index, part] of path.map((value, index) =>
         [index, value] as [number, string]
@@ -787,6 +791,7 @@ export class ContextualFlowControl {
         break;
       } else if (ContextualFlowControl.isTrueSchema(cursor)) {
         // wildcard schema -- equivalent to true, but we can add ifc tags
+        throughWildcard = true;
         break;
       } else if (cursor.type === "object") {
         if (cursor.ifc !== undefined) {
@@ -863,6 +868,7 @@ export class ContextualFlowControl {
       unknown
     >;
     delete result.$defs;
+    if (throughWildcard) delete result.default;
     if (selectedDefs !== undefined) result.$defs = selectedDefs;
     return result as JSONSchema;
   }
