@@ -461,13 +461,15 @@ refused.
 prepares a [custody seal](../specs/cfc-custody-seal.md). Each field is a cell
 reference: the actor's draft, the room's terms document, a cell holding the
 room's policy reference, and the actor's source policy, which must be in the
-actor's home space. The worker reads each and answers with an opaque `id`,
-the actor, the room space, the room's readers from its access list, the terms,
-the instance digest, the policy, the sources the draft draws on, and the exact
-stance. Every field was read and checked by the worker.
+actor's home space. The worker reads each and returns an opaque `id`, the actor,
+the room space, the room's readers from its access list, the terms, the instance
+digest, the policy, the sources the draft draws on, and the exact stance. The
+worker read every field and checked the seal's invariants over them. The terms'
+optional `question` and `answers` are display fields it does not check: nothing
+verifies that the room's policy releases only those answers.
 
 The trusted host shows that preview and requires a trusted user confirmation
-before calling `RuntimeClient.commitCustodySeal(id)`, which answers with the
+before calling `RuntimeClient.commitCustodySeal(id)`, which returns the
 actor's receipt. The worker builds the renderer-trusted `CustodySeal` gesture
 itself; the request carries no event. It reads the actor's source policy again,
 and a changed policy, draft, terms, room readers or actor makes the review

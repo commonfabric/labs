@@ -1105,7 +1105,9 @@ disconnecting the component invalidates the review, and the runtime refuses a
 seal when the draft, the terms, the room's readers or the actor's source policy
 changed after preparation. When the seal commits, the component emits
 `cf-sealed` with no payload. The event carries neither the value nor the
-actor's entry in the room.
+actor's entry in the room. A binding that changes while a commit is in flight
+leaves the component without that event even if the seal committed, so a
+pattern that must know should read the room rather than rely on it.
 
 ## CFC Authorship
 

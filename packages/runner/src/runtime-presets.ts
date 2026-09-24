@@ -499,7 +499,9 @@ function coreOptions(params: CoreParams): RuntimeOptions {
     // cfcContentAddressedLabels / cfcPolicyRecords / cfcTrustConfig /
     // cfcSinkMaxConfidentiality / cfcReadMaxConfidentiality /
     // cfcReadOnExceed are not among them: they ride the constructor defaults
-    // (off / none) until a first-party rollout begins. A caller that opts
+    // (off / none) until a first-party rollout begins, except where a preset
+    // adds a delta after these core options (browserWorker passes the host's
+    // cfcTrustConfig and read ceiling). A caller that opts
     // into `cfcPosture` gets the named bundle's values over the pins, for
     // this one runtime.
     ...presetCfcOptions({
