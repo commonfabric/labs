@@ -107,13 +107,26 @@ function annotation(text: string) {
   `;
 }
 
-/** The policy as a person can compare it: its symbol, module, and digest. */
-function describePolicy(policy: unknown): string {
+/**
+ * The policy as a person can compare it. The runtime admits the policy only
+ * when the actor's trust configuration names its manifest digest, so the
+ * digest is the checked fact. A trust statement need not name the symbol or
+ * the module, which the room's reference supplies, so those are shown as what
+ * the reference names, as room text.
+ */
+function describePolicy(policy: unknown) {
   const atom = policy as Record<string, unknown> | undefined;
-  if (typeof atom?.symbol !== "string") return "";
-  return `${atom.symbol} in ${String(atom.moduleIdentity)} (${
-    String(atom.policyDigest)
-  })`;
+  if (typeof atom?.policyDigest !== "string") return nothing;
+  const named = (value: unknown) =>
+    roomText(typeof value === "string" ? value : "");
+  const symbol = named(atom.symbol);
+  const moduleIdentity = named(atom.moduleIdentity);
+  return html`
+    <bdi class="digest" dir="ltr">${atom.policyDigest}</bdi>
+    <p class="note">A manifest you trust to decide what the room releases. The
+      room's reference names it <bdi class="symbol">${symbol}</bdi> in
+      <bdi class="module">${moduleIdentity}</bdi>.</p>
+  `;
 }
 
 /** A source atom as a person reads it: its name or class, and its kind. */
@@ -233,7 +246,8 @@ export class CFCustodySeal extends BaseElement {
       [role="alert"] {
         color: #932c22;
       }
-      .principal {
+      .principal,
+      .digest {
         unicode-bidi: isolate;
         font: 14px/1.5 monospace;
       }

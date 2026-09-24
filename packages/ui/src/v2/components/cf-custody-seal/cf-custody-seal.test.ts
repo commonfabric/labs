@@ -244,6 +244,29 @@ describe("CFCustodySeal workflow", () => {
     );
   });
 
+  it("shows the policy's digest as the checked fact and its names as room text", async () => {
+    using state = setup({
+      prepare: () =>
+        Promise.resolve({
+          ...preview,
+          policy: {
+            type: "https://commonfabric.org/cfc/atom/Policy",
+            policyRefKind: "module",
+            moduleIdentity: "sha256:\u202eeludom",
+            symbol: "custody\u2066Rules",
+            policyDigest: "policy-digest",
+            subject: "did:key:verified-room",
+          },
+        }),
+    });
+    await state.element.accessForTestingOnly.prepare();
+    expect(interpolatedInto(state.element, '<bdi class="digest"')).toEqual([
+      "policy-digest",
+      "custodyRules",
+      "sha256:eludom",
+    ]);
+  });
+
   for (
     const field of ["draft", "terms", "policy", "sources", "runtime"] as const
   ) {
