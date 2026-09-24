@@ -11,6 +11,8 @@ import {
   internSchema,
   internSchemaAsTaggedHashString,
 } from "@commonfabric/data-model-schema";
+import { walkSchemaDocumentClosure } from "@commonfabric/data-model-schema/schema-closure";
+import { anySchema } from "@commonfabric/data-model-schema/schema-walk";
 import { isDID } from "@commonfabric/identity/did";
 import {
   containsExternalSchemaRef,
@@ -6053,17 +6055,42 @@ export const loadSchemaDocument = (
 };
 
 /**
+ * Whether a stored envelope root declares a definition map anywhere — at the
+ * root or as a nested scope below it. A decomposed root never does: the
+ * decomposition strips the root's `$defs` into documents of their own and
+ * refuses a nested one. A root that does is therefore the inline spelling of
+ * a merged envelope, whose `cid:` references are ones the confidential merge
+ * minted to keep a reference bound to the definition map of the document it
+ * came from (`resolveConfidentialSchema` in `./schema-merge.ts`).
+ */
+const declaresDefinitionScope = (root: JSONSchema): boolean =>
+  anySchema(
+    root,
+    (node) => isObjectNotArray(node.schema) && node.schema.$defs !== undefined,
+    { includeDefs: true, includeUnused: true },
+  );
+
+/**
  * The envelope schema in the INLINE form every consumer walks. A
  * self-contained root is returned as stored, spelling untouched. A root
- * carrying `$ref: cid:` members — a decomposed write, or the root a
- * reference-form declared schema left behind — is recomposed: one read
- * policy, every member resolved or the envelope is unreadable (fail
+ * carrying `$ref: cid:` members is resolved by one read policy: every
+ * referenced document is loaded or the envelope is unreadable (fail
  * closed). Members resolve through `loadSchemaDocument`: space-FIRST
  * with content verification, the registry supplying only what the space
  * does not hold — a registered copy was itself hash-verified at
  * registration, so content addressing makes it the stored document.
  * Each verified member is then registered, so in-session resolvers (the
  * decompose-root equality below among them) can supply the closure.
+ *
+ * What is returned depends on which spelling the root is. A decomposed
+ * write, or the root a reference-form declared schema left behind, is
+ * recomposed. A root that declares a definition map of its own is already
+ * the inline spelling the writer merged and stored: it is returned as
+ * stored, its references resolving through the registry exactly as they did
+ * for the writer. Recomposing it would be wrong twice over — recomposition
+ * reads a document's `$defs` as a cyclic group's members, and it moves every
+ * referenced definition into the root's map, where a reference inside a
+ * nested definition scope would no longer find it.
  */
 const loadEnvelopeSchema = (
   tx: IExtendedStorageTransaction,
@@ -6072,16 +6099,23 @@ const loadEnvelopeSchema = (
 ): JSONSchema => {
   const root = loadSchemaDocument(tx, space, metadata.schemaHash);
   if (!containsExternalSchemaRef(root)) return root;
-  return internSchema(recomposeSchema(
-    formatExternalSchemaRef(metadata.schemaHash),
-    (hash) => {
-      const document = hash === metadata.schemaHash
-        ? root
-        : loadSchemaDocument(tx, space, hash);
-      registerSchemaDocument(hash, document);
-      return document;
-    },
-  ));
+  const load = (hash: string): JSONSchema => {
+    const document = hash === metadata.schemaHash
+      ? root
+      : loadSchemaDocument(tx, space, hash);
+    registerSchemaDocument(hash, document);
+    return document;
+  };
+  if (declaresDefinitionScope(root)) {
+    walkSchemaDocumentClosure({
+      roots: [metadata.schemaHash],
+      load: (hash) => ({ kind: "verified", schema: load(hash) }),
+    });
+    return root;
+  }
+  return internSchema(
+    recomposeSchema(formatExternalSchemaRef(metadata.schemaHash), load),
+  );
 };
 
 /**
