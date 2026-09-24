@@ -61,7 +61,7 @@ async function mountSeal(overrides: Partial<{
   return { element, calls, sealed };
 }
 
-Deno.test("cf-custody-seal presents the room, readers and answers the worker verified", async () => {
+Deno.test("cf-custody-seal presents the room and readers the worker checked apart from the answers the terms list", async () => {
   const { element } = await mountSeal();
   try {
     expect(element).toBeInstanceOf(CFCustodySeal);
