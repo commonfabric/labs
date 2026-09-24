@@ -511,6 +511,9 @@ export function browserWorkerParamsFromInitializationData(
     ...(data.cfcReadOnExceed !== undefined
       ? { cfcReadOnExceed: data.cfcReadOnExceed }
       : {}),
+    ...(data.cfcTrustConfig !== undefined
+      ? { cfcTrustConfig: data.cfcTrustConfig }
+      : {}),
     ...(data.trustSnapshot
       ? { trustSnapshotProvider: () => data.trustSnapshot }
       : {}),
@@ -754,6 +757,7 @@ export function securityContextFrom(
     cfcFlowLabels: data.cfcFlowLabels,
     cfcReadMaxConfidentiality: data.cfcReadMaxConfidentiality,
     cfcReadOnExceed: data.cfcReadOnExceed,
+    cfcTrustConfig: data.cfcTrustConfig,
     renderDeclassificationPolicy: data.renderDeclassificationPolicy,
     renderConfidentialityCeiling: data.renderConfidentialityCeiling,
     trustSnapshot: data.trustSnapshot,

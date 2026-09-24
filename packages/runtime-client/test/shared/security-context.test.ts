@@ -105,6 +105,27 @@ describe("securityContextDifferences()", () => {
     ).toEqual(["identity"]);
   });
 
+  it("names the trust configuration when it differs", () => {
+    // A runtime evaluates concept guards under one trust configuration, so a
+    // document believing another would read a trusted declassifier as trusted
+    // where the runtime does not, or the reverse.
+    expect(
+      securityContextDifferences(
+        {
+          ...running,
+          cfcTrustConfig: {
+            delegations: [{
+              delegator: "*",
+              verifier: "did:web:review.example",
+              concepts: ["https://commonfabric.org/cfc/concepts/example"],
+            }],
+          },
+        },
+        running,
+      ),
+    ).toEqual(["cfcTrustConfig"]);
+  });
+
   it("names the enforcement mode when it differs", () => {
     expect(
       securityContextDifferences(

@@ -82,7 +82,9 @@
  * |                            | coreOptions when a first-party rollout begins    |
  * | cfcPrefixProvenanceStats   | core-default (off) — measurement opt-in, per     |
  * |                            | deployment (value-level provenance Stage 0)      |
- * | cfcTrustConfig             | core-default (none declared) — same              |
+ * | cfcTrustConfig             | core-default (none declared); delta on           |
+ * |                            | browserWorker (the host declares its deployment  |
+ * |                            | trust statements through InitializationData)     |
  * | cfcSinkMaxConfidentiality  | core-default (none declared) — same              |
  * | cfcReadMaxConfidentiality  | core-default (none — the owner view); delta on   |
  * |                            | remoteClient / browserWorker (a per-run or       |
@@ -150,6 +152,7 @@ import {
   type CfcEnforcementMode,
   type CfcFlowLabelsMode,
   type CfcReadOnExceed,
+  type CfcTrustConfigInput,
   type CfcWriteFloorMode,
   sinkCeilingsOf,
   type SinkGovernanceRegistry,
@@ -620,6 +623,13 @@ export interface BrowserWorkerPresetParams extends CoreParams {
   /** The read ceiling's fallback `onExceed`, from the same source. */
   cfcReadOnExceed?: CfcReadOnExceed;
 
+  /**
+   * The deployment trust configuration, from `InitializationData`: the host
+   * decides which statements its runtimes evaluate concept guards under,
+   * such as a default profile trusting a reviewed policy digest.
+   */
+  cfcTrustConfig?: CfcTrustConfigInput;
+
   trustSnapshotProvider?: () => TrustSnapshot | undefined;
   telemetry?: RuntimeTelemetry;
   consoleHandler?: ConsoleHandler;
@@ -794,6 +804,9 @@ export const runtimePresets = {
         ? { cfcFlowLabels: params.cfcFlowLabels }
         : {}),
       ...readCeilingOptions(params),
+      ...(params.cfcTrustConfig !== undefined
+        ? { cfcTrustConfig: params.cfcTrustConfig }
+        : {}),
       ...(params.trustSnapshotProvider !== undefined
         ? { trustSnapshotProvider: params.trustSnapshotProvider }
         : {}),

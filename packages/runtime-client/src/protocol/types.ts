@@ -19,7 +19,10 @@ import type {
   OperationFieldSnapshot,
 } from "@commonfabric/memory/v2";
 import type { MetaField } from "@commonfabric/runner";
-import type { CfcConfClause } from "@commonfabric/runner/cfc";
+import type {
+  CfcConfClause,
+  CfcTrustConfigInput,
+} from "@commonfabric/runner/cfc";
 import type { CfcLabelView } from "@commonfabric/runner/cfc/label-view-core";
 import type {
   ActionRunTraceEntry,
@@ -824,6 +827,18 @@ export type InitializationData = {
   cfcReadOnExceed?: "fail" | "skip";
 
   /**
+   * The deployment trust configuration the worker's runtime evaluates concept
+   * guards under (`RuntimeOptions.cfcTrustConfig`): trust statements, verifier
+   * delegations and concept edges, such as a default profile's statement that
+   * a reviewed policy digest is a trusted declassifier. The runtime validates
+   * it at construction and refuses to start on a malformed one. It is fixed
+   * for the runtime's lifetime; a host that also declares `trustSnapshot`
+   * folds this configuration's version into that snapshot's `revision`.
+   * Absent means no statements, and every concept guard fails closed.
+   */
+  cfcTrustConfig?: CfcTrustConfigInput;
+
+  /**
    * Whether author-supplied render-boundary declassification is honored.
    * `allow` is the default. `deny` ignores an author's
    * `declassifyConfidentiality`, so that a pattern cannot release a secret
@@ -953,6 +968,7 @@ export type RuntimeSecurityContext =
     | "cfcFlowLabels"
     | "cfcReadMaxConfidentiality"
     | "cfcReadOnExceed"
+    | "cfcTrustConfig"
     | "renderDeclassificationPolicy"
     | "renderConfidentialityCeiling"
     | "trustSnapshot"

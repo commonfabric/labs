@@ -69,6 +69,7 @@ const SECURITY_CONTEXT_FIELDS: Record<
   cfcFlowLabels: true,
   cfcReadMaxConfidentiality: true,
   cfcReadOnExceed: true,
+  cfcTrustConfig: true,
   experimental: true,
   identity: true,
   renderConfidentialityCeiling: true,
