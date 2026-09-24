@@ -1086,7 +1086,8 @@ const writeIsRuntimeInitialization = (
   waived: "writeAuthorizedBy" | "uiContract",
 ): boolean => {
   const input = tx.getCfcState().writePolicyInputs.find((input) =>
-    input.kind === "initialization" && tx.isRuntimeWritePolicyInput(input) &&
+    input.kind === "initialization" && input.mode !== "replay" &&
+    tx.isRuntimeWritePolicyInput(input) &&
     input.target.space === target.space && input.target.id === target.id &&
     normalizeCellScope(input.target.scope) === target.scope &&
     concretePathHasPrefix(path, input.target.path)
@@ -1222,6 +1223,33 @@ const writePreservesRuntimeOutput = (
       input.value,
     );
 };
+
+/**
+ * Whether the runtime recorded `path`, or a slot above it, as an argument slot
+ * a setup replay carries over from the stored document. Only that replay's
+ * re-staging is a candidate for leaving a protected path as it is: any other
+ * write attempt at a writer-policied path, even one that changes no byte,
+ * needs the path's writer.
+ */
+const writeReplaysArgumentSlot = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean =>
+  tx.getCfcState().writePolicyInputs.some((input) =>
+    input.kind === "initialization" && input.mode === "replay" &&
+    tx.isRuntimeWritePolicyInput(input) &&
+    input.target.space === target.space && input.target.id === target.id &&
+    normalizeCellScope(input.target.scope) === target.scope &&
+    concretePathHasPrefix(
+      canonicalizeLogicalPath(path),
+      canonicalizeLogicalPath(input.target.path),
+    )
+  );
 
 /**
  * Whether this transaction leaves the value at `path` exactly as it found it:
@@ -4587,8 +4615,8 @@ const verifyInputRequirements = (
   // no onPrefixProvenance hook is installed — skips all measurement.
   provenance?: CfcPrefixProvenanceSummary,
   // A write that changes nothing defers only its writer refusal: a preserved
-  // runtime output, or a path whose value the transaction leaves as it found
-  // it. The persist loop must prove the final envelope unchanged before
+  // runtime output, or an argument slot a setup replay carries over and
+  // leaves as it found it. The persist loop must prove the final envelope unchanged before
   // discarding this reason.
   deferWriterRefusal?: (reason: string, path: readonly string[]) => boolean,
   // `verdict` says whether the failure is a VERDICT on the data (see
@@ -7426,7 +7454,8 @@ export function* prepareBoundaryCommitSteps(
         ? (reason, path) => {
           if (
             !(path.length === 0 && writePreservesRuntimeOutput(tx, target)) &&
-            !writeLeavesPathUnchanged(tx, target, path)
+            !(writeReplaysArgumentSlot(tx, target, path) &&
+              writeLeavesPathUnchanged(tx, target, path))
           ) return false;
           deferredWriterRefusal ??= reason;
           deferredWriterPaths.push(path);

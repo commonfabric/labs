@@ -250,13 +250,11 @@ describe("writer-policied inputs of a sub-piece", () => {
     }
   });
 
-  it("admits a whole-document write that leaves the guarded fields as they are", async () => {
-    // Setting a whole document is how pattern code writes several fields at
-    // once. The writer policies guard two of them; a write that leaves both
-    // byte for byte as they were modifies nothing they guard, whatever it
-    // does beside them. Reading the sealed entries first puts a derived
-    // label on the field it does change, so the document's labels change
-    // too, just not at the guarded paths.
+  it("refuses pattern code rewriting a guarded field with its own bytes", async () => {
+    // What admits the replay is the runtime's record of the slots it carries
+    // over, not the absence of a change: pattern code setting a whole
+    // document, guarded fields included, still needs their writer, even
+    // where it leaves them byte for byte as they were.
     const creator = newRuntime();
     try {
       await storePiece(creator, "writer-policy-whole-document");
@@ -271,7 +269,9 @@ describe("writer-policied inputs of a sub-piece", () => {
       const rewrite = creator.edit();
       const current = argument.withTx(rewrite).get();
       argument.withTx(rewrite).set({ ...current, topic: "lunch" });
-      expect((await rewrite.commit()).error).toBeUndefined();
+      expect((await rewrite.commit()).error?.message).toContain(
+        "writeAuthorizedBy",
+      );
 
       const forge = creator.edit();
       argument.withTx(forge).set({
@@ -283,7 +283,7 @@ describe("writer-policied inputs of a sub-piece", () => {
       );
 
       await creator.idle();
-      expect(argument.get().topic).toBe("lunch");
+      expect(argument.get().topic).toBe("");
       expect(argument.get().entries.map((entry) => entry.seat)).toEqual([1]);
       expect(argument.get().frozen.digest).toBe("first");
     } finally {
