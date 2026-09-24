@@ -17,7 +17,8 @@ and export name onto what it writes, and the rule matches it with
 `moduleIdentity: THIS_POLICY.moduleIdentity`, which binds to the defining
 module's identity at evaluation time. Another function of the same module, a
 handler copying a raw input, or a different version of the module does not
-satisfy the rule.
+satisfy the rule. `blessed-object.tsx` does the same for a function returning an
+object, whose object node is released along with its fields.
 
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space
@@ -43,4 +44,5 @@ Run:
 deno task cf check packages/patterns/cfc-exchange-rules/direct-release.tsx --show-transformed --no-run
 deno task cf test packages/patterns/cfc-exchange-rules/direct-release.test.tsx
 deno task cf test packages/patterns/cfc-exchange-rules/blessed-computation.test.tsx
+deno task cf test packages/patterns/cfc-exchange-rules/blessed-object.test.tsx
 ```

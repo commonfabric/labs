@@ -30,6 +30,17 @@ describe("wish state schema", () => {
     });
   });
 
+  it("wraps a `true` requested schema as a bare cell handle", () => {
+    const properties = stateProperties(wishStateSchemaForResult(true));
+    expect(properties.candidates).toEqual({
+      type: "array",
+      items: { asCell: ["cell"] },
+    });
+    expect(properties.result).toEqual({
+      anyOf: [{ type: "undefined" }, { asCell: ["cell"] }],
+    });
+  });
+
   it("moves state scope to the container without losing referenced definitions", () => {
     const definition = {
       type: "object",

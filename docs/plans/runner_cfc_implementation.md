@@ -483,9 +483,12 @@ selector schema seen during prepare.
 
 The root document `schemaHash` names may be self-contained or carry
 `$ref: cid:` members — a decomposed write
-(`RuntimeOptions.cfcDecomposedEnvelopes`), or the root a reference-form
-declared schema leaves behind. One read policy covers both: every external
-reference a stored root carries resolves (space-first with content
+(`RuntimeOptions.cfcDecomposedEnvelopes`), the root a reference-form
+declared schema leaves behind, or the references a confidential merge mints
+to keep a definition bound to the document that declared it. A root with a
+definition map of its own is the inline spelling and is read as stored; a
+decomposed root is recomposed. One read policy covers all of them: every
+external reference a stored root carries resolves (space-first with content
 verification, the hash-verified realm registry supplying what the space
 does not hold) or the envelope is unreadable (fail closed), and the
 storage commit boundary validates the whole closure at write time. A

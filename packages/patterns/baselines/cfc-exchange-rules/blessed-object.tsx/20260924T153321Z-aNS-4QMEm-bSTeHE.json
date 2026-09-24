@@ -1,0 +1,190 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Brief": {
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "vote": {
+            "enum": [
+              "approve",
+              "reject"
+            ]
+          }
+        },
+        "required": [
+          "vote",
+          "note"
+        ],
+        "type": "object"
+      },
+      "Counts": {
+        "properties": {
+          "approve": {
+            "type": "number"
+          },
+          "reject": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "approve",
+          "reject"
+        ],
+        "type": "object"
+      },
+      "PrivateBrief": {
+        "$ref": "#/$defs/Brief",
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "qN9v_y97KJoYsnZakqrtw1RgQMc4klllKkyLx0TYoZs",
+              "policyDigest": "nn_1M2oEP7eW84lkfET6zqA66ifuBHypZ9xwpV2ohBQ",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "countRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        }
+      },
+      "RoomCounts": {
+        "$ref": "#/$defs/Counts",
+        "ifc": {
+          "maxConfidentiality": []
+        }
+      }
+    },
+    "properties": {
+      "briefs": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/PrivateBrief"
+        },
+        "type": "array"
+      },
+      "roomCounts": {
+        "$ref": "#/$defs/RoomCounts",
+        "asCell": [
+          "cell"
+        ],
+        "default": {
+          "approve": -1,
+          "reject": -1
+        }
+      },
+      "roomHandCounts": {
+        "$ref": "#/$defs/RoomCounts",
+        "asCell": [
+          "cell"
+        ],
+        "default": {
+          "approve": -1,
+          "reject": -1
+        }
+      }
+    },
+    "required": [
+      "briefs",
+      "roomCounts",
+      "roomHandCounts"
+    ],
+    "type": "object"
+  },
+  "pattern": "cfc-exchange-rules/blessed-object.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Brief": {
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "vote": {
+            "enum": [
+              "approve",
+              "reject"
+            ]
+          }
+        },
+        "required": [
+          "vote",
+          "note"
+        ],
+        "type": "object"
+      },
+      "Counts": {
+        "properties": {
+          "approve": {
+            "type": "number"
+          },
+          "reject": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "approve",
+          "reject"
+        ],
+        "type": "object"
+      },
+      "RoomCounts": {
+        "$ref": "#/$defs/Counts",
+        "ifc": {
+          "maxConfidentiality": []
+        }
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "counts": {
+        "$ref": "#/$defs/Counts"
+      },
+      "publishCounts": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "publishHandCounts": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "roomCounts": {
+        "$ref": "#/$defs/RoomCounts"
+      },
+      "roomHandCounts": {
+        "$ref": "#/$defs/RoomCounts"
+      },
+      "submit": {
+        "$ref": "#/$defs/Brief",
+        "asCell": [
+          "stream"
+        ]
+      }
+    },
+    "required": [
+      "counts",
+      "roomCounts",
+      "roomHandCounts",
+      "submit",
+      "publishCounts",
+      "publishHandCounts",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

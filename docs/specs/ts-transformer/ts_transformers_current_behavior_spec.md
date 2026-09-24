@@ -1722,6 +1722,13 @@ Injected behaviors:
   - wrap with `.asSchema(schema)` unless already wrapped
 - `wish(...)`:
   - append schema as second argument if missing
+  - the schema describes `T`, the requested resource, never the `WishState<T>`
+    the call returns (the runtime wraps it in that state). Without a type
+    argument, `T` is the one TypeScript infers for the call from its contextual
+    type: `const s: WishState<X> = wish(...)` gets `X`'s schema, and a call in a
+    pattern's returned object, whose context names no `T`, gets
+    `{ type: "unknown" }`, as `wish<unknown>(...)` does. A call with no
+    contextual type gets no schema
   - explicit or contextual unresolved generic type parameters degrade to
     `{ type: "unknown" }`
 - `generateObject(...)`:

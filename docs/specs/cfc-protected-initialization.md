@@ -80,6 +80,27 @@ staged in the transaction. The link carries its source's label and the
 `LinkReference` a link write mints, so a reader reaching the entry through the
 link sees the entry's own authorship.
 
+## Setup replay over a stored argument
+
+A runtime that starts a piece it did not create replays the setup of the
+sub-pieces its pattern composes, and the replay stages each argument document
+again. The slots the caller does not name are carried over from the stored
+document with the bytes they hold, and the runtime records each such slot as a
+replay. The record permits nothing but leaving those bytes as they are.
+
+Preparation defers a protected field's writer requirement when the field lies
+at or under a recorded replay slot and no write the transaction recorded
+changes a byte at the field, at an ancestor where the difference reaches the
+field, or below it. The deferred requirement is waived only when the envelope
+the transaction would store leaves the field as it was too: the policy claims
+and the label positions they declare are the same throughout the document,
+and every label entry at the field, above it or below it is the same. The
+stored schema document and envelope version are then kept, and labels
+elsewhere in the document persist as for any write. An authoritative
+transaction, which commits each document whole, receives no deferral. Any other
+write attempt at a protected field — pattern code setting a whole document with
+the field's own bytes among them — requires the field's ordinary writer.
+
 ## Authorization and transaction evidence
 
 An initialization policy input is authoritative only when the runtime records it
