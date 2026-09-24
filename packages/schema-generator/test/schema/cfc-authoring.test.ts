@@ -423,6 +423,8 @@ describe("Schema: CFC authoring aliases", () => {
         single: Confidential<string | null, readonly ["a"]>;
         several: Confidential<string | number | null, readonly ["a"]>;
         none: Confidential<null, readonly ["a"]>;
+        nothing: Confidential<never, readonly ["a"]>;
+        impossible: Confidential<string & number, readonly ["a"]>;
         writer: WriteAuthorizedBy<string | null, typeof save>;
       }
     `,
@@ -442,6 +444,10 @@ describe("Schema: CFC authoring aliases", () => {
       ifc,
     });
     expect(schema.properties?.none).toEqual({ type: "null", ifc });
+    // A payload that is itself `never` is the type the checker gave, not a
+    // member the reduction dropped, so the policy accepts nothing, as written.
+    expect(schema.properties?.nothing).toBe(false);
+    expect(schema.properties?.impossible).toBe(false);
     expect(schema.properties?.writer).toEqual({
       anyOf: [{ type: "string" }, { type: "null" }],
       ifc: {

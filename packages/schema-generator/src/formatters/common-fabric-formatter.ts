@@ -1820,12 +1820,15 @@ export class CommonFabricFormatter implements TypeFormatter {
       // Reduced, a policy's type can lose its name: `Confidential<string |
       // null, L>` is `string & carrier`, since `null & carrier` is nothing, and
       // `Confidential<null, L>` is `never`. The reference still names the
-      // policy, and holds its arguments as written, `null` among them.
+      // policy, and holds its arguments as written, `null` among them. A
+      // payload that is itself `never`, as `Confidential<never, L>`'s is, is
+      // the type the checker gave rather than a member it dropped, so that
+      // policy lowers as its type does, accepting nothing.
       if (
         declaration && terminals.has(declaration.name.text) &&
         !typeWithAlias.aliasSymbol
       ) {
-        return this.#resolveAliasChainFromDeclaration(
+        const resolved = this.#resolveAliasChainFromDeclaration(
           terminals,
           declaration,
           undefined,
@@ -1833,6 +1836,10 @@ export class CommonFabricFormatter implements TypeFormatter {
           context,
           new Set([declaration]),
         );
+        const payload = resolved?.aliasArgs[0];
+        if (payload && (payload.flags & ts.TypeFlags.Never) === 0) {
+          return resolved;
+        }
       }
     }
 
