@@ -33,10 +33,22 @@ A panel records who added it in one of two fields. `addedByProfile` links the
 profile under which the person adding it acted, and the runtime labels that link
 with `represents-principal` for the principal who acted, which it resolves
 itself: the root never reads a DID, and no caller chooses the one the label
-names. The adder is that label: the entry at `["addedByProfile"]` in the panel
-document's own label map, not the linked profile's label. The linked profile is
-the actor's claim, as in the roster, since any participant may link any profile;
-a reader shows it as the adder only when it names the same principal.
+names. The linked profile is the actor's claim, as in the roster, since any
+participant may link any profile, and a Fabric profile carries its own owner's
+`represents-principal`.
+
+The actor is read from the panel document's own stored label map, with
+`readStoredCfcMetadata` on the panel's document, which resolves a label map
+stored by reference: the `represents-principal` atom of the entry whose path is
+exactly `["addedByProfile"]` and whose `origin` is not `"link"`. Entries with
+`origin: "link"`, at that path or below it, are copies of the linked profile's
+label and name its owner, not the actor. A merged label view, such as
+`cfcLabelViewForCell` on the field, unions the two without saying which is
+which, and a document that links the panel, such as the panels list, holds all
+of them as link copies; neither can name the actor. A reader shows the linked
+profile as the adder only when that profile's own `represents-principal` names
+the actor; otherwise the panel was added by the actor under someone else's
+profile. The runtime does not refuse that combination.
 
 `admission.tsx` holds `admitPanel`, the only handler the field's write contract
 admits, so `addPiece`, `addPanel`, and `duplicatePanel` are all bindings of it

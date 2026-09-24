@@ -50,8 +50,9 @@ export interface PublishedDocument {
  * One occurrence in the Loom, retaining the complete target cell reference.
  *
  * `addedByProfile` is the profile under which the person who added the
- * occurrence acted, and the label the panel stores at that field names the
- * principal who acted; only the root's `admitPanel` writes it. `addedBy` is the DID of the person who added
+ * occurrence acted, and the label entry the panel declares at that field, as
+ * opposed to the copies of the profile's own label, names the principal who
+ * acted; only the root's `admitPanel` writes it. `addedBy` is the DID of the person who added
  * the occurrence as its writer claims it: the root's handlers check that it is
  * a DID, not that it names the person acting, and a direct write to a panel is
  * not checked. A panel with neither is attributed to the Loom's owner.

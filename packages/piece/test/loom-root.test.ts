@@ -2,14 +2,24 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { createSession, Identity } from "@commonfabric/identity";
-import { type Cell, type MemorySpace, Runtime } from "@commonfabric/runner";
+import {
+  type Cell,
+  type JSONSchema,
+  type MemorySpace,
+  Runtime,
+} from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { pieceListSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  cfcLabelViewForCell,
+  readStoredCfcMetadata,
+} from "@commonfabric/runner/cfc";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
 const signer = await Identity.fromPassphrase("loom-root-contract");
 const foreignSigner = await Identity.fromPassphrase("loom-root-foreign");
+const profileOwner = await Identity.fromPassphrase("loom-root-profile-owner");
 const rootSchema = {
   type: "object",
   required: [
@@ -35,6 +45,87 @@ const profileSchema = {
   properties: { name: { type: "string" } },
   ifc: { addIntegrity: ["loom-root-test-profile"] },
 } as const;
+
+// The way profile-home stores its owner-protected fields: each carries its
+// owner's `represents-principal`, written by the owner through the trusted
+// profile editor.
+const PROFILE_WRITER = "system.profile-home";
+const ownerRepresentation = (owner: string) => ({
+  kind: "represents-principal",
+  subject: owner,
+});
+const ownerProtected = <T extends Record<string, unknown>>(
+  schema: T,
+  owner: string,
+) => ({
+  ...schema,
+  ifc: {
+    ownerPrincipal: owner,
+    addIntegrity: [ownerRepresentation(owner)],
+    writeAuthorizedBy: [PROFILE_WRITER],
+    uiContract: {
+      helper: "UiAction",
+      action: "EditProfile",
+      trustedPattern: "ProfileHome",
+      requiredEventIntegrity: ["ProfileHome"],
+    },
+  },
+});
+
+/**
+ * Writes a profile owned by `owner` and returns it. With `atRoot`, the whole
+ * document carries the owner's `represents-principal`; otherwise only its
+ * `name` does, as a Fabric profile's fields do.
+ */
+const writeOwnedProfile = async (
+  runtime: Runtime,
+  space: MemorySpace,
+  id: string,
+  owner: string,
+  atRoot: boolean,
+): Promise<Cell<unknown>> => {
+  const schema = atRoot
+    ? ownerProtected({
+      type: "object",
+      properties: { name: { type: "string" } },
+    }, owner)
+    : {
+      type: "object",
+      properties: { name: ownerProtected({ type: "string" }, owner) },
+    };
+  const tx = runtime.edit();
+  tx.setCfcTrustSnapshot({ id: `trust-${owner}`, actingPrincipal: owner });
+  tx.setCfcImplementationIdentity({
+    kind: "builtin",
+    builtinId: PROFILE_WRITER,
+  });
+  const profile = runtime.getCell(space, id, schema as JSONSchema, tx);
+  profile.set({ name: "Owner" });
+  const target = profile.getAsNormalizedFullLink();
+  tx.recordCfcWritePolicyInput({
+    kind: "trusted-event",
+    target: {
+      space: target.space,
+      scope: target.scope,
+      id: target.id,
+      path: atRoot ? [] : ["name"],
+    },
+    eventId: `edit-${id}`,
+    provenance: {
+      origin: "dom",
+      trusted: true,
+      ui: {
+        pattern: "ProfileHome",
+        eventIntegrity: ["ProfileHome"],
+        uiContractDataset: { uiAction: "EditProfile" },
+      },
+    },
+  });
+  tx.prepareCfc();
+  const result = await tx.commit();
+  if (result.error) throw result.error;
+  return profile;
+};
 
 describe("loom-root", () => {
   let manager: ReturnType<typeof StorageManager.emulate>;
@@ -187,4 +278,72 @@ describe("loom-root", () => {
       }),
     );
   });
+
+  for (const atRoot of [false, true]) {
+    it(
+      `keeps the actor apart from the linked profile's owner when the profile is labeled ${
+        atRoot ? "at its root" : "on its fields"
+      }`,
+      async () => {
+        const owned = await writeOwnedProfile(
+          runtime,
+          pieces.getSpace(),
+          `loom-root-owned-profile-${atRoot}`,
+          profileOwner.did(),
+          atRoot,
+        );
+        const target = runtime.getCell(
+          pieces.getSpace(),
+          `loom-root-owned-target-${atRoot}`,
+        );
+        const output = root.asSchema(rootSchema);
+        const addPiece = await output.key("addPiece").pull();
+        await new Promise<void>((resolve, reject) =>
+          addPiece.send({ piece: target, as: owned }, (tx) => {
+            const status = tx.status();
+            if (status.status === "error") reject(status.error);
+            else resolve();
+          }, { eventId: `add-owned-${atRoot}`, session: signer.did() })
+        );
+        await runtime.idle();
+        const panels = await output.key("panels").pull();
+        const panel = panels[0].resolveAsCell();
+        const link = panel.getAsNormalizedFullLink();
+        const read = runtime.edit();
+        const metadata = readStoredCfcMetadata(read, link);
+        read.abort();
+        const representations = (
+          entry: { label: { integrity?: readonly unknown[] } },
+        ) =>
+          (entry.label.integrity ?? []).filter((atom) =>
+            (atom as { kind?: unknown }).kind === "represents-principal"
+          );
+        const entries = metadata?.labelMap.entries ?? [];
+        const declared = entries.filter((entry) =>
+          entry.origin !== "link" &&
+          entry.path.length === 1 && entry.path[0] === "addedByProfile"
+        );
+        const copied = entries.filter((entry) =>
+          entry.origin === "link" && entry.path[0] === "addedByProfile"
+        );
+        // The actor is the one declared entry at exactly the field.
+        expect(declared.flatMap(representations)).toEqual([
+          ownerRepresentation(signer.did()),
+        ]);
+        // The linked profile's owner arrives only as a copy of its label.
+        expect(copied.flatMap(representations)).toEqual([
+          ownerRepresentation(profileOwner.did()),
+        ]);
+        // A merged label view does not say which is which.
+        const merged = cfcLabelViewForCell(panel.key("addedByProfile"))
+          ?.entries.flatMap(representations) ?? [];
+        expect(merged).toEqual(
+          expect.arrayContaining([
+            ownerRepresentation(signer.did()),
+            ownerRepresentation(profileOwner.did()),
+          ]),
+        );
+      },
+    );
+  }
 });
