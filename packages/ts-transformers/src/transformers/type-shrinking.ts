@@ -3145,10 +3145,12 @@ function declaredTypeInScope(
 
 /**
  * Helper for `extractCellLikeInnerTypeNode()`, which returns, for the type a
- * node was printed from, the value type node of the cell it holds, or of each
- * cell in a nullable union of cells, each printed from the type arguments
- * its wrapper was given. Returns `undefined` for a type that holds no cell,
- * or holds a stream or a database.
+ * node was printed from, the value type node of the cell it holds, printed
+ * from the type arguments its wrapper was given, or, for a nullable union of
+ * cells, the union of each cell's value and the nullish alternatives, which a
+ * scoped value holds inside its scope wrapper
+ * (`moveNullishIntoScopeWrapper()`). Returns `undefined` for a type that holds
+ * no cell, and for a nullable union holding a stream or a database.
  */
 function printedCellValueTypeNode(
   type: ts.Type,
