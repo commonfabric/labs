@@ -144,6 +144,8 @@ const addPanel = handler<PanelPosition, State>(
   ({ panel, before }, { panels }) => {
     const list = panels.get();
     const index = insertionIndex(list, before);
+    // A panel already present is not admitted again, so there is nothing to
+    // validate; `addPiece` validates its own event's `addedBy` instead.
     if (list.some((existing) => existing.equals(panel))) return;
     validatePanel(panel.get());
     const next = [...list];

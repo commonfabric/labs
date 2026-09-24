@@ -34,11 +34,11 @@ without one is attributed to the Loom's owner. `addPanel`, `addPiece`, and
 `duplicatePanel` refuse an `addedBy` that is not a DID in W3C DID Core syntax,
 or that is longer than 195 characters. They do not check that the DID names the
 person acting, and a direct write to the panels, or a later write to an
-occurrence, is not checked at all, so the stored value is a claim. Each
-participant's publishing daemon writes its own principal there, and consumers
-outside the root read it. The root's own buttons pass no `addedBy` yet, so the
-panels they add or duplicate are attributed to the owner until the root's
-handlers link the profile under which the person is acting.
+occurrence, is not checked at all, so the stored value is a claim. The loom
+reconciler is to write each participant's principal there and read it. The
+root's own buttons pass no `addedBy` yet, so the panels they add or duplicate
+are attributed to the owner until the root's handlers link the profile under
+which the person is acting.
 
 `pieceRegistry` derives from piece panels in order, including duplicates.
 `addPiece({piece, addedBy?})` idempotently adds a registration occurrence; for a

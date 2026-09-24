@@ -127,6 +127,14 @@ export default pattern(() => {
   const duplicateUnattributed = action(() =>
     attributed.duplicatePanel.send({ panel: attributedUrl })
   );
+  // Exactly at the 195-character bound.
+  const longestAdder = `did:key:z${"6".repeat(186)}`;
+  const duplicateAsLongestAdder = action(() =>
+    attributed.duplicatePanel.send({
+      panel: attributedUrl,
+      addedBy: longestAdder,
+    })
+  );
   const duplicateAsBob = action(() =>
     attributed.duplicatePanel.send({ panel: attributedUrl, addedBy: bob })
   );
@@ -343,6 +351,13 @@ export default pattern(() => {
           attributed.panels[3].get().addedBy === bob &&
           attributed.panels[3].get().kind === "url" &&
           attributedUrl.get().addedBy === alice
+        ),
+      },
+      { action: duplicateAsLongestAdder },
+      {
+        assertion: assert(() =>
+          longestAdder.length === 195 && attributed.panels.length === 5 &&
+          attributed.panels[4].get().addedBy === longestAdder
         ),
       },
     ],
