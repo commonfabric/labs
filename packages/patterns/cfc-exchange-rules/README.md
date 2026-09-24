@@ -11,12 +11,13 @@ This demo is the canonical copyable form for a module-authored direct policy:
 surfaces are intentionally separate.
 
 `blessed-computation.tsx` releases the output of one function defined in the
-policy's own module. The runtime mints a `TransformedBy` atom naming the
-function's module and export symbol onto every value that function writes, and
-the rule matches it with `moduleIdentity: THIS_POLICY.moduleIdentity`, which
-binds to the defining module's identity at evaluation time. Another function of
-the same module, a handler copying a raw input, or a different version of the
-module does not satisfy the rule.
+policy's own module. When every write of a transaction comes from one verified
+function, the runtime mints a `TransformedBy` atom naming that function's module
+and export name onto what it writes, and the rule matches it with
+`moduleIdentity: THIS_POLICY.moduleIdentity`, which binds to the defining
+module's identity at evaluation time. Another function of the same module, a
+handler copying a raw input, or a different version of the module does not
+satisfy the rule.
 
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space

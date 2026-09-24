@@ -146,7 +146,10 @@ type DriftFlag = Confidential<Flag, [PolicyOf<typeof driftFlagRules>]>;
   the rules. The second is how a rule names a function of its own module in a
   `TransformedBy` identity pattern
   (`{ kind: "verified", moduleIdentity: THIS_POLICY.moduleIdentity, symbol }`)
-  without spelling a hash that changes with every edit of the module. Because
+  without spelling a hash that changes with every edit of the module or of its
+  imports. `symbol` is the function's export name, so a blessed function must
+  be exported under that one name; a rule naming anything else never fires.
+  Because
   the binding comes from the selected reference, a label created under one
   version of the module is released only by that version's function.
 - `v("X")` is the `{ var: "X" }` placeholder of spec §4.3.3.

@@ -18,11 +18,13 @@ import {
   THIS_POLICY,
 } from "commonfabric/cfc";
 
-// The policy releases what one function of this module computed. The runtime
-// mints `TransformedBy` onto every value a verified function writes, naming
-// the function's module by content identity; `THIS_POLICY.moduleIdentity`
+// The policy releases what one function of this module computed. When every
+// write of a transaction comes from one verified function, the runtime mints
+// `TransformedBy` onto what it writes, naming the function's module by content
+// identity and the function by its export name; `THIS_POLICY.moduleIdentity`
 // binds to the identity of the module defining these rules, so the rule keeps
-// naming this module's `tallyBallot` however the module is edited.
+// naming this module's `tallyBallot` however the module is edited. `symbol` is
+// that export name, so the function must be exported, under that one name.
 export const releaseTally = exchangeRule({
   appliesTo: THIS_POLICY,
   pre: {
