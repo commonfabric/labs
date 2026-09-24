@@ -162,6 +162,16 @@ export const cfcLabelViewForCell = (
   cell: unknown,
 ): CfcLabelView | undefined => cfcLabelViewForCellWithStatus(cell).view;
 
+/** Options for a label read that resolves the cell's path through links. */
+export type ResolvedLabelReadOptions = {
+  /**
+   * Whether resolving the path kicks a sync of each hop target in another
+   * space. On by default. A reader that resolves a link its caller's value
+   * read has already resolved, and so already kicked, turns it off.
+   */
+  kickCrossSpaceTargets?: boolean;
+};
+
 type ResolvedMetadataResult = StoredMetadataResult & {
   /** The resolved doc's path, which the view is rebased against. */
   path: readonly string[];
@@ -182,6 +192,7 @@ type ResolvedMetadataResult = StoredMetadataResult & {
 const resolvedMetadataForCell = (
   cell: LabelQueryableCell,
   link: NormalizedFullLink,
+  options: ResolvedLabelReadOptions,
 ): ResolvedMetadataResult => {
   if (!cell.runtime) {
     return { metadata: undefined, readFailed: false, path: link.path };
@@ -196,6 +207,9 @@ const resolvedMetadataForCell = (
     // against that transaction's accounting like any other crossing.
     const resolved = resolveLink(cell.runtime, tx, link, "value", {
       markIfcCrossings: true,
+      ...(options.kickCrossSpaceTargets === false
+        ? { kickCrossSpaceTargets: false }
+        : {}),
     });
     return {
       metadata: readStoredCfcMetadata(tx, {
@@ -231,6 +245,7 @@ const resolvedMetadataForCell = (
  */
 export const cfcLabelViewForResolvedCellWithStatus = (
   cell: unknown,
+  options: ResolvedLabelReadOptions = {},
 ): CfcLabelViewStatus => {
   const unresolved = cfcLabelViewForCellWithStatus(cell);
   if (
@@ -247,7 +262,11 @@ export const cfcLabelViewForResolvedCellWithStatus = (
     return unresolved;
   }
 
-  const resolved = resolvedMetadataForCell(cell as LabelQueryableCell, link);
+  const resolved = resolvedMetadataForCell(
+    cell as LabelQueryableCell,
+    link,
+    options,
+  );
   return {
     view: mergeCfcLabelViews([
       unresolved.view,
@@ -266,7 +285,9 @@ export const cfcLabelViewForResolvedCellWithStatus = (
  */
 export const cfcLabelViewForResolvedCell = (
   cell: unknown,
-): CfcLabelView | undefined => cfcLabelViewForResolvedCellWithStatus(cell).view;
+  options: ResolvedLabelReadOptions = {},
+): CfcLabelView | undefined =>
+  cfcLabelViewForResolvedCellWithStatus(cell, options).view;
 
 /**
  * Fail-closed label acquisition for the LLM-observation egress path (audit 22),

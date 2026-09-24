@@ -4270,13 +4270,17 @@ function subscribeToReferencedDocs<T>(
       // Read the label on the SINK's transaction (`tx`), not the child `extraTx`,
       // so the cfc-metadata read joins this sink's reactive dependency set: a
       // later label-only write re-fires the sink. `cfcLabelViewForResolvedCell`
-      // is a pure store read (no sync) that also follows a link the path
-      // crosses part way through, since the label vouching for a bound value
-      // is stored on the document that holds it; `internalVerifierRead` keeps
+      // is a pure store read that also follows a link the path crosses part
+      // way through, since the label vouching for a bound value is stored on
+      // the document that holds it. It kicks no cross-space sync: the value
+      // read above resolved the same link and kicked those targets already,
+      // and the sink re-fires when they arrive. `internalVerifierRead` keeps
       // it reactive but out of CFC taint. Raw here — the worker redacts before
       // it leaves.
       const cfcLabel = options.includeCfcLabel
-        ? cfcLabelViewForResolvedCell(createCell(runtime, link, tx))
+        ? cfcLabelViewForResolvedCell(createCell(runtime, link, tx), {
+          kickCrossSpaceTargets: false,
+        })
         : undefined;
       sink.cleanup = callback(newValue, cfcLabel);
 

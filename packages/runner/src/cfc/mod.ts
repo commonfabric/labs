@@ -2,6 +2,7 @@ export type {
   CfcLabelView,
   CfcLabelViewEntry,
   CfcLabelViewStatus,
+  ResolvedLabelReadOptions,
 } from "./label-view.ts";
 export {
   type CfcCellLinkRefPayload,
