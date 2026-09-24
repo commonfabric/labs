@@ -9,13 +9,11 @@ import { join } from "@std/path";
 
 import {
   assertRunscCfcPolicyForMode,
-  assertRunscSessionAllowedForMode,
   defaultDarwinRootfs,
   realPathOfNearestExisting,
   resolveRunscSandboxConfig,
   RunscSandboxRuntime,
 } from "../src/sandbox/runsc.ts";
-import { SandboxSessionUnavailableError } from "../src/sandbox/types.ts";
 import { createHarnessCfcInvocationContext } from "../src/contracts/cfc-invocation-context.ts";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";
 import type {
@@ -36,6 +34,8 @@ class FakeRunscRunner implements ProcessRunner {
   requests: ProcessRunRequest[] = [];
   spawns: ProcessSpawnRequest[] = [];
   killed: string[] = [];
+  execIds: string[] = [];
+  execContexts: string[] = [];
   runResult: Partial<ProcessRunResult> = {};
   resultTaint: unknown = { string: "{conf: ⊤, integ: ∅}", xattrJSON: {} };
 
@@ -63,6 +63,45 @@ class FakeRunscRunner implements ProcessRunner {
         );
       }
       return { stdout: "hello\n", stderr: "", exitCode: 0, ...this.runResult };
+    }
+    if (request.command === "/bin/sh" && sub === "exec") {
+      // The session call: flags, then the container id, then the command.
+      const flagsWithValue = new Set([
+        "--cwd",
+        "--env",
+        "--user",
+        "--cfc-invocation-context-fd",
+        "--cfc-result-fd",
+      ]);
+      let i = argv.indexOf("exec") + 1;
+      while (i < argv.length && argv[i].startsWith("--")) {
+        i += flagsWithValue.has(argv[i]) ? 2 : 1;
+      }
+      const cid = argv[i];
+      this.execIds.push(cid);
+      const contextPath = request.args[3];
+      if (contextPath !== "/dev/null") {
+        this.execContexts.push(await Deno.readTextFile(contextPath));
+      }
+      const resultPath = request.args[4];
+      if (resultPath !== "/dev/null") {
+        await Deno.writeTextFile(
+          resultPath,
+          JSON.stringify({
+            version: 1,
+            containerId: cid,
+            sandboxId: cid,
+            waitStatus: 0,
+            cfcTaint: this.resultTaint,
+          }),
+        );
+      }
+      return {
+        stdout: "from-session\n",
+        stderr: "",
+        exitCode: 0,
+        ...this.runResult,
+      };
     }
     if (sub === "state") {
       return {
@@ -304,17 +343,29 @@ Deno.test("RunscSandboxRuntime keeps one container per session and execs into it
   assertMatch(cid, /^s-run-abc-[0-9a-f]{8}-build$/);
   assertEquals(runtime.sessionContainerIds(), [cid]);
 
-  // Both calls were execs into that container, with cwd honoured.
-  const execs = runner.requests.filter((r) => r.args.includes("exec"));
+  // Both calls were execs into that container, with cwd honoured, through
+  // the same fd wrapper a fresh call uses: the policy is set, so each exec
+  // asked for its result on fd 4 and got one keyed to the container.
+  const execs = runner.requests.filter((r) =>
+    r.command === "/bin/sh" && r.args.includes("exec")
+  );
   assertEquals(execs.length, 2);
-  assert(execs[0].args.includes(cid));
+  assertEquals(runner.execIds, [cid, cid]);
   assertEquals(
     execs[1].args[execs[1].args.indexOf("--cwd") + 1],
     "/workspace/x",
   );
+  assertEquals(
+    execs[0].args[execs[0].args.indexOf("--cfc-result-fd") + 1],
+    "4",
+  );
+  assert(!execs[0].args.includes("--cfc-invocation-context-fd"));
+  assertEquals(first.cfcResult?.stdout.policy, "observed");
   // No fresh containers were run for session calls.
   assertEquals(
-    runner.requests.filter((r) => r.command === "/bin/sh").length,
+    runner.requests.filter((r) =>
+      r.command === "/bin/sh" && r.args.slice(5).includes("run")
+    ).length,
     0,
   );
 
@@ -354,32 +405,53 @@ Deno.test("RunscSandboxRuntime rejects a session name that is not an identifier"
   assertEquals(runner.spawns.length, 0);
 });
 
-Deno.test("assertRunscSessionAllowedForMode refuses sessions under enforcement only", () => {
-  assertRunscSessionAllowedForMode("observe", "build");
-  assertRunscSessionAllowedForMode("disabled", "build");
-  assertRunscSessionAllowedForMode("enforce-explicit", undefined);
-  assertThrows(
-    () => assertRunscSessionAllowedForMode("enforce-explicit", "build"),
-    Error,
-    "cannot run in CFC mode enforce-explicit",
-  );
-});
-
-Deno.test("RunscSandboxRuntime refuses a session call whose invocation context enforces", async () => {
+Deno.test("a session call carries its own CFC context in and result out, enforcing modes included", async () => {
   const runner = new FakeRunscRunner();
+  runner.resultTaint = {
+    string: "{conf: User(did:key:alice), integ: ∅}",
+    xattrJSON: { confidentiality: [{ subject: "did:key:alice" }] },
+  };
   const runtime = new RunscSandboxRuntime(config(), runner);
   const enforcing = await context("enforce-explicit");
-  await assertRejects(
-    () =>
-      runtime.runShell({
-        command: "true",
-        session: "build",
-        cfcInvocationContext: enforcing,
-      }),
-    Error,
-    "cannot run in CFC mode enforce-explicit",
+  const result = await runtime.runShell({
+    command: "cat secret",
+    session: "build",
+    cfcInvocationContext: enforcing,
+  });
+  const exec = runner.requests.find((r) =>
+    r.command === "/bin/sh" && r.args.includes("exec")
   );
-  assertEquals(runner.spawns.length, 0);
+  assert(exec !== undefined);
+  assertEquals(
+    exec.args[exec.args.indexOf("--cfc-invocation-context-fd") + 1],
+    "3",
+  );
+  assertEquals(exec.args[exec.args.indexOf("--cfc-result-fd") + 1], "4");
+  // The context reached the exec as a file on fd 3, verbatim.
+  assertEquals(runner.execContexts.length, 1);
+  assertEquals(
+    JSON.parse(runner.execContexts[0]).cfcEnforcementMode,
+    "enforce-explicit",
+  );
+  // And the exec's own result decided the verdict: confidential, so opaque.
+  assertEquals(result.cfcResult?.stdout.policy, "opaque");
+  assertEquals(result.cfcResult?.stdout.label, {
+    confidentiality: [{ subject: "did:key:alice" }],
+  });
+  // The session container itself was started with no context: nothing seeds
+  // the container's own labels, each call brings its own.
+  assert(!runner.spawns[0].args.includes("--cfc-invocation-context-fd"));
+  await runtime.close();
+  // The per-call files went with the call.
+  let calls: string[] = [];
+  try {
+    for await (
+      const e of Deno.readDir(join(runtime.config.scratchDir, "calls"))
+    ) calls.push(e.name);
+  } catch {
+    calls = [];
+  }
+  assertEquals(calls, []);
 });
 
 Deno.test("resolveRunscSandboxConfig refuses relative paths, empty bind names and overlapping roots", () => {
@@ -629,15 +701,6 @@ Deno.test("RunscSandboxRuntime removes the bundle when the run itself throws", a
     // no bundles directory at all is the cleanest outcome
   }
   assertEquals(left, []);
-});
-
-Deno.test("a session refused in an enforcing mode is the recoverable session error", () => {
-  assertThrows(
-    () => assertRunscSessionAllowedForMode("enforce-explicit", "s1"),
-    SandboxSessionUnavailableError,
-  );
-  assertRunscSessionAllowedForMode("observe", "s1");
-  assertRunscSessionAllowedForMode("enforce-explicit", undefined);
 });
 
 Deno.test("an enforcing mode requires the runsc runtime to run with a CFC policy", () => {

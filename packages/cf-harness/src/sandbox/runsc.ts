@@ -38,7 +38,6 @@ import {
   type SandboxRuntime,
   type SandboxRuntimeDescription,
   type SandboxRuntimeMountDescription,
-  SandboxSessionUnavailableError,
   type SandboxShellRequest,
 } from "./types.ts";
 
@@ -61,10 +60,12 @@ import {
  *   per call at about ten milliseconds. Sessions never share a sandbox: the
  *   container id carries the run id, and two names are two containers.
  *
- * What a session cannot do yet: carry a per-call CFC invocation context or
- * report a per-call result, because `runsc exec` has no fd flags for them.
- * Until it does, a session call in an enforcing mode is refused rather than
- * run unmediated.
+ * A session call carries its own CFC invocation context in on fd 3 and gets
+ * its own trusted result out on fd 4, exactly as a fresh call does: `runsc
+ * exec --cfc-invocation-context-fd/--cfc-result-fd` seeds the exec'd
+ * process from that context and reports its final taint at exit. The
+ * session container itself starts with no context, so nothing leaks from one
+ * call to the next through the container's own labels.
  */
 
 export const DEFAULT_RUNSC_BINARY = "runsc";
@@ -302,22 +303,6 @@ export const resolveRunscSandboxConfig = (
       : {}),
     sessionStartTimeoutMs: options.sessionStartTimeoutMs ?? 30_000,
   });
-};
-
-/**
- * Refuse a session call in an enforcing mode: `runsc exec` cannot yet take a
- * per-call invocation context or hand back a per-call result, so the call
- * would run with no mediation at all, which enforcement forbids.
- */
-export const assertRunscSessionAllowedForMode = (
-  mode: CfcEnforcementMode,
-  session: string | undefined,
-): void => {
-  if (session === undefined) return;
-  if (cfcEnforcementStrictness(mode) < CFC_ENFORCING_STRICTNESS) return;
-  throw new SandboxSessionUnavailableError(
-    `sandbox session "${session}" cannot run in CFC mode ${mode}: runsc exec carries no per-call CFC transport yet; omit the session or run in observe mode`,
-  );
 };
 
 /**
@@ -776,11 +761,28 @@ export class RunscSandboxRuntime implements SandboxRuntime {
   ): Promise<SandboxCommandResult> {
     const state = this.#ensureSession(session);
     await state.ready;
-    const result = await this.#runner.run({
-      command: this.config.runscBinary,
-      args: [
+    // Per call, the same transport a fresh container gets: the context on
+    // fd 3, the result on fd 4, both private files under scratch that go
+    // when the call does.
+    const callId = `x-${this.#runTag}-${crypto.randomUUID().slice(0, 8)}`;
+    const callDir = joinHostPath(this.config.scratchDir, "calls", callId);
+    await Deno.mkdir(callDir, { recursive: true, mode: 0o700 });
+    const contextPath = joinHostPath(callDir, "cfc-invocation-context.json");
+    const resultPath = joinHostPath(callDir, "cfc-result.json");
+    const withContext = request.cfcInvocationContext !== undefined;
+    const withResult = this.config.cfcPolicyPath !== undefined;
+    try {
+      if (withContext) {
+        await Deno.writeTextFile(
+          contextPath,
+          `${JSON.stringify(request.cfcInvocationContext, null, 2)}\n`,
+        );
+      }
+      const runscArgs = [
         ...this.#globalArgs(),
         "exec",
+        ...(withContext ? ["--cfc-invocation-context-fd", "3"] : []),
+        ...(withResult ? ["--cfc-result-fd", "4"] : []),
         "--cwd",
         request.cwd ?? this.defaultWorkingDirectory(),
         ...Object.entries(request.env ?? {})
@@ -791,15 +793,52 @@ export class RunscSandboxRuntime implements SandboxRuntime {
           : []),
         state.containerId,
         ...request.argv,
-      ],
-      stdinText: request.stdinText,
-      timeoutMs: request.timeoutMs,
-    });
-    return {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-    };
+      ];
+      const result = await this.#runner.run({
+        command: "/bin/sh",
+        args: [
+          "-c",
+          'exec 3<"$1" 4>"$2"; shift 2; exec "$@"',
+          "sh",
+          withContext ? contextPath : "/dev/null",
+          withResult ? resultPath : "/dev/null",
+          this.config.runscBinary,
+          ...runscArgs,
+        ],
+        stdinText: request.stdinText,
+        timeoutMs: request.timeoutMs,
+      });
+      const commandResult: SandboxCommandResult = {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+      };
+      if (!withResult) {
+        return commandResult;
+      }
+      let cfcResult: CfcSandboxResult;
+      try {
+        const text = await Deno.readTextFile(resultPath);
+        const parsed = JSON.parse(text) as RunscCfcResultSidecar;
+        cfcResult = cfcResultFromRunscSidecar(
+          parsed,
+          state.containerId,
+          commandResult,
+        );
+      } catch (error) {
+        cfcResult = deniedCfcResult(
+          "runsc_cfc_result_fd_unreadable",
+          "runsc exec did not deliver a CFC result on the result descriptor",
+          {
+            containerId: state.containerId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+      }
+      return { ...commandResult, cfcResult };
+    } finally {
+      await Deno.remove(callDir, { recursive: true }).catch(() => undefined);
+    }
   }
 
   run(request: SandboxCommandRequest): Promise<SandboxCommandResult> {
@@ -807,14 +846,6 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       return Promise.reject(new Error("sandbox runtime is closed"));
     }
     if (request.session !== undefined) {
-      try {
-        assertRunscSessionAllowedForMode(
-          request.cfcInvocationContext?.cfcEnforcementMode ?? "disabled",
-          request.session,
-        );
-      } catch (error) {
-        return Promise.reject(error);
-      }
       return this.#runInSession(request, request.session);
     }
     return this.#runOnce(request);
@@ -868,7 +899,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     }
     // The scratch tree is this run's; take it down when nothing is left in
     // it (non-recursive on purpose: anything still there is evidence).
-    for (const sub of ["bundles", "state"]) {
+    for (const sub of ["calls", "bundles", "state"]) {
       await Deno.remove(joinHostPath(this.config.scratchDir, sub)).catch(() =>
         undefined
       );

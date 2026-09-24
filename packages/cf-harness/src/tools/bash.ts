@@ -37,7 +37,7 @@ export const BASH_CWD_OUTSIDE_SANDBOX_EXIT_CODE = 1;
 export const BASH_TIMEOUT_EXIT_CODE = 124;
 /**
  * The command did not run: it named a sandbox session the runtime cannot
- * honour (no sessions, or an enforcing mode). Recoverable — the model reruns
+ * honour (no sessions). Recoverable — the model reruns
  * without the session.
  */
 export const BASH_SESSION_UNAVAILABLE_EXIT_CODE = 125;
@@ -91,7 +91,7 @@ export const bashToolDescriptor: HarnessToolDescriptor = {
         type: "string",
         pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
         description:
-          "Name a sandbox session to keep state between commands (files outside the mounts, background processes). Only some sandbox runtimes offer sessions, and none do under an enforcing CFC mode: where one is unavailable the call does not run and returns a recoverable error saying so, and you rerun it without a session. Omit for a fresh sandbox per command.",
+          "Name a sandbox session to keep state between commands (files outside the mounts, background processes). Only some sandbox runtimes offer sessions: where one is unavailable the call does not run and returns a recoverable error saying so, and you rerun it without a session. Omit for a fresh sandbox per command.",
       },
     },
     required: ["command"],
@@ -220,8 +220,8 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
         };
       }
       if (error instanceof SandboxSessionUnavailableError) {
-        // The runtime has sessions but not for this run (an enforcing mode):
-        // the model can act on that by dropping the session.
+        // The runtime has sessions but not for this call: the model can act
+        // on that by dropping the session.
         return {
           outputId,
           stdout: "",
