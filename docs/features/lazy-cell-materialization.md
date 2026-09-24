@@ -131,15 +131,6 @@ eager read".
   with no default has nothing to publish, and reads as absent there as it
   does eagerly, the dead-end's read registered so the reader runs again when
   the document arrives.
-- **A handle minted from a typed branch keeps that branch's projection.**
-  Under a union whose branches declare `asCell` with a shape of their own —
-  `{ …id, asCell }` beside a bare `{ asCell }` and a plain `{ …name }` — an
-  eager read evaluates every branch, keeps the cell among its results, and
-  re-points it at the whole compound, so a read through the handle projects
-  every branch: `{ id, name, hidden }`. A view mints the handle from the
-  branch the value selected and reads through that branch alone: `{ id }`.
-  The selected portion is what the reader asked for at that position, and
-  widening it to the union would read what the branch left out.
 
 The first three share one reason: deciding a fallback by evaluating a present
 subtree registers every read below it, and a pattern's optional inputs are
@@ -184,9 +175,14 @@ wrong. These rules hold that agreement:
   handle, unwraps the consumed marker off the handle's own schema, and applies
   the follow-scope cap. Where the type settles nothing, the traverser
   evaluates the union whole and keeps the cell among its matches. A reader
-  gets the same `Cell` either way; what the handle's schema projects is where
-  the two part, as the last divergence above records — a view's handle keeps
-  the typed branch it was minted from, an eager read's the whole compound.
+  gets the same `Cell` either way, carrying the same schema: a handle outlives
+  the read that minted it, so its schema is the reader's declaration and not
+  the mode's. Under a union whose typed branch declares `asCell`, that is the
+  compound with the branches' markers removed, and a read through the handle
+  projects every branch; where every branch that can mint a handle is bare,
+  it is the schema the handle adopted from its link, as
+  [the traversal spec](../specs/space-model/8-traversal.md#merging-branch-results)
+  records.
 - **Object property defaults follow filtering.** A missing or rejected
   declared property takes its non-null default, including when it is required.
   A property default of `null` does not fill an absent or rejected property.

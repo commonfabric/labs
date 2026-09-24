@@ -1333,9 +1333,17 @@ export function validateAndTransform(
     // alone is the link's schema, and a reader asking for a property the link's
     // schema does not name — `title` off a piece typed by its own
     // registration — would read as a property the schema does not select.
-    const viewSchema = valueSelectedSchema ??
-      combineOptionalSchema(effectiveSchema, resolvedValueLink.schema) ??
-      selector.schema;
+    // A branch the value selected mints a handle here, through the entry
+    // point's `asCell` dispatch, and the handle carries what an eager read's
+    // merge would re-point it at (`viewHandleSchema`).
+    const viewSchema = valueSelectedSchema !== undefined
+      ? viewHandleSchema(
+        effectiveSchema as JSONSchemaObj,
+        valueSelectedSchema,
+        readMaybeLink(tx, link)?.schema,
+      )
+      : combineOptionalSchema(effectiveSchema, resolvedValueLink.schema) ??
+        selector.schema;
     // The RULED unresolved-input refusal (OW51, 2026-08-21): the walk
     // crossed a hop (or started from a data-derived handle) and
     // dead-ended at a doc this replica cannot serve (link-resolution's
@@ -1523,6 +1531,75 @@ const combinedCellSchemaCache = new WeakMap<
 >();
 
 /**
+ * The schema a handle minted from one branch of `schema` is re-pointed at:
+ * the whole compound with the branches' own `asCell` markers removed, under
+ * the handle's own `asCell` values, so the union the reader declared governs
+ * what a read through the handle returns. Interned, and memoized per
+ * deep-frozen compound so the `asSchema` interning that follows is an
+ * identity cache hit.
+ */
+function compoundCellSchema(
+  schema: JSONSchemaObj,
+  asCellValues: ReturnType<typeof ContextualFlowControl.getAsCellValues>,
+): JSONSchema {
+  const cacheKey = isDeepFrozen(schema)
+    ? JSON.stringify(asCellValues)
+    : undefined;
+  if (cacheKey !== undefined) {
+    const cached = combinedCellSchemaCache.get(schema)?.get(cacheKey);
+    if (cached !== undefined) return cached;
+  }
+  const allOfItems = (schema.allOf ?? []).map(removeAsCellFromSchema);
+  const anyOfItems = (schema.anyOf ?? []).map(removeAsCellFromSchema);
+  const combinedSchema = internSchema({
+    ...schema,
+    ...(allOfItems.length > 0) && { allOf: allOfItems },
+    ...(anyOfItems.length > 0) && { anyOf: anyOfItems },
+    ...(asCellValues.length > 0) && { asCell: asCellValues },
+  });
+  if (cacheKey !== undefined) {
+    let byKey = combinedCellSchemaCache.get(schema);
+    if (byKey === undefined) {
+      byKey = new Map();
+      combinedCellSchemaCache.set(schema, byKey);
+    }
+    byKey.set(cacheKey, combinedSchema);
+  }
+  return combinedSchema;
+}
+
+/**
+ * The schema a view mints a handle with, where the value selected `branch`
+ * of the compound `schema`: what an eager read's merge re-points the handle
+ * at, since a handle outlives the read that minted it and carries the
+ * reader's declaration rather than the mode's. Where every branch that can
+ * mint a handle is bare and the hop the handle is minted over carries a
+ * schema of its own, the handle adopts that schema under the branch's marker
+ * — the merge keeps such a handle as it is — and the adoption is done here,
+ * since the view re-enters from the resolved value rather than from the hop
+ * the eager traverser crosses; otherwise the compound, markers removed, under
+ * the branch's own `asCell` values.
+ */
+function viewHandleSchema(
+  schema: JSONSchemaObj,
+  branch: JSONSchemaObj,
+  adopted: JSONSchema | undefined,
+): JSONSchema {
+  if (compoundMintsBareHandlesOnly(schema) && isNontrivialSchema(adopted)) {
+    // Resolved for structure the way `createObject` resolves a minted link's
+    // schema, so a content-addressed reference reads the same either way.
+    const combined = combineSchemaForLink(branch, adopted);
+    return isObjectNotArray(combined)
+      ? resolveExternalRootRefForStructure(combined)
+      : combined;
+  }
+  return compoundCellSchema(
+    schema,
+    ContextualFlowControl.getAsCellValues(branch),
+  );
+}
+
+/**
  * The value an opaque (`type: "unknown"`) position projects to when something
  * is there: an empty object carrying the back-to-cell annotation and the
  * marker that says it holds nothing of what it names. Both read paths mint it
@@ -1638,35 +1715,10 @@ class TransformObjectCreator
           ) {
             return cellMatch as any;
           }
-          const asCellValues = ContextualFlowControl.getAsCellValues(
-            cellMatch.schema,
-          );
-          const cacheKey = isDeepFrozen(schema)
-            ? JSON.stringify(asCellValues)
-            : undefined;
-          if (cacheKey !== undefined) {
-            const cached = combinedCellSchemaCache.get(schema)?.get(cacheKey);
-            if (cached !== undefined) return cellMatch.asSchema(cached) as any;
-          }
-          const allOfItems = (schema.allOf ?? []).map(removeAsCellFromSchema);
-          const anyOfItems = (schema.anyOf ?? []).map(removeAsCellFromSchema);
-          // Intern here so the memo holds the canonical instance and the
-          // `asSchema` interning below is an identity cache hit.
-          const combinedSchema = internSchema({
-            ...schema,
-            ...(allOfItems.length > 0) && { allOf: allOfItems },
-            ...(anyOfItems.length > 0) && { anyOf: anyOfItems },
-            ...(asCellValues.length > 0) && { asCell: asCellValues },
-          });
-          if (cacheKey !== undefined) {
-            let byKey = combinedCellSchemaCache.get(schema);
-            if (byKey === undefined) {
-              byKey = new Map();
-              combinedCellSchemaCache.set(schema, byKey);
-            }
-            byKey.set(cacheKey, combinedSchema);
-          }
-          return cellMatch.asSchema(combinedSchema) as any;
+          return cellMatch.asSchema(compoundCellSchema(
+            schema,
+            ContextualFlowControl.getAsCellValues(cellMatch.schema),
+          )) as any;
         }
       }
     }

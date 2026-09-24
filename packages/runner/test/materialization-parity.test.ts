@@ -533,6 +533,112 @@ describe("materialization-parity", () => {
     });
   });
 
+  describe("a handle minted from a branch of a union", () => {
+    // A handle outlives the read that minted it and is read later, by code
+    // that never knew which mode minted it, so its schema is the reader's
+    // declaration, not the mode's. Under a union whose typed branch declares
+    // `asCell`, both modes mint a handle carrying the compound with the
+    // branches' markers removed, and a read through it projects every branch;
+    // under a union whose only handle branch is bare, both keep the schema
+    // the handle adopted from its link.
+
+    const stored = { id: 1, name: "one", hidden: true };
+    const shaped: JSONSchema = {
+      type: "object",
+      properties: {
+        h: {
+          anyOf: [
+            {
+              type: "object",
+              properties: { id: { type: "number" } },
+              asCell: ["cell"],
+            },
+            { asCell: ["cell"] },
+            {
+              type: "object",
+              properties: { name: { type: "string" } },
+              required: ["name"],
+            },
+          ],
+        },
+      },
+    };
+    const bare: JSONSchema = {
+      type: "object",
+      properties: {
+        h: {
+          anyOf: [
+            { asCell: ["cell"] },
+            {
+              type: "object",
+              properties: { name: { type: "string" } },
+              required: ["name"],
+            },
+          ],
+        },
+      },
+    };
+
+    const handleReadsInBothModes = async (
+      cause: string,
+      schema: JSONSchema,
+      expected: unknown,
+      h: FabricValue = stored,
+    ) => {
+      const write = runtime.edit();
+      runtime.getCell(space, cause, undefined, write).setRaw({ h });
+      await write.commit();
+      const schemas: unknown[] = [];
+      for (const lazy of [false, true]) {
+        const tx = runtime.edit();
+        if (lazy) tx.markLazyMaterialize(true);
+        try {
+          const handle = runtime.getCell<{ h: Cell<unknown> }>(
+            space,
+            cause,
+            schema,
+            tx,
+          ).get().h;
+          expect(isCell(handle)).toBe(true);
+          expect(handle.get()).toEqual(expected);
+          schemas.push(handle.schema);
+        } finally {
+          await tx.commit();
+        }
+      }
+      expect(schemas[1]).toEqual(schemas[0]);
+    };
+
+    it("carries the compound, and projects every branch, where a typed branch minted it", async () => {
+      await handleReadsInBothModes("typed-handle-branch", shaped, stored);
+    });
+
+    it("carries the compound where only a bare branch could have minted it and the value is inline", async () => {
+      await handleReadsInBothModes("bare-handle-inline", bare, stored);
+    });
+
+    it("keeps the link's schema where only a bare branch could have minted it over a link that carries one", async () => {
+      const write = runtime.edit();
+      const target = runtime.getCell<{ x: number; y: number }>(
+        space,
+        "bare-handle-target",
+        {
+          type: "object",
+          properties: { x: { type: "number" }, y: { type: "number" } },
+        },
+        write,
+      );
+      target.set({ x: 1, y: 2 });
+      await write.commit();
+      await handleReadsInBothModes(
+        "bare-handle-linked",
+        bare,
+        { x: 1, y: 2 },
+        target.getAsLink({ includeSchema: true }),
+      );
+    });
+  });
+
   describe("a schema that omits `type`", () => {
     // Such a schema admits every type, and which of its keywords apply is
     // settled by the value: a read holding an object narrows a key through
