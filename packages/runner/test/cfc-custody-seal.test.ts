@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { utf8Compare } from "@commonfabric/utils/utf8";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import {
@@ -1337,7 +1338,7 @@ describe("cfc-custody-seal", () => {
             principal: member.did(),
             role: "writer",
           })),
-        ].sort((a, b) => a.principal < b.principal ? -1 : 1);
+        ].sort((a, b) => utf8Compare(a.principal, b.principal));
         expect(prepared.readers).toEqual(expected);
       } finally {
         await fixture.dispose();

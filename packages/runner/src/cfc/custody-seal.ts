@@ -42,7 +42,7 @@ import {
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
-import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
+import { utf8Compare, utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 import type { Cell } from "../cell.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
@@ -827,9 +827,7 @@ const roomReaders = (acl: unknown, room: string): CustodyRoomReader[] => {
       principal,
       role: ROLE_OF[capability],
     }))
-    .sort((a, b) =>
-      a.principal < b.principal ? -1 : a.principal > b.principal ? 1 : 0
-    );
+    .sort((a, b) => utf8Compare(a.principal, b.principal));
 };
 
 /**
