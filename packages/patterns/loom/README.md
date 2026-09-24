@@ -55,15 +55,19 @@ admits, so `addPiece`, `addPanel`, and `duplicatePanel` are all bindings of it
 and take one event shape; an event names the profile in `as`. The contract names
 the handler, not its binding, so any binding of this module's `admitPanel` may
 write the field. Once the root has written a panel, a write to the field from
-any other handler is refused. `addPanel` keeps a profile the occurrence already
-names, since one `admitPanel` recorded carries the label of whoever added it
-first, and records `as` only on an occurrence that names none; removing an
-unattributed occurrence and adding it back under a profile attributes it to
-whoever did so. The runtime links an unlabeled document into the field when the
-panel's document holds no stored write contract yet, as when the write creates
-the panel: it checks a new link's source only under a write contract outside a
-union branch, and this one sits inside each of `Panel`'s branches. Neither
-changes whose principal the label names.
+any other handler is refused. `addPanel` refuses an occurrence that already
+names a profile: one `admitPanel` recorded carries the label of whoever added it
+then, to this Loom or to another, and admitting it again would attribute the new
+admission to them. So an occurrence that was removed is added back by
+duplicating it or by adding a new one, and the profile of an occurrence
+`addPanel` admits comes only from its event's `as`. The runtime would link an
+unlabeled document into the field when the panel's document holds no stored
+write contract yet, as when the write creates the panel, since it checks a new
+link's source only under a write contract outside a union branch and this one
+sits inside each of `Panel`'s branches; `addPanel` refuses such an occurrence
+for the same reason. `addPanel` does record `as` on an unattributed occurrence
+that another Loom also holds, and that Loom then shows the same adder for it:
+the field belongs to the occurrence, not to its place in a Loom.
 
 `addedBy` is the DID of the person who added the panel, as its writer claims it.
 `addPiece` and `duplicatePanel` take it from their event, and `addPanel` from

@@ -25,6 +25,8 @@ export default pattern(() => {
   const alice = "did:key:z6MkAliceAddsPanelsToTheSharedLoom";
 
   const loom = Loom({});
+  // A second Loom, into which an occurrence of the first may be linked.
+  const elsewhere = Loom({});
   const piece = new Writable({ title: "Target" });
   const refusedPiece = new Writable({ title: "Refused target" });
   const url = new Writable<Panel>({
@@ -44,6 +46,19 @@ export default pattern(() => {
   );
   const addUrlAsMember = action(() =>
     loom.addPanel.send({ panel: url, as: member })
+  );
+  // An occurrence that already records a profile names whoever added it
+  // first, so admitting it again, here or to another Loom, would attribute the
+  // new admission to them.
+  const readmitElsewhereAsOther = action(() =>
+    elsewhere.addPanel.send({ panel: url, as: other })
+  );
+  const readmitElsewhere = action(() =>
+    elsewhere.addPanel.send({ panel: url })
+  );
+  const removeUrl = action(() => loom.removePanel.send({ panel: url }));
+  const readmitAsOther = action(() =>
+    loom.addPanel.send({ panel: url, as: other })
   );
   const duplicateAsOther = action(() =>
     loom.duplicatePanel.send({ panel: url, as: other })
@@ -84,13 +99,13 @@ export default pattern(() => {
     // refused event as a runtime error.
     allowConsoleWarnings: true,
     allowRuntimeErrors: true,
-    expectRuntimeErrors: 2,
+    expectRuntimeErrors: 5,
     [TESTS]: [
       { action: addPieceAsMember },
       {
         assertion: assert(() =>
           loom.panels.length === 1 &&
-          loom.panels[0].get().addedByProfile?.equals(member) === true &&
+          loom.panels[0].key("addedByProfile").equals(member) &&
           loom.panels[0].get().addedBy === undefined
         ),
       },
@@ -101,7 +116,15 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           loom.panels.length === 2 && loom.panels[1].equals(url) &&
-          url.get().addedByProfile?.equals(member) === true
+          url.key("addedByProfile").equals(member)
+        ),
+      },
+      { action: readmitElsewhereAsOther },
+      { action: readmitElsewhere },
+      {
+        assertion: assert(() =>
+          elsewhere.panels.length === 0 &&
+          url.key("addedByProfile").equals(member)
         ),
       },
       // A copy is added by whoever duplicates it.
@@ -110,9 +133,9 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           loom.panels.length === 4 &&
-          loom.panels[2].get().addedByProfile?.equals(other) === true &&
+          loom.panels[2].key("addedByProfile").equals(other) &&
           loom.panels[3].get().addedByProfile === undefined &&
-          url.get().addedByProfile?.equals(member) === true
+          url.key("addedByProfile").equals(member)
         ),
       },
       { action: forgeOnUnattributed },
@@ -120,7 +143,7 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           loom.panels[3].get().addedByProfile === undefined &&
-          loom.panels[0].get().addedByProfile?.equals(member) === true
+          loom.panels[0].key("addedByProfile").equals(member)
         ),
       },
       // The root's own Duplicate button acts under the session's profile.
@@ -132,7 +155,7 @@ export default pattern(() => {
           loom.panels.length === 5 &&
           loom.panels[0].get().kind === "piece" &&
           loom.panels[4].get().kind === "piece" &&
-          loom.panels[4].get().addedByProfile?.equals(member) === true
+          loom.panels[4].key("addedByProfile").equals(member)
         ),
       },
       { action: moveUrlLast },
@@ -156,6 +179,15 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           loom.panels.length === 3 && loom.pieceRegistry.length === 0
+        ),
+      },
+      { action: removeUrl },
+      { action: readmitAsOther },
+      {
+        assertion: assert(() =>
+          loom.panels.length === 2 &&
+          !loom.panels.some((panel) => panel.equals(url)) &&
+          url.key("addedByProfile").equals(member)
         ),
       },
     ],

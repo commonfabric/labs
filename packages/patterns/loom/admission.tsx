@@ -208,10 +208,16 @@ export const admitPanel = handler<
     if (event.as !== undefined && value.addedBy !== undefined) {
       throw new Error("A panel added under a profile takes no addedBy");
     }
-    // An occurrence that already names a profile keeps it: one this handler
-    // recorded carries the label of whoever added it first, and one written
-    // any other way carries no such label, which a reader of the label sees.
-    if (event.as !== undefined && value.addedByProfile === undefined) {
+    // An occurrence that already names a profile is refused. One this handler
+    // recorded carries the label of whoever added it then, to this Loom or to
+    // another, so admitting it again would attribute this admission to them.
+    // The profile of an admitted occurrence comes only from the event's `as`.
+    if (value.addedByProfile !== undefined) {
+      throw new Error(
+        "A panel that already records its adder's profile cannot be added again",
+      );
+    }
+    if (event.as !== undefined) {
       panel.key("addedByProfile").set(event.as.resolveAsCell());
     }
     panels.set(withInserted(list, index, panel));
