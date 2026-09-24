@@ -1952,6 +1952,13 @@ export class CommonFabricFormatter implements TypeFormatter {
       if (holdsUnreadLabel(labels)) reportUnread(index);
       return labels;
     };
+    // The list a trusted pattern's name stands for when the policy writes no
+    // `requiredEventIntegrity` of its own, checked as a written one is.
+    const patternLabels = (pattern: unknown, index: number): unknown[] => {
+      const labels = [pattern];
+      if (holdsUnreadLabel(labels)) reportUnread(index);
+      return labels;
+    };
 
     switch (aliasName) {
       case "Cfc": {
@@ -2011,7 +2018,7 @@ export class CommonFabricFormatter implements TypeFormatter {
           aliasName,
           action: readValue(2),
           trustedPattern,
-          requiredEventIntegrity: [trustedPattern],
+          requiredEventIntegrity: patternLabels(trustedPattern, 3),
         });
       }
       case "TrustedActionUiContract": {
@@ -2023,7 +2030,7 @@ export class CommonFabricFormatter implements TypeFormatter {
             trustedPattern,
             requiredEventIntegrity: aliasArgs.length > 3
               ? readLabels(3)
-              : [trustedPattern],
+              : patternLabels(trustedPattern, 2),
           },
         };
       }

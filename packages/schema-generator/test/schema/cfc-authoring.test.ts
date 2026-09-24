@@ -1380,9 +1380,14 @@ describe("Schema: CFC authoring aliases", () => {
       new SchemaGenerator().generateSchema(type, checker, undefined, {
         onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
       });
-      return diagnostics
-        .filter((diagnostic) => diagnostic.type === "cfc-label:unread")
-        .map((diagnostic) => diagnostic.message);
+      const unread = diagnostics.filter((diagnostic) =>
+        diagnostic.type === "cfc-label:unread"
+      );
+      // A warning: compilation goes on, with the label as far as it was read.
+      expect(unread.map((diagnostic) => diagnostic.severity)).toEqual(
+        unread.map(() => "warning"),
+      );
+      return unread.map((diagnostic) => diagnostic.message);
     };
 
     it("reports a union element, naming the label as written", async () => {
@@ -1443,9 +1448,9 @@ describe("Schema: CFC authoring aliases", () => {
         undefined,
         { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
       );
-      expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
-        "cfc-label:unread",
-      ]);
+      expect(
+        diagnostics.map((diagnostic) => [diagnostic.severity, diagnostic.type]),
+      ).toEqual([["warning", "cfc-label:unread"]]);
       expect(diagnostics[0]!.message).toContain('"a" | "b"');
     });
 
@@ -1496,8 +1501,68 @@ describe("Schema: CFC authoring aliases", () => {
         onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
       });
 
+      expect(diagnostics.map((diagnostic) => diagnostic.severity)).toEqual([
+        "warning",
+      ]);
       expect(diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
         expect.stringContaining('`readonly ["fixed", "a" | "b"]`'),
+      ]);
+    });
+
+    it("names a substituted label holding template literals as written", async () => {
+      const messages = await unreadLabels(`
+        type Wrapped<L> = Confidential<string, readonly ["fixed", L]>;
+        interface SchemaRoot {
+          plain: Wrapped<\`a\` | \`b\`>;
+          spliced: Wrapped<\`prefix-\${"a" | "b"}\`>;
+        }
+      `);
+      expect(messages).toEqual([
+        expect.stringContaining('readonly ["fixed", \`a\` | \`b\`]'),
+        expect.stringContaining('readonly ["fixed", \`prefix-\${"a" | "b"}\`]'),
+      ]);
+    });
+
+    it("reports a trusted pattern it cannot read, standing for the event integrity", async () => {
+      // With no \`requiredEventIntegrity\` of its own, the contract requires
+      // its trusted pattern, whose name here is no literal.
+      const messages = await unreadLabels(`
+        type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+        type TrustedActionUiContract<
+          T,
+          Action extends string,
+          Pattern extends string,
+        > = Cfc<T, {
+          uiContract: {
+            helper: "UiAction";
+            action: Action;
+            trustedPattern: Pattern;
+            requiredEventIntegrity: [Pattern];
+          };
+        }>;
+        type TrustedActionWrite<
+          T,
+          Binding,
+          Action extends string,
+          Pattern extends string,
+        > = Cfc<WriteAuthorizedBy<T, Binding>, {
+          uiContract: {
+            helper: "UiAction";
+            action: Action;
+            trustedPattern: Pattern;
+            requiredEventIntegrity: [Pattern];
+          };
+        }>;
+        function save() {}
+        interface SchemaRoot {
+          contract: TrustedActionUiContract<string, "save", string>;
+          write: TrustedActionWrite<string, typeof save, "save", string>;
+          readable: TrustedActionUiContract<string, "save", "trusted">;
+        }
+      `);
+      expect(messages).toEqual([
+        expect.stringContaining("A label of `TrustedActionUiContract`"),
+        expect.stringContaining("A label of `TrustedActionWrite`"),
       ]);
     });
 

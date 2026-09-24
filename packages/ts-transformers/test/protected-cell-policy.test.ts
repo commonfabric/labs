@@ -760,6 +760,11 @@ export default pattern(() => {
     );
 
     expect(diagnostics.filter(isError)).toEqual([]);
+    expect(
+      diagnostics.filter((diagnostic) =>
+        diagnostic.type === "cfc-write-authorized-by:unread"
+      ),
+    ).toEqual([]);
     const writer = {
       writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["setName"] } },
     };

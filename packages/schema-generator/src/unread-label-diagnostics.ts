@@ -69,7 +69,8 @@ const holdsUnreadValue = (value: unknown): boolean =>
 
 /**
  * `node`, a node substitution built, with each leaf that prints from source
- * text rebuilt from its own text, and on one line. Its parsed children,
+ * text (an identifier, a literal, or a template's text) rebuilt from its own
+ * text, and on one line. Its parsed children,
  * perhaps from several files, would otherwise print blank against the one
  * source a printer takes. Only rebuilt nodes are marked; the parsed ones stay
  * as the program holds them.
@@ -85,6 +86,17 @@ const withOwnText = (node: ts.TypeNode): ts.TypeNode => {
         ? ts.factory.createNumericLiteral(child.text)
         : ts.isBigIntLiteral(child)
         ? ts.factory.createBigIntLiteral(child.text)
+        : ts.isNoSubstitutionTemplateLiteral(child)
+        ? ts.factory.createNoSubstitutionTemplateLiteral(
+          child.text,
+          child.rawText,
+        )
+        : ts.isTemplateHead(child)
+        ? ts.factory.createTemplateHead(child.text, child.rawText)
+        : ts.isTemplateMiddle(child)
+        ? ts.factory.createTemplateMiddle(child.text, child.rawText)
+        : ts.isTemplateTail(child)
+        ? ts.factory.createTemplateTail(child.text, child.rawText)
         : ts.visitEachChild(child, visit, context);
     const visit = (child: ts.Node): ts.Node => {
       const rebuilt = rebuild(child);
@@ -133,9 +145,9 @@ export function reportUnreadLabel(
           ? `${text.slice(0, LABEL_TEXT_LIMIT)}…`
           : text,
       ) +
-      ". An atom is a string literal, an object literal, `AnyOf<…>`, or " +
+      ". An atom is a literal, an object literal of them, `AnyOf<…>`, or " +
       "`PolicyOf<typeof …>`; the schema carries what it could not read as " +
-      "no label, or as a `null` atom.",
+      "no label, or as an atom that serializes as `null`.",
     ...((labelNode ?? context.typeNode) &&
       { node: labelNode ?? context.typeNode }),
   };
