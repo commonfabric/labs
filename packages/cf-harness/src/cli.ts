@@ -88,6 +88,7 @@ import {
   DEFAULT_DOCKER_RUNSC_IMAGE,
   DEFAULT_FABRIC_MOUNT_PATH,
 } from "./sandbox/docker-runsc.ts";
+import { resolveSandboxRuntimeSelection } from "./sandbox/runtime-selection.ts";
 import {
   type CfHarnessHostMountConfig,
   type CfHarnessHostMountMode,
@@ -1726,66 +1727,30 @@ export const parseCfHarnessCliArgs = async (
   }
   const sandboxDockerRuntime = rawSandboxDockerRuntime ??
     nonEmptyEnvValue(env.CF_HARNESS_SANDBOX_DOCKER_RUNTIME);
-  const rawSandboxRuntime = typeof args["sandbox-runtime"] === "string"
-    ? args["sandbox-runtime"].trim()
-    : nonEmptyEnvValue(env.CF_HARNESS_SANDBOX_RUNTIME);
-  if (
-    rawSandboxRuntime !== undefined && rawSandboxRuntime !== "docker" &&
-    rawSandboxRuntime !== "runsc"
-  ) {
-    throw new Error("sandbox runtime must be one of docker, runsc");
-  }
-  const sandboxRuntimeKind = rawSandboxRuntime as
-    | "docker"
-    | "runsc"
-    | undefined;
-  const rawSandboxRootfs = typeof args["sandbox-rootfs"] === "string"
-    ? args["sandbox-rootfs"].trim()
-    : nonEmptyEnvValue(env.CF_HARNESS_SANDBOX_ROOTFS);
-  const sandboxRootfs = rawSandboxRootfs === "" ? undefined : rawSandboxRootfs;
-  const rawSandboxCfcPolicy = typeof args["sandbox-cfc-policy"] === "string"
-    ? args["sandbox-cfc-policy"].trim()
-    : nonEmptyEnvValue(env.CF_HARNESS_RUNSC_CFC_POLICY);
-  const explicitSandboxCfcPolicy = rawSandboxCfcPolicy === ""
-    ? undefined
-    : rawSandboxCfcPolicy;
-  // The default the usage text promises: the policy the docker path's
-  // installer puts under HOME, so both runtimes label the same files the same
-  // way. Looked up only for the runsc runtime, only when nothing named one,
-  // and only taken when it is there.
-  const defaultRunscCfcPolicy = nonEmptyEnvValue(env.HOME) !== undefined
-    ? join(env.HOME!, ".local", "share", "runsc-cfc", "cfc-policy.json")
-    : undefined;
-  const pathExists = deps.pathExists ??
-    ((path: string) =>
-      Deno.stat(path).then((info) => info.isFile).catch(() => false));
-  const sandboxCfcPolicy = explicitSandboxCfcPolicy ??
-    (sandboxRuntimeKind === "runsc" && defaultRunscCfcPolicy !== undefined &&
-        await pathExists(defaultRunscCfcPolicy)
-      ? defaultRunscCfcPolicy
-      : undefined);
-  const sandboxRunscBinary = nonEmptyEnvValue(env.CF_HARNESS_RUNSC_BINARY);
-  const rawRunscNetwork = nonEmptyEnvValue(env.CF_HARNESS_DOCKER_NETWORK_MODE);
-  if (
-    sandboxRuntimeKind === "runsc" && rawRunscNetwork !== undefined &&
-    rawRunscNetwork !== "none" && rawRunscNetwork !== "bridge" &&
-    rawRunscNetwork !== "host"
-  ) {
-    // The docker path refuses this value when it builds its sandbox; the
-    // runsc path must not read it as "no network" instead.
-    throw new Error(
-      "CF_HARNESS_DOCKER_NETWORK_MODE must be one of none, bridge, or host",
-    );
-  }
-  // The docker network vocabulary maps onto runsc's: none stays none, bridge
-  // is runsc's own netstack, host is the host's stack.
-  const sandboxRunscNetworkMode = rawRunscNetwork === "none"
-    ? "none" as const
-    : rawRunscNetwork === "host"
-    ? "host" as const
-    : rawRunscNetwork === "bridge"
-    ? "sandbox" as const
-    : undefined;
+  // One derivation shared with the interactive entrypoints; flags win over
+  // the environment, and the default policy is looked up through
+  // `deps.pathExists`.
+  const {
+    sandboxRuntimeKind,
+    sandboxRootfs,
+    sandboxCfcPolicy,
+    sandboxRunscBinary,
+    sandboxRunscNetworkMode,
+  } = await resolveSandboxRuntimeSelection(
+    env,
+    {
+      ...(typeof args["sandbox-runtime"] === "string"
+        ? { sandboxRuntime: args["sandbox-runtime"] }
+        : {}),
+      ...(typeof args["sandbox-rootfs"] === "string"
+        ? { sandboxRootfs: args["sandbox-rootfs"] }
+        : {}),
+      ...(typeof args["sandbox-cfc-policy"] === "string"
+        ? { sandboxCfcPolicy: args["sandbox-cfc-policy"] }
+        : {}),
+    },
+    deps.pathExists,
+  );
   const explicitCfcMode = typeof args["cfc-enforcement-mode"] === "string"
     ? args["cfc-enforcement-mode"]
     : undefined;

@@ -24,6 +24,10 @@ import {
 } from "@std/path/posix";
 
 import type { HarnessFabricSessionConfig } from "./config.ts";
+import {
+  resolveSandboxRuntimeSelection,
+  type SandboxRuntimeSelection,
+} from "./sandbox/runtime-selection.ts";
 import type { DockerRunscAdditionalMountConfig } from "./sandbox/types.ts";
 
 export type CfHarnessHostMountMode = "readonly" | "writable";
@@ -165,8 +169,15 @@ export const parseHostMountSpecs = async (
 };
 
 /**
- * Resolves host mounts, Loom tools, and the Fabric binding into prompt-loop
- * options. Throws when a configured host resource cannot be resolved.
+ * Resolves host mounts, Loom tools, the Fabric binding, and the sandbox
+ * runtime the environment names into prompt-loop options. Throws when a
+ * configured host resource cannot be resolved.
+ *
+ * `env` is the environment the entrypoint was launched with. The runtime
+ * selection (`CF_HARNESS_SANDBOX_RUNTIME` and its companions) is derived the
+ * way the batch CLI derives it, so a chat session and a batch run started
+ * from one environment execute in the same sandbox; the parameter is
+ * required so a new entrypoint cannot forget it the way this one did.
  */
 export const resolveInteractiveProvisioning = async (
   parsed: {
@@ -176,19 +187,24 @@ export const resolveInteractiveProvisioning = async (
     maxModelTurns?: number;
   },
   cwd: string,
-): Promise<{
-  additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
-  fabricSession?: HarnessFabricSessionConfig;
-  loomAuthoring?: HarnessLoomAuthoringConfig;
-  maxModelTurns?: number;
-}> => {
+  env: Record<string, string | undefined>,
+): Promise<
+  {
+    additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
+    fabricSession?: HarnessFabricSessionConfig;
+    loomAuthoring?: HarnessLoomAuthoringConfig;
+    maxModelTurns?: number;
+  } & SandboxRuntimeSelection
+> => {
   const loomAuthoring = await readLoomAuthoringConfig(
     parsed.loomAuthoringConfigPath,
   );
   const mounts = hostMountsToAdditionalMounts(
     await parseHostMountSpecs(parsed.hostMountSpecs, cwd),
   );
+  const runtime = await resolveSandboxRuntimeSelection(env);
   return {
+    ...runtime,
     ...(mounts.length > 0 ? { additionalMounts: mounts } : {}),
     ...(parsed.fabricSession !== undefined
       ? { fabricSession: parsed.fabricSession }
