@@ -879,7 +879,10 @@ describe("stored write requirements", () => {
 
     it("commits beside a claim on every item of the value", async () => {
       const runtime = start();
-      const schema = { type: "array", items: { type: "string", ifc: CLAIM } };
+      const schema = {
+        type: "array",
+        items: { type: "string", ifc: CLAIM },
+      } as const satisfies JSONSchema;
       await seed(runtime, "metadata-beside-items", schema, []);
       const tx = runtime.edit();
       runtime.getCell(space, "metadata-beside-items", schema, tx).set([]);
