@@ -1,6 +1,7 @@
 /**
- * The guard that refuses a builder artifact minted while an action's user code
- * runs; the window itself is kept by `frame-context.ts`.
+ * This module keeps builder artifacts out of running actions. It re-exports
+ * `runInActionExecution`, which `frame-context.ts` implements, and defines the
+ * guard the builder's mint sites call.
  */
 
 import { inActionExecution } from "./frame-context.ts";
