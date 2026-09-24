@@ -1982,10 +1982,11 @@ export class RuntimeProcessor {
 
   /**
    * Prepares a custody seal and keeps its consent in this backend while the
-   * host shows the preview. The policy reference is read from the cell the
-   * host names and is checked by the seal itself. The allowed sources are
-   * read by the seal from the settings cell the host names, only in the
-   * actor's home space, at prepare and again inside the commit.
+   * host shows the preview. The seal reads the policy reference from the cell
+   * the host names, and the allowed sources from the settings cell the host
+   * names, only in the actor's home space. It reads both again inside the
+   * commit, so a value either cell holds that differs from the reviewed one
+   * refuses the seal as stale rather than sealing what was reviewed.
    */
   async handleCustodySealPrepare(
     request: CustodySealPrepareRequest,
@@ -1996,15 +1997,11 @@ export class RuntimeProcessor {
     if (unavailable()) throw new Error("Custody sealing is unavailable");
     const draft = this.#hostSelectedCell(request.draft);
     const terms = this.#hostSelectedCell(request.terms);
-    const policyCell = this.#hostSelectedCell(request.policy);
+    const policy = this.#hostSelectedCell(request.policy);
     const settings = this.#hostSelectedCell(request.allowedSources);
-    await policyCell.sync();
-    const policy = policyCell.get();
-    if (unavailable()) throw new Error("Custody sealing is unavailable");
-    const prepared = await prepareCustodySeal(draft, {
-      terms,
-      policy: policy as never,
-    }, { allowedSources: settings });
+    const prepared = await prepareCustodySeal(draft, { terms, policy }, {
+      allowedSources: settings,
+    });
     if (unavailable()) throw new Error("Custody sealing is unavailable");
     const id = crypto.randomUUID();
     this.#custodySeals.set(clientScopedKey(client, id), {

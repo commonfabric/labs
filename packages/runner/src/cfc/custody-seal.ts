@@ -88,8 +88,14 @@ export interface CustodyRoom {
    */
   readonly terms: Cell<unknown>;
 
-  /** The room's custody policy; its subject must be the room space. */
-  readonly policy: CfcModulePolicyRefAtom;
+  /**
+   * The room's custody policy; its subject must be the room space. A host
+   * whose policy reference is stored passes the cell holding it: the seal then
+   * reads the cell at prepare and again at commit, refuses a commit whose
+   * reading differs from the one the actor reviewed, and has the transaction
+   * that writes the entry verify that the cell still holds it.
+   */
+  readonly policy: CfcModulePolicyRefAtom | Cell<unknown>;
 }
 
 /** Host-supplied bounds on what the actor may seal into this room. */
@@ -948,6 +954,31 @@ const allowedSourcesOf = async (
 };
 
 /**
+ * The policy reference `policy` names: the reference itself, or what its cell
+ * holds. A cell's read is added to `evidence`, so the entry's transaction
+ * verifies it. The reference is checked by the caller.
+ */
+const requestedPolicyOf = async (
+  runtime: Cell<unknown>["runtime"],
+  policy: CustodyRoom["policy"],
+  evidence: ReadEvidence[],
+): Promise<unknown> => {
+  if (!isCell(policy)) return policy;
+  if (policy.runtime !== runtime) {
+    throw new Error("Custody seal handles must belong to the same runtime");
+  }
+  await policy.sync();
+  const tx = runtime.edit();
+  try {
+    const value = snapshotJsonValue(policy.withTx(tx).get());
+    evidence.push(...readEvidence(tx));
+    return value;
+  } finally {
+    tx.abort();
+  }
+};
+
+/**
  * Reads the draft, the terms, and the room's state, and checks them all. At
  * commit, `reviewed` is what the prepare established, and a stored input that
  * no longer holds it is refused as stale before anything is checked against
@@ -1001,6 +1032,15 @@ const inspect = async (
     );
   }
 
+  const requestedPolicy = await requestedPolicyOf(
+    runtime,
+    requestedRoom.policy,
+    evidence,
+  );
+  if (reviewed && !deepEqual(requestedPolicy, reviewed.policy)) {
+    throw new Error(STALE_REVIEW);
+  }
+
   const termsTx = runtime.edit();
   let termsLink: NormalizedFullLink;
   let terms: JSONValue;
@@ -1013,7 +1053,7 @@ const inspect = async (
     if (!isDID(room)) {
       throw new Error("Custody terms must live in a space named by a DID");
     }
-    policy = checkPolicy(requestedRoom.policy, room);
+    policy = checkPolicy(requestedPolicy, room);
     terms = snapshotJsonValue(requestedRoom.terms.withTx(termsTx).get());
     // Terms are copied into every entry, so they may carry only what the
     // room's readers already hold: a clause admitting the room space, or the

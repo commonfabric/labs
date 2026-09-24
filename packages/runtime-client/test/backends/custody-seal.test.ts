@@ -362,6 +362,44 @@ describe("custody-seal", () => {
     }, { sources: [calendar] });
   });
 
+  it("refuses a review whose policy cell changed after preparation", async () => {
+    await withFixture(async ({ processor, runtime, policy, refs }) => {
+      const preview = await processor.handleCustodySealPrepare({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+      }, first);
+      await rewrite(runtime, policy, { ...P, symbol: "otherRules" });
+      await expect(processor.handleCustodySealCommit({
+        type: RequestType.CustodySealCommit,
+        id: preview.id,
+      }, first)).rejects.toThrow("review is stale");
+    });
+  });
+
+  it("refuses a seal whose policy cell changed after the commit's checks", async () => {
+    await withFixture(async ({ processor, runtime, policy, refs }) => {
+      const preview = await processor.handleCustodySealPrepare({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+      }, first);
+      atEditWithRetry(
+        runtime,
+        0,
+        "before",
+        () => rewrite(runtime, policy, { ...P, symbol: "otherRules" }),
+      );
+      await expect(processor.handleCustodySealCommit({
+        type: RequestType.CustodySealCommit,
+        id: preview.id,
+      }, first)).rejects.toThrow("review changed before commit");
+      await rewrite(runtime, policy, P);
+      await processor.handleCustodySealPrepare({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+      }, second);
+    });
+  });
+
   it("refuses a room space with no access list", async () => {
     await withFixture(async ({ processor, refs }) => {
       await expect(processor.handleCustodySealPrepare({
