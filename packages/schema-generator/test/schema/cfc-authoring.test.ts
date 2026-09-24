@@ -1449,6 +1449,58 @@ describe("Schema: CFC authoring aliases", () => {
       expect(diagnostics[0]!.message).toContain('"a" | "b"');
     });
 
+    it("reports an object atom holding a field it cannot read", async () => {
+      const messages = await unreadLabels(`
+        interface SchemaRoot {
+          t: Confidential<string, readonly [{ kind: "k"; subject: "a" | "b" }]>;
+        }
+      `);
+      expect(messages).toHaveLength(1);
+    });
+
+    it("reports a UI contract's event integrity inside a \`Cfc\` payload", async () => {
+      const messages = await unreadLabels(`
+        interface SchemaRoot {
+          t: Cfc<string, {
+            uiContract: {
+              helper: "UiAction";
+              action: "save";
+              trustedPattern: "trusted";
+              requiredEventIntegrity: readonly ["a" | "b"];
+            };
+          }>;
+        }
+      `);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toContain("A label of `Cfc` could not be read");
+    });
+
+    it("names a label substituted into an alias with its literals as written", async () => {
+      // Substitution builds the label's outer node, which holds the parsed
+      // literals of the alias and of the argument, here from two files.
+      const { type, checker } = await getTypeFromFiles(
+        {
+          "/labels.ts": ALIASES.replaceAll("type ", "export type ") + `
+            export type Wrapped<L> = Confidential<string, readonly ["fixed", L]>;
+          `,
+          "/main.ts": `
+            import type { Wrapped } from "./labels.ts";
+            interface SchemaRoot { t: Wrapped<"a" | "b"> }
+          `,
+        },
+        "/main.ts",
+        "SchemaRoot",
+      );
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      new SchemaGenerator().generateSchema(type, checker, undefined, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+
+      expect(diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+        expect.stringContaining('`readonly ["fixed", "a" | "b"]`'),
+      ]);
+    });
+
     it("reports nothing for labels of every readable kind", async () => {
       const messages = await unreadLabels(`
         interface SchemaRoot {
@@ -1457,6 +1509,14 @@ describe("Schema: CFC authoring aliases", () => {
           clause: Confidential<string, readonly [AnyOf<readonly ["x", "y"]>]>;
           empty: Confidential<string, readonly []>;
           carrier: Cfc<string, { confidentiality: readonly ["c"] }>;
+          contract: Cfc<string, {
+            uiContract: {
+              helper: "UiAction";
+              action: "save";
+              trustedPattern: "trusted";
+              requiredEventIntegrity: readonly ["trusted"];
+            };
+          }>;
         }
       `);
       expect(messages).toEqual([]);

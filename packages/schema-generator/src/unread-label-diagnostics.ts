@@ -6,6 +6,7 @@
 
 import { getLogger } from "@commonfabric/utils/logger";
 import { backtickQuote } from "@commonfabric/utils/markdown";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import ts from "typescript";
 
 import type {
@@ -23,7 +24,7 @@ const LABEL_TEXT_LIMIT = 80;
  * requires, each a string literal, an object literal, `AnyOf<…>`, or
  * `PolicyOf<typeof …>`.
  */
-export const IFC_LABEL_KEYS: ReadonlySet<string> = new Set([
+const IFC_LABEL_KEYS: ReadonlySet<string> = new Set([
   "confidentiality",
   "integrity",
   "addIntegrity",
@@ -33,17 +34,70 @@ export const IFC_LABEL_KEYS: ReadonlySet<string> = new Set([
 
 /**
  * Whether `labels`, a label list as the lowering read it, is missing or holds
- * an atom it could not read: an `undefined` element, or one inside an
- * `AnyOf` clause's alternatives.
+ * an atom it could not read in full: one with an `undefined` anywhere in it,
+ * whether the atom itself, a field of an object atom, or an alternative of an
+ * `AnyOf` clause.
  */
 export function holdsUnreadLabel(labels: unknown): boolean {
-  if (!Array.isArray(labels)) return true;
-  return labels.some((atom) =>
-    atom === undefined ||
-    (typeof atom === "object" && atom !== null && "anyOf" in atom &&
-      holdsUnreadLabel((atom as { anyOf: unknown }).anyOf))
-  );
+  return !Array.isArray(labels) || labels.some(holdsUnreadValue);
 }
+
+/**
+ * Whether `metadata`, a `Cfc` payload as the lowering read it, holds a label
+ * list it could not read in full: one under an `ifc` label key, or a UI
+ * contract's `requiredEventIntegrity`, where one is written.
+ */
+export function holdsUnreadMetadataLabel(
+  metadata: Readonly<Record<string, unknown>>,
+): boolean {
+  const uiContract = metadata.uiContract;
+  return Object.entries(metadata).some(([key, labels]) =>
+    IFC_LABEL_KEYS.has(key) && holdsUnreadLabel(labels)
+  ) ||
+    (isObjectOrArray(uiContract) && !Array.isArray(uiContract) &&
+      "requiredEventIntegrity" in uiContract &&
+      holdsUnreadLabel(uiContract.requiredEventIntegrity));
+}
+
+/** Whether `value`, an atom or a part of one, holds an `undefined`. */
+const holdsUnreadValue = (value: unknown): boolean =>
+  value === undefined ||
+  (isObjectOrArray(value) &&
+    (Array.isArray(value) ? value : Object.values(value)).some(
+      holdsUnreadValue,
+    ));
+
+/**
+ * `node`, a node substitution built, with each leaf that prints from source
+ * text rebuilt from its own text, and on one line. Its parsed children,
+ * perhaps from several files, would otherwise print blank against the one
+ * source a printer takes. Only rebuilt nodes are marked; the parsed ones stay
+ * as the program holds them.
+ */
+const withOwnText = (node: ts.TypeNode): ts.TypeNode => {
+  const result = ts.transform(node, [(context) => (root) => {
+    const rebuild = (child: ts.Node): ts.Node =>
+      ts.isIdentifier(child)
+        ? ts.factory.createIdentifier(child.text)
+        : ts.isStringLiteral(child)
+        ? ts.factory.createStringLiteral(child.text)
+        : ts.isNumericLiteral(child)
+        ? ts.factory.createNumericLiteral(child.text)
+        : ts.isBigIntLiteral(child)
+        ? ts.factory.createBigIntLiteral(child.text)
+        : ts.visitEachChild(child, visit, context);
+    const visit = (child: ts.Node): ts.Node => {
+      const rebuilt = rebuild(child);
+      return rebuilt === child
+        ? child
+        : ts.setEmitFlags(rebuilt, ts.EmitFlags.SingleLine);
+    };
+    return ts.visitNode(root, visit) as ts.TypeNode;
+  }]);
+  const [transformed] = result.transformed;
+  result.dispose();
+  return transformed ?? node;
+};
 
 /**
  * Reports that `aliasName`'s label argument, printed from `labelNode` or else
@@ -56,13 +110,14 @@ export function reportUnreadLabel(
   labelNode: ts.TypeNode | undefined,
 ): void {
   // An authored node prints from its own source, where its literals' text
-  // is; a node built in substitution has no source and prints from itself.
+  // is; a node built in substitution has no source, and prints from the text
+  // each of its leaves holds.
   const printed = labelNode && labelNode.pos >= 0
     ? labelNode.getText()
     : labelNode
     ? ts.createPrinter({ removeComments: true }).printNode(
       ts.EmitHint.Unspecified,
-      labelNode,
+      withOwnText(labelNode),
       ts.createSourceFile("unread.ts", "", ts.ScriptTarget.Latest),
     )
     : labelType

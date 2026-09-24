@@ -1024,11 +1024,13 @@ Mechanics:
   `PolicyOf` reached from a type alone, with no annotation that denotes it,
   has no binding to read: its brand is read as an ordinary object,
   `{ __ct_cfc_policy_of__: undefined }`, not as a policy atom. A label list the
-  extraction cannot read in full, an argument that is not a tuple or an atom
-  that is not a string literal, an object literal, `AnyOf<…>`, or
-  `PolicyOf<typeof …>` (a union of literals, say), is reported as the
-  `cfc-label:unread` warning (`unread-label-diagnostics.ts`), naming the label;
-  the schema carries what it could not read as no label or as a `null` atom.
+  extraction cannot read in full is reported as the `cfc-label:unread` warning
+  (`unread-label-diagnostics.ts`), naming the label: an argument that is not a
+  tuple, or an atom with anything unread in it, whether the atom itself, a
+  field of an object atom, or an alternative of an `AnyOf` clause. A union of
+  literals is one such thing, and that `PolicyOf` brand another. The schema
+  carries what it could not read as no label, as a `null` atom, or as a field
+  left out.
   Projection paths encode as JSON Pointers with `~0`/`~1` escaping
   (`encodeJsonPointerPath`).
 - `ifc` combines with the base schema's existing `ifc` one key at a time

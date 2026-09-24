@@ -55,7 +55,7 @@ import { scopeInsideUnionError } from "../scope-placement.ts";
 import { combineIfcLabels } from "../ifc-labels.ts";
 import {
   holdsUnreadLabel,
-  IFC_LABEL_KEYS,
+  holdsUnreadMetadataLabel,
   reportUnreadLabel,
 } from "../unread-label-diagnostics.ts";
 import { reportUnreadWriterBinding } from "../writer-binding-diagnostics.ts";
@@ -1956,14 +1956,10 @@ export class CommonFabricFormatter implements TypeFormatter {
     switch (aliasName) {
       case "Cfc": {
         const payload = readValue(1);
-        if (!isObjectOrArray(payload)) return undefined;
-        if (
-          Object.entries(payload).some(([key, labels]) =>
-            IFC_LABEL_KEYS.has(key) && holdsUnreadLabel(labels)
-          )
-        ) {
-          reportUnread(1);
+        if (!isObjectOrArray(payload) || Array.isArray(payload)) {
+          return undefined;
         }
+        if (holdsUnreadMetadataLabel(payload)) reportUnread(1);
         return { ...payload };
       }
       case "Confidential":
