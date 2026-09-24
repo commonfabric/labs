@@ -8,8 +8,10 @@
  * N; the pass should grow about linearly.
  */
 
-import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, type CfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import type {
@@ -88,9 +90,14 @@ for (const count of [500, 2000, 4000]) {
       timer?.start();
       const join = deriveFlowJoin(tx);
       timer?.end();
-      const witnessed = join.integrity.some((atom) =>
-        (atom as { inputWitness?: unknown }).inputWitness !== undefined
-      );
+      // The witness must be the writer's, so a fixture whose per-key entries
+      // stopped resolving fails here rather than timing a degenerate read.
+      const witnessed = join.integrity.some((atom) => {
+        const witness = (atom as { inputWitness?: CfcAtom }).inputWitness;
+        return isObjectNotArray(witness) &&
+          witness.type === CFC_ATOM_TYPE.TransformedBy &&
+          deepEqual(witness.identity, WRITER);
+      });
       if (!witnessed) throw new Error(`Expected a witness at N=${count}`);
     } finally {
       tx.abort();
