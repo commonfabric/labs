@@ -3173,7 +3173,10 @@ const deriveFlowJoinImpl = (
     if (observation.confidentiality.length === 0) continue;
     labeledSpaces?.add(observation.target.space);
     atoms.push(...observation.confidentiality);
-    // A confidential observation that carries no evidence at all.
+    // The input-witness meet is not the hereditary one: it quantifies over
+    // every confidential input, so a confidential input that carries no
+    // evidence, as label metadata does not, empties it
+    // (docs/specs/cfc-transformed-by-input-witnesses.md).
     noteInputWitnesses([]);
   }
   for (
@@ -3187,6 +3190,8 @@ const deriveFlowJoinImpl = (
       for (const space of observation.labeledSpaces) labeledSpaces.add(space);
     }
     atoms.push(...(observation.flow.confidentiality ?? []));
+    // `observation.flow` is itself a flow join, whose integrity is a meet
+    // over what the content consumed, so it overstates no input.
     if ((observation.flow.confidentiality?.length ?? 0) > 0) {
       noteInputWitnesses(retainedInputWitnesses(observation.flow.integrity));
     }
