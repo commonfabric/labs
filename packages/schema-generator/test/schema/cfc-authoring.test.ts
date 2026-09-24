@@ -1360,4 +1360,106 @@ describe("Schema: CFC authoring aliases", () => {
       expect(defaulted.schema.ifc).toEqual({ confidentiality: [] });
     });
   });
+
+  describe("a label the lowering cannot read", () => {
+    // A label list the lowering reads only in part lowers as no label, or with
+    // a `null` atom; the generator reports it instead of saying nothing.
+
+    const ALIASES = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type AnyOf<X extends readonly unknown[]> = { readonly __ct_cfc_any_of__?: X };
+    `;
+
+    const unreadLabels = async (code: string) => {
+      const { type, checker } = await getTypeFromCode(
+        ALIASES + code,
+        "SchemaRoot",
+      );
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      new SchemaGenerator().generateSchema(type, checker, undefined, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+      return diagnostics
+        .filter((diagnostic) => diagnostic.type === "cfc-label:unread")
+        .map((diagnostic) => diagnostic.message);
+    };
+
+    it("reports a union element, naming the label as written", async () => {
+      const messages = await unreadLabels(`
+        interface SchemaRoot { t: Confidential<string, readonly ["a" | "b"]> }
+      `);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toContain(
+        'A label of `Confidential` could not be read: `readonly ["a" | "b"]`',
+      );
+    });
+
+    it("reports a union alternative of an `AnyOf` clause", async () => {
+      const messages = await unreadLabels(`
+        interface SchemaRoot {
+          t: Confidential<string, readonly [AnyOf<readonly ["a" | "b"]>]>;
+        }
+      `);
+      expect(messages).toHaveLength(1);
+    });
+
+    it("reports a label argument that is not a tuple", async () => {
+      const messages = await unreadLabels(`
+        interface SchemaRoot { t: Confidential<string, string[]> }
+      `);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toContain("`string[]`");
+    });
+
+    it("reports a label list inside a \`Cfc\` payload", async () => {
+      const messages = await unreadLabels(`
+        interface SchemaRoot {
+          t: Cfc<string, { confidentiality: readonly ["a" | "b"] }>;
+        }
+      `);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toContain("A label of `Cfc` could not be read");
+    });
+
+    it("reports a label read from a type alone, naming its type", async () => {
+      const { checker, sourceFile } = await createTestProgram(
+        ALIASES + `
+        type Labeled<L extends readonly unknown[]> = Confidential<string, L>;
+        interface Holder { value: Labeled<readonly ["a" | "b"]> }
+      `,
+      );
+      const holder = checker.getSymbolsInScope(
+        sourceFile,
+        ts.SymbolFlags.Interface,
+      ).find((candidate) => candidate.name === "Holder")!;
+      const value = checker.getDeclaredTypeOfSymbol(holder).getProperty(
+        "value",
+      )!;
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      new SchemaGenerator().generateSchema(
+        checker.getTypeOfSymbolAtLocation(value, sourceFile),
+        checker,
+        undefined,
+        { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
+      );
+      expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
+        "cfc-label:unread",
+      ]);
+      expect(diagnostics[0]!.message).toContain('"a" | "b"');
+    });
+
+    it("reports nothing for labels of every readable kind", async () => {
+      const messages = await unreadLabels(`
+        interface SchemaRoot {
+          strings: Confidential<string, readonly ["a", "b"]>;
+          objects: Confidential<string, readonly [{ kind: "k"; subject: "s" }]>;
+          clause: Confidential<string, readonly [AnyOf<readonly ["x", "y"]>]>;
+          empty: Confidential<string, readonly []>;
+          carrier: Cfc<string, { confidentiality: readonly ["c"] }>;
+        }
+      `);
+      expect(messages).toEqual([]);
+    });
+  });
 });

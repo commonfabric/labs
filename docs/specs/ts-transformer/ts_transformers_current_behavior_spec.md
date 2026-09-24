@@ -1063,6 +1063,19 @@ report these through the same collector (deduplicated via §2.2's
   no reference and is not reported either. See §11 of the schema-generator mapping spec,
   rule 8 of `cfc_authoring_contract.md`, and
   `test/protected-cell-policy.test.ts`.
+- **Warning** `cfc-label:unread` (`common-fabric-formatter.ts`,
+  `unread-label-diagnostics.ts`) — a CFC label list (`confidentiality`,
+  `integrity`, `addIntegrity`, `requiredIntegrity`, `maxConfidentiality`, or a
+  UI contract's `requiredEventIntegrity`, and those keys inside a `Cfc<T, M>`
+  payload) that the lowering could not read in full: the argument is not a
+  tuple, or an atom in it, or an alternative of an `AnyOf` clause, is not a
+  string literal, an object literal, `AnyOf<…>`, or `PolicyOf<typeof …>` (a
+  union of literals, say). The schema carries what it could not read as no
+  label or as a `null` atom; compilation continues. It names the label as
+  written, or its type when it was read from a type alone, and points to the
+  label argument when it has a source position, otherwise to the local schema
+  use. See §11 of the schema-generator mapping spec and
+  `packages/schema-generator/test/schema/cfc-authoring.test.ts`.
 - **Error** `pattern-context:receiver-method-call`
   (`pattern-body-reactive-root-lowering.ts:162`) — the pattern-body
   reactive-root seam could not admit a receiver-method call on a tracked

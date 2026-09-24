@@ -53,6 +53,11 @@ import {
 import { dedupeByValueEqual } from "../value-equality.ts";
 import { scopeInsideUnionError } from "../scope-placement.ts";
 import { combineIfcLabels } from "../ifc-labels.ts";
+import {
+  holdsUnreadLabel,
+  IFC_LABEL_KEYS,
+  reportUnreadLabel,
+} from "../unread-label-diagnostics.ts";
 import { reportUnreadWriterBinding } from "../writer-binding-diagnostics.ts";
 
 type WrapperKind = CellWrapperKind;
@@ -1933,18 +1938,40 @@ export class CommonFabricFormatter implements TypeFormatter {
         parameterTypes,
       );
     };
+    // A label list the lowering cannot read in full would lower as no label or
+    // with a `null` atom without a word to the author.
+    const reportUnread = (index: number) =>
+      reportUnreadLabel(
+        context,
+        aliasName,
+        aliasArgs[index],
+        aliasArgNodes?.[index],
+      );
+    const readLabels = (index: number): unknown => {
+      const labels = readValue(index);
+      if (holdsUnreadLabel(labels)) reportUnread(index);
+      return labels;
+    };
 
     switch (aliasName) {
       case "Cfc": {
         const payload = readValue(1);
-        return isObjectOrArray(payload) ? { ...payload } : undefined;
+        if (!isObjectOrArray(payload)) return undefined;
+        if (
+          Object.entries(payload).some(([key, labels]) =>
+            IFC_LABEL_KEYS.has(key) && holdsUnreadLabel(labels)
+          )
+        ) {
+          reportUnread(1);
+        }
+        return { ...payload };
       }
       case "Confidential":
-        return { confidentiality: readValue(1) };
+        return { confidentiality: readLabels(1) };
       case "Integrity":
-        return { integrity: readValue(1) };
+        return { integrity: readLabels(1) };
       case "AddIntegrity":
-        return { addIntegrity: readValue(1) };
+        return { addIntegrity: readLabels(1) };
       case "RepresentsCurrentUser":
         return {
           addIntegrity: [{
@@ -1960,9 +1987,9 @@ export class CommonFabricFormatter implements TypeFormatter {
           }],
         };
       case "RequiresIntegrity":
-        return { requiredIntegrity: readValue(1) };
+        return { requiredIntegrity: readLabels(1) };
       case "MaxConfidentiality":
-        return { maxConfidentiality: readValue(1) };
+        return { maxConfidentiality: readLabels(1) };
       case "ExactCopy":
         return { exactCopyOf: readValue(1) };
       case "WriteAuthorizedBy":
@@ -1978,7 +2005,7 @@ export class CommonFabricFormatter implements TypeFormatter {
           aliasName,
           action: readValue(2),
           trustedPattern: readValue(3),
-          requiredEventIntegrity: readValue(4),
+          requiredEventIntegrity: readLabels(4),
         });
       case "TrustedActionWrite": {
         const trustedPattern = readValue(3);
@@ -1999,7 +2026,7 @@ export class CommonFabricFormatter implements TypeFormatter {
             action: readValue(1),
             trustedPattern,
             requiredEventIntegrity: aliasArgs.length > 3
-              ? readValue(3)
+              ? readLabels(3)
               : [trustedPattern],
           },
         };

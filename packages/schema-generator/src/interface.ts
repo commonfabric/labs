@@ -49,7 +49,8 @@ export interface SchemaGenerationDiagnostic {
   readonly type:
     | "schema-default:unresolved"
     | "schema-type:unread"
-    | "cfc-write-authorized-by:unread";
+    | "cfc-write-authorized-by:unread"
+    | "cfc-label:unread";
   readonly message: string;
   readonly node?: ts.Node;
 }
