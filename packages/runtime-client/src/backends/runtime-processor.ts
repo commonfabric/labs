@@ -102,6 +102,13 @@ import {
   prepareSnapshotShare,
   type SnapshotShareConsent,
 } from "@commonfabric/runner/cfc/share-snapshot";
+import {
+  commitCustodySeal,
+  CUSTODY_SEAL_GESTURE,
+  type CustodySealConsent,
+  prepareCustodySeal,
+  readCustodySourcePolicy,
+} from "@commonfabric/runner/cfc/custody-seal";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
 import {
   NameSchema,
@@ -119,6 +126,7 @@ import {
   resetAllCountBaselines,
   resetAllTimingBaselines,
 } from "@commonfabric/utils/logger";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { backtickQuote } from "@commonfabric/utils/markdown";
 import {
   isObjectNotArray,
@@ -243,6 +251,9 @@ import {
   type SlugReferenceResponse,
   type SlugResolveRequest,
   type SlugResponse,
+  type CustodySealCommitRequest,
+  type CustodySealPrepareRequest,
+  type CustodySealPreview,
   type SnapshotShareCommitRequest,
   type SnapshotSharePrepareRequest,
   type SnapshotSharePreview,
@@ -764,6 +775,17 @@ export function securityContextFrom(
   } satisfies EveryFieldOf<RuntimeSecurityContext>;
 }
 
+/** A prepared custody seal, held in the backend until its host confirms. */
+type PendingCustodySeal = {
+  consent: CustodySealConsent;
+
+  /** The actor's source policy document, read again at commit. */
+  settings: Cell<unknown>;
+
+  /** The allowed sources the preview was prepared under. */
+  allowedSources: readonly unknown[];
+};
+
 type RuntimeOperationTarget = {
   capability: IOperationStorageCapability;
   address: OperationFieldAddress;
@@ -826,7 +848,8 @@ export class RuntimeProcessor {
     { token: string; prepared: PreparedPieceSourceChange }
   >();
   #snapshotShares = new Map<string, SnapshotShareConsent>();
-  #snapshotShareDetachedClients = new WeakSet<WorkerClient>();
+  #custodySeals = new Map<string, PendingCustodySeal>();
+  #detachedClients = new WeakSet<WorkerClient>();
   #telemetry: RuntimeTelemetry;
 
   /**
@@ -1170,6 +1193,7 @@ export class RuntimeProcessor {
         this.#operationSessions.clear();
         this.#pieceSourceConfirmations.clear();
         this.#snapshotShares.clear();
+        this.#custodySeals.clear();
 
         // Clean up VDOM mounts
         for (const { reconciler, cancel } of this.#vdomMounts.values()) {
@@ -1239,9 +1263,12 @@ export class RuntimeProcessor {
    */
   disposeClient(client: WorkerClient): void {
     const prefix = clientKeyPrefix(client);
-    this.#snapshotShareDetachedClients.add(client);
+    this.#detachedClients.add(client);
     for (const key of this.#snapshotShares.keys()) {
       if (key.startsWith(prefix)) this.#snapshotShares.delete(key);
+    }
+    for (const key of this.#custodySeals.keys()) {
+      if (key.startsWith(prefix)) this.#custodySeals.delete(key);
     }
 
     for (const [key, cancel] of [...this.#subscriptions]) {
@@ -1275,7 +1302,7 @@ export class RuntimeProcessor {
     }
   }
 
-  #snapshotShareCell(ref: CellRef): Cell<unknown> {
+  #hostSelectedCell(ref: CellRef): Cell<unknown> {
     // The host selects an address; stored policy owns its schema and label.
     return getCell(this.#runtime, {
       space: ref.space,
@@ -1888,23 +1915,23 @@ export class RuntimeProcessor {
     request: SnapshotSharePrepareRequest,
     client: WorkerClient = ownerClient,
   ): Promise<SnapshotSharePreview> {
-    if (this.#isDisposed || this.#snapshotShareDetachedClients.has(client)) {
+    if (this.#isDisposed || this.#detachedClients.has(client)) {
       throw new Error("Snapshot sharing is unavailable");
     }
-    const source = this.#snapshotShareCell(request.source);
+    const source = this.#hostSelectedCell(request.source);
     const audience = request.audience;
     if (
       !isObjectNotArray(audience) ||
       ("user" in audience) === ("space" in audience)
     ) throw new Error("Snapshot sharing requires one audience");
-    const audienceCell = this.#snapshotShareCell(
+    const audienceCell = this.#hostSelectedCell(
       "user" in audience ? audience.user : audience.space,
     );
     const appendBooksTo = request.appendBooksTo && {
-      recommended: this.#snapshotShareCell(
+      recommended: this.#hostSelectedCell(
         request.appendBooksTo.recommended,
       ),
-      received: this.#snapshotShareCell(request.appendBooksTo.received),
+      received: this.#hostSelectedCell(request.appendBooksTo.received),
     };
     await Promise.all([
       source.sync(),
@@ -1912,7 +1939,7 @@ export class RuntimeProcessor {
       appendBooksTo?.recommended.sync(),
       appendBooksTo?.received.sync(),
     ]);
-    if (this.#isDisposed || this.#snapshotShareDetachedClients.has(client)) {
+    if (this.#isDisposed || this.#detachedClients.has(client)) {
       throw new Error("Snapshot sharing is unavailable");
     }
     const prepared = prepareSnapshotShare(
@@ -1947,6 +1974,84 @@ export class RuntimeProcessor {
     markRendererTrustedEvent(event);
     const shared = await commitSnapshotShare(consent, event);
     return { cell: createCellRef(shared) };
+  }
+
+  /**
+   * Prepares a custody seal and keeps its consent in this backend while the
+   * host shows the preview. The policy reference is read from the cell the
+   * host names and is checked by the seal itself; the allowed sources are
+   * read only from the actor's home space.
+   */
+  async handleCustodySealPrepare(
+    request: CustodySealPrepareRequest,
+    client: WorkerClient = ownerClient,
+  ): Promise<CustodySealPreview> {
+    const unavailable = () =>
+      this.#isDisposed || this.#detachedClients.has(client);
+    if (unavailable()) throw new Error("Custody sealing is unavailable");
+    const draft = this.#hostSelectedCell(request.draft);
+    const terms = this.#hostSelectedCell(request.terms);
+    const policyCell = this.#hostSelectedCell(request.policy);
+    const settings = this.#hostSelectedCell(request.allowedSources);
+    await policyCell.sync();
+    const policy = policyCell.get();
+    const allowedSources = await readCustodySourcePolicy(settings);
+    if (unavailable()) throw new Error("Custody sealing is unavailable");
+    const prepared = await prepareCustodySeal(draft, {
+      terms,
+      policy: policy as never,
+    }, { allowedSources });
+    if (unavailable()) throw new Error("Custody sealing is unavailable");
+    const id = crypto.randomUUID();
+    this.#custodySeals.set(clientScopedKey(client, id), {
+      consent: prepared.consent,
+      settings,
+      allowedSources,
+    });
+    return {
+      id,
+      actor: prepared.actor as DID,
+      room: prepared.room as DID,
+      readers: prepared.readers.map((reader) => ({ ...reader })),
+      terms: prepared.terms,
+      instance: prepared.instance,
+      policy: prepared.policy,
+      sources: [...prepared.sources],
+      stance: prepared.stance,
+    };
+  }
+
+  /**
+   * Consumes one custody seal preview through the dedicated trusted host
+   * transport. The trusted gesture is built here, never taken from the
+   * request, and the actor's source policy is read again so that a narrowed
+   * policy makes the review stale.
+   */
+  async handleCustodySealCommit(
+    request: CustodySealCommitRequest,
+    client: WorkerClient = ownerClient,
+  ): Promise<CellResponse> {
+    const key = clientScopedKey(client, request.id);
+    const pending = this.#custodySeals.get(key);
+    this.#custodySeals.delete(key);
+    if (pending === undefined) {
+      throw new Error("Custody seal confirmation is unavailable");
+    }
+    const allowedSources = await readCustodySourcePolicy(pending.settings);
+    if (!deepEqual(allowedSources, pending.allowedSources)) {
+      throw new Error("Custody seal review is stale; review the value again");
+    }
+    const event = {
+      type: "click",
+      provenance: {
+        origin: "dom",
+        trusted: true,
+        ui: { pattern: CUSTODY_SEAL_GESTURE },
+      },
+    };
+    markRendererTrustedEvent(event);
+    const sealed = await commitCustodySeal(pending.consent, event);
+    return { cell: createCellRef(sealed.receipt) };
   }
 
   handleCellGetCfcLabel(
@@ -3063,6 +3168,13 @@ export class RuntimeProcessor {
         return await this.handleSnapshotShareCommit(request, client);
       case RequestType.SnapshotShareCancel:
         this.#snapshotShares.delete(clientScopedKey(client, request.id));
+        return;
+      case RequestType.CustodySealPrepare:
+        return await this.handleCustodySealPrepare(request, client);
+      case RequestType.CustodySealCommit:
+        return await this.handleCustodySealCommit(request, client);
+      case RequestType.CustodySealCancel:
+        this.#custodySeals.delete(clientScopedKey(client, request.id));
         return;
       case RequestType.OperationQuery:
         return await this.handleOperationQuery(request, client);

@@ -68,6 +68,7 @@ import {
   RequestType,
   type RuntimeSecurityContext,
   type SlugRefusal,
+  type CustodySealPreview,
   type SnapshotShareAudienceRef,
   type SnapshotSharePreview,
   type SpaceAccessLostNotification,
@@ -272,6 +273,47 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   async cancelSnapshotShare(id: string): Promise<void> {
     await this.#conn.request<RequestType.SnapshotShareCancel>({
       type: RequestType.SnapshotShareCancel,
+      id,
+    });
+  }
+
+  /**
+   * Prepares a custody seal of `draft` into the room whose terms and policy
+   * are named, for the trusted host to show before the actor confirms. The
+   * worker reads and checks every cell, and keeps the consent; the preview is
+   * what crosses.
+   */
+  async prepareCustodySeal(cells: {
+    draft: CellRef;
+    terms: CellRef;
+    policy: CellRef;
+    allowedSources: CellRef;
+  }): Promise<CustodySealPreview> {
+    return await this.#conn.request<RequestType.CustodySealPrepare>({
+      type: RequestType.CustodySealPrepare,
+      draft: cells.draft,
+      terms: cells.terms,
+      policy: cells.policy,
+      allowedSources: cells.allowedSources,
+    });
+  }
+
+  /**
+   * Seals a prepared preview after the trusted host receives the actor's
+   * confirmation, answering with the actor's receipt.
+   */
+  async commitCustodySeal<T = unknown>(id: string): Promise<CellHandle<T>> {
+    const response = await this.#conn.request<RequestType.CustodySealCommit>({
+      type: RequestType.CustodySealCommit,
+      id,
+    });
+    return new CellHandle<T>(this, response.cell);
+  }
+
+  /** Discards a custody seal preview the host closed or replaced. */
+  async cancelCustodySeal(id: string): Promise<void> {
+    await this.#conn.request<RequestType.CustodySealCancel>({
+      type: RequestType.CustodySealCancel,
       id,
     });
   }

@@ -32,7 +32,12 @@ import {
 import { sha256 } from "@commonfabric/content-hash";
 import { debugStr, deepFreeze, hashStringOf } from "@commonfabric/data-model";
 import { isDID } from "@commonfabric/identity/did";
-import { aclDocId, hasConcreteOwner, isACL } from "@commonfabric/memory/acl";
+import {
+  aclDocId,
+  type Capability,
+  hasConcreteOwner,
+  isACL,
+} from "@commonfabric/memory/acl";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
@@ -775,7 +780,7 @@ const roomReaders = (acl: unknown): CustodyRoomReader[] => {
       "Custody seal requires a room space whose access list names its readers",
     );
   }
-  return Object.entries(acl)
+  return Object.entries(acl as Record<string, Capability>)
     .map(([principal, capability]) => ({
       principal,
       role: ROLE_OF[capability],
