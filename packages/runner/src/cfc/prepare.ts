@@ -158,6 +158,7 @@ import { sinkClassOf } from "./sink-inventory.ts";
 import {
   type CfcSchemaMergeIssue,
   cfcSchemaMergeIssue,
+  cfcSchemaPoliciesEqual,
   type MergeCfcSchemaEnvelopeOptions,
   mergeCfcSchemaEnvelopes,
 } from "./schema-merge.ts";
@@ -1220,6 +1221,58 @@ const writePreservesRuntimeOutput = (
       }),
       input.value,
     );
+};
+
+/**
+ * Whether this transaction leaves the value at `path` exactly as it found it:
+ * no write it recorded changed anything at the path, above it where the
+ * difference reaches the path, or below it. A staged write carrying the value
+ * the document already holds records no write detail, so a path that only
+ * such attempts cover is unchanged. That is what a runtime replaying a
+ * piece's setup in another session does to an input it did not create: it
+ * re-stages the argument, and every byte stays where the first session left
+ * it. A path holding a wildcard is compared from its concrete prefix down,
+ * which is the conservative reading.
+ *
+ * Unchanged bytes are half of "modified nothing". The caller defers the
+ * writer refusal to the persist loop, which discards it only when the
+ * document's envelope is canonically unchanged too.
+ */
+const writeLeavesPathUnchanged = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  const wildcard = path.indexOf("*");
+  const protectedPath = [
+    "value",
+    ...(wildcard === -1 ? path : path.slice(0, wildcard)),
+  ];
+  const details = tx.getWriteDetailsForTarget?.(target) ??
+    tx.getWriteDetails?.(target.space) ?? [];
+  for (const detail of details) {
+    if (
+      detail.address.id !== target.id ||
+      normalizeCellScope(detail.address.scope) !== target.scope
+    ) continue;
+    const detailPath = detail.address.path.map(String);
+    if (concretePathHasPrefix(detailPath, protectedPath)) {
+      if (!fabricAwareEqual(detail.value, detail.previousValue)) return false;
+    } else if (concretePathHasPrefix(protectedPath, detailPath)) {
+      const relative = protectedPath.slice(detailPath.length);
+      if (
+        !fabricAwareEqual(
+          getValueAtPath(detail.value, relative),
+          getValueAtPath(detail.previousValue, relative),
+        )
+      ) return false;
+    }
+  }
+  return true;
 };
 
 /** An owner adoption accepts only the unchanged bytes at its exact target. */
@@ -4528,9 +4581,11 @@ const verifyInputRequirements = (
   // accumulated across the boundary pass. undefined — the default, whenever
   // no onPrefixProvenance hook is installed — skips all measurement.
   provenance?: CfcPrefixProvenanceSummary,
-  // A preserved runtime output defers only its writer refusal. The persist
-  // loop must prove the final envelope unchanged before discarding this reason.
-  deferWriterRefusal?: (reason: string) => boolean,
+  // A write that changes nothing defers only its writer refusal: a preserved
+  // runtime output, or a path whose value the transaction leaves as it found
+  // it. The persist loop must prove the final envelope unchanged before
+  // discarding this reason.
+  deferWriterRefusal?: (reason: string, path: readonly string[]) => boolean,
   // `verdict` says whether the failure is a VERDICT on the data (see
   // cfc/verdict-reason.ts): every check here is, except a `maxConfidentiality`
   // miss whose policy evaluation could not resolve a manifest or grant — the
@@ -4743,10 +4798,7 @@ const verifyInputRequirements = (
       ) ||
       writeIsOwnerAdoption(tx, target, entry.path);
     if (writeAuthorizedByFailure !== undefined && !setupProjection) {
-      if (
-        entry.path.length !== 0 ||
-        deferWriterRefusal?.(writeAuthorizedByFailure) !== true
-      ) {
+      if (deferWriterRefusal?.(writeAuthorizedByFailure, entry.path) !== true) {
         return { reason: writeAuthorizedByFailure, verdict: true };
       }
     }
@@ -7365,8 +7417,11 @@ export function* prepareBoundaryCommitSteps(
       metadataResolver,
       prefixProvenance,
       stored.status === "loaded"
-        ? (reason) => {
-          if (!writePreservesRuntimeOutput(tx, target)) return false;
+        ? (reason, path) => {
+          if (
+            !(path.length === 0 && writePreservesRuntimeOutput(tx, target)) &&
+            !writeLeavesPathUnchanged(tx, target, path)
+          ) return false;
           deferredWriterRefusal ??= reason;
           return true;
         }
@@ -8812,6 +8867,26 @@ export function* prepareBoundaryCommitSteps(
         canonicalizeCfcMetadata(existing),
         canonicalizeCfcMetadata(metadata),
       )
+    ) {
+      continue;
+    }
+
+    // A write whose writer refusal was deferred changed no protected bytes.
+    // It is admitted, and leaves the stored envelope exactly as it is, when
+    // the envelope it would store differs only in spelling: the same labels
+    // and the same policy claims, the schema around them spelled another way
+    // — as a runtime replaying a piece's setup spells what the creating
+    // runtime spelled inline. Writing that spelling would need the writer
+    // authority this transaction lacks, and keeping the stored one loses
+    // nothing a gate reads.
+    if (
+      deferredWriterRefusal !== undefined && existing !== undefined &&
+      storedSchema !== undefined && existing.version === metadata.version &&
+      deepEqual(
+        canonicalizeCfcMetadata(existing).labelMap,
+        canonicalizeCfcMetadata(metadata).labelMap,
+      ) &&
+      cfcSchemaPoliciesEqual(storedSchema, schemaAndHash.schema)
     ) {
       continue;
     }
