@@ -856,6 +856,7 @@ function buildShrunkTypeNodeFromType(
   state?: CrossStageState,
   fullShapePaths: readonly (readonly string[])[] = [],
   visiting: ReadonlySet<string> = new Set(),
+  scopeRead = false,
 ): ts.TypeNode | undefined {
   const typeToNodeFlags = ts.NodeBuilderFlags.NoTruncation |
     ts.NodeBuilderFlags.UseStructuralFallback;
@@ -864,10 +865,12 @@ function buildShrunkTypeNodeFromType(
   if (normalized.length === 0) {
     return undefined;
   }
-  // Only the alias names the scope, so a node built from the scoped type's
-  // structure would drop it.
-  const scopeWrapper = getScopeWrapper(type, checker);
+  // The scope lives in the wrapper's alias and brand, not in the scoped
+  // type's structure, so a node built from that structure would drop it.
+  const scopeWrapper = scopeRead ? undefined : getScopeWrapper(type, checker);
   if (scopeWrapper) {
+    // A branded type with no single payload type is its own payload once the
+    // scope is read.
     const shrunk = buildShrunkTypeNodeFromType(
       scopeWrapper.scoped,
       paths,
@@ -878,6 +881,7 @@ function buildShrunkTypeNodeFromType(
       state,
       fullShapePaths,
       visiting,
+      scopeWrapper.scoped === type,
     );
     if (!shrunk) return undefined;
     const wrapped = createHelperWrapperTypeNode(
@@ -1205,33 +1209,54 @@ function buildShrunkTypeNodeFromType(
   );
 }
 
-/** The wrappers that store a value in a scope. A type names one by its alias. */
-const SCOPE_WRAPPER_NAMES: ReadonlySet<string> = new Set([
-  "PerAny",
-  "PerSession",
-  "PerSpace",
-  "PerUser",
-]);
+/**
+ * The wrappers that store a value in a scope, which `getScopeWrapper()` reads
+ * by name when a type's alias is one of them: the alias then gives the
+ * wrapper's argument as it was written, where the brand gives only the members
+ * the checker resolved it to.
+ */
+const SCOPE_WRAPPER_NAMES: ReadonlySet<string> = new Set(
+  Object.values(SCOPE_WRAPPER_FOR_SCOPE),
+);
 
 /**
  * Helper for `buildShrunkTypeNodeFromType()`, which returns the name of the
  * `commonfabric` scope wrapper `type` instantiates, with the type it scopes,
- * or `undefined` for any other type. A type of the author's own that shares a
- * wrapper's name is not one, and neither is a scope wrapper around a cell: the
- * wrapper is read by the scoped type it is registered with, which would undo
- * the capability narrowing applied to the cell node inside it.
+ * or `undefined` for any other type. The checker reports only the outermost
+ * alias, so a wrapper reached through an alias of the author's own, as in
+ * `type Rec = PerUser<Inner>`, is recognized by the brand it leaves on the
+ * resolved type. Where the brand gives no single payload type, the type
+ * scoped is `type` itself, which the caller shrinks without reading its scope
+ * again. A type of the author's own that shares a wrapper's name is
+ * not one, and neither is a scope wrapper around a cell: the wrapper is read
+ * by the scoped type it is registered with, which would undo the capability
+ * narrowing applied to the cell node inside it.
  */
 function getScopeWrapper(
   type: ts.Type,
   checker: ts.TypeChecker,
 ): { readonly name: string; readonly scoped: ts.Type } | undefined {
   const symbol = type.aliasSymbol;
-  const scoped = type.aliasTypeArguments?.[0];
-  return symbol && scoped && SCOPE_WRAPPER_NAMES.has(symbol.name) &&
-      !isCellLikeType(scoped, checker) &&
-      resolvesToCommonFabricSymbol(symbol, checker, symbol.name)
-    ? { name: symbol.name, scoped }
-    : undefined;
+  const argument = type.aliasTypeArguments?.[0];
+  if (
+    symbol && argument && SCOPE_WRAPPER_NAMES.has(symbol.name) &&
+    resolvesToCommonFabricSymbol(symbol, checker, symbol.name)
+  ) {
+    return isCellLikeType(argument, checker)
+      ? undefined
+      : { name: symbol.name, scoped: argument };
+  }
+  // A brand whose payload the checker flattened into several intersection
+  // members, or distributed over the members of a union, has no single
+  // payload type, so the type scoped is `type` itself.
+  const brand = getScopeBrand(type, checker);
+  if (!brand) return undefined;
+  const members = brand.payload.flat();
+  if (members.some((member) => isCellLikeType(member, checker))) {
+    return undefined;
+  }
+  const scoped = members.length === 1 ? members[0]! : type;
+  return { name: SCOPE_WRAPPER_FOR_SCOPE[brand.scope], scoped };
 }
 
 /** The `Default` wrappers `wrapTypeNodeWithRestoredDefault()` built. */

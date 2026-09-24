@@ -64,6 +64,15 @@ import {
 type UiContractHint = NonNullable<SchemaHint["cfcUiContract"]>;
 type CellScope = "space" | "user" | "session";
 
+/**
+ * The scope each `commonfabric` scope wrapper declares, keyed by the wrapper's
+ * name. `cellScopeFromType()` reads it from a type's alias and falls back to
+ * the scope brand, which also covers a wrapper reached through an alias of the
+ * author's own. `typeNodeContainsScopeWrapper()` reads it from authored
+ * syntax, where only the spelling is available; a wrapper that spelling hides
+ * behind an alias is still carried by the inferred type, whose alias and brand
+ * schema generation reads.
+ */
 const SCOPE_ALIAS_TO_CELL_SCOPE: ReadonlyMap<string, CellScope | "any"> =
   new Map([
     ["PerSpace", "space"],

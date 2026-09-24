@@ -131,6 +131,39 @@ export default pattern<Input>(({ roster }) => ({
         scope: "user",
       });
     });
+
+    const ARRAY = "PerUser<Box<number>[]>";
+    const UNION = "PerUser<Box<number>[] | Box<string>[]>";
+    const INTERSECTION = "PerUser<Box<number>[] & { tag: string }>";
+    for (
+      const [form, declaration, wrapper] of [
+        ["an alias of", `type Rec = ${ARRAY};`, ARRAY],
+        [
+          "an alias of an alias of",
+          `type Inner = ${ARRAY};\ntype Rec = Inner;`,
+          ARRAY,
+        ],
+        [
+          "a generic alias of",
+          "type Scoped<T> = PerUser<T[]>;\ntype Rec = Scoped<Box<number>>;",
+          ARRAY,
+        ],
+        ["an alias of", `type Rec = ${UNION};`, UNION],
+        ["an alias of", `type Rec = ${INTERSECTION};`, INTERSECTION],
+      ]
+    ) {
+      it(`gives an array typed by ${form} ${wrapper} the schema of the wrapper written in place`, async () => {
+        const aliased = await captureOf(readingElementsOf(
+          `${declaration}\ninterface Input { c: Rec; }`,
+        ));
+        const direct = await captureOf(readingElementsOf(
+          `interface Input { c: ${wrapper}; }`,
+        ));
+
+        expect(direct.c).toMatchObject({ scope: "user" });
+        expect(aliased.c).toEqual(direct.c);
+      });
+    }
   });
 
   describe("a capture of a scoped cell", () => {
