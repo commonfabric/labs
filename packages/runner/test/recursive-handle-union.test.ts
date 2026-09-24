@@ -190,8 +190,12 @@ describe("recursive handle union", () => {
     describe("walked by a query", () => {
       /** Runs a query-shaped traversal of `{ node: null }` under `schema`. */
       function queryNullNode(schema: JSONSchema) {
+        return queryValue({ node: null } as FabricValue, schema);
+      }
+
+      /** Runs a query-shaped traversal of `value` under `schema`. */
+      function queryValue(value: FabricValue, schema: JSONSchema) {
         const id = "of:branch-cycle-query" as URI;
-        const value = { node: null } as FabricValue;
         const store = new Map<string, Revision<State>>([[`${id}/${TYPE}`, {
           the: TYPE,
           of: id as Entity,
@@ -219,6 +223,75 @@ describe("recursive handle union", () => {
         const expected = queryNullNode(unrolledSchema);
         expect(expected).toEqual({ ok: { node: null } });
         expect(queryNullNode(recursiveSchema)).toEqual(expected);
+      });
+
+      describe("with a branch that comes back and adds properties", () => {
+        // `R` is `A` or `R` together with `B`, and `A` and `B` each select one
+        // property of `{ a, b }`. The branch that comes back to `R` matches
+        // only once `R` has, and then adds `b`: unrolled once, the union
+        // selects both properties, and so must `R`.
+
+        const A = {
+          type: "object",
+          properties: { a: { type: "number" } },
+          additionalProperties: false,
+        } as const satisfies JSONSchema;
+        const B = {
+          type: "object",
+          properties: { b: { type: "number" } },
+          additionalProperties: false,
+        } as const satisfies JSONSchema;
+        const value = { a: 1, b: 2 } as FabricValue;
+
+        it("selects what the union unrolled once selects", () => {
+          const expected = queryValue(value, {
+            anyOf: [A, { allOf: [A, B] }],
+          });
+          expect(expected).toEqual({ ok: { a: 1, b: 2 } });
+          expect(
+            queryValue(value, {
+              $ref: "#/$defs/R",
+              $defs: {
+                R: { anyOf: [A, { allOf: [{ $ref: "#/$defs/R" }, B] }] },
+              },
+            }),
+          ).toEqual(expected);
+        });
+
+        it("selects what the union unrolled once selects through handles", () => {
+          const expected = queryValue(value, {
+            anyOf: [A, { allOf: [{ ...A, asCell: ["cell"] }, B] }],
+            asCell: ["cell"],
+          });
+          expect(expected).toEqual({ ok: { a: 1, b: 2 } });
+          expect(
+            queryValue(value, {
+              $ref: "#/$defs/R",
+              asCell: ["cell"],
+              $defs: {
+                R: {
+                  anyOf: [A, {
+                    allOf: [{ $ref: "#/$defs/R", asCell: ["cell"] }, B],
+                  }],
+                },
+              },
+            }),
+          ).toEqual(expected);
+        });
+
+        it("keeps the first selection of a `oneOf` that the second would reject", () => {
+          // `S` is `A` or `S`. Taken as no match, the branch that comes back
+          // leaves `A` the one match; taken as that match, it makes two, which
+          // a `oneOf` rejects, and taking the rejection makes one again. With
+          // no fixed point to reach, the first selection stands.
+
+          expect(
+            queryValue({ a: 1 } as FabricValue, {
+              $ref: "#/$defs/S",
+              $defs: { S: { oneOf: [A, { $ref: "#/$defs/S" }] } },
+            }),
+          ).toEqual({ ok: { a: 1 } });
+        });
       });
 
       it("selects through a handle first reached inside a cycle as through that handle alone", () => {

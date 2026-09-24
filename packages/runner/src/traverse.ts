@@ -3884,6 +3884,25 @@ export function assertSchemaMemoIdentity(
   }
 }
 
+/**
+ * A traversal in progress, as a combinator branch that comes back to it at the
+ * same position finds it.
+ */
+interface InProgressTraversal {
+  /** Depth the traversal runs at. */
+  readonly depth: number;
+
+  /** Whether a branch has come back to the traversal. */
+  cameBack: boolean;
+
+  /**
+   * What a branch that comes back takes in the traversal's place: `undefined`
+   * on the first pass, which takes it as no match, and that pass's result on
+   * the second.
+   */
+  standIn: TraverseResult<FabricValue> | undefined;
+}
+
 export class SchemaObjectTraverser<V extends FabricValue>
   extends BaseObjectTraverser {
   #sharedSchemaMemo?: SchemaMemo;
@@ -3940,11 +3959,8 @@ export class SchemaObjectTraverser<V extends FabricValue>
     TraverseResult<FabricValue>
   >();
 
-  /**
-   * The memo keys of the traversals in progress, each mapped to the depth its
-   * traversal runs at.
-   */
-  #inProgress = new Map<string, number>();
+  /** The traversals in progress, by memo key. */
+  #inProgress = new Map<string, InProgressTraversal>();
 
   /**
    * Depth of the traversal that began the position being evaluated. Every
@@ -3956,9 +3972,9 @@ export class SchemaObjectTraverser<V extends FabricValue>
 
   /**
    * The shallowest depth whose in-progress traversal a branch at or below the
-   * current one came back to and took as no match, or `Infinity`. A result
-   * computed on that assumption holds only until the traversal at that depth
-   * completes, so it is returned but not memoized.
+   * current one came back to, or `Infinity`. A result computed with a branch
+   * standing in for that traversal holds only until the traversal at that
+   * depth completes, so it is returned but not memoized.
    */
   #provisionalDepth = Infinity;
 
@@ -4217,9 +4233,17 @@ export class SchemaObjectTraverser<V extends FabricValue>
    * is evaluating, taken under another of the caller's schemas, as a
    * combinator branch takes it. A branch that comes back to a traversal of the
    * same position still in progress has read nothing that traversal has not,
-   * and returns no match. That is the least result: in an `anyOf` it leaves
-   * the in-progress traversal to match through its other branches, as the
-   * schema unrolled until it stops returning to itself does.
+   * so it stands for that traversal's own result, which the traversal reaches
+   * as a fixed point in at most two passes. The first pass takes the branch
+   * as no match. Where the first pass matches and a branch came back, the
+   * second takes the first pass's result in the branch's place. Whether a
+   * branch matches turns on the value and on whether what it stands for
+   * matched, never on what that holds, since a combinator merges its matches
+   * without checking them; so a third pass would see the second's outcomes
+   * and return its result, which is the one the schema unrolled until it
+   * stops returning to itself gives. A `oneOf` can reject on the second pass
+   * what it accepted on the first, and so has no fixed point; the first
+   * pass's result stands there.
    */
   #traverseBranch(
     doc: IMemorySpaceValueAttestation,
@@ -4267,32 +4291,42 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // a descent or a link, where the cycle tracker handles the re-entry;
       // only a key in progress at this position is a branch coming back to
       // itself.
-      const inProgressDepth = this.#inProgress.get(memoKey);
+      const inProgress = this.#inProgress.get(memoKey);
       if (
-        inProgressDepth !== undefined &&
-        inProgressDepth >= this.#positionDepth
+        inProgress !== undefined && inProgress.depth >= this.#positionDepth
       ) {
         this.#provisionalDepth = Math.min(
           this.#provisionalDepth,
-          inProgressDepth,
+          inProgress.depth,
         );
-        return fail(TRAVERSE_FAILURES.branchCycle);
+        inProgress.cameBack = true;
+        return inProgress.standIn ?? fail(TRAVERSE_FAILURES.branchCycle);
       }
       const depth = this.#currentDepth;
       const outerProvisionalDepth = this.#provisionalDepth;
       this.#provisionalDepth = Infinity;
-      this.#inProgress.set(memoKey, depth);
+      const traversal: InProgressTraversal = {
+        depth,
+        cameBack: false,
+        standIn: undefined,
+      };
+      this.#inProgress.set(memoKey, traversal);
       try {
-        const result = this.#traverseWithSchemaInner(doc, schema, link);
+        let result = this.#traverseWithSchemaInner(doc, schema, link);
+        if (traversal.cameBack && result.error === undefined) {
+          traversal.standIn = result;
+          const second = this.#traverseWithSchemaInner(doc, schema, link);
+          if (second.error === undefined) result = second;
+        }
         // A cycle back to this traversal settles here; one back to a
         // traversal above it leaves this result provisional.
         if (this.#provisionalDepth >= depth) memo.set(memoKey, result);
         return result;
       } finally {
-        if (inProgressDepth === undefined) {
+        if (inProgress === undefined) {
           this.#inProgress.delete(memoKey);
         } else {
-          this.#inProgress.set(memoKey, inProgressDepth);
+          this.#inProgress.set(memoKey, inProgress);
         }
         this.#provisionalDepth = Math.min(
           outerProvisionalDepth,

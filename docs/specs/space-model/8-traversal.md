@@ -284,10 +284,21 @@ same address as the schema it belongs to, so no tracker keyed on values sees it
 come back. A union whose handle branch names the union itself, as
 `type Recursive = Cell<Recursive> | null` generates, returns to its own
 traversal that way. A branch that reaches a traversal still in progress at its
-own position, under the same schema, matches nothing: that is the least result,
-and the one the schema unrolled until it stops returning to itself gives. A
-result computed on that assumption on behalf of an enclosing traversal holds
-only until that traversal completes, so it is not memoized.
+own position, under the same schema, stands for that traversal's own result,
+which the traversal reaches as a fixed point in at most two passes:
+
+- The first pass takes the branch as no match.
+- Where the first pass matches and a branch came back, the second pass takes
+  the first pass's result in the branch's place. Whether a branch matches turns
+  on the value and on whether what it stands for matched, never on what that
+  holds, so a third pass would repeat the second. The second pass's result is
+  the one the schema unrolled until it stops returning to itself gives:
+  `R = anyOf(A, allOf(R, B))` selects what `A` and `B` both select.
+- A `oneOf` can reject on the second pass what it accepted on the first, and so
+  has no fixed point. There the first pass's result stands.
+
+A result computed with a branch standing in for an enclosing traversal still in
+progress holds only until that traversal completes, so it is not memoized.
 
 The schema-only walks that evaluate a union branch by branch without a value —
 the type pruning behind `schemaAcceptsType()` and `isOpaquePosition()`, and the
