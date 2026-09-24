@@ -60,14 +60,15 @@ names a profile: one `admitPanel` recorded carries the label of whoever added it
 then, to this Loom or to another, and admitting it again would attribute the new
 admission to them. So an occurrence that was removed is added back by
 duplicating it or by adding a new one, and the profile of an occurrence
-`addPanel` admits comes only from its event's `as`. The runtime would link an
-unlabeled document into the field when the panel's document holds no stored
-write contract yet, as when the write creates the panel, since it checks a new
-link's source only under a write contract outside a union branch and this one
-sits inside each of `Panel`'s branches; `addPanel` refuses such an occurrence
-for the same reason. `addPanel` does record `as` on an unattributed occurrence
-that another Loom also holds, and that Loom then shows the same adder for it:
-the field belongs to the occurrence, not to its place in a Loom.
+`addPanel` admits comes only from its event's `as`: an occurrence whose creator
+wrote the field itself is refused by the same check. The runtime links an
+unlabeled document passed as `as` into the field when the panel's document holds
+no stored write contract yet, as when the write creates the panel: it checks a
+new link's source only under a write contract outside a union branch, and this
+one sits inside each of `Panel`'s branches. That does not change whose principal
+the label names. `addPanel` does record `as` on an unattributed occurrence that
+another Loom also holds, and that Loom then shows the same adder for it: the
+field belongs to the occurrence, not to its place in a Loom.
 
 `addedBy` is the DID of the person who added the panel, as its writer claims it.
 `addPiece` and `duplicatePanel` take it from their event, and `addPanel` from
