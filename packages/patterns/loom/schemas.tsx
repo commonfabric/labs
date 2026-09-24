@@ -40,15 +40,28 @@ export interface PublishedDocument {
   notes: string | Default<"">;
 }
 
-/** One occurrence in the Loom, retaining the complete target cell reference. */
+/**
+ * One occurrence in the Loom, retaining the complete target cell reference.
+ *
+ * `addedBy` is the DID of the person who added the occurrence, as its writer
+ * claims it: the root's handlers check that it is a DID, not that it names the
+ * person acting, and a direct write to a panel is not checked. A panel without
+ * it is attributed to the Loom's owner.
+ */
 export type Panel =
-  | { kind: "piece"; piece: Writable<unknown>; titleOverride?: string }
+  | {
+    kind: "piece";
+    piece: Writable<unknown>;
+    titleOverride?: string;
+    addedBy?: string;
+  }
   | {
     kind: "document";
     content: Writable<PublishedDocument>;
     titleOverride?: string;
+    addedBy?: string;
   }
-  | { kind: "url"; url: string; titleOverride?: string };
+  | { kind: "url"; url: string; titleOverride?: string; addedBy?: string };
 
 /** Shared staging and focus, independent of each viewer's session selection. */
 export interface Presentation {
@@ -72,6 +85,11 @@ export interface PanelPosition {
   before?: Writable<Panel>;
 }
 
+/** A duplication, attributed to `addedBy` rather than to the source's adder. */
+export interface PanelDuplication extends PanelPosition {
+  addedBy?: string;
+}
+
 /** Ephemeral selection local to one viewer session. */
 export interface ViewerState {
   selectedPanel?: Writable<Panel>;
@@ -86,12 +104,12 @@ export interface LoomOutput {
   panels: Writable<Panel>[];
   presentation: Presentation;
   pieceRegistry: Writable<unknown>[];
-  addPiece: Stream<{ piece: Writable<unknown> }>;
+  addPiece: Stream<{ piece: Writable<unknown>; addedBy?: string }>;
   removePiece: Stream<{ piece: Writable<unknown> }>;
   addPanel: Stream<PanelPosition>;
   removePanel: Stream<{ panel: Writable<Panel> }>;
   movePanel: Stream<PanelPosition>;
-  duplicatePanel: Stream<PanelPosition>;
+  duplicatePanel: Stream<PanelDuplication>;
   setPresentation: Stream<Presentation>;
   participants: ParticipantProfile[];
   addParticipant: Stream<{ profile: ParticipantProfile }>;

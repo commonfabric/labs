@@ -120,6 +120,21 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/profile-inbox-piece-break.md",
   },
   {
+    // The record's scope moved from the value onto the handle once the schema
+    // generator stopped dropping a scope wrapper reached through an alias. The
+    // recorded contracts carry no scope at all; the argument now caps the
+    // handle at `user`, which every record the `agent` builtin creates meets.
+    pattern: "system/agent-run.tsx",
+    baselines: [
+      "20260920T164352Z-nTSuqgfjRzkwXIgf",
+      "20260920T170445Z-TMoN6scQaXVlTvPW",
+    ],
+    paths: ["argument.run"],
+    reason:
+      "the run argument's scope moved onto the handle as a user cap, which the recorded unscoped contracts read as a changed asCell entry; the linked records are user-scoped documents the cap admits",
+    record: "docs/history/agent-run-record-handle-scope-break.md",
+  },
+  {
     // The same ruling seen from the profile itself: the proof names the
     // first of the two fields that left.
     pattern: "system/profile-home.tsx",
@@ -869,18 +884,18 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/cfc-chat-demo-submit-input-break.md",
   },
   {
-    // The record's scope moved from the value onto the handle once the schema
-    // generator stopped dropping a scope wrapper reached through an alias. The
-    // recorded contracts carry no scope at all; the argument now caps the
-    // handle at `user`, which every record the `agent` builtin creates meets.
-    pattern: "system/agent-run.tsx",
+    // Each `Panel` kind gains an optional `addedBy` DID. The proof does not
+    // apply the open-object evolution allowance inside a union branch, so a
+    // stored panel whose `addedBy` held a non-string reads as a refused
+    // alternative.
+    pattern: "loom/main.tsx",
     baselines: [
-      "20260920T164352Z-nTSuqgfjRzkwXIgf",
-      "20260920T170445Z-TMoN6scQaXVlTvPW",
+      "20260920T232507Z-_ewvPy8qDJYL47km",
+      "20260922T052256Z--2Q9ESzxSenSTer9",
     ],
-    paths: ["argument.run"],
+    paths: ["argument.panels[]"],
     reason:
-      "the run argument's scope moved onto the handle as a user cap, which the recorded unscoped contracts read as a changed asCell entry; the linked records are user-scoped documents the cap admits",
-    record: "docs/history/agent-run-record-handle-scope-break.md",
+      "a Loom panel's new optional addedBy reads as a narrowed union branch under baselines that never had the property",
+    record: "docs/history/loom-panel-added-by-break.md",
   },
 ];
