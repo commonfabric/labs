@@ -34,6 +34,7 @@ import { debugStr, deepFreeze, hashStringOf } from "@commonfabric/data-model";
 import { isDID } from "@commonfabric/identity/did";
 import {
   aclDocId,
+  ANYONE_USER,
   type Capability,
   hasConcreteOwner,
   isACL,
@@ -481,10 +482,12 @@ const checkTerms = (terms: JSONValue, actor: string): unknown => {
   const { seats, stanceSchema } = terms as Record<string, unknown>;
   if (
     !Array.isArray(seats) || seats.length === 0 ||
-    !seats.every((seat) => typeof seat === "string" && isDID(seat)) ||
+    !seats.every(isWellFormedDID) ||
     new Set(seats).size !== seats.length
   ) {
-    throw new Error("Custody terms must name `seats` as distinct DIDs");
+    throw new Error(
+      "Custody terms must name `seats` as distinct, well-formed DIDs",
+    );
   }
   if (!(seats as readonly string[]).includes(actor)) {
     throw new Error(
@@ -765,6 +768,29 @@ const trustsAsDeclassifier = (
     .conceptSatisfied(TRUSTED_DECLASSIFIER_CONCEPT, [policy], actor);
 };
 
+/**
+ * The DID syntax of the W3C DID Core specification (section 3.1): a lowercase
+ * method name, then a method-specific identifier of letters, digits, `.`, `-`,
+ * `_`, percent-escapes, and `:` separators, not ending in `:`. The
+ * confirmation shows seats and readers as facts the runtime checked, and
+ * `isDID` admits any string after `did:`, spaces, parentheses, and
+ * direction-override characters included, which lets a room make a principal
+ * read as `… (you)` or reorder the text around it.
+ */
+const WELL_FORMED_DID =
+  /^did:[a-z0-9]+:(?:[A-Za-z0-9._:-]|%[0-9A-Fa-f]{2})*(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})$/;
+
+/**
+ * The longest DID the confirmation names, in characters. A `did:key` over any
+ * key type this repository signs with is under 60.
+ */
+const MAX_DID_LENGTH = 256;
+
+/** Whether `value` is a DID the confirmation can show as it is. */
+const isWellFormedDID = (value: unknown): value is string =>
+  typeof value === "string" && value.length <= MAX_DID_LENGTH &&
+  WELL_FORMED_DID.test(value);
+
 const ROLE_OF = { OWNER: "owner", WRITE: "writer", READ: "reader" } as const;
 
 /**
@@ -772,9 +798,10 @@ const ROLE_OF = { OWNER: "owner", WRITE: "writer", READ: "reader" } as const;
  * names, and the room space's own key, which the memory service treats as an
  * owner whether or not the list names it.
  *
- * @throws If the room space has no access list, or one with no concrete
- *   owner. Without one, who can read the room cannot be named, and the actor
- *   would consent to an audience nobody showed them.
+ * @throws If the room space has no access list, one with no concrete owner,
+ *   or one naming a principal that is neither `*` nor a well-formed DID.
+ *   Without one, who can read the room cannot be named, and the actor would
+ *   consent to an audience nobody showed them.
  */
 const roomReaders = (acl: unknown, room: string): CustodyRoomReader[] => {
   if (!isACL(acl) || !hasConcreteOwner(acl)) {
@@ -786,6 +813,15 @@ const roomReaders = (acl: unknown, room: string): CustodyRoomReader[] => {
     ...(acl as Record<string, Capability>),
     [room]: "OWNER",
   };
+  if (
+    !Object.keys(listed).every((principal) =>
+      principal === ANYONE_USER || isWellFormedDID(principal)
+    )
+  ) {
+    throw new Error(
+      "Custody seal requires a room space whose access list names only well-formed DIDs or `*`",
+    );
+  }
   return Object.entries(listed)
     .map(([principal, capability]) => ({
       principal,

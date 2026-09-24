@@ -1073,6 +1073,29 @@ describe("cfc-custody-seal", () => {
       }
     });
 
+    it("refuses terms whose seats are not all well-formed DIDs", async () => {
+      for (
+        const seat of [
+          `${bob.did()} (you)`,
+          `did:key:\u202euoy\u202c`,
+          `did:key:z6Mk\ufeffBob`,
+          `did:key:${"z".repeat(300)}`,
+          "did:web:example.com:",
+        ]
+      ) {
+        const fixture = await setup({
+          terms: { ...TERMS, seats: [...TERMS.seats, seat] },
+        });
+        try {
+          const draft = await fixture.draft(alice, honestStance);
+          await expect(prepareCustodySeal(draft, fixture.room(alice)))
+            .rejects.toThrow(/distinct, well-formed DIDs/);
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
     it("refuses a stance its schema does not bound", async () => {
       const cases: [unknown, unknown, RegExp][] = [
         [
@@ -1329,6 +1352,38 @@ describe("cfc-custody-seal", () => {
           .rejects.toThrow(/access list names its readers/);
       } finally {
         await fixture.dispose();
+      }
+    });
+
+    it("admits `*` as a reader of the room", async () => {
+      const fixture = await setup();
+      try {
+        await fixture.roomAcl.set("*", "READ");
+        const draft = await fixture.draft(alice, honestStance);
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        expect(prepared.readers[0]).toEqual({ principal: "*", role: "reader" });
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a room whose access list names a principal that is not a well-formed DID", async () => {
+      const hostile = [
+        `${alice.did()} (you)`,
+        `did:key:\u202euoy\u202c`,
+        `did:key:z6Mk\u200bAlice`,
+        `did:key:${"z".repeat(300)}`,
+      ];
+      for (const principal of hostile) {
+        const fixture = await setup();
+        try {
+          await fixture.roomAcl.set(principal as `did:${string}`, "READ");
+          const draft = await fixture.draft(alice, honestStance);
+          await expect(prepareCustodySeal(draft, fixture.room(alice)))
+            .rejects.toThrow(/names only well-formed DIDs or `\*`/);
+        } finally {
+          await fixture.dispose();
+        }
       }
     });
 
