@@ -49,7 +49,7 @@ export interface FabriChatMessage {
   authorProfile: ProfileCell;
 
   /**
-   * The sender's profile name when the message was sent, or empty when the
+   * The sender's profile name when the message was sent, or `""` when the
    * profile has no name or the name had not yet reached the handler.
    */
   authorName: string;
@@ -161,7 +161,10 @@ export interface FabriChatRoomInput {
   /** The viewer's profile, which holds no value while it is unknown. */
   myProfile: ProfileCell | undefined;
 
-  /** The viewer's profile name, empty while it is unknown or unset. */
+  /**
+   * The viewer's profile name, or `""` while it is unknown or when the profile
+   * has none.
+   */
   myName: string;
 
   /** The viewer's profile avatar (a URL or a glyph), empty if none. */
