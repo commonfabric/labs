@@ -1102,8 +1102,9 @@ values and the terms are under a collapsed details section.
 The actor confirms with one trusted browser gesture on **Seal & consent**; a
 scripted click cannot seal. Changing a binding, dismissing the dialog, or
 disconnecting the component invalidates the review, and the runtime refuses a
-seal when the draft, the terms, the room's readers or the actor's source policy
-changed after preparation. When the seal commits, the component emits
+seal when the draft, the terms, the room's policy, the room's readers or the
+actor's source policy changed after preparation, up to the moment the entry is
+written. When the seal commits, the component emits
 `cf-sealed` with no payload. The event carries neither the value nor the
 actor's entry in the room. A binding that changes while a commit is in flight
 leaves the component without that event even if the seal committed, so a

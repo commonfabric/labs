@@ -773,7 +773,7 @@ export function securityContextFrom(
   } satisfies EveryFieldOf<RuntimeSecurityContext>;
 }
 
-/** Why a custody seal refuses a client that detached, or a disposed runtime. */
+/** Builds the refusal for a detached client's or a disposed runtime's seal. */
 const custodySealingUnavailable = () =>
   new Error("Custody sealing is unavailable");
 

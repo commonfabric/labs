@@ -454,7 +454,9 @@ worker as `InitializationData.cfcTrustConfig` and the runtime as
 custody policy as a trusted declassifier is one statement naming that policy's
 exact `policyDigest` and one delegation to its verifier. The configuration is
 part of the runtime's security context, so an attach asserting another one is
-refused. Absent, no concept guard is satisfied and every custody seal is
+refused. Configurations compare by the digest the runner gives the configuration
+it normalizes, so key order, a key written as `undefined`, and an empty list
+written out or left out do not refuse an attach. Absent, no concept guard is satisfied and every custody seal is
 refused.
 
 `RuntimeClient.prepareCustodySeal({ draft, terms, policy, allowedSources })`
@@ -471,11 +473,21 @@ verifies that the room's policy releases only those answers.
 The trusted host shows that preview and requires a trusted user confirmation
 before calling `RuntimeClient.commitCustodySeal(id)`, which returns the
 actor's receipt. The worker builds the renderer-trusted `CustodySeal` gesture
-itself; the request carries no event. It reads the actor's source policy again,
-and a changed policy, draft, terms, room readers or actor makes the review
-stale. Each confirmation is consumed once, including on a failed commit.
-`cancelCustodySeal(id)`, client detachment and backend disposal discard pending
-consent, and a preview belongs to the client that prepared it. As with snapshot
+itself; the request carries no event. The seal is bound to what the actor
+reviewed: at commit it reads the draft, the terms, the room's readers, the
+policy cell and the source policy again, and a changed value in any of them,
+or a changed actor, makes the review stale. The transaction that writes the
+entry then verifies that every one of those reads still holds, so a change that
+lands after the commit's checks and before the entry is written refuses the
+seal too. A policy cell that now holds another reference refuses the seal
+rather than sealing the reference that was reviewed. Each confirmation is
+consumed once, including on a failed commit. `cancelCustodySeal(id)`, client
+detachment and backend disposal discard pending consent, and a preview belongs
+to the client that prepared it. A client that detaches while its commit is in
+flight aborts it: nothing is sealed unless the entry's transaction was sent
+before the client left. A commit aborted after the receipt was written leaves
+a receipt with no entry, which is how the actor's home space records a seal
+that did not commit. As with snapshot
 sharing, an embedder exposing this transport to untrusted content delegates the
 actor's consent. `cf-custody-seal` is the component that drives it.
 

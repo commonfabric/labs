@@ -110,9 +110,9 @@ export interface CustodySealOptions {
    * form {@link readCustodySourcePolicy} reads, rather than a list it read
    * itself: the seal then reads the cell at prepare and again at commit, and
    * the transaction that writes the entry verifies that the cell still holds
-   * what the commit read. A list read before the commit cannot be bound to
-   * the write, so a policy narrowed in between would seal under the allowance
-   * it withdrew. A fixed list is for a caller whose allowance is not stored.
+   * what the commit read. A fixed list is for a caller whose allowance is not
+   * stored: nothing binds a list to the write, so a stored policy narrowed
+   * after the host read it does not refuse the seal.
    */
   readonly allowedSources: readonly CfcAtom[] | Cell<unknown>;
 }
@@ -925,9 +925,9 @@ const sourcePolicyIn = (
 const STALE_REVIEW = "Custody seal review is stale; review the value again";
 
 /**
- * The allowed sources `options` names: its list, or what its settings cell
- * holds. A cell's read is added to `evidence`, so the entry's transaction
- * verifies it.
+ * Returns the allowed sources `options` names: a copy of its list, or what its
+ * settings cell holds. A cell's read is added to `evidence`, so the entry's
+ * transaction verifies it.
  */
 const allowedSourcesOf = async (
   runtime: Cell<unknown>["runtime"],
@@ -954,9 +954,9 @@ const allowedSourcesOf = async (
 };
 
 /**
- * The policy reference `policy` names: the reference itself, or what its cell
- * holds. A cell's read is added to `evidence`, so the entry's transaction
- * verifies it. The reference is checked by the caller.
+ * Returns the policy reference `policy` names: the reference itself, or what
+ * its cell holds. A cell's read is added to `evidence`, so the entry's
+ * transaction verifies it. The caller checks the reference.
  */
 const requestedPolicyOf = async (
   runtime: Cell<unknown>["runtime"],

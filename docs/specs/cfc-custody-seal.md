@@ -43,7 +43,9 @@ is `(P, D)`, where `D` is the digest of the terms.
 ## What the seal checks
 
 Each check runs at prepare and runs again at commit. At commit, the reads that
-established the checks are compared against the committing transaction.
+established the checks are compared against the committing transaction: the
+transaction that writes the entry reads each of them again and refuses the seal
+if any holds something else, so the value checked is the value committed.
 
 - **Every clause of the draft's label is the actor's own.** Each alternative of
   each clause must be one of six shapes: a bare DID equal to the actor;
@@ -65,16 +67,19 @@ established the checks are compared against the committing transaction.
   When an owner-shaped alternative names another DID, the refusal names both
   DIDs. That makes a stance labeled under a rotated key diagnosable: the seal
   never accepts an alternate or mapped DID.
-- **The sources are allowed.** The host must supply `allowedSources`, which it
-  reads from the actor's private settings, and every `Context` and `Resource`
-  the draft draws on must be among them. An empty list admits only a value
-  labeled for the actor alone, as a value the actor typed in is. The preview
-  lists these sources. `readCustodySourcePolicy(settings)` reads such a
-  setting: a list of the actor's own `Context` and `Resource` atoms in a
-  document in the actor's home space, and nowhere else, so that a room cannot
-  widen what the actor allows. Code running as the actor can write that
-  space; against that code, what holds is the confirmation, which shows the
-  sources the value draws on.
+- **The sources are allowed.** The host must supply `allowedSources`, and every
+  `Context` and `Resource` the draft draws on must be among them. An empty list
+  admits only a value labeled for the actor alone, as a value the actor typed
+  in is. The preview lists these sources. A host passes the actor's private
+  settings cell rather than a list it read itself; the seal reads it as
+  `readCustodySourcePolicy(settings)` does: a list of the actor's own `Context`
+  and `Resource` atoms in a document in the actor's home space, and nowhere
+  else, so that a room cannot widen what the actor allows. The read is one of
+  the reads the entry's transaction verifies, so a policy narrowed at any
+  point before the entry commits refuses the seal. A fixed list is for a
+  caller whose allowance is not stored. Code running as the actor can write
+  that space; against that code, what holds is the confirmation, which shows
+  the sources the value draws on.
 - **The room names its readers.** The room space's access list must exist and
   name a concrete owner, and every principal it names must be `*` or a DID of
   the form the seats take. The preview lists every principal it names, with its
@@ -92,7 +97,11 @@ established the checks are compared against the committing transaction.
   terms document's label must admit `Space(S)` or `P`, because the terms are
   copied into each entry.
 - **The policy is the room's.** `P` must be an exact module policy reference
-  whose subject is `S`, and its manifest must be installed in `S`.
+  whose subject is `S`, and its manifest must be installed in `S`. A host whose
+  reference is stored passes the cell that holds it. The actor consents to the
+  reference they reviewed, so the seal never seals another one: a cell that
+  holds a different reference at commit makes the review stale, and the read
+  is one of those the entry's transaction verifies.
 - **The actor trusts `P`.** Under the actor's trust closure, `P` must satisfy
   the concept `https://commonfabric.org/cfc/concepts/trusted-declassifier`. The
   closure is built from `RuntimeOptions.cfcTrustConfig`, and only from the
@@ -112,7 +121,11 @@ Then:
    records the event, `P`, `D`, the entry key, the sources, and the stance's
    digest. The receipt is written first, so every entry has one. A receipt
    whose entry is absent records a seal that did not commit, or an entry lost
-   afterwards, as when the box is replaced (see below).
+   afterwards, as when the box is replaced (see below). A seal whose commit
+   is aborted after the receipt, as when the host client that asked for it
+   detaches (`commitCustodySeal`'s `signal`), is such a seal. The signal is
+   checked before each write and until the entry's transaction is sent; a
+   transaction already sent is not recalled.
 2. **An entry in the instance's box.** The box is one document in `S` at the
    address `{custodyBox: {policy: P, instance: D}}`. The entry is
    `{instance: D, terms, stance}`. `terms` is the terms serialized as JSON with
