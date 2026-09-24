@@ -762,6 +762,8 @@ describe("cfc-custody-seal", () => {
         });
         expect(prepared.sources).toEqual(sources);
         expect(Object.isFrozen(prepared.sources)).toBe(true);
+        expect(Object.isFrozen(prepared.readers)).toBe(true);
+        expect(prepared.readers.every(Object.isFrozen)).toBe(true);
         expect(prepared.stance).toEqual(honestStance);
         await commitCustodySeal(prepared.consent, trustedClick());
       } finally {
@@ -792,8 +794,8 @@ describe("cfc-custody-seal", () => {
     });
 
     it("seals a draft labeled for the actor's home space", async () => {
-      // The actor's home space is the space whose DID is the actor's own, so
-      // its readers are the actor alone.
+      // The actor's home space is the space whose DID is the actor's own, and
+      // its access list is the actor's to write.
       const fixture = await setup();
       try {
         for (

@@ -1174,6 +1174,7 @@ export async function prepareCustodySeal(
   deepFreeze(inspected.policy);
   deepFreeze(inspected.sources);
   deepFreeze(inspected.allowedSources);
+  deepFreeze(inspected.readers);
   const consent = Object.freeze({}) as CustodySealConsent;
   consents.set(consent, {
     ...inspected,
