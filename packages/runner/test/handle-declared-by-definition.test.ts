@@ -297,6 +297,33 @@ describe("handle declared by a definition", () => {
         ).toEqual(expected);
       });
 
+      it("reads an inline property typed as a union of handle definitions as the reference-site union does", async () => {
+        // No option declares the handle at the position's root, so the
+        // union's branches are traversed and their merge mints it.
+
+        const read = (holder: { get(): unknown }) =>
+          (holder.get() as { profile: unknown }).profile;
+
+        const expected = await observe(
+          "at-references",
+          { kind: "a", profile: { name: "Ada" } },
+          profileHolder(unionAtReferences, false),
+          read,
+        );
+        expect(expected.returned).toEqual({
+          handle: "holder",
+          path: ["profile"],
+        });
+        expect(
+          await observe(
+            "by-definitions",
+            { kind: "a", profile: { name: "Ada" } },
+            profileHolder(unionByDefinitions, false),
+            read,
+          ),
+        ).toEqual(expected);
+      });
+
       it("reads linked array elements as handles on the documents they name", async () => {
         const profiles = [
           await storedProfile("first-profile", "Ada"),
@@ -320,6 +347,60 @@ describe("handle declared by a definition", () => {
             "by-definition",
             { profiles },
             profileList(byDefinition),
+            read,
+          ),
+        ).toEqual(expected);
+      });
+
+      it("reads linked array elements typed as a union of handle definitions as the reference-site union does", async () => {
+        const profiles = [
+          await storedProfile("first-union-profile", "Ada"),
+          await storedProfile("second-union-profile", "Grace"),
+        ];
+        const read = (holder: { get(): unknown }) =>
+          (holder.get() as { profiles: unknown }).profiles;
+
+        const expected = await observe(
+          "at-references",
+          { profiles },
+          profileList(unionAtReferences),
+          read,
+        );
+        expect(expected.returned).toEqual([
+          { handle: "Ada", path: [] },
+          { handle: "Grace", path: [] },
+        ]);
+        // Reading a target to mint its handle does not make the holder
+        // depend on what the target holds.
+        expect(expected.conflict).not.toContain("Ada/value.name");
+        expect(
+          await observe(
+            "by-definitions",
+            { profiles },
+            profileList(unionByDefinitions),
+            read,
+          ),
+        ).toEqual(expected);
+      });
+
+      it("reads inline array elements typed as a union of handle definitions as the reference-site union does", async () => {
+        const read = (holder: { get(): unknown }) =>
+          (holder.get() as { profiles: unknown }).profiles;
+
+        const expected = await observe(
+          "at-references",
+          { profiles: [{ name: "Ada" }] },
+          profileList(unionAtReferences),
+          read,
+        );
+        expect(expected.returned).toEqual([
+          { handle: "holder", path: ["profiles", "0"] },
+        ]);
+        expect(
+          await observe(
+            "by-definitions",
+            { profiles: [{ name: "Ada" }] },
+            profileList(unionByDefinitions),
             read,
           ),
         ).toEqual(expected);

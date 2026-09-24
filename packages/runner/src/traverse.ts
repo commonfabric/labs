@@ -956,6 +956,19 @@ function declaresAsCellMemoized(schema: JSONSchemaObj): boolean {
 }
 
 /**
+ * Whether `schema` declares a handle at its root, itself or through the
+ * definition its root `$ref` names. A union whose every option declares a
+ * handle is a handle as well (`SchemaObjectTraverser.hasAsCell()`), but which
+ * option's handle turns on the value, so the union's branches are traversed
+ * and their merge mints it.
+ */
+function declaresHandleAtRoot(schema: JSONSchema | undefined): boolean {
+  return isObjectNotArray(schema) &&
+    ContextualFlowControl.getAsCellValues(resolveRootRefForStructure(schema))
+        .length > 0;
+}
+
+/**
  * A data structure that maps keys to sets of values, allowing multiple values
  * to be associated with a single key without duplication.
  *
@@ -5149,7 +5162,8 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // parent's reactive transaction.
       if (
         !this.traverseCells &&
-        SchemaObjectTraverser.hasAsCell(curSelector.schema)
+        SchemaObjectTraverser.hasAsCell(curSelector.schema) &&
+        declaresHandleAtRoot(curSelector.schema)
       ) {
         // For my cell link, curDoc currently points to the last
         // redirect target, but we want cell properties to be based on the
@@ -5173,10 +5187,21 @@ export class SchemaObjectTraverser<V extends FabricValue>
         const plan = !this.traverseCells && curSelector.schema !== undefined
           ? preparePlainSchemaPlan(curSelector.schema)
           : undefined;
-        const { ok: val, error } = (plan === undefined
-          ? undefined
-          : this.#traversePlainSchema(curDoc, plan)) ??
-          this.traverseWithSelector(curDoc, curSelector);
+        const traverseElement = () =>
+          (plan === undefined
+            ? undefined
+            : this.#traversePlainSchema(curDoc, plan)) ??
+            this.traverseWithSelector(curDoc, curSelector);
+        // An element reaching here as a handle is a union of handles, whose
+        // branches are traversed to mint it; as for a property, those reads
+        // resolve the reference and are not conflict dependencies.
+        const { ok: val, error } = !this.traverseCells &&
+            SchemaObjectTraverser.hasAsCell(curSelector.schema)
+          ? this.tx.runWithAmbientReadMeta(
+            excludeReadFromConflict,
+            traverseElement,
+          )
+          : traverseElement();
         if (error !== undefined) {
           // If our item doesn't match our schema, we may be able to use
           // undefined or null if those are valid according to our schema.
@@ -5276,6 +5301,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
       if (
         !this.traverseCells &&
         SchemaObjectTraverser.hasAsCell(propSchema) &&
+        declaresHandleAtRoot(propSchema) &&
         !isSigilLink(propValue)
       ) {
         // Intentionally treat asCell/asStream as an opaque boundary in

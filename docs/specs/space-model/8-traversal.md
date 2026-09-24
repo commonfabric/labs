@@ -217,6 +217,13 @@ Notes:
 
 ### Behavior by Value Shape
 
+The runtime shortcuts below are taken where the schema declares the handle at
+its root, itself or through its root `$ref`. A union that declares its handle
+only through its options leaves which option's handle it is to the value, so
+its branches are traversed and their merge mints the handle, as it does across
+a link. As at a property, the reads that traversal makes at an array element
+resolve the reference and are not conflict dependencies.
+
 | Value shape | `traverseCells = false` (runtime transform path) | `traverseCells = true` (query path) |
 | --- | --- | --- |
 | Primitive value with `asCell/asStream` | Boundary at current node. Traverser calls `createObject(link, value)` and does not descend. In runtime object creator this yields a cell-like wrapper. | No boundary shortcut from `traverseCells`; traversal still resolves value normally and query object creator returns plain traversed data. |
