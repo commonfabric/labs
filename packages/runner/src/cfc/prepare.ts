@@ -4393,15 +4393,15 @@ const ifcEntryAppliesToAttemptedWrite = (
     ...(tx.getReactivityLog?.().attemptedWrites ?? []),
   ].filter((write) => write.path.length === 0 || write.path[0] === "value")
     .map((write) => ({
-    write,
-    path: canonicalizeLogicalPath(write.path),
-  })).filter(({ write, path: writePath }) =>
-    write.space === target.space &&
-    write.id === target.id &&
-    normalizeCellScope(write.scope) === target.scope &&
-    pathPatternMatches(path, writePath) &&
-    !writePath.includes("*")
-  ).map(({ path }) => path);
+      write,
+      path: canonicalizeLogicalPath(write.path),
+    })).filter(({ write, path: writePath }) =>
+      write.space === target.space &&
+      write.id === target.id &&
+      normalizeCellScope(write.scope) === target.scope &&
+      pathPatternMatches(path, writePath) &&
+      !writePath.includes("*")
+    ).map(({ path }) => path);
   if (exactAttemptedPaths.length > 0) {
     return exactAttemptedPaths.some((writePath) =>
       matchesValue(effectiveValueForTarget(tx, { ...target, path: writePath }))

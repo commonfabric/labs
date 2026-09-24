@@ -834,9 +834,17 @@ describe("stored write requirements", () => {
         const id = `named-writer-beneath-${writer}`;
         await seed(runtime, id, STORED, SEED);
         const tx = runtime.edit();
-        tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+        tx.setCfcTrustSnapshot({
+          id: `trust-${space}`,
+          actingPrincipal: space,
+        });
         tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: WRITER });
-        runtime.getCell(space, id, WRITERS[writer] as JSONSchema | undefined, tx)
+        runtime.getCell(
+          space,
+          id,
+          WRITERS[writer] as JSONSchema | undefined,
+          tx,
+        )
           .key("frozen").key("digest" as never).set("e" as never);
         expect((await tx.commit()).error).toBeUndefined();
         expect(runtime.getCell(space, id, STORED).get()).toMatchObject({
@@ -857,13 +865,68 @@ describe("stored write requirements", () => {
       tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: WRITER });
       const cell = runtime.getCell(space, id, undefined, tx);
       cell.key("frozen").key("digest" as never).set("e" as never);
-      tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: "mallory" });
+      tx.setCfcImplementationIdentity({
+        kind: "builtin",
+        builtinId: "mallory",
+      });
       tx.writeValueOrThrow({
         ...cell.getAsNormalizedFullLink(),
         path: ["frozen", "note"],
       }, "evil" as never);
       expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
       expect(runtime.getCell(space, id, STORED).get()).toEqual(SEED);
+    });
+
+    describe("a claim on every item", () => {
+      const ITEMS = {
+        type: "object",
+        properties: {
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { name: { type: "string" } },
+              ifc: CLAIM,
+            },
+          },
+        },
+      } as const satisfies JSONSchema;
+      const ITEMS_SEED = { items: [{ name: "a" }] };
+
+      it("commits a write beneath an item by its named writer", async () => {
+        const runtime = start();
+        await seed(runtime, "item-named-writer", ITEMS, ITEMS_SEED);
+        const tx = runtime.edit();
+        tx.setCfcTrustSnapshot({
+          id: `trust-${space}`,
+          actingPrincipal: space,
+        });
+        tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: WRITER });
+        runtime.getCell(space, "item-named-writer", undefined, tx)
+          .key("items").key(0 as never).key("name" as never)
+          .set("b" as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        expect(runtime.getCell(space, "item-named-writer", ITEMS).get())
+          .toEqual({ items: [{ name: "b" }] });
+      });
+
+      it("refuses a write beneath an item by another writer", async () => {
+        const runtime = start();
+        await seed(runtime, "item-other-writer", ITEMS, ITEMS_SEED);
+        const tx = runtime.edit();
+        tx.setCfcTrustSnapshot({
+          id: `trust-${space}`,
+          actingPrincipal: space,
+        });
+        tx.setCfcImplementationIdentity({
+          kind: "builtin",
+          builtinId: "mallory",
+        });
+        runtime.getCell(space, "item-other-writer", undefined, tx)
+          .key("items").key(0 as never).key("name" as never)
+          .set("evil" as never);
+        expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+      });
     });
 
     it("commits a write beneath a claimed root by its named writer", async () => {

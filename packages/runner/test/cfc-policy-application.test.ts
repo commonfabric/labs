@@ -189,7 +189,12 @@ describe("a runtime policy application", () => {
       const runtime = await start("unauthorized-record");
       const tx = runtime.edit();
       trust(tx, APPLIER);
-      const cell = runtime.getCell(space, "unauthorized-record", OWNER_LABEL, tx);
+      const cell = runtime.getCell(
+        space,
+        "unauthorized-record",
+        OWNER_LABEL,
+        tx,
+      );
       cell.applyCfcSchemaToExistingValue();
       const target = cell.getAsNormalizedFullLink();
       tx.recordCfcWritePolicyInput({
@@ -271,7 +276,10 @@ describe("a runtime policy application", () => {
         ],
         [
           "a handler recording the application itself",
-          (runtime: Runtime, id: string) => (tx: IExtendedStorageTransaction) => {
+          (runtime: Runtime, id: string) =>
+          (
+            tx: IExtendedStorageTransaction,
+          ) => {
             const cell = runtime.getCell(space, id, OWNER_LABEL, tx);
             cell.applyCfcSchemaToExistingValue();
             const target = cell.getAsNormalizedFullLink();
