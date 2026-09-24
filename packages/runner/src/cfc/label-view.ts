@@ -257,6 +257,17 @@ export const cfcLabelViewForResolvedCellWithStatus = (
 };
 
 /**
+ * The label view a display surface shows for a cell: the view-only form of
+ * {@link cfcLabelViewForResolvedCellWithStatus}. A value bound to a label
+ * display is commonly reached across a link part way along its path, as a
+ * list element that links to the document holding the value, and the label
+ * that vouches for that value is stored on the linked document.
+ */
+export const cfcLabelViewForResolvedCell = (
+  cell: unknown,
+): CfcLabelView | undefined => cfcLabelViewForResolvedCellWithStatus(cell).view;
+
+/**
  * Fail-closed label acquisition for the LLM-observation egress path (audit 22),
  * including whether a metadata read failed. When a read fails, the returned
  * view is tainted at the root with `CFC_LABEL_READ_FAILED_ATOM`, so every

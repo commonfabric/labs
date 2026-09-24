@@ -1686,6 +1686,88 @@ describe("CFC label view helpers", () => {
       await storageManager.close();
     }
   });
+
+  it("delivers to an includeCfcLabel sink the label of the doc a mid-path link resolves to", async () => {
+    // A value bound to a UI badge is often reached through a list whose
+    // element links to another document, as a profile's `verifiedIdentities`
+    // links each assertion. The label that vouches for the value lives on the
+    // linked document, so the sink has to report it, and still report the
+    // list document's own label.
+    const signer = await Identity.fromPassphrase(
+      "cfc label view sink mid-path link",
+    );
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    try {
+      const tx = runtime.edit();
+      const assertion = runtime.getCell(
+        signer.did(),
+        "cfc-label-sink-mid-path-assertion",
+        undefined,
+        tx,
+      );
+      const list = runtime.getCell(
+        signer.did(),
+        "cfc-label-sink-mid-path-list",
+        undefined,
+        tx,
+      );
+      writeSeedEnvelopeDoc(tx, signer.did());
+      seedStoredEnvelope(tx, {
+        space: signer.did(),
+        id: parseLink(assertion.getAsLink()).id!,
+        type: "application/json",
+        path: [],
+      }, {
+        value: { type: "email", value: "ada@example.com" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{ path: [], label: { integrity: ["verified-source"] } }],
+          },
+        },
+      });
+      seedStoredEnvelope(tx, {
+        space: signer.did(),
+        id: parseLink(list.getAsLink()).id!,
+        type: "application/json",
+        path: [],
+      }, {
+        value: [assertion.getAsLink()],
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{ path: [], label: { integrity: ["list-owner"] } }],
+          },
+        },
+      });
+      runtime.prepareTxForCommit(tx);
+      await tx.commit();
+      await runtime.idle();
+
+      const labels: unknown[] = [];
+      const cancel = list.key(0).key("value").sink((_value, cfcLabel) => {
+        labels.push(cfcLabel);
+      }, { includeCfcLabel: true });
+      await runtime.idle();
+      cancel();
+
+      expect(labels.length).toBeGreaterThan(0);
+      const delivered = JSON.stringify(labels.at(-1));
+      expect(delivered).toContain("verified-source");
+      expect(delivered).toContain("list-owner");
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
 });
 
 describe("stripSigilCfcLabelViews", () => {
