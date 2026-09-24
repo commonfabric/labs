@@ -94,7 +94,7 @@ parameter. The schema hints attached to the node still apply, through the
 context's `hintsNode`. A printed member of a type literal the caller built reads
 as the property would in the object type the literal stands for: a callable is
 left out, unless calling it makes a stream, a cell, or a database, which reads
-as that wrapper's `asCell`.
+as that wrapper's `asCell`, with the UI contract hint the member carries.
 
 A print can carry syntax its type does not: in place of printing a type, the
 checker writes a member's own annotation where it denotes the member's type,

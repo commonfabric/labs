@@ -3440,6 +3440,36 @@ type CalculatorRequest = {
       });
     });
 
+    it("applies the hints attached to a printed callable that makes a stream", async () => {
+      const { checker, sourceFile, makesStream } = await types();
+      const node = unresolvable();
+      const literal = ts.factory.createTypeLiteralNode([
+        ts.factory.createPropertySignature(undefined, "next", undefined, node),
+      ]);
+
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        literal,
+        checker,
+        undefined,
+        new WeakMap([[node, {
+          cfcUiContract: { helper: "UiAction", action: "Go" },
+        }]]),
+        sourceFile,
+        printedFrom(new Map([[node, makesStream]])),
+      );
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: {
+          next: {
+            asCell: ["stream"],
+            ifc: { uiContract: { helper: "UiAction", action: "Go" } },
+          },
+        },
+        required: ["next"],
+      });
+    });
+
     it("reads a printed node that is a member of a union", async () => {
       const { checker, sourceFile, entry } = await types();
       const node = unresolvable();

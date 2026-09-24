@@ -1750,7 +1750,10 @@ export class SchemaGenerator {
               checker,
             );
             if (wrapperSchema) {
-              properties[propName] = wrapperSchema;
+              const uiContract = getUiContractHint(context, member.type);
+              properties[propName] = uiContract
+                ? attachUiContract(wrapperSchema, uiContract)
+                : wrapperSchema;
               if (!member.questionToken) required.push(propName);
             }
             continue;
