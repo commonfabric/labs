@@ -1378,19 +1378,20 @@ Design of record: [`cfc-transformed-by-input-witnesses.md`](cfc-transformed-by-i
 
 **SC-43 [reconcile] `TransformedBy`'s input witnesses as standalone summary
 atoms — §8.9.3, §8.7.1, §15.** `open`. Three passages give the atom three
-shapes: §15's registry row and §4.5.4 carry
-`inputs: Array<{ ref, witnesses? }>`, §8.7.1 carries parallel `inputs` and
-`inputIntegrity` arrays, and §8.9.3's code sketch carries the §15 form. None
-says how an exchange rule reads a per-input list, and the §4.4.5 pattern
-calculus has no quantifier to do it with: an array pattern matches elementwise
-at equal length. The runtime mints the conservative summary §8.9.3 already
-permits, as standalone atoms: `TransformedBy{identity}` beside one
-`TransformedBy{identity, inputWitness: W}` per atom `W` that held at every
-confidential input location, with no input references. Proposed edit: make
-the summary form a registered alternative to `inputs` in §15, with its meaning
-stated once (the transformer wrote the value, and every confidential input it
-consumed carried `W`); state in §8.7.2 that a rule releasing an endorsed
-transformer's output guards on the witness-bearing form, since the identity
-alone admits any caller's choice of input; and note in §8.9.3 that input
-references are a read-path channel when persisted, which is a reason to prefer
-the summary where no consumer dereferences them.
+shapes: §15's registry row and §4.5.4 carry `inputs: Array<{ ref, witnesses?
+}>`, §8.7.1 carries parallel `inputs` and `inputIntegrity` arrays, and §8.9.3's
+code sketch carries the §15 form. None says how an exchange rule reads a
+per-input list, and the §4.4.5 pattern calculus has no quantifier to do it with:
+an array pattern matches elementwise at equal length. The runtime mints the
+conservative summary §8.9.3 already permits, as standalone atoms:
+`TransformedBy{identity}` beside one `TransformedBy{identity, inputWitness: W}`
+per atom `W` that held at every confidential input location, with no input
+references. Proposed edit: make the summary form a registered alternative to
+`inputs` in §15, with its meaning stated once (the transformer wrote the value,
+and every confidential input it consumed carried `W`), and give §8.7.1's
+parallel `inputs` and `inputIntegrity` arrays the §15 shape; state in §8.7.2
+that a rule releasing an endorsed transformer's output guards on the
+witness-bearing form, since the identity alone admits any caller's choice of
+input; and note in §8.9.3 that input references are a read-path channel when
+persisted, which is a reason to prefer the summary where no consumer
+dereferences them.
