@@ -893,10 +893,18 @@ Mechanics:
   with it is read as the checker resolved it, as the direct spelling is.
 - A canonical alias reached by its own name reads its payload, like its
   labels, from the reference's own argument nodes when that reference names
-  the same alias. A reference to another alias the checker resolved to it
-  (`MyProjection<R>` to `ProjectionOf<Root, Path>`, or a conditional alias to
-  `Confidential<…>`) holds that alias's arguments, so the canonical alias is
-  read from its type alone. A payload that is itself a
+  the same alias. A reference to a conditional alias whose one branch other
+  than `never` names the canonical alias holds its arguments as that branch
+  writes them: an argument that is one of the conditional alias's parameters
+  is the reference's argument for it, and one holding no parameter is itself.
+  An argument holding a parameter the conditional checks or infers is read
+  from its type, since the checker binds such a parameter member by member.
+  Any other reference to an alias the checker resolved to it (`MyProjection<R>`
+  to `ProjectionOf<Root, Path>`) holds that alias's arguments, so the canonical
+  alias is read from its type alone. A `WriteAuthorizedBy` reached from a
+  reference whose binding neither way reads is the
+  `cfc-write-authorized-by:unread` error (`writer-binding-diagnostics.ts`),
+  since its schema would carry no write restriction. A payload that is itself a
   CFC alias therefore lowers as it would if written on its own: a generic alias
   keeps its argument (`Integrity<Sec<string>, I>` is a string), a nested
   `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label keeps its

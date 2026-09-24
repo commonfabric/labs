@@ -119,6 +119,14 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
               recoverAuthoredPosition(schemaUse);
             context.reportDiagnosticOnce({
               ...diagnostic,
+              // A generator error refuses a shape an author can fix. Stored
+              // source was accepted when it was deployed and cannot be
+              // re-authored, so there the report keeps its visibility and
+              // loses its veto, as the transformer's own authoring gates do.
+              severity: diagnostic.severity === "error" &&
+                  context.options.storedSource
+                ? "warning"
+                : diagnostic.severity,
               node: original?.getSourceFile()?.fileName === sourceFile.fileName
                 ? original
                 : useRange

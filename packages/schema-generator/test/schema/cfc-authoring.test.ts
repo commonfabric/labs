@@ -299,6 +299,117 @@ describe("Schema: CFC authoring aliases", () => {
     expect(schema.properties?.picked).toEqual(schema.properties?.direct);
   });
 
+  it("reads the writer a conditional alias passes to `WriteAuthorizedBy` as its branch writes it", async () => {
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+      type Guarded<X, B> = X extends string ? WriteAuthorizedBy<X, B> : never;
+      type Swapped<B, X> = X extends string ? WriteAuthorizedBy<X, B> : never;
+      type Crossed<A, B> = B extends unknown ? WriteAuthorizedBy<string, A> : never;
+      function save() {}
+      function other() {}
+      interface SchemaRoot {
+        direct: WriteAuthorizedBy<string, typeof save>;
+        guarded: Guarded<string, typeof save>;
+        swapped: Swapped<typeof save, string>;
+        crossed: Crossed<typeof save, typeof other>;
+        directNarrowed: WriteAuthorizedBy<"a", typeof save>;
+        distributed: Guarded<"a" | 1, typeof save>;
+      }
+    `,
+      "SchemaRoot",
+    );
+    const diagnostics: SchemaGenerationDiagnostic[] = [];
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker, undefined, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      }),
+    );
+
+    expect(schema.properties?.direct).toEqual({
+      type: "string",
+      ifc: {
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: { file: "test.ts", path: ["save"] },
+        },
+      },
+    });
+    for (const alias of ["guarded", "swapped", "crossed"]) {
+      expect(schema.properties?.[alias]).toEqual(schema.properties?.direct);
+    }
+    // The checked `X` reaches the policy one member at a time, so its payload
+    // is `"a"`, as the checker distributes it, not the `"a" | 1` written.
+    expect(schema.properties?.distributed).toEqual(
+      schema.properties?.directNarrowed,
+    );
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("reports a writer binding it cannot read as an error", async () => {
+    // `Checked<B>` distributes over `B`, so the binding the policy receives is
+    // read from its type, with no node to read a writer from. Which branch of
+    // `Either` the checker took is not written anywhere a node could say.
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+      type Checked<B> = B extends unknown ? WriteAuthorizedBy<string, B> : never;
+      type Either<X, B, C> = X extends string
+        ? WriteAuthorizedBy<X, B>
+        : WriteAuthorizedBy<X, C>;
+      function save() {}
+      function other() {}
+      interface SchemaRoot {
+        checked: Checked<typeof save>;
+        either: Either<number, typeof save, typeof other>;
+      }
+    `,
+      "SchemaRoot",
+    );
+    const diagnostics: SchemaGenerationDiagnostic[] = [];
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker, undefined, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      }),
+    );
+
+    expect(schema.properties?.checked).toEqual({ type: "string" });
+    expect(schema.properties?.either).toEqual({ type: "number" });
+    expect(
+      diagnostics.map((diagnostic) => [diagnostic.severity, diagnostic.type]),
+    ).toEqual([
+      ["error", "cfc-write-authorized-by:unread"],
+      ["error", "cfc-write-authorized-by:unread"],
+    ]);
+    expect(diagnostics[0]!.message).toContain("`WriteAuthorizedBy`");
+  });
+
+  it("reports nothing for a policy read from a type alone, which has no reference to spell a binding in", async () => {
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+      type Checked<B> = B extends unknown ? WriteAuthorizedBy<string, B> : never;
+      function save() {}
+      type SchemaRoot = Checked<typeof save>;
+    `,
+      "SchemaRoot",
+    );
+    const diagnostics: SchemaGenerationDiagnostic[] = [];
+    const schema = new SchemaGenerator().generateSchema(
+      type,
+      checker,
+      undefined,
+      {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      },
+    );
+
+    expect(schema).toEqual({ type: "string" });
+    expect(diagnostics).toEqual([]);
+  });
+
   it("formats a projection reached through a user alias over the root its reference carries", async () => {
     const { type, checker } = await getTypeFromCode(
       `
