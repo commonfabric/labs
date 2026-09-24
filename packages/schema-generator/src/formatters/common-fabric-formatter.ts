@@ -1999,10 +1999,9 @@ export class CommonFabricFormatter implements TypeFormatter {
    * writer binding. The binding must be a direct `typeof`
    * (cfc_authoring_contract.md), read from its node;
    * `WriteAuthorizedByValidationTransformer` reports any other spelling. A
-   * policy reached from a written reference whose binding has no node to read
+   * policy written through another alias whose binding has no node to read
    * would leave that reference's schema with no write restriction, which
-   * nothing else would report, so that is an error here. A schema read from a
-   * type alone, such as a capture's, has no reference to spell the binding in.
+   * nothing else would report, so that is an error here.
    */
   #buildWriteAuthorizedByMetadataForArg(
     context: GenerationContext,
@@ -2011,7 +2010,9 @@ export class CommonFabricFormatter implements TypeFormatter {
   ): Record<string, unknown> | undefined {
     const bindingNode = aliasArgNodes?.[1];
     if (!bindingNode) {
-      if (context.typeNode) reportUnreadWriterBinding(context, aliasName);
+      if (this.#writesPolicyThroughAlias(aliasName, context)) {
+        reportUnreadWriterBinding(context, aliasName);
+      }
       return undefined;
     }
     if (
@@ -2028,6 +2029,36 @@ export class CommonFabricFormatter implements TypeFormatter {
         ),
       },
     };
+  }
+
+  /**
+   * Whether the context's written reference names an alias other than
+   * `aliasName`, the policy being lowered, and denotes that policy, as
+   * `Checked<typeof save>` denotes a `WriteAuthorizedBy`. Such a policy is
+   * written through the alias, whose syntax is what passes its binding on. A
+   * reference that denotes something else writes no policy: the payload node
+   * the transformer's direct `WriteAuthorizedBy` path hands over, while it
+   * mints the claim itself, is one. So does a schema read from a type alone,
+   * such as a capture's, which has no reference at all.
+   */
+  #writesPolicyThroughAlias(
+    aliasName: string,
+    context: GenerationContext,
+  ): boolean {
+    const reference = context.typeNode &&
+      readAuthoredTypeNode(context.typeNode, context.typeChecker);
+    if (
+      !reference || !ts.isTypeReferenceNode(reference) ||
+      this.#resolveTypeReferenceName(reference.typeName, context) === aliasName
+    ) {
+      return false;
+    }
+    const denoted = this.#resolveTypeNodeToType(
+      reference,
+      context,
+      NO_PARAMETER_TYPES,
+    ) as TypeWithInternals;
+    return denoted.aliasSymbol?.name === aliasName;
   }
 
   #writeAuthorizedByIdentityForBinding(

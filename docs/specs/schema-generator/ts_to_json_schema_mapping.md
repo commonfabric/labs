@@ -898,11 +898,13 @@ Mechanics:
   writes them: an argument that is one of the conditional alias's parameters
   is the reference's argument for it, and one holding no parameter is itself.
   An argument holding a parameter the conditional checks or infers is read
-  from its type, since the checker binds such a parameter member by member.
+  from its type, since the checker binds such a parameter member by member,
+  and so is any other argument that holds a parameter without being one
+  (`T[]`, `keyof T`).
   Any other reference to an alias the checker resolved to it (`MyProjection<R>`
   to `ProjectionOf<Root, Path>`) holds that alias's arguments, so the canonical
-  alias is read from its type alone. A `WriteAuthorizedBy` reached from a
-  reference whose binding neither way reads is the
+  alias is read from its type alone. A `WriteAuthorizedBy` written through
+  another alias, whose binding neither way reads, is the
   `cfc-write-authorized-by:unread` error (`writer-binding-diagnostics.ts`),
   since its schema would carry no write restriction. A payload that is itself a
   CFC alias therefore lowers as it would if written on its own: a generic alias

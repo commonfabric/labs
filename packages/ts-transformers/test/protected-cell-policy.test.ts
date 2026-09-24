@@ -738,6 +738,36 @@ type Checked<B> = B extends unknown ? WriteAuthorizedBy<string, B> : never;
     });
   });
 
+  it("reports nothing for a policy written directly, whose claim the transformer mints", async () => {
+    // The direct `WriteAuthorizedBy` path hands the schema generator the
+    // payload's node and mints the claim itself, so the generator has no
+    // binding to read there, and no alias it was written through.
+    const diagnostics: TransformationDiagnostic[] = [];
+    const root = parseModule(
+      await transformSource(
+        `${conditionalPrelude}interface Named { name: string }
+export default pattern(() => {
+  const plain = new Writable<WriteAuthorizedBy<string, typeof setName>>("").for("plain");
+  const named = new Writable<WriteAuthorizedBy<Named, typeof setName>>({ name: "" }).for("named");
+  return { plain, named, setName: setName({ name: plain }) };
+});`,
+        {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        },
+      ),
+    );
+
+    expect(diagnostics.filter(isError)).toEqual([]);
+    const writer = {
+      writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["setName"] } },
+    };
+    expect(patternSchemas(root).output).toMatchObject({
+      properties: { plain: { ifc: writer }, named: { ifc: writer } },
+    });
+  });
+
   it("refuses a writer it cannot read, and only warns over stored source", async () => {
     const severities = async (storedSource: boolean) => {
       const diagnostics: TransformationDiagnostic[] = [];

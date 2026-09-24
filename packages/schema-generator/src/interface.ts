@@ -58,7 +58,10 @@ export interface SchemaGenerationDiagnostic {
 export interface SchemaGenerationOptions {
   readonly widenLiterals?: boolean;
 
-  /** Receives warnings; without a callback the generator logs them. */
+  /**
+   * Receives each diagnostic, a warning or an error; without a callback the
+   * generator logs it. An error says the schema generated is not one to accept.
+   */
   readonly onDiagnostic?: (diagnostic: SchemaGenerationDiagnostic) => void;
 
   /**
