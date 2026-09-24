@@ -30,11 +30,6 @@ type CfcReadableClaimValue = {
 };
 
 const DEFAULT_AUTHORSHIP_KIND = "authored-by";
-// Poll cadence for re-reading a label whose resolved cell wasn't loaded yet.
-// Mirrors cf-cfc-label's retry-on-undefined; bounded so a resolved cell that
-// genuinely never carries a label stops retrying.
-const LABEL_RETRY_INTERVAL_MS = 100;
-const MAX_LABEL_RETRY_COUNT = 100;
 const AUTHOR_FIELDS = [
   "subject",
   "author",
@@ -179,14 +174,13 @@ interface LabelViewResult {
   readonly view: CfcLabelView | undefined;
 
   /**
-   * True when the fallback `resolveAsCell()` path read a resolved cell's label
-   * and got nothing back. `getCfcLabel` is a pure, non-blocking store read, so
-   * an empty result means the resolved cell's doc is not loaded yet. This
-   * component subscribes to `value`/`author`, NOT to that internally-resolved
-   * cell, so its load would not re-trigger this read — the caller retries until
-   * it lands (same liveness contract cf-cfc-label gets from its undefined-retry).
+   * The resolved cell whose label the fallback `resolveAsCell()` path read and
+   * got nothing back from, when that cell can be subscribed to. `getCfcLabel`
+   * is a non-blocking store read, so an empty result means the resolved cell's
+   * document is not loaded yet, and the caller watches this cell for the
+   * update that carries its label.
    */
-  readonly pendingResolution: boolean;
+  readonly unloadedCell: CfcLabelSubscribableValue | undefined;
 }
 
 const readLabelView = async (
@@ -202,20 +196,22 @@ const readLabelView = async (
     direct !== undefined && requiredRootIntegrityKind !== undefined &&
     labelHasRootIntegrityKind(direct, requiredRootIntegrityKind)
   ) {
-    return { view: direct, pendingResolution: false };
+    return { view: direct, unloadedCell: undefined };
   }
 
   let resolvedLabel: CfcLabelView | undefined;
-  let pendingResolution = false;
+  let unloadedCell: CfcLabelSubscribableValue | undefined;
   if (hasLabelResolution(value)) {
     const resolved = await value.resolveAsCell();
     if (hasLabelQuery(resolved)) {
       resolvedLabel = await resolved.getCfcLabel();
-      pendingResolution = resolvedLabel === undefined;
+      if (resolvedLabel === undefined && hasLabelSubscription(resolved)) {
+        unloadedCell = resolved;
+      }
     }
   }
 
-  return { view: mergeLabelViews(direct, resolvedLabel), pendingResolution };
+  return { view: mergeLabelViews(direct, resolvedLabel), unloadedCell };
 };
 
 const primitiveToString = (value: unknown): string | undefined => {
@@ -544,10 +540,12 @@ export class CFCFCAuthorship extends BaseElement {
   private _observedAuthor: unknown = undefined;
   private _unsubscribeValue: (() => void) | undefined;
   private _unsubscribeAuthor: (() => void) | undefined;
-  private _labelRetryTimeout: ReturnType<typeof setTimeout> | undefined;
-  private _labelRetryCount = 0;
-  private _valueResolutionPending = false;
-  private _authorResolutionPending = false;
+
+  /** The subscription on `value`'s resolved cell while its label is unloaded. */
+  #valueLabelWatch: (() => void) | undefined;
+
+  /** The subscription on `author`'s resolved cell while its label is unloaded. */
+  #authorLabelWatch: (() => void) | undefined;
 
   constructor() {
     super();
@@ -615,7 +613,6 @@ export class CFCFCAuthorship extends BaseElement {
   override disconnectedCallback() {
     this.clearValueSubscription();
     this.clearAuthorSubscription();
-    this.clearLabelRetry();
     super.disconnectedCallback();
   }
 
@@ -646,8 +643,6 @@ export class CFCFCAuthorship extends BaseElement {
 
     this.clearValueSubscription();
     this._observedValue = value;
-    // New value → fresh retry budget for its (possibly cold) resolved label.
-    this._labelRetryCount = 0;
 
     if (!hasLabelSubscription(value)) {
       return false;
@@ -655,8 +650,7 @@ export class CFCFCAuthorship extends BaseElement {
 
     // includeCfcLabel makes the worker read this cell's label (and its
     // one-hop link target's) on the sink's tracked tx, so a label-only change
-    // re-fires this subscription and refreshLabel re-reads the new label — the
-    // resolved-cell label is now reactive, not just polled.
+    // re-fires this subscription and refreshLabel re-reads the new label.
     this._unsubscribeValue = value.subscribe(() => {
       void this.refreshLabel();
     }, { includeCfcLabel: true });
@@ -667,6 +661,8 @@ export class CFCFCAuthorship extends BaseElement {
     this._unsubscribeValue?.();
     this._unsubscribeValue = undefined;
     this._observedValue = undefined;
+    this.#valueLabelWatch?.();
+    this.#valueLabelWatch = undefined;
   }
 
   private observeAuthor(author: unknown): boolean {
@@ -676,8 +672,6 @@ export class CFCFCAuthorship extends BaseElement {
 
     this.clearAuthorSubscription();
     this._observedAuthor = author;
-    // New author → fresh retry budget for its (possibly cold) resolved label.
-    this._labelRetryCount = 0;
 
     if (!hasLabelSubscription(author)) {
       return false;
@@ -699,14 +693,16 @@ export class CFCFCAuthorship extends BaseElement {
     this._unsubscribeAuthor?.();
     this._unsubscribeAuthor = undefined;
     this._observedAuthor = undefined;
+    this.#authorLabelWatch?.();
+    this.#authorLabelWatch = undefined;
   }
 
   async refreshLabel(): Promise<void> {
     const requestId = ++this._labelRequestId;
     let view: typeof this.cfcLabel;
-    let pendingResolution: boolean;
+    let unloadedCell: CfcLabelSubscribableValue | undefined;
     try {
-      ({ view, pendingResolution } = await readLabelView(
+      ({ view, unloadedCell } = await readLabelView(
         this.value,
         this.kind ?? DEFAULT_AUTHORSHIP_KIND,
       ));
@@ -720,8 +716,11 @@ export class CFCFCAuthorship extends BaseElement {
       const previous = this.cfcLabel;
       this.cfcLabel = view;
       this.requestUpdate("cfcLabel", previous);
-      this._valueResolutionPending = pendingResolution;
-      this.reconcileLabelRetry();
+      this.#valueLabelWatch = this.#watchUnloadedLabel(
+        this.#valueLabelWatch,
+        unloadedCell,
+        () => void this.refreshLabel(),
+      );
     }
   }
 
@@ -736,19 +735,22 @@ export class CFCFCAuthorship extends BaseElement {
       const previous = this._authorClaim;
       this._authorClaim = undefined;
       this.requestUpdate("author", previous);
-      this._authorResolutionPending = false;
-      this.reconcileLabelRetry();
+      this.#authorLabelWatch = this.#watchUnloadedLabel(
+        this.#authorLabelWatch,
+        undefined,
+        () => void this.refreshAuthorClaim(),
+      );
       return;
     }
 
     let authorClaim: unknown;
-    let pendingResolution = false;
+    let unloadedCell: CfcLabelSubscribableValue | undefined;
     try {
       const valueClaim = canReadAuthor
         ? await readClaimValue(author)
         : undefined;
       const profile = await readLabelView(author, "represents-principal");
-      pendingResolution = profile.pendingResolution;
+      unloadedCell = profile.unloadedCell;
       const candidates = authorPrincipalCandidates(profile.view);
       // A label naming more than one principal names none, and the claim's
       // own value does not stand in for it.
@@ -764,49 +766,41 @@ export class CFCFCAuthorship extends BaseElement {
       const previous = this._authorClaim;
       this._authorClaim = authorClaim;
       this.requestUpdate("author", previous);
-      this._authorResolutionPending = pendingResolution;
-      this.reconcileLabelRetry();
+      this.#authorLabelWatch = this.#watchUnloadedLabel(
+        this.#authorLabelWatch,
+        unloadedCell,
+        () => void this.refreshAuthorClaim(),
+      );
     }
   }
 
   /**
-   * Re-reads the label(s) while a resolved cell's doc is still loading. The
-   * resolved cell is queried one-shot inside `readLabelView()` and is not
-   * subscribed to, so without this poll a cold linked/bound-prop author would
-   * stay unverified until an unrelated `value`/`author` change happened to
-   * re-run the read. Bounded by `MAX_LABEL_RETRY_COUNT`.
+   * The subscription that should watch `unloadedCell`, given `current`, the one
+   * in place. A label read through `resolveAsCell()` is a one-time store read,
+   * and this component's own subscriptions are on `value` and `author`, not on
+   * the cells they resolve to, so nothing else would re-run the read when that
+   * cell's document loads. While a cell is unloaded, the subscription re-runs
+   * `refresh` on the first update carrying a label, which ends the watch. It
+   * ends as well when the source changes or the element disconnects, and an
+   * element that is not connected starts none.
    */
-  private reconcileLabelRetry(): void {
-    if (this._valueResolutionPending || this._authorResolutionPending) {
-      this.scheduleLabelRetry();
-    } else {
-      this.clearLabelRetry();
-      this._labelRetryCount = 0;
+  #watchUnloadedLabel(
+    current: (() => void) | undefined,
+    unloadedCell: CfcLabelSubscribableValue | undefined,
+    refresh: () => void,
+  ): (() => void) | undefined {
+    if (unloadedCell === undefined || !this.isConnected) {
+      current?.();
+      return undefined;
     }
-  }
-
-  private scheduleLabelRetry(): void {
-    if (
-      !this.isConnected ||
-      this._labelRetryTimeout !== undefined ||
-      this._labelRetryCount >= MAX_LABEL_RETRY_COUNT
-    ) {
-      return;
+    if (current !== undefined) {
+      return current;
     }
-    this._labelRetryTimeout = setTimeout(() => {
-      this._labelRetryTimeout = undefined;
-      if (!this.isConnected) return;
-      this._labelRetryCount += 1;
-      void this.refreshLabel();
-      void this.refreshAuthorClaim();
-    }, LABEL_RETRY_INTERVAL_MS);
-  }
-
-  private clearLabelRetry(): void {
-    if (this._labelRetryTimeout !== undefined) {
-      clearTimeout(this._labelRetryTimeout);
-      this._labelRetryTimeout = undefined;
-    }
+    return unloadedCell.subscribe((_value, cfcLabel) => {
+      if (cfcLabel !== undefined) {
+        refresh();
+      }
+    }, { includeCfcLabel: true });
   }
 
   private renderAvatar(state: CfcAuthorshipState) {

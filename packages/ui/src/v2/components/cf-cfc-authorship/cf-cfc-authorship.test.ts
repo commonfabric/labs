@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-import { FakeTime } from "@std/testing/time";
 
 import {
   authorshipStateForLabel,
@@ -32,6 +31,51 @@ const linkedProfileLabel = (sender: string, owner: string) => ({
     })),
   ],
 });
+
+/**
+ * A resolved cell whose document has not loaded: its label reads as missing
+ * until `load()` delivers one to its subscribers, as the runtime does with an
+ * update when the document arrives.
+ */
+const unloadedCell = () => {
+  let label: unknown;
+  const subscribers = new Set<
+    (value: unknown, cfcLabel?: unknown) => void
+  >();
+  return {
+    getCfcLabel: () => Promise.resolve(label),
+    subscribe(
+      callback: (value: unknown, cfcLabel?: unknown) => void,
+      _options?: { includeCfcLabel?: boolean },
+    ) {
+      subscribers.add(callback);
+      callback(undefined, label);
+      return () => {
+        subscribers.delete(callback);
+      };
+    },
+    subscriberCount: () => subscribers.size,
+
+    /** Delivers `next` as the label, and settles the reads it starts. */
+    async load(next: unknown) {
+      label = next;
+      for (const callback of [...subscribers]) {
+        callback(undefined, label);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    },
+  };
+};
+
+/** An element that reports itself connected, as one in a document does. */
+const connectedElement = () => {
+  const element = new CFCFCAuthorship();
+  Object.defineProperty(element, "isConnected", {
+    value: true,
+    configurable: true,
+  });
+  return element;
+};
 
 describe("CFCFCAuthorship", () => {
   it("registers the custom element", () => {
@@ -149,61 +193,79 @@ describe("CFCFCAuthorship", () => {
     expect(element.authorshipState).toBe("verified");
   });
 
-  it("retries the resolved cell label until its cold doc loads", async () => {
-    // getCfcLabel is a pure, non-blocking store read, so a resolved cell whose
-    // doc hasn't loaded yet returns nothing. This component does not subscribe
-    // to the internally-resolved cell, so it must poll until the label lands —
-    // otherwise a cold linked/bound-prop author stays unverified forever.
-    const cfcLabel = {
-      version: 1 as const,
-      entries: [{
-        path: [],
-        label: { integrity: [{ kind: "authored-by", subject: "alice" }] },
-      }],
-    };
-    let labelAvailable = false;
-    // Open the fake clock up front. The component schedules its retry poll as a
-    // real setTimeout in `scheduleLabelRetry()`, which the `refreshLabel()` call
-    // below reaches through `reconcileLabelRetry()` — so the timer is armed
-    // there, not here. FakeTime only intercepts timers scheduled after it is
-    // installed, so it has to be in place before the element runs any of its own
-    // code. The `using` declaration restores the real clock when the test ends.
-    using time = new FakeTime();
-    const element = new CFCFCAuthorship();
-    Object.defineProperty(element, "isConnected", {
-      value: true,
-      configurable: true,
-    });
+  it("re-reads the value's resolved label when that cell delivers one", async () => {
+    // A resolved cell whose document has not loaded reads as having no label.
+    // The component subscribes to that cell and re-reads on the update that
+    // carries its label.
+    const cfcLabel = authoredByLabel("alice");
+    const resolved = unloadedCell();
+    const element = connectedElement();
 
     try {
       element.author = "alice";
       element.value = {
         getCfcLabel: () => Promise.resolve(undefined),
-        resolveAsCell: () =>
-          Promise.resolve({
-            getCfcLabel: () =>
-              Promise.resolve(labelAvailable ? cfcLabel : undefined),
-          }),
+        resolveAsCell: () => Promise.resolve(resolved),
       };
 
       await element.refreshLabel();
       expect(element.authorshipState).not.toBe("verified");
+      expect(resolved.subscriberCount()).toBe(1);
 
-      labelAvailable = true;
-      // Advance the clock. runAllAsync() is the actual advance: it jumps logical
-      // time to the one pending retry timer and fires it, so the test never
-      // hardcodes the poll interval. Firing the retry starts an async re-read of
-      // the now-loaded resolved label (getCfcLabel resolves through microtasks).
-      // runAllAsync drains microtasks before each timer it fires, not after the
-      // last one, so runMicrotasks() flushes that trailing re-read to completion.
-      // runMicrotasks() does not move the clock.
-      await time.runAllAsync();
-      await time.runMicrotasks();
+      await resolved.load(cfcLabel);
 
       expect(element.authorshipState).toBe("verified");
+      expect(resolved.subscriberCount()).toBe(0);
     } finally {
       element.disconnectedCallback();
     }
+  });
+
+  it("re-reads the author's resolved label when that cell delivers one", async () => {
+    const resolved = unloadedCell();
+    const element = connectedElement();
+
+    try {
+      element.value = {
+        getCfcLabel: () =>
+          Promise.resolve(authoredByLabel("did:example:alice")),
+      };
+      element.author = {
+        get: () => ({ name: "Alice" }),
+        getCfcLabel: () => Promise.resolve(undefined),
+        resolveAsCell: () => Promise.resolve(resolved),
+      };
+
+      await element.refreshLabel();
+      await element.refreshAuthorClaim();
+      expect(element.authorshipState).not.toBe("verified");
+
+      await resolved.load(
+        linkedProfileLabel("did:example:alice", "did:example:alice"),
+      );
+
+      expect(element.authorshipState).toBe("verified");
+      expect(resolved.subscriberCount()).toBe(0);
+    } finally {
+      element.disconnectedCallback();
+    }
+  });
+
+  it("stops watching an unloaded resolved cell when it disconnects", async () => {
+    const resolved = unloadedCell();
+    const element = connectedElement();
+    element.author = "alice";
+    element.value = {
+      getCfcLabel: () => Promise.resolve(undefined),
+      resolveAsCell: () => Promise.resolve(resolved),
+    };
+
+    await element.refreshLabel();
+    expect(resolved.subscriberCount()).toBe(1);
+
+    element.disconnectedCallback();
+
+    expect(resolved.subscriberCount()).toBe(0);
   });
 
   it("uses resolved root authorship when the direct label only has nested entries", async () => {
@@ -813,40 +875,17 @@ describe("CFCFCAuthorship disposal handling", () => {
   // refreshLabel is fired as `void this.refreshLabel()`; on a disposal race its
   // readLabelView IPC rejects with AbortError, which must be swallowed rather
   // than left as an unhandled rejection.
-  function authorshipThis(getCfcLabel: () => Promise<unknown>): {
-    value: unknown;
-    kind: undefined;
-    _labelRequestId: number;
-    cfcLabel: unknown;
-    _valueResolutionPending: boolean;
-    requestUpdate: () => void;
-    reconcileLabelRetry: () => void;
-  } {
-    return {
-      value: { getCfcLabel },
-      kind: undefined,
-      _labelRequestId: 0,
-      cfcLabel: undefined,
-      _valueResolutionPending: false,
-      requestUpdate: () => {},
-      reconcileLabelRetry: () => {},
-    };
-  }
-
-  function refreshLabel(fakeThis: unknown): Promise<void> {
-    return (CFCFCAuthorship.prototype as unknown as {
-      refreshLabel(this: unknown): Promise<void>;
-    }).refreshLabel.call(fakeThis);
-  }
 
   it("does not leak an unhandled rejection when the label read is cancelled", async () => {
-    const fakeThis = authorshipThis(() =>
-      Promise.reject(new DOMException("aborted", "AbortError"))
-    );
-    // Resolves (does not reject) — the fix swallows the disposal-raced read.
-    await refreshLabel(fakeThis);
+    const element = new CFCFCAuthorship();
+    element.value = {
+      getCfcLabel: () =>
+        Promise.reject(new DOMException("aborted", "AbortError")),
+    };
+    // Resolves (does not reject) — the disposal-raced read is swallowed.
+    await element.refreshLabel();
     // The label was left untouched.
-    expect(fakeThis.cfcLabel).toBeUndefined();
+    expect(element.cfcLabel).toBeUndefined();
   });
 
   it("applies the label when the read succeeds", async () => {
@@ -854,8 +893,9 @@ describe("CFCFCAuthorship disposal handling", () => {
       version: 1,
       entries: [{ path: [], label: { integrity: ["x"] } }],
     };
-    const fakeThis = authorshipThis(() => Promise.resolve(label));
-    await refreshLabel(fakeThis);
-    expect(fakeThis.cfcLabel).toEqual(label);
+    const element = new CFCFCAuthorship();
+    element.value = { getCfcLabel: () => Promise.resolve(label) };
+    await element.refreshLabel();
+    expect(element.cfcLabel).toEqual(label);
   });
 });
