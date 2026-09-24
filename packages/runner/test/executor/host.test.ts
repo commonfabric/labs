@@ -71,6 +71,7 @@ describe("ExecutorHost", () => {
             experimental: { serverExecution: true },
           })
         );
+        let parkStub: { restored: boolean; restore(): void } | undefined;
         try {
           for (const [index, client] of clients.entries()) {
             const space = [failing, held][index];
@@ -79,7 +80,7 @@ describe("ExecutorHost", () => {
           await Promise.all([...activated.values()].map((a) => a.promise));
           const parkFailure = new Error("park failed");
           const failingServer = host.spaceServer(failing)!;
-          const parkStub = stub(failingServer, "park", async () => {
+          parkStub = stub(failingServer, "park", async () => {
             await heldDisposeStarted.promise;
             throw parkFailure;
           });
@@ -112,7 +113,11 @@ describe("ExecutorHost", () => {
             enablersBefore + clients.length,
           );
         } finally {
+          // A case that failed early leaves the host serving: close it with
+          // the real parks, before the server its runtimes use goes away.
+          if (parkStub?.restored === false) parkStub.restore();
           releaseHeldDispose.resolve();
+          await host.close().catch(() => {});
           for (const client of clients) await client.dispose();
           await server.close();
         }
