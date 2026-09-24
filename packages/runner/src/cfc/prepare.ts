@@ -40,6 +40,7 @@ import { deepEqual, deepEqualKey } from "@commonfabric/utils/deep-equal";
 import { getLogger } from "@commonfabric/utils/logger";
 import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { utf8Compare } from "@commonfabric/utils/utf8";
 
 import { encodePointer } from "../../../memory/v2/path.ts";
 import type { JSONSchema } from "../builder/types.ts";
@@ -161,6 +162,7 @@ import {
   cfcSchemaPoliciesEqual,
   type MergeCfcSchemaEnvelopeOptions,
   mergeCfcSchemaEnvelopes,
+  withoutUndefinedMembers,
 } from "./schema-merge.ts";
 import {
   cfcSchemaResolvedRoot,
@@ -6192,10 +6194,17 @@ const loadEnvelopeSchema = (
     return document;
   };
   if (declaresDefinitionScope(root)) {
-    walkSchemaDocumentClosure({
+    // `load` throws on a document it cannot produce, so a miss here means the
+    // walk itself changed; refuse rather than read a partial closure.
+    const { missing } = walkSchemaDocumentClosure({
       roots: [metadata.schemaHash],
       load: (hash) => ({ kind: "verified", schema: load(hash) }),
     });
+    if (missing.size !== 0) {
+      throw new Error(
+        `CFC envelope ${metadata.schemaHash} has an incomplete closure`,
+      );
+    }
     return root;
   }
   return internSchema(
@@ -7442,6 +7451,11 @@ export function* prepareBoundaryCommitSteps(
 
     let deferredWriterRefusal: string | undefined;
     const deferredWriterPaths: (readonly string[])[] = [];
+    // A preserved runtime output's deferral is discarded only by SC-11's
+    // proof that the whole envelope is unchanged, never by the replay waiver
+    // below, which keeps the stored schema over a candidate spelled another
+    // way.
+    let deferredPreservedOutput = false;
     const requirementFailure = verifyInputRequirements(
       tx,
       verificationSchema,
@@ -7453,12 +7467,18 @@ export function* prepareBoundaryCommitSteps(
       stored.status === "loaded"
         ? (reason, path) => {
           if (
-            !(path.length === 0 && writePreservesRuntimeOutput(tx, target)) &&
-            !(writeReplaysArgumentSlot(tx, target, path) &&
-              writeLeavesPathUnchanged(tx, target, path))
-          ) return false;
+            writeReplaysArgumentSlot(tx, target, path) &&
+            writeLeavesPathUnchanged(tx, target, path)
+          ) {
+            deferredWriterPaths.push(path);
+          } else if (
+            path.length === 0 && writePreservesRuntimeOutput(tx, target)
+          ) {
+            deferredPreservedOutput = true;
+          } else {
+            return false;
+          }
           deferredWriterRefusal ??= reason;
-          deferredWriterPaths.push(path);
           return true;
         }
         : undefined,
@@ -8918,8 +8938,8 @@ export function* prepareBoundaryCommitSteps(
     // are not the writer policy's to guard, and persist as for any write.
     let keepsStoredSchema = false;
     if (
-      deferredWriterRefusal !== undefined && existing !== undefined &&
-      storedSchema !== undefined &&
+      deferredWriterRefusal !== undefined && !deferredPreservedOutput &&
+      existing !== undefined && storedSchema !== undefined &&
       cfcSchemaPoliciesEqual(storedSchema, schemaAndHash.schema)
     ) {
       const storedEntries = canonicalizeCfcMetadata(existing).labelMap.entries;
@@ -8936,14 +8956,10 @@ export function* prepareBoundaryCommitSteps(
       const declaredPositions = (schema: JSONSchema) =>
         cfcSchemaEntries(schema).map((entry) => ({
           path: encodePointer(canonicalizeLogicalPath(entry.path)),
-          ifc: JSON.parse(
-            JSON.stringify(
-              isObjectOrArray(entry.schema) ? entry.schema.ifc ?? null : null,
-            ),
+          ifc: withoutUndefinedMembers(
+            isObjectOrArray(entry.schema) ? entry.schema.ifc ?? null : null,
           ),
-        })).sort((left, right) =>
-          left.path < right.path ? -1 : left.path > right.path ? 1 : 0
-        );
+        })).sort((left, right) => utf8Compare(left.path, right.path));
       if (
         deepEqual(
           declaredPositions(storedSchema),

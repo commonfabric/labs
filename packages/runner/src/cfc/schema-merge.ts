@@ -887,9 +887,12 @@ export const cfcSchemaPoliciesEqual = (
   hashStringOf(withoutUndefinedMembers(schemaPolicyGraph(left))) ===
     hashStringOf(withoutUndefinedMembers(schemaPolicyGraph(right)));
 
-// A merge spells an absent claim as a member holding `undefined`, and a stored
-// envelope read back does not, so the two are compared without such members.
-const withoutUndefinedMembers = <T>(value: T): T => {
+/**
+ * `value` with every object member holding `undefined` removed, recursively.
+ * A merge spells an absent claim as such a member, and a stored envelope read
+ * back does not, so the two are compared without them.
+ */
+export const withoutUndefinedMembers = <T>(value: T): T => {
   if (Array.isArray(value)) {
     return value.map(withoutUndefinedMembers) as T;
   }
