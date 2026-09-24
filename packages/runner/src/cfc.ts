@@ -1192,10 +1192,12 @@ export function resolveExternalRootRefForStructure(
  * Like {@link resolveExternalRootRefForStructure}, except that a local root
  * `$ref` resolves too, against the `$defs` the schema carries: a definition
  * declares the structure of every position of its type, the handle it holds
- * among it, whichever form the reference to it takes. A local reference whose
- * definition the schema does not carry, or that resolves to a boolean, reads
- * as the schema itself, without consulting the resolver in the first case,
- * which would log the miss.
+ * among it, whichever form the reference to it takes. Any other reference reads
+ * as the schema itself without consulting the resolver: one naming a
+ * definition the schema does not carry, as a union option read apart from the
+ * `$defs` it names does, where the resolver would log the miss, and one naming
+ * an embedded schema such as `vnode.json`. So does a local reference that
+ * resolves to a boolean.
  */
 export function resolveRootRefForStructure(
   schema: JSONSchemaObj,
