@@ -863,4 +863,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "a Loom panel's new optional addedBy reads as a narrowed union branch under baselines that never had the property",
     record: "docs/history/loom-panel-added-by-break.md",
   },
+  {
+    // Each `Panel` kind gains an optional `addedByProfile`, whose write
+    // contract and label are its type. The proof does not apply the
+    // open-object evolution allowance inside a union branch.
+    pattern: "loom/main.tsx",
+    baselines: ["20260923T232217Z-9unt7nppL26FihSK"],
+    paths: ["argument.panels[]"],
+    reason:
+      "a Loom panel's new optional addedByProfile reads as a narrowed union branch under the baseline recorded before it",
+    record: "docs/history/loom-panel-adder-profile-break.md",
+  },
 ];

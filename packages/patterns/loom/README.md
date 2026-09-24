@@ -29,26 +29,53 @@ A published document stores `{source, notes}`. `source` is the allowlisted
 key. `notes` is collaborative text and remains intact when source data changes;
 the root renders it as a shared text field.
 
-Any panel may carry `addedBy`, the DID of the person who added it. A panel
-without one is attributed to the Loom's owner. `addPanel`, `addPiece`, and
-`duplicatePanel` refuse an `addedBy` that is not a DID in W3C DID Core syntax,
-or that is longer than 195 characters. They do not check that the DID names the
-person acting, and a direct write to the panels, or a later write to an
-occurrence, is not checked at all, so the stored value is a claim. The loom
-reconciler is to write each participant's principal there and read it. The
-root's own buttons pass no `addedBy` yet, so the panels they add or duplicate
-are attributed to the owner until the root's handlers link the profile under
-which the person is acting.
+A panel records who added it in one of two fields. `addedByProfile` links the
+profile under which the person adding it acted, and the runtime labels that link
+with `represents-principal` for the principal who acted, which it resolves
+itself: the root never reads a DID, and no caller chooses the one the label
+names. The adder is that label: the entry at `["addedByProfile"]` in the panel
+document's own label map, not the linked profile's label. The linked profile is
+the actor's claim, as in the roster, since any participant may link any profile;
+a reader shows it as the adder only when it names the same principal.
+
+`admission.tsx` holds `admitPanel`, the only handler the field's write contract
+admits, so `addPiece`, `addPanel`, and `duplicatePanel` are all bindings of it
+and take one event shape; an event names the profile in `as`. The contract names
+the handler, not its binding, so any binding of this module's `admitPanel` may
+write the field. Once the root has written a panel, a write to the field from
+any other handler is refused. `addPanel` keeps a profile the occurrence already
+names, since one `admitPanel` recorded carries the label of whoever added it
+first, and records `as` only on an occurrence that names none; removing an
+unattributed occurrence and adding it back under a profile attributes it to
+whoever did so. The runtime links an unlabeled document into the field when the
+panel's document holds no stored write contract yet, as when the write creates
+the panel: it checks a new link's source only under a write contract outside a
+union branch, and this one sits inside each of `Panel`'s branches. Neither
+changes whose principal the label names.
+
+`addedBy` is the DID of the person who added the panel, as its writer claims it.
+`addPiece` and `duplicatePanel` take it from their event, and `addPanel` from
+the occurrence, refusing one in its event. The three refuse an `addedBy` that is
+not a DID in W3C DID Core syntax, or that is longer than 195 characters, and an
+`as` alongside an `addedBy`. They do not check that the DID names the person
+acting, and a direct write to the panels, or a later write to an occurrence, is
+not checked at all, so the stored value is a claim. It serves a caller that has
+no profile to link. A panel with neither field is attributed to the Loom's
+owner.
+
+The root's own Duplicate button acts under the session's `actingProfile` in
+`viewerState` when it holds one, and otherwise under the viewer's `#profile`;
+with neither, the copy is attributed to the owner.
 
 `pieceRegistry` derives from piece panels in order, including duplicates.
-`addPiece({piece, addedBy?})` idempotently adds a registration occurrence; for a
-piece already registered it changes nothing, `addedBy` included, though a
-malformed `addedBy` is still refused. `addPanel` deduplicates by occurrence
+`addPiece({piece, as?, addedBy?})` idempotently adds a registration occurrence;
+for a piece already registered it changes nothing, its adder included, though a
+malformed adder is still refused. `addPanel` deduplicates by occurrence
 identity. `movePanel` and `duplicatePanel` accept an optional `before`
 occurrence; an absent source or anchor refuses. Duplicating copies the
-occurrence's complete target link and its title. It takes `addedBy` from its own
+occurrence's complete target link and its title. It takes its adder from its own
 event, never from the source: a copy is added by whoever duplicates it, and one
-made without `addedBy` is attributed to the owner. The runtime invocation
+made without an adder is attributed to the owner. The runtime invocation
 identifies the new occurrence, including when that delivery is retried.
 `removePanel` removes only one occurrence and its presentation references.
 `removePiece` unregisters every occurrence of the specified complete piece link.
@@ -76,7 +103,7 @@ and drops a removed member without deleting their entry. The root does not
 render the list: it holds claims, and only a consumer that can read the access
 list can say which are participants.
 
-Run and attach all five tests when deploying or updating source:
+Run and attach all six tests when deploying or updating source:
 
 ```sh
 deno task cf test packages/patterns/loom/main.test.tsx
@@ -84,6 +111,7 @@ deno task cf test packages/patterns/loom/presentation-refusals.test.tsx
 deno task cf test packages/patterns/loom/multi-user.test.tsx
 deno task cf test packages/patterns/loom/participant-labels.test.tsx
 deno task cf test packages/patterns/loom/url-view.test.tsx
+deno task cf test packages/patterns/loom/adder-profile.test.tsx
 
 deno task cf piece new packages/patterns/loom/main.tsx \
   --root packages/patterns \
@@ -91,7 +119,8 @@ deno task cf piece new packages/patterns/loom/main.tsx \
   --test packages/patterns/loom/presentation-refusals.test.tsx \
   --test packages/patterns/loom/multi-user.test.tsx \
   --test packages/patterns/loom/participant-labels.test.tsx \
-  --test packages/patterns/loom/url-view.test.tsx
+  --test packages/patterns/loom/url-view.test.tsx \
+  --test packages/patterns/loom/adder-profile.test.tsx
 ```
 
 Repeat all `--test` arguments with every `piece setsrc`. A source closure for

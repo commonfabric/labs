@@ -12,13 +12,28 @@ const signer = await Identity.fromPassphrase("loom-root-contract");
 const foreignSigner = await Identity.fromPassphrase("loom-root-foreign");
 const rootSchema = {
   type: "object",
-  required: ["panels", "pieceRegistry", "duplicatePanel", "removePiece"],
+  required: [
+    "panels",
+    "pieceRegistry",
+    "addPiece",
+    "duplicatePanel",
+    "removePiece",
+  ],
   properties: {
     panels: { type: "array", items: { type: "unknown", asCell: ["cell"] } },
     pieceRegistry: pieceListSchema,
+    addPiece: { asCell: ["stream"] },
     duplicatePanel: { asCell: ["stream"] },
     removePiece: { asCell: ["stream"] },
   },
+} as const;
+
+// A document labeled the way a Fabric profile is: integrity, no
+// confidentiality.
+const profileSchema = {
+  type: "object",
+  properties: { name: { type: "string" } },
+  ifc: { addIntegrity: ["loom-root-test-profile"] },
 } as const;
 
 describe("loom-root", () => {
@@ -127,5 +142,49 @@ describe("loom-root", () => {
     const remaining = await registry.pull();
     expect(remaining.length).toBe(1);
     expect(remaining[0].equals(local)).toBe(true);
+  });
+
+  it("labels a panel's adder profile with the principal who added it", async () => {
+    const tx = runtime.edit();
+    const profile = runtime.getCell(
+      pieces.getSpace(),
+      "loom-root-adder-profile",
+      profileSchema,
+      tx,
+    );
+    profile.set({ name: "Adder" });
+    await tx.commit();
+    const target = runtime.getCell(pieces.getSpace(), "loom-root-adder-target");
+    const output = root.asSchema(rootSchema);
+    const addPiece = await output.key("addPiece").pull();
+    await new Promise<void>((resolve, reject) =>
+      addPiece.send({ piece: target, as: profile }, (tx) => {
+        const status = tx.status();
+        if (status.status === "error") reject(status.error);
+        else resolve();
+      }, { eventId: "add-as-profile", session: signer.did() })
+    );
+    await runtime.idle();
+    const panels = await output.key("panels").pull();
+    const panel = panels[0].resolveAsCell().getAsNormalizedFullLink();
+    const read = runtime.edit();
+    const stored = read.readOrThrow({
+      space: panel.space,
+      scope: panel.scope,
+      id: panel.id,
+      path: [],
+    }) as { cfc?: { labelMap?: { entries?: unknown[] } } };
+    read.abort();
+    expect(stored.cfc?.labelMap?.entries).toContainEqual(
+      expect.objectContaining({
+        path: ["addedByProfile"],
+        label: expect.objectContaining({
+          integrity: expect.arrayContaining([{
+            kind: "represents-principal",
+            subject: signer.did(),
+          }]),
+        }),
+      }),
+    );
   });
 });
