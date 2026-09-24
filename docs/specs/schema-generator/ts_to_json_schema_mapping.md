@@ -950,6 +950,18 @@ Mechanics:
   `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label keeps its
   `AnyOf` clauses. A named type in the payload stays a `$ref` to its
   definition.
+- A policy's type can lose its alias name. A payload member its metadata
+  carrier cannot intersect is reduced away: `Confidential<string | null, L>` is
+  `string & carrier`, and `Confidential<null, L>` is `never`. A rewrite such as
+  `NonNullable<…>`, which intersects with `{}`, drops the name too. A written
+  reference that names the policy still lowers it from its own arguments,
+  `null` and a `typeof` writer binding included. Read from a type alone, the
+  value is its one member besides the carriers, labelled with each carrier's
+  metadata as its types spell it (`cfcCarriedParts`), provided every value in
+  it reads. A writer binding, which only a `typeof` node names, does not, and a
+  policy read in part could claim what its author never wrote together, such
+  as an `ownerPrincipal` without its `writeAuthorizedBy`. Then the value is its
+  payload alone. The `null` the checker dropped is in the schema neither way.
 - User alias chains are followed with type-parameter node substitution until a
   canonical name is reached (`resolveCfcAliasFromDeclaration` /
   `substituteTypeNode`). Substitution starts at the authored reference's

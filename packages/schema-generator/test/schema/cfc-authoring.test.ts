@@ -410,6 +410,86 @@ describe("Schema: CFC authoring aliases", () => {
     expect(diagnostics).toEqual([]);
   });
 
+  it("lowers a policy whose reduced type lost its name from the reference that names it", async () => {
+    // `null & carrier` is nothing, so the checker reduces each policy below to
+    // its other members, `none` to `never`, with no alias name left.
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+      function save() {}
+      interface SchemaRoot {
+        single: Confidential<string | null, readonly ["a"]>;
+        several: Confidential<string | number | null, readonly ["a"]>;
+        none: Confidential<null, readonly ["a"]>;
+        writer: WriteAuthorizedBy<string | null, typeof save>;
+      }
+    `,
+      "SchemaRoot",
+    );
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+
+    const ifc = { confidentiality: ["a"] };
+    expect(schema.properties?.single).toEqual({
+      anyOf: [{ type: "string" }, { type: "null" }],
+      ifc,
+    });
+    expect(schema.properties?.several).toEqual({
+      type: ["null", "number", "string"],
+      ifc,
+    });
+    expect(schema.properties?.none).toEqual({ type: "null", ifc });
+    expect(schema.properties?.writer).toEqual({
+      anyOf: [{ type: "string" }, { type: "null" }],
+      ifc: {
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: { file: "test.ts", path: ["save"] },
+        },
+      },
+    });
+  });
+
+  it("reads a policy's carriers in full, or not at all, when no reference names it", async () => {
+    // Read from a type alone, a policy whose alias name is gone has only its
+    // carriers, which hold its metadata as types. A writer binding is a
+    // `typeof` no type spells, and an `ownerPrincipal` without its
+    // `writeAuthorizedBy` would claim what the author never wrote alone, so
+    // such carriers are not read at all. `NonNullable<…>` intersects with
+    // `{}`, which drops the name as a reduction does.
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+      type CurrentPrincipal = { readonly __ctCurrentPrincipal: true };
+      function save() {}
+      type Labelled = Cfc<Confidential<string[], readonly ["a"]>, { ownerPrincipal: CurrentPrincipal }>;
+      type Owned = Cfc<WriteAuthorizedBy<string[], typeof save>, { ownerPrincipal: CurrentPrincipal }>;
+      interface SchemaRoot {
+        labelled: NonNullable<Labelled | null>;
+        owned: NonNullable<Owned | null>;
+      }
+    `,
+      "SchemaRoot",
+    );
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+
+    const payload = { type: "array", items: { type: "string" } };
+    expect(schema.properties?.labelled).toEqual({
+      ...payload,
+      ifc: {
+        confidentiality: ["a"],
+        ownerPrincipal: { __ctCurrentPrincipal: true },
+      },
+    });
+    expect(schema.properties?.owned).toEqual(payload);
+  });
+
   it("formats a projection reached through a user alias over the root its reference carries", async () => {
     const { type, checker } = await getTypeFromCode(
       `

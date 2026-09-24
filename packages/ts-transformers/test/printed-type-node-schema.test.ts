@@ -526,6 +526,129 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
       }
     });
 
+    describe("a CFC alias whose type the checker reduced", () => {
+      // `Confidential<string | null, …>` is `string & carrier` once
+      // `null & carrier` is nothing, and the reduced type keeps no alias name.
+      // A written reference still names the policy; a type alone has only its
+      // carrier, which holds the labels but cannot spell a writer binding.
+      for (
+        const [spelling, declaration, a, input, output] of [
+          [
+            "a nullable value written directly",
+            "",
+            `Confidential<string | null, ["secret"]>`,
+            {
+              anyOf: [{ type: "string" }, { type: "null" }],
+              ifc: { confidentiality: ["secret"] },
+            },
+            { type: "string", ifc: { confidentiality: ["secret"] } },
+          ],
+          [
+            "a nullable object written directly",
+            "",
+            `Confidential<{ title: string } | null, ["secret"]>`,
+            {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: { title: { type: "string" } },
+                  required: ["title"],
+                },
+                { type: "null" },
+              ],
+              ifc: { confidentiality: ["secret"] },
+            },
+            {
+              type: "object",
+              properties: { title: { type: "string" } },
+              required: ["title"],
+              ifc: { confidentiality: ["secret"] },
+            },
+          ],
+          [
+            "a nullable value's writer written directly",
+            `const setName = handler<{ name: string }, { name: Writable<string | null> }>((event, { name }) => { name.set(event.name); });`,
+            "WriteAuthorizedBy<string | null, typeof setName>",
+            {
+              anyOf: [{ type: "string" }, { type: "null" }],
+              ifc: {
+                writeAuthorizedBy: {
+                  __ctWriterIdentityOf: {
+                    file: "/main.tsx",
+                    path: ["setName"],
+                  },
+                },
+              },
+            },
+            { type: "string" },
+          ],
+          [
+            "a nullable projection",
+            `type P<T, Path extends readonly string[]> = ProjectionOf<T | null, Path>;`,
+            `P<{ t: string }, ["x/y", "m~n"]>`,
+            {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: { t: { type: "string" } },
+                  required: ["t"],
+                },
+                { type: "null" },
+              ],
+              ifc: { projection: { from: "/", path: "/x~1y/m~0n" } },
+            },
+            {
+              type: "object",
+              properties: { t: { type: "string" } },
+              required: ["t"],
+              ifc: { projection: { from: "/", path: "/x~1y/m~0n" } },
+            },
+          ],
+          [
+            "a nullable value",
+            `type Sec<T> = Confidential<T | null, ["secret"]>;`,
+            "Sec<string>",
+            {
+              anyOf: [{ type: "string" }, { type: "null" }],
+              ifc: { confidentiality: ["secret"] },
+            },
+            { type: "string", ifc: { confidentiality: ["secret"] } },
+          ],
+          [
+            "a nullable array in another label's payload",
+            `type Sec<T> = Confidential<T[] | null, ["secret"]>;`,
+            `Integrity<Sec<string>, ["trusted"]>`,
+            {
+              anyOf: [
+                { type: "array", items: { type: "string" } },
+                { type: "null" },
+              ],
+              ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
+            },
+            {
+              type: "array",
+              items: { type: "string" },
+              ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
+            },
+          ],
+        ] as const
+      ) {
+        it(`keeps the metadata of ${spelling}`, async () => {
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, handler, Integrity, pattern, ProjectionOf, Writable, WriteAuthorizedBy } from "commonfabric";
+${declaration}
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+          const schemas = patternSchemas(parseModule(files["/main.tsx"]!));
+          // The argument is read from its written reference, which keeps
+          // `null`; the result from the reduced type, which has none.
+          expect((schemas.input.properties as Schema).a).toEqual(input);
+          expect((schemas.output.properties as Schema).a).toEqual(output);
+        });
+      }
+    });
+
     describe("an object label with a member the syntax reader cannot name", () => {
       const user = {
         type: "https://commonfabric.org/cfc/atom/User",

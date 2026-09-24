@@ -373,6 +373,17 @@ const soleConditionalBranch = (
 };
 
 /**
+ * The `__ct_cfc__` member of `member` when that is all `member` holds: a CFC
+ * metadata carrier, which a CFC alias intersects its payload with.
+ */
+const cfcCarrierProperty = (member: ts.Type): ts.Symbol | undefined => {
+  const properties = member.getProperties();
+  return properties.length === 1 && properties[0]!.name === "__ct_cfc__"
+    ? properties[0]
+    : undefined;
+};
+
+/**
  * The innermost payload of `type`, a CFC alias chain's instantiation, or
  * `undefined` where it cannot be told apart. Every CFC alias adds its metadata
  * to its payload as one more member of an intersection, a carrier holding only
@@ -383,14 +394,47 @@ const soleConditionalBranch = (
  */
 const cfcPayloadOf = (type: ts.Type): ts.Type | undefined => {
   if (!type.isIntersection()) return undefined;
-  const carries = (member: ts.Type) => {
-    const properties = member.getProperties();
-    return properties.length === 1 && properties[0]!.name === "__ct_cfc__";
-  };
   // An intersection has two members at least, so one left means a carrier.
-  const rest = type.types.filter((member) => !carries(member));
+  const rest = type.types.filter((member) => !cfcCarrierProperty(member));
   return rest.length === 1 ? rest[0] : undefined;
 };
+
+/**
+ * The labelled parts of `type`, an intersection of CFC metadata carriers and
+ * one other member, or `undefined` for any other type: that member, the
+ * payload, and each carrier's metadata. The checker drops a CFC alias's name
+ * where it reduces the alias's type, as `Confidential<T | null, …>` at
+ * `T = string` reduces to `string & carrier` once `null & carrier` is
+ * nothing. Then the carrier is all that says the value is labelled.
+ */
+const cfcCarriedParts = (
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): { payload: ts.Type; metadata: ts.Type[] } | undefined => {
+  if (!type.isIntersection()) return undefined;
+  const metadata: ts.Type[] = [];
+  const rest: ts.Type[] = [];
+  for (const member of type.types) {
+    const carrier = cfcCarrierProperty(member);
+    if (carrier) {
+      metadata.push(
+        memberValueType(carrier, checker.getTypeOfSymbol(carrier), checker),
+      );
+    } else rest.push(member);
+  }
+  return metadata.length > 0 && rest.length === 1
+    ? { payload: rest[0]!, metadata }
+    : undefined;
+};
+
+/**
+ * Whether `value`, metadata read from a type, holds no `undefined`: no value
+ * the type could not spell.
+ */
+const readInFull = (value: unknown): boolean =>
+  value !== undefined &&
+  (!isObjectOrArray(value) ||
+    (Array.isArray(value) ? value : Object.values(value)).every(readInFull));
 
 /**
  * The type `parameterTypes` gives `node` when `node` is a bare reference to one
@@ -574,6 +618,10 @@ export class CommonFabricFormatter implements TypeFormatter {
       return true;
     }
 
+    if (cfcCarriedParts(type, context.typeChecker)) {
+      return true;
+    }
+
     // Check via typeNode for Default (erased at type-level)
     const wrapperViaNode = detectWrapperViaNode(
       context.typeNode,
@@ -662,6 +710,34 @@ export class CommonFabricFormatter implements TypeFormatter {
     );
     if (resolvedCfcAlias) {
       return this.#formatResolvedCfcAlias(resolvedCfcAlias, context);
+    }
+
+    // With no alias name left to follow, and no reference naming the policy,
+    // the metadata carriers say the value is labelled, and with what. Read in
+    // part, a policy could claim what its author never wrote together, or
+    // break an invariant between its parts: an `ownerPrincipal` needs the
+    // `writeAuthorizedBy` whose binding, a `typeof`, no type spells. So the
+    // carriers are read in full, or the value is its payload alone.
+    const carried = cfcCarriedParts(type, context.typeChecker);
+    if (carried) {
+      const payload = this.#schemaGenerator.formatChildType(
+        carried.payload,
+        context,
+        undefined,
+      );
+      const metadata = carried.metadata.map((carrier) =>
+        this.#extractLiteralLikeValue(carrier, undefined, context)
+      );
+      return metadata.every((labels) =>
+          isObjectOrArray(labels) && !Array.isArray(labels) &&
+          readInFull(labels)
+        )
+        ? metadata.reduce<MutableJSONSchema>(
+          (schema, labels) =>
+            this.#mergeIfcMetadata(schema, labels as Record<string, unknown>),
+          payload,
+        )
+        : payload;
     }
 
     // Handle wrapper unions first (before FactoryInput<T> union check)
@@ -1740,6 +1816,23 @@ export class CommonFabricFormatter implements TypeFormatter {
           new Set([declaration]),
         );
         if (resolved) return resolved;
+      }
+      // Reduced, a policy's type can lose its name: `Confidential<string |
+      // null, L>` is `string & carrier`, since `null & carrier` is nothing, and
+      // `Confidential<null, L>` is `never`. The reference still names the
+      // policy, and holds its arguments as written, `null` among them.
+      if (
+        declaration && terminals.has(declaration.name.text) &&
+        !typeWithAlias.aliasSymbol
+      ) {
+        return this.#resolveAliasChainFromDeclaration(
+          terminals,
+          declaration,
+          undefined,
+          reference.typeArguments ?? [],
+          context,
+          new Set([declaration]),
+        );
       }
     }
 
