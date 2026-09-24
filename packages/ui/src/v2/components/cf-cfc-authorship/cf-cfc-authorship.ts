@@ -3,7 +3,7 @@ import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { css, html } from "lit";
 
 import { BaseElement } from "../../core/base-element.ts";
-import { authorPrincipalFromLabel } from "../../core/cfc-label.ts";
+import { authorPrincipalCandidates } from "../../core/cfc-label.ts";
 import { initialsForName } from "../cf-avatar/index.ts";
 
 export type CfcAuthorshipState = "verified" | "unverified" | "unknown";
@@ -749,9 +749,11 @@ export class CFCFCAuthorship extends BaseElement {
         : undefined;
       const profile = await readLabelView(author, "represents-principal");
       pendingResolution = profile.pendingResolution;
-      const profileSubject = authorPrincipalFromLabel(profile.view);
-      authorClaim = principalAuthorClaim(
-        profileSubject,
+      const candidates = authorPrincipalCandidates(profile.view);
+      // A label naming more than one principal names none, and the claim's
+      // own value does not stand in for it.
+      authorClaim = candidates.length > 1 ? undefined : principalAuthorClaim(
+        candidates[0],
         authorDisplayName(valueClaim) ?? primitiveToString(this.authorName),
       ) ?? valueClaim;
     } catch {

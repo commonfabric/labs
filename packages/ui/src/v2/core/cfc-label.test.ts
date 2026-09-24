@@ -2,7 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
 import {
-  authorPrincipalFromLabel,
+  authorPrincipalCandidates,
   cfcLabelViewIsPublic,
   ownerPrincipalFromLabel,
 } from "./cfc-label.ts";
@@ -74,7 +74,7 @@ describe("ownerPrincipalFromLabel", () => {
   });
 });
 
-describe("authorPrincipalFromLabel", () => {
+describe("authorPrincipalCandidates", () => {
   it("returns the DID a profile's field atoms name when the root has none", () => {
     // A message's link to a Fabric profile: the root holds the message's own
     // `authored-by`, and the profile's owner-protected fields their owner.
@@ -87,25 +87,38 @@ describe("authorPrincipalFromLabel", () => {
       representsAt(["bio"], DID),
       representsAt(["elements"], DID),
     ]);
-    expect(authorPrincipalFromLabel(label)).toBe(DID);
+    expect(authorPrincipalCandidates(label)).toEqual([DID]);
   });
 
   it("returns the root's DID for an author labeled only at its root", () => {
     const label = view([representsAt([], DID)]);
-    expect(authorPrincipalFromLabel(label)).toBe(DID);
+    expect(authorPrincipalCandidates(label)).toEqual([DID]);
   });
 
-  it("returns `undefined` when the root and a top-level field name different DIDs", () => {
+  it("returns one DID when the root and a top-level field agree", () => {
+    const label = view([representsAt([], DID), representsAt(["name"], DID)]);
+    expect(authorPrincipalCandidates(label)).toEqual([DID]);
+  });
+
+  it("returns both DIDs when the root and a top-level field disagree", () => {
     // A link slot that is itself labeled with the principal who wrote it,
     // holding a profile someone else owns.
     const label = view([
       representsAt([], OTHER_DID),
       representsAt(["name"], DID),
     ]);
-    expect(authorPrincipalFromLabel(label)).toBeUndefined();
+    expect(authorPrincipalCandidates(label)).toEqual([OTHER_DID, DID]);
   });
 
-  it("ignores atoms below the top-level fields", () => {
+  it("returns both DIDs when top-level fields disagree", () => {
+    const label = view([
+      representsAt(["name"], DID),
+      representsAt(["avatar"], OTHER_DID),
+    ]);
+    expect(authorPrincipalCandidates(label)).toEqual([DID, OTHER_DID]);
+  });
+
+  it("does not count atoms below the top-level fields", () => {
     // A profile that pins a piece owned by someone else holds a copy of that
     // piece's label below the field that links it.
     const label = view([
@@ -113,43 +126,26 @@ describe("authorPrincipalFromLabel", () => {
       representsAt(["elements"], DID),
       representsAt(["elements", "0", "cell"], OTHER_DID),
     ]);
-    expect(authorPrincipalFromLabel(label)).toBe(DID);
-  });
-
-  it("returns `undefined` when field atoms name two DIDs", () => {
-    const label = view([
-      representsAt(["name"], DID),
-      representsAt(["avatar"], OTHER_DID),
-    ]);
-    expect(authorPrincipalFromLabel(label)).toBeUndefined();
-  });
-
-  it("returns `undefined` when root atoms name two DIDs, whatever the fields name", () => {
-    const label = view([
-      representsAt([], DID),
-      representsAt([], OTHER_DID),
-      representsAt(["name"], DID),
-    ]);
-    expect(authorPrincipalFromLabel(label)).toBeUndefined();
+    expect(authorPrincipalCandidates(label)).toEqual([DID]);
   });
 
   it("returns the DID of a string-form atom", () => {
     const label = view([
       { path: ["name"], label: { integrity: [`represents-principal:${DID}`] } },
     ]);
-    expect(authorPrincipalFromLabel(label)).toBe(DID);
+    expect(authorPrincipalCandidates(label)).toEqual([DID]);
   });
 
-  it("returns `undefined` for a label with no represents-principal atom", () => {
+  it("returns no DID for a label with no represents-principal atom", () => {
     const label = view([
       {
         path: [],
         label: { integrity: [{ kind: "authored-by", subject: DID }] },
       },
     ]);
-    expect(authorPrincipalFromLabel(label)).toBeUndefined();
-    expect(authorPrincipalFromLabel(view([]))).toBeUndefined();
-    expect(authorPrincipalFromLabel(undefined)).toBeUndefined();
+    expect(authorPrincipalCandidates(label)).toEqual([]);
+    expect(authorPrincipalCandidates(view([]))).toEqual([]);
+    expect(authorPrincipalCandidates(undefined)).toEqual([]);
   });
 });
 

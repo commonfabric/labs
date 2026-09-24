@@ -605,6 +605,50 @@ describe("CFCFCAuthorship", () => {
     expect(element.authorshipState).toBe("unverified");
   });
 
+  it("does not verify on the claim's own id when the profile's label names two principals", async () => {
+    // Without the label's principal, the component would read an author id
+    // from the claim's value, which here names the sender.
+    const element = new CFCFCAuthorship();
+    element.value = {
+      getCfcLabel: () =>
+        Promise.resolve(authoredByLabel("did:example:mallory")),
+    };
+    element.author = {
+      get: () => ({ id: "did:example:mallory", name: "Alice" }),
+      getCfcLabel: () =>
+        Promise.resolve({
+          version: 1 as const,
+          entries: [
+            ...authoredByLabel("did:example:mallory").entries,
+            {
+              path: ["name"],
+              label: {
+                integrity: [{
+                  kind: "represents-principal",
+                  subject: "did:example:alice",
+                }],
+              },
+            },
+            {
+              path: ["avatar"],
+              label: {
+                integrity: [{
+                  kind: "represents-principal",
+                  subject: "did:example:bob",
+                }],
+              },
+            },
+          ],
+        }),
+    };
+
+    await element.refreshLabel();
+    await element.refreshAuthorClaim();
+
+    expect(element.authorClaim).toBeUndefined();
+    expect(element.authorshipState).toBe("unknown");
+  });
+
   it("fails closed when a bound author claim cell changes away from the integrity subject", async () => {
     const cfcLabel = {
       version: 1 as const,
