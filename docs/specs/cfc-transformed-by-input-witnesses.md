@@ -219,5 +219,18 @@ outer atom's.
 
 Minting the witnesses as separate atoms rather than a set-valued field on one
 atom keeps rule matching unchanged. The identity-only atom stays byte-identical,
-so the stored label of a transformation whose inputs carried no
+so the stored label of a transformation whose confidential inputs carried no
 `TransformedBy` does not change.
+
+Any other attributed transformation stores more than before: one atom per
+retained witness beside the identity-only atom, platform-wide and not only where
+a rule asks for a witness. `INPUT_WITNESS_MAX_DEPTH` bounds the nesting, so a
+chain of endorsed steps, a handler that reads its own output, or a ring of
+handlers each reading the previous one's output settles at four `TransformedBy`
+atoms per stamp (nesting depths zero to three). Measured on the test harness,
+that stamp's label map grows from 582 to 2,049 bytes and stops there, within
+five runs of each handler. The count grows past four only when one input
+location's resolution joins several entries that each carry `TransformedBy`
+(entries from several components, or tied entries). When no location joins more
+than _s_ of them, a stamp carries at most 1 + _s_ + _s_² + _s_³ `TransformedBy`
+atoms.
