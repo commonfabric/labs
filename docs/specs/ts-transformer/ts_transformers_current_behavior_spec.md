@@ -1934,16 +1934,16 @@ adjustments:
   type it was printed from, each type node below it printed afresh from its own
   type (`unfoldPrint` in `transformers/type-shrinking.ts`). Node-driven
   shrinking and the application of identity-only paths unfold a literal, a union
-  (into one print for each of its members), an array (`T[]`, `readonly T[]`,
-  `Array<T>`, `ReadonlyArray<T>`), and a cell reference. The narrowing of cells
-  to their observed capability unfolds a literal, and reads the value of a
-  printed cell, or of each cell in a printed nullable union, printed from the
-  type arguments its wrapper was given. A union carrying a `Default` brand, and
-  an object with a property keyed by a symbol, say something only as a whole and
-  do not unfold; a print of any other kind does not either. A print that does
-  not unfold is kept whole. A print thus goes through each pass as the authored
-  node for its type would, every part a pass keeps is read by its type, and no
-  pass builds a node from a piece of a print
+  (into one print for each of its members), an array (`T[]` or `readonly T[]`,
+  as the printer writes one), and a cell reference. The narrowing of cells to
+  their observed capability unfolds a literal, and reads the value of a printed
+  cell, or of each cell in a printed nullable union, printed from the type
+  arguments its wrapper was given. A union carrying a `Default` brand, and an
+  object with a property keyed by a symbol, say something only as a whole and do
+  not unfold; a print of any other kind does not either. A print that does not
+  unfold is kept whole. A print thus goes through each pass as the authored node
+  for its type would, every part a pass keeps is read by its type, and no pass
+  builds a node from a piece of a print
   (`test/printed-type-node-schema.test.ts`). A scoped cell
   (`PerUser<Writable<T>>`), whose scope only its alias names, is rebuilt by the
   narrowing of cells: its cell, printed afresh, is narrowed inside a rebuilt

@@ -3056,10 +3056,10 @@ function extractCellLikeInnerTypeNode(
  *
  * A wrapper written out is recognized by its name, as schema generation
  * recognizes it, and names its payload. Otherwise the value's type is read,
- * from the cell's type or, for a value node printed from a type, which the
- * checker reads as `any`, by resolving the name it prints in `sourceFile`, and
- * the payload is printed from the types the scope brand is intersected with,
- * one alternative per member of a union the brand was distributed over.
+ * from the cell's type or, for a value node printed from a type, from the type
+ * it was printed from, and the payload is printed from the types the scope
+ * brand is intersected with, one alternative per member of a union the brand
+ * was distributed over.
  */
 function moveNullishIntoScopeWrapper(
   value: ts.TypeNode,
@@ -3085,11 +3085,7 @@ function moveNullishIntoScopeWrapper(
     return payload && wrapInScope([payload], namedScope, nullish, factory);
   }
 
-  const valueType = cellValueType ?? printedType ??
-    (name && ts.isIdentifier((written as ts.TypeReferenceNode).typeName) &&
-        !(written as ts.TypeReferenceNode).typeArguments?.length
-      ? declaredTypeInScope(name, sourceFile, checker)
-      : undefined);
+  const valueType = cellValueType ?? printedType;
   const brand = valueType && getScopeBrand(valueType, checker);
   if (!brand) return undefined;
   const alternatives: ts.TypeNode[] = [];
@@ -3122,25 +3118,6 @@ function wrapInScope(
     SCOPE_WRAPPER_FOR_SCOPE[scope],
     factory,
   );
-}
-
-/**
- * The declared type of the non-generic type `name` denotes in `sourceFile`'s
- * scope, an import followed to what it imports.
- */
-function declaredTypeInScope(
-  name: ts.Identifier,
-  sourceFile: ts.SourceFile,
-  checker: ts.TypeChecker,
-): ts.Type | undefined {
-  let symbol = checker.getSymbolAtLocation(name) ??
-    checker.resolveName(name.text, sourceFile, ts.SymbolFlags.Type, false);
-  if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
-    symbol = checker.getAliasedSymbol(symbol);
-  }
-  return symbol && (symbol.flags & ts.SymbolFlags.Type) !== 0
-    ? checker.getDeclaredTypeOfSymbol(symbol)
-    : undefined;
 }
 
 /**
@@ -3493,8 +3470,8 @@ function applyCellCapabilityPathsToTypeNode(
 
 /**
  * Returns `true` for a node of a kind a pass reading its structure looks
- * inside: a type literal, a union, an array, or a cell or `Array` reference
- * with a type argument. A print of one of these is read through its unfolding
+ * inside: a type literal, a union, an array, or a cell reference with a type
+ * argument. A print of one of these is read through its unfolding
  * (`unfoldPrint()`), and as a whole where it has none.
  */
 function isUnfoldableKind(node: ts.TypeNode): boolean {
@@ -3508,11 +3485,7 @@ function isUnfoldableKind(node: ts.TypeNode): boolean {
     return node.operator === ts.SyntaxKind.ReadonlyKeyword &&
       ts.isArrayTypeNode(node.type);
   }
-  if (!ts.isTypeReferenceNode(node) || !node.typeArguments?.length) {
-    return false;
-  }
-  const name = getTypeReferenceNodeName(node);
-  return name === "Array" || name === "ReadonlyArray" ||
+  return ts.isTypeReferenceNode(node) && !!node.typeArguments?.length &&
     isCellLikeTypeNode(node);
 }
 
@@ -3568,35 +3541,27 @@ function unfoldPrint(
       ? factory.createTypeOperatorNode(ts.SyntaxKind.ReadonlyKeyword, array)
       : array;
   }
-  if (ts.isTypeReferenceNode(node) && node.typeArguments?.length) {
-    const name = getTypeReferenceNodeName(node);
-    if (name === "Array" || name === "ReadonlyArray") {
-      const element = getArrayElementType(type, checker);
-      return element &&
-        factory.createTypeReferenceNode(name, [print(element)]);
-    }
-    if (isCellLikeTypeNode(node)) {
-      const wrapper = getCellWrapperInfo(type, checker);
-      const [argument, ...rest] = cellTypeArguments(type, checker);
-      // The value is printed expanded, so a pass can read inside it, unless
-      // the printer cannot write the expansion: then it is the argument the
-      // wrapper was given, which keeps an alias's name.
-      const value = unwrapCellLikeType(type, checker);
-      const expanded = value && print(value);
-      const printed = expanded &&
-          (expanded.kind !== ts.SyntaxKind.UnknownKeyword ||
-            isAnyOrUnknownType(value!))
-        ? expanded
-        : argument && print(argument);
-      return wrapper && printed
-        ? createHelperWrapperTypeNode(
-          printed,
-          wrapper.kind,
-          factory,
-          rest.map(print),
-        )
-        : undefined;
-    }
+  if (ts.isTypeReferenceNode(node) && isCellLikeTypeNode(node)) {
+    const wrapper = getCellWrapperInfo(type, checker);
+    const [argument, ...rest] = cellTypeArguments(type, checker);
+    // The value is printed expanded, so a pass can read inside it, unless
+    // the printer cannot write the expansion: then it is the argument the
+    // wrapper was given, which keeps an alias's name.
+    const value = unwrapCellLikeType(type, checker);
+    const expanded = value && print(value);
+    const printed = expanded &&
+        (expanded.kind !== ts.SyntaxKind.UnknownKeyword ||
+          isAnyOrUnknownType(value!))
+      ? expanded
+      : argument && print(argument);
+    return wrapper && printed
+      ? createHelperWrapperTypeNode(
+        printed,
+        wrapper.kind,
+        factory,
+        rest.map(print),
+      )
+      : undefined;
   }
   return undefined;
 }
