@@ -412,9 +412,18 @@ describe("stored claim shapes", () => {
       handler,
       stream.getAsNormalizedFullLink(),
     );
-    runtime.scheduler.queueEvent(stream.getAsNormalizedFullLink(), pinClick());
+    let status: ReturnType<IExtendedStorageTransaction["status"]> | undefined;
+    runtime.scheduler.queueEvent(
+      stream.getAsNormalizedFullLink(),
+      pinClick(),
+      false,
+      (tx) => {
+        status = tx.status();
+      },
+    );
     await runtime.idle();
     cancel();
+    return status;
   };
 
   const storedEnvelope = (runtime: Runtime, id: string): JSONSchema => {
@@ -475,7 +484,7 @@ describe("stored claim shapes", () => {
             );
             const seeded = storedEnvelope(runtime, id);
 
-            await clickWrite(
+            const status = await clickWrite(
               runtime,
               id,
               attempt.schema,
@@ -484,8 +493,17 @@ describe("stored claim shapes", () => {
             );
 
             const now = runtime.getCell(space, id, shape.stored).get();
-            if (attempt.refusedWithClick) expect(now).toEqual(shape.seed);
-            else expect(now).not.toEqual(shape.seed);
+            if (attempt.refusedWithClick) {
+              expect(status?.status).toBe("error");
+              expect(
+                isCfcEnforcementRejection(
+                  (status as { error?: never } | undefined)?.error,
+                ),
+              ).toBe(true);
+              expect(now).toEqual(shape.seed);
+            } else {
+              expect(now).not.toEqual(shape.seed);
+            }
             expect(droppedStoredClaim(seeded, storedEnvelope(runtime, id)))
               .toBeUndefined();
           },

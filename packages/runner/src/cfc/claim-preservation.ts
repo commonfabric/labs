@@ -116,8 +116,12 @@ const child = (
   schema: JSONSchema | undefined,
 ): Located => schema === undefined ? EMPTY : { schema, root: parent.root };
 
-const arms = (schema: JSONSchemaObj): readonly JSONSchema[] | undefined =>
-  schema.anyOf ?? schema.oneOf;
+// The branches of every `anyOf` and `oneOf` on a node: both keywords may sit
+// on one node, and each constrains the value on its own.
+const arms = (schema: JSONSchemaObj): readonly JSONSchema[] => [
+  ...(schema.anyOf ?? []),
+  ...(schema.oneOf ?? []),
+];
 
 /**
  * The first write-side claim `stored` makes that `merged` does not keep, as a
@@ -182,10 +186,10 @@ export const droppedStoredClaim = (
     const mObject: JSONSchemaObj = isObjectNotArray(m) ? m : {};
 
     const storedArms = arms(s);
-    if (storedArms !== undefined) {
+    if (storedArms.length > 0) {
       const targets = [
         mergedNode,
-        ...(arms(mObject) ?? []).map((arm) => child(mergedNode, arm)),
+        ...arms(mObject).map((arm) => child(mergedNode, arm)),
       ];
       for (const arm of storedArms) {
         const armAt = child(storedNode, arm);

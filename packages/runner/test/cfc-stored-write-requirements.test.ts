@@ -300,44 +300,6 @@ describe("stored write requirements", () => {
       ifc: { uiContract: { ...PIN_CONTRACT } },
     };
 
-    // Writes `value` at `keys` of `id` from a handler that runs for one
-    // trusted click, through a cell typed by `schema`.
-    const clickSet = async (
-      runtime: Runtime,
-      id: string,
-      schema: JSONSchema | undefined,
-      keys: readonly string[],
-      value: unknown,
-    ) => {
-      const stream = runtime.getCell(space, `${id}-${keys.join(".")}-stream`, {
-        asCell: ["stream"],
-      });
-      let target = runtime.getCell(space, id, schema);
-      for (const key of keys) {
-        target = target.key(key as never) as typeof target;
-      }
-      const handler = Object.assign(
-        ((tx: IExtendedStorageTransaction) => {
-          target.withTx(tx).set(value as never);
-        }) as EventHandler,
-        {
-          reads: [],
-          writes: [target.getAsNormalizedFullLink()],
-          module: { type: "javascript" as const },
-          pattern: {} as never,
-        },
-      );
-      const cancel = runtime.scheduler.addEventHandler(
-        handler,
-        stream.getAsNormalizedFullLink(),
-      );
-      runtime.scheduler.queueEvent(
-        stream.getAsNormalizedFullLink(),
-        pinClick(),
-      );
-      await runtime.idle();
-      cancel();
-    };
     const REFUSALS = {
       uiContract: "missing trusted-event policy input",
       writeAuthorizedBy: "writeAuthorizedBy",
@@ -534,17 +496,15 @@ describe("stored write requirements", () => {
           },
         },
       } as JSONSchema;
-      await clickSet(runtime, id, declared, ["box"], {
-        pin: "seeded",
-        other: "o",
-      });
+      await clickAt(runtime, id, declared, { pin: "seeded", other: "o" }, [
+        "box",
+      ]);
       expect(runtime.getCell(space, id, declared).get()).toEqual({
         box: { pin: "seeded", other: "o" },
       });
-      await clickSet(runtime, id, undefined, ["box"], {
-        pin: "clicked",
-        other: "o2",
-      });
+      await clickAt(runtime, id, undefined, { pin: "clicked", other: "o2" }, [
+        "box",
+      ]);
       expect(runtime.getCell(space, id, declared).get()).toEqual({
         box: { pin: "clicked", other: "o2" },
       });
@@ -952,47 +912,12 @@ describe("stored write requirements", () => {
       ifc: { uiContract: { ...PIN_CONTRACT } },
     } as const satisfies JSONSchema;
 
-    // Commits `value` into `id` through a handler that runs for one renderer
-    // trusted click, writing through a cell typed by `writerSchema`.
-    const clickWrite = async (
-      runtime: Runtime,
-      id: string,
-      writerSchema: JSONSchema,
-      value: unknown,
-    ) => {
-      const stream = runtime.getCell(space, `${id}-stream`, {
-        asCell: ["stream"],
-      });
-      const output = runtime.getCell(space, id, writerSchema);
-      const handler = Object.assign(
-        ((tx: IExtendedStorageTransaction) => {
-          output.withTx(tx).set(value as never);
-        }) as EventHandler,
-        {
-          reads: [],
-          writes: [output.getAsNormalizedFullLink()],
-          module: { type: "javascript" as const },
-          pattern: {} as never,
-        },
-      );
-      const cancel = runtime.scheduler.addEventHandler(
-        handler,
-        stream.getAsNormalizedFullLink(),
-      );
-      runtime.scheduler.queueEvent(
-        stream.getAsNormalizedFullLink(),
-        pinClick(),
-      );
-      await runtime.idle();
-      cancel();
-    };
-
     const read = (runtime: Runtime, id: string) =>
       runtime.getCell(space, id, STORED).get();
 
     it("refuses a labeled writer that has no trusted click", async () => {
       const runtime = start();
-      await clickWrite(runtime, "pin-labeled", STORED, "pinned");
+      await clickAt(runtime, "pin-labeled", STORED, "pinned");
       expect(read(runtime, "pin-labeled")).toBe("pinned");
 
       const result = await commitWrite(runtime, "pin-labeled", {
@@ -1011,7 +936,7 @@ describe("stored write requirements", () => {
         $defs: { Pin: STORED },
       } as const satisfies JSONSchema;
       const runtime = start();
-      await clickWrite(runtime, "pin-referenced", REFERENCED, {
+      await clickAt(runtime, "pin-referenced", REFERENCED, {
         pin: "pinned",
       });
       const pinned = runtime.getCell(space, "pin-referenced", REFERENCED);
@@ -1050,7 +975,7 @@ describe("stored write requirements", () => {
         const ITEMS = { type: "array", ...items } as JSONSchema;
         const id = `pin-items-${shape}`;
         const runtime = start();
-        await clickWrite(runtime, id, ITEMS, ["pinned"]);
+        await clickAt(runtime, id, ITEMS, ["pinned"]);
         const pins = runtime.getCell(space, id, ITEMS);
         expect(pins.get()).toEqual(["pinned"]);
 
@@ -1067,10 +992,10 @@ describe("stored write requirements", () => {
 
     it("commits a labeled writer that does not restate the contract after a matching click", async () => {
       const runtime = start();
-      await clickWrite(runtime, "pin-labeled-click", STORED, "pinned");
+      await clickAt(runtime, "pin-labeled-click", STORED, "pinned");
       expect(read(runtime, "pin-labeled-click")).toBe("pinned");
 
-      await clickWrite(runtime, "pin-labeled-click", {
+      await clickAt(runtime, "pin-labeled-click", {
         type: "string",
         ifc: { ...WRITER_LABEL },
       }, "repinned");
@@ -1100,7 +1025,7 @@ describe("stored write requirements", () => {
           storageManager: firstStorage,
           cfcDecomposedEnvelopes: true,
         });
-        await clickWrite(first, "pin-decomposed", DECOMPOSED, {
+        await clickAt(first, "pin-decomposed", DECOMPOSED, {
           pin: "pinned",
         });
         expect(first.getCell(space, "pin-decomposed", DECOMPOSED).get())
@@ -1119,7 +1044,7 @@ describe("stored write requirements", () => {
         const cold = runtime.getCell(space, "pin-decomposed", DECOMPOSED);
         await cold.sync();
         expect(cold.get()).toEqual({ pin: "pinned" });
-        await clickWrite(runtime, "pin-decomposed", {
+        await clickAt(runtime, "pin-decomposed", {
           type: "object",
           properties: { pin: { type: "string", ifc: { ...WRITER_LABEL } } },
           required: ["pin"],

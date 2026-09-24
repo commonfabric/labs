@@ -84,10 +84,6 @@ import {
 } from "./scheduler.ts";
 import { schemaHasIfc } from "./schema-ifc.ts";
 import {
-  mergeableOpRead,
-  withoutAttemptedWriteMark,
-} from "./storage/reactivity-log.ts";
-import {
   externalResolutionMissCount,
   onSchemaRegistryClear,
 } from "./schema-registry.ts";
@@ -102,6 +98,8 @@ import {
   ignoreReadForScheduling,
   internalVerifierRead,
   linkResolutionProbe,
+  mergeableOpRead,
+  withoutAttemptedWriteMark,
   writeDestinationRead,
 } from "./storage/reactivity-log.ts";
 import { resolveSchemaRefsCanonical, schemaAcceptsType } from "./traverse.ts";
@@ -670,12 +668,16 @@ export function initializeScopedArgumentSlots(
   if (blocked || container.pendingHopDoc || isFabricDataUri(container.id)) {
     return;
   }
-  // Reads which slots exist; the writes it leads to land in those slots.
   const options = {
     nonRecursive: true,
-    meta: { ...allowMutableTransactionRead, ...mergeableOpRead },
+    meta: { ...markReadAsAttemptedWrite, ...allowMutableTransactionRead },
   };
-  const value = tx.readValueOrThrow(container, options);
+  // Reads which slots exist; the writes it leads to land in those slots, and
+  // the diffs below attempt them under `options`.
+  const value = tx.readValueOrThrow(container, {
+    nonRecursive: true,
+    meta: { ...allowMutableTransactionRead, ...mergeableOpRead },
+  });
   if (!isKeyableObjectNotArray(value) || isPrimitiveCellLink(value)) return;
   const changes: ChangeSet = [];
   for (const key of Object.keys(resolvedSchema.properties)) {

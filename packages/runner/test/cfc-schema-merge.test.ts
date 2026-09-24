@@ -741,6 +741,39 @@ describe("mergeCfcSchemaEnvelopes", () => {
     });
   });
 
+  it("keeps the claims a reference's body declares beneath an `ifc` beside the reference", () => {
+    const stored = {
+      type: "object",
+      properties: {
+        pin: {
+          $ref: "#/$defs/Pin",
+          ifc: { confidentiality: ["store-clause"] },
+        },
+      },
+      $defs: {
+        Pin: {
+          type: "string",
+          ifc: { uiContract: { helper: "UiAction", action: "PinNote" } },
+        },
+      },
+    } as const;
+    const candidate = {
+      type: "object",
+      properties: {
+        pin: {
+          type: "string",
+          ifc: { confidentiality: ["store-clause", "writer-clause"] },
+        },
+      },
+    } as const;
+
+    const merged = mergeCfcSchemaEnvelopes(stored, candidate) as JSONSchemaObj;
+    expect((merged.properties?.pin as JSONSchemaObj).ifc).toEqual({
+      confidentiality: ["store-clause", "writer-clause"],
+      uiContract: { helper: "UiAction", action: "PinNote" },
+    });
+  });
+
   it("rejects branch-local ifc labels in divergent schemas", () => {
     expect(() =>
       mergeCfcSchemaEnvelopes({

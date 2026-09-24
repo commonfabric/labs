@@ -87,6 +87,28 @@ describe("droppedStoredClaim()", () => {
     );
   });
 
+  it("returns a claim held in a `oneOf` arm beside an `anyOf` that the merged node drops", () => {
+    const stored = {
+      type: "object",
+      properties: {
+        pin: {
+          anyOf: [{ type: "string" }, { type: "null" }],
+          oneOf: [PIN, { type: "null" }],
+        },
+      },
+    } as const;
+    const merged = {
+      type: "object",
+      properties: {
+        pin: { anyOf: [{ type: "string" }, { type: "null" }] },
+      },
+    } as const;
+    expect(droppedStoredClaim(stored, merged)).toBe(
+      "the merged schema drops the stored uiContract at /pin",
+    );
+    expect(droppedStoredClaim(stored, stored)).toBeUndefined();
+  });
+
   it("returns a claim behind a `cid:` reference that the merged position replaces", () => {
     const release = acquireSchemaRegistryLease();
     try {

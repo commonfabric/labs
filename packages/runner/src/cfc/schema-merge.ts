@@ -585,11 +585,35 @@ const referenceIsShadowed = (
   (other.$ref !== side.$ref ||
     Object.keys(other).some((key) => key !== "$ref"));
 
+/**
+ * `schema`'s reference resolved in `root`, as a merge walks it. An `ifc` beside
+ * the `$ref` replaces the body's on resolution, which would drop every claim
+ * the body declares that the sibling does not restate, so the body's claims
+ * are kept beneath the sibling's. `undefined` when the reference does not
+ * resolve.
+ */
+const resolveKeepingBodyClaims = (
+  schema: JSONSchemaObj,
+  root: JSONSchema,
+): JSONSchema | undefined => {
+  const resolved = resolveCfcSchemaRefs(schema, root);
+  if (!isObjectNotArray(resolved) || !isObjectNotArray(schema.ifc)) {
+    return resolved;
+  }
+  const body = resolveCfcSchemaRefs(
+    { $ref: schema.$ref } as JSONSchemaObj,
+    root,
+  );
+  return isObjectNotArray(body) && isObjectNotArray(body.ifc)
+    ? { ...resolved, ifc: { ...body.ifc, ...schema.ifc } } as JSONSchemaObj
+    : resolved;
+};
+
 const resolveReferenceSide = (
   side: JSONSchemaObj,
   definitions: SchemaDefinitions,
 ): JSONSchemaObj => {
-  const resolved = resolveCfcSchemaRefs(side, { $defs: definitions });
+  const resolved = resolveKeepingBodyClaims(side, { $defs: definitions });
   return isObjectNotArray(resolved) ? resolved as JSONSchemaObj : side;
 };
 
@@ -893,7 +917,7 @@ function resolveConfidentialSchema(
     throw new Error("Recursive confidentiality schema merging is unsupported");
   }
   const resolved = typeof schema.$ref === "string"
-    ? resolveCfcSchemaRefs(schema, root)
+    ? resolveKeepingBodyClaims(schema, root)
     : schema;
   if (resolved === undefined) {
     throw new Error("Confidentiality merging requires resolved schemas");
