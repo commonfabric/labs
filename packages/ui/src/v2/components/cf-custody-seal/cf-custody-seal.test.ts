@@ -245,7 +245,8 @@ describe("summarizeCustodyTerms()", () => {
       question: "Room:\u202e ylimaf\u202c\u0007 " + "x".repeat(400),
       answers: ["yes\u2066"],
     });
-    expect(summary.question).not.toMatch(/[\u202a-\u202e\u2066-\u2069\u0007]/);
+    expect(summary.question).not.toMatch(/[\u202a-\u202e\u2066-\u2069]/);
+    expect(summary.question).not.toContain("\u0007");
     expect(summary.question?.startsWith("Room: ylimaf ")).toBe(true);
     expect(summary.question?.length).toBe(281);
     expect(summary.answers).toEqual(["yes"]);
