@@ -6,7 +6,7 @@ import { callSchemas, parseModule } from "./transformed-ast.ts";
 import { transformSource } from "./utils.ts";
 
 const IMPORTS =
-  `import { computed, pattern, Writable, type Default, type PerUser } from "commonfabric";
+  `import { computed, pattern, Writable, type Default, type PerSession, type PerUser } from "commonfabric";
 interface Box<T> { value: T; extra: string; }
 interface Person { name: string; age: number; }
 `;
@@ -160,6 +160,28 @@ export default pattern<Input>(({ roster }) => ({
         expect(aliased.c).toEqual(direct.c);
       });
     }
+
+    it("keeps the scope and the type of a boolean typed by an alias of a scope wrapper", async () => {
+      // The checker holds `boolean` as `false | true`, so the brand a wrapper
+      // leaves on it is distributed over two literals. The pair is read back
+      // as the type the author wrote, rather than shrunk literal by literal.
+      const capture = await captureOf(`
+type Flag = PerSession<boolean>;
+interface Row { flag: Flag; value: number; extra: string; }
+interface Input { c: Row[]; }
+export default pattern<Input>(({ c }) => ({
+  s: computed(() => c.map((x) => x.flag)),
+}));`);
+
+      expect(capture.c).toEqual({
+        type: "array",
+        items: {
+          type: "object",
+          properties: { flag: { type: "boolean", scope: "session" } },
+          required: ["flag"],
+        },
+      });
+    });
 
     it("gives an array typed by an alias of a scope wrapper around a union one alternative per member", async () => {
       // The brand a wrapper leaves on a union is distributed over its members,
