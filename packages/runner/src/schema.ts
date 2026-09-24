@@ -26,10 +26,7 @@ import { schemaForSpaceCrossing, toMemorySpaceAddress } from "./link-utils.ts";
 import { opaqueReference, toCell } from "./back-to-cell.ts";
 import { type JSONSchema, type SchemaScope } from "./builder/types.ts";
 import { createCell, isCell } from "./cell.ts";
-import {
-  ContextualFlowControl,
-  resolveExternalRootRefForStructure,
-} from "./cfc.ts";
+import { ContextualFlowControl, resolveRootRefForStructure } from "./cfc.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { CfcLabelViewRebaser } from "./cfc/label-view-rebaser.ts";
 import {
@@ -1814,13 +1811,14 @@ class TransformObjectCreator
         this.#labelViewFor(link),
       );
     } else if (isObjectOrArray(link.schema)) {
-      // A reference-form schema resolves here — materialization is a
-      // structural use (asCell handles, defaults), and the handle minted
-      // below works over the resolved document. The link itself keeps its
-      // reference; an unresolvable one behaves as the schemaless
-      // degradation (a plain proxy read, no handle, no defaults).
+      // A reference-form schema resolves here, whether its root reference is
+      // local or external — materialization is a structural use (asCell
+      // handles, defaults), and the handle minted below works over the
+      // resolved document. The link itself keeps its reference; an
+      // unresolvable one behaves as the schemaless degradation (a plain proxy
+      // read, no handle, no defaults).
       const structuralSchema = isObjectNotArray(link.schema)
-        ? resolveExternalRootRefForStructure(link.schema)
+        ? resolveRootRefForStructure(link.schema)
         : link.schema;
       const schema = asCellCompoundSchemaForValue(structuralSchema, value) ??
         structuralSchema;

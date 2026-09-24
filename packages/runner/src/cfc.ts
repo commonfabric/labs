@@ -1188,6 +1188,28 @@ export function resolveExternalRootRefForStructure(
   return resolved;
 }
 
+/**
+ * Like {@link resolveExternalRootRefForStructure}, except that a local root
+ * `$ref` resolves too, against the `$defs` the schema carries: a definition
+ * declares the structure of every position of its type, the handle it holds
+ * among it, whichever form the reference to it takes. A local reference whose
+ * definition the schema does not carry, or that resolves to a boolean, reads
+ * as the schema itself, without consulting the resolver in the first case,
+ * which would log the miss.
+ */
+export function resolveRootRefForStructure(
+  schema: JSONSchemaObj,
+): JSONSchemaObj {
+  const ref = schema.$ref;
+  if (typeof ref !== "string") return schema;
+  if (isExternalSchemaRef(ref)) {
+    return resolveExternalRootRefForStructure(schema);
+  }
+  if (localDefinition(schema, ref) === undefined) return schema;
+  const resolved = ContextualFlowControl.resolveSchemaRefs(schema);
+  return isObjectNotArray(resolved) ? resolved : schema;
+}
+
 /** Whether the schema's body (its `$defs` excluded) names a local `#/...`. */
 function hasLocalSchemaRef(schema: JSONSchema): boolean {
   const refs = new Set<string>();

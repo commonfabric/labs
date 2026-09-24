@@ -195,15 +195,22 @@ Defaults:
 
 ### Detection Rules
 
-`hasAsCell(schema)` is true when:
+`hasAsCell(schema)` reads the schema with its root `$ref` resolved, local or
+external, and is true when:
 
 - schema object has `asCell` property
-- or schema has `anyOf` and every option matches `hasAsCell`
-- or schema has `oneOf` and every option matches `hasAsCell`
+- or schema has `anyOf` and every option has an `asCell` property, or a
+  composition of its own that does
+- or schema has `oneOf` and every option does, likewise
 
 Notes:
 
-- This check is shallow for `anyOf`/`oneOf` options; refs inside options are not fully resolved before this check.
+- A definition declares the handle for every position of its type: a position
+  written `{ "$ref": "#/$defs/Profile" }` is a handle exactly when `Profile`
+  declares `asCell`, as `{ "$ref": "#/$defs/Profile", "asCell": ["cell"] }` is
+  at the reference. The object creator reads a link's schema through its root
+  `$ref` the same way when it mints the handle.
+- This check is shallow for `anyOf`/`oneOf` options; refs inside options are not resolved, so a union that reaches itself through an option is read once.
 - This check determines traversal boundary behavior, not whether final output is a JS Cell object. Output shape still depends on the active `objectCreator`.
 
 ### Behavior by Value Shape
@@ -290,6 +297,7 @@ Traversal is intentionally not a full JSON-Schema validator. Notable differences
 Behavior in this spec is verified by:
 
 - `packages/runner/test/traverse.test.ts`
+- `packages/runner/test/handle-declared-by-definition.test.ts`
 - `packages/runner/test/query.test.ts`
 - `packages/runner/test/schema-view.test.ts`
 
@@ -300,6 +308,7 @@ These include regression tests for:
 - the sibling-keyword merge into combinator branches, under a schema that
   refuses the properties it does not name
 - defaults via resolved `$ref`
+- a handle declared by the definition a position names by `$ref`
 - cycle-tracker cleanup
 
 ---

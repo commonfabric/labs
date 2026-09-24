@@ -70,6 +70,7 @@ import { isOpaqueReference, opaqueReference } from "./back-to-cell.ts";
 import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
+  resolveRootRefForStructure,
 } from "./cfc.ts";
 import { cfcEnvelopeLabelDocumentHashes } from "./cfc/label-documents.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
@@ -880,6 +881,24 @@ export function resolveSchemaRefsCanonical(
     _resolvedRefCache.set(schema, cached);
   }
   return cached === null ? undefined : cached;
+}
+
+/**
+ * Helper for `SchemaObjectTraverser.hasAsCell()`, which reads the handle
+ * declaration off `schema` as written: its own `asCell` entry, or one that every
+ * `anyOf` or every `oneOf` option declares. An option is read as written too,
+ * its references left unresolved, so a union that reaches itself through one
+ * is read once rather than without end.
+ */
+function declaresAsCellAsWritten(schema: JSONSchema | undefined): boolean {
+  if (schema === undefined || typeof schema === "boolean") {
+    return false;
+  }
+  return ContextualFlowControl.getAsCellValues(schema).length > 0 ||
+    (Array.isArray(schema.anyOf) &&
+      schema.anyOf.every((option) => declaresAsCellAsWritten(option))) ||
+    (Array.isArray(schema.oneOf) &&
+      schema.oneOf.every((option) => declaresAsCellAsWritten(option)));
 }
 
 /**
@@ -5501,7 +5520,13 @@ export class SchemaObjectTraverser<V extends FabricValue>
   }
 
   /**
-   * Check whether the schema specifies asCell
+   * Returns whether the schema declares a handle: an `asCell` entry, of
+   * whatever kind.
+   *
+   * The schema's root `$ref` is resolved first, local or external
+   * ({@link resolveRootRefForStructure}): a definition declares the handle for
+   * every position of its type, so `{ $ref: "#/$defs/Profile" }` declares one
+   * exactly when `Profile` does, as `{ $ref, asCell }` does at the reference.
    *
    * This handling gets a little blurry with anyOf or oneOf schemas, and
    * in those cases, we base the value on whether every option has the flag.
@@ -5512,27 +5537,12 @@ export class SchemaObjectTraverser<V extends FabricValue>
    * We do not resolve references in the anyOf or oneOf options, which means
    * we don't need to worry about cycles, but it also means we may miss some
    * references that should be asCell.
-   *
-   * @param schema
-   * @returns
    */
   static hasAsCell(schema: JSONSchema | undefined): boolean {
     if (schema === undefined || typeof schema === "boolean") {
       return false;
     }
-    const asCellValues = ContextualFlowControl.getAsCellValues(schema);
-    if (
-      asCellValues.length > 0 ||
-      (Array.isArray(schema.anyOf) &&
-        schema.anyOf.every((option) =>
-          SchemaObjectTraverser.hasAsCell(option)
-        )) ||
-      (Array.isArray(schema.oneOf) &&
-        schema.oneOf.every((option) => SchemaObjectTraverser.hasAsCell(option)))
-    ) {
-      return true;
-    }
-    return false;
+    return declaresAsCellAsWritten(resolveRootRefForStructure(schema));
   }
 
   #applyDefault(
