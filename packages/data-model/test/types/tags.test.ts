@@ -523,15 +523,6 @@ describe("tags", () => {
       expect(tagOfFabricValue({ a: 1 })).toBe(VALUE_TAGS.Object);
     });
 
-    it("returns `Object` for a null-prototype object", () => {
-      // The narrowing this rests on asks a shape question rather than the
-      // membership one, so a record membership refuses is still an `Object`
-      // here. That is the looseness the function's doc comment reserves.
-
-      const obj = Object.create(null) as FabricValue;
-      expect(tagOfFabricValue(obj)).toBe(VALUE_TAGS.Object);
-    });
-
     for (const [value, tag] of FABRIC_PRIMITIVE_TAGS) {
       it(`returns \`${tag}\` for a \`${value.constructor.name}\``, () => {
         expect(tagOfFabricValue(value)).toBe(tag);
@@ -559,6 +550,15 @@ describe("tags", () => {
       expect(() => tagOfFabricValue(new Date() as unknown as FabricValue))
         .toThrow("Not possibly a valid `FabricValue`");
       expect(() => tagOfFabricValue(new Map() as unknown as FabricValue))
+        .toThrow("Not possibly a valid `FabricValue`");
+    });
+
+    it("throws for a null-prototype object", () => {
+      // A record is `Object.prototype`-rooted, so an object holding the same
+      // properties with no prototype cannot possibly be one.
+
+      const obj = Object.assign(Object.create(null), { a: 1 }) as FabricValue;
+      expect(() => tagOfFabricValue(obj))
         .toThrow("Not possibly a valid `FabricValue`");
     });
 
@@ -1002,9 +1002,13 @@ describe("tags", () => {
       expect(tagOfConvertibleJsValueElseNull(/abc/)).toBe(VALUE_TAGS.JsRegExp);
     });
 
-    it("returns `Object` tag for null-prototype objects (no constructor)", () => {
+    it("returns `null` for null-prototype objects", () => {
+      // Neither a `FabricPlainObject` nor a convertible class instance: a
+      // record is `Object.prototype`-rooted, and conversion refuses one that
+      // is not rather than re-rooting it.
+
       const obj = Object.create(null);
-      expect(tagOfConvertibleJsValueElseNull(obj)).toBe(VALUE_TAGS.Object);
+      expect(tagOfConvertibleJsValueElseNull(obj)).toBe(null);
     });
 
     it("returns `null` for class instances", () => {

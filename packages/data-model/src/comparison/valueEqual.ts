@@ -155,7 +155,7 @@ function objectSubtypeOf(
     return "special";
   } else if (Array.isArray(value)) {
     return "array";
-  } else if (isPlainObject(value)) {
+  } else if (isPlainObject(value, false)) {
     return "plain";
   } else {
     throw new Error(

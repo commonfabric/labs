@@ -709,19 +709,16 @@ describe("VisitInProgress", () => {
           ]);
         });
 
-        it("walks a null-prototype object as a plain object", () => {
+        it("passes a null-prototype object to `isPlusType()` rather than walking it as a plain object", () => {
+          // A `FabricPlainObject` is `Object.prototype`-rooted, so this one is
+          // a non-fabric value like any other.
+
           const rec = new Recorder();
           const object = Object.assign(Object.create(null), { a: 1 });
 
           visit(object, rec);
-          expect(rec.plusTypeChecks).toEqual([]);
-          expect(rec.names).toEqual([
-            "value",
-            "object",
-            "value",
-            "primitive",
-            "visitedFabricPlainObjectEntry",
-          ]);
+          expect(rec.plusTypeChecks).toEqual([object]);
+          expect(rec.names).toEqual(["value", "plusType"]);
         });
       });
 

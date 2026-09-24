@@ -29,7 +29,6 @@
 
 import {
   isObjectOrArray,
-  isPlainContainer,
   isPlainObject,
   type ReadonlyRecord,
 } from "@commonfabric/utils/types";
@@ -206,13 +205,15 @@ export function isFabricSpecialObject(value: unknown): boolean {
 export function isFabricContainerValue(
   value: FabricValue,
 ): value is FabricContainerValue {
-  return isPlainContainer(value) || value instanceof FabricInstance;
+  return isFabricPlainContainer(value) || value instanceof FabricInstance;
 }
 
 /**
  * Narrows to the two *plain* container arms of `FabricValue` -- an array or a
  * plain object -- the values whose contents are reachable by index or property
- * name. This is the question to ask before addressing into a value by key.
+ * name. This is the question to ask before addressing into a value by key. A
+ * plain object here is what `isFabricPlainObject()` accepts, so a
+ * null-prototype object is not one.
  *
  * Contrast `isFabricContainerValue()`, which is one arm wider: a
  * `FabricInstance` is a container, but it holds its contents privately, so a
@@ -223,7 +224,7 @@ export function isFabricContainerValue(
 export function isFabricPlainContainer(
   value: FabricValue,
 ): value is FabricArray | FabricPlainObject {
-  return isPlainContainer(value);
+  return Array.isArray(value) || isPlainObject(value, false);
 }
 
 /**
@@ -263,25 +264,22 @@ export function isFabricObjectOrArray(
 
 /**
  * Narrows to the plain-record arm of `FabricValue` (`FabricPlainObject`): an
- * object whose prototype is `Object.prototype` or `null`. This rejects arrays,
- * `FabricSpecialObject`s, and other class instances (`Date`, `Map`, …), none of
- * which are representable as a `FabricPlainObject`. Unlike a bare
+ * object whose prototype is exactly `Object.prototype`. This rejects arrays,
+ * `FabricSpecialObject`s, other class instances (`Date`, `Map`, …), and
+ * null-prototype objects, none of which is a `FabricPlainObject`. Unlike a bare
  * `isObjectOrArray()` check, it preserves the value type —
  * `FabricPlainObject`'s string index of `FabricValue` keeps an indexed value
  * typed as a `FabricValue`.
  *
- * This asks a shape question -- "may I read this by property name?" -- of a
- * value the type already says is a `FabricValue`, and a null-prototype object
- * answers yes as readily as any other record. That makes it deliberately looser
- * than membership: a `FabricPlainObject` is `Object.prototype`-rooted, so
- * `isValidFabricValue()` refuses the null-prototype object this accepts. The
- * looseness costs nothing, the input being out of contract either way, and it
- * keeps callers holding un-validated values from losing a reader they can use.
- * For the membership question asked of an `unknown`, see
+ * This asks a shape question of a value the type already says is a
+ * `FabricValue`, and answers it from the prototype alone. It does not look at
+ * the properties, so it accepts a record that membership refuses for what one
+ * of them is: an accessor, a symbol key, or a name this runtime reserves. For
+ * the membership question asked of an `unknown`, see
  * `isValidFabricPlainObject()`.
  */
 export function isFabricPlainObject(
   value: FabricValue,
 ): value is FabricPlainObject {
-  return isPlainObject(value);
+  return isPlainObject(value, false);
 }

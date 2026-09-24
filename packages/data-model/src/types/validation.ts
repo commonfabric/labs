@@ -375,8 +375,8 @@ export function isValidFabricValue(value: unknown): value is FabricValue {
  *
  * This is a *membership* check asked of an `unknown`, which makes it strictly
  * narrower at runtime than the narrowing `isFabricPlainObject()`: that one is
- * asked of a value already typed as a `FabricValue`, and accepts a
- * null-prototype object, which membership refuses.
+ * asked of a value already typed as a `FabricValue`, and looks at the prototype
+ * alone, so it accepts a record whose properties membership refuses.
  */
 export function isValidFabricPlainObject(
   value: unknown,

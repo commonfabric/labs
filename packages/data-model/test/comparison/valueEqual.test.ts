@@ -489,6 +489,27 @@ describe("valueEqual()", () => {
   describe("object-subtype-check branch", () => {
     // Different container kinds are unequal without reading their contents.
 
+    describe("given a null-prototype object", () => {
+      it("throws against any object other than itself", () => {
+        // Not a `FabricPlainObject`, which is `Object.prototype`-rooted, so
+        // there is no subtype for it to be compared as. Identity is settled
+        // before any value is classified, so only a second object reaches the
+        // refusal.
+
+        const make = () => Object.assign(Object.create(null), { a: 1 });
+        const nullProto = make();
+        expect(() => valueEqual(nullProto, { a: 1 })).toThrow(
+          "Cannot compare value",
+        );
+        expect(() => valueEqual({ a: 1 }, nullProto)).toThrow(
+          "Cannot compare value",
+        );
+        expect(() => valueEqual(nullProto, make())).toThrow(
+          "Cannot compare value",
+        );
+      });
+    });
+
     describe("given a plain object and an array", () => {
       it("returns `false`", () => {
         expect(valueEqual({ 0: 1, 1: 2 }, [1, 2])).toBe(false);

@@ -881,11 +881,14 @@ describe("ValueHasher", () => {
           expect(h1).toEqual(h2);
         });
 
-        it("hashes a null-prototype object as an ordinary plain object", () => {
+        it("throws for a null-prototype object", () => {
+          // Not a `FabricPlainObject`, which is `Object.prototype`-rooted, so
+          // it has no hash, rather than the hash of the record it resembles.
+
           const nullProto = Object.create(null) as Record<string, FabricValue>;
           nullProto.a = 1;
 
-          expect(hashBytesOf(nullProto)).toEqual(hashBytesOf({ a: 1 }));
+          expect(() => hashBytesOf(nullProto)).toThrow("Cannot hash value");
         });
 
         it("matches a hand-computed byte stream for {a: 1, b: 2}", () => {

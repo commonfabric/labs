@@ -88,7 +88,8 @@ function trackForCircularity(
  * `FabricValue` and only adjusts frozenness by cloning where necessary.
  *
  * Cyclic values are not supported: a deep clone (the default) throws on a
- * detected cycle.
+ * detected cycle. A record it has to copy throws if it has an own `__proto__`
+ * property, a name this runtime reserves.
  *
  * @param value - An already-valid `FabricValue`.
  * @param options - See `CloneOptions`. Defaults to
@@ -258,12 +259,19 @@ export function cloneHelper(
     case VALUE_TAGS.Object: {
       if (canReturnAsIs(value)) return value;
       const obj = value as object;
+      // The copy is built by assignment, and assigning `__proto__` reaches the
+      // prototype's accessor rather than making a property. A browser host then
+      // drops the property, and repoints the copy's prototype when its value is
+      // an object. This runtime reserves the name (see `unsafeObjectKeyIn()`),
+      // so a record carrying it is refused here rather than copied one way on
+      // one host and another way on the next.
+      if (Object.hasOwn(obj, "__proto__")) {
+        throw new Error(
+          "Cannot clone: object with a property name this runtime reserves " +
+            "(`__proto__`)",
+        );
+      }
       if (deep) seen = trackForCircularity(obj, seen);
-      // A clone is built in the shape a `FabricPlainObject` has, the same way
-      // the array case above builds a fresh `Array`. Valid input is already
-      // `Object.prototype`-rooted, so this changes nothing for it; input that
-      // reached here carrying some other prototype leaves canonical rather than
-      // propagating a shape no `FabricValue` has.
       const copy = {} as Record<string, FabricValue>;
       if (deep) {
         for (const [key, val] of Object.entries(obj)) {
