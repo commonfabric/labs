@@ -978,6 +978,41 @@ export default pattern<{
       });
     });
 
+    it("keeps the alias a cell inside a printed value is given", async () => {
+      // The cell's value type expands `EntriesValue`; the type argument its
+      // wrapper was given keeps the name.
+      const [capture] = await liftSchemas(
+        `import { Cell, computed, Default, pattern, wish } from "commonfabric";
+interface Entry { readonly profile: Cell<{ name: string }>; }
+type EntriesValue = Entry[] | Default<[]>;
+export default pattern<{ x: string }>(() => {
+  const found = wish<{ entries: Cell<EntriesValue>; label: string }>({
+    query: "#entries",
+    headless: true,
+  });
+  return {
+    out: computed(() =>
+      found.result?.label + String(found.result?.entries.get().length)
+    ),
+  };
+});`,
+      );
+
+      expect((capture as Schema).properties).toMatchObject({
+        found: {
+          properties: {
+            result: {
+              anyOf: [{
+                properties: {
+                  entries: { $ref: "#/$defs/EntriesValue", asCell: ["cell"] },
+                },
+              }, { type: "undefined" }],
+            },
+          },
+        },
+      });
+    });
+
     it("refuses a type argument that holds a piece of a print", async () => {
       // A state saying each `string` keyword was built below a print stands in
       // for a pass that took a print apart.

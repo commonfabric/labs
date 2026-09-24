@@ -27,21 +27,24 @@ type EntriesValue = Entry[] | Default<[
 // read-only and triggers the Cell -> ReadonlyCell narrowing.
 const firstName = __cfHardenFn((entries: Cell<EntriesValue>): string => (entries.get() ?? [])[0]?.profile.get().name ?? "");
 const __cfLift_1 = __cfHelpers.lift<{
-    entries: __cfHelpers.ReadonlyCell<unknown>;
+    entries: __cfHelpers.ReadonlyCell<EntriesValue>;
 }, string>(({ entries }) => firstName(entries), {
     type: "object",
     properties: {
         entries: {
-            type: "array",
-            items: {
-                $ref: "#/$defs/Entry"
-            },
-            "default": [],
+            $ref: "#/$defs/EntriesValue",
             asCell: ["readonly"]
         }
     },
     required: ["entries"],
     $defs: {
+        EntriesValue: {
+            type: "array",
+            items: {
+                $ref: "#/$defs/Entry"
+            },
+            "default": []
+        },
         Entry: {
             type: "object",
             properties: {

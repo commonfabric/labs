@@ -2754,13 +2754,14 @@ function createHelperWrapperTypeNode(
   node: ts.TypeNode,
   wrapperName: string,
   factory: ts.NodeFactory,
+  rest: readonly ts.TypeNode[] = [],
 ): ts.TypeNode {
   return factory.createTypeReferenceNode(
     factory.createQualifiedName(
       factory.createIdentifier("__cfHelpers"),
       factory.createIdentifier(wrapperName),
     ),
-    [node],
+    [node, ...rest],
   );
 }
 
@@ -3073,8 +3074,29 @@ function printedCellValueTypeNode(
   if (!isCellLikeType(type, checker) || isScopedCellType(type, checker)) {
     return undefined;
   }
-  const value = unwrapCellLikeType(type, checker);
+  const [value] = cellTypeArguments(type, checker);
   return value && print(value);
+}
+
+/**
+ * Helper for `printedCellValueTypeNode()` and `unfoldPrint()`, which
+ * returns the type arguments of the cell wrapper `type` instantiates, as the
+ * wrapper was given them, so that an alias among them keeps its name:
+ * `Cell<EntriesValue>` yields `EntriesValue`, which the cell's value type
+ * would expand. A cell-like type with no wrapper reference yields its value
+ * type.
+ */
+function cellTypeArguments(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): readonly ts.Type[] {
+  const typeRef = getCellWrapperInfo(type, checker)?.typeRef;
+  const parameters = typeRef?.target.typeParameters?.length;
+  if (typeRef && parameters) {
+    return checker.getTypeArguments(typeRef).slice(0, parameters);
+  }
+  const value = unwrapCellLikeType(type, checker);
+  return value ? [value] : [];
 }
 
 function selectCellPathCapability(
@@ -3399,9 +3421,14 @@ function unfoldPrint(
     }
     if (isCellLikeTypeNode(node)) {
       const wrapper = getCellWrapperInfo(type, checker);
-      const value = wrapper && unwrapCellLikeType(type, checker);
+      const [value, ...rest] = cellTypeArguments(type, checker);
       return wrapper && value
-        ? createHelperWrapperTypeNode(print(value), wrapper.kind, factory)
+        ? createHelperWrapperTypeNode(
+          print(value),
+          wrapper.kind,
+          factory,
+          rest.map(print),
+        )
         : undefined;
     }
   }
