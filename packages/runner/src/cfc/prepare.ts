@@ -5889,7 +5889,8 @@ type LinkLabelDeriver = {
 
   /**
    * Derives the label a recorded link carries at `relativePath` below its
-   * receiving slot, or `undefined` when the link cannot be derived there.
+   * receiving slot, or `undefined` when the link itself, or its source's label
+   * at that path, cannot be derived.
    */
   labelAt: (
     input: LinkWritePolicyInput,
@@ -6037,12 +6038,14 @@ const createLinkLabelDeriver = (
   };
 
   // The label below the receiving slot is the source's own label at the
-  // matching path. The carried view is relative to the receiving slot, so its
-  // checks belong to `persisted`, which holds it against the source path.
+  // matching path, credited only when the link itself derives. The carried
+  // view is relative to the receiving slot, so `persisted` checks it against
+  // the source path it was written for, never against the nested one.
   const labelAt = (
     input: LinkWritePolicyInput,
     relativePath: readonly string[],
   ): IFCLabel | undefined => {
+    if (persisted(input).reasons.length > 0) return undefined;
     const nested: LinkWritePolicyInput = {
       ...input,
       source: {

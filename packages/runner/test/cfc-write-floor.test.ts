@@ -243,6 +243,68 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
     }
   });
 
+  it("fails a nested link floor under a link whose label view carries a reader the source does not store", async () => {
+    // The link itself cannot be derived, so the floor credits nothing from it,
+    // in agreement with the persisted labels it would have left.
+
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
+    try {
+      await seedLabeledDoc(
+        runtime,
+        "unbound-reader-source",
+        {
+          approved: "yes",
+        },
+        { integrity: [ADMIN_ATOM] },
+        ["approved"],
+      );
+      const tx = runtime.edit();
+      const source = runtime.getCell(
+        signer.did(),
+        "unbound-reader-source",
+        undefined,
+        tx,
+      );
+      const link = linkRefFrom<CfcCellLinkRefPayload>({
+        ...linkRefPayload(source.getAsLink()),
+        cfcLabelView: {
+          version: 1,
+          entries: [{
+            path: ["reader"],
+            label: {
+              confidentiality: [{
+                type: CFC_ATOM_TYPE.User,
+                subject: { __ctCurrentPrincipal: true },
+              }],
+            },
+          }],
+        },
+      });
+      const sink = runtime.getCell(signer.did(), "unbound-reader-sink", {
+        type: "object",
+        properties: {
+          out: {
+            type: "object",
+            properties: {
+              approved: {
+                type: "string",
+                ifc: { requiredIntegrity: [ADMIN_ATOM] },
+              },
+            },
+          },
+        },
+      }, tx);
+      sink.set({ out: link });
+      tx.prepareCfc();
+      const message = (await tx.commit()).error?.message;
+      expect(message).toContain("write floor failed at /out/approved");
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("flow-persist with an empty hereditary meet does not weaken the floor", async () => {
     // Under cfcFlowLabels:"persist" the floor credits the flow meet — but an
     // empty meet (the common case: some unlabeled read empties it) credits
