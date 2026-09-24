@@ -69,7 +69,9 @@ established the checks are compared against the committing transaction.
   sources the value draws on.
 - **The room names its readers.** The room space's access list must exist and
   name a concrete owner. The preview lists every principal it names, with its
-  role, since whoever can read `S` is the audience of what the room releases.
+  role, and the room space's own key, which the memory service treats as an
+  owner whether or not the list names it, since whoever can read `S` is the
+  audience of what the room releases.
   A room whose readers change after the review makes the review stale.
 - **The value is instruction-inert.** `stanceSchema` may admit only booleans,
   `null`, numbers with a finite `minimum` and `maximum`, `const` and `enum`
