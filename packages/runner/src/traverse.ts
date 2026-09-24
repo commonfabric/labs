@@ -3885,22 +3885,32 @@ export function assertSchemaMemoIdentity(
 }
 
 /**
- * A traversal in progress, as a combinator branch that comes back to it at the
- * same position finds it.
+ * The rounds in which the traversal that began a position reaches a fixed
+ * point, from the first combinator branch that comes back to a traversal of the
+ * position still in progress.
  */
-interface InProgressTraversal {
-  /** Depth the traversal runs at. */
-  readonly depth: number;
-
-  /** Whether a branch has come back to the traversal. */
-  cameBack: boolean;
+interface PositionRounds {
+  /**
+   * What a branch that comes back to a traversal takes in its place, by memo
+   * key: that traversal's result in the latest round that reached it. A
+   * traversal with none is taken as no match.
+   */
+  readonly standIns: Map<string, TraverseResult<FabricValue>>;
 
   /**
-   * What a branch that comes back takes in the traversal's place: `undefined`
-   * on the first pass, which takes it as no match, and that pass's result on
-   * the second.
+   * The results of the current round that took something in place of a
+   * traversal, by memo key. A traversal reached again in the round takes its
+   * result from here.
    */
-  standIn: TraverseResult<FabricValue> | undefined;
+  readonly results: Map<string, TraverseResult<FabricValue>>;
+
+  /** The memo keys of the traversals a branch came back to in the round. */
+  readonly cameBack: Set<string>;
+}
+
+/** Whether `result` is a match, `undefined` standing for no match. */
+function isMatch(result: TraverseResult<FabricValue> | undefined): boolean {
+  return result !== undefined && result.error === undefined;
 }
 
 export class SchemaObjectTraverser<V extends FabricValue>
@@ -3959,8 +3969,8 @@ export class SchemaObjectTraverser<V extends FabricValue>
     TraverseResult<FabricValue>
   >();
 
-  /** The traversals in progress, by memo key. */
-  #inProgress = new Map<string, InProgressTraversal>();
+  /** The traversals in progress, by memo key, each with the depth it runs at. */
+  #inProgress = new Map<string, number>();
 
   /**
    * Depth of the traversal that began the position being evaluated. Every
@@ -3971,12 +3981,17 @@ export class SchemaObjectTraverser<V extends FabricValue>
   #positionDepth = 0;
 
   /**
-   * The shallowest depth whose in-progress traversal a branch at or below the
-   * current one came back to, or `Infinity`. A result computed with a branch
-   * standing in for that traversal holds only until the traversal at that
-   * depth completes, so it is returned but not memoized.
+   * The rounds of the position being evaluated, once a branch has come back to
+   * one of its traversals.
    */
-  #provisionalDepth = Infinity;
+  #rounds: PositionRounds | undefined;
+
+  /**
+   * Whether the traversal being evaluated has taken, itself or through a
+   * traversal below it, a result that holds only for the current round of its
+   * position. Such a result is returned but not memoized.
+   */
+  #provisional = false;
 
   schemaMemoHits = 0;
 
@@ -4220,11 +4235,14 @@ export class SchemaObjectTraverser<V extends FabricValue>
     link?: NormalizedFullLink,
   ): TraverseResult<FabricValue> {
     const outerPositionDepth = this.#positionDepth;
+    const outerRounds = this.#rounds;
     this.#positionDepth = this.#currentDepth + 1;
+    this.#rounds = undefined;
     try {
       return this.#traverseBranch(doc, schema, link);
     } finally {
       this.#positionDepth = outerPositionDepth;
+      this.#rounds = outerRounds;
     }
   }
 
@@ -4233,17 +4251,8 @@ export class SchemaObjectTraverser<V extends FabricValue>
    * is evaluating, taken under another of the caller's schemas, as a
    * combinator branch takes it. A branch that comes back to a traversal of the
    * same position still in progress has read nothing that traversal has not,
-   * so it stands for that traversal's own result, which the traversal reaches
-   * as a fixed point in at most two passes. The first pass takes the branch
-   * as no match. Where the first pass matches and a branch came back, the
-   * second takes the first pass's result in the branch's place. Whether a
-   * branch matches turns on the value and on whether what it stands for
-   * matched, never on what that holds, since a combinator merges its matches
-   * without checking them; so a third pass would see the second's outcomes
-   * and return its result, which is the one the schema unrolled until it
-   * stops returning to itself gives. A `oneOf` can reject on the second pass
-   * what it accepted on the first, and so has no fixed point; the first
-   * pass's result stands there.
+   * so it stands for that traversal's own result, which the traversal that
+   * began the position reaches in rounds (see `#settleRounds()`).
    */
   #traverseBranch(
     doc: IMemorySpaceValueAttestation,
@@ -4291,50 +4300,115 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // a descent or a link, where the cycle tracker handles the re-entry;
       // only a key in progress at this position is a branch coming back to
       // itself.
-      const inProgress = this.#inProgress.get(memoKey);
+      const inProgressDepth = this.#inProgress.get(memoKey);
       if (
-        inProgress !== undefined && inProgress.depth >= this.#positionDepth
+        inProgressDepth !== undefined && inProgressDepth >= this.#positionDepth
       ) {
-        this.#provisionalDepth = Math.min(
-          this.#provisionalDepth,
-          inProgress.depth,
-        );
-        inProgress.cameBack = true;
-        return inProgress.standIn ?? fail(TRAVERSE_FAILURES.branchCycle);
+        const rounds = this.#rounds ??= {
+          standIns: new Map(),
+          results: new Map(),
+          cameBack: new Set(),
+        };
+        rounds.cameBack.add(memoKey);
+        this.#provisional = true;
+        return rounds.standIns.get(memoKey) ??
+          fail(TRAVERSE_FAILURES.branchCycle);
+      }
+      const roundResult = this.#rounds?.results.get(memoKey);
+      if (roundResult !== undefined) {
+        this.#provisional = true;
+        return roundResult;
       }
       const depth = this.#currentDepth;
-      const outerProvisionalDepth = this.#provisionalDepth;
-      this.#provisionalDepth = Infinity;
-      const traversal: InProgressTraversal = {
-        depth,
-        cameBack: false,
-        standIn: undefined,
-      };
-      this.#inProgress.set(memoKey, traversal);
+      const outerProvisional = this.#provisional;
+      this.#provisional = false;
+      this.#inProgress.set(memoKey, depth);
       try {
         let result = this.#traverseWithSchemaInner(doc, schema, link);
-        if (traversal.cameBack && result.error === undefined) {
-          traversal.standIn = result;
-          const second = this.#traverseWithSchemaInner(doc, schema, link);
-          if (second.error === undefined) result = second;
+        if (depth === this.#positionDepth && this.#rounds !== undefined) {
+          result = this.#settleRounds(doc, schema, link, memoKey, result);
+          this.#provisional = false;
         }
-        // A cycle back to this traversal settles here; one back to a
-        // traversal above it leaves this result provisional.
-        if (this.#provisionalDepth >= depth) memo.set(memoKey, result);
+        if (this.#provisional) {
+          this.#rounds!.results.set(memoKey, result);
+        } else {
+          memo.set(memoKey, result);
+        }
         return result;
       } finally {
-        if (inProgress === undefined) {
+        if (inProgressDepth === undefined) {
           this.#inProgress.delete(memoKey);
         } else {
-          this.#inProgress.set(memoKey, inProgress);
+          this.#inProgress.set(memoKey, inProgressDepth);
         }
-        this.#provisionalDepth = Math.min(
-          outerProvisionalDepth,
-          this.#provisionalDepth < depth ? this.#provisionalDepth : Infinity,
-        );
+        this.#provisional ||= outerProvisional;
       }
     } finally {
       this.#currentDepth--;
+    }
+  }
+
+  /**
+   * Runs the traversal that began the position until it reaches a fixed point,
+   * given `result` from its first round, and returns its result there.
+   *
+   * The first round takes every branch that comes back as no match. Each later
+   * round takes, in place of a traversal a branch comes back to, that
+   * traversal's result in the latest round that reached it, and a traversal
+   * reached again within a round takes its result from earlier in the round,
+   * so a round traverses each schema at the position once. Whether a branch
+   * matches turns on the value and on whether what it stands for matched,
+   * never on what that holds, since a combinator merges its matches without
+   * checking them. Under `anyOf` and `allOf`, what stands for a match in place
+   * of what stood for none can only turn no match into a match, so each round
+   * matches everything the round before did. Once a round leaves no traversal
+   * that a branch came back to matching where what stood in for it did not,
+   * the next round would take the same branches, and this round's result is
+   * the one the schema unrolled until it stops returning to itself gives:
+   * every schema those branches reach was traversed in the round, so what a
+   * branch standing in for one adds, the round has already selected.
+   * `R = anyOf(A, allOf(R, B))` selects what `A` and `B` both select. Every
+   * round before that one matches a traversal the rounds before it did not,
+   * so the rounds number at most one more than the schemas at the position.
+   *
+   * A `oneOf` can reject in one round what it accepted in the round before, and
+   * so has no fixed point to reach; the round before the first such rejection
+   * stands.
+   */
+  #settleRounds(
+    doc: IMemorySpaceValueAttestation,
+    schema: JSONSchema,
+    link: NormalizedFullLink | undefined,
+    memoKey: string,
+    result: TraverseResult<FabricValue>,
+  ): TraverseResult<FabricValue> {
+    const rounds = this.#rounds!;
+    let before = result;
+    for (;;) {
+      rounds.results.set(memoKey, result);
+      for (const [key, found] of rounds.results) {
+        if (isMatch(rounds.standIns.get(key)) && !isMatch(found)) {
+          return before;
+        }
+      }
+      let rose = false;
+      for (const key of rounds.cameBack) {
+        if (
+          !isMatch(rounds.standIns.get(key)) && isMatch(rounds.results.get(key))
+        ) {
+          rose = true;
+          break;
+        }
+      }
+      if (!rose) return result;
+      for (const [key, found] of rounds.results) {
+        rounds.standIns.set(key, found);
+      }
+      rounds.results.clear();
+      rounds.cameBack.clear();
+      before = result;
+      this.#provisional = false;
+      result = this.#traverseWithSchemaInner(doc, schema, link);
     }
   }
 

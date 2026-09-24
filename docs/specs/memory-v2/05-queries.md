@@ -388,14 +388,18 @@ it belongs to, so neither tracker sees it come back. A union whose handle
 branch names the union itself (`type Recursive = Cell<Recursive> | null`)
 returns to its own traversal without descending. The traverser keeps the memo
 keys of the traversals in progress at the current position, and a branch that
-reaches one of them stands for that traversal's result, reached as a fixed
-point in at most two passes. The first pass takes the branch as no match; where
-it matches and a branch came back, the second takes its result in the branch's
-place, and selects what the schema unrolled until it stops returning to itself
-selects. A `oneOf`, which can reject on the second pass what it accepted on the
-first, keeps the first pass's result. A result computed with a branch standing
-in for an enclosing traversal is returned but not memoized, since it holds only
-until that traversal completes.
+reaches one of them stands for that traversal's result, which the traversal
+that began the position reaches as a fixed point in rounds. The first round
+takes the branch as no match. Each later round takes the result the traversal
+it comes back to had in the latest round that reached it, and a traversal
+reached again within a round takes its result from earlier in the round, so a
+round traverses each schema at the position once. Rounds repeat until one
+leaves no traversal a branch came back to matching where what stood in for it
+did not, and the result then selects what the schema unrolled until it stops
+returning to itself selects. A `oneOf`, which can reject in one round what it
+accepted in the round before, keeps the round before that rejection. A result
+that took something standing in for a traversal holds only for its round, so it
+is returned but not memoized.
 
 ### 5.3.4 Schema Narrowing
 

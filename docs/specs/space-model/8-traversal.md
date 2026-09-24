@@ -285,20 +285,28 @@ come back. A union whose handle branch names the union itself, as
 `type Recursive = Cell<Recursive> | null` generates, returns to its own
 traversal that way. A branch that reaches a traversal still in progress at its
 own position, under the same schema, stands for that traversal's own result,
-which the traversal reaches as a fixed point in at most two passes:
+which the traversal that began the position reaches as a fixed point in rounds:
 
-- The first pass takes the branch as no match.
-- Where the first pass matches and a branch came back, the second pass takes
-  the first pass's result in the branch's place. Whether a branch matches turns
-  on the value and on whether what it stands for matched, never on what that
-  holds, so a third pass would repeat the second. The second pass's result is
-  the one the schema unrolled until it stops returning to itself gives:
-  `R = anyOf(A, allOf(R, B))` selects what `A` and `B` both select.
-- A `oneOf` can reject on the second pass what it accepted on the first, and so
-  has no fixed point. There the first pass's result stands.
+- The first round takes every such branch as no match.
+- Each later round takes, in a branch's place, the result the traversal it comes
+  back to had in the latest round that reached it. A traversal reached again
+  within a round takes its result from earlier in the round, so a round
+  traverses each schema at the position once.
+- Whether a branch matches turns on the value and on whether what it stands for
+  matched, never on what that holds. Under `anyOf` and `allOf` each round
+  matches everything the round before did. Once a round leaves no traversal a
+  branch came back to matching where what stood in for it did not, the next
+  round would take the same branches, and that round's result is the one the
+  schema unrolled until it stops returning to itself gives:
+  `R = anyOf(A, allOf(R, B))` selects what `A` and `B` both select. Every round
+  before it matches a traversal the rounds before it did not, so the rounds
+  number at most one more than the schemas at the position.
+- A `oneOf` can reject in one round what it accepted in the round before, and so
+  has no fixed point. There the round before the first such rejection stands.
 
-A result computed with a branch standing in for an enclosing traversal still in
-progress holds only until that traversal completes, so it is not memoized.
+A result that took something standing in for a traversal, itself or through a
+branch below it, holds only for its round, so it is returned but not memoized.
+The traversal that began the position is memoized once its rounds settle.
 
 The schema-only walks that evaluate a union branch by branch without a value —
 the type pruning behind `schemaAcceptsType()` and `isOpaquePosition()`, and the

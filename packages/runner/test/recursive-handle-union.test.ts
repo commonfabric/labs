@@ -195,6 +195,14 @@ describe("recursive handle union", () => {
 
       /** Runs a query-shaped traversal of `value` under `schema`. */
       function queryValue(value: FabricValue, schema: JSONSchema) {
+        return queryTraversal(value, schema).result;
+      }
+
+      /**
+       * Runs a query-shaped traversal of `value` under `schema`, and reports
+       * its result and how many schemas it traversed.
+       */
+      function queryTraversal(value: FabricValue, schema: JSONSchema) {
         const id = "of:branch-cycle-query" as URI;
         const store = new Map<string, Revision<State>>([[`${id}/${TYPE}`, {
           the: TYPE,
@@ -213,10 +221,11 @@ describe("recursive handle union", () => {
             sessionId: "session-1",
           }),
         );
-        return traverser.traverse({
+        const result = traverser.traverse({
           address: { space: "did:null:null", id, type: TYPE, path: ["value"] },
           value,
         });
+        return { result, traversals: traverser.traverseWithSchemaCalls };
       }
 
       it("selects what the unrolled union selects", () => {
@@ -279,6 +288,45 @@ describe("recursive handle union", () => {
           ).toEqual(expected);
         });
 
+        it("selects what a branch adds once the traversal it comes back to matches", () => {
+          // `R` is `A` or `Y`, and `Y` is `R` together with `B` or `Y`
+          // together with `C`. `Y` matches only once `R` has, and its branch
+          // that comes back to `Y` only once `Y` has, adding `c`: unrolled
+          // until it stops returning to itself, the union selects all three
+          // properties, and so must `R`.
+
+          const C = {
+            type: "object",
+            properties: { c: { type: "number" } },
+            additionalProperties: false,
+          } as const satisfies JSONSchema;
+          const value = { a: 1, b: 2, c: 3 } as FabricValue;
+
+          const expected = queryValue(value, {
+            anyOf: [A, {
+              anyOf: [
+                { allOf: [A, B] },
+                { allOf: [{ anyOf: [{ allOf: [A, B] }] }, C] },
+              ],
+            }],
+          });
+          expect(expected).toEqual({ ok: { a: 1, b: 2, c: 3 } });
+          expect(
+            queryValue(value, {
+              $ref: "#/$defs/R",
+              $defs: {
+                R: { anyOf: [A, { $ref: "#/$defs/Y" }] },
+                Y: {
+                  anyOf: [
+                    { allOf: [{ $ref: "#/$defs/R" }, B] },
+                    { allOf: [{ $ref: "#/$defs/Y" }, C] },
+                  ],
+                },
+              },
+            }),
+          ).toEqual(expected);
+        });
+
         it("keeps the first selection of a `oneOf` that the second would reject", () => {
           // `S` is `A` or `S`. Taken as no match, the branch that comes back
           // leaves `A` the one match; taken as that match, it makes two, which
@@ -292,6 +340,51 @@ describe("recursive handle union", () => {
             }),
           ).toEqual({ ok: { a: 1 } });
         });
+      });
+
+      describe("with definitions that come back to one another", () => {
+        // Each definition is `null` or a handle naming another, so every
+        // branch comes back to a traversal in progress at the position and
+        // none settles until the first definition does. Running each
+        // definition to its own fixed point within every round of the one
+        // naming it would multiply the traversals with each definition.
+
+        /** `count` definitions, the `i`th naming those `steps` after it. */
+        function definitions(
+          count: number,
+          steps: readonly number[],
+        ): JSONSchema {
+          const handle = (i: number) => ({
+            $ref: `#/$defs/R${i % count}`,
+            asCell: ["cell" as const],
+          });
+          return {
+            ...handle(0),
+            $defs: Object.fromEntries(
+              Array.from({ length: count }, (_, i) => [`R${i}`, {
+                anyOf: [
+                  { type: "null" as const },
+                  ...steps.map((step) => handle(i + step)),
+                ],
+              }]),
+            ),
+          };
+        }
+
+        const shapes = [
+          ["itself and the next", [0, 1]],
+          ["the next two", [1, 2]],
+        ] as const;
+        for (const [named, steps] of shapes) {
+          it(`traverses at most twice the schemas for twice the definitions, each naming ${named}`, () => {
+            const few = queryTraversal(null, definitions(8, steps));
+            const many = queryTraversal(null, definitions(16, steps));
+
+            expect(few.result).toEqual({ ok: null });
+            expect(many.result).toEqual({ ok: null });
+            expect(many.traversals).toBeLessThanOrEqual(2 * few.traversals);
+          });
+        }
       });
 
       it("selects through a handle first reached inside a cycle as through that handle alone", () => {
