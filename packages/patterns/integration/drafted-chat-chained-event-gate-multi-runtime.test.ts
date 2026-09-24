@@ -1,16 +1,14 @@
 /**
  * The chained-event serve-order gate, pinned deterministically.
  *
- * A trusted action whose SERVED handler reads a precondition cell
- * written by an immediately-preceding event (draft → trusted send) is
- * racy by design under ON: events on different streams have no
- * cross-stream serve-order guarantee (events.md §2 — per stream,
- * commit-seq order; across streams, no claim), and the group-chat
- * handlers silently no-op on an empty draft
- * (`prepareTrustedMessageSend` returns null). The real UI forbids the
- * racy interleaving — the trusted control stays disabled until the
- * draft state the CLICKING session sees is non-empty — so tests must
- * gate the same way. Ungated, the race reproduced nightly under CI
+ * An action whose SERVED handler reads a precondition cell written by
+ * an immediately-preceding event (draft → send) is racy by design
+ * under ON: events on different streams have no cross-stream
+ * serve-order guarantee (events.md §2 — per stream, commit-seq order;
+ * across streams, no claim), and the drafted chat fixture's send
+ * silently skips an empty draft. A UI that commits a draft this way
+ * must keep its control disabled until the draft state the CLICKING
+ * session sees is non-empty, so tests must gate the same way. Ungated, the race reproduced nightly under CI
  * load (2026-08-22, runs 32543810077 / 32547606642: "bob's
  * post-lockdown message arrives at alice" timing out with quiescence
  * clean and zero errors — the message was never appended, not slow).
@@ -37,15 +35,10 @@ import {
   type MultiRuntimeSession,
 } from "./multi-runtime-harness.ts";
 
-const PROFILE_SURFACE = "TrustedGroupChatProfileSurface";
-const SAVE_PROFILE_ACTION = "TrustedGroupChatSaveProfile";
-const SEND_SURFACE = "TrustedGroupChatSendSurface";
-const SEND_ACTION = "TrustedGroupChatSendMessage";
-
 const PROGRAM_PATH = join(
   import.meta.dirname!,
-  "..",
-  "cfc-group-chat-demo",
+  "fixtures",
+  "drafted-chat",
   "main.tsx",
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");
@@ -57,11 +50,8 @@ const SERVER_EXECUTION_ON =
   experimentalOptionsFromEnv(Deno.env.get).serverExecution ??
     SERVER_EXECUTION_DEFAULT_ENABLED;
 
-async function fireTrustedSend(session: MultiRuntimeSession): Promise<void> {
-  await session.send("sendTrustedMessage", {}, {
-    surface: SEND_SURFACE,
-    action: SEND_ACTION,
-  });
+async function fireSend(session: MultiRuntimeSession): Promise<void> {
+  await session.send("sendMessage");
 }
 
 async function messageBodies(session: MultiRuntimeSession): Promise<string[]> {
@@ -97,14 +87,11 @@ describe("group chat chained-event gates across sessions", () => {
     sender = harness.session("sender");
     writer = harness.session("writer");
 
-    // Profile first — the send handler also no-ops without one — gated
-    // and awaited, so the draft is the only variable in the steps.
+    // Profile first, gated and awaited, so the message draft is the only
+    // variable in the steps.
     await sender.send("setProfileDraft", "Alice");
     await sender.awaitEventConsequences();
-    await sender.send("saveProfile", {}, {
-      surface: PROFILE_SURFACE,
-      action: SAVE_PROFILE_ACTION,
-    });
+    await sender.send("saveProfile");
     await harness.waitFor(
       "alice's profile is saved",
       async () => (await sender.read(["currentProfileName"])) === "Alice",
@@ -112,7 +99,7 @@ describe("group chat chained-event gates across sessions", () => {
     return harness;
   }
 
-  it("firing the trusted send once the SENDER observes the draft appends the message (the UI-enablement gate, both arms)", async () => {
+  it("firing the send once the SENDER observes the draft appends the message (the UI-enablement gate, both arms)", async () => {
     try {
       // Inside the try: a harness-creation throw must still hit this
       // step's dispose arm rather than leak workers and sockets.
@@ -129,7 +116,7 @@ describe("group chat chained-event gates across sessions", () => {
         "the sender observes the chained draft",
         async () => (await sender.read(["messageDraft"])) === "Observed body",
       );
-      await fireTrustedSend(sender);
+      await fireSend(sender);
       await h.waitFor(
         "the observed-draft message arrives at both sessions",
         async () =>
@@ -172,7 +159,7 @@ describe("group chat chained-event gates across sessions", () => {
       // early and the 300 ms delay makes this step fail
       // deterministically with the CI signature).
       await writer.awaitEventConsequences();
-      await fireTrustedSend(sender);
+      await fireSend(sender);
       await h.waitFor(
         "the quiescence-gated message arrives at both sessions",
         async () =>

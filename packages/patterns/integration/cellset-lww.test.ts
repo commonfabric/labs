@@ -31,17 +31,12 @@ import {
 
 const PROGRAM_PATH = join(
   import.meta.dirname!,
-  "..",
-  "cfc-group-chat-demo",
+  "fixtures",
+  "drafted-chat",
   "main.tsx",
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");
 const DRAFT: (string | number)[] = ["profileDraft"];
-
-// Trusted surface/action for the profile save (inlined from
-// cfc-group-chat-demo/trusted.tsx, as the multi-runtime demo test does).
-const PROFILE_SURFACE = "TrustedGroupChatProfileSurface";
-const SAVE_PROFILE_ACTION = "TrustedGroupChatSaveProfile";
 
 const isConflict = (error?: { name?: string; message?: string }): boolean =>
   error?.name === "ConflictError" ||
@@ -143,9 +138,9 @@ describe("cellset last-write-wins for scalar $value (own-write race)", () => {
   it(
     "end-to-end: a typed name survives the own-write race through save",
     async () => {
-      // The original cfc-group-chat-demo "Name not set" flake, end to end: a user
+      // The "Name not set" flake, end to end: a user
       // types a profile name (a scalar `$value` write to the PerUser draft), then
-      // saves. The save handler (commitTrustedProfileSave) reads draftText(nameDraft).
+      // saves. The fixture's save handler reads the draft.
       // Pre-fix, the draft `$value` write loses the own-write race, is rejected and
       // rolled back to its prior (empty) value, so the save reads the wrong/empty
       // draft and the profile name is not the one the user typed. With the fix the
@@ -169,11 +164,8 @@ describe("cellset last-write-wins for scalar $value (own-write race)", () => {
         // …so alice's later typed name commits against a stale baseline.
         const typed = `alice-typed-${i}`;
         await alice.set([...DRAFT], typed, { idle: false });
-        // Save the profile via the trusted action (reads draftText(nameDraft)).
-        await alice.send("saveProfile", {}, {
-          surface: PROFILE_SURFACE,
-          action: SAVE_PROFILE_ACTION,
-        });
+        // Save the profile (the handler reads the draft).
+        await alice.send("saveProfile");
         await harness.settle();
         assertEquals(
           await alice.read(["currentProfileName"]),

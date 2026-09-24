@@ -12,15 +12,7 @@
  * `{ label }` / `{ await }` markers. See the multi-user section of
  * docs/common/patterns/multi-user-patterns.md.
  */
-import {
-  action,
-  assert,
-  type Default,
-  multiUserTest,
-  pattern,
-  TESTS,
-  type Writable,
-} from "commonfabric";
+import { assert, multiUserTest, pattern, TESTS } from "commonfabric";
 import {
   messagesValue,
   profilesValue,
@@ -51,6 +43,13 @@ const adminGesture = {
 
 type GroupChatDemoInputArg = Parameters<typeof GroupChatDemo>[0];
 
+// A `cf-submit-input` delivers its field's text on the trusted click, from its
+// button or from Enter in the field.
+const submitted = (text: string) => ({
+  type: "click",
+  target: { value: text },
+});
+
 interface Setup {
   chat: GroupChatDemoOutput;
 }
@@ -70,12 +69,6 @@ const messageBodies = (chat: GroupChatDemoOutput): string[] =>
 
 export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const chat = setup.chat;
-  const action_set_name = action(() => {
-    chat.setProfileDraft.send("Alice");
-  });
-  const action_set_message = action(() => {
-    chat.setMessageDraft.send("Hello from Alice");
-  });
 
   const assert_named_alice = assert(() => chat.currentProfileName === "Alice");
   const assert_sees_both_profiles = assert(() =>
@@ -91,8 +84,11 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
 
   return {
     [TESTS]: [
-      { action: action_set_name },
-      { action: chat.saveProfile, trustedUi: profileGesture },
+      {
+        action: chat.saveProfile,
+        event: submitted("Alice"),
+        trustedUi: profileGesture,
+      },
       { assertion: assert_named_alice },
       { label: "alice-saved" },
       { await: "bob-saved" },
@@ -100,8 +96,11 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       // registry must resolve BOTH names in Alice's runtime.
       { assertion: assert_named_alice },
       { assertion: assert_sees_both_profiles },
-      { action: action_set_message },
-      { action: chat.sendTrustedMessage, trustedUi: sendGesture },
+      {
+        action: chat.sendTrustedMessage,
+        event: submitted("Hello from Alice"),
+        trustedUi: sendGesture,
+      },
       { label: "alice-posted" },
       { await: "bob-posted" },
       { assertion: assert_sees_bobs_message },
@@ -122,19 +121,8 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
 
 export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const chat = setup.chat;
-  const action_set_name = action(() => {
-    chat.setProfileDraft.send("Bob");
-  });
-  const action_set_message = action(() => {
-    chat.setMessageDraft.send("Hi from Bob");
-  });
-  const action_set_lockdown_message = action(() => {
-    chat.setMessageDraft.send("Bob posts after lockdown");
-  });
 
-  // PerUser draft: Alice's typing must never show up in Bob's runtime.
-  const profileDraft: Writable<string | Default<"">> = chat.profileDraft;
-  const assert_draft_empty = assert(() => (profileDraft.get() ?? "") === "");
+  // PerUser profile: Alice's saved name must never show up as Bob's.
   const assert_unnamed = assert(() =>
     chat.currentProfileName === "Name not set"
   );
@@ -150,22 +138,30 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   return {
     [TESTS]: [
       { await: "alice-saved" },
-      { assertion: assert_draft_empty },
       { assertion: assert_unnamed },
       { assertion: assert_sees_alice_profile },
-      { action: action_set_name },
-      { action: chat.saveProfile, trustedUi: profileGesture },
+      {
+        action: chat.saveProfile,
+        event: submitted("Bob"),
+        trustedUi: profileGesture,
+      },
       { assertion: assert_named_bob },
       { label: "bob-saved" },
       { await: "alice-posted" },
       { assertion: assert_sees_alices_message },
-      { action: action_set_message },
-      { action: chat.sendTrustedMessage, trustedUi: sendGesture },
+      {
+        action: chat.sendTrustedMessage,
+        event: submitted("Hi from Bob"),
+        trustedUi: sendGesture,
+      },
       { label: "bob-posted" },
       { await: "alice-locked-down" },
       { assertion: assert_not_admin },
-      { action: action_set_lockdown_message },
-      { action: chat.sendTrustedMessage, trustedUi: sendGesture },
+      {
+        action: chat.sendTrustedMessage,
+        event: submitted("Bob posts after lockdown"),
+        trustedUi: sendGesture,
+      },
       { label: "bob-posted-after-lockdown" },
     ],
   };

@@ -18,7 +18,7 @@ decision is reversed or superseded).
 
 ## Index
 
-- [Protected initialization](cfc-protected-initialization.md) — transaction-scoped initialization of protected cells and new defaulted fields
+- [Protected initialization](cfc-protected-initialization.md) — transaction-scoped initialization of protected cells, new defaulted fields, and references a collection builtin hands a sub-pattern
 
 ### Addressing and navigation
 

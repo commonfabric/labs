@@ -1042,9 +1042,9 @@ describe("JsonCodecEngine", () => {
         expect(Object.keys(encoded)).toEqual(["", "\u{10000}"]);
       });
 
-      it("matches the key order used by `value-hash.ts`", () => {
+      it("matches the key order used by `ValueHasher`", () => {
         // Both subsystems must agree on the canonical sort order. Cross-check
-        // via `utf8SortedKeysOf`, which is the function value-hash.ts uses.
+        // via `utf8SortedKeysOf`, which is the function `ValueHasher` uses.
 
         const obj = {
           ["\u{1F600}"]: 1,

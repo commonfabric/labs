@@ -1,0 +1,1 @@
+{"date":"2026-09-23","from":{"k":"unit","s":"data-model","n":"JsonCodecEngine > plain objects > key ordering (Section 10) > matches the key order used by `value-hash.ts`"},"to":{"k":"unit","s":"data-model","n":"JsonCodecEngine > plain objects > key ordering (Section 10) > matches the key order used by `ValueHasher`"}}
