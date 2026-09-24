@@ -105,32 +105,52 @@ describe("brand-payload default recovery (expanded Default<T, V>)", () => {
   it("keys an object payload's members by their written names", async () => {
     // TypeScript escapes a name that starts with `__` by adding a third
     // underscore, and marks a symbol-keyed member with `__@`. A string key
-    // written `__@x` is data, and escapes to `___@x`.
+    // written `__@x` is data, and escapes to `___@x`. The generic parameter
+    // keeps the value from being read off the authored node, so it is read
+    // from the brand payload.
     const code = `${DEFAULT_PRELUDE}
-      interface Settings {
+      interface Tagged<V extends number> {
         config: Default<
           { __foo: number; ___bar: number; "__@x": number; plain: string },
-          { __foo: 1; ___bar: 2; "__@x": 3; plain: "a" }
+          { __foo: V; ___bar: 2; "__@x": 3; plain: "a" }
         >;
       }
+      interface Holder {
+        tagged: Tagged<1>;
+      }
     `;
-    const { type, checker } = await getTypeFromCode(code, "Settings");
+    const { type, checker } = await getTypeFromCode(code, "Holder");
     const schema = asObjectSchema(transformer.generateSchema(type, checker));
 
-    expect((schema.properties?.config as Record<string, unknown>).default)
+    const tagged = asObjectSchema(
+      (schema.properties?.tagged ?? {}) as Record<string, unknown>,
+    );
+    expect((tagged.properties?.config as Record<string, unknown>).default)
       .toEqual({ __foo: 1, ___bar: 2, "__@x": 3, plain: "a" });
   });
 
   it("keeps a `__proto__` payload member as an own property", async () => {
+    // Deno removes the `Object.prototype.__proto__` accessor, so here this
+    // pins the member's name; how the member is written cannot be observed.
+
     const code = `${DEFAULT_PRELUDE}
-      interface Settings {
-        config: Default<{ __proto__: number; id: number }, { __proto__: 1; id: 2 }>;
+      interface Tagged<V extends number> {
+        config: Default<
+          { __proto__: number; id: number },
+          { __proto__: V; id: 2 }
+        >;
+      }
+      interface Holder {
+        tagged: Tagged<1>;
       }
     `;
-    const { type, checker } = await getTypeFromCode(code, "Settings");
+    const { type, checker } = await getTypeFromCode(code, "Holder");
     const schema = asObjectSchema(transformer.generateSchema(type, checker));
 
-    const value = (schema.properties?.config as Record<string, unknown>)
+    const tagged = asObjectSchema(
+      (schema.properties?.tagged ?? {}) as Record<string, unknown>,
+    );
+    const value = (tagged.properties?.config as Record<string, unknown>)
       .default as Record<string, unknown>;
     expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
     expect(Object.hasOwn(value, "__proto__")).toBe(true);
