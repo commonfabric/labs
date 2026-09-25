@@ -6029,12 +6029,13 @@ export class SpaceServer implements TransactionSealDestination {
             // The INPUT barrier, not the durability barrier: sealed
             // commits settle at the wave commit BELOW, so the full
             // synced() would deadlock here (see
-            // StorageManager.inputSynced).
+            // StorageManager.inputSynced). It also waits for the
+            // loopback transport to hand over every frame the drain
+            // above sent, which it does one frame per event-loop turn.
             await runtime.storageManager.inputSynced?.();
-            // One macrotask yield: loopback frames are delivered
-            // synchronously on send, but their application schedules
-            // work; the yield lets it register dirtiness so the
-            // isIdle() probe below sees it. (An application parked
+            // One macrotask yield: a handed-over frame's application
+            // schedules work; the yield lets it register dirtiness so
+            // the isIdle() probe below sees it. (An application parked
             // behind one of our own sealed commits is excluded from
             // the W advance below via unappliedForeignSeqFloor — the
             // settle input barrier, Phase 2 revisit (a).)
