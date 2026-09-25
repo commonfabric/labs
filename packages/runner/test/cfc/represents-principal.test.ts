@@ -128,6 +128,11 @@ describe("represents-principal", () => {
         representsAt([], DID),
         representsAt(["name"], DID),
         representsAt(["bio"], OTHER_DID),
+        // Another claim kind names no represented principal.
+        {
+          path: [],
+          label: { integrity: [{ kind: "authored-by", subject: OTHER_DID }] },
+        },
         // Below the top-level fields, as authorPrincipalCandidates reads it.
         representsAt(["elements", "0"], "did:key:deeper"),
       ]);

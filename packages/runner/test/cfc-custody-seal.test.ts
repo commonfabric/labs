@@ -1152,6 +1152,54 @@ describe("cfc-custody-seal", () => {
       }
     });
 
+    it("reads the policy declared on the policy cell itself, not on what it holds", async () => {
+      const fixture = await setup();
+      try {
+        const runtime = fixture.runtimes.get(alice)!;
+        const tx = runtime.edit();
+        const cell = runtime.getCell(S, "declaring-cell", undefined, tx);
+        writeSeedEnvelopeDoc(tx, S);
+        seedStoredEnvelope(tx, {
+          space: S,
+          scope: "space",
+          id: cell.getAsNormalizedFullLink().id,
+          path: [],
+        }, {
+          value: { inner: true },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [
+                { path: [], label: { confidentiality: [P] } },
+                // A field's own policy, and a shape label, name no policy
+                // for the cell.
+                {
+                  path: ["inner"],
+                  label: { confidentiality: [policyOf(SCRATCH)] },
+                },
+                {
+                  path: [],
+                  observes: "shape",
+                  label: { confidentiality: [policyOf(SCRATCH)] },
+                },
+              ],
+            },
+          },
+        } as FabricValue);
+        expect((await tx.commit()).error).toBeUndefined();
+        const draft = await fixture.draft(alice, honestStance);
+        const prepared = await prepareCustodySeal(draft, {
+          ...fixture.room(alice),
+          policy: cell.withTx(undefined),
+        });
+        expect(prepared.policy).toEqual(P);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
     it("refuses a policy cell whose label declares no policy, or more than one", async () => {
       const fixture = await setup();
       try {
@@ -1449,6 +1497,33 @@ describe("cfc-custody-seal", () => {
       }
     });
 
+    it("refuses terms that are not an object, or whose seats are not a list", async () => {
+      for (
+        const [terms, refusal] of [
+          [["not", "an", "object"], /Custody terms must be an object/],
+          [{ ...TERMS, seats: alice.did() }, /distinct, well-formed DIDs/],
+          [
+            { ...TERMS, seats: [alice.did(), { name: "not a link" }] },
+            /distinct, well-formed DIDs/,
+          ],
+        ] as const
+      ) {
+        const fixture = await setup();
+        try {
+          const runtime = fixture.runtimes.get(alice)!;
+          const tx = runtime.edit();
+          runtime.getCellFromLink(fixture.terms, undefined, tx)
+            .setRaw(terms as never);
+          expect((await tx.commit()).error).toBeUndefined();
+          const draft = await fixture.draft(alice, honestStance);
+          await expect(prepareCustodySeal(draft, fixture.room(alice)))
+            .rejects.toThrow(refusal);
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
     it("refuses two seats that resolve to one principal", async () => {
       const fixture = await setup();
       try {
@@ -1658,6 +1733,31 @@ describe("cfc-custody-seal", () => {
           },
           [],
           /array inside an array's elements/,
+        ],
+        [
+          {
+            type: "array",
+            items: { type: "boolean" },
+            minItems: 3,
+            maxItems: 2,
+          },
+          [true],
+          /`minItems` must be an integer no greater than `maxItems`/,
+        ],
+        [
+          {
+            type: "array",
+            items: { type: "boolean" },
+            minItems: 0.5,
+            maxItems: 2,
+          },
+          [true],
+          /`minItems` must be an integer/,
+        ],
+        [
+          { type: "array", items: { type: "boolean" }, maxItems: 2 },
+          { 0: true },
+          /the value is not an array/,
         ],
         [
           { type: "boolean", maxItems: 2 },
