@@ -162,8 +162,8 @@ const writeOwnedString = async (
   owner: string,
 ): Promise<Cell<unknown>> => {
   const tx = runtime.edit();
-  tx.setCfcTrustSnapshot({ id: `trust-${owner}`, actingPrincipal: owner });
-  tx.setCfcImplementationIdentity({
+  setCfcTrustSnapshot(tx, { id: `trust-${owner}`, actingPrincipal: owner });
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: PROFILE_WRITER,
   });
