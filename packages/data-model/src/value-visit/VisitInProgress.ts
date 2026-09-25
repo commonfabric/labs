@@ -28,6 +28,7 @@ import { debugStr } from "@/value-debug";
 
 import {
   type BaselineVisitorMethodResult,
+  type MapToForm,
   type RecurseForm,
   type ReplaceForm,
   type ValueVisitor,
@@ -69,13 +70,13 @@ export class VisitInProgress<
   ResultType = FabricValuePlus<PlusType>,
 > {
   /** Concrete visitor implementation. */
-  #visitor: ValueVisitor<PlusType, ResultType>;
+  readonly #visitor: ValueVisitor<PlusType, ResultType>;
 
   /** Bound method call to `#visitor.isPlusType()`. */
-  #isPlusType: PlusTypePredicate<PlusType>;
+  readonly #isPlusType: PlusTypePredicate<PlusType>;
 
   /** Container stack of the visit currently in progress. */
-  #stack = new IndexTrackingStack<FabricValuePlus<PlusType>>();
+  readonly #stack = new IndexTrackingStack<FabricValuePlus<PlusType>>();
 
   /** Indicates if a visit is now actually in-progress. */
   #inProgress = false;
@@ -331,8 +332,10 @@ export class VisitInProgress<
         lastIdx = idxNumber;
 
         const element = array[idxNumber]!;
-        const elemResult = this.#visitValue(element);
-        let mappedTo: ResultType;
+        const elemResult = this.#handleMappingAsAppropriate(
+          element,
+          this.#visitValue(element),
+        );
 
         switch (elemResult?.type) {
           case "mainResult": {
@@ -340,27 +343,28 @@ export class VisitInProgress<
           }
 
           case "mapTo": {
-            mappedTo = elemResult.value;
+            const mappedTo = elemResult.value;
+
+            // `!` is valid, because we'll only see `mapTo` when we're actually
+            // mapping.
+            mapResult![idxNumber] = mappedTo;
+
+            const result = vis.visitedFabricArrayElement(
+              array,
+              idxNumber,
+              mappedTo,
+            );
+
+            if (result?.type === "mainResult") {
+              return result;
+            }
+
             break;
           }
 
           case undefined: {
-            mappedTo = this.#assertResultType(element);
             break;
           }
-        }
-
-        if (mapResult) {
-          mapResult[idxNumber] = mappedTo;
-        }
-
-        const result = vis.visitedFabricArrayElement(
-          array,
-          idxNumber,
-          mappedTo,
-        );
-        if (result?.type === "mainResult") {
-          return result;
         }
       }
 
@@ -371,6 +375,7 @@ export class VisitInProgress<
           lastIdx + 1,
           array.length - lastIdx - 1,
         );
+
         if (result?.type === "mainResult") {
           return result;
         }
@@ -409,33 +414,35 @@ export class VisitInProgress<
     this.#stack.push(instance);
 
     try {
-      const stateResult = this.#visitValue(state);
-      let mappedTo: ResultType;
+      const stateResult = this.#handleMappingAsAppropriate(
+        state,
+        this.#visitValue(state),
+      );
 
       switch (stateResult?.type) {
         case "mainResult": {
           return stateResult;
         }
 
-        case "mapTo": {
-          mappedTo = stateResult.value;
-          break;
-        }
-
         case undefined: {
-          mappedTo = this.#assertResultType(state);
-          break;
+          // Not mapping.
+          return undefined;
         }
       }
 
+      // We are doing a structural-map operation, and `stateResult` is
+      // necessarily a `mapTo` (which might have been transformed from an "no
+      // change" `undefined`).
+
+      const mappedTo = (stateResult as MapToForm<ResultType>).value;
       const result = vis.visitedFabricInstanceState(instance, mappedTo);
       if (result?.type === "mainResult") {
         return result;
       }
 
-      if (!this.#doMap || (mappedTo === state)) {
-        // We're not mapping, or the state visit didn't map to a new state
-        // value. Either way, there is no replacement `FabricInstance`.
+      if (mappedTo === state) {
+        // The state visit returned the original state value, so we in turn
+        // return the original `FabricInstance`.
         return undefined;
       }
 
@@ -520,72 +527,59 @@ export class VisitInProgress<
 
     try {
       for (const [key, value] of entries) {
-        let keyMappedTo: string;
-        let valueMappedTo: ResultType;
+        const keyResult = this.#handleMappingAsAppropriate(key, doKeys ? this.#visitValue(key) : undefined);
+        let keyMappedTo: string | undefined;
 
-        if (doKeys) {
-          const keyResult = this.#visitValue(key);
-          switch (keyResult?.type) {
-            case "mainResult": {
-              return keyResult;
-            }
-
-            case "mapTo": {
-              const allegedKeyResult = keyResult.value;
-              if (typeof allegedKeyResult !== "string") {
-                throw new Error(
-                  debugStr`Visit of key $quote${key} mapped to non-string: $quote${allegedKeyResult}`,
-                );
-              } else if (isUnsafeObjectKey(allegedKeyResult)) {
-                throw new Error(
-                  debugStr`Visit of key $quote${key} mapped to unsafe key: $quote${allegedKeyResult}`,
-                );
-              }
-              keyMappedTo = allegedKeyResult;
-              break;
-            }
-
-            case undefined: {
-              keyMappedTo = key;
-              break;
-            }
+        switch (keyResult?.type) {
+          case "mainResult": {
+            return keyResult;
           }
-        } else {
-          keyMappedTo = key;
+
+          case "mapTo": {
+            keyMappedTo = this.#assertValidPlainObjectKey(key, keyResult.value);
+            break;
+          }
+
+          case undefined: {
+            keyMappedTo = undefined;
+            break;
+          }
         }
 
-        if (doValues) {
-          const valueResult = this.#visitValue(value);
-          switch (valueResult?.type) {
-            case "mainResult": {
-              return valueResult;
-            }
+        const valueResult = this.#handleMappingAsAppropriate(value, doValues ? this.#visitValue(value) : undefined);
+        let valueMappedTo: ResultType | undefined;
 
-            case "mapTo": {
-              valueMappedTo = valueResult.value;
-              break;
-            }
-
-            case undefined: {
-              valueMappedTo = this.#assertResultType(value);
-              break;
-            }
+        switch (valueResult?.type) {
+          case "mainResult": {
+            return valueResult;
           }
-        } else {
-          valueMappedTo = this.#assertResultType(value);
+
+          case "mapTo": {
+            valueMappedTo = valueResult.value;
+            break;
+          }
+
+          case undefined: {
+            valueMappedTo = undefined;
+            break;
+          }
         }
 
         if (mapResult) {
-          mapResult[keyMappedTo] = valueMappedTo;
-        }
+          // `keyMappedTo!` is safe, because if we made it here, it necessarily
+          // got set to a `string`.
+          const finalKey: string = keyMappedTo!;
+          const result = vis.visitedFabricPlainObjectEntry(
+            plainObj,
+            finalKey,
+            valueMappedTo,
+          );
 
-        const result = vis.visitedFabricPlainObjectEntry(
-          plainObj,
-          keyMappedTo,
-          valueMappedTo,
-        );
-        if (result?.type === "mainResult") {
-          return result;
+          if (result?.type === "mainResult") {
+            return result;
+          }
+
+          mapResult[finalKey] = valueMappedTo;
         }
       }
 
@@ -668,6 +662,23 @@ export class VisitInProgress<
   }
 
   /**
+   * Asserts that the given value is a valid `FabricPlainObject` property key.
+   */
+  #assertValidPlainObjectKey(original: string, value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>): string {
+    if (typeof value !== "string") {
+      throw new Error(
+        debugStr`Visit of key $quote${original} mapped to non-string: $quote${value}`,
+      );
+    } else if (isUnsafeObjectKey(value)) {
+      throw new Error(
+        debugStr`Visit of key $quote${original} mapped to unsafe key: $quote${value}`,
+      );
+    }
+
+    return value;
+  }
+
+  /**
    * Gets the tag for the given value, consulting the visitor's `isPlusType()`
    * only where the value cannot be a `FabricValue`.
    */
@@ -675,5 +686,31 @@ export class VisitInProgress<
     value: FabricValuePlus<PlusType>,
   ): FabricValuePlusTag | null {
     return tagOfFabricValueElseNull(value, this.#isPlusType);
+  }
+
+  /**
+   * Converts a `#visitValue()` result from a `recurse`-induced sub-value
+   * iteration as appropriate, based on the `#doMap` mode. Specifically, this
+   * always returns a `mapTo` result when mapping (furthermore validating the
+   * result as necessary), and always returns `undefined` when _not_ mapping.
+   */
+  #handleMappingAsAppropriate(
+    original: FabricValuePlus<PlusType>,
+    visitResult: MainVisitResult<PlusType, ResultType>,
+  ): MainVisitResult<PlusType, ResultType> | undefined {
+    if (!this.#doMap) {
+      return undefined;
+    }
+
+    switch (visitResult?.type) {
+      case "mainResult":
+      case "mapTo": {
+        return visitResult;
+      }
+
+      case undefined: {
+        return { type: "mapTo", value: this.#assertResultType(original) };
+      }
+    }
   }
 }
