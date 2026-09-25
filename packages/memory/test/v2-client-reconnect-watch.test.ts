@@ -10,6 +10,7 @@ import {
 } from "./v2-auth-test-helpers.ts";
 
 const SPACE = "did:key:z6Mk-client-reconnect-watch";
+const SECOND_SPACE = "did:key:z6Mk-client-reconnect-watch-second";
 
 /** A graph watch on the whole of document `of:<id>`. */
 const graphWatch = (id: string) => ({
@@ -232,6 +233,86 @@ describe("v2-client-reconnect-watch", () => {
           const updates = (await session.watchAddSync([])).view.subscribe();
           const writer = await writerClient.mount(
             SPACE,
+            {},
+            testSessionOpenAuthFactory,
+          );
+          await writer.transact({
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: "of:during",
+              value: { value: { written: true } },
+            }],
+          });
+          const next = await updates.next();
+          expect(
+            (next.value?.entities ?? []).map((entity: EntitySnapshot) =>
+              entity.id
+            ),
+          ).toContain("of:during");
+        } finally {
+          await client.close();
+          await writerClient.close();
+          await before.close();
+          await after.close();
+        }
+      });
+
+      it("keeps a watch added on a session the reconnect has not reopened yet installed on the server", async () => {
+        // One client holds two sessions, and the reconnect restores them one
+        // after the other. The watch is added on the second while the first
+        // is reopening: the client is connected, and the second session has
+        // neither reopened nor started its restore.
+
+        const before = new Server({
+          ...testSessionOpenServerOptions,
+          store: new URL("memory://reconnect-watch-second-before"),
+          subscriptionRefreshDelayMs: 0,
+        });
+        const after = new Server({
+          ...testSessionOpenServerOptions,
+          store: new URL("memory://reconnect-watch-second-after"),
+          subscriptionRefreshDelayMs: 0,
+        });
+        const host = outageTransport(before);
+        const client = await connect({ transport: host.transport });
+        const writerClient = await connect({ transport: loopback(after) });
+        try {
+          let reopening = false;
+          let connectedAtReopen: boolean | undefined;
+          let added: Promise<unknown> | undefined;
+          const first = await client.mount(SPACE, {}, (...args) => {
+            if (reopening && added === undefined) {
+              connectedAtReopen = client.isConnected();
+              added = second.watchAddSync([graphWatch("during")]);
+              // Awaited below; observed here so that a rejection before then
+              // fails the case rather than surfacing as unhandled.
+              added.catch(() => {});
+            }
+            return testSessionOpenAuthFactory(...args);
+          });
+          const second = await client.mount(
+            SECOND_SPACE,
+            {},
+            testSessionOpenAuthFactory,
+          );
+          first.setConcurrentWatchRefresh(concurrentWatchRefresh);
+          second.setConcurrentWatchRefresh(concurrentWatchRefresh);
+          await first.watchAddSync([graphWatch("before")]);
+          await second.watchAddSync([graphWatch("before")]);
+
+          await host.goDown();
+          reopening = true;
+          host.comeBack(after);
+
+          await client.restoreConnection();
+          expect(connectedAtReopen).toBe(true);
+          await added;
+
+          const updates = (await second.watchAddSync([])).view.subscribe();
+          const writer = await writerClient.mount(
+            SECOND_SPACE,
             {},
             testSessionOpenAuthFactory,
           );

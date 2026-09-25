@@ -1836,13 +1836,17 @@ export class SpaceSession {
 
   /**
    * Whether a watch mutation sent now would have to wait for a restore: the
-   * connection is down (the reconnect that restores this session is running),
-   * or this session's own restore has not completed. Each is something
-   * `#whenWatchMutationsMaySend()` can wait on, so a released mutation always
+   * connection is down, this session has not reopened on the current
+   * connection, or its restore has not completed. The second is separate
+   * because a reconnect restores its client's sessions one after another, so
+   * a session can sit connected with its restore not yet begun. Each is
+   * covered by something `#whenWatchMutationsMaySend()` waits on — the
+   * reconnect, or this session's restore — so a released mutation always
    * blocks on a real event rather than spinning.
    */
   #watchMutationWaitsForRestore(): boolean {
-    return !this.#client.isConnected() || this.#restoreComplete !== undefined;
+    return !this.#client.isConnected() || !this.#readyOnConnection ||
+      this.#restoreComplete !== undefined;
   }
 
   /**

@@ -67,10 +67,12 @@ subsequent transport failure during request issuance.
 
 Watch mutations (`watchSetSync()`, `watchAddSync()`, `watchRemoveSync()`, and
 `viewSetSync()`) are ordered on a per-session chain, and restoration
-re-establishes the watch set through that same chain. A mutation whose turn
-comes while the connection is down or its session is restoring therefore gives
-the turn back unsent, waits for restoration, and queues again, so restoration
-never waits behind a mutation that is itself waiting for restoration.
+re-establishes the watch set through that same chain. An ordinary mutation whose
+turn comes while the connection is down or its session is not yet restored
+therefore gives the turn back unsent, waits for restoration, and queues again,
+so restoration never waits behind a mutation that is itself waiting for
+restoration. The restoration's own `watch.set` is the one mutation sent before
+its session is restored.
 
 ## Layout
 
