@@ -208,7 +208,12 @@ SpaceServer outbox ──(e)──► network; results re-enter via (a)
   document is answered from the replica, and the feed's admitted
   commits (plane (d)) re-read the documents the replica holds — so the
   runtime walks the schema once, over what it actually reads, and the
-  memory server never walks it for the serving session at all. The
+  memory server never walks it for the serving session at all. Of the
+  loop's own commits, whose other writes the replica already holds as
+  sealed, the feed re-reads the stream sidecars: admission stamps each
+  appended entry's seq and advances the stream's `eventWatermark` in the
+  sidecar the store keeps, and the event drain queues an entry only once
+  the replica's view holds it at that seq. The
   read-through preserves the frame validator's delivery guarantee: it
   reads the `cid:` schema documents referenced by an accessed document's
   link positions or schema metadata, and follows the schema documents'
