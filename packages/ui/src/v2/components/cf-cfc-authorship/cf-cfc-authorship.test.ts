@@ -966,6 +966,20 @@ describe("CFCFCAuthorship integrity matching", () => {
     );
   });
 
+  it("counts no string atom as authorship integrity", () => {
+    // A spelling no reader matches is not a claim, verified or otherwise.
+    const view = {
+      version: 1 as const,
+      entries: [{
+        path: [],
+        label: { integrity: ["authored-by:bob"] },
+      }],
+    };
+    expect(authorshipStateForLabel(view, "alice", "authored-by")).toBe(
+      "unknown",
+    );
+  });
+
   it("matches no string atom and no author field but the subject", () => {
     // The runtime refuses a pattern-authored claim spelled any other way, so
     // these are claims nothing checked.

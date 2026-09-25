@@ -299,6 +299,20 @@ describe("represents-principal writer check", () => {
       expect(error).toBeUndefined();
     });
 
+    it("refuses an ownerPrincipal write whose only owner atom no reader reads", async () => {
+      // The owner's atom nested inside another atom authorizes nothing: a
+      // reader looks only at the atoms the label holds directly.
+      const { error, principals } = await writeAsAlice(
+        claimSchema([{
+          type: "https://example.com/wrapper",
+          inner: { kind: "represents-principal", subject: alice.did() },
+        }], { ownerPrincipal: alice.did() }),
+        "represents-principal-writer-owner-nested",
+      );
+      expect(principals).toEqual([]);
+      expect(error).toContain("ownerPrincipal requires matching");
+    });
+
     it("commits a self-attestation through the runtime placeholder", async () => {
       const { error, principals } = await writeAsAlice(
         claimSchema([{
