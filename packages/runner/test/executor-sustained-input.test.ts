@@ -97,17 +97,19 @@ describe("SpaceServer", () => {
       await cycles.reached(start + 6);
       const held = cycles.entries.slice(start);
       floor = undefined;
+      // The stream runs on until a cycle ends with an exhausted advance past
+      // the lift; a loop that never resumed one leaves this wait to the
+      // stuck net, which fails the case.
       const exhaustedAdvances = host.stats().exhaustedAdvances;
-      await cycles.reached(cycles.entries.length + 4);
+      await cycles.matching(() =>
+        host.stats().exhaustedAdvances > exhaustedAdvances
+      );
       await stream.stop();
       const last = stream.inputs[stream.inputs.length - 1].seq;
       await awaitAdmitted(server, () => readWatermarkSeq(engine) >= last);
 
       expect(stream.inputs.some((input) => input.seq > shadowed)).toBe(true);
       expect(held.filter((end) => end.watermark >= shadowed)).toEqual([]);
-      expect(host.stats().exhaustedAdvances).toBeGreaterThan(
-        exhaustedAdvances,
-      );
     });
   });
 });
