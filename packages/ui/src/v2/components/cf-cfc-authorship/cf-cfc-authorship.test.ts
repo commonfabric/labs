@@ -961,9 +961,17 @@ describe("CFCFCAuthorship integrity matching", () => {
       "alice",
       "x-auth",
     )).toBe(false);
-    expect(authorshipStateForLabel(view, "alice", "x-auth")).not.toBe(
-      "verified",
-    );
+    expect(authorshipStateForLabel(view, "alice", "x-auth")).toBe("unknown");
+  });
+
+  it("matches a represents-principal claim only when its subject is a DID", () => {
+    // Without an owner, a pattern may write a represents-principal subject
+    // that is not a DID; no reader takes that for a principal.
+    expect(integrityAtomMatchesAuthor(
+      { kind: "represents-principal", subject: "alice" },
+      "alice",
+      "represents-principal",
+    )).toBe(false);
   });
 
   it("counts no string atom as authorship integrity", () => {

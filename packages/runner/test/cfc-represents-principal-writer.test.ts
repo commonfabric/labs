@@ -570,6 +570,35 @@ describe("represents-principal writer check", () => {
       expect(subjects).not.toContain(bob.did());
     });
 
+    it("refuses a link to an unlabeled source whose carried view holds only claims", async () => {
+      // With the claims gone the view carries nothing, so the link must meet
+      // the same refusal as one that carries no view.
+      const { error, subjects } = await linkAsAlice(
+        "represents-principal-link-view-only-claims",
+        undefined,
+        (source) => {
+          const link = source.getAsLink() as {
+            "/": Record<string, Record<string, unknown>>;
+          };
+          link["/"][LINK_V1_TAG].cfcLabelView = {
+            version: 1,
+            entries: [{
+              path: [],
+              label: {
+                integrity: [{
+                  kind: "represents-principal",
+                  subject: bob.did(),
+                }],
+              },
+            }],
+          };
+          return link;
+        },
+      );
+      expect(subjects).not.toContain(bob.did());
+      expect(error).toContain("missing link source metadata");
+    });
+
     it("carries the claim the source's own stored label holds", async () => {
       const { error, subjects } = await linkAsAlice(
         "represents-principal-link-genuine",
