@@ -1,10 +1,12 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
+import { taggedHashStringOf } from "@commonfabric/data-model";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { encodeMemoryBoundary } from "../v2.ts";
 import { applyCommit, close, type Engine, open } from "../v2/engine.ts";
 import {
+  extendTrackedGraph,
   refreshTrackedGraph,
   toDirtyKey,
   type TrackedGraphState,
@@ -65,6 +67,39 @@ const commit = (
   });
 };
 
+/** Replaces the schema ref of the link at `/value/x` in document `id`. */
+const patchLinkSchemaRef = (
+  engine: Engine,
+  localSeq: number,
+  id: string,
+  hash: string,
+): void => {
+  // A patch inside an existing link's schema introduces a reference the
+  // commit boundary does not collect, so the store accepts one it would
+  // refuse from a whole link.
+  commit(engine, localSeq, [{
+    op: "patch",
+    id,
+    patches: [{
+      op: "replace",
+      path: "/value/x/~1/link@1/schema/$ref",
+      value: `cid:${hash}`,
+    }],
+  }]);
+};
+
+/** Opens an engine on a fresh store, hands it to `fn`, and closes it. */
+const withEngine = async (fn: (engine: Engine) => void): Promise<void> => {
+  const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+  const engine = await open({ url: toFileUrl(path) });
+  try {
+    fn(engine);
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+};
+
 /**
  * Opens an engine holding a carrier whose link schema references `outer`,
  * which references `leaf`, plus an unrelated tally document; tracks both
@@ -72,12 +107,10 @@ const commit = (
  * closure pass is the only route by which a schema document arrives; and
  * hands the graph state to `fn`.
  */
-const withTrackedCarrier = async (
+const withTrackedCarrier = (
   fn: (engine: Engine, state: TrackedGraphState) => void,
-): Promise<void> => {
-  const path = await Deno.makeTempFile({ suffix: ".sqlite" });
-  const engine = await open({ url: toFileUrl(path) });
-  try {
+): Promise<void> =>
+  withEngine((engine) => {
     commit(engine, 1, [
       { op: "set", id: `cid:${leafHash}`, value: { value: leafSchema } },
       { op: "set", id: `cid:${outerHash}`, value: { value: outerSchema } },
@@ -103,11 +136,7 @@ const withTrackedCarrier = async (
     expect(tracked.state.entities.has(docKey(`cid:${leafHash}`))).toBe(true);
     expect(tracked.state.entities.has(docKey(`cid:${outerHash}`))).toBe(true);
     fn(engine, tracked.state);
-  } finally {
-    close(engine);
-    await Deno.remove(path);
-  }
-};
+  });
 
 describe("v2-refresh-schema-closure", () => {
   describe("refreshTrackedGraph()", () => {
@@ -231,17 +260,7 @@ describe("v2-refresh-schema-closure", () => {
           type: "null",
           title: "refresh-closure-never-installed",
         });
-        // A patch inside an existing link's schema introduces a reference
-        // the commit boundary does not collect, so the store accepts it.
-        commit(engine, 2, [{
-          op: "patch",
-          id: carrier,
-          patches: [{
-            op: "replace",
-            path: "/value/x/~1/link@1/schema/$ref",
-            value: `cid:${absentHash}`,
-          }],
-        }]);
+        patchLinkSchemaRef(engine, 2, carrier, absentHash);
         expect(() =>
           refreshTrackedGraph(
             space,
@@ -250,6 +269,116 @@ describe("v2-refresh-schema-closure", () => {
             new Set([toDirtyKey(carrier)]),
           )
         ).toThrow("is not stored in this space");
+      });
+    });
+
+    it("throws when a changed document references a delivered `cid:` document that is not a schema document", async () => {
+      // The blob is delivered as a watch root, so the graph holds it at the
+      // version it scanned; only its scan says it is no schema document.
+
+      const blob = "refresh-closure-blob";
+      const blobHash = taggedHashStringOf(blob);
+      await withEngine((engine) => {
+        commit(engine, 1, [
+          { op: "set", id: `cid:${leafHash}`, value: { value: leafSchema } },
+          { op: "set", id: `cid:${blobHash}`, value: { value: blob } },
+          {
+            op: "set",
+            id: carrier,
+            value: { value: { x: linkWithSchemaRef(leafHash) } },
+          },
+        ]);
+        const { state } = trackGraph(
+          space,
+          engine,
+          {
+            roots: [
+              { id: carrier, selector: { path: [], schema: false } },
+              { id: `cid:${blobHash}`, selector: { path: [], schema: false } },
+            ],
+          },
+          undefined,
+          identity,
+        );
+        expect(state.entities.has(docKey(`cid:${blobHash}`))).toBe(true);
+        patchLinkSchemaRef(engine, 2, carrier, blobHash);
+        expect(() =>
+          refreshTrackedGraph(
+            space,
+            engine,
+            state,
+            new Set([toDirtyKey(carrier)]),
+          )
+        ).toThrow("did not verify in this space");
+      });
+    });
+  });
+
+  describe("extendTrackedGraph()", () => {
+    it("throws when an added root references a schema document that a failed refresh tracked but never delivered", async () => {
+      // The carrier's selector reads through its link, so the refresh's
+      // traversal tracks `fresh` and scans it before the closure pass fails
+      // on its forged leaf. The added root's selector reads nothing through
+      // its link, so only the closure pass can check `fresh` for it.
+
+      const other = "of:refresh-closure-other";
+      await withEngine((engine) => {
+        commit(engine, 1, [
+          { op: "set", id: `cid:${leafHash}`, value: { value: leafSchema } },
+          {
+            op: "set",
+            id: carrier,
+            value: { value: { x: linkWithSchemaRef(leafHash) } },
+          },
+          {
+            op: "set",
+            id: other,
+            value: { value: { x: linkWithSchemaRef(leafHash) } },
+          },
+        ]);
+        const { state } = trackGraph(
+          space,
+          engine,
+          { roots: [{ id: carrier, selector: { path: [], schema: true } }] },
+          undefined,
+          identity,
+        );
+        commit(engine, 2, [
+          {
+            op: "set",
+            id: `cid:${freshLeafHash}`,
+            value: { value: freshLeafSchema },
+          },
+          { op: "set", id: `cid:${freshHash}`, value: { value: freshSchema } },
+          {
+            op: "set",
+            id: carrier,
+            value: { value: { x: linkWithSchemaRef(freshHash) } },
+          },
+        ]);
+        engine.database.prepare(
+          `UPDATE revision SET data = :data WHERE id = :id`,
+        ).run({
+          data: encodeMemoryBoundary({
+            value: { type: "boolean", title: "forged" },
+          }),
+          id: `cid:${freshLeafHash}`,
+        });
+        patchLinkSchemaRef(engine, 3, other, freshHash);
+        expect(() =>
+          refreshTrackedGraph(
+            space,
+            engine,
+            state,
+            new Set([toDirtyKey(carrier)]),
+          )
+        ).toThrow("did not verify in this space");
+        expect(state.tracker.has(docKey(`cid:${freshHash}`))).toBe(true);
+        expect(() =>
+          extendTrackedGraph(space, engine, state, {
+            roots: [{ id: other, selector: { path: [], schema: false } }],
+          })
+        ).toThrow("did not verify in this space");
       });
     });
   });

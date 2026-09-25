@@ -98,10 +98,10 @@ export type TrackedGraphState = {
    * scanned. One entry per delivered version, the schema documents the
    * closure itself delivered included; reused by document key and sequence;
    * every scope, since the state is one identity's; the state's lifetime.
-   * The engine-wide cache of space-scoped scans only seeds it. Between
-   * evaluations, a tracked `cid:` document whose entry names its own hash
-   * is a schema document this state established, closure and all (see
-   * `assembleSchemaDocClosures`). */
+   * The engine-wide cache of space-scoped scans only seeds it. A `cid:`
+   * document whose entry names its own hash, at the version `entities`
+   * holds, is a schema document this state established, closure and all
+   * (see `assembleSchemaDocClosures`). */
   schemaRefs: SchemaRefScans;
 };
 
@@ -1235,15 +1235,18 @@ export class SchemaClosureError extends Error {
  * frame).
  *
  * The walk starts from the documents in `delivered` and stops at every
- * schema document the state has already established: tracked, not being
- * delivered again, and recorded in `scans` as the schema document its hash
- * names. The assembly that recorded one verified its closure and tracked
- * it whole — a state whose assembly failed is replaced rather than
- * evaluated again — and the commit boundary never replaces or removes a
- * stored `cid:` document, so an established closure costs no read. What
- * the walk does not see is the store altered out of band beneath an
- * unchanged referrer; a new evaluation over the same closure reads it
- * again. A delivered document's previous version contributes its refs too,
+ * schema document the state has already established: not being delivered
+ * again, held in `established` (the state's `entities`) at the version
+ * `scans` records, and recorded there as the schema document its hash
+ * names. `entities` takes a document only once the assembly delivering it
+ * verified the whole closure, so a pass that failed — whose traversal and
+ * scans may already have run over a new schema document — establishes
+ * nothing, even for a later extension of the same state. The commit
+ * boundary never replaces or removes a stored `cid:` document, so an
+ * established closure costs no read. What the walk does not see is the
+ * store altered out of band beneath an unchanged referrer; an evaluation
+ * that builds its graph afresh, rather than taking it from the evaluation
+ * cache, reads it again. A delivered document's previous version contributes its refs too,
  * which is what re-checks a `cid:` document delivered at a new version
  * against the hash it verified as.
  *
@@ -1258,6 +1261,7 @@ const assembleSchemaDocClosures = (
   branch: string,
   tracker: MapSetStringToPathSelectors,
   delivered: ReadonlyMap<QueryDocKey, EntitySnapshot>,
+  established: ReadonlyMap<QueryDocKey, EntitySnapshot>,
   scans: SchemaRefScans,
   stats: QueryTraversalStats,
 ): {
@@ -1285,9 +1289,12 @@ const assembleSchemaDocClosures = (
   const identity = identityOf(manager);
   const schemaDocKey = (hash: string): QueryDocKey =>
     toDocKey(space, `cid:${hash}`, DEFAULT_SCOPE, identity);
-  const isEstablished = (hash: string, key: QueryDocKey): boolean =>
-    !delivered.has(key) && tracker.has(key) &&
-    scans.get(key)?.refs.has(hash) === true;
+  const isEstablished = (hash: string, key: QueryDocKey): boolean => {
+    if (delivered.has(key)) return false;
+    const scan = scans.get(key);
+    return scan !== undefined && scan.refs.has(hash) &&
+      established.get(key)?.seq === scan.seq;
+  };
   let verified = verifiedSchemaDocCaches.get(engine);
   if (verified === undefined) {
     verified = new Map();
@@ -1672,6 +1679,8 @@ export const trackGraph = (
     branch,
     schemaTracker,
     entities,
+    // A graph's first assembly has nothing established to stop at.
+    new Map(),
     schemaRefs,
     stats,
   );
@@ -1791,6 +1800,7 @@ export const extendTrackedGraph = (
     state.branch,
     state.tracker,
     updates,
+    state.entities,
     state.schemaRefs,
     stats,
   );
@@ -2082,6 +2092,7 @@ export const refreshTrackedGraph = (
       state.branch,
       state.tracker,
       updates,
+      state.entities,
       state.schemaRefs,
       stats,
     );

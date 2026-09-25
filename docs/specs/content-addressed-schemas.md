@@ -676,20 +676,23 @@ delivery and traversal split the work in two layers:
   query delivers — link positions and the `schema` metadata member —
   verifies each referenced closure against the space's
   own store, and joins it to the delivered set and watch set — failing
-  the query on a hole. A session's assemblies after its first — a
-  refresh, an added watch — walk only the closures of the documents they
-  deliver, and stop at each schema document the session already holds
-  verified: an earlier assembly verified that document and its whole
-  closure against this store, the commit boundary never replaces or
-  removes an installed `cid:` document, and the client retains the copy
-  it was delivered, so an established reference cannot come to resolve
-  differently through the store's API. A delivered document's previous
+  the query on a hole. An assembly over a graph the session already
+  holds — a refresh, or an added watch that extends the graph — walks
+  only the closures of the documents it delivers, and stops at each
+  schema document an earlier assembly of that graph delivered: that
+  assembly verified the document and its whole closure against this
+  store before delivering either, and the commit boundary never
+  replaces or removes an installed `cid:` document, so an established
+  reference cannot come to resolve differently through the store's
+  API. A schema document an assembly tracked before failing was never
+  delivered, so it is not established. A delivered document's previous
   version contributes its references as well, so a `cid:` document
   arriving at a new version is checked against the hash it verified as.
   What such an assembly does not re-read is a closure document altered
-  out of band beneath an unchanged referrer; an evaluation that reads
-  that closure from the store — a watch installation or a full
-  re-evaluation the evaluation cache does not answer — fails on it. An
+  out of band beneath an unchanged referrer; an evaluation that builds
+  its graph afresh — the first watch on a branch, or a full
+  re-evaluation — reads that closure from the store and fails on it,
+  unless the evaluation cache answers it. An
   assembly failure means the patch shape that escapes
   commit-time validation (see Resolution), out-of-band tampering, or a
   store predating that validation — never a transient condition, since
