@@ -45,9 +45,9 @@ type RecurseOfForm<PlusType> = {
  * Possible results from the top `#visitValue()` method, and some of the
  * methods that effectively feed into it.
  */
-type MainVisitResult<ResultType> = BaselineVisitorMethodResult<
-  ResultType
->;
+type MainVisitResult<PlusType, ResultType> = Exclude<
+  VisitResult<PlusType, ResultType>,
+  RecurseForm | ReplaceForm<PlusType>>;
 
 /**
  * State of a visit currently in progress, along with most of the visit
@@ -170,10 +170,7 @@ export class VisitInProgress<
    */
   #visitValue(
     value: FabricValuePlus<PlusType>,
-  ): Exclude<
-    VisitResult<PlusType, ResultType>,
-    RecurseForm | ReplaceForm<PlusType>
-  > {
+  ): MainVisitResult<PlusType, ResultType> {
     const tag = this.#tagOfValueElseNull(value);
     const result = this.#visitResolvingCyclesAndReplacement(value, tag);
 
@@ -283,7 +280,7 @@ export class VisitInProgress<
    */
   #recurseFabricArray(
     result: RecurseOfForm<PlusType>,
-  ): MainVisitResult<ResultType> {
+  ): MainVisitResult<PlusType, ResultType> {
     const { container, doValues } = result;
     const array = container as FabricArrayPlus<PlusType>;
     const vis = this.#visitor;
@@ -375,7 +372,7 @@ export class VisitInProgress<
    */
   #recurseFabricInstance(
     result: RecurseOfForm<PlusType>,
-  ): MainVisitResult<ResultType> {
+  ): MainVisitResult<PlusType, ResultType> {
     const { container, doValues } = result;
     const instance = container as FabricInstancePlus<PlusType>;
     const vis = this.#visitor;
@@ -418,7 +415,7 @@ export class VisitInProgress<
    */
   #recurseFabricPlainObject(
     result: RecurseOfForm<PlusType>,
-  ): MainVisitResult<ResultType> {
+  ): MainVisitResult<PlusType, ResultType> {
     const { container, doKeys, doValues } = result;
     const plainObj = container as FabricPlainObjectPlus<PlusType>;
     const vis = this.#visitor;
