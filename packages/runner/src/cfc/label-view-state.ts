@@ -8,6 +8,7 @@ import {
   cloneCfcLabelView,
   mergeCfcLabelViews,
   rebaseCfcLabelView,
+  withCfcLabelViewOrigins,
 } from "./label-view-core.ts";
 
 export type {
@@ -17,6 +18,7 @@ export type {
 } from "./label-view-core.ts";
 export {
   canonicalizeCfcLogicalPath,
+  cfcLabelViewOriginSpaces,
   cfcLabelViewPathKey,
   cfcLabelViewsEqual,
   cloneCfcLabel,
@@ -24,6 +26,7 @@ export {
   hasCfcLabelValues,
   mergeCfcLabelViews,
   rebaseCfcLabelView,
+  withCfcLabelViewOrigins,
 } from "./label-view-core.ts";
 
 export const cfcLabelViewSymbol: unique symbol = Symbol("cfcLabelView");
@@ -74,9 +77,12 @@ const deriveCfcLabelViewForAddress = (
   address: CfcAddress,
 ): CfcLabelView | undefined => {
   try {
-    return cfcLabelViewFromMetadata(
-      readStoredCfcMetadata(tx, address),
-      canonicalizeCfcLogicalPath(address.path),
+    return withCfcLabelViewOrigins(
+      cfcLabelViewFromMetadata(
+        readStoredCfcMetadata(tx, address),
+        canonicalizeCfcLogicalPath(address.path),
+      ),
+      [address.space],
     );
   } catch (error) {
     // The errors the reader THROWS to fail closed must keep failing
