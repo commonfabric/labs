@@ -1,6 +1,8 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { llmGenerateObjectRequestProblem } from "@commonfabric/llm/types";
+
 import { llmToolExecutionHelpers } from "../../src/builtins/llm-dialog.ts";
 
 const { prepareSchemaForLLM } = llmToolExecutionHelpers;
@@ -91,5 +93,28 @@ describe("prepareSchemaForLLM()", () => {
       required: ["entry", "byName"],
       additionalProperties: false,
     });
+  });
+
+  it("returns the object form of a boolean schema", () => {
+    expect(prepareSchemaForLLM(true)).toEqual({
+      type: "object",
+      properties: {},
+      additionalProperties: true,
+    });
+    expect(prepareSchemaForLLM(false)).toEqual({
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    });
+  });
+
+  it("returns a schema the generateObject route accepts for `true`", () => {
+    // `generateObject<any>()` asks with `true`, and the route takes a schema
+    // only as an object.
+
+    expect(llmGenerateObjectRequestProblem({
+      messages: [{ role: "user", content: "Return anything" }],
+      schema: prepareSchemaForLLM(true),
+    })).toBeUndefined();
   });
 });

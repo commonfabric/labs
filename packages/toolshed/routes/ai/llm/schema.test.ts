@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { describe, it } from "@std/testing/bdd";
+import { Ajv } from "ajv";
 import { normalizeSchemaForProvider } from "./schema.ts";
 
 describe("normalizeSchemaForProvider", () => {
@@ -68,6 +69,60 @@ describe("normalizeSchemaForProvider", () => {
 
   it("maps a top-level `false` schema to an empty-object schema", () => {
     assertEquals(normalizeSchemaForProvider(false), {});
+  });
+
+  it("drops the type of an `unknown` position and keeps its other keywords", () => {
+    assertEquals(
+      normalizeSchemaForProvider({
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          data: { type: "unknown", description: "Anything" },
+        },
+        required: ["title", "data"],
+      }),
+      {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          data: { description: "Anything" },
+        },
+        required: ["title", "data"],
+      },
+    );
+  });
+
+  it("drops a type array that includes `unknown`", () => {
+    assertEquals(
+      normalizeSchemaForProvider({ type: ["unknown", "string"] }),
+      {},
+    );
+  });
+
+  it("returns a schema Ajv compiles for the `unknown` and `undefined` types the runtime adds", () => {
+    // The generateObject route compiles the normalized schema with these
+    // options before it calls the model.
+
+    for (
+      const schema of [
+        { type: "unknown" },
+        { type: ["unknown", "string"] },
+        { type: ["string", "undefined"] },
+        {
+          type: "object",
+          properties: {
+            data: { type: "unknown" },
+            items: { type: "array", items: { type: "unknown" } },
+            maybe: { anyOf: [{ type: "undefined" }, { type: "unknown" }] },
+          },
+        },
+      ]
+    ) {
+      const ajv = new Ajv({ allErrors: true, strict: false });
+      ajv.compile(
+        normalizeSchemaForProvider(schema) as Record<string, unknown>,
+      );
+    }
   });
 
   it("preserves nested `additionalProperties: false`", () => {

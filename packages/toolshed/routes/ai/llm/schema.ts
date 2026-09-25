@@ -27,15 +27,23 @@ function normalizeSchemaNode(schema: unknown): unknown {
     }
   }
 
+  // The runtime's `"unknown"` type marks a position it reads as a reference
+  // rather than descending into. The model may put any JSON value there, so a
+  // type that includes it constrains nothing and is left out.
   const typeValue = schema.type;
   if (Array.isArray(typeValue)) {
     const filteredTypes = typeValue.filter((item) => item !== "undefined");
-    if (filteredTypes.length === 1) {
-      out.type = filteredTypes[0];
-    } else if (filteredTypes.length > 1) {
-      out.type = filteredTypes;
+    if (!filteredTypes.includes("unknown")) {
+      if (filteredTypes.length === 1) {
+        out.type = filteredTypes[0];
+      } else if (filteredTypes.length > 1) {
+        out.type = filteredTypes;
+      }
     }
-  } else if (typeValue !== undefined && typeValue !== "undefined") {
+  } else if (
+    typeValue !== undefined && typeValue !== "undefined" &&
+    typeValue !== "unknown"
+  ) {
     out.type = typeValue;
   }
 
