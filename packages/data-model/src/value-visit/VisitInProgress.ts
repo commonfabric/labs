@@ -76,6 +76,12 @@ export class VisitInProgress<
   #doMap = false;
 
   /**
+   * Cached result of a call to `#visitor.isDomainAssignableToResultType()`, if
+   * ever called.
+   */
+  #isDomainAssignableToResultType: boolean | undefined  = undefined;
+
+  /**
    * Constructs an instance.
    */
   constructor(visitor: ValueVisitor<PlusType, ResultType>) {
@@ -514,7 +520,16 @@ export class VisitInProgress<
   #assertResultType(
     value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
   ): ResultType {
-    if (this.#visitor.isResultType(value)) {
+    if (this.#isDomainAssignableToResultType === undefined) {
+      this.#isDomainAssignableToResultType =
+        this.#visitor.isDomainAssignableToResultType();
+    }
+
+    if (this.#isDomainAssignableToResultType) {
+      // This cast is based on the assurance of `#visitor` that the cast is
+      // correct, as far as the visitor is concerned.
+      return value as ResultType;
+    } else if (this.#visitor.isResultType(value)) {
       return value;
     }
 
