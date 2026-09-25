@@ -9,8 +9,6 @@ export type {
 
 export {
   clearAuthData,
-  createBackgroundIntegrationErrorResponse,
-  createBackgroundIntegrationSuccessResponse,
   createCallbackResponse,
   createLoginErrorResponse,
   createLoginSuccessResponse,
@@ -31,7 +29,6 @@ export { createOAuth2Handlers } from "./oauth2-common.handlers.ts";
 
 export {
   createOAuth2Routes,
-  type OAuth2BackgroundIntegrationRoute,
   type OAuth2CallbackRoute,
   type OAuth2LoginRoute,
   type OAuth2LogoutRoute,

@@ -49,8 +49,10 @@ import {
 } from "@commonfabric/runner";
 import {
   atomsOutsideCeiling,
+  buildCfcPolicyArtifactManifest,
   CFC_ENFORCEMENT_MODES,
   cfcLabelViewForCell,
+  createRuntimeCfcModulePolicySource,
   linkCfcLabelView,
   setLinkCfcLabelView,
 } from "@commonfabric/runner/cfc";
@@ -168,7 +170,14 @@ describe("runtime-processor", () => {
       const { runtime, storageManager } = createRuntime();
       try {
         expect(
-          renderConfidentialityResolverFor(runtime, cfcSigner, undefined),
+          renderConfidentialityResolverFor(
+            runtime,
+            cfcSigner,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+          ),
         ).toBeUndefined();
       } finally {
         await runtime.dispose();
@@ -179,9 +188,14 @@ describe("runtime-processor", () => {
     it("resolves the acting user's own space against a ceiling", async () => {
       const { runtime, storageManager } = createRuntime();
       try {
-        const resolver = renderConfidentialityResolverFor(runtime, cfcSigner, {
-          atoms: [cfcAtom.user(cfcSigner.did())],
-        });
+        const resolver = renderConfidentialityResolverFor(
+          runtime,
+          cfcSigner,
+          { atoms: [cfcAtom.user(cfcSigner.did())] },
+          undefined,
+          undefined,
+          undefined,
+        );
         expect(resolver).toBeDefined();
         const ceiling = [cfcAtom.user(cfcSigner.did())];
         // The acting user's own space (space DID == principal DID) is a verified
@@ -218,6 +232,8 @@ describe("runtime-processor", () => {
           cfcSigner,
           { atoms: [cfcAtom.user(cfcSigner.did())] },
           sessionSpace,
+          undefined,
+          undefined,
         );
         const ceiling = [cfcAtom.user(cfcSigner.did())];
         // The session workspace resolves...
@@ -264,6 +280,8 @@ describe("runtime-processor", () => {
           cfcSigner,
           { atoms: [cfcAtom.user(delegate)] },
           sessionSpace,
+          undefined,
+          undefined,
         );
         const ceiling = [cfcAtom.user(delegate)];
         // The key holder's workspace stays blocked for the delegate.
@@ -327,9 +345,14 @@ describe("runtime-processor", () => {
         await runtime.idle();
         await storageManager.synced();
 
-        const resolver = renderConfidentialityResolverFor(runtime, cfcSigner, {
-          atoms: [cfcAtom.user(cfcSigner.did())],
-        });
+        const resolver = renderConfidentialityResolverFor(
+          runtime,
+          cfcSigner,
+          { atoms: [cfcAtom.user(cfcSigner.did())] },
+          undefined,
+          undefined,
+          undefined,
+        );
         const ceiling = [cfcAtom.user(cfcSigner.did())];
         // The ACL-granted space resolves to User(actingUser).
         expect(
@@ -345,6 +368,236 @@ describe("runtime-processor", () => {
             ceiling,
           ),
         ).toEqual([cfcAtom.space(deniedSpace)]);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    it("releases a PolicyOf label its installed module rule admits", async () => {
+      // A value labelled with a module policy stays sealed at the display
+      // boundary until its module rule fires, and the rule's manifest is read
+      // from the space the label is stored in, where the commit that labelled
+      // the value installed it.
+      const { runtime, storageManager } = createRuntime();
+      const space = cfcSigner.did();
+      const artifact = buildCfcPolicyArtifactManifest({
+        formatVersion: 1,
+        moduleIdentity: "sha256:render-release-module",
+        symbol: "releaseToMembers",
+        template: {
+          templateVersion: 1,
+          exchangeRules: [{
+            name: "releaseWhenTallied",
+            preCondition: {
+              confidentiality: [{ thisPolicy: true }],
+              integrity: [{
+                type: "TallyComplete",
+                space: { thisPolicyField: "subject" },
+              }],
+            },
+            postCondition: {
+              confidentiality: [{
+                type: CFC_ATOM_TYPE.Space,
+                id: { thisPolicyField: "subject" },
+              }],
+              integrity: [],
+            },
+          }],
+          dependencies: { authorityOnly: [], dataBearing: [] },
+          integrityRequirements: {},
+        },
+      });
+      const reference = cfcAtom.modulePolicyRef(
+        artifact.manifest.moduleIdentity,
+        artifact.manifest.symbol,
+        artifact.policyDigest,
+        space,
+      );
+      try {
+        // The manifest document as a labelling commit leaves it.
+        const install = storageManager.edit();
+        install.write({
+          space,
+          id: `of:cfc-policy-manifest:${artifact.policyDigest}` as URI,
+          type: "application/json",
+          path: ["value"],
+        }, artifact as never);
+        expect((await install.commit()).ok).toBeDefined();
+        await storageManager.synced();
+
+        const resolver = renderConfidentialityResolverFor(
+          runtime,
+          cfcSigner,
+          { atoms: [cfcAtom.user(cfcSigner.did())] },
+          undefined,
+          undefined,
+          createRuntimeCfcModulePolicySource(runtime),
+        );
+        const ceiling = [cfcAtom.user(cfcSigner.did())];
+        expect(
+          atomsOutsideCeiling(
+            resolver!({
+              confidentiality: [reference],
+              integrity: [{ type: "TallyComplete", space }],
+              spaces: () => [space],
+            }),
+            ceiling,
+          ),
+        ).toEqual([]);
+        // Without the release evidence the rule does not fire.
+        expect(
+          atomsOutsideCeiling(
+            resolver!({ confidentiality: [reference], spaces: () => [space] }),
+            ceiling,
+          ),
+        ).toEqual([reference]);
+        await storageManager.synced();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    it("releases a direct-release PolicyOf value to verified readers only", async () => {
+      // The manifest packages/patterns/cfc-exchange-rules/direct-release.tsx
+      // compiles (its digest is the one that pattern's baseline pins): a
+      // holder of HasRole(reader) on the policy's subject space gains
+      // User(reader). The labels carry no integrity, so nothing but the
+      // resolver's own membership facts can satisfy the rule.
+      const { runtime, storageManager } = createRuntime();
+      const own = cfcSigner.did();
+      const shared = "did:key:z6MkDirectReleaseSharedSpace";
+      const foreign = "did:key:z6MkDirectReleaseForeignSpace";
+      const missing = "did:key:z6MkDirectReleaseNoManifestSpace";
+      const tampered = "did:key:z6MkDirectReleaseTamperedSpace";
+      const artifact = buildCfcPolicyArtifactManifest({
+        formatVersion: 1,
+        moduleIdentity: "UsUHkONMerVZwnUOIBrbzrUlhEfaV0SByvpFqW28WLg",
+        symbol: "directReleaseRules",
+        template: {
+          templateVersion: 1,
+          exchangeRules: [{
+            name: "releaseToSpaceReader",
+            preCondition: {
+              confidentiality: [{ thisPolicy: true }],
+              integrity: [{
+                type: CFC_ATOM_TYPE.HasRole,
+                principal: { var: "reader" },
+                space: { thisPolicyField: "subject" },
+                role: "reader",
+              }],
+            },
+            postCondition: {
+              confidentiality: [{
+                type: CFC_ATOM_TYPE.User,
+                subject: { var: "reader" },
+              }],
+              integrity: [],
+            },
+          }],
+          dependencies: { authorityOnly: [], dataBearing: [] },
+          integrityRequirements: {},
+        },
+      });
+      expect(artifact.policyDigest).toEqual(
+        "jr6me2Bb11h2h9txejm-Vjp-5-YPtlpKsLaGcjSR4Sk",
+      );
+      const referenceIn = (subject: string) =>
+        cfcAtom.modulePolicyRef(
+          artifact.manifest.moduleIdentity,
+          artifact.manifest.symbol,
+          artifact.policyDigest,
+          subject,
+        );
+      const [rule] = artifact.manifest.template.exchangeRules;
+      try {
+        // The manifest documents as a labelling commit leaves them, written
+        // beneath the runtime's guard on that reserved state. A transaction
+        // writes one space, so each document commits on its own.
+        const manifestAt = async (space: string, value: unknown) => {
+          const install = storageManager.edit();
+          install.write({
+            space: space as MemorySpace,
+            id: `of:cfc-policy-manifest:${artifact.policyDigest}` as URI,
+            type: "application/json",
+            path: ["value"],
+          }, value as never);
+          expect((await install.commit()).ok).toBeDefined();
+        };
+        const aclAt = async (space: string, reader: string) => {
+          const tx = runtime.edit();
+          tx.writeOrThrow({
+            space: space as MemorySpace,
+            id: `of:${space}` as URI,
+            type: "application/json",
+            path: [],
+          }, { value: { [space]: "OWNER", [reader]: "READ" } });
+          expect((await tx.commit()).ok).toBeDefined();
+        };
+        for (const space of [own, shared, foreign]) {
+          await manifestAt(space, artifact);
+        }
+        // Same digest, module and symbol; the rule releases to anyone. Only
+        // recomputing the digest separates it from the real manifest.
+        await manifestAt(tampered, {
+          ...artifact,
+          manifest: {
+            ...artifact.manifest,
+            template: {
+              ...artifact.manifest.template,
+              exchangeRules: [{
+                ...rule,
+                preCondition: {
+                  confidentiality: [{ thisPolicy: true }],
+                  integrity: [],
+                },
+                postCondition: {
+                  confidentiality: [cfcAtom.user(own)],
+                  integrity: [],
+                },
+              }],
+            },
+          },
+        });
+        for (const space of [shared, missing, tampered]) {
+          await aclAt(space, own);
+        }
+        await aclAt(foreign, "did:key:z6MkSomebodyElse");
+        await runtime.idle();
+        await storageManager.synced();
+
+        const resolver = renderConfidentialityResolverFor(
+          runtime,
+          cfcSigner,
+          { atoms: [cfcAtom.user(own)] },
+          undefined,
+          undefined,
+          createRuntimeCfcModulePolicySource(runtime),
+        );
+        // The label read from `holding`, where a labeling commit installs
+        // the manifest; by default the subject space itself.
+        const outside = (subject: string, holding = subject) =>
+          atomsOutsideCeiling(
+            resolver!({
+              confidentiality: [referenceIn(subject)],
+              spaces: () => [holding],
+            }),
+            [cfcAtom.user(own)],
+          );
+        // The owner, and a reader the shared space's ACL grants.
+        expect(outside(own)).toEqual([]);
+        expect(outside(shared)).toEqual([]);
+        // A space whose ACL names somebody else.
+        expect(outside(foreign)).toEqual([referenceIn(foreign)]);
+        // A readable space holding no manifest, or one that fails
+        // verification.
+        expect(outside(missing)).toEqual([referenceIn(missing)]);
+        expect(outside(tampered)).toEqual([referenceIn(tampered)]);
+        // The same readable subject, copied into a space whose copy installed
+        // the manifest: the label's own space is where it is read.
+        expect(outside(missing, own)).toEqual([]);
+        await storageManager.synced();
       } finally {
         await runtime.dispose();
         await storageManager.close();

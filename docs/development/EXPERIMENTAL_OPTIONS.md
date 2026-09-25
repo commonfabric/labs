@@ -86,10 +86,10 @@ this category default off unless their section says otherwise.
 The mapping from environment variable to flag is defined once, canonically, as
 `EXPERIMENTAL_ENV_VARS` in
 [`packages/runner/src/experimental-posture.ts`](../../packages/runner/src/experimental-posture.ts),
-and read by `experimentalOptionsFromEnv(envReader)`. The toolshed, the CLI, and
-the background piece service all go through that one mapping, so their wirings
-cannot drift; the shell reads the same variables from its build-time defines
-through the same canonical parser, for the flags it defines;
+and read by `experimentalOptionsFromEnv(envReader)`. The toolshed and the CLI
+both go through that one mapping, so their wirings cannot drift; the shell
+reads the same variables from its build-time defines through the same canonical
+parser, for the flags it defines;
 `packages/shell/felt.config.ts` and `packages/shell/src/lib/env.ts` are the
 authority on which those are. A CI lane builds the binaries it caches with
 every define's variable unset unless `cachedBinaries()` in
@@ -401,8 +401,8 @@ server](#clients-that-are-not-built-alongside-their-server).
   ordered gates still apply; a flip record does not establish their
   current verdicts. The default
   is read by every deployed-topology entry point — the `productionServer` / `remoteClient` construction presets
-  (toolshed's operator runtime, the background piece service, the CLI,
-  every pieces controller and integration harness against a toolshed),
+  (toolshed's operator runtime, the CLI, every pieces controller and
+  integration harness against a toolshed),
   toolshed's serving-host gate and its memory ACL principal lists (the
   DELEGATING class since OW31's build — the process identity is no
   longer an implicit-OWNER service principal), and the browser
@@ -444,9 +444,9 @@ server](#clients-that-are-not-built-alongside-their-server).
   probed through the shared role
   resolver; the opposite lane uses `build-toolshed-opposite`, whose shell
   define is baked from the resolved inverse. The
-  `deployed-topology-gate` job exercises the real `bg-piece-service`
-  binary and cf-harness's fabric session at the default resolution, and
-  the CLI lanes probe the server their `cf` adopts its posture from —
+  `deployed-topology-gate` job exercises cf-harness's fabric session at
+  the default resolution, and the CLI lanes probe the server their `cf`
+  adopts its posture from —
   with ON-arm skips and OFF-arm authored coverage following the resolved arm.
   Skips are only through `tasks/server-execution-on-skips.ts`, printed loudly
   (EMPTY at the flip, its stated precondition). End
@@ -1049,7 +1049,9 @@ the per-epic implementation notes).
   byte-identical to before the dial existed; `observe` evaluates the gated
   labels to a fixpoint and emits diagnostics while still deciding on the
   un-rewritten label; `enforce` decides on the rewritten label and fails closed
-  when the evaluation runs out of fuel.
+  when the evaluation runs out of fuel. The dial governs the commit and sink
+  gates; the display boundary evaluates whenever `cfcRenderCeiling` is on, as
+  its own switch.
 - **Current default and planned end state.** `enforce` by default, which is
   where the dial rests.
 - **Status on 2026-09-17.** Implemented and rolled out.
@@ -1410,17 +1412,27 @@ the per-epic implementation notes).
 - **Purpose.** Populates the CFC render confidentiality ceiling in the shell's
   runtime. Display sinks admit the acting user's identity and personal-space
   atoms plus allow-listed influence-class caveat kinds. Before the fit check,
-  the worker resolves shared `Space` labels through verified reader membership;
-  a delegate's access to the session workspace requires its own membership
-  evidence. Confidentiality the ceiling does not satisfy stays blocked, and
-  author-supplied render-boundary declassification is denied.
+  the worker resolves shared `Space` labels through verified reader membership,
+  and runs the exchange rules of any module policy (`PolicyOf`) a label
+  selects, reading that policy's manifest from the space the label is stored
+  in and verifying its digest; a delegate's access to the session workspace
+  requires its own membership evidence. Confidentiality the ceiling does not
+  satisfy stays blocked, and author-supplied render-boundary declassification
+  is denied.
 - **Current default and planned end state.** On by default; a browser profile
   opts out with `commonfabric.cfcRenderCeiling(false)`, which is what the
   `cfcRenderCeiling` localStorage key records. The end state is to remove the
   toggle and make the ceiling unconditional.
-- **Status on 2026-09-08.** Exchange resolution is implemented. Where reader
-  membership is required, missing or unsynced ACL evidence keeps the content
-  blocked; a reader grant admits it and a revocation blocks it again.
+- **Status on 2026-09-23.** Exchange resolution is implemented, including
+  module policies. Where reader membership is required, missing or unsynced
+  ACL evidence keeps the content blocked; a reader grant admits it and a
+  revocation blocks it again. A module policy whose manifest is missing, has
+  not synced, or fails verification keeps its content blocked until a
+  verifying manifest arrives. A rule guarded on reader membership of a subject
+  held in commitment form, as it is on a value copied across spaces, releases
+  only to a viewer whose membership in that subject the render boundary
+  already verified for another reason: the viewer's own or session space, or
+  a `Space` atom the same label names. The commitment is never opened.
 - **Path to removal.** Retire the opt-out once no profile needs it, then make
   the ceiling unconditional.
 
@@ -1721,11 +1733,8 @@ Server Process (Deno)
   +-- toolshed/index.ts           --> new Runtime(toolshedRuntimeOptions(...))
 ```
 
-The background piece service's main and worker processes use the same mapping
-and the same presets, so the server-side wirings agree on how a value parses.
-
-The CLI is not one of them. `cf`, the pieces controller behind it, the agents
-host, the GitHub connector host and `cast-admin` are clients of a deployment
+The CLI is not a server-side process. `cf`, the pieces controller behind it,
+the agents host and the GitHub connector host are clients of a deployment
 rather than part of one, and
 they resolve their posture from that deployment first — the environment
 supplies their overrides, not their starting point. Their wiring is
@@ -1768,7 +1777,7 @@ The shell disagrees with its server only by explicit define: toolshed bakes
 the defines and serves the bundle, so the two ship one posture per deploy.
 Every other client is installed, deployed, or checked out on its own
 schedule — the `cf` binary, the pieces controller a FUSE mount opens, the
-agents host, the GitHub connector host, the background-piece admin CLI — and
+agents host, the GitHub connector host — and
 the environment they read
 belongs to whoever launched them, not to the deployment they talk to. Left
 there, the operator has to know a deployment's flags and set them by hand, and
@@ -1779,7 +1788,7 @@ These clients take the posture from the server instead. Each one calls
 before constructing its `Runtime`:
 
 ```
-cf / pieces controller / agents host / github host / cast-admin
+cf / pieces controller / agents host / github host
   |
   +-- GET <apiUrl>/api/meta  --> { experimental: { <flag>: <boolean>, ... } }
   |     the posture the SERVER runs at
@@ -1851,9 +1860,7 @@ stopped wanting a posture at all.
 
 Presets that run against local emulated storage — `cf test`, `cf check`, the
 pattern harnesses — have no server to ask and keep reading the environment
-alone. The background piece service's own main and worker processes have one
-but do not ask it: they are deployed with the same environment as the toolshed
-they serve alongside, and read it directly through `productionServer`.
+alone.
 
 The adoption happens before `new Runtime(...)`, not at the memory handshake,
 even though `hello`/`hello.ok` already carries capability flags in both
@@ -1863,14 +1870,6 @@ would arrive after the process had already committed to a serialization. The
 handshake's job stays what it is: refusing a connection whose peer resolved a
 wire contract differently — which, for a client that adopts, is a mismatch
 that should no longer arise.
-
-### Background piece service
-
-The background piece service reads the same environment variables and builds its
-main and worker runtimes through the `productionServer` preset, so set the same
-`EXPERIMENTAL_*` variables when starting it. Its `cast-admin` CLI is the
-exception: that one is a client of whatever toolshed it is pointed at, and
-adopts the deployment's posture like the others above.
 
 ## Enabling flags locally
 

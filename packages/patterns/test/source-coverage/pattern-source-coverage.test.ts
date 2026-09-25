@@ -9,10 +9,11 @@ function sourceCoveragePath(name: string): string {
  *
  * The child runs changed pattern modules as plain code under Deno's V8 coverage,
  * with the pattern runtime (transformer + sandbox) out of the picture. The
- * `commonfabric` reactive surface is swapped for `commonfabric-shim.test.ts`
- * (those primitives need the real runtime), but the pure `data-model` helpers
- * stay real, so the child also produces coverage for the `data-model`/
- * `content-hash`/`leb128` code the pattern runtime exercises.
+ * `commonfabric` reactive surface is swapped for
+ * `tools/test-support/source-coverage-commonfabric.ts` (those primitives need
+ * the real runtime), but the pure `data-model` helpers stay real, so the child
+ * also produces coverage for the `data-model`/`content-hash`/`leb128` code the
+ * pattern runtime exercises.
  *
  * A flat `--import-map` replaces the workspace's `imports`/`scopes`, so the real
  * graph's dependencies must be present in it. Rather than hand-maintain (and
@@ -27,7 +28,7 @@ function sourceCoveragePath(name: string): string {
  * Relative root targets are absolutized so the map works from its temp location.
  */
 async function writeChildImportMap(): Promise<string> {
-  const here = new URL("./", import.meta.url);
+  const testSupport = new URL("../../tools/test-support/", import.meta.url);
   const rootUrl = new URL("../../../../deno.jsonc", import.meta.url);
   const root = parseJsonc(await Deno.readTextFile(rootUrl)) as {
     imports: Record<string, string>;
@@ -48,9 +49,12 @@ async function writeChildImportMap(): Promise<string> {
       }
     }
   }
-  imports["commonfabric"] = new URL("commonfabric-shim.test.ts", here).href;
+  imports["commonfabric"] = new URL(
+    "source-coverage-commonfabric.ts",
+    testSupport,
+  ).href;
   imports["@commonfabric/runner/jsx-runtime"] =
-    new URL("jsx-runtime-stub.test.ts", here).href;
+    new URL("source-coverage-jsx-runtime.ts", testSupport).href;
 
   // Re-establish each workspace member's own `@/` aliases as a scope, read
   // from its config so the set tracks the packages rather than a fixed list.

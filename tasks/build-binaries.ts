@@ -16,7 +16,7 @@ export interface BuildConfigInitializer {
   cliOnly?: boolean;
 }
 
-export const BINARY_NAMES = ["toolshed", "bg-piece-service", "cf"] as const;
+export const BINARY_NAMES = ["toolshed", "cf"] as const;
 export type BinaryName = (typeof BINARY_NAMES)[number];
 
 /**
@@ -174,19 +174,6 @@ export class BuildConfig {
     return this.#path("packages", "toolshed", "index.ts");
   }
 
-  bgPieceServiceEntryPath() {
-    return this.#path("packages", "background-piece-service", "src", "main.ts");
-  }
-
-  bgPieceServiceWorkerPath() {
-    return this.#path(
-      "packages",
-      "background-piece-service",
-      "src",
-      "worker.ts",
-    );
-  }
-
   toolshedEnvPath() {
     return this.#path("packages", "toolshed", "COMPILED");
   }
@@ -244,8 +231,6 @@ export class BuildConfig {
       this.shellProjectPath(),
       this.toolshedProjectPath(),
       this.toolshedEntryPath(),
-      this.bgPieceServiceEntryPath(),
-      this.bgPieceServiceWorkerPath(),
       this.staticAssetsPath(),
       ...this.patternPaths(),
       this.staticTypesPath(),
@@ -275,8 +260,6 @@ export class BuildConfig {
           this.staticAssetsPath(),
           ...this.patternPaths(),
         ];
-      case "bg-piece-service":
-        return [this.bgPieceServiceWorkerPath(), this.staticAssetsPath()];
       case "cf":
         return [
           this.staticTypesPath(),
@@ -322,7 +305,6 @@ export type BuildDependencies = {
   buildShell(config: BuildConfig): Promise<void>;
   prepareWorkspace(config: BuildConfig): Promise<void>;
   buildToolshed(config: BuildConfig): Promise<void>;
-  buildBgPieceService(config: BuildConfig): Promise<void>;
   buildCli(config: BuildConfig): Promise<void>;
   revertWorkspace(config: BuildConfig): Promise<void>;
 };
@@ -332,7 +314,6 @@ export const defaultBuildDependencies: BuildDependencies = {
   buildShell,
   prepareWorkspace,
   buildToolshed,
-  buildBgPieceService,
   buildCli,
   revertWorkspace,
 };
@@ -349,9 +330,6 @@ export async function build(
     if (config.builds("toolshed")) await dependencies.buildShell(config);
     await dependencies.prepareWorkspace(config);
     if (config.builds("toolshed")) await dependencies.buildToolshed(config);
-    if (config.builds("bg-piece-service")) {
-      await dependencies.buildBgPieceService(config);
-    }
     if (config.builds("cf")) await dependencies.buildCli(config);
   } catch (e: unknown) {
     buildError = e as Error;
@@ -434,33 +412,6 @@ async function buildToolshed(config: BuildConfig): Promise<void> {
     throw new Error("Failed to build toolshed binary");
   }
   console.log("Toolshed binary built successfully");
-}
-
-async function buildBgPieceService(config: BuildConfig): Promise<void> {
-  console.log("Building background piece service binary...");
-  const { success } = await new Deno.Command(Deno.execPath(), {
-    args: [
-      ...lockedCompileArgs(config),
-      // Run `--no-check` here, as the `--include`'d
-      // `es2023.d.ts` file will attempt to be checked
-      // as a non-static asset. Checking should be done
-      // prior to building.
-      "--no-check",
-      "--output",
-      config.distPath("bg-piece-service"),
-      ...embedArgs(config, "bg-piece-service"),
-      "-A", // All permissions
-      "--unstable-worker-options", // Required by bg-piece-service
-      config.bgPieceServiceEntryPath(),
-    ],
-    cwd: config.root,
-    stdout: "inherit",
-    stderr: "inherit",
-  }).output();
-  if (!success) {
-    throw new Error("Failed to build background piece service binary");
-  }
-  console.log("Background piece service binary built successfully");
 }
 
 async function buildCli(config: BuildConfig): Promise<void> {

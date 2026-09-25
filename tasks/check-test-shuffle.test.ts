@@ -156,7 +156,6 @@ describe("check-test-shuffle", () => {
     it("accepts a runner that shuffles in its own code", () => {
       expect(problemWith("deno run -A ../deno-web-test/cli.ts **/*.test.ts"))
         .toBeUndefined();
-      expect(problemWith("deno run -A test/runner.ts")).toBeUndefined();
     });
 
     it("accepts a shell harness whose order is recorded as the test", () => {
@@ -233,7 +232,6 @@ describe("check-test-shuffle", () => {
     // it and see only that thing reported.
     const TRACKED = [
       "tasks/run-sharded-test-files.ts",
-      "packages/dashboard/test/runner.ts",
       "packages/deno-web-test/runner.ts",
       "packages/cli/lib/test-runner.ts",
       "packages/cli/integration/integration.sh",
@@ -241,7 +239,7 @@ describe("check-test-shuffle", () => {
       "packages/cli/integration/fuse-exec.sh",
     ];
     const WRITTEN = [
-      "run-sharded-test-files.ts test/runner.ts deno-web-test/cli.ts cf test",
+      "run-sharded-test-files.ts deno-web-test/cli.ts cf test",
     ];
 
     it("says nothing while every record still describes the tree", () => {
@@ -251,7 +249,7 @@ describe("check-test-shuffle", () => {
     it("names a runner no command starts any more", () => {
       const stale = staleRecords(
         TRACKED,
-        ["test/runner.ts deno-web-test/cli.ts cf test"],
+        ["deno-web-test/cli.ts cf test"],
       );
       expect(stale).toHaveLength(1);
       expect(stale[0]!.command).toBe("run-sharded-test-files.ts");

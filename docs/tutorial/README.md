@@ -33,7 +33,7 @@ also read "vertically": learn a concept, then immediately open the hood on it.
 | | [8. The reactive runtime](08-runtime-internals.md) | What a Cell really is; the scheduler; transactions and retries |
 | | [9. Storage and sync](09-storage-and-sync.md) | The commit protocol, conflict detection, subscriptions, SQLite layout |
 | | [10. Identity, authorization, and isolation](10-identity-and-security.md) | DIDs, passkeys, signed sessions, sandboxing untrusted code |
-| | [11. The deployed system, end to end](11-deployed-system.md) | Toolshed, the shell, background execution; one click traced through every layer |
+| | [11. The deployed system, end to end](11-deployed-system.md) | Toolshed and the shell; one click traced through every layer |
 
 ## How to choose your path
 

@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { parse as parseYaml } from "@std/yaml";
 import { getBinary } from "@astral/astral";
+import { COVERAGE_ARTIFACT } from "@commonfabric/test-support/records";
 import { commandWords, withoutComments } from "./ci-workflow.ts";
 import { phaseOf } from "./ci-step-phases.ts";
 import { EXPECTED_COVERAGE_ARTIFACT_NAMES } from "./coverage-check.ts";
@@ -733,14 +734,19 @@ Deno.test("the Coverage Check job records no tests", async () => {
 
   // The gate reads the coverage artifacts of every test job in this run, so no
   // lane can be asked to run it, and the criterion in `docs/specs/test-records.md`
-  // under "Recording" puts it outside test records: no spool directory, no
-  // wrapper, no ship step.
-  assert(!job.includes("CF_TEST_RECORDS_DIR"), "the job spools test records");
+  // under "Recording" puts it outside test records: no wrapper, and no JUnit
+  // file gathered. What its spool holds is the run's coverage measurements,
+  // which it ships under the name readers list the store for, and only from
+  // a push, because every reader takes a figure from a push to main alone.
   assert(
     !job.includes("run-recorded"),
     "the job wraps its command in run-recorded",
   );
-  assert(!job.includes("test-records-ship"), "the job ships test records");
+  assertStringIncludes(job, "CF_TEST_RECORDS_DIR:");
+  const ship = stepBlock(job, "📤 Ship test records");
+  assertStringIncludes(ship, `artifact: ${COVERAGE_ARTIFACT}\n`);
+  assertStringIncludes(ship, "if: always() && github.event_name == 'push'");
+  assert(!ship.includes("junit:"), "the job gathers a JUnit file");
   // The gate itself runs.
   assertStringIncludes(job, "tasks/coverage-check.ts");
 });
@@ -800,12 +806,14 @@ Deno.test("the store half of the drift guard reads every record artifact", async
   // artifact this job does not see is a surface it cannot hold the topology
   // to. It therefore waits for every job that ships records, and downloads
   // them by the prefix the ship step names them under.
-  const shippers = jobIds(contents).filter((jobId) =>
-    jobId !== "test-topology-store-check" &&
-    jobBlock(contents, jobId).includes(
-      "uses: ./.github/actions/test-records-ship",
-    )
-  );
+  // A job shipping the run's coverage measurements alone ships no test's
+  // record, so its artifact holds nothing to hold the topology to.
+  const shippers = jobIds(contents).filter((jobId) => {
+    const job = jobBlock(contents, jobId);
+    return jobId !== "test-topology-store-check" &&
+      job.includes("uses: ./.github/actions/test-records-ship") &&
+      !job.includes(`artifact: ${COVERAGE_ARTIFACT}\n`);
+  });
   // The floor pins the extraction: zero found jobs would mean the search
   // broke rather than that the workflow stopped shipping records.
   assert(shippers.length >= 14, `only ${shippers.length} shipping jobs found`);
@@ -1354,11 +1362,9 @@ Deno.test("server-execution CI uses stable default and opposite roles", async ()
     "the opposite build must bake the posture resolved by the shared helper",
   );
 
-  // The real bg-piece-service binary and cf-harness fabric session are always
-  // exercised at the first-party default resolution.
+  // The cf-harness fabric session is always exercised at the first-party
+  // default resolution.
   const gate = jobBlock(contents, "deployed-topology-gate");
-  assertStringIncludes(gate, "binary-bg-piece-service");
-  assertStringIncludes(gate, "integration/posture-gate.test.ts");
   assertStringIncludes(gate, "integration/fabric-session-posture-gate.test.ts");
   assertStringIncludes(
     gate,
