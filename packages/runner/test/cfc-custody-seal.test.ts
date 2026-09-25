@@ -1400,6 +1400,55 @@ describe("cfc-custody-seal", () => {
       }
     });
 
+    it("refuses a seat cell whose attesting field the room's readers do not hold", async () => {
+      // The attestation sits on a top-level field, as a profile's does, and
+      // that field alone is private.
+      const fixture = await setup();
+      try {
+        const runtime = fixture.runtimes.get(alice)!;
+        const tx = runtime.edit();
+        const seat = runtime.getCell(S, "seat-field", undefined, tx);
+        writeSeedEnvelopeDoc(tx, S);
+        seedStoredEnvelope(tx, {
+          space: S,
+          scope: "space",
+          id: seat.getAsNormalizedFullLink().id,
+          path: [],
+        }, {
+          value: { name: "Carol" },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: ["name"],
+                label: {
+                  confidentiality: [cfcAtom.user(bob.did())],
+                  integrity: [{
+                    kind: "represents-principal",
+                    subject: carol.did(),
+                  }],
+                },
+              }],
+            },
+          },
+        } as FabricValue);
+        expect((await tx.commit()).error).toBeUndefined();
+        const write = runtime.edit();
+        runtime.getCellFromLink(fixture.terms, undefined, write).setRaw({
+          ...TERMS,
+          seats: [alice.did(), bob.did(), seat.withTx(undefined).getAsLink()],
+        } as never);
+        expect((await write.commit()).error).toBeUndefined();
+        const draft = await fixture.draft(alice, honestStance);
+        await expect(prepareCustodySeal(draft, fixture.room(alice)))
+          .rejects.toThrow(/seat 2 .*the room's readers do not hold/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
     it("refuses two seats that resolve to one principal", async () => {
       const fixture = await setup();
       try {
@@ -2002,6 +2051,20 @@ describe("cfc-custody-seal", () => {
           template([witnessedRule, rule([byProjector])]),
         ),
       ).toBe(false);
+      // A witnessed guard beside an unwitnessed one on the releasing code
+      // does not witness the release.
+      expect(
+        releaseRequiresSealWitness(template([rule([
+          {
+            type: CFC_ATOM_TYPE.TransformedBy,
+            identity: { kind: "verified", symbol: "helper" },
+            inputWitness: sealedBy,
+          },
+          byProjector,
+        ])])),
+      ).toBe(false);
+      // A rule with no transformer guard at all is not witnessed.
+      expect(releaseRequiresSealWitness(template([rule([])]))).toBe(false);
       // A witness naming some other writer is not the seal's.
       expect(
         releaseRequiresSealWitness(template([rule([{

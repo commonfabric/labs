@@ -1,7 +1,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CfcLabelView } from "../../src/cfc/label-view-core.ts";
-import { authorPrincipalCandidates } from "../../src/cfc/represents-principal.ts";
+import {
+  authorPrincipalCandidates,
+  exactPrincipalAttestations,
+} from "../../src/cfc/represents-principal.ts";
 
 const DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 const OTHER_DID = "did:key:z6MkoTHERoTHERoTHERoTHERoTHERoTHERoTHERoTHERoT";
@@ -116,6 +119,35 @@ describe("represents-principal", () => {
       expect(authorPrincipalCandidates(label)).toEqual([]);
       expect(authorPrincipalCandidates(view([]))).toEqual([]);
       expect(authorPrincipalCandidates(undefined)).toEqual([]);
+    });
+  });
+
+  describe("exactPrincipalAttestations", () => {
+    it("returns each DID the root and top-level fields attest in the minted form", () => {
+      const label = view([
+        representsAt([], DID),
+        representsAt(["name"], DID),
+        representsAt(["bio"], OTHER_DID),
+        // Below the top-level fields, as authorPrincipalCandidates reads it.
+        representsAt(["elements", "0"], "did:key:deeper"),
+      ]);
+      expect(exactPrincipalAttestations(label)).toEqual([DID, OTHER_DID]);
+      expect(exactPrincipalAttestations(undefined)).toEqual([]);
+    });
+
+    it("refuses a claim in any form the runtime does not mint", () => {
+      // authorPrincipalCandidates reads each of these as naming DID.
+      for (
+        const atom of [
+          `represents-principal:${DID}`,
+          { kind: "represents-principal", subject: ` ${DID}` },
+          { kind: "represents-principal", subject: DID, scope: "x" },
+        ]
+      ) {
+        const label = view([{ path: ["name"], label: { integrity: [atom] } }]);
+        expect(authorPrincipalCandidates(label)).toEqual([DID]);
+        expect(exactPrincipalAttestations(label)).toBeUndefined();
+      }
     });
   });
 });

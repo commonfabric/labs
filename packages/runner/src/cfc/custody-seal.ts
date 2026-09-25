@@ -62,8 +62,10 @@ import { readStoredCfcMetadata } from "./metadata.ts";
 import { cfcPolicyManifestDocId, type PolicyTemplateV1 } from "./policy.ts";
 import { collectConsumedLabel } from "./prepare.ts";
 import { CfcReadCeilingError } from "./read-ceiling.ts";
-import type { CfcLabelView } from "./label-view-core.ts";
-import { representsPrincipalSubject } from "./represents-principal.ts";
+import {
+  exactPrincipalAttestations,
+  principalClaimEntries,
+} from "./represents-principal.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
 import { isRendererTrustedEvent } from "./ui-contract.ts";
@@ -697,10 +699,10 @@ const readEvidence = (tx: IExtendedStorageTransaction): ReadEvidence[] => {
 };
 
 /**
- * Whether every exchange rule of `template` requires, among its integrity
- * guards, a `TransformedBy` whose input witness is the seal's own
- * `TransformedBy{builtin cfc-custody-seal}`, so that no rule releases what
- * code computed over anything the seal did not write. A policy with no rules
+ * Whether every exchange rule of `template` guards on the code that computed
+ * what it releases, and every such `TransformedBy` guard names the seal's own
+ * `TransformedBy{builtin cfc-custody-seal}` as its input witness, so that no
+ * rule releases what code computed over anything the seal did not write. A policy with no rules
  * releases nothing and passes.
  *
  * TODO(L14b): until a pattern's reads carry the witness, a rule in this form
@@ -711,13 +713,15 @@ const readEvidence = (tx: IExtendedStorageTransaction): ReadEvidence[] => {
 export const releaseRequiresSealWitness = (
   template: PolicyTemplateV1,
 ): boolean =>
-  template.exchangeRules.every((rule) =>
-    rule.preCondition.integrity.some((guard) =>
-      isObjectNotArray(guard) &&
-      guard.type === CFC_ATOM_TYPE.TransformedBy &&
-      deepEqual(guard.inputWitness, SEALED_BY)
-    )
-  );
+  template.exchangeRules.every((rule) => {
+    const transformers = rule.preCondition.integrity.filter((guard) =>
+      isObjectNotArray(guard) && guard.type === CFC_ATOM_TYPE.TransformedBy
+    );
+    return transformers.length > 0 &&
+      transformers.every((guard) =>
+        deepEqual((guard as Record<string, unknown>).inputWitness, SEALED_BY)
+      );
+  });
 
 /**
  * Whether the document at `link` is absent, or its root was written by the
@@ -1070,43 +1074,9 @@ const clauseWithheldFromRoom = (
   );
 
 /**
- * The principals a seat cell's label attests: the subject of each
- * `represents-principal` integrity atom at the cell's root or on one of its
- * top-level fields, as `authorPrincipalCandidates` reads an author claim.
- * Each must be exactly the form a runtime mints, an object of `kind` and
- * `subject` whose subject is a well-formed DID as written. A runtime refuses
- * a literal subject only in that form, so any other spelling that names a
- * principal, such as the string form or a padded subject, may have been
- * written by someone other than that principal.
- *
- * @throws If an atom that names a principal is in any other form.
- */
-const attestedPrincipals = (
-  view: CfcLabelView | undefined,
-  seat: number,
-): string[] => {
-  const principals = new Set<string>();
-  for (const entry of view?.entries ?? []) {
-    if (entry.path.length > 1) continue;
-    for (const atom of entry.label.integrity ?? []) {
-      if (representsPrincipalSubject(atom) === undefined) continue;
-      if (
-        !isObjectNotArray(atom) || !hasExactKeys(atom, ["kind", "subject"]) ||
-        !isWellFormedDID(atom.subject)
-      ) {
-        throw new Error(
-          `Custody terms name seat ${seat} by a cell with an attestation that is not in the form a runtime mints`,
-        );
-      }
-      principals.add(atom.subject);
-    }
-  }
-  return [...principals];
-};
-
-/**
  * Returns `terms` with each seat named by a reference replaced by the one
- * principal its cell attests, as {@link attestedPrincipals} reads it. A
+ * principal its cell attests, in exactly the form a runtime mints (see
+ * `exactPrincipalAttestations`), with a well-formed DID for its subject. A
  * pattern holds a member's profile, not the member's DID, so a seat can name
  * what the member's own runtime attested. The reads are added to `evidence`,
  * so the transaction that writes the entry verifies them.
@@ -1137,11 +1107,12 @@ const resolveSeats = async (
       // The seal writes the DID into terms every reader of the room sees, so
       // the cell must already be one they hold, whether or not its label
       // traveled into the terms with the reference.
+      // The attestation is read from the root and from top-level fields, so
+      // those are the entries the room's readers must hold.
       const withheld = clauseWithheldFromRoom(
-        (view?.entries ?? [])
+        principalClaimEntries(view)
           .filter((entry) =>
-            entry.path.length === 0 &&
-            (entry.observes === undefined || entry.observes === "value")
+            entry.observes === undefined || entry.observes === "value"
           )
           .flatMap((entry) =>
             (entry.label.confidentiality ?? []) as CfcConfClause[]
@@ -1154,7 +1125,14 @@ const resolveSeats = async (
           debugStr`Custody terms name seat ${index} by a cell with a clause the room's readers do not hold: $quote,long${withheld}`,
         );
       }
-      const principals = attestedPrincipals(view, index);
+      const principals = exactPrincipalAttestations(view);
+      if (
+        principals === undefined || !principals.every(isWellFormedDID)
+      ) {
+        throw new Error(
+          `Custody terms name seat ${index} by a cell with an attestation that is not in the form a runtime mints`,
+        );
+      }
       if (principals.length === 0) {
         throw new Error(
           `Custody terms name seat ${index} by a cell that attests no principal`,

@@ -129,11 +129,46 @@ export const representsPrincipalSubjects = (
  */
 export const authorPrincipalCandidates = (
   view: CfcLabelView | undefined,
-): string[] =>
-  view === undefined ? [] : [
-    ...new Set(
-      representsPrincipalSubjects(
-        view.entries.filter((entry) => entry.path.length <= 1),
-      ),
-    ),
-  ];
+): string[] => [
+  ...new Set(representsPrincipalSubjects(principalClaimEntries(view))),
+];
+
+/**
+ * The entries of `view` a principal claim is read from: those at the root and
+ * on top-level fields, where a profile's owner-protected fields carry their
+ * owner's atom. Entries deeper down come from documents the value links.
+ */
+export const principalClaimEntries = (
+  view: CfcLabelView | undefined,
+): CfcLabelView["entries"] =>
+  view === undefined
+    ? []
+    : view.entries.filter((entry) => entry.path.length <= 1);
+
+/**
+ * The principals `view` attests in exactly the form a runtime mints, read
+ * from the entries {@link principalClaimEntries} names, or `undefined` when
+ * any atom there names a principal in another form. A runtime binds a
+ * `{ kind, subject }` atom's subject to its acting principal and refuses a
+ * literal DID only in that form, so the string form, a padded subject, or an
+ * atom with another key may have been written by someone other than the
+ * principal it names. A caller that must know who wrote the attestation,
+ * rather than whom a claim is about, refuses those.
+ */
+export const exactPrincipalAttestations = (
+  view: CfcLabelView | undefined,
+): string[] | undefined => {
+  const principals = new Set<string>();
+  for (const entry of principalClaimEntries(view)) {
+    for (const atom of entry.label.integrity ?? []) {
+      const subject = representsPrincipalSubject(atom);
+      if (subject === undefined) continue;
+      if (
+        !isObjectNotArray(atom) || Object.keys(atom).length !== 2 ||
+        (atom as Record<string, unknown>).subject !== subject
+      ) return undefined;
+      principals.add(subject);
+    }
+  }
+  return [...principals];
+};
