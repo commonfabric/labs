@@ -701,31 +701,6 @@ jobs:
           path: ./dist/toolshed
           if-no-files-found: error
 
-  build-bg-piece-service:
-    name: "Build Binary (bg-piece-service)"
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      - name: 🏗️ Build bg-piece-service binary
-        timeout-minutes: *work-timeout
-        run: deno task build-binaries bg-piece-service
-
-      - name: 📤 Upload bg-piece-service binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: binary-bg-piece-service
-          path: ./dist/bg-piece-service
-          if-no-files-found: error
-
   build-cf:
     name: "Build Binary (cf)"
     runs-on: ubuntu-latest
@@ -1842,15 +1817,15 @@ jobs:
           shard: ${{ matrix.chunk }}/${{ matrix.total }}
 
   # These gates exercise production construction paths with the flag unset:
-  # the real bg-piece-service binary and cf-harness's fabric-session factory.
-  # Their expectations follow the same first-party default constant.
+  # the toolshed binary and cf-harness's fabric-session factory. Their
+  # expectations follow the same first-party default constant.
   deployed-topology-gate:
     name: "Deployed Topology Posture Gates"
     runs-on: ubuntu-latest
     timeout-minutes: *job-timeout
     env:
       CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
-    needs: ["build-toolshed", "build-bg-piece-service"]
+    needs: ["build-toolshed"]
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1871,18 +1846,11 @@ jobs:
           name: binary-toolshed
           path: common-binaries
 
-      - name: 📥 Download bg-piece-service binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: binary-bg-piece-service
-          path: common-binaries
-
       - name: 🔌 Start Toolshed server for testing
         env:
           TOOLSHED_PORT: 8000
         run: |
           chmod +x ./common-binaries/toolshed
-          chmod +x ./common-binaries/bg-piece-service
           # --background waits until the server has bound its port before it
           # returns. The flag stays unset so the gates exercise the default.
           CFTS_AI_GATEWAY_URL="" \
@@ -1895,19 +1863,6 @@ jobs:
         env:
           TOOLSHED_PORT: 8000
         run: deno run --allow-net tasks/server-execution-ci-command.ts probe default "http://localhost:${TOOLSHED_PORT}"
-
-      - name: 🧪 Run bg-piece-service posture gate
-        timeout-minutes: *work-timeout
-        working-directory: packages/background-piece-service
-        env:
-          API_URL: http://localhost:8000
-          BG_PIECE_SERVICE_BIN: ${{ github.workspace }}/common-binaries/bg-piece-service
-        run: |
-          mkdir -p ../../test-results
-          deno test --shuffle=$(deno task -q test-seed) --no-check \
-            --junit-path=../../test-results/bg-piece-service-posture-gate.xml \
-            --allow-env --allow-run --allow-net \
-            integration/posture-gate.test.ts
 
       - name: 🧪 Run cf-harness posture gate
         timeout-minutes: *work-timeout
@@ -1937,8 +1892,6 @@ jobs:
           artifact: deployed-topology-gate
           job: Deployed Topology Posture Gates
           junit: >-
-            kind=integration,scope=background-piece-service,prefix=packages/background-piece-service,glob=test-results/bg-piece-service-posture-gate.xml
-
             kind=integration,scope=cf-harness,prefix=packages/cf-harness,glob=test-results/cf-harness-posture-gate.xml
 
   # ---------------------------------------------------------------------------
@@ -1954,7 +1907,6 @@ jobs:
       - check
       - test
       - build-toolshed
-      - build-bg-piece-service
       - build-cf
       - package-integration-test
       - cli-integration-test
@@ -1972,6 +1924,10 @@ jobs:
       # only writes the comment to an artifact. The coverage-comment workflow
       # posts it from the base-repo context with a write token.
       pull-requests: read
+    # The check writes the run's coverage figures into this spool as
+    # measurements, which the last step ships to the record store.
+    env:
+      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1992,7 +1948,8 @@ jobs:
           digest-mismatch: error
 
       # The gate reads the coverage artifacts of every test job in this run, so
-      # no lane can be asked to run it and this job writes no test records.
+      # no lane can be asked to run it and this job writes no test records:
+      # what it ships is the run's coverage measurements alone.
       # `docs/specs/test-records.md` under "Recording" holds the criterion.
       - name: 📊 Run coverage check
         timeout-minutes: *work-timeout
@@ -2026,6 +1983,18 @@ jobs:
           path: perf-metrics.json
           retention-days: 90
           if-no-files-found: ignore
+
+      # The run's coverage measurements, for the dashboard's trend and the
+      # test-selection publisher, which read it from the record store, and
+      # for the run report, which reads it from this run's artifacts. Only a
+      # push ships one, because every reader takes a figure from a push to
+      # main alone.
+      - name: 📤 Ship test records
+        if: always() && github.event_name == 'push'
+        uses: ./.github/actions/test-records-ship
+        with:
+          artifact: coverage
+          job: Coverage Check
 
   # The store half of the test-topology drift guard. The tree half fails a
   # surface in the working tree that no suite claims; this fails one that is
@@ -2106,7 +2075,6 @@ jobs:
       - runner-test
       - build-toolshed
       - build-toolshed-opposite
-      - build-bg-piece-service
       - build-cf
       - generated-patterns-integration-test
       - package-integration-test
@@ -2155,7 +2123,6 @@ jobs:
         "pattern-compat",
         "pattern-vintage",
         "build-toolshed",
-        "build-bg-piece-service",
         "build-cf",
         "runner-test",
         "pattern-integration-test",
@@ -2180,12 +2147,6 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: binary-toolshed
-          path: common-binaries
-
-      - name: 📥 Download bg-piece-service binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: binary-bg-piece-service
           path: common-binaries
 
       - name: 📥 Download cf binary
@@ -2240,20 +2201,6 @@ jobs:
           cp ./dist/toolshed ./signed/
           cp ./dist/toolshed.sig ./signed/
 
-          # Process bg-piece-service binary
-          echo "Processing binary: bg-piece-service"
-          sha256sum ./dist/bg-piece-service > ./dist/bg-piece-service.hash.txt
-          BG_PIECE_SERVICE_HASH=$(cat ./dist/bg-piece-service.hash.txt | awk '{print $1}')
-          echo "bg-piece-service hash: $BG_PIECE_SERVICE_HASH"
-          echo "bg_piece_service_hash=$BG_PIECE_SERVICE_HASH" >> $GITHUB_OUTPUT
-
-          # Sign the bg-piece-service binary
-          openssl dgst -sha256 -sign <(echo "${{ secrets.ARTIFACT_SIGNING_KEY }}") -out ./dist/bg-piece-service.sig ./dist/bg-piece-service
-
-          # Copy to signed directory
-          cp ./dist/bg-piece-service ./signed/
-          cp ./dist/bg-piece-service.sig ./signed/
-
           # Process cf binary
           echo "Processing binary: cf"
           sha256sum ./dist/cf > ./dist/cf.hash.txt
@@ -2286,14 +2233,6 @@ jobs:
           subject-name: ./dist/toolshed
           subject-digest: sha256:${{ steps.binary_processing.outputs.toolshed_hash }}
 
-      - name: 📝 Generate attestation for bg-piece-service binary
-        id: attest_bg_piece_service
-        timeout-minutes: *work-timeout
-        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1.4.4
-        with:
-          subject-name: ./dist/bg-piece-service
-          subject-digest: sha256:${{ steps.binary_processing.outputs.bg_piece_service_hash }}
-
       - name: 📝 Generate attestation for cf binary
         id: attest_cf
         timeout-minutes: *work-timeout
@@ -2317,7 +2256,6 @@ jobs:
           if-no-files-found: error
           path: |
             ${{ steps.attest_toolshed.outputs.bundle-path }}
-            ${{ steps.attest_bg_piece_service.outputs.bundle-path }}
             ${{ steps.attest_cf.outputs.bundle-path }}
             ${{ steps.attest_tarball.outputs.bundle-path }}
 
@@ -2326,49 +2264,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Verify tarball attestation
-          echo "::group::Tarball attestation details"
-          gh attestation verify release/labs-${{ github.sha }}.tar.gz -R ${{ github.repository }} --format json | jq
-          echo "::endgroup::"
-          if [ $? -eq 0 ]; then
-            echo -e "\033[32m✓ Tarball attestation verified successfully\033[0m"
-          else
-            echo -e "\033[31m✗ Tarball attestation verification failed\033[0m"
-            exit 1
-          fi
-
-          # Verify toolshed binary attestation
-          echo "::group::toolshed attestation details"
-          gh attestation verify ./dist/toolshed -R ${{ github.repository }} --format json | jq
-          echo "::endgroup::"
-          if [ $? -eq 0 ]; then
-            echo -e "\033[32m✓ toolshed attestation verified successfully\033[0m"
-          else
-            echo -e "\033[31m✗ toolshed attestation verification failed\033[0m"
-            exit 1
-          fi
-
-          # Verify bg-piece-service binary attestation
-          echo "::group::bg-piece-service attestation details"
-          gh attestation verify ./dist/bg-piece-service -R ${{ github.repository }} --format json | jq
-          echo "::endgroup::"
-          if [ $? -eq 0 ]; then
-            echo -e "\033[32m✓ bg-piece-service attestation verified successfully\033[0m"
-          else
-            echo -e "\033[31m✗ bg-piece-service attestation verification failed\033[0m"
-            exit 1
-          fi
-
-          # Verify cf binary attestation
-          echo "::group::cf attestation details"
-          gh attestation verify ./dist/cf -R ${{ github.repository }} --format json | jq
-          echo "::endgroup::"
-          if [ $? -eq 0 ]; then
-            echo -e "\033[32m✓ cf attestation verified successfully\033[0m"
-          else
-            echo -e "\033[31m✗ cf attestation verification failed\033[0m"
-            exit 1
-          fi
+          # A subject whose attestation does not verify fails the step: the
+          # command substitution hands `bash -e` the exit status of `gh`.
+          for subject in release/labs-${{ github.sha }}.tar.gz ./dist/toolshed ./dist/cf; do
+            details=$(gh attestation verify "$subject" -R ${{ github.repository }} --format json)
+            echo "::group::$subject attestation details"
+            jq . <<< "$details"
+            echo "::endgroup::"
+            echo -e "\033[32m✓ $subject attestation verified successfully\033[0m"
+          done
 
       - name: 🔑 Authenticate to Google Cloud
         uses: google-github-actions/auth@3a3c4c57d294ef65efaaee4ff17b22fa88dd3c69 # v1.3.0

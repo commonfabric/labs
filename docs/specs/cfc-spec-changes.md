@@ -1395,3 +1395,48 @@ witness-bearing form, since the identity alone admits any caller's choice of
 input; and note in §8.9.3 that input references are a read-path channel when
 persisted, which is a reason to prefer the summary where no consumer
 dereferences them.
+
+## From the display-boundary module-policy build (2026-09-24)
+
+**SC-44 [normative] A module policy's subject space is a membership candidate
+— §4.9.3 + §18.4.5.** `open`. §4.9.3 discovers the spaces to point-query for
+`HasRole` facts "from the `Space(...)` atoms present in the label being
+evaluated", and §18.4.5 subscribes a gated cell to the ACL documents of exactly
+those spaces. A module policy's rules release on evidence about
+`THIS_POLICY.subject`, and §4.4.2's own example guards on
+`HasRole(reviewer, subject, reader)`. A label selecting that policy carries the
+subject inside the `Policy` reference, not as a `Space(...)` atom, so under the
+text as written no point query is ever addressed to it: the rule can fire for
+a viewer whose own or session space is the subject, and for no other reader.
+
+The runtime adds the plaintext `subject` of each exact module-policy reference
+the label selects to the candidate set, and the reconciler watches that
+space's ACL document as it watches a `Space(X)` atom's. The discipline is
+unchanged: one point query per `(principal, space)`, no member enumeration, and
+no inference from residency.
+
+Two things are left as they are. A subject in commitment form (§4.6.4.1) names
+no space and is not a candidate: a committed subject is never opened (§4.3.6);
+minted facts for other candidates still unify with it. Those are the facts the
+boundary mints for another reason — the viewer's own or session space, or a
+`Space` atom the same label names — so the commitment adds no candidate and no
+new fact. A space a module rule adds from
+any binding other than the subject is not a candidate either, and its `Space`
+alternative stays sealed; consulting spaces that first appear in the rewritten
+label would need a watch set that depends on evaluation, which §18.4.5's
+reactive model does not have.
+
+The same reactive obligation extends to manifests. A label whose manifest
+has not reached the local replica fails closed (§4.4.3), and nothing in
+§18.4.5 re-evaluates it when the manifest arrives. The runtime subscribes a
+gated cell to the manifest document at `policyDigest` in each space its label
+was read from — the local digest-addressed store of §4.4.1, where the
+persisting transaction installed it — until one verifies.
+
+Proposed edit: add the plaintext module-policy subject to §4.9.3's
+candidate-discovery sentence, with the commitment-form carve-out; and add
+subject-space ACL documents and unverified manifest documents to §18.4.5's
+reactive re-render paragraph. Implemented in
+`packages/runner/src/cfc/render-ceiling.ts`
+(`membershipSpacesInConfidentiality`) and
+`packages/html/src/worker/reconciler.ts` (`#watchCellMembership`).

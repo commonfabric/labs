@@ -29,6 +29,7 @@ import { cfcAtom } from "@commonfabric/api/cfc";
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
 import { type DID, Identity } from "@commonfabric/identity";
 import type { Runtime } from "@commonfabric/runner";
+import { createTrustResolver } from "@commonfabric/runner/cfc";
 import type { Options as StorageOptions } from "@commonfabric/runner/storage/cache";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -68,6 +69,24 @@ const SENT = {
   cfcFlowLabels: "persist",
   cfcReadMaxConfidentiality: [cfcAtom.user(signer.did())],
   cfcReadOnExceed: "skip",
+  cfcTrustConfig: {
+    statements: [{
+      concrete: {
+        type: "https://commonfabric.org/cfc/atom/Policy",
+        policyRefKind: "module",
+        moduleIdentity: "sha256:reach-module",
+        symbol: "reachRules",
+        policyDigest: "sha256:reach-digest",
+      },
+      implements: "https://commonfabric.org/cfc/concepts/reach",
+      verifier: "did:web:reach.example",
+    }],
+    delegations: [{
+      delegator: "*",
+      verifier: "did:web:reach.example",
+      concepts: ["https://commonfabric.org/cfc/concepts/reach"],
+    }],
+  },
   renderDeclassificationPolicy: "deny",
   renderConfidentialityCeiling: {
     atoms: [cfcAtom.user(signer.did())],
@@ -163,6 +182,24 @@ const REACH = {
   cfcReadOnExceed: {
     reads: (o) => o.runtime.cfcReadOnExceed,
     expected: "skip",
+  },
+  cfcTrustConfig: {
+    // The runtime's own validated copy, so the case turns on the statement
+    // reaching the resolver the concept guards consult.
+    reads: (o) =>
+      createTrustResolver(o.runtime.cfcTrustConfig).conceptSatisfied(
+        "https://commonfabric.org/cfc/concepts/reach",
+        [{
+          type: "https://commonfabric.org/cfc/atom/Policy",
+          policyRefKind: "module",
+          moduleIdentity: "sha256:reach-module",
+          symbol: "reachRules",
+          policyDigest: "sha256:reach-digest",
+          subject: space,
+        }],
+        signer.did(),
+      ),
+    expected: true,
   },
   renderDeclassificationPolicy: {
     reads: (o) => o.processor.accessForTestingOnly.renderDeclassificationPolicy,

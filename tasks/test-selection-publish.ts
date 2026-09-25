@@ -73,7 +73,7 @@ import {
   loadTopology,
   wholeUnits,
 } from "./test-topology.ts";
-import { publishableBaselines } from "./test-selection/baselines.ts";
+import { baselinesOf, mergeBaselines } from "./test-selection/baselines.ts";
 import type { Suite } from "./test-topology/suite.ts";
 import {
   fetchManifest,
@@ -540,10 +540,18 @@ function refusal(
 }
 
 /**
- * The coverage baselines the next manifest carries: what the newest one
- * holds, brought forward, plus whatever the `main` runs since then
- * published. Reading the previous manifest is one public read and is
- * what keeps a publish from asking about every run in the window.
+ * The coverage baselines the newest manifest holds, which the next one
+ * brings forward. The objects a run folds are the ones no earlier run
+ * folded, so the baselines they hold are added to these rather than
+ * standing in for them.
+ *
+ * Throws where the store could not be asked. The objects those baselines
+ * came from are ones no later run folds again, so a manifest published
+ * without them would hold none of them, and neither would any manifest
+ * after it. Where the store answers that it holds no manifest this
+ * publisher can read, the baselines start empty, and the ones in objects
+ * earlier runs folded come back only from a `--bootstrap`, which folds the
+ * window again.
  */
 export async function liveBaselines(
   now: Date,
@@ -553,10 +561,10 @@ export async function liveBaselines(
     at: now.toISOString(),
     ...(fetch === undefined ? {} : { fetch }),
   });
-  return await publishableBaselines(
-    now,
-    previous.manifest?.coverageBaselines ?? [],
-  );
+  if (previous.unreachable) {
+    throw new Error(`reading the previous manifest failed: ${previous.absent}`);
+  }
+  return previous.manifest?.coverageBaselines ?? [];
 }
 
 /**
@@ -594,6 +602,18 @@ export async function publish(
   const startedAt = now;
   const today = startedAt.toISOString().slice(0, 10);
   const partitions = dayPartitions(startedAt, options.days);
+  let carried: CoverageBaseline[];
+  try {
+    carried = await baselines(startedAt);
+  } catch (error) {
+    console.warn(`test selection: ${error}`);
+    console.warn(
+      "test selection: refusing to publish without the coverage baselines " +
+        "the previous manifest carries. The previous manifest is still the " +
+        "newest one.",
+    );
+    return 1;
+  }
   let aggregate: AggregateState;
   if (options.bootstrap) {
     aggregate = emptyAggregate(today);
@@ -637,6 +657,7 @@ export async function publish(
   const resolver = await loadAliasResolver();
   const fold = new Fold(aggregate, resolver, today);
   const runs = new Set<string>();
+  const found: { attempt: number; baseline: CoverageBaseline }[] = [];
   let commit = "unknown";
 
   const noteReport = (report: StoredReport): void => {
@@ -644,6 +665,10 @@ export async function publish(
       const id = group.context?.ci?.workflowRunId;
       if (id !== undefined) runs.add(id);
       if (group.context?.branch === "main") commit = group.context.commit;
+      const attempt = group.context?.ci?.runAttempt ?? 0;
+      for (const baseline of baselinesOf(group)) {
+        found.push({ attempt, baseline });
+      }
     }
   };
 
@@ -808,10 +833,16 @@ export async function publish(
       laneObservations(folded.aggregate.lanes ?? []),
     ),
   });
-  // What the coverage gate compares a pull request against. It comes from
-  // outside the fold, because the counts are published by the full run on
-  // `main` rather than recorded as tests.
-  manifest.coverageBaselines = await baselines(startedAt);
+  // What the coverage gate compares a pull request against. The full run on
+  // `main` writes the counts as measurements, which the fold passes over,
+  // so they are collected beside it.
+  // Ordered by attempt, stably, so that of two attempts stamped with one
+  // start the later is the one kept.
+  manifest.coverageBaselines = mergeBaselines(
+    carried,
+    found.sort((a, b) => a.attempt - b.attempt).map(({ baseline }) => baseline),
+    startedAt,
+  );
   manifest.unavailable = suites.flatMap((suite) =>
     suite.unavailable.map((entry) => ({
       suite: suite.id,

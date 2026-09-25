@@ -912,52 +912,6 @@ is always an armed zero-delay timer that `settle()` can see, while the waiting
 itself costs microseconds rather than the two milliseconds Deno takes to wake
 its event loop for a timer.
 
-## The background-piece-service suite: the same clock for a polling loop
-
-`packages/background-piece-service` loads the same shared harness — its
-`packages/background-piece-service/test/clock-preload.ts` calls
-`installFakeClock` in the `auto-advance` mode, wired through `--preload` on the
-package test task, with the controls exposed as a global `clock` typed in
-`test/clock.d.ts` — and follows the same rule for test sleeps. It needs the
-clock for the same reason the runner does: the service's own machinery is
-time-coupled, so freezing every positive-delay timer would deadlock a plain test
-on the service's own loop rather than on any sleep the test wrote.
-
-Three pieces of the service arm positive-delay timers. `SpaceManager.#execLoop`
-parks on `sleep(pollingIntervalMs)` between polls of its task queue.
-`SpaceManager.stop` races a `setInterval` that watches for the active job to
-finish against a `sleep(deactivationTimeoutMs)` deadline. And
-`WorkerController.#exec` arms a `setTimeout(timeoutMs)` that rejects a worker
-request the worker never answers. Each of these is scheduled from `src/`, so the
-clock reads it as a production timer. The poll and the deactivation deadline
-reach `setTimeout` indirectly, through the `sleep` helper in
-`@commonfabric/utils`; that does not change the classification, because the
-clock reads the immediate caller's frame, and `sleep`'s own frame is a `src/`
-frame too. They therefore auto-advance: the poll interval elapses instantly,
-and an unanswered worker request's timeout fires on its own.
-The auto-advance mechanism is the runner's, described just above.
-
-Each wait these tests need goes through the clock. A test that exercises one
-branch of the exec loop and then stops it starts the loop, calls
-`clock.settle()` to let it reach its parked `sleep`, clears `isRunning`, and
-calls `clock.tick(1)` to fire that parked sleep so the loop sees the flag and
-exits. A test that waits for a worker's initialize request to time out calls
-`clock.tick(1)` to fire the `timeoutMs` timer. A test that needs only the next
-reactive turn — a sink firing, a shutdown callback running — waits on
-`clock.settle()`.
-
-One file stays on the real clock, listed in the preload's `realClockFiles`:
-`otel.test.ts`. It exercises the real OpenTelemetry SDK against a real loopback
-OTLP receiver. The provider's `forceFlush` and `shutdown` guard each flush with
-their own `setTimeout`, armed inside the vendored SDK rather than from `src/`;
-under auto-advance that guard fires against the real HTTP round trip before it
-completes, and the flush reports that the span processor did not finish within
-its timeout. The SDK's periodic metric reader arms a repeating interval that is
-a production timer too. These tests carry no sleeps or deadlines to convert, so
-the fake clock would buy them no determinism; they keep real time, already opt
-out of the op sanitizer for those timers, and tear them down through
-`shutdownOpenTelemetry`.
-
 ## The runtime-client suite stays on the real clock
 
 `packages/runtime-client` keeps its unit tests on the real clock. Most of its

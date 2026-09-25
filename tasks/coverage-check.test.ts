@@ -7,6 +7,10 @@ import {
 } from "@std/assert";
 import * as path from "@std/path";
 import {
+  coverageFiguresOf,
+  readSpool,
+} from "@commonfabric/test-support/records";
+import {
   type Artifact,
   type BaselineSample,
   COVERAGE_SUGGESTION_MARKER,
@@ -1971,6 +1975,71 @@ Deno.test("main passes a pull request ungated when a rate limit refuses its arti
       payload.body ?? "",
       "| `tasks` | GitHub's API rate limit stopped this run reading",
     );
+  } finally {
+    Deno.chdir(originalCwd);
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("main records the run's figures in the spool it is handed, and in no other", async () => {
+  // The measurement reads the working directory as the repository root, so
+  // the run is given one of its own holding a single `tasks` source file.
+  const root = await Deno.makeTempDir({ prefix: "coverage-recorded-" });
+  const originalCwd = Deno.cwd();
+  const source = path.join(root, "tasks", "recorded.ts");
+  await Deno.mkdir(path.dirname(source));
+  await Deno.writeTextFile(source, "export const recorded = 1;\n");
+  const artifactsDir = path.join(root, "coverage-artifacts");
+  for (const name of EXPECTED_COVERAGE_ARTIFACT_NAMES) {
+    await Deno.mkdir(path.join(artifactsDir, name), { recursive: true });
+    await Deno.writeTextFile(
+      path.join(artifactsDir, name, "coverage.lcov"),
+      `SF:${source}\nDA:1,0\nend_of_record\n`,
+    );
+  }
+  const eventPath = path.join(root, "event.json");
+  await Deno.writeTextFile(eventPath, JSON.stringify({ after: SHA_C }));
+  // The spool the process around the check records into, which a test
+  // driving the check stands in for, and the one the entry point hands it.
+  const ambient = path.join(root, "ambient-spool");
+  const handed = path.join(root, "handed-spool");
+  const currentRunId = 123;
+  try {
+    Deno.chdir(root);
+    await captureConsoleAsync(() =>
+      withEnv(
+        {
+          GITHUB_TOKEN: "test-token",
+          GITHUB_RUN_ID: String(currentRunId),
+          GITHUB_EVENT_PATH: eventPath,
+          GITHUB_EVENT_NAME: "push",
+          GITHUB_SHA: SHA_C,
+          PR_NUMBER: "",
+          COVERAGE_ARTIFACTS_DIR: artifactsDir,
+          GITHUB_STEP_SUMMARY: undefined,
+          CF_TEST_RECORDS_DIR: ambient,
+        },
+        () =>
+          withMockFetch(
+            (input) =>
+              String(input).includes(`/actions/runs/${currentRunId}/artifacts`)
+                ? spentRateLimitWindow()
+                : jsonResponse({ workflow_runs: [] }),
+            () =>
+              withMockExit(() =>
+                main((name) =>
+                  name === "CF_TEST_RECORDS_DIR" ? handed : undefined
+                )
+              ),
+          ),
+      )
+    );
+    assertEquals(coverageFiguresOf((await readSpool(handed)).records), {
+      groups: new Map([["tasks", 1], ["workspace", 1]]),
+      sets: new Map(),
+      cold: false,
+    });
+    assertEquals((await readSpool(ambient)).records, []);
   } finally {
     Deno.chdir(originalCwd);
     await Deno.remove(root, { recursive: true });

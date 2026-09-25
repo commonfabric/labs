@@ -90,8 +90,8 @@ from an owned setup transaction that commits to storage, and since a
 wave's withdrawable acceptance cannot supply that, its setup transaction
 commits directly to the store as the serving loop's own derived-class
 commit, outside the wave (serving-loop.md §3e). Every other client of
-the piece controller — the shell, the background piece service — keeps
-the client-side shape until its own migration.)*
+the piece controller, such as the shell, keeps the client-side shape
+until its own migration.)*
 
 **The `system` class is PRODUCER-defined, its contents exemplary
 (RULED 2026-08-05).** The stamp rides the memory server's generic

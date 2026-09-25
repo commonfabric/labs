@@ -14,7 +14,7 @@ import {
   textContent,
   UI,
   Writable,
-} from "../commonfabric-shim.test.ts";
+} from "../../../tools/test-support/source-coverage-commonfabric.ts";
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);

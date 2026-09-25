@@ -19,6 +19,7 @@ import {
   cfcLabelViewForCellFailClosed,
   cfcLabelViewForCellFailClosedWithStatus,
   cfcLabelViewFromMetadata,
+  cfcLabelViewSourceForCell,
   cfcLabelViewSymbol,
 } from "../src/cfc/mod.ts";
 import { stripSigilCfcLabelViews } from "../src/cfc/link-label-view.ts";
@@ -381,6 +382,69 @@ describe("CFC label view helpers", () => {
           },
         }],
       });
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("names the spaces of the documents a view was read from", async () => {
+    // A module policy's manifest is installed beside the label that selects
+    // it, so the display boundary reads it from these spaces. The labeled
+    // value lives in another space and is reached through a link, so the
+    // cell's own space alone would be the wrong answer.
+    const signer = await Identity.fromPassphrase("cfc label view spaces");
+    const elsewhere = (await Identity.fromPassphrase(
+      "cfc label view spaces elsewhere",
+    )).did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    try {
+      const seedIn = async (
+        space: typeof elsewhere,
+        id: string,
+        value: unknown,
+        entries: unknown[],
+      ) => {
+        const tx = runtime.edit();
+        const cell = runtime.getCell(space, id, undefined, tx);
+        writeSeedEnvelopeDoc(tx, space);
+        seedStoredEnvelope(tx, {
+          space,
+          id: parseLink(cell.getAsLink()).id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value,
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: { version: 1, entries },
+          },
+        } as never);
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit()).ok).toBeDefined();
+        return runtime.getCell(space, id);
+      };
+      const source = await seedIn(elsewhere, "spaces-source", "sealed", [{
+        path: [],
+        label: { confidentiality: ["source-label"] },
+      }]);
+      const unlabeledHolder = await seedIn(signer.did(), "spaces-holder", {
+        detail: source.getAsLink(),
+      }, []);
+      const labeledHolder = await seedIn(signer.did(), "spaces-labeled", {
+        detail: source.getAsLink(),
+      }, [{ path: ["detail"], label: { integrity: ["holder-label"] } }]);
+
+      expect(cfcLabelViewSourceForCell(unlabeledHolder.key("detail")).spaces)
+        .toEqual([elsewhere]);
+      expect(cfcLabelViewSourceForCell(labeledHolder.key("detail")).spaces)
+        .toEqual([signer.did(), elsewhere]);
+      expect(cfcLabelViewSourceForCell(source).spaces).toEqual([elsewhere]);
     } finally {
       await runtime.dispose();
       await storageManager.close();

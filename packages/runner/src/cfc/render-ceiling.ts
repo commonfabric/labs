@@ -1,4 +1,10 @@
-import { CFC_ATOM_TYPE, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
+import {
+  CFC_ATOM_TYPE,
+  type CfcAtom,
+  cfcAtom,
+  type CfcModulePolicyRefAtom,
+} from "@commonfabric/api/cfc";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { CfcConfClause } from "./clause.ts";
@@ -10,8 +16,10 @@ import {
 import {
   buildCfcPolicySnapshot,
   type ExchangeRule,
+  isExactModulePolicyRef,
   type PolicySnapshot,
 } from "./policy.ts";
+import type { RenderModulePolicyResolver } from "./policy-resolver.ts";
 import type { SpaceMembershipProvider } from "./space-membership.ts";
 import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
 
@@ -115,7 +123,8 @@ export type RenderConfidentialityResolverConfig = {
 
   /**
    * The §4.9.3 membership lookup: a per-space capability oracle consulted for
-   * each `Space(id)` atom in the label being rendered. When it verifies the
+   * each space `membershipSpacesInConfidentiality` lists for the label being
+   * rendered. When it verifies the
    * acting principal reads that space (its declared ACL grants READ+, never
    * residency), the resolver mints `HasRole(actingPrincipal, id, reader)` so
    * the clause resolves — the dynamic complement to the static `memberSpaces`
@@ -140,38 +149,97 @@ export type RenderConfidentialityResolverConfig = {
    * when absent, exactly like `trustResolver`.
    */
   readonly grantResolver?: CfcGrantResolver;
+
+  /**
+   * Manifest lookup for a label that selects a module policy (`PolicyOf<...>`,
+   * spec §4.3.6), given the spaces the label was read from. The selected
+   * manifest's exchange rules run alongside the standard render rules, as at
+   * any boundary (§8.10.6), so a module rule that releases its clause — for
+   * instance by adding `User(reader)` on a
+   * `HasRole(reader, THIS_POLICY.subject)` fact, which the resolver mints for
+   * a verified reader of the subject space — reaches the display audience.
+   * Absent, or a lookup that finds no verified manifest, leaves such a label
+   * unresolved, so it stays outside the ceiling (fail closed). The render
+   * ceiling has its own switch, so this evaluation runs whatever the
+   * `cfcPolicyEvaluation` dial says, as the standard render rule does.
+   */
+  readonly modulePolicyResolver?: RenderModulePolicyResolver;
 };
 
 /**
- * The `Space(id)` atom ids present in a confidentiality label, walking each
- * clause's alternatives so a `Space` atom nested inside an `{ anyOf: [...] }`
- * clause is discovered too (§4.3.4 multi-binding gives one access path per
- * role held). Order-preserving and deduped, so the provider is consulted once
- * per distinct space.
+ * The spaces whose reader membership can decide how a label renders: each
+ * `Space(id)` atom, the candidates spec §4.9.3 names, and the plaintext
+ * subject space of each module policy the label selects, which
+ * `docs/specs/cfc-spec-changes.md` SC-44 adds. A module rule's
+ * `HasRole(reader, THIS_POLICY.subject)` guard is a membership point query on
+ * that space and can fire for no other reader without one. A subject held in
+ * commitment form names no space and is not listed: the runtime never opens a
+ * commitment (§4.3.6), so such a guard can match only a fact the resolver
+ * mints anyway. A space a module rule adds from any other binding is not
+ * listed, and its `Space` alternative stays sealed. The render resolver
+ * consults exactly these, and the reconciler watches exactly these ACLs.
+ * Order-preserving and deduped.
  */
-export const spaceAtomIdsInConfidentiality = (
+export const membershipSpacesInConfidentiality = (
   confidentiality: readonly CfcConfClause[],
 ): readonly string[] => {
-  const ids: string[] = [];
+  const spaces: string[] = [];
   for (const clause of confidentiality) {
     for (const alternative of clauseAlternatives(clause as CfcConfClause)) {
-      if (
+      let space: unknown;
+      if (isExactModulePolicyRef(alternative)) {
+        space = alternative.subject;
+      } else if (
         isObjectOrArray(alternative) &&
-        (alternative as { type?: unknown }).type === CFC_ATOM_TYPE.Space &&
-        typeof (alternative as { id?: unknown }).id === "string"
+        (alternative as { type?: unknown }).type === CFC_ATOM_TYPE.Space
       ) {
-        const id = (alternative as { id: string }).id;
-        if (!ids.includes(id)) ids.push(id);
+        space = (alternative as { id?: unknown }).id;
+      }
+      if (typeof space === "string" && !spaces.includes(space)) {
+        spaces.push(space);
       }
     }
   }
-  return ids;
+  return spaces;
+};
+
+/**
+ * The module-policy references a label selects, each exactly once, in label
+ * order. The reconciler watches their manifests so a label sealed for want of
+ * one re-renders when it arrives. A malformed reference is not listed; the
+ * evaluator seals its label regardless.
+ */
+export const modulePolicyRefsInConfidentiality = (
+  confidentiality: readonly CfcConfClause[],
+): readonly CfcModulePolicyRefAtom[] => {
+  const refs: CfcModulePolicyRefAtom[] = [];
+  for (const clause of confidentiality) {
+    for (const alternative of clauseAlternatives(clause as CfcConfClause)) {
+      if (
+        isExactModulePolicyRef(alternative) &&
+        !refs.some((ref) => deepEqual(ref, alternative))
+      ) {
+        refs.push(alternative);
+      }
+    }
+  }
+  return refs;
 };
 
 /** The label of the cell being rendered, as read at the display boundary. */
 export type RenderLabelInput = {
   readonly confidentiality: readonly CfcConfClause[];
   readonly integrity?: readonly CfcAtom[];
+
+  /**
+   * The spaces whose documents the label was read from. A module policy's
+   * manifest is read from these, the label's local digest-addressed store
+   * (spec §4.4.1): the commit that persisted the label installed the manifest
+   * beside it. A thunk, called only for a label that selects a module policy,
+   * since finding them can mean resolving the cell's links. Absent or empty,
+   * a label that selects a module policy stays sealed.
+   */
+  readonly spaces?: () => readonly string[];
 };
 
 /**
@@ -204,23 +272,27 @@ export const createRenderConfidentialityResolver = (
   const actingPrincipal = config.actingPrincipal;
   const staticMemberSpaces = config.memberSpaces ?? [];
   const provider = config.membershipProvider;
+  const modulePolicyResolver = config.modulePolicyResolver;
   return (label) => {
     if (label.confidentiality.length === 0) {
       return label.confidentiality as readonly CfcConfClause[];
     }
     // §4.9.3: role facts come ONLY from verified membership, never from the
     // cell's residency. The static fast-path members (own space + session
-    // space — implicit reads, no ACL lookup) plus any `Space(id)` atom in THIS
-    // label the provider confirms the acting principal reads. A space the user
-    // cannot prove reader access to mints nothing and fails closed.
+    // space — implicit reads, no ACL lookup) plus each space
+    // `membershipSpacesInConfidentiality` lists that the provider confirms the
+    // acting principal reads. A space the user cannot prove reader access to
+    // mints nothing and fails closed.
     const memberSpaces = new Set(staticMemberSpaces);
     if (provider !== undefined && actingPrincipal !== undefined) {
-      for (const id of spaceAtomIdsInConfidentiality(label.confidentiality)) {
+      for (
+        const id of membershipSpacesInConfidentiality(label.confidentiality)
+      ) {
         if (memberSpaces.has(id)) continue; // already a static fast-path member
         if (provider.readerRole(id) !== null) memberSpaces.add(id);
       }
     }
-    const roleFacts = mintReaderRoleFacts(actingPrincipal, [...memberSpaces]);
+    let spaces: readonly string[] | undefined;
     const result = evaluateExchangeRules(
       {
         confidentiality: [...label.confidentiality],
@@ -228,13 +300,18 @@ export const createRenderConfidentialityResolver = (
       },
       STANDARD_RENDER_SNAPSHOT,
       {
-        integrity: roleFacts,
+        integrity: mintReaderRoleFacts(actingPrincipal, [...memberSpaces]),
         boundary,
         trustResolver,
         actingPrincipal,
         // §8.12.7 route 2a grant lookups at the display boundary (H3b) —
         // see the config field's doc; absent fails closed.
         grantResolver: config.grantResolver,
+        // Consulted only for a label that selects a module policy.
+        modulePolicyResolver: modulePolicyResolver === undefined
+          ? undefined
+          : (reference) =>
+            modulePolicyResolver(reference, spaces ??= label.spaces?.() ?? []),
       },
     );
     return (result.exhausted

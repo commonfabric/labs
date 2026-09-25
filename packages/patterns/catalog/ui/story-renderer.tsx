@@ -18,6 +18,7 @@ import VStackStory from "../stories/cf-vstack-story.tsx";
 import HStackStory from "../stories/cf-hstack-story.tsx";
 import VGroupStory from "../stories/cf-vgroup-story.tsx";
 import HGroupStory from "../stories/cf-hgroup-story.tsx";
+import HoverRevealStory from "../stories/cf-hover-reveal-story.tsx";
 import VScrollStory from "../stories/cf-vscroll-story.tsx";
 import HScrollStory from "../stories/cf-hscroll-story.tsx";
 import TextareaStory from "../stories/cf-textarea-story.tsx";
@@ -119,6 +120,8 @@ export default pattern<StoryRendererInput, StoryRendererOutput>(
           return VGroupStory({});
         case "hgroup":
           return HGroupStory({});
+        case "hover-reveal":
+          return HoverRevealStory({});
         case "vscroll":
           return VScrollStory({});
         case "hscroll":

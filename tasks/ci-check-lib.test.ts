@@ -26,6 +26,7 @@ import {
   coverageMetricMeasuredSet,
   coverageNotGatedNotice,
   downloadAndExtractArtifact,
+  downloadAndParseCoverageBaseline,
   fetchArtifactsForRun,
   fetchCurrentPRBody,
   fetchIssueComments,
@@ -45,6 +46,7 @@ import {
   parseBaselineOverrides,
   parseCacheStateFiles,
   parseCoverageBaselineDetailed,
+  PERF_METRICS_FILE,
   REPO,
   serializeCoverageBaseline,
   shouldGateCoverageDebtMetric,
@@ -52,6 +54,7 @@ import {
   WORKFLOW_RUNS_PAGE_SIZE,
   workflowRunsPagePath,
 } from "./ci-check-lib.ts";
+import { buildZip } from "./zip-testing.ts";
 
 Deno.test("coverage baseline files round-trip stable metric samples", () => {
   const metrics = new Map<string, BaselineSample>([
@@ -145,7 +148,6 @@ Deno.test("coverage baseline files round-trip compile cache states", () => {
     ],
   ]);
   const states: CompileCacheStates = {
-    "compile-cache": "cold",
     "generated-patterns": "cold",
     "pattern-unit": "warm",
   };
@@ -1795,6 +1797,61 @@ Deno.test("downloadAndExtractArtifact retries transient artifact downloads", asy
     globalThis.fetch = originalFetch;
     console.warn = originalWarn;
   }
+});
+
+/** Runs `read` with every artifact download answering with `zip`. */
+async function withArtifactZip<T>(
+  zip: Uint8Array,
+  read: () => Promise<T>,
+): Promise<T> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      new Response(zip as BodyInit, { status: 200 }),
+    )) as typeof fetch;
+  try {
+    return await read();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+Deno.test("downloadAndParseCoverageBaseline reads the baseline file an artifact holds", async () => {
+  const metrics = new Map<string, BaselineSample>([
+    [coverageMetricForGroup("tasks"), {
+      runId: 5,
+      sha: "abc",
+      createdAt: "2026-01-01T00:00:00Z",
+      uncoveredLines: 42,
+    }],
+  ]);
+  const zip = await buildZip(
+    PERF_METRICS_FILE,
+    new TextEncoder().encode(
+      JSON.stringify(
+        serializeCoverageBaseline(metrics, { "pattern-unit": "cold" }),
+      ),
+    ),
+    0,
+  );
+  const parsed = await withArtifactZip(
+    zip,
+    () => downloadAndParseCoverageBaseline(7),
+  );
+  assertEquals(parsed?.metrics, metrics);
+  assertEquals(parsed?.compileCacheStates, { "pattern-unit": "cold" });
+});
+
+Deno.test("downloadAndParseCoverageBaseline returns null for an artifact holding no baseline file", async () => {
+  const zip = await buildZip(
+    "something-else.json",
+    new TextEncoder().encode("{}"),
+    0,
+  );
+  assertEquals(
+    await withArtifactZip(zip, () => downloadAndParseCoverageBaseline(7)),
+    null,
+  );
 });
 
 Deno.test("newestArtifactsByName keeps the latest re-run upload per name", () => {

@@ -11,7 +11,6 @@ of each section.
 |---|---|
 | Toolshed (server) | [`packages/toolshed/env.ts`](../../packages/toolshed/env.ts) |
 | Shell (browser, build-time) | [`packages/shell/felt.config.ts`](../../packages/shell/felt.config.ts), [`packages/shell/src/lib/env.ts`](../../packages/shell/src/lib/env.ts) |
-| Background piece service | [`packages/background-piece-service/src/env.ts`](../../packages/background-piece-service/src/env.ts) |
 | CLI | [`packages/cli/launcher.ts`](../../packages/cli/launcher.ts), [`packages/cli/mod.ts`](../../packages/cli/mod.ts) |
 | cf-harness | [`packages/cf-harness/src/cli.ts`](../../packages/cf-harness/src/cli.ts), [`packages/cf-harness/src/provenance.ts`](../../packages/cf-harness/src/provenance.ts) |
 | Integration tests | [`packages/integration/env.ts`](../../packages/integration/env.ts) |
@@ -118,18 +117,17 @@ All blank by default. Each integration is gated on its `_CLIENT_ID` /
 
 ## Identity & auth
 
-There are three interacting identity concepts. Pick one column based on which
+There are two interacting identity concepts. Pick one column based on which
 process you're configuring.
 
 | Process | Path-to-keyfile var | Passphrase var | Default fallback |
 |---|---|---|---|
 | Toolshed | `IDENTITY` | `IDENTITY_PASSPHRASE` _(deprecated)_ | `"implicit trust"` (dev only) |
-| Background piece service | `IDENTITY` | `OPERATOR_PASS` | `"implicit trust"` (dev only) |
 | CF CLI | `CF_IDENTITY` env or `--identity <path>` | _(none)_ | _(none — error if remote)_ |
 
-For local dev, all three default to the implicit-trust passphrase so they
-share an identity automatically. To match the CLI to the local server (only
-needed for operator/admin tasks on your own localhost):
+For local dev, toolshed defaults to the implicit-trust passphrase. To match
+the CLI to the local server (only needed for operator/admin tasks on your own
+localhost):
 
 ```bash
 deno run -A packages/cli/mod.ts id derive "implicit trust" > claude.key
@@ -263,7 +261,7 @@ variables only decide whether the module installs one of its own on startup.
 [`docs/development/EXPERIMENTAL_OPTIONS.md`](./EXPERIMENTAL_OPTIONS.md) is the
 central registry of every experimental flag: what each gates, who added it, its
 default, its planned end state, and its removal path, plus the propagation paths
-(server / shell / bg-piece / CLI) and verification steps. Briefly:
+(server / shell / CLI) and verification steps. Briefly:
 
 - Server-side toggles take effect on restart.
 - Server-authoritative flags propagate to clients not built alongside the
@@ -333,7 +331,7 @@ the labs checkout and dispatches to `packages/cli/mod.ts`.
 | `CF_CLI_NAME` | `cf` | Override the displayed CLI name (for branded builds). |
 | `CF_CLI_TRACE_TIMINGS` | `0` | Set to `1` for detailed timing traces. |
 | `CF_SKIP_VERSION_CHECK` | _(unset)_ | Set to any non-empty value to skip the cf ↔ server version check. By default, server-touching commands compare this cf's commit (baked build metadata, or the checkout's HEAD for source runs) with the server's self-reported commit — the `gitSha` riding the `/_health` response the health check already fetches (same value as `/api/meta`) — and warn on stderr when they differ. Source runs grade the warning by git ancestry: cf newer than the server is the normal local-dev case and stays silent unless the command fails, where its note prints as neutral version context. Commit distance alone does not establish incompatibility or explain a failure. `cf piece call` suppresses the held note for confirmed unknown verbs, rejected payloads, and argument validation failures before dispatch; cf **older** than the server gets the loud OUTDATED warning immediately; diverged or unorderable pairs (including all compiled binaries, which carry no history) get the undirected wording immediately. |
-| `CF_ADOPT_SERVER_FLAGS` | `true` | Set to `false` to keep this process on its own `EXPERIMENTAL_*` posture instead of adopting the one the toolshed publishes on `/api/meta`. A cf binary is installed independently of the server it talks to, so by default it takes the deployment's experimental flags and lets an explicit `EXPERIMENTAL_*` override them per flag; this turns the mechanism off wholesale when a deployment publishes something this client cannot run. Read by every client that is not built alongside its server — cf, the pieces controller behind a FUSE mount, the agents host, `cast-admin`. See [the flag registry](./EXPERIMENTAL_OPTIONS.md#clients-that-are-not-built-alongside-their-server). |
+| `CF_ADOPT_SERVER_FLAGS` | `true` | Set to `false` to keep this process on its own `EXPERIMENTAL_*` posture instead of adopting the one the toolshed publishes on `/api/meta`. A cf binary is installed independently of the server it talks to, so by default it takes the deployment's experimental flags and lets an explicit `EXPERIMENTAL_*` override them per flag; this turns the mechanism off wholesale when a deployment publishes something this client cannot run. Read by every client that is not built alongside its server — cf, the pieces controller behind a FUSE mount, the agents host. See [the flag registry](./EXPERIMENTAL_OPTIONS.md#clients-that-are-not-built-alongside-their-server). |
 | `CF_CLI_INTEGRATION_USE_LOCAL` | _(unset)_ | Used by integration tests to dispatch through local source rather than a built binary. |
 | `CF_LABS_ROOT` | _(unset)_ | Read by `bin/cf` only. Selects which labs checkout answers, overriding the nearest one walking up from the cwd. Must be a checkout (a directory with `packages/cli/launcher.ts`) or `bin/cf` exits 2. Chooses the CLI, not the working directory. |
 
@@ -400,17 +398,6 @@ the service that launched it, `ENV=test` to recognize the unit suite,
 
 ---
 
-## Background piece service
-
-| Var | Default | Notes |
-|---|---|---|
-| `OPERATOR_PASS` | `"implicit trust"` | Passphrase for implicit identity. Must match toolshed's identity in dev. |
-| `IDENTITY` | _(unset)_ | Path to keyfile; takes precedence over `OPERATOR_PASS`. |
-| `API_URL` | `http://localhost:8000` | Toolshed URL the service calls. |
-| `EXPERIMENTAL_MODERN_CELL_REP` | _(unset)_ | See experimental flags. |
-
----
-
 ## Integration tests
 
 [`packages/integration/env.ts`](../../packages/integration/env.ts) reads these
@@ -441,7 +428,7 @@ shell expansion to forward extra `deno test` flags (e.g. `--filter`).
 | `check` | Type-check all packages (`./tasks/check.sh`). |
 | `test` | Run all package tests (`./tasks/test.ts`). |
 | `integration` | Run integration tests (`./tasks/integration.ts`). |
-| `build-binaries` | Build all standalone binaries, build only the named targets passed after the task (`toolshed`, `bg-piece-service`, or `cf`), or use the legacy `deno task build-binaries --cli-only` alias to build only `cf`. |
+| `build-binaries` | Build all standalone binaries, build only the named targets passed after the task (`toolshed` or `cf`), or use the legacy `deno task build-binaries --cli-only` alias to build only `cf`. |
 | `cf` | Run the CLI via the launcher. |
 | `initialize-db` | Initialize the local development database. |
 | `install-hooks` | Install git pre-commit hooks. |
@@ -476,18 +463,6 @@ shell expansion to forward extra `deno test` flags (e.g. `--filter`).
 | `test` | Unit tests. |
 | `integration`, `fuse-integration`, `acl-integration` | Integration suites against a local toolshed. |
 
-### Background piece service (`packages/background-piece-service`)
-
-| Task | What it does |
-|---|---|
-| `start` | Run from source. |
-| `add-admin-piece` | One-time setup: cast the admin piece into the system space. |
-| `test` | Run unit tests. |
-| `check` | Type-check source files. |
-| `lint` | Lint source files. |
-| `fmt` | Format package files. |
-| `help` | Service help. |
-
 ---
 
 ## Where defaults live
@@ -499,10 +474,9 @@ shell expansion to forward extra `deno test` flags (e.g. `--filter`).
   - `SANDBOX_SERVICE_URL` → `https://sandbox.stage.commontools.dev`.
   Both fall back gracefully when unreachable, but expect logs warning about
   the failed probes if you're off the corporate network.
-- **`"implicit trust"`** appears as the identity-passphrase default in three
-  places (toolshed `IDENTITY_PASSPHRASE`, bg-service `OPERATOR_PASS`, and the
-  CLI dev recipe). They must match for those three processes to share an
-  identity in local dev.
+- **`"implicit trust"`** appears as the identity-passphrase default in two
+  places (toolshed `IDENTITY_PASSPHRASE` and the CLI dev recipe). They must
+  match for toolshed and the CLI to share an identity in local dev.
 
 ---
 

@@ -2,6 +2,11 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import * as path from "@std/path";
 import {
+  type CoverageFigures,
+  coverageFiguresOf,
+  readSpool,
+} from "@commonfabric/test-support/records";
+import {
   collectReports,
   main,
   markedSets,
@@ -39,12 +44,6 @@ const MEMBER = "packages/leb128";
 /** The suite whose units measure that member. */
 const SUITE = "workspace-unit";
 
-/** When a run these tests stand for happened. */
-const WHEN = "2026-09-01T00:00:00Z";
-
-/** The run identity every command line has to carry. */
-const STAMP = ["--run-id", "1", "--sha", "abc", "--created-at", WHEN];
-
 /** A directory holding one file per entry, at a path relative to its root. */
 async function directoryOf(files: Record<string, string>): Promise<string> {
   const root = await Deno.makeTempDir({ prefix: "coverage-report-" });
@@ -57,12 +56,33 @@ async function directoryOf(files: Record<string, string>): Promise<string> {
 }
 
 /** The rest of a command line, for a run over `root` reading `reports`. */
-function optionsFor(
-  root: string,
+function optionsFor(root: string, reports: string): ReportOptions {
+  return { reports, root };
+}
+
+/**
+ * Runs `report()` over `reports` with a fresh spool as the run's, and
+ * returns the coverage figures it left there alongside its summary, and how
+ * many records hold them.
+ */
+async function reportInto(
   reports: string,
-  out = "/dev/null",
-): ReportOptions {
-  return { reports, out, runId: 1, sha: "abc", createdAt: WHEN, root };
+): Promise<{ summary: string; coverage: CoverageFigures; records: number }> {
+  const spool = await Deno.makeTempDir({ prefix: "coverage-spool-" });
+  try {
+    const summary = await report(
+      optionsFor(REPOSITORY, reports),
+      (name) => name === "CF_TEST_RECORDS_DIR" ? spool : undefined,
+    );
+    const { records } = await readSpool(spool);
+    return {
+      summary,
+      coverage: coverageFiguresOf(records),
+      records: records.length,
+    };
+  } finally {
+    await Deno.remove(spool, { recursive: true });
+  }
 }
 
 /**
@@ -120,61 +140,27 @@ function setFiguresFrom(
   return measuredSetFigures(optionsFor(REPOSITORY, reports), {
     lcov: [],
     unlaunchedMembers,
+    cold: false,
   });
 }
 
 describe("coverage-report", () => {
   describe("parseReportArgs()", () => {
     it("returns the defaults for the flags a command line omits", () => {
-      const options = parseReportArgs([...STAMP, "--reports", "at"], "/root");
-      expect(options?.reports).toBe("at");
-      expect(options?.out).toBe("perf-metrics.json");
-      expect(options?.root).toBe("/root");
+      expect(parseReportArgs([], "/root")).toEqual({
+        reports: "coverage-artifacts",
+        root: "/root",
+      });
+      expect(parseReportArgs(["--reports", "at"], "/root")?.reports)
+        .toBe("at");
     });
 
     it("returns `undefined` for a flag with no value", () => {
-      expect(parseReportArgs([...STAMP, "--reports"], "/root")).toBeUndefined();
+      expect(parseReportArgs(["--reports"], "/root")).toBeUndefined();
     });
 
     it("returns `undefined` for a flag nothing reads", () => {
-      expect(parseReportArgs([...STAMP, "--nonsense", "1"], "/root"))
-        .toBeUndefined();
-    });
-
-    it("returns `undefined` for a command line carrying no commit", () => {
-      // A baseline the gate can never look up is worth less than a
-      // refusal naming the flag the job lost.
-
-      expect(parseReportArgs(["--run-id", "7", "--created-at", WHEN]))
-        .toBeUndefined();
-    });
-
-    it("returns `undefined` for a commit that expanded to nothing", () => {
-      expect(
-        parseReportArgs(["--run-id", "7", "--sha", "", "--created-at", WHEN]),
-      )
-        .toBeUndefined();
-    });
-
-    it("returns `undefined` for a date nothing can read", () => {
-      expect(
-        parseReportArgs(["--run-id", "7", "--sha", "abc", "--created-at", ""]),
-      )
-        .toBeUndefined();
-    });
-
-    it("returns `undefined` for a run id that is not a positive integer", () => {
-      expect(
-        parseReportArgs([
-          "--run-id",
-          "0",
-          "--sha",
-          "abc",
-          "--created-at",
-          WHEN,
-        ]),
-      )
-        .toBeUndefined();
+      expect(parseReportArgs(["--nonsense", "1"], "/root")).toBeUndefined();
     });
   });
 
@@ -230,8 +216,8 @@ describe("coverage-report", () => {
         [`lane-2/lcov/${COMPILE_CACHE_STATE_FILE}`]: "warm\n",
       });
       try {
-        expect((await collectReports(cold)).compileCache).toBe("cold");
-        expect((await collectReports(warm)).compileCache).toBe("warm");
+        expect((await collectReports(cold)).cold).toBe(true);
+        expect((await collectReports(warm)).cold).toBe(false);
       } finally {
         await Deno.remove(cold, { recursive: true });
         await Deno.remove(warm, { recursive: true });
@@ -247,19 +233,19 @@ describe("coverage-report", () => {
         [`lane-2/lcov/${COMPILE_CACHE_STATE_FILE}`]: "tepid\n",
       });
       try {
-        expect((await collectReports(root)).compileCache).toBe("cold");
+        expect((await collectReports(root)).cold).toBe(true);
       } finally {
         await Deno.remove(root, { recursive: true });
       }
     });
 
-    it("returns no cache state where no lane opened the cache", async () => {
+    it("returns the cache not cold where no lane opened it", async () => {
       const root = await directoryOf({
         "lane-1/lcov/sets/workspace-unit/packages_memory/coverage.lcov":
           "SF:/a.ts\nend_of_record\n",
       });
       try {
-        expect((await collectReports(root)).compileCache).toBeUndefined();
+        expect((await collectReports(root)).cold).toBe(false);
       } finally {
         await Deno.remove(root, { recursive: true });
       }
@@ -269,6 +255,7 @@ describe("coverage-report", () => {
       expect(await collectReports("/nonexistent-coverage-artifacts")).toEqual({
         lcov: [],
         unlaunchedMembers: [],
+        cold: false,
       });
     });
 
@@ -298,6 +285,7 @@ describe("coverage-report", () => {
           await repositoryFigures(optionsFor(root, "artifacts"), {
             lcov: [`SF:${alpha}\nDA:1,1\nDA:2,0\nend_of_record\n`],
             unlaunchedMembers: [],
+            cold: false,
           }),
         ).toEqual([
           { name: coverageMetricForGroup("workspace"), uncoveredLines: 3 },
@@ -320,6 +308,7 @@ describe("coverage-report", () => {
           await repositoryFigures(optionsFor(root, "artifacts"), {
             lcov: ["TN:\nend_of_record\n"],
             unlaunchedMembers: [],
+            cold: false,
           }),
         ).toEqual([]);
       } finally {
@@ -339,6 +328,7 @@ describe("coverage-report", () => {
           await repositoryFigures(optionsFor(root, "artifacts"), {
             lcov: [],
             unlaunchedMembers: [],
+            cold: false,
           }),
         ).toEqual([]);
       } finally {
@@ -357,6 +347,7 @@ describe("coverage-report", () => {
           await repositoryFigures(optionsFor(root, "artifacts"), {
             lcov: [`SF:${alpha}\nDA:1,1\nDA:2,0\nend_of_record\n`],
             unlaunchedMembers: ["./packages/beta"],
+            cold: false,
           }),
         ).toEqual([
           { name: coverageMetricForGroup("packages/alpha"), uncoveredLines: 1 },
@@ -542,38 +533,20 @@ describe("coverage-report", () => {
   });
 
   describe("report()", () => {
-    it("publishes every figure stamped with the run it came from", async () => {
-      // The gate looks a baseline up by the commit it was measured at,
-      // and the manifest keeps only the baselines inside its window, so a
-      // figure that reached the file without its stamp reaches no reader.
-
+    it("publishes every figure as a measurement in the run's spool", async () => {
       const source = path.join(REPOSITORY, MEMBER, "src/index.ts");
       const reports = await directoryOf({
         [await reportPathIn("lane-1")]:
           `SF:${source}\nDA:1,1\nDA:2,0\nend_of_record\n`,
       });
-      const out = await Deno.makeTempFile({ prefix: "coverage-report-" });
       try {
-        const summary = await report({
-          ...optionsFor(REPOSITORY, reports, out),
-          runId: 42,
-          sha: "cafef00d",
-        });
-        const published: {
-          metrics: { name: string; runId: number; sha: string }[];
-        } = JSON.parse(await Deno.readTextFile(out));
-        expect(published.metrics.map((metric) => metric.name)).toContain(
-          measuredSetCoverageMetric(`${SUITE}/${MEMBER}`),
-        );
-        expect(
-          published.metrics.every((metric) =>
-            metric.sha === "cafef00d" && metric.runId === 42
-          ),
-        ).toBe(true);
+        const { summary, coverage } = await reportInto(reports);
+        expect([...coverage.sets.keys()]).toEqual([`${SUITE}/${MEMBER}`]);
+        expect(coverage.groups.get("workspace")).toBeGreaterThan(0);
+        expect(coverage.groups.get(MEMBER)).toBeGreaterThan(0);
         expect(summary).toContain("uncovered lines");
       } finally {
         await Deno.remove(reports, { recursive: true });
-        await Deno.remove(out);
       }
     });
 
@@ -581,34 +554,24 @@ describe("coverage-report", () => {
       // The dashboard leaves a cold run out of the repository-wide trend,
       // and reads that from here.
 
-      const out = await Deno.makeTempFile({ prefix: "coverage-report-" });
-      try {
-        for (const state of ["cold", "warm"]) {
-          const reports = await directoryOf({
-            [`lane-1/lcov/${COMPILE_CACHE_STATE_FILE}`]: `${state}\n`,
-          });
-          try {
-            await report(optionsFor(REPOSITORY, reports, out));
-            expect(JSON.parse(await Deno.readTextFile(out)).compileCacheStates)
-              .toEqual({ "compile-cache": state });
-          } finally {
-            await Deno.remove(reports, { recursive: true });
-          }
+      const source = path.join(REPOSITORY, MEMBER, "src/index.ts");
+      for (const state of ["cold", "warm"] as const) {
+        const reports = await directoryOf({
+          [await reportPathIn("lane-1")]:
+            `SF:${source}\nDA:1,1\nDA:2,0\nend_of_record\n`,
+          [`lane-1/lcov/${COMPILE_CACHE_STATE_FILE}`]: `${state}\n`,
+        });
+        try {
+          const { coverage } = await reportInto(reports);
+          expect(coverage.cold).toBe(state === "cold");
+        } finally {
+          await Deno.remove(reports, { recursive: true });
         }
-      } finally {
-        await Deno.remove(out);
       }
     });
 
-    it("publishes no cache state where no lane opened the cache", async () => {
-      const out = await Deno.makeTempFile({ prefix: "coverage-report-" });
-      try {
-        await report(optionsFor(REPOSITORY, "/nonexistent-artifacts", out));
-        expect(JSON.parse(await Deno.readTextFile(out)).compileCacheStates)
-          .toBeUndefined();
-      } finally {
-        await Deno.remove(out);
-      }
+    it("publishes nothing where no lane reported", async () => {
+      expect((await reportInto("/nonexistent-artifacts")).records).toBe(0);
     });
   });
 
@@ -619,30 +582,27 @@ describe("coverage-report", () => {
       // figures came out, and however few of them there are, this exits
       // zero.
 
-      const out = await Deno.makeTempFile({ prefix: "coverage-report-" });
       const summaryFile = await Deno.makeTempFile({ prefix: "step-summary-" });
       const before = Deno.env.get("GITHUB_STEP_SUMMARY");
       Deno.env.set("GITHUB_STEP_SUMMARY", summaryFile);
       try {
         const status = await main(
-          [...STAMP, "--reports", "/nonexistent-artifacts", "--out", out],
+          ["--reports", "/nonexistent-artifacts"],
           REPOSITORY,
         );
         expect(status).toBe(0);
-        expect(JSON.parse(await Deno.readTextFile(out)).metrics).toEqual([]);
         expect(await Deno.readTextFile(summaryFile)).toContain(
           "No lane reported coverage",
         );
       } finally {
         if (before === undefined) Deno.env.delete("GITHUB_STEP_SUMMARY");
         else Deno.env.set("GITHUB_STEP_SUMMARY", before);
-        await Deno.remove(out);
         await Deno.remove(summaryFile);
       }
     });
 
     it("returns two for a command line it cannot read", async () => {
-      expect(await main([...STAMP, "--nonsense", "1"], REPOSITORY)).toBe(2);
+      expect(await main(["--nonsense", "1"], REPOSITORY)).toBe(2);
     });
   });
 });

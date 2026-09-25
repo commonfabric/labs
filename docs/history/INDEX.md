@@ -147,6 +147,7 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 
 ## Executed plans and work orders
 
+- [Scheduled work in the server, Part 2: deleting the background piece service](plans/scheduled-work-part-2-background-service-deletion.md) — 2026-09-02 plan, executed September 2026; the inventory and reasoning behind deleting the background piece service, its registration route, and its binary, CI job, and CI capability, including why the registry data and the registry write side were not kept; `<cf-updater>` was retired as an inert element rather than deleted. Parts 1 and 3 remain live in `docs/plans/scheduled-work-in-the-server.md`.
 - [Personalized book recommendations](plans/personalized-book-recommendations.md) — 2026-09-21; executed demo plan for the personal shelf, invitation, verified visitor agent ceiling, reviewed recommendation delivery, and bounded reader privacy, with raw-server reader authorization and inbox submission authenticity explicitly deferred.
 - [Agent requests — implementation plan](plans/agent-requests-implementation.md) — 2026-09-20; stages 1 through 6 implemented and verified through the book demonstration, with stage 7 ceiling work retained as pending at the archival boundary.
 - [Agent requests from a pattern, and the queue that runs them](plans/agent-requests-and-work-queue.md) — 2026-09-20; design and rulings at the stage 6 demonstration boundary, including linked inputs and results, the per-user runner, inspection, enforcement limitations, and pending stage 7 ceiling work.
