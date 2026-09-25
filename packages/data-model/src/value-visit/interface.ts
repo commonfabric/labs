@@ -169,13 +169,11 @@ export interface ValueVisitor<
 > {
   /**
    * Indicates whether the complete domain of a visitor -- that is, the type
-   * `FabricValuePlus<PlusType>` -- is considered assignable to the `ResultType`
-   * defined by the visitor. This is called at the start of a structural-map
-   * operation, to determine whether or not the visitor engine ever needs to use
-   * `isResultType()`.
-   *
-   * **Note:** This method is nascent: There are no structural-map methods in
-   * this module, yet.
+   * `FabricValuePlus<PlusType>` -- is to be treated as always assignable to the
+   * `ResultType` defined by the visitor. This is called at some point before
+   * the would-be first call to `isResultType()` (generally, at most once per
+   * visitor engine instantiation), to determine whether or not the visitor
+   * engine ever needs to use `isResultType()`.
    */
   isDomainAssignableToResultType(): boolean;
 
