@@ -6816,8 +6816,8 @@ export class Server {
 
   /**
    * @deprecated (W1 review NIT-3) Production-DEAD since (d′): the
-   * SpaceServer's demand pass reads `demandedInstancesForSpace` (the
-   * tracked-ids closure), never this. Retained only as a witness in a few
+   * SpaceServer's demand pass reads `demandForSpace` (the tracked-ids
+   * closure, per session), never this. Retained only as a witness in a few
    * tests (`executor-serving-loop`, `instance-keyed-replica`, `fan-out`);
    * migrate those to `demandedInstancesForSpace` and remove this, or keep
    * it explicitly as the roots-only projection. No production caller.
