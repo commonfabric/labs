@@ -395,9 +395,11 @@ it comes back to had in the latest round that reached it, and a traversal
 reached again within a round takes its result from earlier in the round, so a
 round traverses each schema at the position once. Rounds repeat until one
 leaves no traversal a branch came back to matching where what stood in for it
-did not, and the result then selects what the schema unrolled until it stops
-returning to itself selects. A `oneOf`, which can reject in one round what it
-accepted in the round before, keeps the round before that rejection. A result
+did not. The result then matches as the schema unrolled does and selects the
+properties it selects; where matching branches project one property
+differently, the round's merges decide which projection is kept, since an
+unrolling need not settle on one. A `oneOf`, which can reject in one round what
+it accepted in the round before, keeps the round before that rejection. A result
 that took something standing in for a traversal holds only for its round, so it
 is returned but not memoized.
 

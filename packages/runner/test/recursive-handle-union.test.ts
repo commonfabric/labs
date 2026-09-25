@@ -342,6 +342,102 @@ describe("recursive handle union", () => {
         });
       });
 
+      describe("with branches that come back and project a property differently", () => {
+        // `A` and `B` each select a different part of `x`, and a merge keeps
+        // the later matching branch's projection of `x`. Among branches that
+        // come back to one another, the rounds' own merges decide which that
+        // is: unrolling the union need not settle it.
+
+        const select = (
+          properties: Record<string, JSONSchema>,
+        ): JSONSchema => ({
+          type: "object",
+          properties,
+          additionalProperties: false,
+        });
+        const ref = (name: string) => ({ $ref: `#/$defs/${name}` });
+        const A = select({ x: select({ a: { type: "number" } }) });
+        const B = select({ x: select({ b: { type: "number" } }) });
+        const value = { x: { a: 1, b: 2 } } as FabricValue;
+
+        /**
+         * `node` with each reference into `$defs` expanded to its definition,
+         * `depth` references deep, and `false` below that.
+         */
+        function unrolled(
+          node: unknown,
+          $defs: Record<string, unknown>,
+          depth: number,
+        ): unknown {
+          if (Array.isArray(node)) {
+            return node.map((item) => unrolled(item, $defs, depth));
+          }
+          if (typeof node !== "object" || node === null) return node;
+          const { $ref } = node as { $ref?: unknown };
+          if (typeof $ref === "string") {
+            return depth === 0 ? false : unrolled(
+              $defs[$ref.slice("#/$defs/".length)],
+              $defs,
+              depth - 1,
+            );
+          }
+          return Object.fromEntries(
+            Object.entries(node).map((
+              [key, item],
+            ) => [key, unrolled(item, $defs, depth)]),
+          );
+        }
+
+        /** The union `R` in `$defs`, unrolled `depth` references deep. */
+        function unrolledR(
+          $defs: Record<string, unknown>,
+          depth: number,
+        ): JSONSchema {
+          return unrolled(ref("R"), $defs, depth) as JSONSchema;
+        }
+
+        it("keeps `B`'s projection where the unrolled union alternates between `A`'s and `B`'s with its depth", () => {
+          // `R` is `A` or `S`, and `S` is `B` or `R`: unrolled to an odd
+          // depth, `R` keeps `A`'s projection of `x`, and to an even one
+          // `B`'s.
+
+          const $defs = {
+            R: { anyOf: [A, ref("S")] },
+            S: { anyOf: [B, ref("R")] },
+          };
+
+          expect(queryValue(value, unrolledR($defs, 3))).toEqual({
+            ok: { x: { a: 1 } },
+          });
+          expect(queryValue(value, unrolledR($defs, 4))).toEqual({
+            ok: { x: { b: 2 } },
+          });
+          expect(queryValue(value, { ...ref("R"), $defs } as JSONSchema))
+            .toEqual({ ok: { x: { b: 2 } } });
+        });
+
+        it("keeps `B`'s projection where the unrolled union keeps `A`'s at every depth", () => {
+          // `R` is `A` or `S`, `S` is `T` or `R`, and `T` is `R` or `B`.
+          // Unrolled, `R` keeps `A`'s projection of `x`. The first round takes
+          // `R` within `S` as no match, so `S` projects `x` as `T` does,
+          // through `B`, and `R` merges `S` last.
+
+          const $defs = {
+            R: { anyOf: [A, ref("S")] },
+            S: { anyOf: [ref("T"), ref("R")] },
+            T: { anyOf: [ref("R"), B] },
+          };
+
+          for (const depth of [3, 4, 5, 6]) {
+            expect(queryValue(value, unrolledR($defs, depth))).toEqual({
+              ok: { x: { a: 1 } },
+            });
+          }
+          expect(queryValue(value, { ...ref("R"), $defs } as JSONSchema))
+            .toEqual({ ok: { x: { b: 2 } } });
+        });
+      });
+
       describe("with definitions that come back to one another", () => {
         // Each definition is `null` or a handle naming another, so every
         // branch comes back to a traversal in progress at the position and

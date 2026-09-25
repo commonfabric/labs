@@ -296,11 +296,17 @@ which the traversal that began the position reaches as a fixed point in rounds:
   matched, never on what that holds. Under `anyOf` and `allOf` each round
   matches everything the round before did. Once a round leaves no traversal a
   branch came back to matching where what stood in for it did not, the next
-  round would take the same branches, and that round's result is the one the
-  schema unrolled until it stops returning to itself gives:
+  round would take the same branches. That round matches as the schema
+  unrolled does, and selects every property the unrolled schema selects:
   `R = anyOf(A, allOf(R, B))` selects what `A` and `B` both select. Every round
   before it matches a traversal the rounds before it did not, so the rounds
   number at most one more than the schemas at the position.
+- Where two matching branches project one property differently, the merge
+  keeps the later branch's projection, and the round's own merges decide which
+  that is, which need not be the one an unrolling keeps. An unrolling need not
+  settle on one: `R = anyOf(A, S)` with `S = anyOf(B, R)`, where `A` and `B`
+  select different parts of one property, keeps `A`'s projection unrolled to
+  an odd depth and `B`'s to an even one.
 - A `oneOf` can reject in one round what it accepted in the round before, and so
   has no fixed point. There the round before the first such rejection stands.
 

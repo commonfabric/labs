@@ -4363,13 +4363,20 @@ export class SchemaObjectTraverser<V extends FabricValue>
    * of what stood for none can only turn no match into a match, so each round
    * matches everything the round before did. Once a round leaves no traversal
    * that a branch came back to matching where what stood in for it did not,
-   * the next round would take the same branches, and this round's result is
-   * the one the schema unrolled until it stops returning to itself gives:
-   * every schema those branches reach was traversed in the round, so what a
-   * branch standing in for one adds, the round has already selected.
+   * the next round would take the same branches. That round matches as the
+   * schema unrolled does, and selects every property the unrolled schema
+   * selects: every schema those branches reach was traversed in the round, so
+   * what a branch standing in for one adds, the round has already selected.
    * `R = anyOf(A, allOf(R, B))` selects what `A` and `B` both select. Every
    * round before that one matches a traversal the rounds before it did not,
    * so the rounds number at most one more than the schemas at the position.
+   *
+   * Where two matching branches project one property differently, the merge
+   * keeps the later branch's projection, and the round's own merges decide
+   * which that is, which need not be the one an unrolling keeps. An unrolling
+   * need not settle on one: `R = anyOf(A, S)` with `S = anyOf(B, R)`, where
+   * `A` and `B` select different parts of one property, keeps `A`'s
+   * projection unrolled to an odd depth and `B`'s to an even one.
    *
    * A `oneOf` can reject in one round what it accepted in the round before, and
    * so has no fixed point to reach; the round before the first such rejection
