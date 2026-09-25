@@ -1404,6 +1404,21 @@ says, a candidate that exceeds a limit is revised or deferred rather than the
 limit moved, and a new tradeoff needs a documented decision and rationale.
 Nothing here limits startup time or latency.
 
+## Engine current-state reads
+
+`packages/memory/test/v2-engine-read.bench.ts` measures reading 256 documents
+through the memory engine, once each, when every decoded revision is already in
+the engine's document cache. What a read costs past that cache is resolving its
+branch and finding its revision row in SQLite, so the case tracks the per-read
+statement cost. One case reads at the default branch's head; the other reads on
+a fork that holds no rows of its own, so every read falls through to the parent
+as of the fork point. The fixture is written once per run, and checking what the
+reads returned is outside the timed interval. Run with:
+
+```sh
+deno bench --no-lock -A packages/memory/test/v2-engine-read.bench.ts
+```
+
 ## JSON Pointer encoding
 
 `packages/memory/test/v2-path.bench.ts` measures encoding 256 distinct paths and
