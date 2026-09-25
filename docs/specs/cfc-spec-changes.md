@@ -1430,8 +1430,8 @@ The same reactive obligation extends to manifests. A label whose manifest
 has not reached the local replica fails closed (§4.4.3), and nothing in
 §18.4.5 re-evaluates it when the manifest arrives. The runtime subscribes a
 gated cell to the manifest document at `policyDigest` in each space its label
-was read from — the local digest-addressed store §4.4.1 has the persisting
-transaction install — until one verifies.
+was read from — the local digest-addressed store of §4.4.1, where the
+persisting transaction installed it — until one verifies.
 
 Proposed edit: add the plaintext module-policy subject to §4.9.3's
 candidate-discovery sentence, with the commitment-form carve-out; and add

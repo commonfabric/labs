@@ -6,6 +6,7 @@ import { hashStringOf } from "@commonfabric/data-model";
 import {
   buildCfcPolicyArtifactManifest,
   buildCfcPolicySnapshot,
+  isExactModulePolicyRef,
   lowerCfcPolicyTemplateRules,
   validateCfcPolicyArtifactManifest,
 } from "../src/cfc/policy.ts";
@@ -515,5 +516,28 @@ describe("CFC module policy templates", () => {
     const before = buildCfcPolicySnapshot(input)!.records[0].digest;
     buildCfcPolicyArtifactManifest(manifestBody());
     expect(buildCfcPolicySnapshot(input)!.records[0].digest).toBe(before);
+  });
+
+  it("admits a module policy reference only as six own enumerable fields", () => {
+    const fields = {
+      type: CFC_ATOM_TYPE.Policy,
+      policyRefKind: "module",
+      moduleIdentity: "sha256:module",
+      symbol: "releaseRules",
+      policyDigest: "sha256:digest",
+      subject: "did:key:z6MkSubject",
+    };
+    expect(isExactModulePolicyRef({ ...fields })).toBe(true);
+
+    const { subject, ...rest } = fields;
+    expect(isExactModulePolicyRef(Object.assign(Object.create({ subject }), rest)))
+      .toBe(false);
+    const hidden = { ...rest };
+    Object.defineProperty(hidden, "subject", { value: subject, enumerable: false });
+    expect(isExactModulePolicyRef(hidden)).toBe(false);
+    const accessor = { ...rest };
+    Object.defineProperty(accessor, "subject", { get: () => subject, enumerable: true });
+    expect(isExactModulePolicyRef(accessor)).toBe(false);
+    expect(isExactModulePolicyRef({ ...fields, [Symbol("extra")]: 1 })).toBe(false);
   });
 });

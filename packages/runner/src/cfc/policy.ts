@@ -44,7 +44,18 @@ export const isExactModulePolicyRef = (
   ) {
     return false;
   }
-  return Object.keys(value).every((key) => MODULE_POLICY_REF_KEYS.has(key));
+  // The six fields must be the atom's own enumerable data properties and its
+  // only keys, so an inherited, accessor or hidden field cannot pass.
+  const ownKeys = Reflect.ownKeys(value);
+  return ownKeys.length === MODULE_POLICY_REF_KEYS.size &&
+    ownKeys.every((key) => {
+      if (typeof key !== "string" || !MODULE_POLICY_REF_KEYS.has(key)) {
+        return false;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      return descriptor !== undefined && descriptor.enumerable === true &&
+        "value" in descriptor;
+    });
 };
 
 /**

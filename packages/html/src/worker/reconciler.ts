@@ -1583,8 +1583,13 @@ export class WorkerReconciler {
       try {
         addCancel(subscribe());
         watched.add(key);
-      } catch {
-        // Unwatched; the render fit stays fail-closed independently.
+      } catch (error) {
+        // Unwatched; the render fit stays fail-closed independently, but a
+        // cell that can no longer upgrade should say why.
+        logger.error(
+          "render policy watch subscription failed",
+          () => ({ key, error }),
+        );
       }
     };
     if (provider !== undefined) {
