@@ -953,6 +953,8 @@ describe("stored write requirements", () => {
           .key("items").key(0 as never).key("name" as never)
           .set("evil" as never);
         expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+        expect(runtime.getCell(space, "item-other-writer", ITEMS).get())
+          .toEqual(ITEMS_SEED);
       });
     });
 
@@ -1159,11 +1161,11 @@ describe("stored write requirements", () => {
         holderSchema("release-1", guarded),
         tx,
       );
-      if (raw) {
-        holder.setRaw(value(profile.getAsLink()) as never);
-      } else holder.set(value(profile) as never);
+      const seeded = value(raw ? profile.getAsLink() : profile);
+      if (raw) holder.setRaw(seeded as never);
+      else holder.set(seeded as never);
       expect((await tx.commit()).error).toBeUndefined();
-      return value(raw ? profile.getAsLink() : profile);
+      return seeded;
     };
 
     // The holder's own next release rewrites its document whole, as a

@@ -1673,11 +1673,11 @@ Deno.test("debug pattern loads connector child cells on a cold replica", async (
 /** The verified identity of the writer the stored command queue names. */
 function commandWriterIdentity(
   runtime: Runtime,
-  link: { space: `did:${string}`; id: string; scope?: unknown },
+  link: Parameters<typeof loadStoredCfcEnvelope>[1],
 ): ImplementationIdentity {
   const tx = runtime.edit();
   try {
-    const envelope = loadStoredCfcEnvelope(tx, link as never);
+    const envelope = loadStoredCfcEnvelope(tx, link);
     const writer = envelope.status === "loaded"
       ? (envelope.schema as {
         ifc?: {

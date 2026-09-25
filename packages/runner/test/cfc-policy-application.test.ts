@@ -262,7 +262,7 @@ describe("a runtime policy application", () => {
         event,
         undefined,
         (tx) => {
-          status = tx.status().status;
+          status = tx.status();
         },
       );
       await runtime.idle();
@@ -308,8 +308,17 @@ describe("a runtime policy application", () => {
       it(`refuses ${name}`, async () => {
         const id = `handler-${name}`;
         const runtime = await start(id);
-        const status = await inHandler(runtime, id, act(runtime, id));
-        expect(status).not.toBe("done");
+        const status = await inHandler(runtime, id, act(runtime, id)) as {
+          status: string;
+          error?: Error;
+        };
+        // Refused by the stored writer claim, not by anything else that could
+        // stop a handler's transaction.
+        expect(status.status).not.toBe("done");
+        expect(isCfcEnforcementRejection(status.error)).toBe(true);
+        expect(String(status.error?.message)).toContain(
+          "writeAuthorizedBy failed at /queue",
+        );
         expect(storedIfcAt(runtime, id, "queue").root).toBeUndefined();
       });
     }

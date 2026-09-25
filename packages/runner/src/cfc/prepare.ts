@@ -6230,13 +6230,10 @@ const storedValuesAt = (
         path.slice(covering.path.length),
       ) as FabricValue | undefined;
     }
-    try {
-      return tx.readValueOrThrow({ ...target, path }, {
-        meta: INTERNAL_VERIFIER_META,
-      });
-    } catch {
-      return UNKNOWN;
-    }
+    // Any failure but absence propagates, as `effectiveValueForTarget`'s does.
+    return tx.readValueOrThrow({ ...target, path }, {
+      meta: INTERNAL_VERIFIER_META,
+    });
   };
   const expand = (
     prefix: readonly string[],
@@ -6270,7 +6267,7 @@ const storedValuesAt = (
   const valuesAt = (
     path: readonly string[],
   ): readonly FabricValue[] | undefined => {
-    const key = path.join("\u0000");
+    const key = JSON.stringify(path);
     if (!cache.has(key)) {
       cache.set(
         key,

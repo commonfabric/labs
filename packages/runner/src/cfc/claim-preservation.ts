@@ -188,7 +188,7 @@ export const droppedStoredClaim = (
     const storedKey = storedAt.schema;
     const mergedKey = mergedAt.schema;
     if (!isObjectNotArray(storedKey)) return undefined;
-    const valueKey = foreign.variesBelow(path) ? path.join("\u0000") : "";
+    const valueKey = foreign.variesBelow(path) ? JSON.stringify(path) : "";
     let results = compared.get(storedKey);
     if (results === undefined) compared.set(storedKey, results = new Map());
     let byValue = results.get(mergedKey);
