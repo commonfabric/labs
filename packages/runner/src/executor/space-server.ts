@@ -1081,6 +1081,21 @@ export class SpaceServer implements TransactionSealDestination {
    */
   #eventVisibilityFloor: number | undefined;
 
+  /**
+   * The batch head whose frames a completed settle barrier has applied to
+   * the serving replica, carried across cycles until W covers it. The
+   * settle's PREFIX COVERAGE (serving-loop.md §3) rests on it: input that
+   * keeps arriving keeps the scheduler busy at every exit probe, so a
+   * settle can reach the flush deadline without observing quiescence even
+   * though the batch it drained was long done. Any later moment at which
+   * the scheduler is idle with no re-armed root pending proves this head
+   * covered, since whatever the scheduler ran after the barrier it ran to
+   * completion too; that moment may fall in a later cycle. A wave commit
+   * that aborts clears it, because the abort withdrew consequences the
+   * proof would otherwise count, and so does the end of the tenure.
+   */
+  #barrierHead: number | undefined;
+
   /** Set when a LOAD-PARK deferral — or a handler-not-run withdrawal
    * (review-6459 F1, the same §2 obligation) — fires while a drain pass
    * is running (verification-coverage.md's OW45 residue member). The
@@ -5311,6 +5326,49 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   /**
+   * Helper for `#serveWave()`, which clamps `head` below every input the
+   * serving scheduler cannot have run yet however quiet it is: foreign
+   * novelty the replica still shadows behind one of this loop's own parked
+   * commits, and an event entry the drain could not queue. Returns the floor
+   * and the head after the shadow clamp alone as well, which
+   * `watermarkClamped` reads.
+   */
+  #visibleInputHead(
+    runtime: Runtime,
+    head: number,
+  ): {
+    shadowFloor: number | undefined;
+    shadowVisible: number;
+    visible: number;
+  } {
+    const shadowFloor = runtime.storageManager
+      .open(this.#options.space).replica.unappliedForeignSeqFloor?.();
+    const shadowVisible = shadowFloor === undefined
+      ? head
+      : Math.min(head, shadowFloor - 1);
+    // A settled scheduler has not processed an entry the drain could not
+    // queue. Its later frame application alone cannot establish coverage.
+    const visible = this.#eventVisibilityFloor === undefined
+      ? shadowVisible
+      : Math.min(shadowVisible, this.#eventVisibilityFloor - 1);
+    return { shadowFloor, shadowVisible, visible };
+  }
+
+  /**
+   * Helper for `#serveWave()`, which reports whether a terminal root that a
+   * commit re-armed still owes this settle its structure load: a settle
+   * does not end, and proves no coverage, while one does. Frame application
+   * makes the re-arming metadata readable, so a root re-armed under foreign
+   * novelty the replica still shadows waits for a later cycle, and the
+   * shadow floor keeps W below that novelty meanwhile.
+   */
+  #rearmPending(runtime: Runtime): boolean {
+    return this.#rearmedAwaitingSettle.size > 0 &&
+      runtime.storageManager.open(this.#options.space).replica
+          .unappliedForeignSeqFloor?.() === undefined;
+  }
+
+  /**
    * The tenure's space-root ensure (OW45 arm-B server-ensure stage 1;
    * design PR #6209 §1/§4): make sure the space's default pattern
    * EXISTS and is FRESH — the client-era duties 1 and 2, no start (the
@@ -5686,6 +5744,11 @@ export class SpaceServer implements TransactionSealDestination {
    */
   async #serveWave(runtime: Runtime): Promise<void> {
     const { batchHead } = this.#drainFeed(runtime);
+    // A record the drain holds back stops this batch short of it, and a
+    // carried barrier head may not claim it either.
+    if (this.#barrierHead !== undefined && this.#barrierHead > batchHead) {
+      this.#barrierHead = batchHead;
+    }
     // The event drain stays a fully-awaited, single-flight step AHEAD
     // of the deadline race (Phase 3's shape): at most one drain runs
     // at a time, so a deadline-cut wave can never leave a detached
@@ -5762,6 +5825,9 @@ export class SpaceServer implements TransactionSealDestination {
     };
     let loadPass = joinLoadPass();
     let exhausted = false;
+    // The head this settle proves covered (see `#barrierHead`), clamped as
+    // the advance below clamps: what an exhausted cycle advances W to.
+    let provenHead: number | undefined;
     // The segment the deadline actually cuts. Read against
     // `executor/wave/cycle`: a settle at the deadline inside a much longer
     // cycle means the wave's cost is the seal and the commit, not the
@@ -5778,6 +5844,19 @@ export class SpaceServer implements TransactionSealDestination {
           (async () => {
             await loadPass;
             await runtime.idle();
+            // The probe and the floors that clamp the proof are read in one
+            // synchronous stretch, as the exit probe below and the floors the
+            // advance reads are, so no shadow promotion falls between them.
+            const barrierHead = this.#barrierHead;
+            if (
+              barrierHead !== undefined && runtime.scheduler.isIdle() &&
+              !this.#rearmPending(runtime)
+            ) {
+              provenHead = Math.max(
+                provenHead ?? 0,
+                this.#visibleInputHead(runtime, barrierHead).visible,
+              );
+            }
             // Couple the settle to FRAME DELIVERY (W-soundness): the
             // feed learns of a commit synchronously at admission, but
             // the serving runtime's DIRTINESS arrives on the loopback
@@ -5812,11 +5891,10 @@ export class SpaceServer implements TransactionSealDestination {
           break;
         }
         if (!this.#active || this.#runtime !== runtime) break;
-        if (
-          this.#rearmedAwaitingSettle.size > 0 &&
-          runtime.storageManager.open(this.#options.space).replica
-              .unappliedForeignSeqFloor?.() === undefined
-        ) {
+        // The barrier above has applied every frame at or below the batch
+        // head, whatever the probes below find.
+        this.#barrierHead = batchHead;
+        if (this.#rearmPending(runtime)) {
           if (Date.now() >= deadline) {
             exhausted = true;
             this.#purgeLt1Leftovers(runtime);
@@ -5847,6 +5925,9 @@ export class SpaceServer implements TransactionSealDestination {
     // one, and folding its duration in would blunt the measurement.
     timing.time(settleStart, "executor", "wave", "settle");
     if (!this.#active || this.#runtime !== runtime) return;
+    // Read once: a settle step the deadline cut keeps running detached, and
+    // a proof it reaches after this point belongs to no wave.
+    const proven = exhausted ? provenHead : undefined;
 
     const wave = this.#currentWave;
     const haveContributions = (wave?.contributionCount ?? 0) > 0;
@@ -5865,9 +5946,9 @@ export class SpaceServer implements TransactionSealDestination {
     // (serving-loop.md §3): everything at or below batchHead has its
     // consequences committed and its demanded derivations current —
     // that is what the settle above established. An exhausted flush
-    // carries no watermark movement. The advance is input-driven (the
-    // batch head only moves when commits arrive), so a quiet space
-    // commits nothing.
+    // moves W only as far as its prefix coverage proved, and not at all
+    // without one. The advance is input-driven (the batch head only
+    // moves when commits arrive), so a quiet space commits nothing.
     //
     // The settle input barrier (Phase 2 revisit (a)): the settle above
     // proves frames were SENT and pulls settled — not that every
@@ -5882,19 +5963,13 @@ export class SpaceServer implements TransactionSealDestination {
     // shadow-flip wake (`shadowFlipObserver`, installed at activation —
     // without it a then-quiet space would wait out the idle window),
     // the woken wave derives over the foreign value, and W catches up.
-    const shadowFloor = runtime.storageManager
-      .open(this.#options.space).replica.unappliedForeignSeqFloor?.();
-    const shadowVisibleHead = shadowFloor === undefined
-      ? batchHead
-      : Math.min(batchHead, shadowFloor - 1);
-    // A settled scheduler has not processed an entry the drain could not
-    // queue. Its later frame application alone cannot establish coverage.
-    const inputVisibleHead = this.#eventVisibilityFloor === undefined
-      ? shadowVisibleHead
-      : Math.min(shadowVisibleHead, this.#eventVisibilityFloor - 1);
-    const inputAdvanceTo = exhausted
+    const { shadowFloor, shadowVisible: shadowVisibleHead, visible } = this
+      .#visibleInputHead(runtime, batchHead);
+    const inputAdvanceTo = !exhausted
+      ? Math.max(this.#watermark, visible)
+      : proven === undefined
       ? this.#watermark
-      : Math.max(this.#watermark, inputVisibleHead);
+      : Math.max(this.#watermark, Math.min(proven, visible));
     if (
       !exhausted && shadowVisibleHead < batchHead &&
       batchHead > this.#watermark
@@ -5907,8 +5982,8 @@ export class SpaceServer implements TransactionSealDestination {
       // REMOVE's sentinel floor 1 holds W entirely — where advanceTo
       // == W and the pre-fix `advanceTo > W` guard missed the count. A
       // floor with batchHead ≤ W is still NOT a clamp: no advance was
-      // owed. An exhausted flush is likewise excluded — exhaustion
-      // suppresses the advance regardless of the floor, and §7's
+      // owed. An exhausted flush is likewise excluded: its advance is
+      // bounded by its prefix coverage before any floor, and §7's
       // wavesBudgetExhausted carries that case.
       this.#options.stats.watermarkClamped += 1;
       logger.info?.("watermark-clamped", () => [
@@ -5968,7 +6043,7 @@ export class SpaceServer implements TransactionSealDestination {
         settleAdvanceGeneration = this.#ownContentGeneration;
       }
     }
-    const shouldAdvance = !exhausted && advanceTo > this.#watermark;
+    const shouldAdvance = advanceTo > this.#watermark;
 
     // The wave the bookkeeping write below seals into must be one opened
     // at this cycle's serverSeq, not one a seal opened earlier and left
@@ -6006,10 +6081,11 @@ export class SpaceServer implements TransactionSealDestination {
     // The loop's own bookkeeping write (the sanctioned internal stamp
     // kind): the watermark doc advances INSIDE the same wave commit —
     // never its own commit (protocol.md §4). An exhausted wave carries
-    // no watermark movement (`derivedThrough` stays at the current W;
-    // serving-loop.md §3). Written as a key-path SET (a patch against an
-    // existing doc) so the bookkeeping conflict class's REBASE arm is
-    // live: a disjoint concurrent patch to the watermark doc commutes,
+    // only the movement its prefix coverage proved (`derivedThrough`
+    // otherwise stays at the current W; serving-loop.md §3). Written as a
+    // key-path SET (a patch against an existing doc) so the bookkeeping
+    // conflict class's REBASE arm is live: a disjoint concurrent patch to
+    // the watermark doc commutes,
     // while a whole-doc authored intrusion (forgery) still conflicts
     // semantically and drops the DOC write whole. Stated truthfully:
     // that drop is decided inside commitWave, AFTER `advanceSealed`
@@ -6113,11 +6189,10 @@ export class SpaceServer implements TransactionSealDestination {
       }
     }
 
-    const derivedThrough = !exhausted && advanceSealed
-      ? advanceTo
-      : this.#watermark;
+    const derivedThrough = advanceSealed ? advanceTo : this.#watermark;
     const outcome = await closing.commitWave(this.#sink!, { derivedThrough });
     this.#servedWave = { wave: closing, outcome };
+    if (outcome.aborted !== undefined) this.#barrierHead = undefined;
     if (outcome.seq !== undefined) this.#lastCommittedWaveSeq = outcome.seq;
     // The EXPLICIT WARM REQUEST (serving-loop.md §1's third activation
     // trigger; RULED 2026-08-21): every foreign provisioning batch this
@@ -6291,9 +6366,13 @@ export class SpaceServer implements TransactionSealDestination {
         outcome.seq,
         closing.contentContributionCount > 0,
       );
-      if (!exhausted && advanceSealed) {
+      if (advanceSealed) {
         const advancedFrom = this.#watermark;
         this.#watermark = advanceTo;
+        if (exhausted) stats.exhaustedAdvances += 1;
+        if (this.#barrierHead !== undefined && this.#barrierHead <= advanceTo) {
+          this.#barrierHead = undefined;
+        }
         this.#recordSettleCoverage(advanceTo);
         for (const seq of this.#ownDerivedSeqs) {
           if (seq <= advanceTo) this.#ownDerivedSeqs.delete(seq);
@@ -6502,6 +6581,7 @@ export class SpaceServer implements TransactionSealDestination {
     // The drain's in-flight copies die with the scheduler queue below.
     this.#drainInFlight.clear();
     this.#eventVisibilityFloor = undefined;
+    this.#barrierHead = undefined;
     for (const timer of this.#deliveryFailureWakeTimers.values()) {
       clearTimeout(timer);
     }

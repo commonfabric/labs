@@ -405,16 +405,39 @@ on wave budget exhaustion — EITHER trigger (deadline RULED, owner
 2026-08-04): (a) a cascade that will not quiesce within the
 scheduler's pass budget, or (b) the CONSEQUENCE-FLUSH DEADLINE — a
 wave still running at T_flush commits what is sealed so far. ONE
-mechanism for both: close a wave when it has sealed contributions or pending
-effects, count `wavesBudgetExhausted`, and keep W unchanged. A zero-delta
-cycle with no pending effects closes no wave and makes no durable commit,
-but still increments the exhaustion counter. A committed exhausted wave
-contains a consistent sealed snapshot; its `derivedThrough` stays at the
-current W. Continuation waves carry the
-cascade as dirtiness; W jumps to the top of the pending input batch only
-at true quiescence. Crash recovery stays sound because the basis index
-re-marks the truncated dirty frontier (§3b, §6) and memo hits suppress
-effect re-fires.
+mechanism for both: close a wave when it has sealed contributions, pending
+effects, or a PREFIX-COVERAGE advance (below), count `wavesBudgetExhausted`,
+and otherwise keep W unchanged. A zero-delta cycle with no pending effects
+and no such advance closes no wave and makes no durable commit, but still
+increments the exhaustion counter. A committed exhausted wave contains a
+consistent sealed snapshot; its `derivedThrough` is the prefix-coverage
+head it proved, or the current W when it proved none. Continuation waves
+carry the cascade as dirtiness; W jumps to the top of the pending input
+batch at true quiescence. Crash recovery stays sound because the basis
+index re-marks the truncated dirty frontier (§3b, §6) and memo hits
+suppress effect re-fires.
+
+PREFIX COVERAGE — how an exhausted cycle still moves W: input arriving
+while a settle runs lands through the settle's own frame barrier, so under
+sustained input every exit probe can find the scheduler busy with the
+NEWER input and the settle reaches T_flush without observing quiescence,
+although the batch it drained was long done. The loop therefore records a
+batch head H once a settle's frame barrier has completed with every frame
+at or below H applied — the moment at which an idle scheduler would have
+ended the settle — and carries H across cycles until W covers it,
+lowering it to a later cycle's batch head when that drain holds a record
+back. Any
+later moment at which the scheduler is idle, the demanded-structure load
+the settle awaits has completed, and no re-armed root is pending proves H
+covered: everything the scheduler ran after the barrier, it ran to
+completion. The proof is clamped by the shadow floor and the
+event-visibility floor read at that moment, as the quiescent advance is,
+and again by the floors at the cycle's end; an exhausted cycle advances W
+to the highest head proved before its wave closed, sealing the advance into
+that wave as any other. A wave commit that aborts discards the carried H
+(the abort withdrew consequences the proof would count), as does the end
+of the tenure. A cycle whose settle proved nothing keeps W unchanged.
+Counted: exhaustedAdvances.
 
 on drain-settle (TRUE quiescence: a settled non-exhausted cycle, no
 contributions, no pending events, the drain empty — S1, RULED
@@ -480,7 +503,10 @@ is not a committed-wave exhaustion fraction. The amplification budget's
 inspection rule treats deadline flushes under load as a reason to inspect
 and, with the required evidence, re-baseline (testing.md §4). The deadline
 allows sealed consequences to become visible under sustained multi-user
-input while full input coverage remains gated on quiescence.
+input, and prefix coverage lets input coverage follow them without waiting
+for the input to pause; coverage of the batch a cut settle drained still
+waits for an idle scheduler after its barrier. Pinned:
+`executor-sustained-input.test.ts`.
 
 **Sealing order makes the first flush worth flushing**: events and
 their handler consequences MUST seal ahead of deep demanded
@@ -489,7 +515,7 @@ derivations are demanded pulls — this sentence pins it so an
 implementation does not reorder. Per-stream `eventWatermark` still
 advances for events fully processed in an exhausted wave, and
 `consequenceOf` carries them, so overlay echoes retire on the FIRST
-flush (speculation.md §4) even when W lags to quiescence.
+flush (speculation.md §4) even when W lags behind them.
 
 **Considered and RECORDED as the fallback, not built** (owner,
 2026-08-04): the two-tier WRITE-CLASS split — every wave committing
@@ -1553,8 +1579,8 @@ the drain first; these counters do not equate each deferral with an elapsed
 timer interval or each cycle with a durable commit.
 
 Exposed via the existing `/api/health/stats` shape, replacing v1's pool block:
-`servingLoop: { activeSpaces, waves, wavesBudgetExhausted, supersededWrites,
-authoredSeen, effectAcks, derivedCommits, structureLoadFailures,
+`servingLoop: { activeSpaces, waves, wavesBudgetExhausted, exhaustedAdvances,
+supersededWrites, authoredSeen, effectAcks, derivedCommits, structureLoadFailures,
 structureLoadDeferred, structureLoadStuck, structureLoadTerminal,
 structureLoadConfirmationsSkipped, structureLoadRearmed, watermarkClamped,
 storeReads, storeRefreshes, unstampedSealRefusals, foreignWriteRefusals,
@@ -1618,7 +1644,10 @@ tenure. Demand departure drops terminal decisions; a new tenure starts its own
 pass. Park cancels structure loading at its next asynchronous boundary, before
 any subsequent piece start. Completion from a parked tenure cannot publish a
 terminal decision; park does not wait for unresolved pattern loading.
-`watermarkClamped` counts
+`exhaustedAdvances` counts exhausted cycles whose committed wave still
+advanced W by §3's prefix coverage, a subset of `wavesBudgetExhausted`: an
+exhausted cycle outside it carried no watermark movement. `watermarkClamped`
+counts
 non-exhausted cycles whose foreign-write shadow floor is below an input batch
 head above W. An event-visibility floor can constrain the same cycle, so the
 counter does not isolate the marginal effect of the shadow floor. The shadow
