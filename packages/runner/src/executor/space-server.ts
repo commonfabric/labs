@@ -4771,12 +4771,21 @@ export class SpaceServer implements TransactionSealDestination {
         id: first.id,
         scope: first.scope,
       };
+      // A key and a pair are recorded only once the scheduler has taken
+      // them, so a throw leaves them unrecorded and the full reconcile it
+      // forces takes them again.
       let known = this.#demandersByKey.get(key);
       if (known === undefined) {
+        try {
+          runtime.scheduler.enterDemandedEntity(address);
+        } catch (error) {
+          // The enter counted the entity before it threw.
+          runtime.scheduler.leaveDemandedEntity(address);
+          throw error;
+        }
         known = new Map();
         this.#demandersByKey.set(key, known);
         this.#indexDemandKey(key, first.id);
-        runtime.scheduler.enterDemandedEntity(address);
       }
       for (const pairKey of [...known.keys()]) {
         if (pairs.has(pairKey)) continue;
@@ -4785,13 +4794,13 @@ export class SpaceServer implements TransactionSealDestination {
       }
       for (const [pairKey, identity] of pairs) {
         if (known.has(pairKey)) continue;
-        known.set(pairKey, identity);
-        this.#demandedPairCount += 1;
-        if (this.#demandedRoots.has(key)) arrivals.add(key);
         notCurrentRearms += runtime.scheduler.rearmNotCurrentForDemander(
           address,
           identity,
         );
+        known.set(pairKey, identity);
+        this.#demandedPairCount += 1;
+        if (this.#demandedRoots.has(key)) arrivals.add(key);
       }
     }
     this.#demandFullReconcile = false;

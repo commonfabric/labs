@@ -1798,9 +1798,10 @@ export class Server {
   /**
    * The engine opener a test may supply, the timer-driven refresh pass
    * and the per-space publication lock, which a test drives directly, the
-   * registry's live sessions of one space, which a test inspects, and the
+   * registry's live sessions of one space, which a test inspects, the
    * demand-set build count and an uncached build, which a test compares the
-   * kept demand set against.
+   * kept demand set against, and the demand-set drop a write makes, which a
+   * test applies through a session object of its choosing.
    */
   get accessForTestingOnly(): {
     engineOpener: EngineOpener | undefined;
@@ -1812,6 +1813,7 @@ export class Server {
     sessionsForSpace(space: string): SessionState[];
     readonly sessionDemandBuilds: number;
     buildSessionDemand(session: SessionState): SessionDemand;
+    touchDemand(session: SessionState): void;
   } {
     // deno-lint-ignore no-this-alias
     const outerThis = this;
@@ -1830,6 +1832,7 @@ export class Server {
         return outerThis.#sessionDemandBuilds;
       },
       buildSessionDemand: (session) => this.#buildSessionDemand(session),
+      touchDemand: (session) => this.#touchDemand(session),
     };
   }
 
@@ -5804,6 +5807,12 @@ export class Server {
    */
   #touchDemand(session: SessionState): void {
     this.#sessionDemand.delete(session);
+    // A reopen registers a new object that shares this one's watch list,
+    // entity map, tracked set, and graphs, so a write made through an object
+    // the registry has since replaced — by a pass that read it before the
+    // reopen — changes the replacement's demand as well.
+    const current = this.#sessions.peek(session.space, session.id);
+    if (current !== undefined) this.#sessionDemand.delete(current);
   }
 
   /** Roll back the delivery state a computed-but-undelivered sync frame

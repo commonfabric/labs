@@ -113,20 +113,28 @@ describe("SpaceServer", () => {
     const enter = scheduler.enterDemandedEntity.bind(scheduler);
     const leave = scheduler.leaveDemandedEntity.bind(scheduler);
     const rearm = scheduler.rearmNotCurrentForDemander.bind(scheduler);
+    // A failing enter throws after the scheduler has counted the entity,
+    // which is where the scheduler's own enter can throw.
     let throwOnEnter: string | undefined;
+    let throwOnRearm: string | undefined;
     scheduler.enterDemandedEntity = (address) => {
+      entered.push(address.id);
+      const writers = enter(address);
       if (address.id === throwOnEnter) {
         throwOnEnter = undefined;
         throw new Error(`entering ${address.id} fails`);
       }
-      entered.push(address.id);
-      return enter(address);
+      return writers;
     };
     scheduler.leaveDemandedEntity = (address) => {
       left.push(address.id);
       leave(address);
     };
     scheduler.rearmNotCurrentForDemander = (address, demander) => {
+      if (address.id === throwOnRearm) {
+        throwOnRearm = undefined;
+        throw new Error(`re-arming ${address.id} fails`);
+      }
       rearmed.push({ id: address.id, demander });
       return rearm(address, demander);
     };
@@ -190,15 +198,22 @@ describe("SpaceServer", () => {
       },
       /**
        * Replaces the client demand and runs the pass it wakes, which throws
-       * when it enters `id`, along with any pass the loop runs after it.
+       * when it enters `id`, or when it first re-arms a demanding pair of
+       * `id` given `"rearm"`, along with any pass the loop runs after it.
        */
-      async passThrowingOn(id: string, next: SessionDemand[]): Promise<void> {
+      async passThrowingOn(
+        id: string,
+        next: SessionDemand[],
+        call: "enter" | "rearm" = "enter",
+      ): Promise<void> {
         demand = next;
-        throwOnEnter = id;
+        if (call === "enter") throwOnEnter = id;
+        else throwOnRearm = id;
         tenure.noteDemandChanged();
         await clock.tick(300);
         await clock.settle();
         expect(throwOnEnter).toBeUndefined();
+        expect(throwOnRearm).toBeUndefined();
       },
       /** Forgets the scheduler calls recorded so far. */
       forget(): void {
@@ -276,6 +291,52 @@ describe("SpaceServer", () => {
         await fixture.pass();
 
         expect(fixture.stats.demand.demandKeysReconciled).toBe(reconciled + 3);
+      });
+
+      it("enters a key again, and leaves it once for each enter, after a pass whose enter of it throws", async () => {
+        const fixture = await openFixture([
+          share("s1", [row("computed:a", "s1", alice)]),
+        ]);
+        fixture.forget();
+
+        await fixture.passThrowingOn("computed:c", [
+          share("s1", [
+            row("computed:a", "s1", alice),
+            row("computed:c", "s1", alice),
+          ]),
+        ]);
+        await fixture.pass();
+
+        expect(fixture.entered.filter((id) => id === "computed:c")).toEqual([
+          "computed:c",
+          "computed:c",
+        ]);
+        expect(fixture.serving.demandedIdentitiesOf("computed:c")).toEqual([
+          { principal: alice, sessionId: "s1" },
+        ]);
+
+        await fixture.pass([share("s1", [row("computed:a", "s1", alice)])]);
+
+        expect(fixture.left).toEqual(["computed:c", "computed:c"]);
+      });
+
+      it("re-arms a pair again after a pass whose re-arm of it throws", async () => {
+        const first = share("s1", [row("computed:a", "s1", alice)]);
+        const fixture = await openFixture([first]);
+        fixture.forget();
+
+        await fixture.passThrowingOn(
+          "computed:a",
+          [first, share("s2", [row("computed:a", "s2", bob)])],
+          "rearm",
+        );
+        await fixture.pass();
+
+        expect(fixture.rearmed).toEqual([{
+          id: "computed:a",
+          demander: { principal: bob, sessionId: "s2" as never },
+        }]);
+        expect(fixture.stats.demand.demandedPairs).toBe(2);
       });
 
       it("enters the keys a session gains and leaves the keys no session keeps", async () => {

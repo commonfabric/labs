@@ -217,6 +217,35 @@ describe("Server", () => {
         expectKeptSharesCurrent();
       });
 
+      it("rebuilds a reopened session's share on a write made through the object the reopen replaced", async () => {
+        const watcher = await mount(alice);
+        await watcher.watchSet([follow("of:root")]);
+        const replaced = server.accessForTestingOnly.sessionsForSpace(space)
+          .find((session) => session.id === watcher.sessionId)!;
+        const client = await connect({ transport: loopback(server) });
+        clients.push(client);
+        await client.mount(space, {
+          sessionId: watcher.sessionId,
+          sessionToken: watcher.sessionToken,
+        }, openAs(alice));
+        const current = server.accessForTestingOnly.sessionsForSpace(space)
+          .find((session) => session.id === watcher.sessionId)!;
+        expect(current).not.toBe(replaced);
+        expect(current.watches).toBe(replaced.watches);
+        const before = shareOf(watcher);
+
+        // What a watch addition that read the session before the reopen
+        // publishes: the watch list it extends in place is the replacement's
+        // too.
+        replaced.watches.push(follow("of:leaf-b"));
+        server.accessForTestingOnly.touchDemand(replaced);
+
+        const after = shareOf(watcher);
+        expect(after).not.toBe(before);
+        expect(after.rows.has("space\0of:leaf-b")).toBe(true);
+        expectKeptSharesCurrent();
+      });
+
       it("omits the shares of the excluded principal's sessions", async () => {
         const watcher = await mount(alice);
         await watcher.watchSet([follow("of:root")]);
