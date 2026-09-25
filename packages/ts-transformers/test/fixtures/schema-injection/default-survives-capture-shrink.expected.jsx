@@ -39,7 +39,7 @@ interface Input {
     items: Item[];
     boxes: Tagged<number>[];
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h92f89a953010 = __cfHelpers.lift<{
     items: {
         done: boolean | (false & { readonly [DEFAULT_MARKER]: false; });
     }[];
@@ -64,7 +64,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h9f7ff89c3038 = __cfHelpers.lift<{
     items: {
         label: string | (string & { readonly [DEFAULT_MARKER]: ""; });
     }[];
@@ -89,7 +89,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h3f01798c9e11 = __cfHelpers.lift<{
     items: {
         rank: number | (number & { readonly [DEFAULT_MARKER]: 7; });
     }[];
@@ -114,7 +114,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_hd693c8f0c88c = __cfHelpers.lift<{
     boxes: {
         note: string | (string & { readonly [DEFAULT_MARKER]: "n/a"; });
     }[];
@@ -142,10 +142,10 @@ const __cfLift_4 = __cfHelpers.lift<{
 export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
     const boxes = __cf_pattern_input.key("boxes");
-    const firstDone = __cfLift_1({ items: items }).for("firstDone", true);
-    const firstLabelEmpty = __cfLift_2({ items: items }).for("firstLabelEmpty", true);
-    const firstRank = __cfLift_3({ items: items }).for("firstRank", true);
-    const firstBoxNote = __cfLift_4({ boxes: boxes }).for("firstBoxNote", true);
+    const firstDone = __cfLift_h92f89a953010({ items: items }).for("firstDone", true);
+    const firstLabelEmpty = __cfLift_h9f7ff89c3038({ items: items }).for("firstLabelEmpty", true);
+    const firstRank = __cfLift_h3f01798c9e11({ items: items }).for("firstRank", true);
+    const firstBoxNote = __cfLift_hd693c8f0c88c({ boxes: boxes }).for("firstBoxNote", true);
     return { firstDone, firstLabelEmpty, firstRank, firstBoxNote };
 }, {
     type: "object",
@@ -216,8 +216,12 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4
+    __cfLift_h92f89a953010,
+    __cfLift_h9f7ff89c3038,
+    __cfLift_h3f01798c9e11,
+    __cfLift_hd693c8f0c88c,
+    __cfLift_1: __cfLift_h92f89a953010,
+    __cfLift_2: __cfLift_h9f7ff89c3038,
+    __cfLift_3: __cfLift_h3f01798c9e11,
+    __cfLift_4: __cfLift_hd693c8f0c88c
 });

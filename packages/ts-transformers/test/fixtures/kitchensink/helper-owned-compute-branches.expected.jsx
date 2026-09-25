@@ -33,7 +33,7 @@ interface Project {
     members: string[];
     badges: Badge[];
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hcc2204ac106f = __cfHelpers.lift<{
     state: {
         showArchived: boolean;
         projects: {
@@ -115,7 +115,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h6fc8d8628c41 = __cfHelpers.lift<{
     memberIndex: number;
 }, boolean>(({ memberIndex }) => memberIndex === 0, {
     type: "object",
@@ -128,7 +128,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_hdf4bcefb52cf = __cfHelpers.lift<{
     project: {
         name: string;
     };
@@ -153,7 +153,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h17b323b2c208 = __cfHelpers.pattern(__cf_pattern_input => {
     const member = __cf_pattern_input.key("element");
     const memberIndex = __cf_pattern_input.key("index");
     const project = __cf_pattern_input.params.project;
@@ -166,7 +166,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         type: "string"
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "string"
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_2({ memberIndex: memberIndex }), __cfLift_3({
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_h6fc8d8628c41({ memberIndex: memberIndex }), __cfLift_hdf4bcefb52cf({
         project: {
             name: project.name
         },
@@ -220,7 +220,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_hceda935cd7a2 = __cfHelpers.lift<{
     visibleProjects: {
         name: string;
         badges: {
@@ -262,7 +262,7 @@ visibleProjects.map((project, projectIndex) => {
                     : ""}
             </span>))}
           {/* [TRANSFORM] .map() → mapWithPattern: fallbackMembers is a Writable (reactive Cell), lowered even inside computed */}
-          {fallbackMembers.mapWithPattern(__cfPattern_1, {
+          {fallbackMembers.mapWithPattern(__cfPattern_h17b323b2c208, {
             project: {
                 name: project.name
             }
@@ -362,12 +362,12 @@ export default pattern((state) => {
         }
     } as const satisfies __cfHelpers.JSONSchema).for("fallbackMembers", true);
     // [TRANSFORM] computed() -> lift(): captures state.showArchived, state.projects
-    const visibleProjects = __cfLift_1({ state: {
+    const visibleProjects = __cfLift_hcc2204ac106f({ state: {
             showArchived: state.key("showArchived"),
             projects: state.key("projects")
         } }).for("visibleProjects", true);
     // [TRANSFORM] computed() -> lift(): captures visibleProjects (asOpaque), state.prefix, fallbackMembers (asCell — Writable)
-    const rows = __cfLift_4({
+    const rows = __cfLift_hceda935cd7a2({
         visibleProjects: visibleProjects,
         state: {
             prefix: state.key("prefix")
@@ -469,9 +469,14 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfPattern_1,
-    __cfLift_4
+    __cfLift_hcc2204ac106f,
+    __cfLift_h6fc8d8628c41,
+    __cfLift_hdf4bcefb52cf,
+    __cfPattern_h17b323b2c208,
+    __cfLift_hceda935cd7a2,
+    __cfLift_1: __cfLift_hcc2204ac106f,
+    __cfLift_2: __cfLift_h6fc8d8628c41,
+    __cfLift_3: __cfLift_hdf4bcefb52cf,
+    __cfPattern_1: __cfPattern_h17b323b2c208,
+    __cfLift_4: __cfLift_hceda935cd7a2
 });

@@ -40,7 +40,7 @@ const addTodo = handler({
 } as const satisfies __cfHelpers.JSONSchema, (event, state) => {
     state.items.push(event.add);
 });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hfb57fac2bd3f = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const index = __cf_pattern_input.key("index");
     return <li key={index}>{item}</li>;
@@ -88,7 +88,7 @@ export default pattern((state) => {
           Add
         </button>
         <ul>
-          {state.key("items").mapWithPattern(__cfPattern_1, {})}
+          {state.key("items").mapWithPattern(__cfPattern_hfb57fac2bd3f, {})}
         </ul>
       </div>),
     };
@@ -139,5 +139,6 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     addTodo,
-    __cfPattern_1
+    __cfPattern_hfb57fac2bd3f,
+    __cfPattern_1: __cfPattern_hfb57fac2bd3f
 });

@@ -15,7 +15,7 @@ interface Config {
     required: number;
     unionUndefined: number | undefined;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_ha8f7d286d8ce = __cfHelpers.lift<{
     value: __cfHelpers.ReadonlyCell<number>;
     config: {
         required: number;
@@ -53,7 +53,7 @@ export default pattern((config: Config) => {
     const value = new Writable(10, {
         type: "number"
     } as const satisfies __cfHelpers.JSONSchema).for("value", true);
-    const result = __cfLift_1({
+    const result = __cfLift_ha8f7d286d8ce({
         value: value,
         config: {
             required: config.key("required"),
@@ -79,5 +79,6 @@ export default pattern((config: Config) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_ha8f7d286d8ce,
+    __cfLift_1: __cfLift_ha8f7d286d8ce
 });

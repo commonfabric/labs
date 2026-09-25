@@ -14,7 +14,7 @@ const __cfAmdHooks = undefined;
 interface Item {
     title: string;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h69ac9161ab4d = __cfHelpers.lift<{
     items: __cfHelpers.ReadonlyCell<Item[]>;
     processed: __cfHelpers.WriteonlyCell<string[]>;
 }, void>(({ processed, items }) => {
@@ -85,7 +85,7 @@ export default pattern(() => {
             type: "string"
         }
     } as const satisfies __cfHelpers.JSONSchema).for("processed", true);
-    __cfLift_1({
+    __cfLift_h69ac9161ab4d({
         processed: processed,
         items: items
     });
@@ -125,5 +125,6 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h69ac9161ab4d,
+    __cfLift_1: __cfLift_h69ac9161ab4d
 });

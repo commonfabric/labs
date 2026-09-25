@@ -27,7 +27,7 @@ interface Output {
     [UI]: VNode;
 }
 const visibleEntries = __cfHardenFn((entries: Entry[], prefix: string) => entries.filter((entry) => entry.name.startsWith(prefix)));
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hd194ffcb3be3 = __cfHelpers.lift<{
     entries: Entry[];
     prefix: string;
 }, Entry[]>(({ entries, prefix }) => visibleEntries(entries, prefix), {
@@ -72,7 +72,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h81b52218b9d7 = __cfHelpers.pattern(__cf_pattern_input => {
     const entry = __cf_pattern_input.key("element");
     const labelPrefix = __cf_pattern_input.key("params", "labelPrefix");
     return (<button type="button">
@@ -169,11 +169,11 @@ export default pattern((__cf_pattern_input) => {
                             required: ["name"]
                         }
                     }
-                } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({
+                } as const satisfies __cfHelpers.JSONSchema, __cfLift_hd194ffcb3be3({
                     entries: entries,
                     prefix: prefix
                 }).for(["visible", 3], true), []).for("visible", true);
-                return visible.mapWithPattern(__cfPattern_1, {
+                return visible.mapWithPattern(__cfPattern_h81b52218b9d7, {
                     labelPrefix: labelPrefix
                 });
             })()}
@@ -220,6 +220,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_hd194ffcb3be3,
+    __cfPattern_h81b52218b9d7,
+    __cfLift_1: __cfLift_hd194ffcb3be3,
+    __cfPattern_1: __cfPattern_h81b52218b9d7
 });

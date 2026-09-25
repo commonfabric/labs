@@ -48,7 +48,23 @@ export default pattern<Input, Output>(({ items, base }) => ({
 
 /** The lowered `mapWithPattern` callback body, isolated for assertions. */
 function mapCallbackBody(output: ts.SourceFile): ts.Node {
-  return extractedCallbackBody(output, "__cfPattern_1");
+  // Hoist names are content-addressed (`__cfPattern_h<digest>`), so locate
+  // the single hoisted pattern const by shape rather than by a positional
+  // spelling.
+  let hoisted: string | undefined;
+  for (const statement of output.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const decl of statement.declarationList.declarations) {
+      if (
+        ts.isIdentifier(decl.name) &&
+        decl.name.text.startsWith("__cfPattern_")
+      ) {
+        hoisted = decl.name.text;
+      }
+    }
+  }
+  if (!hoisted) throw new Error("no hoisted pattern const found");
+  return extractedCallbackBody(output, hoisted);
 }
 
 Deno.test(

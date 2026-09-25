@@ -23,7 +23,7 @@ interface State {
     items: Item[];
     currentUser: User;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h456793747a37 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const state = __cf_pattern_input.key("params", "state");
     return (<div>
@@ -103,7 +103,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_h456793747a37, {
                 state: {
                     currentUser: {
                         firstName: state.key("currentUser", "firstName"),
@@ -187,5 +187,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_h456793747a37,
+    __cfPattern_1: __cfPattern_h456793747a37
 });

@@ -15,7 +15,7 @@ interface Item {
     name: string;
     active: boolean;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h2034208c1680 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return ({
         name: item.key("name"),
@@ -55,7 +55,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
     },
     required: ["name", "active"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h5603ae6f4eee = __cfHelpers.pattern(__cf_pattern_input => {
     const entry = __cf_pattern_input.key("element");
     return entry.key("active");
 }, {
@@ -78,7 +78,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h27bd6432e8db = __cfHelpers.pattern(__cf_pattern_input => {
     const entry = __cf_pattern_input.key("element");
     return <span>{entry.key("name")}</span>;
 }, {
@@ -129,7 +129,7 @@ export default pattern((__cf_pattern_input) => {
     const list = __cf_pattern_input.key("list");
     return {
         [UI]: (<div>
-        {list.mapWithPattern(__cfPattern_1, {}).filterWithPattern(__cfPattern_2, {}).mapWithPattern(__cfPattern_3, {})}
+        {list.mapWithPattern(__cfPattern_h2034208c1680, {}).filterWithPattern(__cfPattern_h5603ae6f4eee, {}).mapWithPattern(__cfPattern_h27bd6432e8db, {})}
       </div>),
     };
 }, {
@@ -191,7 +191,10 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1,
-    __cfPattern_2,
-    __cfPattern_3
+    __cfPattern_h2034208c1680,
+    __cfPattern_h5603ae6f4eee,
+    __cfPattern_h27bd6432e8db,
+    __cfPattern_1: __cfPattern_h2034208c1680,
+    __cfPattern_2: __cfPattern_h5603ae6f4eee,
+    __cfPattern_3: __cfPattern_h27bd6432e8db
 });

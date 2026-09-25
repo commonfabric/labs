@@ -15,7 +15,7 @@ interface PollState {
     users: Default<string[], [
     ]>;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h42f13f2d01f6 = __cfHelpers.lift<{
     userCount: number;
 }, boolean>(({ userCount }) => userCount > 0, {
     type: "object",
@@ -57,7 +57,7 @@ export default pattern((__cf_pattern_input) => {
                     type: "object",
                     properties: {}
                 }]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ userCount: userCount }), <div>has users</div>, null)}
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h42f13f2d01f6({ userCount: userCount }), <div>has users</div>, null)}
       </div>),
     };
 }, {
@@ -106,5 +106,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h42f13f2d01f6,
+    __cfLift_1: __cfLift_h42f13f2d01f6
 });

@@ -29,7 +29,7 @@ interface Input {
 interface Output {
     [UI]: VNode;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h9d9f829bb403 = __cfHelpers.lift<{
     file: {
         type: string;
     };
@@ -50,7 +50,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hbaf04710eb97 = __cfHelpers.lift<{
     file: {
         contentType: string;
     };
@@ -71,9 +71,9 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hfd0e1ffaf712 = __cfHelpers.pattern(__cf_pattern_input => {
     const file = __cf_pattern_input.key("element");
-    const isFolder = __cfLift_1({ file: {
+    const isFolder = __cfLift_h9d9f829bb403({ file: {
             type: file.key("type")
         } }).for("isFolder", true);
     const isOpenable = __cfHelpers.unless({
@@ -82,7 +82,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "boolean"
-    } as const satisfies __cfHelpers.JSONSchema, isFolder, __cfLift_2({ file: {
+    } as const satisfies __cfHelpers.JSONSchema, isFolder, __cfLift_hbaf04710eb97({ file: {
             contentType: file.key("contentType")
         } }).for(["isOpenable", 4], true)).for("isOpenable", true);
     return <span>{__cfHelpers.ifElse({
@@ -144,7 +144,7 @@ export default pattern((__cf_pattern_input) => {
     const files = __cf_pattern_input.key("files");
     return {
         [UI]: (<div>
-        {files.mapWithPattern(__cfPattern_1, {})}
+        {files.mapWithPattern(__cfPattern_hfd0e1ffaf712, {})}
       </div>),
     };
 }, {
@@ -190,7 +190,10 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfPattern_1
+    __cfLift_h9d9f829bb403,
+    __cfLift_hbaf04710eb97,
+    __cfPattern_hfd0e1ffaf712,
+    __cfLift_1: __cfLift_h9d9f829bb403,
+    __cfLift_2: __cfLift_hbaf04710eb97,
+    __cfPattern_1: __cfPattern_hfd0e1ffaf712
 });

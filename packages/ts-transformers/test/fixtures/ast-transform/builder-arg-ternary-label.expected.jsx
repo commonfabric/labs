@@ -36,7 +36,7 @@ interface CardState {
     users: Default<string[], [
     ]>;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h1eef49fc3d16 = __cfHelpers.lift<{
     users: {
         length: number;
     };
@@ -57,7 +57,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h98aa865b6fae = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         boundJoin: {
@@ -97,13 +97,13 @@ export default pattern((__cf_pattern_input) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["join the others", "be first"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ users: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h1eef49fc3d16({ users: {
                 length: users.key("length")
             } }), "join the others", "be first").for(["boundJoin", "label"], true)
     }).for({ stream: "boundJoin" }, true);
     return {
         [UI]: (<div>
-        <cf-button onClick={__cfHandler_1({
+        <cf-button onClick={__cfHandler_h98aa865b6fae({
             boundJoin: boundJoin
         })}>
           Join
@@ -161,6 +161,8 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     join,
-    __cfLift_1,
-    __cfHandler_1
+    __cfLift_h1eef49fc3d16,
+    __cfHandler_h98aa865b6fae,
+    __cfLift_1: __cfLift_h1eef49fc3d16,
+    __cfHandler_1: __cfHandler_h98aa865b6fae
 });

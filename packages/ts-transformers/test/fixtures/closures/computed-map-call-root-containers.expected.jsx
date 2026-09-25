@@ -18,7 +18,7 @@ interface Item {
 interface State {
     items: Item[];
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h4f0a5fd4ef76 = __cfHelpers.lift<{
     state: {
         items: Item[];
     };
@@ -67,7 +67,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h0a84b210883c = __cfHelpers.lift<{
     row: {
         done: boolean;
     };
@@ -88,7 +88,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h0a84b210883c_2 = __cfHelpers.lift<{
     row: {
         done: boolean;
     };
@@ -109,13 +109,13 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hf2ad469e50c6 = __cfHelpers.pattern(__cf_pattern_input => {
     const row = __cf_pattern_input.key("element");
     return ({
-        value: __cfLift_2({ row: {
+        value: __cfLift_h0a84b210883c({ row: {
                 done: row.key("done")
             } }).for(["__patternResult", "value"], true),
-        list: [__cfLift_3({ row: {
+        list: [__cfLift_h0a84b210883c_2({ row: {
                     done: row.key("done")
                 } }).for(["__patternResult", "list", 0], true)]
     });
@@ -153,7 +153,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
     },
     required: ["value", "list"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h0a84b210883c_3 = __cfHelpers.lift<{
     row: {
         done: boolean;
     };
@@ -174,9 +174,9 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hf3688bb5295a = __cfHelpers.pattern(__cf_pattern_input => {
     const row = __cf_pattern_input.key("element");
-    return __cfLift_4({ row: {
+    return __cfLift_h0a84b210883c_3({ row: {
             done: row.key("done")
         } }).for("__patternResult", true);
 }, {
@@ -212,11 +212,11 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 //   row => identity(row.done ? "Done" : "Pending")
 //   → row => lift(({ row }) => identity(row.done ? "Done" : "Pending"))(...)
 export default pattern((state) => {
-    const rows = __cfLift_1({ state: {
+    const rows = __cfLift_h4f0a5fd4ef76({ state: {
             items: state.key("items")
         } }).for("rows", true);
-    const views = rows.mapWithPattern(__cfPattern_1, {}).for("views", true);
-    const labels = rows.mapWithPattern(__cfPattern_2, {}).for("labels", true);
+    const views = rows.mapWithPattern(__cfPattern_hf2ad469e50c6, {}).for("views", true);
+    const labels = rows.mapWithPattern(__cfPattern_hf3688bb5295a, {}).for("labels", true);
     return { views, labels };
 }, {
     type: "object",
@@ -274,10 +274,16 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfPattern_1,
-    __cfLift_4,
-    __cfPattern_2
+    __cfLift_h4f0a5fd4ef76,
+    __cfLift_h0a84b210883c,
+    __cfLift_h0a84b210883c_2,
+    __cfPattern_hf2ad469e50c6,
+    __cfLift_h0a84b210883c_3,
+    __cfPattern_hf3688bb5295a,
+    __cfLift_1: __cfLift_h4f0a5fd4ef76,
+    __cfLift_2: __cfLift_h0a84b210883c,
+    __cfLift_3: __cfLift_h0a84b210883c_2,
+    __cfPattern_1: __cfPattern_hf2ad469e50c6,
+    __cfLift_4: __cfLift_h0a84b210883c_3,
+    __cfPattern_2: __cfPattern_hf3688bb5295a
 });

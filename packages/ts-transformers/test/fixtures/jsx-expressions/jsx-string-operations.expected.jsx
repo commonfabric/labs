@@ -18,7 +18,7 @@ interface State {
     message: string;
     count: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hb5d66f421e31 = __cfHelpers.lift<{
     state: {
         title: string;
         firstName: string;
@@ -47,7 +47,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h15e8e7a39b75 = __cfHelpers.lift<{
     state: {
         firstName: string;
         lastName: string;
@@ -72,7 +72,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_hab5f61386c04 = __cfHelpers.lift<{
     state: {
         firstName: string;
     };
@@ -93,7 +93,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h386a71e909e3 = __cfHelpers.lift<{
     state: {
         firstName: string;
     };
@@ -114,7 +114,7 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_5 = __cfHelpers.lift<{
+const __cfLift_h25caee64b0f1 = __cfHelpers.lift<{
     state: {
         firstName: string;
         lastName: string;
@@ -139,7 +139,7 @@ const __cfLift_5 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_6 = __cfHelpers.lift<{
+const __cfLift_hb9a61a2da304 = __cfHelpers.lift<{
     state: {
         title: string;
         firstName: string;
@@ -168,7 +168,7 @@ const __cfLift_6 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_7 = __cfHelpers.lift<{
+const __cfLift_ha60c52f437d2 = __cfHelpers.lift<{
     state: {
         firstName: string;
     };
@@ -189,7 +189,7 @@ const __cfLift_7 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_8 = __cfHelpers.lift<{
+const __cfLift_hfebbbd81c011 = __cfHelpers.lift<{
     state: {
         title: string;
     };
@@ -210,7 +210,7 @@ const __cfLift_8 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_9 = __cfHelpers.lift<{
+const __cfLift_h2167e67dc3af = __cfHelpers.lift<{
     state: {
         message: string;
     };
@@ -231,7 +231,7 @@ const __cfLift_9 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_10 = __cfHelpers.lift<{
+const __cfLift_hb6c794b52f0b = __cfHelpers.lift<{
     state: {
         firstName: string;
         count: number;
@@ -256,7 +256,7 @@ const __cfLift_10 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_11 = __cfHelpers.lift<{
+const __cfLift_h1b1fd4031ba9 = __cfHelpers.lift<{
     state: {
         firstName: string;
         count: number;
@@ -281,7 +281,7 @@ const __cfLift_11 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_12 = __cfHelpers.lift<{
+const __cfLift_hc4c271035fc3 = __cfHelpers.lift<{
     state: {
         count: number;
     };
@@ -311,55 +311,55 @@ export default pattern((state) => {
     return {
         [UI]: (<div>
         <h3>String Concatenation</h3>
-        <h1>{__cfLift_1({ state: {
+        <h1>{__cfLift_hb5d66f421e31({ state: {
                 title: state.key("title"),
                 firstName: state.key("firstName"),
                 lastName: state.key("lastName")
             } })}</h1>
-        <p>{__cfLift_2({ state: {
+        <p>{__cfLift_h15e8e7a39b75({ state: {
                 firstName: state.key("firstName"),
                 lastName: state.key("lastName")
             } })}</p>
-        <p>{__cfLift_3({ state: {
+        <p>{__cfLift_hab5f61386c04({ state: {
                 firstName: state.key("firstName")
             } })}</p>
 
         <h3>Template Literals</h3>
-        <p>{__cfLift_4({ state: {
+        <p>{__cfLift_h386a71e909e3({ state: {
                 firstName: state.key("firstName")
             } })}</p>
-        <p>{__cfLift_5({ state: {
+        <p>{__cfLift_h25caee64b0f1({ state: {
                 firstName: state.key("firstName"),
                 lastName: state.key("lastName")
             } })}</p>
-        <p>{__cfLift_6({ state: {
+        <p>{__cfLift_hb9a61a2da304({ state: {
                 title: state.key("title"),
                 firstName: state.key("firstName"),
                 lastName: state.key("lastName")
             } })}</p>
 
         <h3>String Methods</h3>
-        <p>Uppercase: {__cfLift_7({ state: {
+        <p>Uppercase: {__cfLift_ha60c52f437d2({ state: {
                 firstName: state.key("firstName")
             } })}</p>
-        <p>Lowercase: {__cfLift_8({ state: {
+        <p>Lowercase: {__cfLift_hfebbbd81c011({ state: {
                 title: state.key("title")
             } })}</p>
         <p>Length: {state.key("message", "length")}</p>
-        <p>Substring: {__cfLift_9({ state: {
+        <p>Substring: {__cfLift_h2167e67dc3af({ state: {
                 message: state.key("message")
             } })}</p>
 
         <h3>Mixed String and Number</h3>
-        <p>{__cfLift_10({ state: {
+        <p>{__cfLift_hb6c794b52f0b({ state: {
                 firstName: state.key("firstName"),
                 count: state.key("count")
             } })}</p>
-        <p>{__cfLift_11({ state: {
+        <p>{__cfLift_h1b1fd4031ba9({ state: {
                 firstName: state.key("firstName"),
                 count: state.key("count")
             } })}</p>
-        <p>Count as string: {__cfLift_12({ state: {
+        <p>Count as string: {__cfLift_hc4c271035fc3({ state: {
                 count: state.key("count")
             } })}</p>
       </div>),
@@ -418,16 +418,28 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4,
-    __cfLift_5,
-    __cfLift_6,
-    __cfLift_7,
-    __cfLift_8,
-    __cfLift_9,
-    __cfLift_10,
-    __cfLift_11,
-    __cfLift_12
+    __cfLift_hb5d66f421e31,
+    __cfLift_h15e8e7a39b75,
+    __cfLift_hab5f61386c04,
+    __cfLift_h386a71e909e3,
+    __cfLift_h25caee64b0f1,
+    __cfLift_hb9a61a2da304,
+    __cfLift_ha60c52f437d2,
+    __cfLift_hfebbbd81c011,
+    __cfLift_h2167e67dc3af,
+    __cfLift_hb6c794b52f0b,
+    __cfLift_h1b1fd4031ba9,
+    __cfLift_hc4c271035fc3,
+    __cfLift_1: __cfLift_hb5d66f421e31,
+    __cfLift_2: __cfLift_h15e8e7a39b75,
+    __cfLift_3: __cfLift_hab5f61386c04,
+    __cfLift_4: __cfLift_h386a71e909e3,
+    __cfLift_5: __cfLift_h25caee64b0f1,
+    __cfLift_6: __cfLift_hb9a61a2da304,
+    __cfLift_7: __cfLift_ha60c52f437d2,
+    __cfLift_8: __cfLift_hfebbbd81c011,
+    __cfLift_9: __cfLift_h2167e67dc3af,
+    __cfLift_10: __cfLift_hb6c794b52f0b,
+    __cfLift_11: __cfLift_h1b1fd4031ba9,
+    __cfLift_12: __cfLift_hc4c271035fc3
 });

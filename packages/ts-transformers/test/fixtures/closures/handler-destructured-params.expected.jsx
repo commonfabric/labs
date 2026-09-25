@@ -15,7 +15,7 @@ interface State {
     selectedValue: Cell<string>;
     lastItems: Cell<string>;
 }
-const __cfHandler_1 = __cfHelpers.handler({
+const __cfHandler_hc321cd91405f = __cfHelpers.handler({
     type: "object",
     properties: {
         detail: {
@@ -72,7 +72,7 @@ export default pattern((state) => {
         [UI]: (<cf-select $value={state.key("selectedValue")} items={[
                 { label: "Option A", value: "a" },
                 { label: "Option B", value: "b" },
-            ]} oncf-change={__cfHandler_1({
+            ]} oncf-change={__cfHandler_hc321cd91405f({
             state: {
                 selectedValue: state.key("selectedValue"),
                 lastItems: state.key("lastItems")
@@ -126,5 +126,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1
+    __cfHandler_hc321cd91405f,
+    __cfHandler_1: __cfHandler_hc321cd91405f
 });

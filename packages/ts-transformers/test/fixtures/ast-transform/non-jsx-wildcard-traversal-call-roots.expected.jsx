@@ -23,7 +23,7 @@ interface State {
         }
     ];
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h5e22b2ec64a3 = __cfHelpers.lift<{
     state: {
         wishes: [{ id: string; status: string; }, { id: string; status: string; }];
     };
@@ -56,7 +56,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h26eaecab77c8 = __cfHelpers.lift<{
     state: {
         wishes: [{ id: string; status: string; }, { id: string; status: string; }];
     };
@@ -92,7 +92,7 @@ const __cfLift_2 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_ha0b1686d00f1 = __cfHelpers.lift<{
     state: {
         wishes: [{ id: string; status: string; }, { id: string; status: string; }];
     };
@@ -128,7 +128,7 @@ const __cfLift_3 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h02687c7c0570 = __cfHelpers.lift<{
     state: {
         wishes: [{ id: string; status: string; }, { id: string; status: string; }];
     };
@@ -170,16 +170,16 @@ const __cfLift_4 = __cfHelpers.lift<{
 // FIXTURE: non-jsx-wildcard-traversal-call-roots
 // Verifies: wildcard traversal calls lower as whole call roots outside JSX
 export default pattern((state) => ({
-    serialized: __cfLift_1({ state: {
+    serialized: __cfLift_h5e22b2ec64a3({ state: {
             wishes: state.key("wishes")
         } }).for(["__patternResult", "serialized"], true),
-    keys: __cfLift_2({ state: {
+    keys: __cfLift_h26eaecab77c8({ state: {
             wishes: state.key("wishes")
         } }).for(["__patternResult", "keys"], true),
-    values: __cfLift_3({ state: {
+    values: __cfLift_ha0b1686d00f1({ state: {
             wishes: state.key("wishes")
         } }).for(["__patternResult", "values"], true),
-    entries: __cfLift_4({ state: {
+    entries: __cfLift_h02687c7c0570({ state: {
             wishes: state.key("wishes")
         } }).for(["__patternResult", "entries"], true)
 }), {
@@ -236,8 +236,12 @@ export default pattern((state) => ({
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4
+    __cfLift_h5e22b2ec64a3,
+    __cfLift_h26eaecab77c8,
+    __cfLift_ha0b1686d00f1,
+    __cfLift_h02687c7c0570,
+    __cfLift_1: __cfLift_h5e22b2ec64a3,
+    __cfLift_2: __cfLift_h26eaecab77c8,
+    __cfLift_3: __cfLift_ha0b1686d00f1,
+    __cfLift_4: __cfLift_h02687c7c0570
 });

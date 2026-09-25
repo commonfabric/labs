@@ -11,7 +11,7 @@ import { Cell, ifElse, pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hd9841d3f637b = __cfHelpers.lift<{
     showHistory: boolean;
     messageCount: number;
     dismissedIndex: __cfHelpers.ReadonlyCell<number>;
@@ -58,7 +58,7 @@ export default pattern((__cf_pattern_input) => {
                     type: "object",
                     properties: {}
                 }]
-        } as const satisfies __cfHelpers.JSONSchema, {} as const satisfies __cfHelpers.JSONSchema, __cfLift_1({
+        } as const satisfies __cfHelpers.JSONSchema, {} as const satisfies __cfHelpers.JSONSchema, __cfLift_hd9841d3f637b({
             showHistory: showHistory,
             messageCount: messageCount,
             dismissedIndex: dismissedIndex
@@ -114,5 +114,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_hd9841d3f637b,
+    __cfLift_1: __cfLift_hd9841d3f637b
 });

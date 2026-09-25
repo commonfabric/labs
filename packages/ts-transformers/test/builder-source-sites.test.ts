@@ -111,7 +111,7 @@ describe("builder-source-sites", () => {
       );
 
       const hoistedLift = Object.entries(sidecar?.sites ?? {}).find(
-        ([symbol]) => /^__cfLift_\d+$/.test(symbol),
+        ([symbol]) => /^__cfLift_h[0-9a-f]+(?:_\d+)?$/.test(symbol),
       );
       expect(hoistedLift?.[1]).toEqual({
         ...locationOf("() => value + 2"),

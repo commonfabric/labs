@@ -11,7 +11,7 @@ import { Writable, computed, pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h25d077160003 = __cfHelpers.lift<{
     value: __cfHelpers.ReadonlyCell<number>;
     config: { multiplier: number; divisor: number; };
     key: string;
@@ -52,7 +52,7 @@ export default pattern(() => {
     } as const satisfies __cfHelpers.JSONSchema).for("value", true);
     const config = { multiplier: 2, divisor: 5 };
     const key = "multiplier";
-    const result = __cfLift_1({
+    const result = __cfLift_h25d077160003({
         value: value,
         config: config,
         key: key
@@ -65,5 +65,6 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h25d077160003,
+    __cfLift_1: __cfLift_h25d077160003
 });

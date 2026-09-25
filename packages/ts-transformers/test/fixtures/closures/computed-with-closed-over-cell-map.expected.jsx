@@ -11,7 +11,7 @@ import { Writable, computed, pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h0d543629e9e2 = __cfHelpers.lift<{
     n: number;
     multiplier: __cfHelpers.Cell<number>;
 }, number>(({ n, multiplier }) => n * multiplier.get(), {
@@ -29,10 +29,10 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h8e7cbfd4f5fa = __cfHelpers.pattern(__cf_pattern_input => {
     const n = __cf_pattern_input.key("element");
     const multiplier = __cf_pattern_input.key("params", "multiplier");
-    return __cfLift_1({
+    return __cfLift_h0d543629e9e2({
         n: n,
         multiplier: multiplier
     }).for("__patternResult", true);
@@ -57,10 +57,10 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h76dbf7cc5b9e = __cfHelpers.lift<{
     numbers: __cfHelpers.ReadonlyCell<number[]>;
     multiplier: __cfHelpers.ReadonlyCell<number>;
-}, number[]>(({ numbers, multiplier }) => numbers.mapWithPattern(__cfPattern_1, {
+}, number[]>(({ numbers, multiplier }) => numbers.mapWithPattern(__cfPattern_h8e7cbfd4f5fa, {
     multiplier: multiplier
 }), {
     type: "object",
@@ -104,7 +104,7 @@ export default pattern(() => {
     // The computed gets transformed to the lift-applied form lift(() => numbers.map(...))({})
     // Inside a lift-applied computation, .map on a closed-over Cell should STILL be transformed to mapWithPattern
     // because Cells need the pattern-based mapping even when unwrapped
-    const doubled = __cfLift_2({
+    const doubled = __cfLift_h76dbf7cc5b9e({
         numbers: numbers,
         multiplier: multiplier
     }).for("doubled", true);
@@ -119,7 +119,10 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1,
-    __cfLift_2
+    __cfLift_h0d543629e9e2,
+    __cfPattern_h8e7cbfd4f5fa,
+    __cfLift_h76dbf7cc5b9e,
+    __cfLift_1: __cfLift_h0d543629e9e2,
+    __cfPattern_1: __cfPattern_h8e7cbfd4f5fa,
+    __cfLift_2: __cfLift_h76dbf7cc5b9e
 });

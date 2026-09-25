@@ -11,7 +11,7 @@ import { cell, pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hf4e7d1ab5fb4 = __cfHelpers.lift<{
     user: __cfHelpers.Cell<{ active: boolean; verified: boolean; name: string; }>;
 }, boolean>(({ user }) => user.get().active && user.get().verified, {
     type: "object",
@@ -34,7 +34,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h7c79f9ddc33e = __cfHelpers.lift<{
     user: __cfHelpers.Cell<{ active: boolean; verified: boolean; name: string; }>;
 }, string>(({ user }) => user.get().name, {
     type: "object",
@@ -96,7 +96,7 @@ export default pattern((_state) => {
                     type: "object",
                     properties: {}
                 }]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ user: user }), <span>Welcome, {__cfLift_2({ user: user })}!</span>)}
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_hf4e7d1ab5fb4({ user: user }), <span>Welcome, {__cfLift_h7c79f9ddc33e({ user: user })}!</span>)}
       </div>),
     };
 }, false as const satisfies __cfHelpers.JSONSchema, {
@@ -133,6 +133,8 @@ export default pattern((_state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_hf4e7d1ab5fb4,
+    __cfLift_h7c79f9ddc33e,
+    __cfLift_1: __cfLift_hf4e7d1ab5fb4,
+    __cfLift_2: __cfLift_h7c79f9ddc33e
 });

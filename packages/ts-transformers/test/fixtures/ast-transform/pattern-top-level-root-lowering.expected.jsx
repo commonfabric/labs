@@ -12,7 +12,7 @@ const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
 const identity = __cfHardenFn(<T,>(value: T) => value);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h456b5e8dcaaa = __cfHelpers.lift<{
     state: {
         user: {
             name: string;
@@ -41,7 +41,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h571176a622b0 = __cfHelpers.lift<{
     state: {
         maybeUser?: { name: string; } | undefined;
     };
@@ -67,7 +67,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["string", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_hc153d1b5c82c = __cfHelpers.lift<{
     state: {
         a: number;
         b: number;
@@ -92,7 +92,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h1f431b9b430a = __cfHelpers.lift<{
     state: {
         float: string;
     };
@@ -113,7 +113,7 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_5 = __cfHelpers.lift<{
+const __cfLift_h10bbe946665d = __cfHelpers.lift<{
     state: {
         label?: string | null | undefined;
     };
@@ -143,25 +143,25 @@ const __cfLift_5 = __cfHelpers.lift<{
 //   state.label ?? "Pending"      -> lift-applied nullish root
 //   state.items?.[0]              -> lowered optional element access
 export default pattern((state) => {
-    const label = __cfLift_1({ state: {
+    const label = __cfLift_h456b5e8dcaaa({ state: {
             user: {
                 name: state.key("user", "name")
             }
         } }).for("label", true);
-    const maybeLabel = __cfLift_2({ state: {
+    const maybeLabel = __cfLift_h571176a622b0({ state: {
             maybeUser: state.key("maybeUser")
         } }).for("maybeLabel", true);
     return {
         label,
         maybeLabel,
-        maxValue: __cfLift_3({ state: {
+        maxValue: __cfLift_hc153d1b5c82c({ state: {
                 a: state.key("a"),
                 b: state.key("b")
             } }).for(["__patternResult", "maxValue"], true),
-        parsedValue: __cfLift_4({ state: {
+        parsedValue: __cfLift_h1f431b9b430a({ state: {
                 float: state.key("float")
             } }).for(["__patternResult", "parsedValue"], true),
-        fallbackLabel: __cfLift_5({ state: {
+        fallbackLabel: __cfLift_h10bbe946665d({ state: {
                 label: state.key("label")
             } }).for(["__patternResult", "fallbackLabel"], true),
         firstItem: state.key("items", "0")
@@ -239,9 +239,14 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4,
-    __cfLift_5
+    __cfLift_h456b5e8dcaaa,
+    __cfLift_h571176a622b0,
+    __cfLift_hc153d1b5c82c,
+    __cfLift_h1f431b9b430a,
+    __cfLift_h10bbe946665d,
+    __cfLift_1: __cfLift_h456b5e8dcaaa,
+    __cfLift_2: __cfLift_h571176a622b0,
+    __cfLift_3: __cfLift_hc153d1b5c82c,
+    __cfLift_4: __cfLift_h1f431b9b430a,
+    __cfLift_5: __cfLift_h10bbe946665d
 });

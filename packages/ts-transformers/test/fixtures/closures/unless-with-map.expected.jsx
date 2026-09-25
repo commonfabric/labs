@@ -26,7 +26,7 @@ interface PatternInput {
     items: Cell<Default<Item[], [
     ]>>;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hc3ba77b76767 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return <li>{item.key("label")}</li>;
 }, {
@@ -89,7 +89,7 @@ export default pattern((__cf_pattern_input) => {
             items: {}
         } as const satisfies __cfHelpers.JSONSchema, {
             asCell: ["cell"]
-        } as const satisfies __cfHelpers.JSONSchema, customContent, items.mapWithPattern(__cfPattern_1, {}))}
+        } as const satisfies __cfHelpers.JSONSchema, customContent, items.mapWithPattern(__cfPattern_hc3ba77b76767, {}))}
       </div>),
     };
 }, {
@@ -153,5 +153,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_hc3ba77b76767,
+    __cfPattern_1: __cfPattern_hc3ba77b76767
 });

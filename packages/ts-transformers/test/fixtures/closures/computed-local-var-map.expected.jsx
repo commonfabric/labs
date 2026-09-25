@@ -22,7 +22,7 @@ interface Item {
     name: string;
     price: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hd71ecf3d0bc1 = __cfHelpers.lift<{
     items: {
         price: number;
     }[];
@@ -63,7 +63,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h2af3b9ccad92 = __cfHelpers.lift<{
     filtered: {
         name: string;
     }[];
@@ -122,10 +122,10 @@ const __cfLift_2 = __cfHelpers.lift<{
 //   This is a negative test for reactive .map() detection on local aliases.
 export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
-    const filtered = __cfLift_1({ items: items }).for("filtered", true);
+    const filtered = __cfLift_hd71ecf3d0bc1({ items: items }).for("filtered", true);
     return {
         [UI]: (<div>
-        {__cfLift_2({ filtered: filtered })}
+        {__cfLift_h2af3b9ccad92({ filtered: filtered })}
       </div>),
     };
 }, {
@@ -187,6 +187,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_hd71ecf3d0bc1,
+    __cfLift_h2af3b9ccad92,
+    __cfLift_1: __cfLift_hd71ecf3d0bc1,
+    __cfLift_2: __cfLift_h2af3b9ccad92
 });

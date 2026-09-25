@@ -85,7 +85,7 @@ const Sub = pattern((__cf_pattern_input) => {
 export interface Input {
     items: Item[];
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hfb54462a066e = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return Sub({ item });
 }, {
@@ -133,7 +133,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
-    const subs = items.mapWithPattern(__cfPattern_1, {}).for("subs", true);
+    const subs = items.mapWithPattern(__cfPattern_hfb54462a066e, {}).for("subs", true);
     return { subs };
 }, {
     type: "object",
@@ -198,5 +198,6 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     Sub,
-    __cfPattern_1
+    __cfPattern_hfb54462a066e,
+    __cfPattern_1: __cfPattern_hfb54462a066e
 });

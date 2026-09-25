@@ -11,7 +11,7 @@ import { computed, pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h0386b6a2a2c4 = __cfHelpers.lift<{
     items: number[] & {} & { [SELF]: Reactive<any>; };
 }, number[]>(({ items }) => items.map((n) => n * 2), {
     type: "object",
@@ -39,7 +39,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 export default pattern((items) => {
     // items is Reactive<number[]> as a pattern parameter
     // Inside the computed callback (which becomes a lift-applied computation), items.map should NOT be transformed
-    const doubled = __cfLift_1({ items: items }).for("doubled", true);
+    const doubled = __cfLift_h0386b6a2a2c4({ items: items }).for("doubled", true);
     return doubled;
 }, {
     type: "array",
@@ -56,5 +56,6 @@ export default pattern((items) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h0386b6a2a2c4,
+    __cfLift_1: __cfLift_h0386b6a2a2c4
 });

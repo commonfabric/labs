@@ -11,7 +11,7 @@ import { cell, pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hd337c2a65e32 = __cfHelpers.lift<{
     primary: __cfHelpers.Cell<string>;
     secondary: __cfHelpers.Cell<string>;
 }, number>(({ primary, secondary }) => primary.get().length || secondary.get().length, {
@@ -30,7 +30,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h18cb601b88ef = __cfHelpers.lift<{
     items: __cfHelpers.Cell<string[]>;
 }, number | undefined>(({ items }) => items.get()[0]?.length || items.get()[1]?.length, {
     type: "object",
@@ -74,7 +74,7 @@ export default pattern((_state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: ["number", "string"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_hd337c2a65e32({
             primary: primary,
             secondary: secondary
         }), "no content")}</span>
@@ -86,7 +86,7 @@ export default pattern((_state) => {
             type: "number"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "number"
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_2({ items: items }), 0)}</span>
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h18cb601b88ef({ items: items }), 0)}</span>
       </div>),
     };
 }, false as const satisfies __cfHelpers.JSONSchema, {
@@ -123,6 +123,8 @@ export default pattern((_state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_hd337c2a65e32,
+    __cfLift_h18cb601b88ef,
+    __cfLift_1: __cfLift_hd337c2a65e32,
+    __cfLift_2: __cfLift_h18cb601b88ef
 });

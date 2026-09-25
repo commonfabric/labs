@@ -12,7 +12,7 @@ const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
 const double = __cfHardenFn((x: number) => x * 2);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_ha35b82f2d059 = __cfHelpers.lift<{
     state: {
         count: number;
     };
@@ -40,7 +40,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 //   double(state.count + 1)   -> lift(({ state }) => double(state.count + 1))({ state })
 export default pattern((state) => ({
     staticDoubled: double(2),
-    doubled: __cfLift_1({ state: {
+    doubled: __cfLift_ha35b82f2d059({ state: {
             count: state.key("count")
         } }).for(["__patternResult", "doubled"], true)
 }), {
@@ -67,5 +67,6 @@ export default pattern((state) => ({
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_ha35b82f2d059,
+    __cfLift_1: __cfLift_ha35b82f2d059
 });

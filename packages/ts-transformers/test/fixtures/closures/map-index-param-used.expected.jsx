@@ -19,7 +19,7 @@ interface State {
     items: Item[];
     offset: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hb484e503a22f = __cfHelpers.lift<{
     index: number;
     state: {
         offset: number;
@@ -44,12 +44,12 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h8a25b63df1cb = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const index = __cf_pattern_input.key("index");
     const state = __cf_pattern_input.key("params", "state");
     return (<div>
-            Item #{__cfLift_1({
+            Item #{__cfLift_hb484e503a22f({
         index: index,
         state: {
             offset: state.key("offset")
@@ -118,7 +118,7 @@ export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Uses both index parameter and captures state.offset */}
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_h8a25b63df1cb, {
                 state: {
                     offset: state.key("offset")
                 }
@@ -187,6 +187,8 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_hb484e503a22f,
+    __cfPattern_h8a25b63df1cb,
+    __cfLift_1: __cfLift_hb484e503a22f,
+    __cfPattern_1: __cfPattern_h8a25b63df1cb
 });

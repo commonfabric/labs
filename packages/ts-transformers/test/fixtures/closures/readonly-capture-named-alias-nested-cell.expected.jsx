@@ -26,7 +26,7 @@ type EntriesValue = Entry[] | Default<[
 // Reads the cell only (passed by reference, never written) — makes the capture
 // read-only and triggers the Cell -> ReadonlyCell narrowing.
 const firstName = __cfHardenFn((entries: Cell<EntriesValue>): string => (entries.get() ?? [])[0]?.profile.get().name ?? "");
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h66ce37b0964f = __cfHelpers.lift<{
     entries: __cfHelpers.ReadonlyCell<EntriesValue>;
 }, string>(({ entries }) => firstName(entries), {
     type: "object",
@@ -109,7 +109,7 @@ export default pattern(() => {
             }
         }
     } as const satisfies __cfHelpers.JSONSchema).for("entries", true);
-    return __cfLift_1({ entries: entries }).for("__patternResult", true);
+    return __cfLift_h66ce37b0964f({ entries: entries }).for("__patternResult", true);
 }, false as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
@@ -117,5 +117,6 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h66ce37b0964f,
+    __cfLift_1: __cfLift_h66ce37b0964f
 });

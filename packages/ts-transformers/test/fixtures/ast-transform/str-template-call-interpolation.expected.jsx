@@ -18,7 +18,7 @@ function format(n: number): string {
     return `#${n}`;
 }
 __cfHardenFn(format);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h4cf6c56203e6 = __cfHelpers.lift<{
     cell: {
         value: number;
     };
@@ -39,7 +39,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h6e766619f6ec = __cfHelpers.lift<{
     cell: {
         value: number;
     };
@@ -74,9 +74,9 @@ const __cfLift_2 = __cfHelpers.lift<{
 //   call-expressions were never classified as lowerable expression sites.
 export default pattern((cell) => {
     return {
-        [NAME]: str `bare ${cell.key("value")} call ${__cfLift_1({ cell: {
+        [NAME]: str `bare ${cell.key("value")} call ${__cfLift_h4cf6c56203e6({ cell: {
                 value: cell.key("value")
-            } })} math ${__cfLift_2({ cell: {
+            } })} math ${__cfLift_h6e766619f6ec({ cell: {
                 value: cell.key("value")
             } })}`,
         value: cell.key("value"),
@@ -105,6 +105,8 @@ export default pattern((cell) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_h4cf6c56203e6,
+    __cfLift_h6e766619f6ec,
+    __cfLift_1: __cfLift_h4cf6c56203e6,
+    __cfLift_2: __cfLift_h6e766619f6ec
 });

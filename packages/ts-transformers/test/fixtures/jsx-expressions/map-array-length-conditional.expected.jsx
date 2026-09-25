@@ -11,7 +11,7 @@ import { cell, pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h66c4b91b886a = __cfHelpers.lift<{
     list: __cfHelpers.Cell<string[]>;
 }, boolean>(({ list }) => list.get().length > 0, {
     type: "object",
@@ -28,7 +28,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hd2753091aa55 = __cfHelpers.pattern(__cf_pattern_input => {
     const name = __cf_pattern_input.key("element");
     return (<span>{name}</span>);
 }, {
@@ -86,8 +86,8 @@ export default pattern((_state) => {
                     type: "object",
                     properties: {}
                 }]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ list: list }), <div>
-            {list.mapWithPattern(__cfPattern_1, {})}
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h66c4b91b886a({ list: list }), <div>
+            {list.mapWithPattern(__cfPattern_hd2753091aa55, {})}
           </div>)}
       </div>),
     };
@@ -125,6 +125,8 @@ export default pattern((_state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_h66c4b91b886a,
+    __cfPattern_hd2753091aa55,
+    __cfLift_1: __cfLift_h66c4b91b886a,
+    __cfPattern_1: __cfPattern_hd2753091aa55
 });

@@ -16,7 +16,7 @@ interface Problem {
     discount: number;
     tax: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h2bb23d5a01ed = __cfHelpers.lift<{
     price: number;
     discount: number;
 }, number>(({ price, discount }) => price - discount, {
@@ -33,7 +33,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h1e98e70f8a68 = __cfHelpers.lift<{
     price: number;
     discount: number;
     tax: number;
@@ -65,11 +65,11 @@ export default pattern((__cf_pattern_input) => {
     return {
         [UI]: (<div>
           <p>Price: {price}</p>
-          <p>Discount: {__cfLift_1({
+          <p>Discount: {__cfLift_h2bb23d5a01ed({
             price: price,
             discount: discount
         })}</p>
-          <p>With tax: {__cfLift_2({
+          <p>With tax: {__cfLift_h1e98e70f8a68({
             price: price,
             discount: discount,
             tax: tax
@@ -124,6 +124,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_h2bb23d5a01ed,
+    __cfLift_h1e98e70f8a68,
+    __cfLift_1: __cfLift_h2bb23d5a01ed,
+    __cfLift_2: __cfLift_h1e98e70f8a68
 });

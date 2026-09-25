@@ -14,7 +14,7 @@ const __cfAmdHooks = undefined;
 interface Item {
     name: string;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hfe105d59f1b1 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return <span>{item.key("name")}</span>;
 }, {
@@ -80,7 +80,7 @@ export default pattern(() => {
         result: []
     }), items = __cf_destructure_1.key("result").for("items", true);
     return {
-        [UI]: <div>{items.mapWithPattern(__cfPattern_1, {})}</div>,
+        [UI]: <div>{items.mapWithPattern(__cfPattern_hfe105d59f1b1, {})}</div>,
     };
 }, {
     type: "object",
@@ -120,5 +120,6 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_hfe105d59f1b1,
+    __cfPattern_1: __cfPattern_hfe105d59f1b1
 });

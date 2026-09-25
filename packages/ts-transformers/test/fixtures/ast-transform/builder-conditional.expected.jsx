@@ -15,7 +15,7 @@ interface PatternState {
     count: Default<number, 0>;
     label: Default<string, "">;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hbb9e3a8118a5 = __cfHelpers.lift<{
     state: {
         count: number;
     };
@@ -62,7 +62,7 @@ export default pattern((state) => {
                     type: "object",
                     properties: {}
                 }]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_hbb9e3a8118a5({ state: {
                 count: state.key("count")
             } }), <p>Positive</p>, <p>Non-positive</p>)}
       </section>),
@@ -117,5 +117,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_hbb9e3a8118a5,
+    __cfLift_1: __cfLift_hbb9e3a8118a5
 });

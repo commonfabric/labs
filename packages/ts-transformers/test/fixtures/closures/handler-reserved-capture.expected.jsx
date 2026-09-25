@@ -14,7 +14,7 @@ const __cfAmdHooks = undefined;
 interface State {
     label: string;
 }
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h194ddf07454f = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         __cf_handler_event: {
@@ -30,7 +30,7 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
 export default pattern((state) => {
     const __cf_handler_event = state.key("label");
     return {
-        [UI]: (<button type="button" onClick={__cfHandler_1({
+        [UI]: (<button type="button" onClick={__cfHandler_h194ddf07454f({
             __cf_handler_event: __cf_handler_event
         })}>
         Echo
@@ -78,5 +78,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1
+    __cfHandler_h194ddf07454f,
+    __cfHandler_1: __cfHandler_h194ddf07454f
 });

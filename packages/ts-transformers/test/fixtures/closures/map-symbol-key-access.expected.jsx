@@ -18,7 +18,7 @@ interface Entry {
 interface Input {
     items: Entry[];
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hb82b3fcbd408 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return ({ n: item.key(__cfHelpers.NAME), u: item.key(__cfHelpers.UI) });
 }, {
@@ -62,7 +62,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 // Context: Symbol-keyed property access (NAME, UI) is lowered to .key() with helper references
 const _p = pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
-    return items.mapWithPattern(__cfPattern_1, {});
+    return items.mapWithPattern(__cfPattern_hb82b3fcbd408, {});
 }, {
     type: "object",
     properties: {
@@ -108,5 +108,6 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     _p,
-    __cfPattern_1
+    __cfPattern_hb82b3fcbd408,
+    __cfPattern_1: __cfPattern_hb82b3fcbd408
 });

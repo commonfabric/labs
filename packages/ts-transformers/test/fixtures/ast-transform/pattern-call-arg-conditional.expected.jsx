@@ -12,7 +12,7 @@ const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
 const identity = __cfHardenFn(<T,>(value: T) => value);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h4318ee2c2a91 = __cfHelpers.lift<{
     state: {
         done: boolean;
     };
@@ -39,7 +39,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 //   const label = identity(state.done ? "Done" : "Pending")
 //   → const label = lift(({ state }) => identity(state.done ? "Done" : "Pending"))({ state })
 export default pattern((state) => {
-    const label = __cfLift_1({ state: {
+    const label = __cfLift_h4318ee2c2a91({ state: {
             done: state.key("done")
         } }).for("label", true);
     return { label };
@@ -64,5 +64,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h4318ee2c2a91,
+    __cfLift_1: __cfLift_h4318ee2c2a91
 });

@@ -15,7 +15,7 @@ interface State {
     values: number[];
     multiplier: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h15c6732687e5 = __cfHelpers.lift<{
     value: number;
     state: {
         multiplier: number;
@@ -40,10 +40,10 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h822e46241699 = __cfHelpers.pattern(__cf_pattern_input => {
     const value = __cf_pattern_input.key("element");
     const state = __cf_pattern_input.key("params", "state");
-    return (<span>{__cfLift_1({
+    return (<span>{__cfLift_h15c6732687e5({
         value: value,
         state: {
             multiplier: state.key("multiplier")
@@ -110,7 +110,7 @@ export default pattern((state) => {
     } as const satisfies __cfHelpers.JSONSchema).for("typedValues", true);
     return {
         [UI]: (<div>
-        {typedValues.mapWithPattern(__cfPattern_1, {
+        {typedValues.mapWithPattern(__cfPattern_h822e46241699, {
                 state: {
                     multiplier: state.key("multiplier")
                 }
@@ -165,6 +165,8 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_h15c6732687e5,
+    __cfPattern_h822e46241699,
+    __cfLift_1: __cfLift_h15c6732687e5,
+    __cfPattern_1: __cfPattern_h822e46241699
 });

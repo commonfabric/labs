@@ -20,7 +20,7 @@ interface LinksState {
     ]>;
     myName: Default<string, "">;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h578766f76305 = __cfHelpers.lift<{
     myName: Default<string, "">;
 }, string>(({ myName }) => myName.trim(), {
     type: "object",
@@ -34,7 +34,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h44217494a20f = __cfHelpers.lift<{
     entry: {
         name: string;
     };
@@ -59,7 +59,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h693560d5b14a = __cfHelpers.pattern(__cf_pattern_input => {
     const entry = __cf_pattern_input.key("element");
     const me = __cf_pattern_input.key("params", "me");
     return (__cfHelpers.ifElse({
@@ -78,7 +78,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                 type: "object",
                 properties: {}
             }]
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_2({
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_h44217494a20f({
         entry: {
             name: entry.key("name")
         },
@@ -150,10 +150,10 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((__cf_pattern_input) => {
     const links = __cf_pattern_input.key("links");
     const myName = __cf_pattern_input.key("myName");
-    const me = __cfLift_1({ myName: myName }).for("me", true);
+    const me = __cfLift_h578766f76305({ myName: myName }).for("me", true);
     return {
         [UI]: (<div>
-        {links.mapWithPattern(__cfPattern_1, {
+        {links.mapWithPattern(__cfPattern_h693560d5b14a, {
                 me: me
             })}
       </div>),
@@ -222,7 +222,10 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfPattern_1
+    __cfLift_h578766f76305,
+    __cfLift_h44217494a20f,
+    __cfPattern_h693560d5b14a,
+    __cfLift_1: __cfLift_h578766f76305,
+    __cfLift_2: __cfLift_h44217494a20f,
+    __cfPattern_1: __cfPattern_h693560d5b14a
 });

@@ -78,7 +78,7 @@ const passthroughLabels = lift((labels: string[]) => labels, {
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h501ebd2fc822 = __cfHelpers.lift<{
     state: {
         threads: Thread[];
         showFlagged: boolean;
@@ -220,7 +220,7 @@ state.threads.map((thread, outerIndex) => ({
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hcca64af3f49f = __cfHelpers.lift<{
     visibleComments: Comment[];
 }, Comment[]>(({ visibleComments }) => visibleComments, {
     type: "object",
@@ -285,7 +285,7 @@ const __cfLift_2 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h237caf5ae9ed = __cfHelpers.lift<{
     reboundIndex: number;
     outerIndex: number;
 }, boolean>(({ reboundIndex, outerIndex }) => reboundIndex === outerIndex, {
@@ -302,7 +302,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h2c81ffb44100 = __cfHelpers.lift<{
     state: {
         lane: string;
     };
@@ -335,7 +335,7 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h9876d1a32b2f = __cfHelpers.pattern(__cf_pattern_input => {
     const comment = __cf_pattern_input.key("element");
     const reboundIndex = __cf_pattern_input.key("index");
     const outerIndex = __cf_pattern_input.params.outerIndex;
@@ -349,10 +349,10 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         type: "string"
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "string"
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_3({
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_h237caf5ae9ed({
         reboundIndex: reboundIndex,
         outerIndex: outerIndex
-    }), __cfLift_4({
+    }), __cfLift_h2c81ffb44100({
         state: {
             lane: state.key("lane")
         },
@@ -420,7 +420,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_5 = __cfHelpers.lift<{
+const __cfLift_h7a3748fcc627 = __cfHelpers.lift<{
     edgeIndex: number;
     outerIndex: number;
 }, boolean>(({ edgeIndex, outerIndex }) => edgeIndex === outerIndex, {
@@ -437,7 +437,7 @@ const __cfLift_5 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_6 = __cfHelpers.lift<{
+const __cfLift_hce182c9f2358 = __cfHelpers.lift<{
     state: {
         lane: string;
     };
@@ -462,7 +462,7 @@ const __cfLift_6 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_he535898b6b88 = __cfHelpers.pattern(__cf_pattern_input => {
     const edge = __cf_pattern_input.key("element");
     const edgeIndex = __cf_pattern_input.key("index");
     const outerIndex = __cf_pattern_input.params.outerIndex;
@@ -476,10 +476,10 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
         type: "string"
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "string"
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_5({
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_h7a3748fcc627({
         edgeIndex: edgeIndex,
         outerIndex: outerIndex
-    }), __cfLift_6({
+    }), __cfLift_hce182c9f2358({
         state: {
             lane: state.key("lane")
         },
@@ -536,7 +536,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_7 = __cfHelpers.lift<{
+const __cfLift_h99f835fa1c74 = __cfHelpers.lift<{
     visibleThreads: {
         thread: {
             title: string;
@@ -562,7 +562,7 @@ visibleThreads.map(({ thread, outerIndex, visibleComments }) => {
     const plainSeparators = ["top", "bottom"].map((edge) => `${thread.title}-${edge}`);
     const liftedSeparators = passthroughLabels(plainSeparators).for("liftedSeparators", true);
     // [TRANSFORM] computed() → lift() (nested): captures visibleComments from outer computed scope
-    const reboundComments = __cfLift_2({ visibleComments: visibleComments }).for("reboundComments", true);
+    const reboundComments = __cfLift_hcca64af3f49f({ visibleComments: visibleComments }).for("reboundComments", true);
     return (<article>
           <h2>{thread.title}</h2>
           {/* [TRANSFORM] .map() stays plain: visibleComments is destructured from captured computed input */}
@@ -600,7 +600,7 @@ visibleThreads.map(({ thread, outerIndex, visibleComments }) => {
             </div>))}
           {/* [TRANSFORM] .map() → mapWithPattern: reboundComments is output of nested computed() — reactive even inside outer computed */}
           {/* [TRANSFORM] closure captures: outerIndex (via params opaque), state.lane (via params reactive .key()) */}
-          {reboundComments.mapWithPattern(__cfPattern_1, {
+          {reboundComments.mapWithPattern(__cfPattern_h9876d1a32b2f, {
             outerIndex: outerIndex,
             state: {
                 lane: state.lane
@@ -608,7 +608,7 @@ visibleThreads.map(({ thread, outerIndex, visibleComments }) => {
         })}
           {/* [TRANSFORM] .map() → mapWithPattern: liftedSeparators is output of lift() — reactive even inside outer computed */}
           {/* [TRANSFORM] closure captures: outerIndex (via params opaque), state.lane (via params reactive .key()) */}
-          {liftedSeparators.mapWithPattern(__cfPattern_2, {
+          {liftedSeparators.mapWithPattern(__cfPattern_he535898b6b88, {
             outerIndex: outerIndex,
             state: {
                 lane: state.lane
@@ -717,7 +717,7 @@ visibleThreads.map(({ thread, outerIndex, visibleComments }) => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_8 = __cfHelpers.lift<{
+const __cfLift_hc40d6438fae7 = __cfHelpers.lift<{
     labelIndex: number;
 }, boolean>(({ labelIndex }) => labelIndex === 0, {
     type: "object",
@@ -730,7 +730,7 @@ const __cfLift_8 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_9 = __cfHelpers.lift<{
+const __cfLift_h4866d7f7ca10 = __cfHelpers.lift<{
     state: {
         lane: string;
     };
@@ -755,7 +755,7 @@ const __cfLift_9 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hc09ff3953e73 = __cfHelpers.pattern(__cf_pattern_input => {
     const label = __cf_pattern_input.key("element");
     const labelIndex = __cf_pattern_input.key("index");
     const state = __cf_pattern_input.key("params", "state");
@@ -768,7 +768,7 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
         type: "string"
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "string"
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_8({ labelIndex: labelIndex }), __cfLift_9({
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_hc40d6438fae7({ labelIndex: labelIndex }), __cfLift_h4866d7f7ca10({
         state: {
             lane: state.key("lane")
         },
@@ -822,7 +822,7 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_4 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hcb517b892e1a = __cfHelpers.pattern(__cf_pattern_input => {
     const row = __cf_pattern_input.key("element");
     const rowIndex = __cf_pattern_input.key("index");
     return (<section data-row={rowIndex}>{row}</section>);
@@ -887,12 +887,12 @@ export default pattern((state) => {
     } as const satisfies __cfHelpers.JSONSchema).for("selectedCommentId", true);
     const laneLabels = passthroughLabels(["lane", "detail", "summary"]).for("laneLabels", true);
     // [TRANSFORM] computed() → lift(): captures state.threads, state.showFlagged
-    const visibleThreads = __cfLift_1({ state: {
+    const visibleThreads = __cfLift_h501ebd2fc822({ state: {
             threads: state.key("threads"),
             showFlagged: state.key("showFlagged")
         } }).for("visibleThreads", true);
     // [TRANSFORM] computed() → lift(): captures visibleThreads (asOpaque), selectedCommentId (asCell — Writable), state.lane
-    const threadRows = __cfLift_7({
+    const threadRows = __cfLift_h99f835fa1c74({
         visibleThreads: visibleThreads,
         selectedCommentId: selectedCommentId,
         state: {
@@ -903,13 +903,13 @@ export default pattern((state) => {
         [UI]: (<div>
         {/* [TRANSFORM] .map() → mapWithPattern: laneLabels is output of lift() in pattern context — reactive */}
         {/* [TRANSFORM] ternary lowered: labelIndex===0 ? `${state.lane}:${label}` : label → ifElse(lift(cond), lift(true-branch), label) */}
-        {laneLabels.mapWithPattern(__cfPattern_3, {
+        {laneLabels.mapWithPattern(__cfPattern_hc09ff3953e73, {
                 state: {
                     lane: state.key("lane")
                 }
             })}
         {/* [TRANSFORM] .map() → mapWithPattern: threadRows is output of computed() — reactive, back in pattern-owned UI */}
-        {threadRows.mapWithPattern(__cfPattern_4, {})}
+        {threadRows.mapWithPattern(__cfPattern_hcb517b892e1a, {})}
       </div>),
     };
 }, {
@@ -1009,17 +1009,30 @@ __cfHardenFn(h);
 __cfReg({
     jumpToComment,
     passthroughLabels,
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4,
-    __cfPattern_1,
-    __cfLift_5,
-    __cfLift_6,
-    __cfPattern_2,
-    __cfLift_7,
-    __cfLift_8,
-    __cfLift_9,
-    __cfPattern_3,
-    __cfPattern_4
+    __cfLift_h501ebd2fc822,
+    __cfLift_hcca64af3f49f,
+    __cfLift_h237caf5ae9ed,
+    __cfLift_h2c81ffb44100,
+    __cfPattern_h9876d1a32b2f,
+    __cfLift_h7a3748fcc627,
+    __cfLift_hce182c9f2358,
+    __cfPattern_he535898b6b88,
+    __cfLift_h99f835fa1c74,
+    __cfLift_hc40d6438fae7,
+    __cfLift_h4866d7f7ca10,
+    __cfPattern_hc09ff3953e73,
+    __cfPattern_hcb517b892e1a,
+    __cfLift_1: __cfLift_h501ebd2fc822,
+    __cfLift_2: __cfLift_hcca64af3f49f,
+    __cfLift_3: __cfLift_h237caf5ae9ed,
+    __cfLift_4: __cfLift_h2c81ffb44100,
+    __cfPattern_1: __cfPattern_h9876d1a32b2f,
+    __cfLift_5: __cfLift_h7a3748fcc627,
+    __cfLift_6: __cfLift_hce182c9f2358,
+    __cfPattern_2: __cfPattern_he535898b6b88,
+    __cfLift_7: __cfLift_h99f835fa1c74,
+    __cfLift_8: __cfLift_hc40d6438fae7,
+    __cfLift_9: __cfLift_h4866d7f7ca10,
+    __cfPattern_3: __cfPattern_hc09ff3953e73,
+    __cfPattern_4: __cfPattern_hcb517b892e1a
 });

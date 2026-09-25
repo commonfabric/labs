@@ -11,7 +11,7 @@ import { Writable, computed, pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_he58ebaec399e = __cfHelpers.lift<{
     prefix: __cfHelpers.ReadonlyCell<string>;
     value: __cfHelpers.ReadonlyCell<number>;
 }, string>(({ prefix, value }) => `${prefix.get()}${value.get()}`, {
@@ -40,7 +40,7 @@ export default pattern(() => {
     const prefix = new Writable("Value: ", {
         type: "string"
     } as const satisfies __cfHelpers.JSONSchema).for("prefix", true);
-    const result = __cfLift_1({
+    const result = __cfLift_he58ebaec399e({
         prefix: prefix,
         value: value
     }).for("result", true);
@@ -52,5 +52,6 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_he58ebaec399e,
+    __cfLift_1: __cfLift_he58ebaec399e
 });

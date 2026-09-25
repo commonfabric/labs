@@ -63,7 +63,7 @@ export const PatternLogicalAnd = pattern((__cf_pattern_input) => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_ha0c6789b93cc = __cfHelpers.lift<{
     foo: boolean;
     bar: string;
 }, string | false>(({ foo, bar }) => foo && bar, {
@@ -88,7 +88,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 export const ComputedLogicalAnd = pattern((__cf_pattern_input) => {
     const foo = __cf_pattern_input.key("foo");
     const bar = __cf_pattern_input.key("bar");
-    return (<div>{__cfLift_1({
+    return (<div>{__cfLift_ha0c6789b93cc({
         foo: foo,
         bar: bar
     })}</div>);
@@ -128,5 +128,6 @@ export const ComputedLogicalAnd = pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_ha0c6789b93cc,
+    __cfLift_1: __cfLift_ha0c6789b93cc
 });

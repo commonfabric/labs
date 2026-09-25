@@ -27,7 +27,7 @@ interface Output {
     [UI]: VNode;
 }
 const visibleEntries = __cfHardenFn((entries: Entry[], prefix: string) => entries.filter((entry) => entry.name.startsWith(prefix)));
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hd194ffcb3be3 = __cfHelpers.lift<{
     entries: Entry[];
     prefix: string;
 }, Entry[]>(({ entries, prefix }) => visibleEntries(entries, prefix), {
@@ -72,7 +72,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hbfa9244d5eee = __cfHelpers.lift<{
     entry: {
         name: string;
     };
@@ -97,7 +97,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h6bcb4e4b757d = __cfHelpers.pattern(__cf_pattern_input => {
     const entry = __cf_pattern_input.key("element");
     const labelPrefix = __cf_pattern_input.key("params", "labelPrefix");
     return __cfHelpers.ifElse({
@@ -115,7 +115,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         items: {
             type: "string"
         }
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_2({
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_hbfa9244d5eee({
         entry: {
             name: entry.key("name")
         },
@@ -155,7 +155,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hc8a1beca432f = __cfHelpers.pattern(__cf_pattern_input => {
     const label = __cf_pattern_input.key("element");
     return <button type="button">{label}</button>;
 }, {
@@ -229,14 +229,14 @@ export default pattern((__cf_pattern_input) => {
                             required: ["name"]
                         }
                     }
-                } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({
+                } as const satisfies __cfHelpers.JSONSchema, __cfLift_hd194ffcb3be3({
                     entries: entries,
                     prefix: prefix
                 }).for(["visible", 3], true), []).for("visible", true);
-                const labels = visible.flatMapWithPattern(__cfPattern_1, {
+                const labels = visible.flatMapWithPattern(__cfPattern_h6bcb4e4b757d, {
                     labelPrefix: labelPrefix
                 }).for("labels", true);
-                return labels.mapWithPattern(__cfPattern_2, {});
+                return labels.mapWithPattern(__cfPattern_hc8a1beca432f, {});
             })()}
     </div>)
     });
@@ -281,8 +281,12 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfPattern_1,
-    __cfPattern_2
+    __cfLift_hd194ffcb3be3,
+    __cfLift_hbfa9244d5eee,
+    __cfPattern_h6bcb4e4b757d,
+    __cfPattern_hc8a1beca432f,
+    __cfLift_1: __cfLift_hd194ffcb3be3,
+    __cfLift_2: __cfLift_hbfa9244d5eee,
+    __cfPattern_1: __cfPattern_h6bcb4e4b757d,
+    __cfPattern_2: __cfPattern_hc8a1beca432f
 });

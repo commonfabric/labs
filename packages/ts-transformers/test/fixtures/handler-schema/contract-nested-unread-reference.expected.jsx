@@ -33,7 +33,7 @@ interface Out {
         ok: boolean;
     }>;
 }
-const __cfHandler_1 = __cfHelpers.handler({
+const __cfHandler_h2b697611607a = __cfHelpers.handler({
     type: "object",
     properties: {
         title: {
@@ -94,7 +94,7 @@ const __cfHandler_1 = __cfHelpers.handler({
     } as const satisfies __cfHelpers.JSONSchema });
 export default pattern((__cf_pattern_input) => {
     const log = __cf_pattern_input.key("log");
-    const add = __cfHandler_1({
+    const add = __cfHandler_h2b697611607a({
         log: log
     }).for({ stream: "add" }, true);
     return { [NAME]: "p", log: log!.for(["__patternResult", "log"], true), add: add.for({ stream: ["__patternResult", "add"] }, true) };
@@ -168,5 +168,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1
+    __cfHandler_h2b697611607a,
+    __cfHandler_1: __cfHandler_h2b697611607a
 });

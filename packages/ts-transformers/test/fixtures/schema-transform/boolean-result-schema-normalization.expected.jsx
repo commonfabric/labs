@@ -11,7 +11,7 @@ import { pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h1ceb9e35cb2e = __cfHelpers.lift<{
     state: {
         score: number;
     };
@@ -54,7 +54,7 @@ export default pattern((state: {
             type: "boolean"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "boolean"
-        } as const satisfies __cfHelpers.JSONSchema, state.key("isPremium"), __cfLift_1({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, state.key("isPremium"), __cfLift_h1ceb9e35cb2e({ state: {
                 score: state.key("score")
             } })), "Premium", "Regular")}</div>,
     };
@@ -103,5 +103,6 @@ export default pattern((state: {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h1ceb9e35cb2e,
+    __cfLift_1: __cfLift_h1ceb9e35cb2e
 });

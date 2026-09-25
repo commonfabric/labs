@@ -43,7 +43,7 @@ interface Input {
 interface Output {
     [UI]: VNode;
 }
-const __cfHandler_1 = __cfHelpers.handler({
+const __cfHandler_hfc59d3603eb4 = __cfHelpers.handler({
     type: "object",
     properties: {
         name: {
@@ -66,7 +66,7 @@ const __cfHandler_1 = __cfHelpers.handler({
 } as const satisfies __cfHelpers.JSONSchema, ({ name }, { path }) => {
     path.push(name);
 });
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hfd50a862864e = __cfHelpers.lift<{
     path: __cfHelpers.Cell<string[]>;
 }, readonly string[]>(({ path }) => path.get(), {
     type: "object",
@@ -86,7 +86,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_he3cf86ab1f0d = __cfHelpers.lift<{
     tree: __cfHelpers.Cell<Entry[]>;
     p: readonly string[];
 }, readonly Entry[]>(({ tree, p }) => findChildren(tree, p), {
@@ -159,7 +159,7 @@ const __cfLift_2 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h5e6bc47ef34d = __cfHelpers.lift<{
     unsorted: readonly Entry[];
 }, Entry[]>(({ unsorted }) => [...unsorted].sort((a: Entry, b: Entry) => a.name.localeCompare(b.name)), {
     type: "object",
@@ -224,7 +224,7 @@ const __cfLift_3 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfHandler_2 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h5e44d572cb85 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         item: {
@@ -249,10 +249,10 @@ const __cfHandler_2 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
     },
     required: ["item", "pushPath"]
 } as const satisfies __cfHelpers.JSONSchema, (_, { pushPath, item }) => pushPath.send({ name: item.name }));
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h181d19baff88 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const pushPath = __cf_pattern_input.key("params", "pushPath");
-    return (<button type="button" onClick={__cfHandler_2({
+    return (<button type="button" onClick={__cfHandler_h5e44d572cb85({
         pushPath: pushPath,
         item: {
             name: item.key("name")
@@ -339,7 +339,7 @@ export default pattern((__cf_pattern_input) => {
             type: "string"
         }
     } as const satisfies __cfHelpers.JSONSchema).for("path", true);
-    const pushPath = __cfHandler_1({
+    const pushPath = __cfHandler_hfc59d3603eb4({
         path: path
     }).for({ stream: "pushPath" }, true);
     return {
@@ -359,13 +359,13 @@ export default pattern((__cf_pattern_input) => {
                     items: {
                         type: "string"
                     }
-                } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ path: path }).for(["p", 3], true), []).for("p", true);
-                const unsorted = __cfLift_2({
+                } as const satisfies __cfHelpers.JSONSchema, __cfLift_hfd50a862864e({ path: path }).for(["p", 3], true), []).for("p", true);
+                const unsorted = __cfLift_he3cf86ab1f0d({
                     tree: tree,
                     p: p
                 }).for("unsorted", true);
-                const items = __cfLift_3({ unsorted: unsorted }).for("items", true);
-                return items.mapWithPattern(__cfPattern_1, {
+                const items = __cfLift_h5e6bc47ef34d({ unsorted: unsorted }).for("items", true);
+                return items.mapWithPattern(__cfPattern_h181d19baff88, {
                     pushPath: pushPath
                 });
             })()}
@@ -420,10 +420,16 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1,
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfHandler_2,
-    __cfPattern_1
+    __cfHandler_hfc59d3603eb4,
+    __cfLift_hfd50a862864e,
+    __cfLift_he3cf86ab1f0d,
+    __cfLift_h5e6bc47ef34d,
+    __cfHandler_h5e44d572cb85,
+    __cfPattern_h181d19baff88,
+    __cfHandler_1: __cfHandler_hfc59d3603eb4,
+    __cfLift_1: __cfLift_hfd50a862864e,
+    __cfLift_2: __cfLift_he3cf86ab1f0d,
+    __cfLift_3: __cfLift_h5e6bc47ef34d,
+    __cfHandler_2: __cfHandler_h5e44d572cb85,
+    __cfPattern_1: __cfPattern_h181d19baff88
 });

@@ -11,7 +11,7 @@ import { pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h6daebbf29419 = __cfHelpers.lift<{
     state: {
         done: boolean;
     };
@@ -38,7 +38,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 //   return { hidden: !state.done }
 //   → return { hidden: lift(({ state }) => !state.done)({ state }) }
 export default pattern((state) => ({
-    hidden: __cfLift_1({ state: {
+    hidden: __cfLift_h6daebbf29419({ state: {
             done: state.key("done")
         } }).for(["__patternResult", "hidden"], true)
 }), {
@@ -62,5 +62,6 @@ export default pattern((state) => ({
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h6daebbf29419,
+    __cfLift_1: __cfLift_h6daebbf29419
 });

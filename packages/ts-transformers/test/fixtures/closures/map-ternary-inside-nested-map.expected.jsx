@@ -34,7 +34,7 @@ interface PatternInput {
     ]>>;
     showInactive?: Default<boolean, false>;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h3e4089b7ce19 = __cfHelpers.lift<{
     items: __cfHelpers.ReadonlyCell<unknown[]>;
 }, boolean>(({ items }) => items.get().length > 0, {
     type: "object",
@@ -51,7 +51,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hfdc4f733cafa = __cfHelpers.lift<{
     item: {
         tags: {
             length: number;
@@ -80,7 +80,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h2a999321e38e = __cfHelpers.pattern(__cf_pattern_input => {
     const tag = __cf_pattern_input.key("element");
     const showInactive = __cf_pattern_input.key("params", "showInactive");
     return (<li>
@@ -156,7 +156,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h766236d8cc20 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const showInactive = __cf_pattern_input.key("params", "showInactive");
     return (<div>
@@ -169,13 +169,13 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
         type: "string"
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "string"
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_2({ item: {
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_hfdc4f733cafa({ item: {
             tags: {
                 length: item.key("tags", "length")
             }
         } }), item.key("label"), "No tags")}</strong>
               <ul>
-                {item.key("tags").mapWithPattern(__cfPattern_1, {
+                {item.key("tags").mapWithPattern(__cfPattern_h2a999321e38e, {
             showInactive: showInactive
         })}
               </ul>
@@ -258,7 +258,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
     const showInactive = __cf_pattern_input.key("showInactive");
-    const hasItems = __cfLift_1({ items: items }).for("hasItems", true);
+    const hasItems = __cfLift_h3e4089b7ce19({ items: items }).for("hasItems", true);
     return {
         [UI]: (<div>
         {__cfHelpers.ifElse({
@@ -279,7 +279,7 @@ export default pattern((__cf_pattern_input) => {
                     type: "array",
                     items: {}
                 }]
-        } as const satisfies __cfHelpers.JSONSchema, hasItems, items.mapWithPattern(__cfPattern_2, {
+        } as const satisfies __cfHelpers.JSONSchema, hasItems, items.mapWithPattern(__cfPattern_h766236d8cc20, {
             showInactive: showInactive
         }), <p>No items</p>)}
       </div>),
@@ -363,8 +363,12 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfPattern_1,
-    __cfPattern_2
+    __cfLift_h3e4089b7ce19,
+    __cfLift_hfdc4f733cafa,
+    __cfPattern_h2a999321e38e,
+    __cfPattern_h766236d8cc20,
+    __cfLift_1: __cfLift_h3e4089b7ce19,
+    __cfLift_2: __cfLift_hfdc4f733cafa,
+    __cfPattern_1: __cfPattern_h2a999321e38e,
+    __cfPattern_2: __cfPattern_h766236d8cc20
 });

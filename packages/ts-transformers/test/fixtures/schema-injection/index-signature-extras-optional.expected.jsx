@@ -27,7 +27,7 @@ interface TaggedItem {
 interface Input {
     items: TaggedItem[];
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h665cafd00974 = __cfHelpers.lift<{
     items: {
         priority?: any;
     }[];
@@ -48,7 +48,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hc7b56ac5455a = __cfHelpers.lift<{
     items: {
         label: string;
     }[];
@@ -75,9 +75,9 @@ const __cfLift_2 = __cfHelpers.lift<{
 export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
     // Extras key: only exists on some elements; must shrink to `priority?`.
-    const extraIsNine = __cfLift_1({ items: items }).for("extraIsNine", true);
+    const extraIsNine = __cfLift_h665cafd00974({ items: items }).for("extraIsNine", true);
     // Declared key for contrast: stays required as before.
-    const labelIsGamma = __cfLift_2({ items: items }).for("labelIsGamma", true);
+    const labelIsGamma = __cfLift_hc7b56ac5455a({ items: items }).for("labelIsGamma", true);
     return { extraIsNine, labelIsGamma };
 }, {
     type: "object",
@@ -121,6 +121,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_h665cafd00974,
+    __cfLift_hc7b56ac5455a,
+    __cfLift_1: __cfLift_h665cafd00974,
+    __cfLift_2: __cfLift_hc7b56ac5455a
 });

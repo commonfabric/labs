@@ -11,7 +11,7 @@ import { cell, pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h5049118e4ead = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const index = __cf_pattern_input.key("index");
     const array = __cf_pattern_input.key("array");
@@ -70,7 +70,7 @@ export default pattern((_state) => {
     } as const satisfies __cfHelpers.JSONSchema).for("items", true);
     return {
         [UI]: (<div>
-        {items.mapWithPattern(__cfPattern_1, {})}
+        {items.mapWithPattern(__cfPattern_h5049118e4ead, {})}
       </div>),
     };
 }, false as const satisfies __cfHelpers.JSONSchema, {
@@ -107,5 +107,6 @@ export default pattern((_state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_h5049118e4ead,
+    __cfPattern_1: __cfPattern_h5049118e4ead
 });

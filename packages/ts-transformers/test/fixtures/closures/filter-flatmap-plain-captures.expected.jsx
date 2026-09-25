@@ -11,7 +11,7 @@ import { pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h050dea176069 = __cfHelpers.lift<{
     item: {
         label: string;
     };
@@ -36,10 +36,10 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h4561f8309545 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const suffix = __cf_pattern_input.params.suffix;
-    return __cfLift_1({
+    return __cfLift_h050dea176069({
         item: {
             label: item.key("label")
         },
@@ -77,7 +77,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hf9754c685f57 = __cfHelpers.lift<{
     item: {
         tags: string[];
     };
@@ -108,7 +108,7 @@ const __cfLift_2 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_he33e19088b5c = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const prefix = __cf_pattern_input.params.prefix;
     return __cfHelpers.ifElse({
@@ -126,7 +126,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
         items: {
             type: "string"
         }
-    } as const satisfies __cfHelpers.JSONSchema, item.key("tags", "length"), __cfLift_2({
+    } as const satisfies __cfHelpers.JSONSchema, item.key("tags", "length"), __cfLift_hf9754c685f57({
         item: {
             tags: item.key("tags")
         },
@@ -179,9 +179,9 @@ export default pattern((__cf_pattern_input) => {
     const suffix = "!";
     const prefix = "#";
     return {
-        labels: items.filterWithPattern(__cfPattern_1, {
+        labels: items.filterWithPattern(__cfPattern_h4561f8309545, {
             suffix: suffix
-        }).flatMapWithPattern(__cfPattern_2, {
+        }).flatMapWithPattern(__cfPattern_he33e19088b5c, {
             prefix: prefix
         }).for(["__patternResult", "labels"], true)
     };
@@ -224,8 +224,12 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1,
-    __cfLift_2,
-    __cfPattern_2
+    __cfLift_h050dea176069,
+    __cfPattern_h4561f8309545,
+    __cfLift_hf9754c685f57,
+    __cfPattern_he33e19088b5c,
+    __cfLift_1: __cfLift_h050dea176069,
+    __cfPattern_1: __cfPattern_h4561f8309545,
+    __cfLift_2: __cfLift_hf9754c685f57,
+    __cfPattern_2: __cfPattern_he33e19088b5c
 });

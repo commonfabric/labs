@@ -22,7 +22,7 @@ interface Item {
     name: string;
     done: boolean;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_ha71d7bca9e61 = __cfHelpers.lift<{
     items: {
         done: boolean;
     }[];
@@ -75,7 +75,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h61e4f72fe7bb = __cfHelpers.lift<{
     result: {
         tasks: {
             name: string;
@@ -142,10 +142,10 @@ const __cfLift_2 = __cfHelpers.lift<{
 //   Note the captures use result.key("tasks") to extract the needed sub-property.
 export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
-    const result = __cfLift_1({ items: items }).for("result", true);
+    const result = __cfLift_ha71d7bca9e61({ items: items }).for("result", true);
     return {
         [UI]: (<div>
-        {__cfLift_2({ result: {
+        {__cfLift_h61e4f72fe7bb({ result: {
                     tasks: result.key("tasks")
                 } })}
       </div>),
@@ -209,6 +209,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_ha71d7bca9e61,
+    __cfLift_h61e4f72fe7bb,
+    __cfLift_1: __cfLift_ha71d7bca9e61,
+    __cfLift_2: __cfLift_h61e4f72fe7bb
 });

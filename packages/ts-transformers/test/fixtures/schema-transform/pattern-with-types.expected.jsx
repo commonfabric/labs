@@ -134,7 +134,7 @@ const addItem = handler // <
 }) => {
     items.push({ text: event.detail.message });
 });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hf4a79a3cefa7 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const index = __cf_pattern_input.key("index");
     return (<li key={index}>{item.key("text")}</li>);
@@ -200,7 +200,7 @@ export default pattern((__cf_pattern_input) => {
         <p>Basic pattern</p>
         <p>Items count: {items_count}</p>
         <ul>
-          {items.mapWithPattern(__cfPattern_1, {})}
+          {items.mapWithPattern(__cfPattern_hf4a79a3cefa7, {})}
         </ul>
         <cf-message-input name="Send" placeholder="Type a message..." appearance="rounded" oncf-send={addItem({ items })}/>
       </div>),
@@ -273,5 +273,6 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     addItem,
-    __cfPattern_1
+    __cfPattern_hf4a79a3cefa7,
+    __cfPattern_1: __cfPattern_hf4a79a3cefa7
 });

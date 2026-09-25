@@ -11,7 +11,7 @@ import { computed, pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h6ba434de0349 = __cfHelpers.lift<{
     count: number;
 }, __cfHelpers.JSXElement>(({ count }) => {
     const format = (value: number) => `Count: ${value}`;
@@ -53,7 +53,7 @@ export default pattern((__cf_pattern_input) => {
     const count = __cf_pattern_input.key("count");
     return {
         [UI]: (<div>
-        {__cfLift_1({ count: count })}
+        {__cfLift_h6ba434de0349({ count: count })}
       </div>),
     };
 }, {
@@ -98,5 +98,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h6ba434de0349,
+    __cfLift_1: __cfLift_h6ba434de0349
 });

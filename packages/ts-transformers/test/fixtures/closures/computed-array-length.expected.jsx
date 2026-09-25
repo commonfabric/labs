@@ -25,7 +25,7 @@ interface Piece {
     id: string;
     name: string;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hbd624f7612fa = __cfHelpers.lift<{
     pieceRegistry: {
         length: number;
     };
@@ -46,7 +46,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hf611cce52f3d = __cfHelpers.lift<{
     pieceRegistry: {
         length: number;
     };
@@ -67,7 +67,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hb25978ea4e46 = __cfHelpers.pattern(__cf_pattern_input => {
     const piece = __cf_pattern_input.key("element");
     return (<li>{piece.key("name")}</li>);
 }, {
@@ -149,15 +149,15 @@ export default pattern(() => {
         }
     } as const satisfies __cfHelpers.JSONSchema), pieceRegistry = __cf_destructure_1.key("result", "pieceRegistry").for("pieceRegistry", true);
     return {
-        [NAME]: __cfLift_1({ pieceRegistry: {
+        [NAME]: __cfLift_hbd624f7612fa({ pieceRegistry: {
                 length: pieceRegistry.key("length")
             } }),
         [UI]: (<div>
-        <span>Count: {__cfLift_2({ pieceRegistry: {
+        <span>Count: {__cfLift_hf611cce52f3d({ pieceRegistry: {
                 length: pieceRegistry.key("length")
             } })}</span>
         <ul>
-          {pieceRegistry.mapWithPattern(__cfPattern_1, {})}
+          {pieceRegistry.mapWithPattern(__cfPattern_hb25978ea4e46, {})}
         </ul>
       </div>),
     };
@@ -198,7 +198,10 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfPattern_1
+    __cfLift_hbd624f7612fa,
+    __cfLift_hf611cce52f3d,
+    __cfPattern_hb25978ea4e46,
+    __cfLift_1: __cfLift_hbd624f7612fa,
+    __cfLift_2: __cfLift_hf611cce52f3d,
+    __cfPattern_1: __cfPattern_hb25978ea4e46
 });

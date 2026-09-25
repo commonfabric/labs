@@ -23,7 +23,7 @@ interface Message {
 interface State {
     messages: Message[];
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h6cdcb512d0c4 = __cfHelpers.lift<{
     state: {
         messages: Message[];
     };
@@ -116,7 +116,7 @@ export default pattern((state) => {
     // The callback becomes synthetic during transformation, which previously
     // caused type inference to fail, resulting in a 'true' schema instead of
     // the correct union type schema.
-    const latestMessage = __cfLift_1({ state: {
+    const latestMessage = __cfLift_h6cdcb512d0c4({ state: {
             messages: state.key("messages")
         } }).for("latestMessage", true);
     return {
@@ -205,5 +205,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h6cdcb512d0c4,
+    __cfLift_1: __cfLift_h6cdcb512d0c4
 });

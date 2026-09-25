@@ -17,7 +17,7 @@ interface Input {
 interface Output extends Input {
     bar: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h32a2c448187a = __cfHelpers.lift<{
     input: { foo: string; } & {} & { [SELF]: Output; };
 }, { bar: number; foo: string; [SELF]: Output; }>(({ input }) => ({ ...input, bar: 123 }), {
     type: "object",
@@ -50,7 +50,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 //   pattern<Input, Output>() → input schema from Input, output schema from Output (includes inherited fields)
 //   Output extends Input → output schema includes both own (bar) and inherited (foo) properties
 export default pattern((input) => {
-    return __cfLift_1({ input: input }).for("__patternResult", true);
+    return __cfLift_h32a2c448187a({ input: input }).for("__patternResult", true);
 }, {
     type: "object",
     properties: {
@@ -75,5 +75,6 @@ export default pattern((input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h32a2c448187a,
+    __cfLift_1: __cfLift_h32a2c448187a
 });

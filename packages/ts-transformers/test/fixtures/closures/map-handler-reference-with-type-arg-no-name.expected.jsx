@@ -41,7 +41,7 @@ interface State {
     items: Item[];
     count: Cell<number>;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h017ccb87b2a6 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const state = __cf_pattern_input.key("params", "state");
     return (<cf-button onClick={handleClick({ count: state.key("count") })}>
@@ -114,7 +114,7 @@ export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Map callback references handler - should NOT capture it */}
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_h017ccb87b2a6, {
                 state: {
                     count: state.key("count")
                 }
@@ -185,5 +185,6 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     handleClick,
-    __cfPattern_1
+    __cfPattern_h017ccb87b2a6,
+    __cfPattern_1: __cfPattern_h017ccb87b2a6
 });

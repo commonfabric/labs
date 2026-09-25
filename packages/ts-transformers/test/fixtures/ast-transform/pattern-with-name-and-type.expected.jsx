@@ -14,7 +14,7 @@ const __cfAmdHooks = undefined;
 interface MyInput {
     value: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h57f53477e330 = __cfHelpers.lift<{
     input: {
         value: number;
     };
@@ -42,7 +42,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 // Context: Type comes from inline parameter annotation, not generic type argument
 export default pattern((input: MyInput) => {
     return {
-        result: __cfLift_1({ input: {
+        result: __cfLift_h57f53477e330({ input: {
                 value: input.key("value")
             } }).for(["__patternResult", "result"], true)
     };
@@ -67,5 +67,6 @@ export default pattern((input: MyInput) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h57f53477e330,
+    __cfLift_1: __cfLift_h57f53477e330
 });

@@ -24,7 +24,7 @@ interface State {
     items: Item[];
     prefix: string;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h3b72c8cb776e = __cfHelpers.pattern(__cf_pattern_input => {
     const tag = __cf_pattern_input.key("element");
     const item = __cf_pattern_input.key("params", "item");
     return (<li>{item.key("name")} - {tag.key("name")}</li>);
@@ -86,13 +86,13 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hba936b52ceef = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const state = __cf_pattern_input.key("params", "state");
     return (<div>
             {state.key("prefix")}: {item.key("name")}
             <ul>
-              {item.key("tags").mapWithPattern(__cfPattern_1, {
+              {item.key("tags").mapWithPattern(__cfPattern_h3b72c8cb776e, {
             item: {
                 name: item.key("name")
             }
@@ -184,7 +184,7 @@ export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Outer map captures state.prefix, inner map closes over item from outer callback */}
-        {state.key("items").mapWithPattern(__cfPattern_2, {
+        {state.key("items").mapWithPattern(__cfPattern_hba936b52ceef, {
                 state: {
                     prefix: state.key("prefix")
                 }
@@ -271,6 +271,8 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1,
-    __cfPattern_2
+    __cfPattern_h3b72c8cb776e,
+    __cfPattern_hba936b52ceef,
+    __cfPattern_1: __cfPattern_h3b72c8cb776e,
+    __cfPattern_2: __cfPattern_hba936b52ceef
 });

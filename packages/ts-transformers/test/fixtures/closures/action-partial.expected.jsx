@@ -17,7 +17,7 @@ interface BaseState {
 }
 // Partial<BaseState> should make both 'a' and 'b' optional in the schema
 type PartState = Partial<BaseState>;
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h30e1080784a4 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         a: {
@@ -30,7 +30,7 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, (_, { a }) => console.log(a));
-const __cfHandler_2 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h0924cad1751f = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         b: {
@@ -51,10 +51,10 @@ export default pattern((__cf_pattern_input) => {
     const a = __cf_pattern_input.key("a");
     const b = __cf_pattern_input.key("b");
     return {
-        readA: __cfHandler_1({
+        readA: __cfHandler_h30e1080784a4({
             a: a
         }).for({ stream: ["__patternResult", "readA"] }, true),
-        readB: __cfHandler_2({
+        readB: __cfHandler_h0924cad1751f({
             b: b
         }).for({ stream: ["__patternResult", "readB"] }, true)
     };
@@ -86,6 +86,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1,
-    __cfHandler_2
+    __cfHandler_h30e1080784a4,
+    __cfHandler_h0924cad1751f,
+    __cfHandler_1: __cfHandler_h30e1080784a4,
+    __cfHandler_2: __cfHandler_h0924cad1751f
 });

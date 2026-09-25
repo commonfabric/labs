@@ -15,7 +15,7 @@ interface State {
     items: number[];
     highlight: string;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h4ad5e93039d3 = __cfHelpers.pattern(__cf_pattern_input => {
     const _ = __cf_pattern_input.key("element");
     const index = __cf_pattern_input.key("index");
     const element = __cf_pattern_input.key("params", "element");
@@ -69,7 +69,7 @@ export default pattern((state) => {
     const element = state.key("highlight");
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_h4ad5e93039d3, {
                 element: element
             })}
       </div>),
@@ -122,5 +122,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_h4ad5e93039d3,
+    __cfPattern_1: __cfPattern_h4ad5e93039d3
 });

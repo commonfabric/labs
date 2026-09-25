@@ -16,7 +16,7 @@ interface State {
         name: string;
     }>;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h0a5a0f7b7aed = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const count = __cf_pattern_input.key("params", "count");
     return (<span>{item.key("name")} #{count}</span>);
@@ -75,7 +75,7 @@ export default pattern((state) => {
     } as const satisfies __cfHelpers.JSONSchema).for("count", true);
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_h0a5a0f7b7aed, {
                 count: count
             })}
       </div>),
@@ -131,5 +131,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_h0a5a0f7b7aed,
+    __cfPattern_1: __cfPattern_h0a5a0f7b7aed
 });

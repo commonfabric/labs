@@ -20,7 +20,7 @@ interface State {
     items: Item[];
     taxRate: number;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h8fc1d53b74e8 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return item.key("active");
 }, {
@@ -51,7 +51,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hb3e82ef6e306 = __cfHelpers.lift<{
     item: {
         price: number;
     };
@@ -84,11 +84,11 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h17b8a5d28ba0 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const state = __cf_pattern_input.key("params", "state");
     return (<div>
-              Total: {__cfLift_1({
+              Total: {__cfLift_hb3e82ef6e306({
         item: {
             price: item.key("price")
         },
@@ -168,7 +168,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("items").filterWithPattern(__cfPattern_1, {}).mapWithPattern(__cfPattern_2, {
+        {state.key("items").filterWithPattern(__cfPattern_h8fc1d53b74e8, {}).mapWithPattern(__cfPattern_h17b8a5d28ba0, {
                 state: {
                     taxRate: state.key("taxRate")
                 }
@@ -240,7 +240,10 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1,
-    __cfLift_1,
-    __cfPattern_2
+    __cfPattern_h8fc1d53b74e8,
+    __cfLift_hb3e82ef6e306,
+    __cfPattern_h17b8a5d28ba0,
+    __cfPattern_1: __cfPattern_h8fc1d53b74e8,
+    __cfLift_1: __cfLift_hb3e82ef6e306,
+    __cfPattern_2: __cfPattern_h17b8a5d28ba0
 });

@@ -58,7 +58,7 @@ interface CardState {
     myName: Default<string, "">;
     profile?: Cell<Profile>;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hc5c32edf01b0 = __cfHelpers.lift<{
     profile?: __cfHelpers.Cell<Profile> | undefined;
     profileWish: {
         result: Profile | undefined;
@@ -116,7 +116,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h98aa865b6fae = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         boundJoin: {
@@ -158,7 +158,7 @@ export default pattern((__cf_pattern_input) => {
         },
         required: ["name"]
     } as const satisfies __cfHelpers.JSONSchema).for("profileWish", true);
-    const activeProfile = __cfLift_1({
+    const activeProfile = __cfLift_hc5c32edf01b0({
         profile: profile,
         profileWish: {
             result: profileWish.key("result")
@@ -170,7 +170,7 @@ export default pattern((__cf_pattern_input) => {
     }).for({ stream: "boundJoin" }, true);
     return {
         [UI]: (<div>
-        <cf-button onClick={__cfHandler_1({
+        <cf-button onClick={__cfHandler_h98aa865b6fae({
             boundJoin: boundJoin
         })}>
           Join
@@ -236,6 +236,8 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     join,
-    __cfLift_1,
-    __cfHandler_1
+    __cfLift_hc5c32edf01b0,
+    __cfHandler_h98aa865b6fae,
+    __cfLift_1: __cfLift_hc5c32edf01b0,
+    __cfHandler_1: __cfHandler_h98aa865b6fae
 });

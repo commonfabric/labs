@@ -14,7 +14,7 @@ const __cfAmdHooks = undefined;
 interface State {
     count: Cell<number>;
 }
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h5d43534d0802 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         count: {
@@ -30,7 +30,7 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
 export default pattern((__cf_pattern_input) => {
     const count = __cf_pattern_input.key("count");
     return {
-        inc: __cfHandler_1({
+        inc: __cfHandler_h5d43534d0802({
             count: count
         }).for({ stream: ["__patternResult", "inc"] }, true)
     };
@@ -56,5 +56,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1
+    __cfHandler_h5d43534d0802,
+    __cfHandler_1: __cfHandler_h5d43534d0802
 });

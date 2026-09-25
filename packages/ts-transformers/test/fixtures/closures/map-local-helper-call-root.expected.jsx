@@ -12,7 +12,7 @@ const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
 const identity = __cfHardenFn(<T,>(value: T) => value);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hbaa31b91b83b = __cfHelpers.lift<{
     item: string;
 }, string>(({ item }) => identity(item.toUpperCase()), {
     type: "object",
@@ -25,9 +25,9 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_ha490a8b5065b = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
-    return __cfLift_1({ item: item }).for("__patternResult", true);
+    return __cfLift_hbaa31b91b83b({ item: item }).for("__patternResult", true);
 }, {
     type: "object",
     properties: {
@@ -47,7 +47,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 //   -> mapWithPattern(..., ({ item }) => lift(({ item }) => identity(item.toUpperCase()))(...))
 export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
-    return items.mapWithPattern(__cfPattern_1, {}).for("__patternResult", true);
+    return items.mapWithPattern(__cfPattern_ha490a8b5065b, {}).for("__patternResult", true);
 }, {
     type: "object",
     properties: {
@@ -69,6 +69,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_hbaa31b91b83b,
+    __cfPattern_ha490a8b5065b,
+    __cfLift_1: __cfLift_hbaa31b91b83b,
+    __cfPattern_1: __cfPattern_ha490a8b5065b
 });

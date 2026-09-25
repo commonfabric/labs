@@ -20,7 +20,7 @@ interface State {
     suffix: string;
     items: Array<string | undefined>;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h75a57fdb1745 = __cfHelpers.lift<{
     state: {
         maybeText?: string | undefined;
     };
@@ -40,7 +40,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["string", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hdd5f23bb73e2 = __cfHelpers.lift<{
     state: {
         maybeText?: string | undefined;
     };
@@ -60,7 +60,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h9b1a146aab98 = __cfHelpers.lift<{
     state: {
         maybeText?: string | undefined;
         suffix: string;
@@ -85,7 +85,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["string", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h64f5ae547b8d = __cfHelpers.lift<{
     item: string | undefined;
 }, string | undefined>(({ item }) => item?.trim?.(), {
     type: "object",
@@ -97,9 +97,9 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["string", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h626f90a53442 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
-    return <span>{__cfLift_4({ item: item })}</span>;
+    return <span>{__cfLift_h64f5ae547b8d({ item: item })}</span>;
 }, {
     type: "object",
     properties: {
@@ -137,18 +137,18 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 // Context: Optionality modifies an otherwise supported call;
 //          the underlying call's provenance and lowering route stay unchanged.
 export default pattern((state) => ({
-    normalized: __cfLift_1({ state: {
+    normalized: __cfLift_h75a57fdb1745({ state: {
             maybeText: state.key("maybeText")
         } }).for(["__patternResult", "normalized"], true),
-    selected: __cfLift_2({ state: {
+    selected: __cfLift_hdd5f23bb73e2({ state: {
             maybeText: state.key("maybeText")
         } }).for(["__patternResult", "selected"], true),
     [UI]: (<div>
-      <p>{__cfLift_3({ state: {
+      <p>{__cfLift_h9b1a146aab98({ state: {
             maybeText: state.key("maybeText"),
             suffix: state.key("suffix")
         } })}</p>
-      {state.key("items").mapWithPattern(__cfPattern_1, {})}
+      {state.key("items").mapWithPattern(__cfPattern_h626f90a53442, {})}
     </div>)
 }), {
     type: "object",
@@ -207,9 +207,14 @@ export default pattern((state) => ({
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4,
-    __cfPattern_1
+    __cfLift_h75a57fdb1745,
+    __cfLift_hdd5f23bb73e2,
+    __cfLift_h9b1a146aab98,
+    __cfLift_h64f5ae547b8d,
+    __cfPattern_h626f90a53442,
+    __cfLift_1: __cfLift_h75a57fdb1745,
+    __cfLift_2: __cfLift_hdd5f23bb73e2,
+    __cfLift_3: __cfLift_h9b1a146aab98,
+    __cfLift_4: __cfLift_h64f5ae547b8d,
+    __cfPattern_1: __cfPattern_h626f90a53442
 });

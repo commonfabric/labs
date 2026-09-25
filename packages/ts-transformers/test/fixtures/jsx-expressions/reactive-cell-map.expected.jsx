@@ -144,7 +144,7 @@ const goToPiece = handler({
     console.log("goToPiece clicked");
     return navigateTo(piece);
 });
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h47a985a89abd = __cfHelpers.lift<{
     cellRef: unknown[];
 }, boolean>(({ cellRef }) => !cellRef?.length, {
     type: "object",
@@ -160,7 +160,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h91b64b70a4ed = __cfHelpers.lift<{
     piece: any;
 }, any>(({ piece }) => piece[__cfHelpers.NAME], {
     type: "object",
@@ -169,7 +169,7 @@ const __cfLift_2 = __cfHelpers.lift<{
     },
     required: ["piece"]
 } as const satisfies __cfHelpers.JSONSchema, true as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h1a719250c3fa = __cfHelpers.pattern(__cf_pattern_input => {
     const piece = __cf_pattern_input.key("element");
     const index = __cf_pattern_input.key("index");
     return (<li>
@@ -178,7 +178,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                 </cf-button>
                 <span>Piece {index + 1}: {__cfHelpers.unless(true as const satisfies __cfHelpers.JSONSchema, {
         type: "string"
-    } as const satisfies __cfHelpers.JSONSchema, true as const satisfies __cfHelpers.JSONSchema, __cfLift_2({ piece: piece }), "Unnamed")}</span>
+    } as const satisfies __cfHelpers.JSONSchema, true as const satisfies __cfHelpers.JSONSchema, __cfLift_h91b64b70a4ed({ piece: piece }), "Unnamed")}</span>
               </li>);
 }, {
     type: "object",
@@ -244,8 +244,8 @@ export default pattern(() => {
                     type: "object",
                     properties: {}
                 }]
-        } as const satisfies __cfHelpers.JSONSchema, {} as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ cellRef: cellRef }), <div>No pieces created yet</div>, <ul>
-            {cellRef.mapWithPattern(__cfPattern_1, {})}
+        } as const satisfies __cfHelpers.JSONSchema, {} as const satisfies __cfHelpers.JSONSchema, __cfLift_h47a985a89abd({ cellRef: cellRef }), <div>No pieces created yet</div>, <ul>
+            {cellRef.mapWithPattern(__cfPattern_h1a719250c3fa, {})}
           </ul>)}
 
         <cf-button onClick={createSimplePattern({ cellRef })}>
@@ -301,7 +301,10 @@ __cfReg({
     addPieceAndNavigate,
     createSimplePattern,
     goToPiece,
-    __cfLift_1,
-    __cfLift_2,
-    __cfPattern_1
+    __cfLift_h47a985a89abd,
+    __cfLift_h91b64b70a4ed,
+    __cfPattern_h1a719250c3fa,
+    __cfLift_1: __cfLift_h47a985a89abd,
+    __cfLift_2: __cfLift_h91b64b70a4ed,
+    __cfPattern_1: __cfPattern_h1a719250c3fa
 });

@@ -20,7 +20,7 @@ interface State {
     prefix: string;
     suffix: string;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h508f75dbbc9b = __cfHelpers.lift<{
     state: {
         prefix: string;
         suffix: string;
@@ -57,10 +57,10 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h20ff6bcddac9 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const state = __cf_pattern_input.key("params", "state");
-    return (<div>{__cfLift_1({
+    return (<div>{__cfLift_h508f75dbbc9b({
         state: {
             prefix: state.key("prefix"),
             suffix: state.key("suffix")
@@ -139,7 +139,7 @@ export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Template literal with captures */}
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_h20ff6bcddac9, {
                 state: {
                     prefix: state.key("prefix"),
                     suffix: state.key("suffix")
@@ -212,6 +212,8 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_h508f75dbbc9b,
+    __cfPattern_h20ff6bcddac9,
+    __cfLift_1: __cfLift_h508f75dbbc9b,
+    __cfPattern_1: __cfPattern_h20ff6bcddac9
 });

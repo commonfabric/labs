@@ -31,7 +31,7 @@ interface Settings {
 interface Input {
     settings: Settings;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hd71ee5e7e564 = __cfHelpers.lift<{
     settings: {
         note: string | (string & { readonly [DEFAULT_MARKER]: "n/a"; });
     };
@@ -53,7 +53,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hb214eb60162b = __cfHelpers.lift<{
     settings: {
         count: number | (number & { readonly [DEFAULT_MARKER]: 3; });
     };
@@ -75,7 +75,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h469941f83a9a = __cfHelpers.lift<{
     settings: {
         enabled: boolean | (false & { readonly [DEFAULT_MARKER]: true; }) | (true & { readonly [DEFAULT_MARKER]: true; });
     };
@@ -99,13 +99,13 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
 export default pattern((__cf_pattern_input) => {
     const settings = __cf_pattern_input.key("settings");
-    const noteIsUnset = __cfLift_1({ settings: {
+    const noteIsUnset = __cfLift_hd71ee5e7e564({ settings: {
             note: settings.key("note")
         } }).for("noteIsUnset", true);
-    const countTimesTwo = __cfLift_2({ settings: {
+    const countTimesTwo = __cfLift_hb214eb60162b({ settings: {
             count: settings.key("count")
         } }).for("countTimesTwo", true);
-    const isEnabled = __cfLift_3({ settings: {
+    const isEnabled = __cfLift_h469941f83a9a({ settings: {
             enabled: settings.key("enabled")
         } }).for("isEnabled", true);
     return { noteIsUnset, countTimesTwo, isEnabled };
@@ -156,7 +156,10 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3
+    __cfLift_hd71ee5e7e564,
+    __cfLift_hb214eb60162b,
+    __cfLift_h469941f83a9a,
+    __cfLift_1: __cfLift_hd71ee5e7e564,
+    __cfLift_2: __cfLift_hb214eb60162b,
+    __cfLift_3: __cfLift_h469941f83a9a
 });

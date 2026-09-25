@@ -11,7 +11,7 @@ import { pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h6e766619f6ec = __cfHelpers.lift<{
     cell: {
         value: number;
     };
@@ -32,7 +32,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_he3d28b1cf8a0 = __cfHelpers.lift<{
     cell: {
         value: number;
     };
@@ -62,10 +62,10 @@ export default pattern((cell) => {
     return {
         [UI]: (<div>
         <p>Current value: {cell.key("value")}</p>
-        <p>Next value: {__cfLift_1({ cell: {
+        <p>Next value: {__cfLift_h6e766619f6ec({ cell: {
                 value: cell.key("value")
             } })}</p>
-        <p>Double: {__cfLift_2({ cell: {
+        <p>Double: {__cfLift_he3d28b1cf8a0({ cell: {
                 value: cell.key("value")
             } })}</p>
       </div>),
@@ -116,6 +116,8 @@ export default pattern((cell) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_h6e766619f6ec,
+    __cfLift_he3d28b1cf8a0,
+    __cfLift_1: __cfLift_h6e766619f6ec,
+    __cfLift_2: __cfLift_he3d28b1cf8a0
 });

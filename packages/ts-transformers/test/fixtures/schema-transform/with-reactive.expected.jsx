@@ -27,7 +27,7 @@ const model = __cfHelpers.__cf_data({
         value: 0
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hfa486dfebf88 = __cfHelpers.lift<{
     cell: {
         value: __cfHelpers.Cell<number>;
     };
@@ -55,7 +55,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 //   toSchema<State>({default: ...}) → schema with "default" key preserved
 //   bare `cell.value.get() * 2` → auto-wraps, capturing cell.key("value") into lift(inputSchema, outputSchema, fn)
 export default pattern((cell) => {
-    const doubled = __cfLift_1({ cell: {
+    const doubled = __cfLift_hfa486dfebf88({ cell: {
             value: cell.key("value")
         } }).for("doubled", true);
     return {
@@ -88,5 +88,6 @@ export default pattern((cell) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_hfa486dfebf88,
+    __cfLift_1: __cfLift_hfa486dfebf88
 });

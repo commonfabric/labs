@@ -52,7 +52,7 @@ const removeItem = handler({
 } as const satisfies __cfHelpers.JSONSchema, (_, { items, item }) => {
     items.remove(item);
 });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hdaf4da8c46b9 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const items = __cf_pattern_input.key("params", "items");
     return (<li>
@@ -148,7 +148,7 @@ export default pattern((_) => {
     return {
         [NAME]: "Test",
         [UI]: (<ul>
-        {items.mapWithPattern(__cfPattern_1, {
+        {items.mapWithPattern(__cfPattern_hdaf4da8c46b9, {
                 items: items
             })}
       </ul>),
@@ -195,5 +195,6 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     removeItem,
-    __cfPattern_1
+    __cfPattern_hdaf4da8c46b9,
+    __cfPattern_1: __cfPattern_hdaf4da8c46b9
 });

@@ -22,7 +22,7 @@ interface State {
         done: boolean;
     }>;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hb356a7f2b97f = __cfHelpers.lift<{
     state: {
         items: {
             done: boolean;
@@ -66,7 +66,7 @@ const __cfLift_1 = __cfHelpers.lift<{
     },
     required: ["count", "total"]
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h17e3cd177afb = __cfHelpers.lift<{
     stats: {
         count: number;
         total: number;
@@ -99,12 +99,12 @@ const __cfLift_2 = __cfHelpers.lift<{
 //   transform rewrites them to stats.key("count") and stats.key("total") in
 //   the captures object because stats is a Reactive.
 export default pattern((state) => {
-    const stats = __cfLift_1({ state: {
+    const stats = __cfLift_hb356a7f2b97f({ state: {
             items: state.key("items")
         } }).for("stats", true);
     return {
         [UI]: (<div>
-        {__cfLift_2({ stats: {
+        {__cfLift_h17e3cd177afb({ stats: {
                 count: stats.key("count"),
                 total: stats.key("total")
             } })}
@@ -164,6 +164,8 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_hb356a7f2b97f,
+    __cfLift_h17e3cd177afb,
+    __cfLift_1: __cfLift_hb356a7f2b97f,
+    __cfLift_2: __cfLift_h17e3cd177afb
 });

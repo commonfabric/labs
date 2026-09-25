@@ -11,7 +11,7 @@ import { Writable, computed, pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h9ede6275b830 = __cfHelpers.lift<{
     a: __cfHelpers.ReadonlyCell<number>;
     b: __cfHelpers.ReadonlyCell<number>;
 }, number>(({ a, b }) => a.get() + b.get(), {
@@ -30,7 +30,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h2c4416d8dec5 = __cfHelpers.lift<{
     sum: number;
 }, number>(({ sum }) => sum * 2, {
     type: "object",
@@ -56,11 +56,11 @@ export default pattern(() => {
     const b = new Writable(20, {
         type: "number"
     } as const satisfies __cfHelpers.JSONSchema).for("b", true);
-    const sum = __cfLift_1({
+    const sum = __cfLift_h9ede6275b830({
         a: a,
         b: b
     }).for("sum", true);
-    const doubled = __cfLift_2({ sum: sum }).for("doubled", true);
+    const doubled = __cfLift_h2c4416d8dec5({ sum: sum }).for("doubled", true);
     return doubled;
 }, false as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
@@ -69,6 +69,8 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_h9ede6275b830,
+    __cfLift_h2c4416d8dec5,
+    __cfLift_1: __cfLift_h9ede6275b830,
+    __cfLift_2: __cfLift_h2c4416d8dec5
 });

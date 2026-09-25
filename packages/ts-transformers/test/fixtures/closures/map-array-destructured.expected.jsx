@@ -19,7 +19,7 @@ interface State {
     pizzas: PizzaEntry[];
     scale: number;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h50853fac3465 = __cfHelpers.pattern(__cf_pattern_input => {
     const date = __cf_pattern_input.key("element", "0");
     const pizza = __cf_pattern_input.key("element", "1");
     return (<div>
@@ -62,7 +62,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hc843d1f36cab = __cfHelpers.pattern(__cf_pattern_input => {
     const date = __cf_pattern_input.key("element", "0");
     const pizza = __cf_pattern_input.key("element", "1");
     const state = __cf_pattern_input.key("params", "state");
@@ -130,10 +130,10 @@ export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Map with array destructured parameter */}
-        {state.key("pizzas").mapWithPattern(__cfPattern_1, {})}
+        {state.key("pizzas").mapWithPattern(__cfPattern_h50853fac3465, {})}
 
         {/* Map with array destructured parameter and capture */}
-        {state.key("pizzas").mapWithPattern(__cfPattern_2, {
+        {state.key("pizzas").mapWithPattern(__cfPattern_hc843d1f36cab, {
                 state: {
                     scale: state.key("scale")
                 }
@@ -196,6 +196,8 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1,
-    __cfPattern_2
+    __cfPattern_h50853fac3465,
+    __cfPattern_hc843d1f36cab,
+    __cfPattern_1: __cfPattern_h50853fac3465,
+    __cfPattern_2: __cfPattern_hc843d1f36cab
 });

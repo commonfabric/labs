@@ -166,7 +166,7 @@ interface BuilderSite {
   readonly callback: ts.ArrowFunction | ts.FunctionExpression | undefined;
 }
 
-const HOISTED_NAME = /^__cf(Lift|Pattern|Handler)_\d+$/;
+const HOISTED_NAME = /^__cf(Lift|Pattern|Handler)_(?:\d+|h[0-9a-f]+(?:_\d+)?)$/;
 
 /**
  * Every hoisted builder-artifact const (`const __cf{Lift,Pattern,Handler}_N =

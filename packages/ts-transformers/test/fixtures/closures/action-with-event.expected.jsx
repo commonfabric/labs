@@ -17,7 +17,7 @@ interface MyEvent {
 interface State {
     value: Cell<string>;
 }
-const __cfHandler_1 = __cfHelpers.handler({
+const __cfHandler_he2ef4e205199 = __cfHelpers.handler({
     type: "object",
     properties: {
         data: {
@@ -42,7 +42,7 @@ const __cfHandler_1 = __cfHelpers.handler({
 export default pattern((__cf_pattern_input) => {
     const value = __cf_pattern_input.key("value");
     return {
-        update: __cfHandler_1({
+        update: __cfHandler_he2ef4e205199({
             value: value
         }).for({ stream: ["__patternResult", "update"] }, true)
     };
@@ -80,5 +80,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1
+    __cfHandler_he2ef4e205199,
+    __cfHandler_1: __cfHandler_he2ef4e205199
 });

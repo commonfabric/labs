@@ -21,7 +21,7 @@ interface State {
         }[];
     }[];
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h13cb7f8764ac = __cfHelpers.pattern(__cf_pattern_input => {
     const tag = __cf_pattern_input.key("element");
     const tasks = __cf_pattern_input.key("params", "tasks");
     return (<span>
@@ -77,11 +77,11 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hf49a97a2ad1d = __cfHelpers.pattern(__cf_pattern_input => {
     const section = __cf_pattern_input.key("element");
     const tasks = section.key("tasks");
     return (<div>
-            {section.key("tags").mapWithPattern(__cfPattern_1, {
+            {section.key("tags").mapWithPattern(__cfPattern_h13cb7f8764ac, {
             tasks: {
                 length: tasks.key("length")
             }
@@ -149,7 +149,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 //   nested tag callback reads tasks.length through key("length"), not plain params values
 export default pattern((state) => ({
     [UI]: (<div>
-      {state.key("sections").mapWithPattern(__cfPattern_2, {})}
+      {state.key("sections").mapWithPattern(__cfPattern_hf49a97a2ad1d, {})}
     </div>),
 }), {
     type: "object",
@@ -223,6 +223,8 @@ export default pattern((state) => ({
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1,
-    __cfPattern_2
+    __cfPattern_h13cb7f8764ac,
+    __cfPattern_hf49a97a2ad1d,
+    __cfPattern_1: __cfPattern_h13cb7f8764ac,
+    __cfPattern_2: __cfPattern_hf49a97a2ad1d
 });

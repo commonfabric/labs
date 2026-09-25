@@ -47,7 +47,7 @@ const liftSummary = lift(({ primary, secondary }) => {
     },
     required: ["primary", "secondary", "difference"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h96ef859499ed = __cfHelpers.lift<{
     summary: {
         difference: any;
     };
@@ -71,7 +71,7 @@ export default pattern((__cf_pattern_input) => {
     const primary = __cf_pattern_input.key("primary");
     const secondary = __cf_pattern_input.key("secondary");
     const summary = liftSummary({ primary: primary.for(["summary", "primary"], true), secondary: secondary.for(["summary", "secondary"], true) }).for("summary", true);
-    const difference = __cfLift_1({ summary: {
+    const difference = __cfLift_h96ef859499ed({ summary: {
             difference: summary.key("difference")
         } }).for("difference", true);
     return { difference };
@@ -100,5 +100,6 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     liftSummary,
-    __cfLift_1
+    __cfLift_h96ef859499ed,
+    __cfLift_1: __cfLift_h96ef859499ed
 });

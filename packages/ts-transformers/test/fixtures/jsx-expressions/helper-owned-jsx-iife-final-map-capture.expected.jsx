@@ -34,7 +34,7 @@ function visibleEntries(entries: Writable<Default<Entry[], [
     return list.filter((entry) => prefix.length === 0 || entry.name.startsWith(prefix));
 }
 __cfHardenFn(visibleEntries);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hfd50a862864e = __cfHelpers.lift<{
     path: __cfHelpers.Cell<string[]>;
 }, readonly string[]>(({ path }) => path.get(), {
     type: "object",
@@ -54,7 +54,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hea53e36dd1c6 = __cfHelpers.lift<{
     entries: Writable<Default<Entry[], [
     ]>>;
     p: readonly string[];
@@ -105,7 +105,7 @@ const __cfLift_2 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h0c68680bd45d = __cfHelpers.pattern(__cf_pattern_input => {
     const entry = __cf_pattern_input.key("element");
     const labelPrefix = __cf_pattern_input.key("params", "labelPrefix");
     return (<button type="button">
@@ -188,12 +188,12 @@ export default pattern((__cf_pattern_input) => {
                     items: {
                         type: "string"
                     }
-                } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ path: path }).for(["p", 3], true), []).for("p", true);
-                const visible = __cfLift_2({
+                } as const satisfies __cfHelpers.JSONSchema, __cfLift_hfd50a862864e({ path: path }).for(["p", 3], true), []).for("p", true);
+                const visible = __cfLift_hea53e36dd1c6({
                     entries: entries,
                     p: p
                 }).for("visible", true);
-                return visible.mapWithPattern(__cfPattern_1, {
+                return visible.mapWithPattern(__cfPattern_h0c68680bd45d, {
                     labelPrefix: labelPrefix
                 });
             })()}
@@ -236,7 +236,10 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfPattern_1
+    __cfLift_hfd50a862864e,
+    __cfLift_hea53e36dd1c6,
+    __cfPattern_h0c68680bd45d,
+    __cfLift_1: __cfLift_hfd50a862864e,
+    __cfLift_2: __cfLift_hea53e36dd1c6,
+    __cfPattern_1: __cfPattern_h0c68680bd45d
 });

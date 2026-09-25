@@ -45,7 +45,7 @@ Deno.test("Closure Transformer hoists nested computed callbacks that close over 
   // lift is function-first: the callback leads, schemas trail. The hoisted call
   // carries explicit `<In, Out>` type args, so match `lift<…>(` then the callback.
   const hoistedMatch = normalized.match(
-    /const (__cfLift_\d+) = __cfHelpers\.lift<[\s\S]*?>\(\(\{ dateStr \}\) => formatDateShort\(dateStr\)/,
+    /const (__cfLift_h[0-9a-f]+(?:_\d+)?) = __cfHelpers\.lift<[\s\S]*?>\(\(\{ dateStr \}\) => formatDateShort\(dateStr\)/,
   );
 
   assert(hoistedMatch, `expected hoisted lift in output:\n${output}`);
@@ -133,7 +133,7 @@ Deno.test("CT-1655: whole synthesized mapWithPattern pattern() call is hoisted t
   // `__cf_pattern_input => { const entry = __cf_pattern_input.key("element"); ... }`.
   // The exact const name is generated; capture it for the call-site assertion.
   const hoistedMatch = normalized.match(
-    /const (__cfPattern_\d+) = __cfHelpers\.pattern\(\s*__cf_pattern_input\b/,
+    /const (__cfPattern_h[0-9a-f]+(?:_\d+)?) = __cfHelpers\.pattern\(\s*__cf_pattern_input\b/,
   );
   assert(
     hoistedMatch,

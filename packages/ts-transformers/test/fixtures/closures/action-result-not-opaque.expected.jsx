@@ -19,7 +19,7 @@ const __cfAmdHooks = undefined;
 interface State {
     label: string;
 }
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_hcc25504e4124 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         count: {
@@ -31,7 +31,7 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
 } as const satisfies __cfHelpers.JSONSchema, (_, { count }) => {
     count.set(count.get() + 1);
 });
-const __cfHandler_2 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h144e7c72f512 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         count: {
@@ -52,10 +52,10 @@ export default pattern((__cf_pattern_input) => {
     const count = new Writable(0, {
         type: "number"
     } as const satisfies __cfHelpers.JSONSchema).for("count", true);
-    const increment = __cfHandler_1({
+    const increment = __cfHandler_hcc25504e4124({
         count: count
     }).for({ stream: "increment" }, true);
-    const decrement = __cfHandler_2({
+    const decrement = __cfHandler_h144e7c72f512({
         count: count
     }).for({ stream: "decrement" }, true);
     return {
@@ -112,6 +112,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1,
-    __cfHandler_2
+    __cfHandler_hcc25504e4124,
+    __cfHandler_h144e7c72f512,
+    __cfHandler_1: __cfHandler_hcc25504e4124,
+    __cfHandler_2: __cfHandler_h144e7c72f512
 });

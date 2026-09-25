@@ -15,7 +15,7 @@ interface Item {
     name: string;
     value: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hdbf1e9e0ab50 = __cfHelpers.lift<{
     state: {
         items: Item[];
     };
@@ -70,7 +70,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h0fd003a899da = __cfHelpers.lift<{
     state: {
         items: {
             length: number;
@@ -110,10 +110,10 @@ export default pattern((state) => {
     const showList = new Writable(true, {
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema).for("showList", true);
-    const sorted = __cfLift_1({ state: {
+    const sorted = __cfLift_hdbf1e9e0ab50({ state: {
             items: state.key("items")
         } }).for("sorted", true);
-    const count = __cfLift_2({ state: {
+    const count = __cfLift_h0fd003a899da({ state: {
             items: {
                 length: state.key("items", "length")
             }
@@ -206,6 +206,8 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_hdbf1e9e0ab50,
+    __cfLift_h0fd003a899da,
+    __cfLift_1: __cfLift_hdbf1e9e0ab50,
+    __cfLift_2: __cfLift_h0fd003a899da
 });

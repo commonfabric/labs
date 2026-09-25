@@ -206,6 +206,49 @@ const HOISTABLE_BUILDERS: readonly HoistableBuilderSpec[] = [
   PATTERN_BUILDER,
 ];
 
+/**
+ * Marker that keeps the content-addressed hoist namespace (`__cfPattern_h…`)
+ * disjoint from the positional alias namespace (`__cfPattern_<n>`): a hash
+ * suffix always starts with this letter, a positional alias never does, so a
+ * recognizer can classify a symbol by shape alone and a hex digest that
+ * happens to be all-numeric can never be mistaken for an alias.
+ */
+const HOIST_HASH_MARKER = "h";
+
+/** Hex digits kept from the 64-bit digest: 48 bits, far past birthday range
+ * for the handful of hoists a single file mints. */
+const HOIST_HASH_LENGTH = 12;
+
+/**
+ * FNV-1a over the canonical print of a hoisted call, 64-bit.
+ *
+ * FROZEN. A hoist's content suffix is the durable half of the
+ * `{ identity, symbol }` reference deployed pieces store for their mapped
+ * sub-patterns (CT-1623), so this function and its input are part of the
+ * stored-data contract: changing either re-keys every hoist in the tree.
+ * The positional aliases keep OLD pointers loadable through such a change
+ * (a frozen source reproduces its visit order under any toolchain), but new
+ * correlation would churn fleet-wide — do not "improve" this hash.
+ */
+function fnv1a64(text: string): bigint {
+  const prime = 0x100000001b3n;
+  let hash = 0xcbf29ce484222325n;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= BigInt(text.charCodeAt(i));
+    hash = (hash * prime) & 0xffffffffffffffffn;
+  }
+  return hash;
+}
+
+/** `h` + the first {@link HOIST_HASH_LENGTH} hex chars of the digest. */
+function hoistContentSuffix(printedInnerCall: string): string {
+  const digest = fnv1a64(printedInnerCall)
+    .toString(16)
+    .padStart(16, "0")
+    .slice(0, HOIST_HASH_LENGTH);
+  return `${HOIST_HASH_MARKER}${digest}`;
+}
+
 function hoistBuilderCalls(
   sourceFile: ts.SourceFile,
   context: TransformationContext,
@@ -250,24 +293,62 @@ function hoistBuilderCalls(
   // safe for lift/handler is NOT safe for pattern.)
   let pendingHoists: ts.Statement[] = [];
 
-  // Per-file counters keyed by builder prefix. Explicit counters + literal
-  // suffixes (NOT `factory.createUniqueName`, whose `.text` carries only the
-  // bare prefix and defers numeric suffixing to emit — so every hoisted
-  // identifier would share the same `.text`, breaking the identity-by-text
-  // lookups later stages rely on to match a `<prefix>_N` call site back to its
-  // hoisted const).
+  // Each hoist gets TWO names, and the split is load-bearing:
+  //
+  //   - a CANONICAL name, `<prefix>_h<digest>` — the digest of the inner
+  //     call's canonical (comment-stripped) print. Content-addressed, so
+  //     inserting, removing, or reordering OTHER hoists cannot re-key an
+  //     existing one; it re-keys only when its own callback or baked schemas
+  //     change, which is when its contract genuinely changed. The hoisted
+  //     const is bound under this name, call sites reference it, and it is
+  //     the symbol NEW `{ identity, symbol }` references serialize under.
+  //   - a POSITIONAL ALIAS, `<prefix>_<n>` in visit order — the historical
+  //     numbering. Registered alongside the canonical name (never bound, never
+  //     referenced by emitted code) so every `{ identity, symbol }` pointer a
+  //     deployed piece stored under the old numeric scheme keeps resolving:
+  //     by-identity cold loads recompile the OLD source with the CURRENT
+  //     toolchain, and a frozen source reproduces its visit order exactly.
+  //     Permanent, not transitional — the aliases are what make the stored
+  //     archive immortal under toolchain change.
+  //
+  // Both are explicit literal names (NOT `factory.createUniqueName`, whose
+  // `.text` carries only the bare prefix and defers numeric suffixing to emit —
+  // so every hoisted identifier would share the same `.text`, breaking the
+  // identity-by-text lookups later stages rely on to match a hoist call site
+  // back to its hoisted const).
   const counters = new Map<string, number>();
+  // Occurrences per canonical base name: identical twins (same builder, same
+  // printed content) share a digest, so the second onward takes an occurrence
+  // ordinal (`…_2`). Twins mint identical graphs, so even a cross-twin
+  // correlation is content-correct; the ordinal only keeps registration keys
+  // unique, deterministically.
+  const hashOccurrences = new Map<string, number>();
+  // Canonical print of a hoisted call for hashing: comments stripped (a
+  // comment edit must not re-key) and line endings pinned (the digest must not
+  // vary by platform). Runs after schema injection, so the print covers the
+  // callback AND its baked schemas — a type-level change re-keys, which is
+  // aligned: the sub-pattern's contract changed.
+  const hoistPrinter = ts.createPrinter({
+    removeComments: true,
+    newLine: ts.NewLineKind.LineFeed,
+  });
 
-  // Every hoisted builder-artifact name (`__cfPattern_N`, `__cfLift_N`,
-  // `__cfHandler_N`), in creation order. After the whole file is visited we emit
-  // a SINGLE trailing `__cfReg({ __cfPattern_1, __cfLift_1, … })` call so the
-  // runtime can assign each a content-addressed `{ identity, symbol }` reference
-  // (the property key is the symbol). A single trailing call — rather than
-  // exporting each hoist or registering it inline — keeps the verifier's job to
-  // "exactly one top-level `__cfReg` call" and lets a run-once trap reject any
-  // injected duplicate. See PatternManager.registerHoistedValues / the
-  // `__cfReg` factory parameter wired up by the module-record compiler.
+  // Every hoisted builder-artifact CANONICAL name plus every authored
+  // non-exported builder const, in creation order. After the whole file is
+  // visited we emit a SINGLE trailing
+  // `__cfReg({ __cfPattern_h…, …, __cfPattern_1: __cfPattern_h…, … })` call so
+  // the runtime can assign each a content-addressed `{ identity, symbol }`
+  // reference (the property key is the symbol). Canonical entries come FIRST:
+  // the runtime's forward value→ref map is first-write-wins, so ordering is
+  // what makes new serializations canonical-hash while the positional aliases
+  // (appended after) quietly serve pointers stored under the old numbering.
+  // A single trailing call — rather than exporting each hoist or registering
+  // it inline — keeps the verifier's job to "exactly one top-level `__cfReg`
+  // call" and lets a run-once trap reject any injected duplicate. See
+  // PatternManager.registerHoistedValues / the `__cfReg` factory parameter
+  // wired up by the module-record compiler.
   const registeredNames: string[] = [];
+  const hoistAliases: { alias: string; canonical: string }[] = [];
   const exportedSymbolsByLocalName = collectExportedLocalSymbols(sourceFile);
 
   const visit: ts.Visitor = (node: ts.Node): ts.Node => {
@@ -282,11 +363,25 @@ function hoistBuilderCalls(
         continue;
       }
 
+      // Positional alias: the historical visit-order numbering (see the
+      // counter block above for why it is registered but never bound).
       const next = (counters.get(builder.prefix) ?? 0) + 1;
       counters.set(builder.prefix, next);
-      const nameText = `${builder.prefix}_${next}`;
+      const aliasText = `${builder.prefix}_${next}`;
+      // Canonical name: content digest of the inner call's canonical print,
+      // plus an occurrence ordinal when an identical twin already minted it.
+      const printed = hoistPrinter
+        .printNode(ts.EmitHint.Expression, innerCall, sourceFile)
+        .replace(/\r\n/g, "\n");
+      const baseName = `${builder.prefix}_${hoistContentSuffix(printed)}`;
+      const occurrence = (hashOccurrences.get(baseName) ?? 0) + 1;
+      hashOccurrences.set(baseName, occurrence);
+      const nameText = occurrence === 1
+        ? baseName
+        : `${baseName}_${occurrence}`;
       const name = factory.createIdentifier(nameText);
       registeredNames.push(nameText);
+      hoistAliases.push({ alias: aliasText, canonical: nameText });
       recordBuilderSourceSite(
         nameText,
         resolveBuilderArtifact(innerCall, context.checker),
@@ -394,11 +489,25 @@ function hoistBuilderCalls(
           undefined,
           [
             factory.createObjectLiteralExpression(
-              registeredNames.map((n) =>
-                factory.createShorthandPropertyAssignment(
-                  factory.createIdentifier(n),
-                )
-              ),
+              [
+                // Canonical entries first — the runtime's forward value→ref
+                // map is first-write-wins, so this ordering is what stamps
+                // NEW serializations with the canonical hash symbol.
+                ...registeredNames.map((n) =>
+                  factory.createShorthandPropertyAssignment(
+                    factory.createIdentifier(n),
+                  )
+                ),
+                // Positional aliases after: same live values under the
+                // visit-order numeric names, serving every `{identity,symbol}`
+                // pointer stored under the historical numbering.
+                ...hoistAliases.map(({ alias, canonical }) =>
+                  factory.createPropertyAssignment(
+                    factory.createIdentifier(alias),
+                    factory.createIdentifier(canonical),
+                  )
+                ),
+              ],
               true,
             ),
           ],

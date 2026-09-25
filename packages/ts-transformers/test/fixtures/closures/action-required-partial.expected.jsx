@@ -17,7 +17,7 @@ interface BaseState {
 }
 // Required<BaseState> should make 'a' required in the schema
 type ReqState = Required<BaseState>;
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_ha0ffa0cc7a66 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         a: {
@@ -27,7 +27,7 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
     },
     required: ["a"]
 } as const satisfies __cfHelpers.JSONSchema, (_, { a }) => a.set("hello"));
-const __cfHandler_2 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_hfa3cd03bb942 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         b: {
@@ -45,10 +45,10 @@ export default pattern((__cf_pattern_input) => {
     const a = __cf_pattern_input.key("a");
     const b = __cf_pattern_input.key("b");
     return {
-        setA: __cfHandler_1({
+        setA: __cfHandler_ha0ffa0cc7a66({
             a: a
         }).for({ stream: ["__patternResult", "setA"] }, true),
-        setB: __cfHandler_2({
+        setB: __cfHandler_hfa3cd03bb942({
             b: b
         }).for({ stream: ["__patternResult", "setB"] }, true)
     };
@@ -81,6 +81,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1,
-    __cfHandler_2
+    __cfHandler_ha0ffa0cc7a66,
+    __cfHandler_hfa3cd03bb942,
+    __cfHandler_1: __cfHandler_ha0ffa0cc7a66,
+    __cfHandler_2: __cfHandler_hfa3cd03bb942
 });

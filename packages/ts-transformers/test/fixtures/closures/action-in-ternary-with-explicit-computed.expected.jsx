@@ -25,7 +25,7 @@ interface Card {
 interface Input {
     card: Card;
 }
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h51b930355b0f = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         isEditing: {
@@ -37,7 +37,7 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
 } as const satisfies __cfHelpers.JSONSchema, (_, { isEditing }) => {
     isEditing.set(true);
 });
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h8e88377ecb13 = __cfHelpers.lift<{
     card: {
         description: string;
     };
@@ -93,7 +93,7 @@ export default pattern((__cf_pattern_input) => {
     const isEditing = new Cell(false, {
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema).for("isEditing", true);
-    const startEditing = __cfHandler_1({
+    const startEditing = __cfHandler_h51b930355b0f({
         isEditing: isEditing
     }).for({ stream: "startEditing" }, true);
     return {
@@ -120,7 +120,7 @@ export default pattern((__cf_pattern_input) => {
             <span>{card.key("title")}</span>
             {/* Explicit computed() wrapping JSX that references the action */}
             {/* The action must be captured in the lift-applied computation created for this computed */}
-            {__cfLift_1({
+            {__cfLift_h8e88377ecb13({
                 card: {
                     description: card.key("description")
                 },
@@ -201,6 +201,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1,
-    __cfLift_1
+    __cfHandler_h51b930355b0f,
+    __cfLift_h8e88377ecb13,
+    __cfHandler_1: __cfHandler_h51b930355b0f,
+    __cfLift_1: __cfLift_h8e88377ecb13
 });

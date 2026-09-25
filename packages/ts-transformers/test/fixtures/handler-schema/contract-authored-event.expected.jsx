@@ -36,7 +36,7 @@ interface ProbeOutput {
     entries: string[];
     add: Stream<ProbeEvent, ProbeResult>;
 }
-const __cfHandler_1 = __cfHelpers.handler({
+const __cfHandler_h8bce45e0dabd = __cfHelpers.handler({
     type: "object",
     properties: {
         title: {
@@ -96,7 +96,7 @@ const __cfHandler_1 = __cfHelpers.handler({
     } as const satisfies __cfHelpers.JSONSchema });
 export default pattern((__cf_pattern_input) => {
     const entries = __cf_pattern_input.key("entries");
-    const add = __cfHandler_1({
+    const add = __cfHandler_h8bce45e0dabd({
         entries: entries
     }).for({ stream: "add" }, true);
     return { [NAME]: "probe", entries: entries.for(["__patternResult", "entries"], true), add: add.for({ stream: ["__patternResult", "add"] }, true) };
@@ -172,5 +172,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1
+    __cfHandler_h8bce45e0dabd,
+    __cfHandler_1: __cfHandler_h8bce45e0dabd
 });

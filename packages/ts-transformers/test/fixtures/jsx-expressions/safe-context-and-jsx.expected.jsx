@@ -12,7 +12,7 @@ import { handler, computed } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h497773797bb6 = __cfHelpers.lift<{
     show: boolean;
 }, boolean>(({ show }) => show, {
     type: "object",
@@ -118,9 +118,9 @@ const MyHandler = handler({
     },
     required: ["show"]
 } as const satisfies __cfHelpers.JSONSchema, (_event, { show }) => {
-    return <div>{__cfLift_1({ show: show }) && <span>Content</span>}</div>;
+    return <div>{__cfLift_h497773797bb6({ show: show }) && <span>Content</span>}</div>;
 });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_ha03ba3ee95e4 = __cfHelpers.lift<{
     value: string | null;
 }, string | null>(({ value }) => value, {
     type: "object",
@@ -233,14 +233,16 @@ const MyHandler2 = handler({
     },
     required: ["value"]
 } as const satisfies __cfHelpers.JSONSchema, (_event, { value }) => {
-    return <div>{__cfLift_2({ value: value }) || <span>Fallback</span>}</div>;
+    return <div>{__cfLift_ha03ba3ee95e4({ value: value }) || <span>Fallback</span>}</div>;
 });
 // @ts-ignore: Internals
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     MyHandler,
-    __cfLift_1,
+    __cfLift_h497773797bb6,
     MyHandler2,
-    __cfLift_2
+    __cfLift_ha03ba3ee95e4,
+    __cfLift_1: __cfLift_h497773797bb6,
+    __cfLift_2: __cfLift_ha03ba3ee95e4
 });

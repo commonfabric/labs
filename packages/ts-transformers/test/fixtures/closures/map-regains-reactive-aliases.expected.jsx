@@ -22,7 +22,7 @@ const passthrough = lift((items: string[]) => items, {
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h25c7969c79e7 = __cfHelpers.lift<{
     state: {
         items: string[];
     };
@@ -49,7 +49,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h46fcdf4bd295 = __cfHelpers.lift<{
     inner: string[];
 }, string[]>(({ inner }) => inner, {
     type: "object",
@@ -68,7 +68,7 @@ const __cfLift_2 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_haacab7ab55c2 = __cfHelpers.lift<{
     item: string;
 }, string>(({ item }) => item + "!", {
     type: "object",
@@ -81,9 +81,9 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hbedea5792321 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
-    return __cfLift_3({ item: item }).for("__patternResult", true);
+    return __cfLift_haacab7ab55c2({ item: item }).for("__patternResult", true);
 }, {
     type: "object",
     properties: {
@@ -95,11 +95,11 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h3a10d74f22a6 = __cfHelpers.lift<{
     inner: string[];
 }, string[]>(({ inner }) => {
-    const foo = __cfLift_2({ inner: inner }).for("foo", true);
-    return foo.mapWithPattern(__cfPattern_1, {});
+    const foo = __cfLift_h46fcdf4bd295({ inner: inner }).for("foo", true);
+    return foo.mapWithPattern(__cfPattern_hbedea5792321, {});
 }, {
     type: "object",
     properties: {
@@ -117,7 +117,7 @@ const __cfLift_4 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_5 = __cfHelpers.lift<{
+const __cfLift_haacab7ab55c2_2 = __cfHelpers.lift<{
     item: string;
 }, string>(({ item }) => item + "!", {
     type: "object",
@@ -130,9 +130,9 @@ const __cfLift_5 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h3a7d86a214aa = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
-    return __cfLift_5({ item: item }).for("__patternResult", true);
+    return __cfLift_haacab7ab55c2_2({ item: item }).for("__patternResult", true);
 }, {
     type: "object",
     properties: {
@@ -144,11 +144,11 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_6 = __cfHelpers.lift<{
+const __cfLift_hb60fff46237a = __cfHelpers.lift<{
     inner: string[];
 }, string[]>(({ inner }) => {
     const foo = passthrough(inner).for("foo", true);
-    return foo.mapWithPattern(__cfPattern_2, {});
+    return foo.mapWithPattern(__cfPattern_h3a7d86a214aa, {});
 }, {
     type: "object",
     properties: {
@@ -166,7 +166,7 @@ const __cfLift_6 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_7 = __cfHelpers.lift<{
+const __cfLift_haacab7ab55c2_3 = __cfHelpers.lift<{
     item: string;
 }, string>(({ item }) => item + "!", {
     type: "object",
@@ -179,9 +179,9 @@ const __cfLift_7 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hc0add00504ab = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
-    return __cfLift_7({ item: item }).for("__patternResult", true);
+    return __cfLift_haacab7ab55c2_3({ item: item }).for("__patternResult", true);
 }, {
     type: "object",
     properties: {
@@ -193,7 +193,7 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_8 = __cfHelpers.lift(() => {
+const __cfLift_h7059495abfc1 = __cfHelpers.lift(() => {
     const foo = wish<Default<string[], [
     ]>>({ query: "#items" }, {
         type: "array",
@@ -202,9 +202,9 @@ const __cfLift_8 = __cfHelpers.lift(() => {
         },
         "default": []
     } as const satisfies __cfHelpers.JSONSchema).result!;
-    return foo.mapWithPattern(__cfPattern_3, {});
+    return foo.mapWithPattern(__cfPattern_hc0add00504ab, {});
 }, false, undefined, { completeSchedulerScopeSummary: true });
-const __cfLift_9 = __cfHelpers.lift<{
+const __cfLift_h46fcdf4bd295_2 = __cfHelpers.lift<{
     inner: string[];
 }, string[]>(({ inner }) => inner, {
     type: "object",
@@ -223,7 +223,7 @@ const __cfLift_9 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_10 = __cfHelpers.lift<{
+const __cfLift_hd0cb62492362 = __cfHelpers.lift<{
     item: {
         length: number;
     };
@@ -244,9 +244,9 @@ const __cfLift_10 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_4 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h349f704fe887 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
-    return __cfLift_10({ item: {
+    return __cfLift_hd0cb62492362({ item: {
             length: item.key("length")
         } }).for("__patternResult", true);
 }, {
@@ -260,7 +260,7 @@ const __cfPattern_4 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_11 = __cfHelpers.lift<{
+const __cfLift_haacab7ab55c2_4 = __cfHelpers.lift<{
     item: string;
 }, string>(({ item }) => item + "!", {
     type: "object",
@@ -273,9 +273,9 @@ const __cfLift_11 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_5 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_ha964652d3e0d = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
-    return __cfLift_11({ item: item }).for("__patternResult", true);
+    return __cfLift_haacab7ab55c2_4({ item: item }).for("__patternResult", true);
 }, {
     type: "object",
     properties: {
@@ -287,12 +287,12 @@ const __cfPattern_5 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_12 = __cfHelpers.lift<{
+const __cfLift_h663d123103e9 = __cfHelpers.lift<{
     inner: string[];
 }, string[]>(({ inner }) => {
-    const foo = __cfLift_9({ inner: inner }).for("foo", true);
-    const filtered = foo.filterWithPattern(__cfPattern_4, {}).for("filtered", true);
-    return filtered.mapWithPattern(__cfPattern_5, {});
+    const foo = __cfLift_h46fcdf4bd295_2({ inner: inner }).for("foo", true);
+    const filtered = foo.filterWithPattern(__cfPattern_h349f704fe887, {}).for("filtered", true);
+    return filtered.mapWithPattern(__cfPattern_ha964652d3e0d, {});
 }, {
     type: "object",
     properties: {
@@ -310,7 +310,7 @@ const __cfLift_12 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_13 = __cfHelpers.lift<{
+const __cfLift_h46fcdf4bd295_3 = __cfHelpers.lift<{
     inner: string[];
 }, string[]>(({ inner }) => inner, {
     type: "object",
@@ -329,7 +329,7 @@ const __cfLift_13 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_14 = __cfHelpers.lift<{
+const __cfLift_hd0cb62492362_2 = __cfHelpers.lift<{
     item: {
         length: number;
     };
@@ -350,9 +350,9 @@ const __cfLift_14 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_6 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h75d29e59268b = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
-    return __cfLift_14({ item: {
+    return __cfLift_hd0cb62492362_2({ item: {
             length: item.key("length")
         } }).for("__patternResult", true);
 }, {
@@ -366,7 +366,7 @@ const __cfPattern_6 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_15 = __cfHelpers.lift<{
+const __cfLift_h8ee1135a2ccf = __cfHelpers.lift<{
     item: string;
 }, string>(({ item }) => item.toUpperCase(), {
     type: "object",
@@ -379,9 +379,9 @@ const __cfLift_15 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_7 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hf23ac404a1de = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
-    return __cfLift_15({ item: item }).for("__patternResult", true);
+    return __cfLift_h8ee1135a2ccf({ item: item }).for("__patternResult", true);
 }, {
     type: "object",
     properties: {
@@ -393,12 +393,12 @@ const __cfPattern_7 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_16 = __cfHelpers.lift<{
+const __cfLift_h5e1e356213e2 = __cfHelpers.lift<{
     inner: string[];
 }, string[]>(({ inner }) => {
-    const foo = __cfLift_13({ inner: inner }).for("foo", true);
-    const filtered = foo.filterWithPattern(__cfPattern_6, {}).for("filtered", true);
-    return filtered.mapWithPattern(__cfPattern_7, {});
+    const foo = __cfLift_h46fcdf4bd295_3({ inner: inner }).for("foo", true);
+    const filtered = foo.filterWithPattern(__cfPattern_h75d29e59268b, {}).for("filtered", true);
+    return filtered.mapWithPattern(__cfPattern_hf23ac404a1de, {});
 }, {
     type: "object",
     properties: {
@@ -429,14 +429,14 @@ const __cfLift_16 = __cfHelpers.lift<{
 // Context: contrasts with the existing plain-array compute fixtures where the
 // callback receiver really is compute-owned plain JS data.
 export default pattern((state) => {
-    const inner = __cfLift_1({ state: {
+    const inner = __cfLift_h25c7969c79e7({ state: {
             items: state.key("items")
         } }).for("inner", true);
-    const fromComputed = __cfLift_4({ inner: inner }).for("fromComputed", true);
-    const fromLift = __cfLift_6({ inner: inner }).for("fromLift", true);
-    const fromWish = __cfLift_8().for("fromWish", true);
-    const fromFiltered = __cfLift_12({ inner: inner }).for("fromFiltered", true);
-    const fromFilteredReceiverMethod = __cfLift_16({ inner: inner }).for("fromFilteredReceiverMethod", true);
+    const fromComputed = __cfLift_h3a10d74f22a6({ inner: inner }).for("fromComputed", true);
+    const fromLift = __cfLift_hb60fff46237a({ inner: inner }).for("fromLift", true);
+    const fromWish = __cfLift_h7059495abfc1().for("fromWish", true);
+    const fromFiltered = __cfLift_h663d123103e9({ inner: inner }).for("fromFiltered", true);
+    const fromFilteredReceiverMethod = __cfLift_h5e1e356213e2({ inner: inner }).for("fromFilteredReceiverMethod", true);
     return {
         fromComputed,
         fromLift,
@@ -496,27 +496,50 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     passthrough,
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfPattern_1,
-    __cfLift_4,
-    __cfLift_5,
-    __cfPattern_2,
-    __cfLift_6,
-    __cfLift_7,
-    __cfPattern_3,
-    __cfLift_8,
-    __cfLift_9,
-    __cfLift_10,
-    __cfPattern_4,
-    __cfLift_11,
-    __cfPattern_5,
-    __cfLift_12,
-    __cfLift_13,
-    __cfLift_14,
-    __cfPattern_6,
-    __cfLift_15,
-    __cfPattern_7,
-    __cfLift_16
+    __cfLift_h25c7969c79e7,
+    __cfLift_h46fcdf4bd295,
+    __cfLift_haacab7ab55c2,
+    __cfPattern_hbedea5792321,
+    __cfLift_h3a10d74f22a6,
+    __cfLift_haacab7ab55c2_2,
+    __cfPattern_h3a7d86a214aa,
+    __cfLift_hb60fff46237a,
+    __cfLift_haacab7ab55c2_3,
+    __cfPattern_hc0add00504ab,
+    __cfLift_h7059495abfc1,
+    __cfLift_h46fcdf4bd295_2,
+    __cfLift_hd0cb62492362,
+    __cfPattern_h349f704fe887,
+    __cfLift_haacab7ab55c2_4,
+    __cfPattern_ha964652d3e0d,
+    __cfLift_h663d123103e9,
+    __cfLift_h46fcdf4bd295_3,
+    __cfLift_hd0cb62492362_2,
+    __cfPattern_h75d29e59268b,
+    __cfLift_h8ee1135a2ccf,
+    __cfPattern_hf23ac404a1de,
+    __cfLift_h5e1e356213e2,
+    __cfLift_1: __cfLift_h25c7969c79e7,
+    __cfLift_2: __cfLift_h46fcdf4bd295,
+    __cfLift_3: __cfLift_haacab7ab55c2,
+    __cfPattern_1: __cfPattern_hbedea5792321,
+    __cfLift_4: __cfLift_h3a10d74f22a6,
+    __cfLift_5: __cfLift_haacab7ab55c2_2,
+    __cfPattern_2: __cfPattern_h3a7d86a214aa,
+    __cfLift_6: __cfLift_hb60fff46237a,
+    __cfLift_7: __cfLift_haacab7ab55c2_3,
+    __cfPattern_3: __cfPattern_hc0add00504ab,
+    __cfLift_8: __cfLift_h7059495abfc1,
+    __cfLift_9: __cfLift_h46fcdf4bd295_2,
+    __cfLift_10: __cfLift_hd0cb62492362,
+    __cfPattern_4: __cfPattern_h349f704fe887,
+    __cfLift_11: __cfLift_haacab7ab55c2_4,
+    __cfPattern_5: __cfPattern_ha964652d3e0d,
+    __cfLift_12: __cfLift_h663d123103e9,
+    __cfLift_13: __cfLift_h46fcdf4bd295_3,
+    __cfLift_14: __cfLift_hd0cb62492362_2,
+    __cfPattern_6: __cfPattern_h75d29e59268b,
+    __cfLift_15: __cfLift_h8ee1135a2ccf,
+    __cfPattern_7: __cfPattern_hf23ac404a1de,
+    __cfLift_16: __cfLift_h5e1e356213e2
 });

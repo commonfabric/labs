@@ -35,7 +35,7 @@ interface Output {
     [UI]: VNode;
 }
 const senderName = __cfHardenFn((name?: string) => name?.trim() || "Anonymous");
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h902b97e3e367 = __cfHelpers.lift<{
     selectedRoom: __cfHelpers.ReadonlyCell<Default<{
         messages: Message[];
     }, {
@@ -97,7 +97,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h3d5fbc953a9b = __cfHelpers.lift<{
     message: {
         author: string;
     };
@@ -124,7 +124,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_hdab7585059f5 = __cfHelpers.lift<{
     message: {
         author: string;
     };
@@ -145,16 +145,16 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h3e608b30d351 = __cfHelpers.pattern(__cf_pattern_input => {
     const message = __cf_pattern_input.key("element");
     const name = __cf_pattern_input.key("params", "name");
-    const isMine = __cfLift_2({
+    const isMine = __cfLift_h3d5fbc953a9b({
         message: {
             author: message.key("author")
         },
         name: name
     }).for("isMine", true);
-    const isKnownAuthor = __cfLift_3({ message: {
+    const isKnownAuthor = __cfLift_hdab7585059f5({ message: {
             author: message.key("author")
         } }).for("isKnownAuthor", true);
     return (<div data-author-kind={__cfHelpers.ifElse({
@@ -236,7 +236,7 @@ export default pattern((__cf_pattern_input) => {
     const selectedRoom = __cf_pattern_input.key("selectedRoom");
     return {
         [UI]: (<div>
-        {__cfLift_1({ selectedRoom: selectedRoom }).mapWithPattern(__cfPattern_1, {
+        {__cfLift_h902b97e3e367({ selectedRoom: selectedRoom }).mapWithPattern(__cfPattern_h3e608b30d351, {
             name: name
         })}
       </div>),
@@ -294,8 +294,12 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfPattern_1
+    __cfLift_h902b97e3e367,
+    __cfLift_h3d5fbc953a9b,
+    __cfLift_hdab7585059f5,
+    __cfPattern_h3e608b30d351,
+    __cfLift_1: __cfLift_h902b97e3e367,
+    __cfLift_2: __cfLift_h3d5fbc953a9b,
+    __cfLift_3: __cfLift_hdab7585059f5,
+    __cfPattern_1: __cfPattern_h3e608b30d351
 });

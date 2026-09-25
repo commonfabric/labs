@@ -21,7 +21,7 @@ interface Message {
 interface Input {
     messages: Message[];
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h4603604df9ca = __cfHelpers.lift<{
     msg: {
         reactions?: Reaction[] | undefined;
     };
@@ -69,7 +69,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_ha2237755eb6a = __cfHelpers.pattern(__cf_pattern_input => {
     const reaction = __cf_pattern_input.key("element");
     const msg = __cf_pattern_input.key("params", "msg");
     return (<button type="button" data-msg-id={msg.key("id")}>
@@ -130,13 +130,13 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hf1b99ce1e8ac = __cfHelpers.pattern(__cf_pattern_input => {
     const msg = __cf_pattern_input.key("element");
-    const messageReactions = __cfLift_1({ msg: {
+    const messageReactions = __cfLift_h4603604df9ca({ msg: {
             reactions: msg.key("reactions")
         } }).for("messageReactions", true);
     return (<div>
-              {messageReactions.mapWithPattern(__cfPattern_1, {
+              {messageReactions.mapWithPattern(__cfPattern_ha2237755eb6a, {
             msg: {
                 id: msg.key("id")
             }
@@ -206,7 +206,7 @@ export default pattern((__cf_pattern_input) => {
     const messages = __cf_pattern_input.key("messages");
     return {
         [UI]: (<div>
-        {messages.mapWithPattern(__cfPattern_2, {})}
+        {messages.mapWithPattern(__cfPattern_hf1b99ce1e8ac, {})}
       </div>),
     };
 }, {
@@ -280,7 +280,10 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1,
-    __cfPattern_2
+    __cfLift_h4603604df9ca,
+    __cfPattern_ha2237755eb6a,
+    __cfPattern_hf1b99ce1e8ac,
+    __cfLift_1: __cfLift_h4603604df9ca,
+    __cfPattern_1: __cfPattern_ha2237755eb6a,
+    __cfPattern_2: __cfPattern_hf1b99ce1e8ac
 });

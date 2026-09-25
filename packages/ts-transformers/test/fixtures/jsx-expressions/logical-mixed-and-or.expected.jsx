@@ -11,7 +11,7 @@ import { cell, pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hefc277b5b8c3 = __cfHelpers.lift<{
     user: __cfHelpers.Cell<{ name: string; age: number; }>;
 }, string | false>(({ user }) => (user.get().name.length > 0 && user.get().name), {
     type: "object",
@@ -36,7 +36,7 @@ const __cfLift_1 = __cfHelpers.lift<{
             "enum": [false]
         }]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h4b4a158e7f60 = __cfHelpers.lift<{
     defaultMessage: __cfHelpers.Cell<string>;
 }, string>(({ defaultMessage }) => defaultMessage.get(), {
     type: "object",
@@ -50,7 +50,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h813665f2b200 = __cfHelpers.lift<{
     user: __cfHelpers.Cell<{ name: string; age: number; }>;
 }, boolean>(({ user }) => user.get().age > 18, {
     type: "object",
@@ -70,7 +70,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h4263b494dc38 = __cfHelpers.lift<{
     user: __cfHelpers.Cell<{ name: string; age: number; }>;
 }, string>(({ user }) => user.get().name, {
     type: "object",
@@ -90,7 +90,7 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_5 = __cfHelpers.lift<{
+const __cfLift_h334d0ef251d1 = __cfHelpers.lift<{
     user: __cfHelpers.Cell<{ name: string; age: number; }>;
 }, string | false>(({ user }) => (user.get().name.length > 0 && `Hello ${user.get().name}`) ||
     (user.get().age > 0 && `Age: ${user.get().age}`), {
@@ -154,7 +154,7 @@ export default pattern((_state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ user: user }), __cfLift_2({ defaultMessage: defaultMessage }))}</span>
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_hefc277b5b8c3({ user: user }), __cfLift_h4b4a158e7f60({ defaultMessage: defaultMessage }))}</span>
 
         {/* condition && (value || fallback) pattern */}
         <span>{__cfHelpers.when({
@@ -163,13 +163,13 @@ export default pattern((_state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: ["boolean", "string"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_3({ user: user }), __cfHelpers.unless({
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h813665f2b200({ user: user }), __cfHelpers.unless({
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_4({ user: user }), "Anonymous Adult"))}</span>
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h4263b494dc38({ user: user }), "Anonymous Adult"))}</span>
 
         {/* Complex: (a && b) || (c && d) */}
         <span>
@@ -179,7 +179,7 @@ export default pattern((_state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_5({ user: user }), "Unknown user")}
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h334d0ef251d1({ user: user }), "Unknown user")}
         </span>
       </div>),
     };
@@ -217,9 +217,14 @@ export default pattern((_state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4,
-    __cfLift_5
+    __cfLift_hefc277b5b8c3,
+    __cfLift_h4b4a158e7f60,
+    __cfLift_h813665f2b200,
+    __cfLift_h4263b494dc38,
+    __cfLift_h334d0ef251d1,
+    __cfLift_1: __cfLift_hefc277b5b8c3,
+    __cfLift_2: __cfLift_h4b4a158e7f60,
+    __cfLift_3: __cfLift_h813665f2b200,
+    __cfLift_4: __cfLift_h4263b494dc38,
+    __cfLift_5: __cfLift_h334d0ef251d1
 });

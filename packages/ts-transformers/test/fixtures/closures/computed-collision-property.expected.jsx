@@ -11,7 +11,7 @@ import { Writable, computed, pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h5e0071b7bb7b = __cfHelpers.lift<{
     multiplier: __cfHelpers.ReadonlyCell<number>;
 }, { multiplier: number; value: number; }>(({ multiplier }) => ({
     multiplier: multiplier.get(),
@@ -48,7 +48,7 @@ export default pattern(() => {
     } as const satisfies __cfHelpers.JSONSchema).for("multiplier", true);
     // The callback returns an object with a property named 'multiplier'.
     // Only the variable reference should resolve to the capture, NOT the property name.
-    const result = __cfLift_1({ multiplier: multiplier }).for("result", true);
+    const result = __cfLift_h5e0071b7bb7b({ multiplier: multiplier }).for("result", true);
     return result;
 }, false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
@@ -66,5 +66,6 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h5e0071b7bb7b,
+    __cfLift_1: __cfLift_h5e0071b7bb7b
 });

@@ -27,7 +27,7 @@ type State = {
     recentEvents: TagEvent[];
     items: Item[];
 };
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hdbf1e9e0ab50 = __cfHelpers.lift<{
     state: {
         items: Item[];
     };
@@ -82,7 +82,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h0fd003a899da = __cfHelpers.lift<{
     state: {
         items: {
             length: number;
@@ -111,7 +111,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h24bcb361f84f = __cfHelpers.lift<{
     state: any;
 }, boolean>(({ state }) => state.recentEvents.length === 0, {
     type: "object",
@@ -122,7 +122,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h0ba44e3e915a = __cfHelpers.pattern(__cf_pattern_input => {
     const event = __cf_pattern_input.key("element");
     const idx = __cf_pattern_input.key("index");
     return (<cf-hstack key={idx} gap="2">
@@ -183,10 +183,10 @@ export default pattern((state) => {
     const showList = new Writable(true, {
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema).for("showList", true);
-    const sorted = __cfLift_1({ state: {
+    const sorted = __cfLift_hdbf1e9e0ab50({ state: {
             items: state.key("items")
         } }).for("sorted", true);
-    const count = __cfLift_2({ state: {
+    const count = __cfLift_h0fd003a899da({ state: {
             items: {
                 length: state.key("items", "length")
             }
@@ -219,8 +219,8 @@ export default pattern((state) => {
                     type: "object",
                     properties: {}
                 }]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_3({ state: state }), <span>No events yet</span>, <div>
-              {state.key("recentEvents").mapWithPattern(__cfPattern_1, {})}
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h24bcb361f84f({ state: state }), <span>No events yet</span>, <div>
+              {state.key("recentEvents").mapWithPattern(__cfPattern_h0ba44e3e915a, {})}
             </div>)}
         {__cfHelpers.ifElse({
             type: "boolean",
@@ -338,8 +338,12 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfPattern_1
+    __cfLift_hdbf1e9e0ab50,
+    __cfLift_h0fd003a899da,
+    __cfLift_h24bcb361f84f,
+    __cfPattern_h0ba44e3e915a,
+    __cfLift_1: __cfLift_hdbf1e9e0ab50,
+    __cfLift_2: __cfLift_h0fd003a899da,
+    __cfLift_3: __cfLift_h24bcb361f84f,
+    __cfPattern_1: __cfPattern_h0ba44e3e915a
 });

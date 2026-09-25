@@ -14,7 +14,7 @@ const __cfAmdHooks = undefined;
 interface State {
     counter: Cell<number>;
 }
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_hb2a3cc5d0b7a = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         state: {
@@ -35,7 +35,7 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
 //   onClick={() => state.counter.set(...)} → onClick={handler(false, { state: { counter: asCell } }, (_, { state }) => ...)({ state: { counter } })}
 export default pattern((state) => {
     return {
-        [UI]: (<button type="button" onClick={__cfHandler_1({
+        [UI]: (<button type="button" onClick={__cfHandler_hb2a3cc5d0b7a({
             state: {
                 counter: state.key("counter")
             }
@@ -86,5 +86,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1
+    __cfHandler_hb2a3cc5d0b7a,
+    __cfHandler_1: __cfHandler_hb2a3cc5d0b7a
 });

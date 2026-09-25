@@ -18,7 +18,7 @@ interface Item {
 interface State {
     items: Item[];
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hc2743d0ed6b3 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const i = __cf_pattern_input.key("index");
     return (<div key={i}>
@@ -62,7 +62,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h055bedc1745d = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const idx = __cf_pattern_input.key("index");
     return (<div key={idx}>
@@ -115,10 +115,10 @@ export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Map with common shorthand index parameter names */}
-        {state.key("items").mapWithPattern(__cfPattern_1, {})}
+        {state.key("items").mapWithPattern(__cfPattern_hc2743d0ed6b3, {})}
 
         {/* Map with idx as index parameter */}
-        {state.key("items").mapWithPattern(__cfPattern_2, {})}
+        {state.key("items").mapWithPattern(__cfPattern_h055bedc1745d, {})}
       </div>),
     };
 }, {
@@ -180,6 +180,8 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1,
-    __cfPattern_2
+    __cfPattern_hc2743d0ed6b3,
+    __cfPattern_h055bedc1745d,
+    __cfPattern_1: __cfPattern_hc2743d0ed6b3,
+    __cfPattern_2: __cfPattern_h055bedc1745d
 });

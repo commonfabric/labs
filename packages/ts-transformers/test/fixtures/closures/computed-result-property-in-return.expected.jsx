@@ -20,7 +20,7 @@ const __cfAmdHooks = undefined;
 interface State {
     items: string[];
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hb27e9bd529db = __cfHelpers.lift<{
     state: {
         items: string[];
     };
@@ -44,7 +44,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h8cc0d578f778 = __cfHelpers.lift<{
     summary: {
         length: number;
     };
@@ -72,12 +72,12 @@ const __cfLift_2 = __cfHelpers.lift<{
 //   When the second computed() accesses summary.length, the capture is rewritten
 //   to summary.key("length") because summary is a Reactive, not a plain value.
 export default pattern((state) => {
-    const summary = __cfLift_1({ state: {
+    const summary = __cfLift_hb27e9bd529db({ state: {
             items: state.key("items")
         } }).for("summary", true);
     return {
         summary,
-        charCount: __cfLift_2({ summary: {
+        charCount: __cfLift_h8cc0d578f778({ summary: {
                 length: summary.key("length")
             } }).for(["__patternResult", "charCount"], true)
     };
@@ -108,6 +108,8 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_hb27e9bd529db,
+    __cfLift_h8cc0d578f778,
+    __cfLift_1: __cfLift_hb27e9bd529db,
+    __cfLift_2: __cfLift_h8cc0d578f778
 });

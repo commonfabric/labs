@@ -65,7 +65,7 @@ const EntryRow = pattern((input) => ({
     },
     required: ["rendered", "$UI", "$NAME"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h78b7b76105ac = __cfHelpers.pattern(__cf_pattern_input => {
     const entry = __cf_pattern_input.key("element");
     const row = EntryRow({
         piece: entry.key("piece"),
@@ -130,7 +130,7 @@ export default pattern((__cf_pattern_input) => {
     const filtered = __cf_pattern_input.key("filtered");
     return ({
         [UI]: (<div>
-      {filtered.mapWithPattern(__cfPattern_1, {})}
+      {filtered.mapWithPattern(__cfPattern_h78b7b76105ac, {})}
     </div>),
     });
 }, {
@@ -199,5 +199,6 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     EntryRow,
-    __cfPattern_1
+    __cfPattern_h78b7b76105ac,
+    __cfPattern_1: __cfPattern_h78b7b76105ac
 });

@@ -46,7 +46,7 @@ interface Out {
         ok: boolean;
     }>;
 }
-const __cfHandler_1 = __cfHelpers.handler({
+const __cfHandler_hfaa598c7156f = __cfHelpers.handler({
     anyOf: [{
             type: "object",
             properties: {
@@ -99,7 +99,7 @@ const __cfHandler_1 = __cfHelpers.handler({
         },
         required: ["ok"]
     } as const satisfies __cfHelpers.JSONSchema });
-const __cfHandler_2 = __cfHelpers.handler({
+const __cfHandler_h945fffca7161 = __cfHelpers.handler({
     type: "array",
     items: {
         type: "string"
@@ -118,7 +118,7 @@ const __cfHandler_2 = __cfHelpers.handler({
         },
         required: ["n"]
     } as const satisfies __cfHelpers.JSONSchema });
-const __cfHandler_3 = __cfHelpers.handler({
+const __cfHandler_hc7858bec2146 = __cfHelpers.handler({
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
@@ -134,7 +134,7 @@ const __cfHandler_3 = __cfHelpers.handler({
         },
         required: ["n"]
     } as const satisfies __cfHelpers.JSONSchema });
-const __cfHandler_4 = __cfHelpers.handler({
+const __cfHandler_h8b5b8b11d10a = __cfHelpers.handler({
     type: "object",
     properties: {
         base: {
@@ -181,12 +181,12 @@ const __cfHandler_4 = __cfHelpers.handler({
     } as const satisfies __cfHelpers.JSONSchema });
 export default pattern((__cf_pattern_input) => {
     const log = __cf_pattern_input.key("log");
-    const addUnion = __cfHandler_1({
+    const addUnion = __cfHandler_hfaa598c7156f({
         log: log
     }).for({ stream: "addUnion" }, true);
-    const addArr = __cfHandler_2({}).for({ stream: "addArr" }, true);
-    const addStr = __cfHandler_3({}).for({ stream: "addStr" }, true);
-    const addSection = __cfHandler_4({
+    const addArr = __cfHandler_h945fffca7161({}).for({ stream: "addArr" }, true);
+    const addStr = __cfHandler_hc7858bec2146({}).for({ stream: "addStr" }, true);
+    const addSection = __cfHandler_h8b5b8b11d10a({
         log: log
     }).for({ stream: "addSection" }, true);
     return { [NAME]: "p", log: log!.for(["__patternResult", "log"], true), addUnion: addUnion.for({ stream: ["__patternResult", "addUnion"] }, true), addArr: addArr.for({ stream: ["__patternResult", "addArr"] }, true), addStr: addStr.for({ stream: ["__patternResult", "addStr"] }, true), addSection: addSection.for({ stream: ["__patternResult", "addSection"] }, true) };
@@ -287,8 +287,12 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1,
-    __cfHandler_2,
-    __cfHandler_3,
-    __cfHandler_4
+    __cfHandler_hfaa598c7156f,
+    __cfHandler_h945fffca7161,
+    __cfHandler_hc7858bec2146,
+    __cfHandler_h8b5b8b11d10a,
+    __cfHandler_1: __cfHandler_hfaa598c7156f,
+    __cfHandler_2: __cfHandler_h945fffca7161,
+    __cfHandler_3: __cfHandler_hc7858bec2146,
+    __cfHandler_4: __cfHandler_h8b5b8b11d10a
 });

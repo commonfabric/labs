@@ -11,7 +11,7 @@ import { cell, pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h6cc24f939f41 = __cfHelpers.lift<{
     items: __cfHelpers.Cell<string[]>;
 }, number>(({ items }) => items.get().length, {
     type: "object",
@@ -55,7 +55,7 @@ export default pattern((_state) => {
                     type: "object",
                     properties: {}
                 }]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ items: items }), <span>List is empty</span>)}
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h6cc24f939f41({ items: items }), <span>List is empty</span>)}
       </div>),
     };
 }, false as const satisfies __cfHelpers.JSONSchema, {
@@ -92,5 +92,6 @@ export default pattern((_state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h6cc24f939f41,
+    __cfLift_1: __cfLift_h6cc24f939f41
 });

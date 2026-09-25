@@ -14,7 +14,7 @@ const __cfAmdHooks = undefined;
 interface State {
     counter: Cell<number>;
 }
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_he9fc23f93dc0 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {}
 } as const satisfies __cfHelpers.JSONSchema, (__cf_handler_event, __cf_handler_params) => console.log("hi"));
@@ -24,7 +24,7 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
 // Context: No closed-over state; capture object is empty
 export default pattern((_state) => {
     return {
-        [UI]: (<button type="button" onClick={__cfHandler_1({})}>
+        [UI]: (<button type="button" onClick={__cfHandler_he9fc23f93dc0({})}>
         Log
       </button>),
     };
@@ -71,5 +71,6 @@ export default pattern((_state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1
+    __cfHandler_he9fc23f93dc0,
+    __cfHandler_1: __cfHandler_he9fc23f93dc0
 });

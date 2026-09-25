@@ -21,7 +21,7 @@ const items = __cfHelpers.__cf_data(new Cell<string[]>([], {
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema).for("items", true));
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h29c94d383dae = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return item;
 }, {
@@ -35,7 +35,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-export const fn = lift(() => items.mapWithPattern(__cfPattern_1, {}), false as const satisfies __cfHelpers.JSONSchema, {
+export const fn = lift(() => items.mapWithPattern(__cfPattern_h29c94d383dae, {}), false as const satisfies __cfHelpers.JSONSchema, {
     type: "array",
     items: {
         type: "string"
@@ -45,5 +45,6 @@ export const fn = lift(() => items.mapWithPattern(__cfPattern_1, {}), false as c
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_h29c94d383dae,
+    __cfPattern_1: __cfPattern_h29c94d383dae
 });

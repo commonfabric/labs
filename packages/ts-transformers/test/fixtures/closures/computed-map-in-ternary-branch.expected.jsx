@@ -19,7 +19,7 @@ interface PatternInput {
     people?: Cell<Default<Person[], [
     ]>>;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h316fa572d593 = __cfHelpers.lift<{
     people: __cfHelpers.ReadonlyCell<Person[]>;
 }, { name: string; rank: number; isFirst: boolean; }[]>(({ people }) => [...people.get()]
     .sort((a, b) => a.rank - b.rank)
@@ -67,7 +67,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         required: ["name", "rank", "isFirst"]
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h3a9c50d3f4cf = __cfHelpers.lift<{
     people: __cfHelpers.ReadonlyCell<unknown[]>;
 }, number>(({ people }) => people.get().length, {
     type: "object",
@@ -84,7 +84,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h9d910eebd9d0 = __cfHelpers.pattern(__cf_pattern_input => {
     const person = __cf_pattern_input.key("element");
     return (<span>{person.key("name")}</span>);
 }, {
@@ -130,7 +130,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h18f03ff428f4 = __cfHelpers.lift<{
     count: number;
 }, string>(({ count }) => count + " people", {
     type: "object",
@@ -143,7 +143,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h278aca9fcc08 = __cfHelpers.pattern(__cf_pattern_input => {
     const entry = __cf_pattern_input.key("element");
     return (<li>
                     {__cfHelpers.ifElse({
@@ -211,11 +211,11 @@ export default pattern((__cf_pattern_input) => {
     const showAdmin = new Writable(false, {
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema).for("showAdmin", true);
-    const adminData = __cfLift_1({ people: people }).for("adminData", true);
-    const count = __cfLift_2({ people: people }).for("count", true);
+    const adminData = __cfLift_h316fa572d593({ people: people }).for("adminData", true);
+    const count = __cfLift_h3a9c50d3f4cf({ people: people }).for("count", true);
     return {
         [UI]: (<div>
-        {people.mapWithPattern(__cfPattern_1, {})}
+        {people.mapWithPattern(__cfPattern_h9d910eebd9d0, {})}
         {__cfHelpers.ifElse({
             type: "boolean",
             asCell: ["cell"]
@@ -234,9 +234,9 @@ export default pattern((__cf_pattern_input) => {
                     properties: {}
                 }]
         } as const satisfies __cfHelpers.JSONSchema, showAdmin, <div>
-              <span>{__cfLift_3({ count: count })}</span>
+              <span>{__cfLift_h18f03ff428f4({ count: count })}</span>
               <ul>
-                {adminData.mapWithPattern(__cfPattern_2, {})}
+                {adminData.mapWithPattern(__cfPattern_h278aca9fcc08, {})}
               </ul>
             </div>, null)}
       </div>),
@@ -301,9 +301,14 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfPattern_1,
-    __cfLift_3,
-    __cfPattern_2
+    __cfLift_h316fa572d593,
+    __cfLift_h3a9c50d3f4cf,
+    __cfPattern_h9d910eebd9d0,
+    __cfLift_h18f03ff428f4,
+    __cfPattern_h278aca9fcc08,
+    __cfLift_1: __cfLift_h316fa572d593,
+    __cfLift_2: __cfLift_h3a9c50d3f4cf,
+    __cfPattern_1: __cfPattern_h9d910eebd9d0,
+    __cfLift_3: __cfLift_h18f03ff428f4,
+    __cfPattern_2: __cfPattern_h278aca9fcc08
 });

@@ -17,7 +17,7 @@ interface Item {
 interface State {
     items: Item[];
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h4f0a5fd4ef76 = __cfHelpers.lift<{
     state: {
         items: Item[];
     };
@@ -66,7 +66,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h2f95c1bbd07f = __cfHelpers.pattern(__cf_pattern_input => {
     const row = __cf_pattern_input.key("element");
     const view = { status: __cfHelpers.unless({
             type: "boolean"
@@ -122,12 +122,12 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 //   const view = { status: row.done || "Pending" }
 //   → const view = { status: unless(row.done, "Pending") }
 export default pattern((state) => {
-    const rows = __cfLift_1({ state: {
+    const rows = __cfLift_h4f0a5fd4ef76({ state: {
             items: state.key("items")
         } }).for("rows", true);
     return {
         [UI]: (<div>
-        {rows.mapWithPattern(__cfPattern_1, {})}
+        {rows.mapWithPattern(__cfPattern_h2f95c1bbd07f, {})}
       </div>),
     };
 }, {
@@ -186,6 +186,8 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_h4f0a5fd4ef76,
+    __cfPattern_h2f95c1bbd07f,
+    __cfLift_1: __cfLift_h4f0a5fd4ef76,
+    __cfPattern_1: __cfPattern_h2f95c1bbd07f
 });

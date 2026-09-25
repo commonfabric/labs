@@ -11,7 +11,7 @@ import { computed, ifElse, pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h4a92c84a9f6d = __cfHelpers.lift<{
     bar: boolean;
 }, "B" | "C">(({ bar }) => bar ? "B" : "C", {
     type: "object",
@@ -39,7 +39,7 @@ export const OuterTernary = pattern((__cf_pattern_input) => {
         type: "string"
     } as const satisfies __cfHelpers.JSONSchema, {
         "enum": ["B", "C", "D"]
-    } as const satisfies __cfHelpers.JSONSchema, show, __cfLift_1({ bar: bar }), "D")}</div>);
+    } as const satisfies __cfHelpers.JSONSchema, show, __cfLift_h4a92c84a9f6d({ bar: bar }), "D")}</div>);
 }, {
     type: "object",
     properties: {
@@ -72,7 +72,7 @@ export const OuterTernary = pattern((__cf_pattern_input) => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h1659fa1d5ff8 = __cfHelpers.lift<{
     foo: boolean;
     bar: boolean;
 }, "A" | "B" | "C">(({ foo, bar }) => foo ? "A" : bar ? "B" : "C", {
@@ -101,7 +101,7 @@ export const AuthoredIfElse = pattern((__cf_pattern_input) => {
         type: "string"
     } as const satisfies __cfHelpers.JSONSchema, {
         "enum": ["A", "B", "C", "D"]
-    } as const satisfies __cfHelpers.JSONSchema, show, __cfLift_2({
+    } as const satisfies __cfHelpers.JSONSchema, show, __cfLift_h1659fa1d5ff8({
         foo: foo,
         bar: bar
     }), "D");
@@ -126,6 +126,8 @@ export const AuthoredIfElse = pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_h4a92c84a9f6d,
+    __cfLift_h1659fa1d5ff8,
+    __cfLift_1: __cfLift_h4a92c84a9f6d,
+    __cfLift_2: __cfLift_h1659fa1d5ff8
 });

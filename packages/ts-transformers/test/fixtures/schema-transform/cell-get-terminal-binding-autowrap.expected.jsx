@@ -15,7 +15,7 @@ interface Row {
     sentAt: number;
     body: string;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h6e3cc74f1dd3 = __cfHelpers.lift<{
     rows: __cfHelpers.Writable<Row[]>;
 }, number>(({ rows }) => rows.get().length, {
     type: "object",
@@ -32,7 +32,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h6e93f541fe6d = __cfHelpers.lift<{
     rows: __cfHelpers.Writable<Row[]>;
 }, readonly Row[]>(({ rows }) => rows.get(), {
     type: "object",
@@ -80,7 +80,7 @@ const __cfLift_2 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_hb4c16d0a1435 = __cfHelpers.lift<{
     rows: __cfHelpers.Writable<Row[]>;
 }, Row | undefined>(({ rows }) => rows.get()[0], {
     type: "object",
@@ -129,7 +129,7 @@ const __cfLift_3 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h982e956d5205 = __cfHelpers.lift<{
     rows: __cfHelpers.Writable<Row[]>;
 }, string>(({ rows }) => rows.get().join(","), {
     type: "object",
@@ -160,7 +160,7 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_5 = __cfHelpers.lift<{
+const __cfLift_h6e93f541fe6d_2 = __cfHelpers.lift<{
     rows: __cfHelpers.Writable<Row[]>;
 }, readonly Row[]>(({ rows }) => rows.get(), {
     type: "object",
@@ -208,7 +208,7 @@ const __cfLift_5 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_6 = __cfHelpers.lift<{
+const __cfLift_h994a3cd6b58c = __cfHelpers.lift<{
     row: {
         sentAt: number;
     };
@@ -229,9 +229,9 @@ const __cfLift_6 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hcf51934bbcbe = __cfHelpers.pattern(__cf_pattern_input => {
     const row = __cf_pattern_input.key("element");
-    return __cfLift_6({ row: {
+    return __cfLift_h994a3cd6b58c({ row: {
             sentAt: row.key("sentAt")
         } }).for("__patternResult", true);
 }, {
@@ -259,7 +259,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_7 = __cfHelpers.lift<{
+const __cfLift_hd457b85824ad = __cfHelpers.lift<{
     label?: __cfHelpers.Writable<string> | undefined;
 }, string | undefined>(({ label }) => label?.get(), {
     type: "object",
@@ -292,12 +292,12 @@ const __cfLift_7 = __cfHelpers.lift<{
 export default pattern((__cf_pattern_input) => {
     const rows = __cf_pattern_input.key("rows");
     const label = __cf_pattern_input.key("label");
-    const count = __cfLift_1({ rows: rows }).for("count", true);
-    const all = __cfLift_2({ rows: rows }).for("all", true);
-    const first = __cfLift_3({ rows: rows }).for("first", true);
-    const joined = __cfLift_4({ rows: rows }).for("joined", true);
-    const recent = __cfLift_5({ rows: rows }).filterWithPattern(__cfPattern_1, {}).for("recent", true);
-    const optional = __cfLift_7({ label: label }).for("optional", true);
+    const count = __cfLift_h6e3cc74f1dd3({ rows: rows }).for("count", true);
+    const all = __cfLift_h6e93f541fe6d({ rows: rows }).for("all", true);
+    const first = __cfLift_hb4c16d0a1435({ rows: rows }).for("first", true);
+    const joined = __cfLift_h982e956d5205({ rows: rows }).for("joined", true);
+    const recent = __cfLift_h6e93f541fe6d_2({ rows: rows }).filterWithPattern(__cfPattern_hcf51934bbcbe, {}).for("recent", true);
+    const optional = __cfLift_hd457b85824ad({ label: label }).for("optional", true);
     return { count, all, first, joined, recent, optional };
 }, {
     type: "object",
@@ -381,12 +381,20 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4,
-    __cfLift_5,
-    __cfLift_6,
-    __cfPattern_1,
-    __cfLift_7
+    __cfLift_h6e3cc74f1dd3,
+    __cfLift_h6e93f541fe6d,
+    __cfLift_hb4c16d0a1435,
+    __cfLift_h982e956d5205,
+    __cfLift_h6e93f541fe6d_2,
+    __cfLift_h994a3cd6b58c,
+    __cfPattern_hcf51934bbcbe,
+    __cfLift_hd457b85824ad,
+    __cfLift_1: __cfLift_h6e3cc74f1dd3,
+    __cfLift_2: __cfLift_h6e93f541fe6d,
+    __cfLift_3: __cfLift_hb4c16d0a1435,
+    __cfLift_4: __cfLift_h982e956d5205,
+    __cfLift_5: __cfLift_h6e93f541fe6d_2,
+    __cfLift_6: __cfLift_h994a3cd6b58c,
+    __cfPattern_1: __cfPattern_hcf51934bbcbe,
+    __cfLift_7: __cfLift_hd457b85824ad
 });

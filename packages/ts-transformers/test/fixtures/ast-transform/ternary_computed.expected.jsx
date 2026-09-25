@@ -14,7 +14,7 @@ const __cfAmdHooks = undefined;
 interface PatternState {
     value: Default<number, 0>;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h7a4ce95fb921 = __cfHelpers.lift<{
     state: {
         value: number;
     };
@@ -35,7 +35,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_ha245ae91eff9 = __cfHelpers.lift<{
     state: {
         value: number;
     };
@@ -73,9 +73,9 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: ["number", "string"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h7a4ce95fb921({ state: {
                 value: state.key("value")
-            } }), __cfLift_2({ state: {
+            } }), __cfLift_ha245ae91eff9({ state: {
                 value: state.key("value")
             } }), "undefined")}
       </div>),
@@ -126,6 +126,8 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_h7a4ce95fb921,
+    __cfLift_ha245ae91eff9,
+    __cfLift_1: __cfLift_h7a4ce95fb921,
+    __cfLift_2: __cfLift_ha245ae91eff9
 });

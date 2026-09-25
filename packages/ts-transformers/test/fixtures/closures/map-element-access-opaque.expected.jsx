@@ -15,7 +15,7 @@ interface State {
     sortedTags: string[];
     tagCounts: Record<string, number>;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h4dee98929829 = __cfHelpers.lift<{
     state: {
         tagCounts: Record<string, number>;
     };
@@ -44,11 +44,11 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["number", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hd6dbc804668e = __cfHelpers.pattern(__cf_pattern_input => {
     const tag = __cf_pattern_input.key("element");
     const state = __cf_pattern_input.key("params", "state");
     return (<span>
-            {tag}: {__cfLift_1({
+            {tag}: {__cfLift_h4dee98929829({
         state: {
             tagCounts: state.key("tagCounts")
         },
@@ -111,7 +111,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("sortedTags").mapWithPattern(__cfPattern_1, {
+        {state.key("sortedTags").mapWithPattern(__cfPattern_hd6dbc804668e, {
                 state: {
                     tagCounts: state.key("tagCounts")
                 }
@@ -170,6 +170,8 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_h4dee98929829,
+    __cfPattern_hd6dbc804668e,
+    __cfLift_1: __cfLift_h4dee98929829,
+    __cfPattern_1: __cfPattern_hd6dbc804668e
 });

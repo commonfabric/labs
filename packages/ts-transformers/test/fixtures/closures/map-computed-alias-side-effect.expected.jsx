@@ -19,7 +19,7 @@ __cfHardenFn(nextKey);
 interface State {
     items: Array<Record<string, number>>;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h8cb8146c03b7 = __cfHelpers.lift<{
     element: any;
     __cf_amount_key: any;
 }, number | undefined>(({ element, __cf_amount_key }) => element[__cf_amount_key], {
@@ -32,10 +32,10 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["number", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_he5b726ec597e = __cfHelpers.pattern(__cf_pattern_input => {
     const element = __cf_pattern_input.key("element");
     const __cf_amount_key = nextKey();
-    const amount = __cfLift_1({
+    const amount = __cfLift_h8cb8146c03b7({
         element: element,
         __cf_amount_key: __cf_amount_key
     }).for("amount", true);
@@ -81,7 +81,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {})}
+        {state.key("items").mapWithPattern(__cfPattern_he5b726ec597e, {})}
       </div>),
     };
 }, {
@@ -133,6 +133,8 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_h8cb8146c03b7,
+    __cfPattern_he5b726ec597e,
+    __cfLift_1: __cfLift_h8cb8146c03b7,
+    __cfPattern_1: __cfPattern_he5b726ec597e
 });

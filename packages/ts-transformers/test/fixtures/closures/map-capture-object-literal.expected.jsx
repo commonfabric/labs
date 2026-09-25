@@ -16,7 +16,7 @@ interface State {
         name: string;
     }>;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_ha8f1995eb83d = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const style = __cf_pattern_input.params.style;
     return (<span style={style}>{item.key("name")}</span>);
@@ -81,7 +81,7 @@ export default pattern((state) => {
     const style = { color: "red", fontSize: 14 };
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_ha8f1995eb83d, {
                 style: style
             })}
       </div>),
@@ -137,5 +137,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_ha8f1995eb83d,
+    __cfPattern_1: __cfPattern_ha8f1995eb83d
 });

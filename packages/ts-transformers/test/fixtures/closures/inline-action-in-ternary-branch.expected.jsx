@@ -27,7 +27,7 @@ interface State {
     card: Card;
     isEditing: Cell<boolean>;
 }
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h4dd54a6449de = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         state: {
@@ -43,11 +43,11 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
     },
     required: ["state"]
 } as const satisfies __cfHelpers.JSONSchema, (__cf_handler_event, { state }) => state.isEditing.set(true));
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h6f2eaa266e70 = __cfHelpers.lift<{
     state: {
         isEditing: __cfHelpers.ReadonlyCell<boolean>;
     };
-}, __cfHelpers.JSXElement>(({ state }) => (<cf-button onClick={__cfHandler_1({
+}, __cfHelpers.JSXElement>(({ state }) => (<cf-button onClick={__cfHandler_h4dd54a6449de({
     state: {
         isEditing: state.isEditing
     }
@@ -116,7 +116,7 @@ export default pattern((state) => {
             <span>{state.key("card", "title")}</span>
             {/* Explicit computed() wrapping a button with inline handler */}
             {/* The Cell ref in the handler must be captured in the lift-applied computation */}
-            {__cfLift_1({ state: {
+            {__cfLift_h6f2eaa266e70({ state: {
                     isEditing: state.key("isEditing")
                 } })}
           </div>)}
@@ -198,6 +198,8 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1,
-    __cfLift_1
+    __cfHandler_h4dd54a6449de,
+    __cfLift_h6f2eaa266e70,
+    __cfHandler_1: __cfHandler_h4dd54a6449de,
+    __cfLift_1: __cfLift_h6f2eaa266e70
 });

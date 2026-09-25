@@ -19,7 +19,7 @@ interface Input {
 interface Result {
     doubled: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h7d1023a45462 = __cfHelpers.lift<{
     count: number;
 }, number>(({ count }) => count * 2, {
     type: "object",
@@ -40,7 +40,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 export default pattern((__cf_pattern_input) => {
     const count = __cf_pattern_input.key("count");
     return {
-        doubled: __cfLift_1({ count: count }).for(["__patternResult", "doubled"], true)
+        doubled: __cfLift_h7d1023a45462({ count: count }).for(["__patternResult", "doubled"], true)
     };
 }, {
     type: "object",
@@ -63,5 +63,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h7d1023a45462,
+    __cfLift_1: __cfLift_h7d1023a45462
 });

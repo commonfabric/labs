@@ -14,7 +14,7 @@ const __cfAmdHooks = undefined;
 interface Item {
     id: string;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hff88f9de98cc = __cfHelpers.lift<{
     items?: Item[] | undefined;
 }, Item[]>(({ items }) => items ?? [], {
     type: "object",
@@ -54,7 +54,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hb32bf9452bc4 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return <span data-inline-id={item.key("id")}>{item.key("id")}</span>;
 }, {
@@ -97,7 +97,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_heac5394eeb2e = __cfHelpers.lift<{
     items?: Item[] | undefined;
 }, Item[]>(({ items }) => (items as Item[] | undefined) ?? [], {
     type: "object",
@@ -137,7 +137,7 @@ const __cfLift_2 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h2d6ab837b25b = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return (<span data-cast-id={item.key("id")}>{item.key("id")}</span>);
 }, {
@@ -180,7 +180,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h8652c8fdce24 = __cfHelpers.lift<{
     items?: Item[] | undefined;
 }, Item[]>(({ items }) => (items satisfies Item[] | undefined) ?? [], {
     type: "object",
@@ -220,7 +220,7 @@ const __cfLift_3 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hef14e1c72f15 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return (<span data-satisfies-id={item.key("id")}>{item.key("id")}</span>);
 }, {
@@ -273,9 +273,9 @@ export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
     return {
         [UI]: (<div>
-        {(__cfLift_1({ items: items })).mapWithPattern(__cfPattern_1, {})}
-        {(__cfLift_2({ items: items })).mapWithPattern(__cfPattern_2, {})}
-        {(__cfLift_3({ items: items })).mapWithPattern(__cfPattern_3, {})}
+        {(__cfLift_hff88f9de98cc({ items: items })).mapWithPattern(__cfPattern_hb32bf9452bc4, {})}
+        {(__cfLift_heac5394eeb2e({ items: items })).mapWithPattern(__cfPattern_h2d6ab837b25b, {})}
+        {(__cfLift_h8652c8fdce24({ items: items })).mapWithPattern(__cfPattern_hef14e1c72f15, {})}
       </div>),
     };
 }, {
@@ -333,10 +333,16 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1,
-    __cfLift_2,
-    __cfPattern_2,
-    __cfLift_3,
-    __cfPattern_3
+    __cfLift_hff88f9de98cc,
+    __cfPattern_hb32bf9452bc4,
+    __cfLift_heac5394eeb2e,
+    __cfPattern_h2d6ab837b25b,
+    __cfLift_h8652c8fdce24,
+    __cfPattern_hef14e1c72f15,
+    __cfLift_1: __cfLift_hff88f9de98cc,
+    __cfPattern_1: __cfPattern_hb32bf9452bc4,
+    __cfLift_2: __cfLift_heac5394eeb2e,
+    __cfPattern_2: __cfPattern_h2d6ab837b25b,
+    __cfLift_3: __cfLift_h8652c8fdce24,
+    __cfPattern_3: __cfPattern_hef14e1c72f15
 });

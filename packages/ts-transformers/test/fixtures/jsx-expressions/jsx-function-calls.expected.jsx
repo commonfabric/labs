@@ -20,7 +20,7 @@ interface State {
     name: string;
     float: string;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hc153d1b5c82c = __cfHelpers.lift<{
     state: {
         a: number;
         b: number;
@@ -45,7 +45,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hffd39797350c = __cfHelpers.lift<{
     state: {
         a: number;
     };
@@ -66,7 +66,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h57086f1770fe = __cfHelpers.lift<{
     state: {
         a: number;
         b: number;
@@ -91,7 +91,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_he75194969f73 = __cfHelpers.lift<{
     state: {
         price: number;
     };
@@ -112,7 +112,7 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_5 = __cfHelpers.lift<{
+const __cfLift_h6c3d6e4ebc7e = __cfHelpers.lift<{
     state: {
         price: number;
     };
@@ -133,7 +133,7 @@ const __cfLift_5 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_6 = __cfHelpers.lift<{
+const __cfLift_h01327696368c = __cfHelpers.lift<{
     state: {
         price: number;
     };
@@ -154,7 +154,7 @@ const __cfLift_6 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_7 = __cfHelpers.lift<{
+const __cfLift_ha1812ca90e20 = __cfHelpers.lift<{
     state: {
         a: number;
     };
@@ -175,7 +175,7 @@ const __cfLift_7 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_8 = __cfHelpers.lift<{
+const __cfLift_hd70a6d2393b8 = __cfHelpers.lift<{
     state: {
         name: string;
     };
@@ -196,7 +196,7 @@ const __cfLift_8 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_9 = __cfHelpers.lift<{
+const __cfLift_h06a586055757 = __cfHelpers.lift<{
     state: {
         name: string;
     };
@@ -217,7 +217,7 @@ const __cfLift_9 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_10 = __cfHelpers.lift<{
+const __cfLift_hbce3f5caa499 = __cfHelpers.lift<{
     state: {
         text: string;
     };
@@ -238,7 +238,7 @@ const __cfLift_10 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_11 = __cfHelpers.lift<{
+const __cfLift_h20a0fe9c716a = __cfHelpers.lift<{
     state: {
         text: string;
     };
@@ -259,7 +259,7 @@ const __cfLift_11 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_12 = __cfHelpers.lift<{
+const __cfLift_hd27e59eaabe9 = __cfHelpers.lift<{
     state: {
         text: string;
     };
@@ -280,7 +280,7 @@ const __cfLift_12 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_13 = __cfHelpers.lift<{
+const __cfLift_hbe3db5019722 = __cfHelpers.lift<{
     state: {
         name: string;
     };
@@ -301,7 +301,7 @@ const __cfLift_13 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_14 = __cfHelpers.lift<{
+const __cfLift_hb8f89b907c39 = __cfHelpers.lift<{
     state: {
         price: number;
     };
@@ -322,7 +322,7 @@ const __cfLift_14 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_15 = __cfHelpers.lift<{
+const __cfLift_hb821b83dfb5b = __cfHelpers.lift<{
     state: {
         price: number;
     };
@@ -343,7 +343,7 @@ const __cfLift_15 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_16 = __cfHelpers.lift<{
+const __cfLift_h1f431b9b430a = __cfHelpers.lift<{
     state: {
         float: string;
     };
@@ -364,7 +364,7 @@ const __cfLift_16 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_17 = __cfHelpers.lift<{
+const __cfLift_hb332029fac5d = __cfHelpers.lift<{
     state: {
         float: string;
     };
@@ -385,7 +385,7 @@ const __cfLift_17 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_18 = __cfHelpers.lift<{
+const __cfLift_hf4dc1251e63c = __cfHelpers.lift<{
     state: {
         values: number[];
     };
@@ -409,7 +409,7 @@ const __cfLift_18 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_19 = __cfHelpers.lift<{
+const __cfLift_h81c31b3c6346 = __cfHelpers.lift<{
     state: {
         values: number[];
     };
@@ -433,7 +433,7 @@ const __cfLift_19 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_20 = __cfHelpers.lift<{
+const __cfLift_hf6f49a1f9e90 = __cfHelpers.lift<{
     state: {
         values: number[];
     };
@@ -457,7 +457,7 @@ const __cfLift_20 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_21 = __cfHelpers.lift<{
+const __cfLift_h4bea4b458ea1 = __cfHelpers.lift<{
     state: {
         a: number;
     };
@@ -478,7 +478,7 @@ const __cfLift_21 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_22 = __cfHelpers.lift<{
+const __cfLift_h2d17bf278df3 = __cfHelpers.lift<{
     state: {
         a: number;
     };
@@ -499,7 +499,7 @@ const __cfLift_22 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_23 = __cfHelpers.lift<{
+const __cfLift_h5dac3358f7b4 = __cfHelpers.lift<{
     state: {
         name: string;
     };
@@ -520,7 +520,7 @@ const __cfLift_23 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_24 = __cfHelpers.lift<{
+const __cfLift_h6c2a5c2bed73 = __cfHelpers.lift<{
     state: {
         a: number;
         b: number;
@@ -554,41 +554,41 @@ export default pattern((state) => {
     return {
         [UI]: (<div>
         <h3>Math Functions</h3>
-        <p>Max: {__cfLift_1({ state: {
+        <p>Max: {__cfLift_hc153d1b5c82c({ state: {
                 a: state.key("a"),
                 b: state.key("b")
             } })}</p>
-        <p>Min: {__cfLift_2({ state: {
+        <p>Min: {__cfLift_hffd39797350c({ state: {
                 a: state.key("a")
             } })}</p>
-        <p>Abs: {__cfLift_3({ state: {
+        <p>Abs: {__cfLift_h57086f1770fe({ state: {
                 a: state.key("a"),
                 b: state.key("b")
             } })}</p>
-        <p>Round: {__cfLift_4({ state: {
+        <p>Round: {__cfLift_he75194969f73({ state: {
                 price: state.key("price")
             } })}</p>
-        <p>Floor: {__cfLift_5({ state: {
+        <p>Floor: {__cfLift_h6c3d6e4ebc7e({ state: {
                 price: state.key("price")
             } })}</p>
-        <p>Ceiling: {__cfLift_6({ state: {
+        <p>Ceiling: {__cfLift_h01327696368c({ state: {
                 price: state.key("price")
             } })}</p>
-        <p>Square root: {__cfLift_7({ state: {
+        <p>Square root: {__cfLift_ha1812ca90e20({ state: {
                 a: state.key("a")
             } })}</p>
 
         <h3>String Methods as Function Calls</h3>
-        <p>Uppercase: {__cfLift_8({ state: {
+        <p>Uppercase: {__cfLift_hd70a6d2393b8({ state: {
                 name: state.key("name")
             } })}</p>
-        <p>Lowercase: {__cfLift_9({ state: {
+        <p>Lowercase: {__cfLift_h06a586055757({ state: {
                 name: state.key("name")
             } })}</p>
-        <p>Substring: {__cfLift_10({ state: {
+        <p>Substring: {__cfLift_hbce3f5caa499({ state: {
                 text: state.key("text")
             } })}</p>
-        <p>Replace: {__cfLift_11({ state: {
+        <p>Replace: {__cfLift_h20a0fe9c716a({ state: {
                 text: state.key("text")
             } })}</p>
         <p>Includes: {__cfHelpers.ifElse({
@@ -599,7 +599,7 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["Yes", "No"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_12({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_hd27e59eaabe9({ state: {
                 text: state.key("text")
             } }), "Yes", "No")}</p>
         <p>Starts with: {__cfHelpers.ifElse({
@@ -610,48 +610,48 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["Yes", "No"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_13({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_hbe3db5019722({ state: {
                 name: state.key("name")
             } }), "Yes", "No")}</p>
 
         <h3>Number Methods</h3>
-        <p>To Fixed: {__cfLift_14({ state: {
+        <p>To Fixed: {__cfLift_hb8f89b907c39({ state: {
                 price: state.key("price")
             } })}</p>
-        <p>To Precision: {__cfLift_15({ state: {
+        <p>To Precision: {__cfLift_hb821b83dfb5b({ state: {
                 price: state.key("price")
             } })}</p>
 
         <h3>Parse Functions</h3>
-        <p>Parse Int: {__cfLift_16({ state: {
+        <p>Parse Int: {__cfLift_h1f431b9b430a({ state: {
                 float: state.key("float")
             } })}</p>
-        <p>Parse Float: {__cfLift_17({ state: {
+        <p>Parse Float: {__cfLift_hb332029fac5d({ state: {
                 float: state.key("float")
             } })}</p>
 
         <h3>Array Method Calls</h3>
-        <p>Sum: {__cfLift_18({ state: {
+        <p>Sum: {__cfLift_hf4dc1251e63c({ state: {
                 values: state.key("values")
             } })}</p>
-        <p>Max value: {__cfLift_19({ state: {
+        <p>Max value: {__cfLift_h81c31b3c6346({ state: {
                 values: state.key("values")
             } })}</p>
-        <p>Joined: {__cfLift_20({ state: {
+        <p>Joined: {__cfLift_hf6f49a1f9e90({ state: {
                 values: state.key("values")
             } })}</p>
 
         <h3>Complex Function Calls</h3>
-        <p>Multiple args: {__cfLift_21({ state: {
+        <p>Multiple args: {__cfLift_h4bea4b458ea1({ state: {
                 a: state.key("a")
             } })}</p>
-        <p>Nested calls: {__cfLift_22({ state: {
+        <p>Nested calls: {__cfLift_h2d17bf278df3({ state: {
                 a: state.key("a")
             } })}</p>
-        <p>Chained calls: {__cfLift_23({ state: {
+        <p>Chained calls: {__cfLift_h5dac3358f7b4({ state: {
                 name: state.key("name")
             } })}</p>
-        <p>With expressions: {__cfLift_24({ state: {
+        <p>With expressions: {__cfLift_h6c2a5c2bed73({ state: {
                 a: state.key("a"),
                 b: state.key("b")
             } })}</p>
@@ -720,28 +720,52 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4,
-    __cfLift_5,
-    __cfLift_6,
-    __cfLift_7,
-    __cfLift_8,
-    __cfLift_9,
-    __cfLift_10,
-    __cfLift_11,
-    __cfLift_12,
-    __cfLift_13,
-    __cfLift_14,
-    __cfLift_15,
-    __cfLift_16,
-    __cfLift_17,
-    __cfLift_18,
-    __cfLift_19,
-    __cfLift_20,
-    __cfLift_21,
-    __cfLift_22,
-    __cfLift_23,
-    __cfLift_24
+    __cfLift_hc153d1b5c82c,
+    __cfLift_hffd39797350c,
+    __cfLift_h57086f1770fe,
+    __cfLift_he75194969f73,
+    __cfLift_h6c3d6e4ebc7e,
+    __cfLift_h01327696368c,
+    __cfLift_ha1812ca90e20,
+    __cfLift_hd70a6d2393b8,
+    __cfLift_h06a586055757,
+    __cfLift_hbce3f5caa499,
+    __cfLift_h20a0fe9c716a,
+    __cfLift_hd27e59eaabe9,
+    __cfLift_hbe3db5019722,
+    __cfLift_hb8f89b907c39,
+    __cfLift_hb821b83dfb5b,
+    __cfLift_h1f431b9b430a,
+    __cfLift_hb332029fac5d,
+    __cfLift_hf4dc1251e63c,
+    __cfLift_h81c31b3c6346,
+    __cfLift_hf6f49a1f9e90,
+    __cfLift_h4bea4b458ea1,
+    __cfLift_h2d17bf278df3,
+    __cfLift_h5dac3358f7b4,
+    __cfLift_h6c2a5c2bed73,
+    __cfLift_1: __cfLift_hc153d1b5c82c,
+    __cfLift_2: __cfLift_hffd39797350c,
+    __cfLift_3: __cfLift_h57086f1770fe,
+    __cfLift_4: __cfLift_he75194969f73,
+    __cfLift_5: __cfLift_h6c3d6e4ebc7e,
+    __cfLift_6: __cfLift_h01327696368c,
+    __cfLift_7: __cfLift_ha1812ca90e20,
+    __cfLift_8: __cfLift_hd70a6d2393b8,
+    __cfLift_9: __cfLift_h06a586055757,
+    __cfLift_10: __cfLift_hbce3f5caa499,
+    __cfLift_11: __cfLift_h20a0fe9c716a,
+    __cfLift_12: __cfLift_hd27e59eaabe9,
+    __cfLift_13: __cfLift_hbe3db5019722,
+    __cfLift_14: __cfLift_hb8f89b907c39,
+    __cfLift_15: __cfLift_hb821b83dfb5b,
+    __cfLift_16: __cfLift_h1f431b9b430a,
+    __cfLift_17: __cfLift_hb332029fac5d,
+    __cfLift_18: __cfLift_hf4dc1251e63c,
+    __cfLift_19: __cfLift_h81c31b3c6346,
+    __cfLift_20: __cfLift_hf6f49a1f9e90,
+    __cfLift_21: __cfLift_h4bea4b458ea1,
+    __cfLift_22: __cfLift_h2d17bf278df3,
+    __cfLift_23: __cfLift_h5dac3358f7b4,
+    __cfLift_24: __cfLift_h6c2a5c2bed73
 });

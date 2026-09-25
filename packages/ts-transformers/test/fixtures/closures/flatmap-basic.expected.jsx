@@ -18,7 +18,7 @@ interface Item {
 interface State {
     items: Item[];
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h6c4c7c07d827 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return (<div>Item #{item.key("id")}</div>);
 }, {
@@ -74,7 +74,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("items").flatMapWithPattern(__cfPattern_1, {})}
+        {state.key("items").flatMapWithPattern(__cfPattern_h6c4c7c07d827, {})}
       </div>),
     };
 }, {
@@ -139,5 +139,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_h6c4c7c07d827,
+    __cfPattern_1: __cfPattern_h6c4c7c07d827
 });

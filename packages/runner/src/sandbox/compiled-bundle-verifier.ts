@@ -1323,11 +1323,22 @@ function isCompiledExportStarStatementNormalized(normalized: string): boolean {
 
 /**
  * Recognize the transformer's hoist-registration statement:
- * `__cfReg({ __cfPattern_1, __cfLift_1, … })` — a call to `__cfReg` with a single
- * object literal of shorthand properties, each naming a top-level binding. The
- * shorthand form guarantees every registered value IS a module-level binding (no
- * arbitrary expression / closure value). Returns false for anything else, so a
- * non-conforming `__cfReg` use is rejected as unsupported.
+ * `__cfReg({ __cfPattern_h…, …, __cfPattern_1: __cfPattern_h…, … })` — a call
+ * to `__cfReg` with a single object literal whose entries take exactly two
+ * forms:
+ *
+ *   - a shorthand property naming a top-level binding (canonical hoist names
+ *     and authored non-exported builder consts); or
+ *   - a positional-alias property `__cf<Kind>_<n>: __cf<Kind>_h<digest>` whose
+ *     VALUE names a top-level binding — the visit-order alias the transformer
+ *     registers beside each content-addressed hoist so pointers stored under
+ *     the historical numbering stay loadable.
+ *
+ * Both forms guarantee every registered VALUE is a module-level binding (no
+ * arbitrary expression / closure value) — the property the shorthand-only rule
+ * existed for; the alias form adds only an inert key. Anything else — spreads,
+ * computed keys, string keys, non-alias-shaped `key:value` pairs — is rejected
+ * as unsupported.
  */
 function isHoistRegistrationCallNormalized(
   normalized: string,
@@ -1338,12 +1349,21 @@ function isHoistRegistrationCallNormalized(
   const inner = match[1].replace(/,$/, "").trim();
   if (inner.length === 0) return false;
   for (const raw of inner.split(",")) {
-    const name = raw.trim();
-    // Shorthand identifiers only (`{a,b}`); `key:value`, spreads, computed keys,
-    // and string keys all contain a disallowed character and are rejected.
-    if (!/^[A-Za-z_$][\w$]*$/.test(name)) return false;
-    // Each must be a top-level binding the verifier already saw declared.
-    if (!env.has(name)) return false;
+    const entry = raw.trim();
+    // Shorthand identifier (`{a,b}`): must be a declared top-level binding.
+    if (/^[A-Za-z_$][\w$]*$/.test(entry)) {
+      if (!env.has(entry)) return false;
+      continue;
+    }
+    // Positional-alias pair: numeric-alias key, content-addressed value, and
+    // the VALUE must be a declared top-level binding. Nothing else passes, so
+    // spreads / computed keys / string keys / arbitrary `key:value` stay
+    // rejected exactly as before.
+    const alias = entry.match(
+      /^(__cf[A-Za-z]+_\d+):(__cf[A-Za-z]+_h[0-9a-f]+(?:_\d+)?)$/,
+    );
+    if (!alias) return false;
+    if (!env.has(alias[2])) return false;
   }
   return true;
 }

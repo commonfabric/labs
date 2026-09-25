@@ -32,7 +32,7 @@ interface State {
     removePersonConfirmTarget: string | null;
     spots: Spot[];
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hef6f0b5f7981 = __cfHelpers.lift<{
     state: {
         editingPersonName: string | null;
     };
@@ -61,7 +61,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h703af272706b = __cfHelpers.lift<{
     state: {
         removePersonConfirmTarget: string | null;
     };
@@ -90,7 +90,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h15cbbaba2d64 = __cfHelpers.lift<{
     state: {
         spots: {
             spotNumber: string;
@@ -147,7 +147,7 @@ const __cfLift_3 = __cfHelpers.lift<{
         required: ["label", "value"]
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h10a03c43aa30 = __cfHelpers.lift<{
     activeSpotOpts: {
         length: number;
     };
@@ -168,7 +168,7 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_5 = __cfHelpers.lift<{
+const __cfLift_h08a94ce500b2 = __cfHelpers.lift<{
     spotPreferences: string[];
 }, boolean>(({ spotPreferences }) => spotPreferences.length > 0, {
     type: "object",
@@ -184,7 +184,7 @@ const __cfLift_5 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_6 = __cfHelpers.lift<{
+const __cfLift_h7c1de21101a8 = __cfHelpers.lift<{
     spotPreferences: string[];
 }, string>(({ spotPreferences }) => spotPreferences.map((n) => "#" + n).join(", "), {
     type: "object",
@@ -200,23 +200,23 @@ const __cfLift_6 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h643a896225ff = __cfHelpers.pattern(__cf_pattern_input => {
     const person = __cf_pattern_input.key("element");
     const state = __cf_pattern_input.key("params", "state");
     const personName = person.key("name"), email = person.key("email"), commuteMode = person.key("commuteMode"), priorityRank = person.key("priorityRank"), defaultSpot = person.key("defaultSpot"), spotPreferences = person.key("spotPreferences"), isFirst = person.key("isFirst"), isLast = person.key("isLast");
-    const isEditing = __cfLift_1({
+    const isEditing = __cfLift_hef6f0b5f7981({
         state: {
             editingPersonName: state.key("editingPersonName")
         },
         personName: personName
     }).for("isEditing", true);
-    const isRemoveConfirm = __cfLift_2({
+    const isRemoveConfirm = __cfLift_h703af272706b({
         state: {
             removePersonConfirmTarget: state.key("removePersonConfirmTarget")
         },
         personName: personName
     }).for("isRemoveConfirm", true);
-    const activeSpotOpts = __cfLift_3({ state: {
+    const activeSpotOpts = __cfLift_h15cbbaba2d64({ state: {
             spots: state.key("spots")
         } }).for("activeSpotOpts", true);
     return (<section>
@@ -325,7 +325,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                 type: "object",
                 properties: {}
             }]
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_4({ activeSpotOpts: {
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_h10a03c43aa30({ activeSpotOpts: {
             length: activeSpotOpts.key("length")
         } }), <span>spots</span>, null)}
               {__cfHelpers.ifElse({
@@ -344,8 +344,8 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                 type: "object",
                 properties: {}
             }]
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_5({ spotPreferences: spotPreferences }), <span>
-                    Prefers: {__cfLift_6({ spotPreferences: spotPreferences })}
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_h08a94ce500b2({ spotPreferences: spotPreferences }), <span>
+                    Prefers: {__cfLift_h7c1de21101a8({ spotPreferences: spotPreferences })}
                   </span>, null)}
             </section>);
 }, {
@@ -468,7 +468,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("people").mapWithPattern(__cfPattern_1, {
+        {state.key("people").mapWithPattern(__cfPattern_h643a896225ff, {
                 state: {
                     editingPersonName: state.key("editingPersonName"),
                     removePersonConfirmTarget: state.key("removePersonConfirmTarget"),
@@ -592,11 +592,18 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4,
-    __cfLift_5,
-    __cfLift_6,
-    __cfPattern_1
+    __cfLift_hef6f0b5f7981,
+    __cfLift_h703af272706b,
+    __cfLift_h15cbbaba2d64,
+    __cfLift_h10a03c43aa30,
+    __cfLift_h08a94ce500b2,
+    __cfLift_h7c1de21101a8,
+    __cfPattern_h643a896225ff,
+    __cfLift_1: __cfLift_hef6f0b5f7981,
+    __cfLift_2: __cfLift_h703af272706b,
+    __cfLift_3: __cfLift_h15cbbaba2d64,
+    __cfLift_4: __cfLift_h10a03c43aa30,
+    __cfLift_5: __cfLift_h08a94ce500b2,
+    __cfLift_6: __cfLift_h7c1de21101a8,
+    __cfPattern_1: __cfPattern_h643a896225ff
 });

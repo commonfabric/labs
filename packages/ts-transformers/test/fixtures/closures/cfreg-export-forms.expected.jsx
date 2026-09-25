@@ -36,7 +36,7 @@ const reexportedLift = lift((x: number) => x - 1, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
 export { reexportedLift };
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h09d355f6a10b = __cfHelpers.pattern(__cf_pattern_input => {
     const x = __cf_pattern_input.key("element");
     return internalHelper(x).for("__patternResult", true);
 }, {
@@ -53,7 +53,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
     return ({
-        vs: items.mapWithPattern(__cfPattern_1, {}).for(["__patternResult", "vs"], true)
+        vs: items.mapWithPattern(__cfPattern_h09d355f6a10b, {}).for(["__patternResult", "vs"], true)
     });
 }, {
     type: "object",
@@ -83,5 +83,6 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     internalHelper,
-    __cfPattern_1
+    __cfPattern_h09d355f6a10b,
+    __cfPattern_1: __cfPattern_h09d355f6a10b
 });

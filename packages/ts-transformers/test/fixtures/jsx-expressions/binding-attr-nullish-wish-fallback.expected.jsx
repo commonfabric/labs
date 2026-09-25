@@ -18,7 +18,7 @@ interface Profile {
 interface BadgeState {
     profileInput?: Profile;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h5e12a53b8b00 = __cfHelpers.lift<{
     profileInput?: Profile | undefined;
     profileWish: {
         result: Profile | undefined;
@@ -99,7 +99,7 @@ export default pattern((__cf_pattern_input) => {
     } as const satisfies __cfHelpers.JSONSchema).for("profileWish", true);
     return {
         [UI]: (<div>
-        <cf-profile-badge $profile={__cfLift_1({
+        <cf-profile-badge $profile={__cfLift_h5e12a53b8b00({
             profileInput: profileInput,
             profileWish: {
                 result: profileWish.key("result")
@@ -162,5 +162,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h5e12a53b8b00,
+    __cfLift_1: __cfLift_h5e12a53b8b00
 });

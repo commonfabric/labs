@@ -24,7 +24,7 @@ interface Input {
 interface Output {
     [UI]: VNode;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h9d9f829bb403 = __cfHelpers.lift<{
     file: {
         type: string;
     };
@@ -45,9 +45,9 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h5d209dccb645 = __cfHelpers.pattern(__cf_pattern_input => {
     const file = __cf_pattern_input.key("element");
-    const isFolder = __cfLift_1({ file: {
+    const isFolder = __cfLift_h9d9f829bb403({ file: {
             type: file.key("type")
         } }).for("isFolder", true);
     return isFolder;
@@ -76,7 +76,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_heeb0796677a1 = __cfHelpers.pattern(__cf_pattern_input => {
     const file = __cf_pattern_input.key("element");
     return <span>{file.key("name")}</span>;
 }, {
@@ -126,7 +126,7 @@ export default pattern((__cf_pattern_input) => {
     const files = __cf_pattern_input.key("files");
     return {
         [UI]: (<div>
-        {files.filterWithPattern(__cfPattern_1, {}).mapWithPattern(__cfPattern_2, {})}
+        {files.filterWithPattern(__cfPattern_h5d209dccb645, {}).mapWithPattern(__cfPattern_heeb0796677a1, {})}
       </div>),
     };
 }, {
@@ -167,7 +167,10 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1,
-    __cfPattern_2
+    __cfLift_h9d9f829bb403,
+    __cfPattern_h5d209dccb645,
+    __cfPattern_heeb0796677a1,
+    __cfLift_1: __cfLift_h9d9f829bb403,
+    __cfPattern_1: __cfPattern_h5d209dccb645,
+    __cfPattern_2: __cfPattern_heeb0796677a1
 });

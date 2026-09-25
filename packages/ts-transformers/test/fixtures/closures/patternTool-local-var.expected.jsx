@@ -19,7 +19,7 @@ type Output = {
         content: string;
     }>;
 };
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_ha211a6369c80 = __cfHelpers.lift<{
     language: string;
 }, string>(({ language }) => `Translate to ${language}.`, {
     type: "object",
@@ -32,7 +32,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h5c730a888d1d = __cfHelpers.lift<{
     content: string;
 }, string>(({ content }) => content, {
     type: "object",
@@ -45,7 +45,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_he03f43d93cdf = __cfHelpers.lift<{
     genResult: {
         pending: boolean;
         result?: string | undefined;
@@ -74,17 +74,17 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["string", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = pattern((__cf_pattern_input: {
+const __cfPattern_h502969b505f1 = pattern((__cf_pattern_input: {
     language: string;
     content: string;
 }) => {
     const language = __cf_pattern_input.key("language");
     const content = __cf_pattern_input.key("content");
     const genResult = generateText({
-        system: __cfLift_1({ language: language }).for(["genResult", "system"], true),
-        prompt: __cfLift_2({ content: content }).for(["genResult", "prompt"], true)
+        system: __cfLift_ha211a6369c80({ language: language }).for(["genResult", "system"], true),
+        prompt: __cfLift_h5c730a888d1d({ content: content }).for(["genResult", "prompt"], true)
     }).for("genResult", true);
-    return __cfLift_3({ genResult: {
+    return __cfLift_he03f43d93cdf({ genResult: {
             pending: genResult.key("pending"),
             result: genResult.key("result")
         } }).for("__patternResult", true);
@@ -109,7 +109,7 @@ const __cfPattern_1 = pattern((__cf_pattern_input: {
 //   extraParams).
 //   patternTool(pattern(({ language, content }) => …genResult…), { content })
 export default pattern(() => {
-    const tool = patternTool(__cfPattern_1, { content: content.for(["tool", 1, "content"], true) });
+    const tool = patternTool(__cfPattern_h502969b505f1, { content: content.for(["tool", 1, "content"], true) });
     return { tool };
 }, {
     type: "object",
@@ -162,8 +162,12 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfPattern_1
+    __cfLift_ha211a6369c80,
+    __cfLift_h5c730a888d1d,
+    __cfLift_he03f43d93cdf,
+    __cfPattern_h502969b505f1,
+    __cfLift_1: __cfLift_ha211a6369c80,
+    __cfLift_2: __cfLift_h5c730a888d1d,
+    __cfLift_3: __cfLift_he03f43d93cdf,
+    __cfPattern_1: __cfPattern_h502969b505f1
 });

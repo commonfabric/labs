@@ -22,7 +22,7 @@ interface Message {
 interface Input {
     messages: Message[];
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hff129e72c0e8 = __cfHelpers.pattern(__cf_pattern_input => {
     const reaction = __cf_pattern_input.key("element");
     const msg = __cf_pattern_input.key("params", "msg");
     return (<button type="button" data-msg-id={msg.key("id")}>
@@ -89,7 +89,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h332182e77eca = __cfHelpers.pattern(__cf_pattern_input => {
     const reaction = __cf_pattern_input.key("element");
     const msg = __cf_pattern_input.key("params", "msg");
     return (<span>
@@ -148,15 +148,15 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h829001654f7f = __cfHelpers.pattern(__cf_pattern_input => {
     const msg = __cf_pattern_input.key("element");
     return (<section>
-            {(msg.key("reactions") ?? []).mapWithPattern(__cfPattern_1, {
+            {(msg.key("reactions") ?? []).mapWithPattern(__cfPattern_hff129e72c0e8, {
             msg: {
                 id: msg.key("id")
             }
         })}
-            {(msg.key("reactions") || []).mapWithPattern(__cfPattern_2, {
+            {(msg.key("reactions") || []).mapWithPattern(__cfPattern_h332182e77eca, {
             msg: {
                 id: msg.key("id")
             }
@@ -232,7 +232,7 @@ export default pattern((__cf_pattern_input) => {
     const messages = __cf_pattern_input.key("messages");
     return {
         [UI]: (<div>
-        {messages.mapWithPattern(__cfPattern_3, {})}
+        {messages.mapWithPattern(__cfPattern_h829001654f7f, {})}
       </div>),
     };
 }, {
@@ -312,7 +312,10 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1,
-    __cfPattern_2,
-    __cfPattern_3
+    __cfPattern_hff129e72c0e8,
+    __cfPattern_h332182e77eca,
+    __cfPattern_h829001654f7f,
+    __cfPattern_1: __cfPattern_hff129e72c0e8,
+    __cfPattern_2: __cfPattern_h332182e77eca,
+    __cfPattern_3: __cfPattern_h829001654f7f
 });

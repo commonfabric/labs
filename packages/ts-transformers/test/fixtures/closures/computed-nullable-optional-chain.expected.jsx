@@ -17,11 +17,11 @@ type Question = {
     category: string;
     priority: number;
 };
-const __cfLift_1 = __cfHelpers.lift((): Question | null => {
+const __cfLift_h9573153a224e = __cfHelpers.lift((): Question | null => {
     // In real code this would filter and return first match, or null
     return null;
 }, false, undefined, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h5a6cb2bb4b3b = __cfHelpers.lift<{
     topQuestion: {
         question: string;
     } | null;
@@ -46,7 +46,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_he60ccd567888 = __cfHelpers.lift<{
     topQuestion: Question | null;
 }, string>(({ topQuestion }) => topQuestion === null ? "" : topQuestion.question, {
     type: "object",
@@ -80,7 +80,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h815ffe88b108 = __cfHelpers.lift<{
     topQuestion: {
         category: string;
     } | null;
@@ -105,7 +105,7 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_5 = __cfHelpers.lift<{
+const __cfLift_h343c1dce0059 = __cfHelpers.lift<{
     topQuestion: Question | null;
 }, string>(({ topQuestion }) => topQuestion === null ? "" : topQuestion.category, {
     type: "object",
@@ -148,22 +148,22 @@ const __cfLift_5 = __cfHelpers.lift<{
 //   with asOpaque: true for the topQuestion capture.
 export default pattern((_) => {
     // This computed can return null - simulates finding a question from a list
-    const topQuestion = __cfLift_1().for("topQuestion", true);
+    const topQuestion = __cfLift_h9573153a224e().for("topQuestion", true);
     return {
         [NAME]: "Computed Nullable Optional Chain",
         [UI]: (<div>
         {/* BUG CASE: Optional chaining loses nullability in schema inference */}
         {/* The input schema should have topQuestion as anyOf [Question, null] */}
         {/* but instead infers topQuestion as object with required "question" */}
-        <p>Optional chaining: {__cfLift_2({ topQuestion: topQuestion })}</p>
+        <p>Optional chaining: {__cfLift_h5a6cb2bb4b3b({ topQuestion: topQuestion })}</p>
 
         {/* WORKAROUND: Explicit null check preserves nullability */}
         {/* This correctly generates anyOf [Question, null] in the schema */}
-        <p>Explicit check: {__cfLift_3({ topQuestion: topQuestion })}</p>
+        <p>Explicit check: {__cfLift_he60ccd567888({ topQuestion: topQuestion })}</p>
 
         {/* Same issue with category field */}
-        <span>Category (buggy): {__cfLift_4({ topQuestion: topQuestion })}</span>
-        <span>Category (works): {__cfLift_5({ topQuestion: topQuestion })}</span>
+        <span>Category (buggy): {__cfLift_h815ffe88b108({ topQuestion: topQuestion })}</span>
+        <span>Category (works): {__cfLift_h343c1dce0059({ topQuestion: topQuestion })}</span>
       </div>),
     };
 }, false as const satisfies __cfHelpers.JSONSchema, {
@@ -203,9 +203,14 @@ export default pattern((_) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4,
-    __cfLift_5
+    __cfLift_h9573153a224e,
+    __cfLift_h5a6cb2bb4b3b,
+    __cfLift_he60ccd567888,
+    __cfLift_h815ffe88b108,
+    __cfLift_h343c1dce0059,
+    __cfLift_1: __cfLift_h9573153a224e,
+    __cfLift_2: __cfLift_h5a6cb2bb4b3b,
+    __cfLift_3: __cfLift_he60ccd567888,
+    __cfLift_4: __cfLift_h815ffe88b108,
+    __cfLift_5: __cfLift_h343c1dce0059
 });

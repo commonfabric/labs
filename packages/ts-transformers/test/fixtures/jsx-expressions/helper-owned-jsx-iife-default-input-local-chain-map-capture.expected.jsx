@@ -43,7 +43,7 @@ interface Input {
 interface Output {
     [UI]: VNode;
 }
-const __cfHandler_1 = __cfHelpers.handler({
+const __cfHandler_hfc59d3603eb4 = __cfHelpers.handler({
     type: "object",
     properties: {
         name: {
@@ -66,7 +66,7 @@ const __cfHandler_1 = __cfHelpers.handler({
 } as const satisfies __cfHelpers.JSONSchema, ({ name }, { path }) => {
     path.push(name);
 });
-const __cfHandler_2 = __cfHelpers.handler({
+const __cfHandler_hb1fea7adc27a = __cfHelpers.handler({
     type: "object",
     properties: {
         item: {
@@ -106,7 +106,7 @@ const __cfHandler_2 = __cfHelpers.handler({
 } as const satisfies __cfHelpers.JSONSchema, ({ item }, __cf_action_params) => {
     void item;
 });
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hfd50a862864e = __cfHelpers.lift<{
     path: __cfHelpers.Cell<string[]>;
 }, readonly string[]>(({ path }) => path.get(), {
     type: "object",
@@ -126,7 +126,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h98ff9fc03d40 = __cfHelpers.lift<{
     unsorted: Entry[];
 }, Entry[]>(({ unsorted }) => [...unsorted].sort((a: Entry, b: Entry) => {
     if (a.type === b.type)
@@ -201,7 +201,7 @@ const __cfLift_2 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfHandler_3 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_hb75a3a162723 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         item: {
@@ -228,7 +228,7 @@ const __cfHandler_3 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
 } as const satisfies __cfHelpers.JSONSchema, (_, { handleNavigateInto, item }) => handleNavigateInto.send({
     name: item.name,
 }));
-const __cfHandler_4 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h1e2796f330fe = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         item: {
@@ -276,7 +276,7 @@ const __cfHandler_4 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, (_, { handleOpenFile, item }) => handleOpenFile.send({ item }));
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h40871c06266f = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const handleNavigateInto = __cf_pattern_input.key("params", "handleNavigateInto");
     const handleOpenFile = __cf_pattern_input.key("params", "handleOpenFile");
@@ -290,13 +290,13 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
     } as const satisfies __cfHelpers.JSONSchema, !isFolder &&
         !!item.key("contentType"), item.key("contentType") !== "binary").for("isOpenable", true);
     return (<button type="button" onClick={isFolder
-            ? __cfHandler_3({
+            ? __cfHandler_hb75a3a162723({
                 handleNavigateInto: handleNavigateInto,
                 item: {
                     name: item.key("name")
                 }
             }) : isOpenable
-            ? __cfHandler_4({
+            ? __cfHandler_h1e2796f330fe({
                 handleOpenFile: handleOpenFile,
                 item: item
             }) : undefined}>
@@ -394,10 +394,10 @@ export default pattern((__cf_pattern_input) => {
             type: "string"
         }
     } as const satisfies __cfHelpers.JSONSchema).for("path", true);
-    const handleNavigateInto = __cfHandler_1({
+    const handleNavigateInto = __cfHandler_hfc59d3603eb4({
         path: path
     }).for({ stream: "handleNavigateInto" }, true);
-    const handleOpenFile = __cfHandler_2({}).for({ stream: "handleOpenFile" }, true);
+    const handleOpenFile = __cfHandler_hb1fea7adc27a({}).for({ stream: "handleOpenFile" }, true);
     return {
         [UI]: (<div>
         {(() => {
@@ -480,10 +480,10 @@ export default pattern((__cf_pattern_input) => {
                     items: {
                         type: "string"
                     }
-                } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ path: path }), [])).for("p", true) as string[];
+                } as const satisfies __cfHelpers.JSONSchema, __cfLift_hfd50a862864e({ path: path }), [])).for("p", true) as string[];
                 const unsorted = findChildren(tree, p) as Entry[];
-                const items = __cfLift_2({ unsorted: unsorted }).for("items", true);
-                return items.mapWithPattern(__cfPattern_1, {
+                const items = __cfLift_h98ff9fc03d40({ unsorted: unsorted }).for("items", true);
+                return items.mapWithPattern(__cfPattern_h40871c06266f, {
                     handleNavigateInto: handleNavigateInto,
                     handleOpenFile: handleOpenFile
                 });
@@ -541,11 +541,18 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1,
-    __cfHandler_2,
-    __cfLift_1,
-    __cfLift_2,
-    __cfHandler_3,
-    __cfHandler_4,
-    __cfPattern_1
+    __cfHandler_hfc59d3603eb4,
+    __cfHandler_hb1fea7adc27a,
+    __cfLift_hfd50a862864e,
+    __cfLift_h98ff9fc03d40,
+    __cfHandler_hb75a3a162723,
+    __cfHandler_h1e2796f330fe,
+    __cfPattern_h40871c06266f,
+    __cfHandler_1: __cfHandler_hfc59d3603eb4,
+    __cfHandler_2: __cfHandler_hb1fea7adc27a,
+    __cfLift_1: __cfLift_hfd50a862864e,
+    __cfLift_2: __cfLift_h98ff9fc03d40,
+    __cfHandler_3: __cfHandler_hb75a3a162723,
+    __cfHandler_4: __cfHandler_h1e2796f330fe,
+    __cfPattern_1: __cfPattern_h40871c06266f
 });

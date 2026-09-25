@@ -24,7 +24,7 @@ interface Input {
     logs: Writable<HabitLog[]>;
     todayDate: string;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hac16c55fa17a = __cfHelpers.lift<{
     logs: __cfHelpers.ReadonlyCell<HabitLog[]>;
     habit: {
         name: string;
@@ -79,11 +79,11 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hd0e404c05c63 = __cfHelpers.pattern(__cf_pattern_input => {
     const habit = __cf_pattern_input.key("element");
     const logs = __cf_pattern_input.key("params", "logs");
     const todayDate = __cf_pattern_input.key("params", "todayDate");
-    const doneToday = __cfLift_1({
+    const doneToday = __cfLift_hac16c55fa17a({
         logs: logs,
         habit: {
             name: habit.key("name")
@@ -180,7 +180,7 @@ export default pattern((__cf_pattern_input) => {
     const logs = __cf_pattern_input.key("logs");
     const todayDate = __cf_pattern_input.key("todayDate");
     return {
-        [UI]: <div>{habits.mapWithPattern(__cfPattern_1, {
+        [UI]: <div>{habits.mapWithPattern(__cfPattern_hd0e404c05c63, {
                 logs: logs,
                 todayDate: todayDate
             })}</div>,
@@ -266,6 +266,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_hac16c55fa17a,
+    __cfPattern_hd0e404c05c63,
+    __cfLift_1: __cfLift_hac16c55fa17a,
+    __cfPattern_1: __cfPattern_hd0e404c05c63
 });

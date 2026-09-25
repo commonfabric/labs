@@ -116,8 +116,11 @@ export const SYNTHETIC_HANDLER_HOIST_PREFIX = "__cfHandler";
  * argument of an enclosing `receiver.mapWithPattern(pattern(...), { params })`
  * call (per-instance captures flow through the params object, the second
  * argument). The bare pattern call is hoisted to
- * `const __cfPattern_N = __cfHelpers.pattern(...)` and the `*WithPattern` call's
- * first argument is rewritten to `__cfPattern_N`. The top-level
+ * `const __cfPattern_h<digest> = __cfHelpers.pattern(...)` (content-addressed
+ * canonical name; a visit-order `__cfPattern_N` alias is additionally
+ * registered for pointers stored under the historical numbering — see
+ * `builder-call-hoisting.ts`) and the `*WithPattern` call's first argument is
+ * rewritten to the canonical name. The top-level
  * `export default pattern(...)` is a direct call (not a `*WithPattern`
  * argument) and is NOT hoisted.
  */
