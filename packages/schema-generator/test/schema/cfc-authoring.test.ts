@@ -1027,9 +1027,10 @@ describe("Schema: CFC authoring aliases", () => {
     expect(value.ifc).toBeUndefined();
   });
 
-  it("lowers only the labels where an alias chain's payload keeps a parameter substitution does not reach", async () => {
+  it("reads an alias chain's payload holding an indexed access from the type the chain instantiates", async () => {
     // `Contact` names no parameter, but its expansion reaches `Secret`'s `T`
-    // through an indexed access the lowering does not substitute.
+    // through an indexed access, which no reading of the declaration under
+    // bindings reaches; the type `Contact` instantiates holds it.
     const code = `
       type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
@@ -1049,6 +1050,9 @@ describe("Schema: CFC authoring aliases", () => {
 
     expect(schema.properties?.contact).toEqual({ $ref: "#/$defs/Contact" });
     expect(schema.$defs?.Contact).toEqual({
+      type: "object",
+      properties: { name: { type: "string", enum: ["Ada"] } },
+      required: ["name"],
       ifc: { confidentiality: ["owner"] },
     });
   });
@@ -1734,6 +1738,403 @@ describe("Schema: CFC authoring aliases", () => {
         }
       `);
       expect(messages).toEqual([]);
+    });
+  });
+
+  describe("an alias chain entered with its arguments as written", () => {
+    // A field's annotation reaches the lowering with the reference's argument
+    // nodes. The payload is read from the declaration of the last alias along
+    // the chain, each parameter bound to the argument written for it.
+
+    const ALIASES = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
+      type WriteAuthorizedBy<T, B> = Cfc<T, { writeAuthorizedBy: B }>;
+      type Default<T, V extends T = T> = [T] extends [null | undefined]
+        ? { readonly __ct_default__?: V }
+        : T | (T & { readonly __ct_default__?: V });
+      interface Box<U> { value: U }
+    `;
+
+    const generate = async (code: string) => {
+      const { type, checker } = await getTypeFromCode(
+        ALIASES + code,
+        "Holder",
+      );
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      const schema = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker, undefined, {
+          onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+        }),
+      );
+      return { schema, value: schema.properties?.value, diagnostics };
+    };
+    const box = (value: unknown) => ({
+      type: "object",
+      properties: { value },
+      required: ["value"],
+    });
+
+    it("reads a generic interface the payload holds with the argument", async () => {
+      const { value, diagnostics } = await generate(`
+        type Sec<T> = Confidential<Box<T> & { tag: string }, readonly ["a"]>;
+        interface Holder { value: Sec<string> }
+      `);
+      expect(value).toEqual({
+        type: "object",
+        properties: { value: { type: "string" }, tag: { type: "string" } },
+        required: ["value", "tag"],
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("reads a recursive generic interface apart for each argument", async () => {
+      const { schema } = await generate(`
+        interface Link<U> { value: U; next?: Link<U> }
+        type Sec<T> = Confidential<Link<T>, readonly ["a"]>;
+        interface Holder { value: Sec<string>; other: Sec<number> }
+      `);
+      // Each field refers to the recursive definition its own argument reads.
+      const readsOf = (field: string) => {
+        const reference = schema.properties?.[field] as { $ref: string };
+        const name = reference.$ref.split("/").pop()!;
+        const def = schema.$defs?.[name] as {
+          properties: { value: unknown; next: { anyOf: { $ref?: string }[] } };
+        };
+        return {
+          value: def.properties.value,
+          self: def.properties.next.anyOf.some((arm) =>
+            arm.$ref === reference.$ref
+          ),
+        };
+      };
+      expect(readsOf("value")).toEqual({
+        value: { type: "string" },
+        self: true,
+      });
+      expect(readsOf("other")).toEqual({
+        value: { type: "number" },
+        self: true,
+      });
+    });
+
+    it("reads an argument written in the declaration before it under that declaration's bindings", async () => {
+      const { value } = await generate(`
+        type Sec<T> = Confidential<Box<T>, readonly ["a"]>;
+        type Outer<X> = Sec<X[]>;
+        interface Holder { value: Outer<string> }
+      `);
+      expect(value).toEqual({
+        ...box({ type: "array", items: { type: "string" } }),
+        ifc: { confidentiality: ["a"] },
+      });
+    });
+
+    it("reads an argument the reference leaves out as its default, read with the arguments before it", async () => {
+      const { value, diagnostics } = await generate(`
+        type Sec<T, U = Box<T>> = Confidential<U, readonly ["a"]>;
+        interface Holder { value: Sec<string> }
+      `);
+      expect(value).toEqual({
+        ...box({ type: "string" }),
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("reads a parameter bound to another alias's parameter as that one's argument", async () => {
+      // `Box` and `Inner` both name their parameter `U`; each reads as the
+      // argument its own reference supplies.
+      const { value, diagnostics } = await generate(`
+        type Inner<U> = Confidential<Box<U> | number, readonly ["inner"]>;
+        type Sec<T> = Confidential<Inner<T> | boolean, readonly ["a"]>;
+        interface Holder { value: Sec<string> }
+      `);
+      expect(value).toEqual({
+        anyOf: [
+          {
+            anyOf: [box({ type: "string" }), { type: "number" }],
+            ifc: { confidentiality: ["inner"] },
+          },
+          { type: "boolean" },
+        ],
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("keeps a `Default` written as the argument", async () => {
+      const { value } = await generate(`
+        type Sec<T> = Confidential<{ v: T }, readonly ["a"]>;
+        interface Holder { value: Sec<Default<string, "x">> }
+      `);
+      expect(value).toEqual({
+        type: "object",
+        properties: { v: { type: "string", default: "x" } },
+        required: ["v"],
+        ifc: { confidentiality: ["a"] },
+      });
+    });
+
+    it("keeps the default a `Default` over a parameter writes", async () => {
+      const { value } = await generate(`
+        type Sec<T, D extends T> = Confidential<{ v: Default<T, D> }, readonly ["a"]>;
+        interface Holder { value: Sec<string, "x"> }
+      `);
+      expect(value).toEqual({
+        type: "object",
+        properties: { v: { type: "string", default: "x" } },
+        required: ["v"],
+        ifc: { confidentiality: ["a"] },
+      });
+    });
+
+    it("keeps a label passed as an argument to an alias the payload holds", async () => {
+      const { value } = await generate(`
+        type Sec<T, L extends string> =
+          Confidential<Integrity<Box<T>, readonly [L]>, readonly ["a"]>;
+        interface Holder { value: Sec<string, "lab"> }
+      `);
+      expect(value).toEqual({
+        ...box({ type: "string" }),
+        ifc: { integrity: ["lab"], confidentiality: ["a"] },
+      });
+    });
+
+    it("keeps a writer binding passed as an argument to an alias the payload holds", async () => {
+      const { value } = await generate(`
+        declare function setName(): void;
+        type Owned<T, B> = Confidential<WriteAuthorizedBy<T, B>, readonly ["a"]>;
+        interface Holder { value: Owned<string, typeof setName> }
+      `);
+      expect(value).toMatchObject({
+        type: "string",
+        ifc: {
+          writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["setName"] } },
+        },
+      });
+    });
+
+    it("reads a library alias over a parameter by its syntax", async () => {
+      const { value, diagnostics } = await generate(`
+        type Sec<T> = Confidential<Partial<T>, readonly ["a"]>;
+        interface Holder { value: Sec<{ a: string }> }
+      `);
+      expect(value).toEqual({
+        type: "object",
+        properties: { a: { type: "string" } },
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    const unreachable: [string, string, unknown][] = [
+      ["an indexed access", '{ n: T["a"] }', {
+        type: "object",
+        properties: { n: { type: "string" } },
+        required: ["n"],
+      }],
+      ["a mapped type", "{ [K in keyof T]: T[K] }", {
+        type: "object",
+        properties: { a: { type: "string" } },
+        required: ["a"],
+      }],
+      ["`keyof`", "{ k: keyof T }", {
+        type: "object",
+        properties: { k: { type: "string", enum: ["a"] } },
+        required: ["k"],
+      }],
+    ];
+    for (const [use, payload, expected] of unreachable) {
+      it(`reads a payload using a parameter in ${use} from the type the chain instantiates`, async () => {
+        const { value, diagnostics } = await generate(`
+          type Sec<T extends { a: string }> = Confidential<${payload}, readonly ["a"]>;
+          interface Holder { value: Sec<{ a: string }> }
+        `);
+        expect(value).toEqual({
+          ...(expected as object),
+          ifc: { confidentiality: ["a"] },
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    it("reports a library alias over a parameter whose rules do not apply", async () => {
+      // `Pick` reads its keys from a literal, and `K` is a parameter.
+      const { value, diagnostics } = await generate(`
+        type Sec<T, K extends keyof T> =
+          Confidential<{ picked: Pick<T, K> }, readonly ["a"]>;
+        interface Holder { value: Sec<{ a: string; b: number }, "a"> }
+      `);
+      expect(value).toEqual({
+        type: "object",
+        properties: { picked: true },
+        required: ["picked"],
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
+        "schema-type:unread",
+      ]);
+    });
+
+    it("reports a mapped type over a parameter that a generic declaration in the payload holds", async () => {
+      const { value, diagnostics } = await generate(`
+        interface W<U> { m: Partial<U> }
+        type Sec<T> = Confidential<W<T>, readonly ["a"]>;
+        interface Holder { value: Sec<{ a: string }> }
+      `);
+      expect(value).toEqual({
+        type: "object",
+        properties: { m: {} },
+        required: ["m"],
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
+        "schema-type:unread",
+      ]);
+    });
+
+    it("reports a mapped type a generic declaration in the payload writes over its own parameter", async () => {
+      // `W<T>`'s `m` is `W`'s mapped type instantiated over `T`, which has no
+      // alias arguments to show it and no member the checker can list.
+      const { value, diagnostics } = await generate(`
+        interface W<U> { m: { [K in keyof U]: U[K] } }
+        type Sec<T> = Confidential<W<T>, readonly ["a"]>;
+        interface Holder { value: Sec<{ a: string }> }
+      `);
+      expect(value).toEqual({
+        type: "object",
+        properties: { m: {} },
+        required: ["m"],
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
+        "schema-type:unread",
+      ]);
+    });
+
+    it("reads a mapped type a generic declaration in the payload writes over a concrete argument", async () => {
+      const { value, diagnostics } = await generate(`
+        interface W<U> { m: { [K in keyof U]: U[K] } }
+        type Sec<T> = Confidential<{ w: W<{ a: string }>; t: T }, readonly ["a"]>;
+        interface Holder { value: Sec<number> }
+      `);
+      expect(value).toEqual({
+        type: "object",
+        properties: {
+          w: {
+            type: "object",
+            properties: {
+              m: {
+                type: "object",
+                properties: { a: { type: "string" } },
+                required: ["a"],
+              },
+            },
+            required: ["m"],
+          },
+          t: { type: "number" },
+        },
+        required: ["w", "t"],
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("reads a recursion through the alias with its own parameter as a reference to its definition", async () => {
+      const { value, schema, diagnostics } = await generate(`
+        type Sec<T> = Confidential<{ v: T; next?: Sec<T> }, readonly ["a"]>;
+        interface Holder { value: Sec<string> }
+      `);
+      const next = (value as any).properties.next;
+      const def = schema.$defs?.[next.$ref.split("/").pop()] as any;
+      expect((value as any).properties.v).toEqual({ type: "string" });
+      expect(def.properties.v).toEqual({ type: "string" });
+      expect(def.properties.next.$ref).toBe(next.$ref);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("reads a nesting of an alias in its own argument as written", async () => {
+      const { value, diagnostics } = await generate(`
+        type Wrap<B> = Confidential<{ w: B }, readonly ["w"]>;
+        type Pair<A> = Confidential<{ l: Wrap<A[]> }, readonly ["p"]>;
+        interface Holder { value: Pair<Pair<string>> }
+      `);
+      const pair = (inner: unknown) => ({
+        type: "object",
+        properties: {
+          l: {
+            type: "object",
+            properties: { w: { type: "array", items: inner } },
+            required: ["w"],
+            ifc: { confidentiality: ["w"] },
+          },
+        },
+        required: ["l"],
+        ifc: { confidentiality: ["p"] },
+      });
+      expect(value).toEqual(pair(pair({ type: "string" })));
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("reports a recursion that nests the alias's own argument without end", async () => {
+      const { diagnostics } = await generate(`
+        type Nest<T> = Confidential<{ inner?: Nest<T[]>; v: T }, readonly ["a"]>;
+        interface Holder { value: Nest<string> }
+      `);
+      expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
+        "schema-type:unread",
+      ]);
+    });
+
+    it("reports a generic declaration's member naming a generic alias whose payload its instantiated type does not hold apart", async () => {
+      // `Wrapper<string>` holds the argument, but its payload, a union, is
+      // not one member beside the carrier, and `U` binds nothing here.
+      const { value, diagnostics } = await generate(`
+        type Inner<X> = Confidential<{ v: X } | number, readonly ["i"]>;
+        interface Wrapper<U> { inner: Inner<U> }
+        interface Holder { value: Wrapper<string> }
+      `);
+      expect(value).toEqual({
+        type: "object",
+        properties: {
+          inner: {
+            anyOf: [
+              { type: "number" },
+              { type: "object", properties: { v: {} }, required: ["v"] },
+            ],
+            ifc: { confidentiality: ["i"] },
+          },
+        },
+        required: ["inner"],
+      });
+      expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
+        "schema-type:unread",
+      ]);
+    });
+
+    it("reads a generic declaration's member naming a generic alias from its instantiated type", async () => {
+      // `inner: Inner<U>` is written in `Wrapper`'s parameter, whose argument
+      // is in the type `Wrapper<string>`, not in the member's syntax.
+      const { value, diagnostics } = await generate(`
+        type Inner<X> = Confidential<X[], readonly ["i"]>;
+        interface Wrapper<U> { inner: Inner<U> }
+        interface Holder { value: Wrapper<string> }
+      `);
+      expect(value).toEqual({
+        type: "object",
+        properties: {
+          inner: {
+            type: "array",
+            items: { type: "string" },
+            ifc: { confidentiality: ["i"] },
+          },
+        },
+        required: ["inner"],
+      });
+      expect(diagnostics).toEqual([]);
     });
   });
 });

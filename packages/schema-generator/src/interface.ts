@@ -193,18 +193,41 @@ export interface GenerationContext {
   uninterpretedTypeNodes?: ts.TypeNode[];
 
   /**
-   * Type parameters read as their arguments' types, for a payload read from
-   * the declaration that is written in them: a CFC alias chain entered from
-   * its type has no argument nodes to substitute. Wherever a bound parameter
-   * appears, its argument's type is read. A type that still depends on one
-   * where the binding cannot reach, such as `T["name"]` or a conditional
-   * type, is reported through `uninterpretedTypeNodes` as not fully read.
+   * Type parameters read as their arguments, for a node read from the
+   * declaration that is written in them (`BoundTypeParameters`).
    */
-  boundTypeParameters?: {
-    readonly types: ReadonlyMap<ts.TypeParameterDeclaration, ts.Type>;
-    /** The declared payload, reported where no nearer node is at hand. */
-    readonly declaredNode: ts.TypeNode;
-  };
+  boundTypeParameters?: BoundTypeParameters;
+}
+
+/**
+ * Type parameters bound to their arguments, for a payload read from the
+ * declaration of the alias that holds it, as written, rather than from an
+ * instantiation. Wherever a bound parameter appears, its argument is read. A
+ * type that still depends on one where the binding cannot reach, such as
+ * `T["name"]` or a conditional type, is reported through
+ * `uninterpretedTypeNodes` as not fully read.
+ */
+export interface BoundTypeParameters {
+  readonly arguments: ReadonlyMap<
+    ts.TypeParameterDeclaration,
+    BoundTypeArgument
+  >;
+  /** The node read under these bindings, reported where none is nearer. */
+  readonly declaredNode: ts.TypeNode;
+}
+
+/**
+ * A type parameter's argument. One written as a type argument, or as the
+ * parameter's default, is read from its node under the bindings of the place
+ * it is written, since the node may itself name parameters bound there, and
+ * may say what its type cannot, such as a `Default` or a `typeof` binding.
+ * One with a type and no node is read as that type.
+ */
+export interface BoundTypeArgument {
+  readonly type: ts.Type;
+  readonly node?: ts.TypeNode;
+  /** The bindings `node` is written under, absent where it is under none. */
+  readonly bound?: BoundTypeParameters;
 }
 
 /**

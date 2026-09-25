@@ -12,6 +12,8 @@ import {
 } from "./typescript/default-brand.ts";
 import {
   getTypeAliasDeclaration,
+  holdsTypeParameter,
+  sameBesidesUndefined,
   unwrapTypeParentheses,
 } from "./typescript/type-node.ts";
 import {
@@ -190,11 +192,14 @@ export function safeGetPropertyType(
   }
 
   // Try to get type from declaration
+  const declTypeNode = decl && ts.isPropertySignature(decl)
+    ? decl.type
+    : undefined;
   let typeFromDecl: ts.Type | undefined;
-  if (decl && ts.isPropertySignature(decl) && decl.type) {
+  if (declTypeNode) {
     typeFromDecl = safeGetTypeFromTypeNode(
       checker,
-      decl.type,
+      declTypeNode,
       "property signature",
     );
   }
@@ -204,12 +209,21 @@ export function safeGetPropertyType(
   if (typeFromParent && typeFromDecl) {
     const parentStr = checker.typeToString(typeFromParent);
     const declStr = checker.typeToString(typeFromDecl);
+    // A declaration written in type parameters that the parent instantiates
+    // denotes another type even where the two print alike: `Box<U>` for
+    // another declaration's `U` prints its property `value: U` the same as
+    // `Box`'s own. An optional property's `?` adds `undefined` to it without
+    // instantiating anything.
+    const instantiated = declTypeNode !== undefined &&
+      holdsTypeParameter(declTypeNode, checker) &&
+      typeFromParent !== typeFromDecl &&
+      !(isOptional && sameBesidesUndefined(typeFromParent, typeFromDecl));
 
-    if (parentStr !== declStr) {
+    if (parentStr !== declStr || instantiated) {
       // For optional properties, the parent type may include "| undefined" which we don't want
       // The optionality is tracked separately in the schema via the required array
       // Check if parent is a union that contains undefined, and if removing it gives us the decl type
-      if (isOptional && typeFromParent.isUnion()) {
+      if (isOptional && !instantiated && typeFromParent.isUnion()) {
         const parentUnion = typeFromParent as ts.UnionType;
         const hasUndefined = parentUnion.types.some((t) =>
           !!(t.flags & ts.TypeFlags.Undefined)

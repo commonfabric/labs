@@ -821,11 +821,13 @@ as a type's aliasSymbol, so `type Rec = PerUser<Inner>` reads as `Rec`, and
 only the chain finds the wrapper. The chain ends at a wrapper's name, so
 `Scoped<T, S>`, the type the four are declared with, is not read as one
 written directly. The payload of a wrapper found that way is
-the wrapper's first argument, with the arguments of each generic alias along
-the chain substituted for its parameters, the same walk that lowers a CFC alias
-reached through aliases (§11): `type Rec<T> = PerUser<{ value: T }>` read as
-`Rec<string>` → `{ type: "object", properties: { value: { type: "string" } },
-required: ["value"], scope: "user" }`. Aliases are followed by declaration,
+the wrapper's first argument as the last alias along the chain writes it, read
+with each generic alias's parameters bound to the arguments written for them,
+the same walk that lowers a CFC alias reached through aliases (§11):
+`type Rec<T> = PerUser<{ value: T }>` read as `Rec<string>` →
+`{ type: "object", properties: { value: { type: "string" } },
+required: ["value"], scope: "user" }`, and a generic declaration the payload
+names, as in `PerUser<Box<T>>`, reads with the argument too. Aliases are followed by declaration,
 bare or namespace-qualified (`cf.PerUser<T>`), so two same-named aliases in
 different modules do not stop the walk. Such a type is not hoisted (§5.1), and
 is a scope wrapper for the union rule below. Tested: scope-wrappers.test.ts,
@@ -966,53 +968,77 @@ Mechanics:
   as an `ownerPrincipal` without its `writeAuthorizedBy`. Then the value is its
   payload alone. The `null` the checker dropped is in the schema neither way.
 - User alias chains are followed with type-parameter node substitution until a
-  canonical name is reached (`resolveCfcAliasFromDeclaration` /
-  `substituteTypeNode`). Substitution starts at the authored reference's
-  declaration, including a function-local generic alias whose resolved type
-  reports an inner alias: the outer reference's arguments belong to the outer
-  declaration's parameters. Fixed writer bindings and default value arguments
-  are read from that declaration. References qualified through a namespace
-  import are followed by resolving their full type name, including within a
-  nested policy payload. Cycle detection tracks resolved declarations, so
-  aliases with the same name in different modules remain distinct. Qualified
-  metadata aliases such as `cf.CurrentPrincipal` resolve through the same
-  import. Type arguments are
-  converted to checker types only when the chain reaches a canonical policy
-  alias. Unresolvable expansions fall back to
-  ordinary generation (tested). A subtree holding a substituted parameter is
-  built afresh, with no original node, so the payload is read from the node
-  and its arguments, never back through the checker as the declaration's
-  subtree with the parameter unbound; a subtree holding none keeps its
-  declaration node. An argument a reference leaves out is its parameter's
+  canonical name is reached (`#resolveAliasChainFromDeclaration` /
+  `substituteTypeNode`), and the labels read the substituted argument nodes.
+  Substitution starts at the authored reference's declaration, including a
+  function-local generic alias whose resolved type reports an inner alias:
+  the outer reference's arguments belong to the outer declaration's
+  parameters. Fixed writer bindings and default value arguments are read from
+  that declaration. References qualified through a namespace import are
+  followed by resolving their full type name, including within a nested
+  policy payload. Cycle detection tracks resolved declarations, so aliases
+  with the same name in different modules remain distinct. Qualified metadata
+  aliases such as `cf.CurrentPrincipal` resolve through the same import. Type
+  arguments are converted to checker types only when the chain reaches a
+  canonical policy alias. Unresolvable expansions fall back to ordinary
+  generation (tested). An argument a reference leaves out is its parameter's
   default, read with the arguments before it, as the checker instantiates one.
-  A payload that still refers to a parameter that substitution had an argument
-  for but did not reach, through a kind it does not open (`T["name"]`), is a
-  guess: the payload reads as accepting anything, and the labels are lowered
-  as usual. A chain entered with no argument nodes, as from a type whose print
-  expands the alias, binds each parameter to its argument's type instead, by
-  declaration: a bare reference to the parameter, as a payload, a label, a
-  label's element, or an argument of a nested alias, reads as that type. A
-  payload node holding one (`T[]`, `{ value: T }`) is read from the type the
-  chain instantiates. Every CFC alias adds its metadata to its payload as one
-  more member of an intersection, a carrier holding only `__ct_cfc__`, so the
-  intersection's other member is the innermost payload, the argument in
-  wherever the declaration wrote the parameter (`cfcPayloadOf`). A payload
-  that is itself an intersection or a union has no one other member, and is
-  read from its declaration with each parameter bound to its argument's type
-  (`GenerationContext.boundTypeParameters`): wherever the walk reaches a bound
-  parameter, in a union's member, an intersection's part, an array's element,
-  or an object's property, its argument's type is read. A union or an
-  intersection written in the declaration is read by its written members, as
-  a print of the instantiation was, since the checker folds a member that is
-  itself a union, a CFC alias over one among them, into the whole and loses
-  its boundary and labels. A recursive definition read under bindings is
-  named by its type and its bindings together, so two instantiations of one
-  declaration keep apart. A use the binding
-  cannot reach, one the checker defers such as `T["name"]` or a conditional
-  type, accepts any value there, and the payload is reported as not fully
-  read. A label reads a parameter it holds as its type wherever the label
-  reader pairs that position. A `typeof` binding
-  supplied only as a type argument cannot be read from a type, so a
+- The payload is read from the declaration of the last alias along the chain,
+  as written, with each parameter bound to its argument
+  (`GenerationContext.boundTypeParameters`), never from a substituted node,
+  whose rebuilt references the checker cannot resolve. A parameter's argument
+  is the node written for it, read under the bindings of the place it is
+  written: the reference itself, or the declaration before it along the
+  chain, so `type Outer<X> = Sec<X[]>` reads `Sec`'s parameter as `X[]` with
+  `X` bound to `Outer`'s argument. A default is read under the bindings of the
+  parameters before it, and a bare reference to a bound parameter is that
+  parameter's argument. Wherever the walk reaches a bound parameter, in a
+  union's member, an intersection's part, an array's element, an object's
+  property, or a member of a generic declaration the checker instantiates with
+  it, its argument is read, from its node where it has one, so what only
+  syntax says survives: a `Default`, a `PolicyOf<typeof rules>`, the binding
+  of a nested `WriteAuthorizedBy`. A node holding a bound parameter is read by
+  its syntax where its type is built from the checker's unbound parameter: an
+  object, an array, a tuple, a union, an intersection, `readonly`, a
+  default-library alias the node-based analyzer applies (`Partial`, `Pick`,
+  …), and a `Default`; any other node is read by its type. A union or an
+  intersection is thereby read by its written members, since the checker
+  folds a member that is itself a union, a CFC alias over one among them,
+  into the whole and loses its boundary and labels. A label written as a
+  bound parameter reads its argument, from its node where that names no
+  parameter of its own.
+- A chain entered with no argument nodes, as from a type whose print expands
+  the alias, binds each parameter of its first alias to its argument's type.
+  So does a chain whose written arguments name a type parameter the reading
+  does not bind, as a member of a generic declaration the checker has
+  instantiated does: its argument is in the instantiated type, not in the
+  member's syntax, and the parameter is left unbound. Every CFC alias adds its
+  metadata to its payload as one more member of an intersection, a carrier
+  holding only `__ct_cfc__`, so the intersection's other member is the
+  innermost payload, the argument in wherever the declaration wrote the
+  parameter (`cfcPayloadOf`). For such a chain, and for a written payload
+  using a parameter where no reading under bindings reaches (an indexed
+  access, a conditional type, `keyof`, a mapped type, a template literal
+  type), the payload is read from the type the chain instantiates, less the
+  `undefined` an optional member's `?` adds, where that has one other member
+  and the payload is no CFC alias of its own, whose labels the carriers merge
+  with the chain's. A payload that is itself an intersection or a union has
+  no one other member, and is read from its declaration under the bindings.
+- A use no binding reaches, such as a type the checker defers over a bound
+  parameter (`T["name"]`, a conditional type), a mapped type over one, or a
+  parameter left unbound, accepts any value there, and the payload is reported
+  as not fully read. A type read under bindings is identified, as a recursive
+  definition's name and in cycle detection, by its type and its bindings
+  together, so two instantiations of one declaration keep apart, and an alias
+  reached again inside its own payload with its own parameters refers to its
+  definition. The same type read inside itself with the same arguments
+  written for it, each under deeper bindings, is either a nesting its author
+  wrote out (`Pair<Pair<string>>`) or a recursion that instantiates it without
+  end (`Nest<T[]>` inside `Nest<T>`); nested `MAX_BOUND_NESTING` deep, it is
+  taken for the second, and the innermost accepts any value and is reported.
+  A label reads a parameter it holds as its type wherever the label reader
+  pairs that position. A `typeof` binding that a chain entered from a type
+  receives only as a type argument cannot be read from a type, so a
   `writeAuthorizedBy` claim whose binding arrives that way is not emitted; one
   written in the alias declaration itself is read from the declaration.
 - Metadata values come from type-level literals (`extractLiteralLikeValue`).
