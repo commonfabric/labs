@@ -33,10 +33,18 @@ import {
   effectTargetKey,
   markEffectCompletion,
 } from "../executor/effect-completion.ts";
-import { waveSettlementOf } from "../executor/wave.ts";
+import {
+  delegatedCarriageOf,
+  waveRunContextOf,
+  waveSettlementOf,
+} from "../executor/wave.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import { getCellOrThrow } from "../query-result-proxy.ts";
-import { type Runtime, spaceCellSchema } from "../runtime.ts";
+import {
+  type Runtime,
+  type ServerRunInfo,
+  spaceCellSchema,
+} from "../runtime.ts";
 import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
@@ -420,13 +428,21 @@ export function agent(
       }
     }
 
-    const previousCallHash = state.previousCallHash;
     state.previousCallHash = hash;
     state.currentHash = hash;
-    tx.addCommitCallback((_committedTx, commitResult) => {
-      if (commitResult.error && state.previousCallHash === hash) {
-        state.previousCallHash = previousCallHash;
-      }
+    // A request whose staging does not become durable is not in flight, so
+    // the next run stages it again. On a serving runtime that includes a
+    // staging the wave withdraws after accepting it. Staging a request twice
+    // is harmless, since its record is found by its hash and created once.
+    const forgetRequest = () => {
+      if (state.previousCallHash === hash) state.previousCallHash = undefined;
+    };
+    tx.addCommitCallback((committedTx, commitResult) => {
+      if (commitResult.error) return forgetRequest();
+      const settlement = waveSettlementOf(committedTx) ?? waveSettlementOf(tx);
+      void settlement?.then(({ error }) => {
+        if (error) forgetRequest();
+      });
     });
 
     fields.pending.set(true);
@@ -441,7 +457,9 @@ export function agent(
      * transaction so the record carries that read's labels, and refusing
      * to create one for a request the node has since replaced.
      */
-    const createRecord = async (): Promise<void> => {
+    const createRecord = async (
+      carriage: ServerRunInfo["delegated"],
+    ): Promise<void> => {
       const queue = agentQueueIndexCell(runtime, homeSpace);
       try {
         await queue.sync();
@@ -540,50 +558,77 @@ export function agent(
         );
         return;
       }
-      const indexed = await runtime.editWithRetry((tx) => {
-        tx.tx.scopeKeyIdentity = identity;
-        const record = agentRunRecordCell(
-          runtime,
-          tx,
-          parentCell,
-          cause,
-          hash,
-        );
-        const recordId = record.getAsNormalizedFullLink().id;
-        const queue = agentQueueIndexCell(runtime, homeSpace, tx);
-        // A home space with no queue has nowhere to list the record, and
-        // writing the path anyway would leave a `defaultPattern` value where
-        // the home pattern's own creation expects none.
-        if (queue.withTx(tx).get() === undefined) {
-          throw new Error("the home space holds no agent queue");
-        }
-        const entries = queue.key("entries").withTx(tx);
-        const listed = (entries.get() ?? []).some((entry) =>
-          entry.run.getAsNormalizedFullLink().id === recordId
-        );
-        if (listed) return;
-        // The record's id determines the entry's address, so concurrent
-        // index writes cannot reuse an element from the same list position.
-        // The stored array can carry a different item schema. The writer's
-        // canonical contract declares that each run resolves per user.
-        const entry = entries.elementById(recordId).asSchema(
-          AgentQueueIndexSchema.properties.entries.items,
-        ) as Cell<{ run: Cell<unknown>; host: string; address?: string }>;
-        entry.set({
-          run: record,
-          host,
-          address: renderCellReference(record.getAsNormalizedFullLink()),
+      /**
+       * Writes the record's index entry, and returns why it did not land.
+       * A serving runtime's wave can still withdraw the write after
+       * accepting it. A contribution the wave drops is retryable in place,
+       * and the write adds the entry only if it is not listed, so a first
+       * drop issues the write once more against the state that dropped it.
+       */
+      const index = async (reissue: boolean): Promise<Error | undefined> => {
+        const indexed = await runtime.editWithRetry((tx) => {
+          // The index write is the runtime's own bookkeeping, made after the
+          // request's run is over. Into a home space that is not the served
+          // one it crosses on the staging run's carriage, which a serving wave
+          // admits for an actor that owns or was granted the target space
+          // (serving-loop.md §3d, "Multi-space seals").
+          runtime.stampServerRun(tx, {
+            actionId: `${AGENT_SINK}/index/${effectKey}`,
+            kind: "bookkeeping",
+            ...runtime.delegationForWriteTo(homeSpace, carriage),
+          });
+          tx.tx.scopeKeyIdentity = identity;
+          const record = agentRunRecordCell(
+            runtime,
+            tx,
+            parentCell,
+            cause,
+            hash,
+          );
+          const recordId = record.getAsNormalizedFullLink().id;
+          const queue = agentQueueIndexCell(runtime, homeSpace, tx);
+          // A home space with no queue has nowhere to list the record, and
+          // writing the path anyway would leave a `defaultPattern` value where
+          // the home pattern's own creation expects none.
+          if (queue.withTx(tx).get() === undefined) {
+            throw new Error("the home space holds no agent queue");
+          }
+          const entries = queue.key("entries").withTx(tx);
+          const listed = (entries.get() ?? []).some((entry) =>
+            entry.run.getAsNormalizedFullLink().id === recordId
+          );
+          if (listed) return tx;
+          // The record's id determines the entry's address, so concurrent
+          // index writes cannot reuse an element from the same list position.
+          // The stored array can carry a different item schema. The writer's
+          // canonical contract declares that each run resolves per user.
+          const entry = entries.elementById(recordId).asSchema(
+            AgentQueueIndexSchema.properties.entries.items,
+          ) as Cell<{ run: Cell<unknown>; host: string; address?: string }>;
+          entry.set({
+            run: record,
+            host,
+            address: renderCellReference(record.getAsNormalizedFullLink()),
+          });
+          entries.addUnique(entry);
+          return tx;
         });
-        entries.addUnique(entry);
-      });
-      if (indexed.error) {
+        if (indexed.error) return indexed.error;
+        const withdrawn = (await waveSettlementOf(indexed.ok))?.error;
+        return reissue &&
+            withdrawn?.waveWithdrawalCause === "contribution-dropped"
+          ? index(false)
+          : withdrawn;
+      };
+      const indexError = await index(true);
+      if (indexError) {
         // A record no index names is a request nothing will ever claim, so
         // the effect, which still owns the record until it is indexed, ends
         // it: the record reads `refused` and the result cell derives that.
         reportRejection(
           "Indexing the run record was rejected.",
           hash,
-          indexed.error,
+          indexError,
         );
         const refused = await runtime.editWithRetry((tx) => {
           markEffectCompletion(tx, effectKey);
@@ -653,8 +698,11 @@ export function agent(
         const settlement = served
           ? waveSettlementOf(committedTx) ?? waveSettlementOf(tx)
           : undefined;
+        const carriage = delegatedCarriageOf(
+          waveRunContextOf(committedTx) ?? waveRunContextOf(tx),
+        );
         const work = Promise.resolve(settlement).then((verdict) =>
-          verdict?.error ? undefined : createRecord()
+          verdict?.error ? undefined : createRecord(carriage)
         );
         runtime.trackAsyncWork(work, parentCell);
       },

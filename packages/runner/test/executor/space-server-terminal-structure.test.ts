@@ -18,6 +18,7 @@ import type { SealedCommitVerdict } from "../../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
 import { readValueAtPath } from "../../src/storage/v2-path.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
+import { sessionDemandOf } from "../support/session-demand.ts";
 
 const owner = await Identity.fromPassphrase("terminal structure owner");
 const service = await Identity.fromPassphrase("terminal structure service");
@@ -179,13 +180,15 @@ describe("SpaceServer", () => {
           };
           const facade = new Proxy(server, {
             get(target, key, receiver) {
-              if (key === "demandedInstancesForSpace") {
+              if (key === "demandForSpace") {
                 return (
                   requestedSpace: string,
                   options: { excludePrincipal?: string },
                 ) =>
-                  target.demandedInstancesForSpace(requestedSpace, options)
-                    .map((row) => ({ ...row, root: row.id === rootId }));
+                  sessionDemandOf(
+                    target.demandedInstancesForSpace(requestedSpace, options)
+                      .map((row) => ({ ...row, root: row.id === rootId })),
+                  );
               }
               const value = Reflect.get(target, key, receiver);
               return typeof value === "function" ? value.bind(target) : value;
@@ -390,13 +393,29 @@ describe("SpaceServer", () => {
                 cancelLeftover = runtime.scheduler.addEventHandler(() => {
                   leftoverRuns++;
                 }, leftover);
+                // The settle probes the scheduler after its idle wait too,
+                // ahead of the barrier. The probe guarding the deadline
+                // decision is the one after the barrier.
+                let barrierCrossed = false;
+                const inputSynced = manager.inputSynced.bind(manager);
+                manager.inputSynced = async () => {
+                  await inputSynced();
+                  barrierCrossed = true;
+                };
+                const idle = runtime.idle.bind(runtime);
+                runtime.idle = async () => {
+                  await idle();
+                  barrierCrossed = false;
+                };
                 const isIdle = runtime.scheduler.isIdle.bind(runtime.scheduler);
                 runtime.scheduler.isIdle = () => {
+                  const afterBarrier = barrierCrossed;
+                  barrierCrossed = false;
                   // The settle loop reaches this probe with the re-armed retry
                   // already spent. The copy lands and the clock steps in the
                   // same synchronous stretch as the deadline decision the probe
                   // guards, so the wave is cut with the copy still queued.
-                  if (!deadlineStepped && rearmQueued()) {
+                  if (afterBarrier && !deadlineStepped && rearmQueued()) {
                     runtime.scheduler.queueEvent(
                       leftover,
                       {},

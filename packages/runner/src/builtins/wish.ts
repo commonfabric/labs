@@ -48,7 +48,7 @@ import {
   isStorageTransactionInconsistent,
 } from "../storage/rejection.ts";
 import { isCfcRejectedCommitError } from "../scheduler/cfc-rejection-report.ts";
-import { onSchemaRegistryClear } from "../schema-registry.ts";
+import { schemaRegistryEpoch } from "../schema-registry.ts";
 import {
   enrollRuntimeOwnedStore,
   recordRuntimeOwnedStore,
@@ -1663,16 +1663,13 @@ export type SidecarSurfaceState = {
   openingEpoch?: number;
 };
 
-let schemaRegistryEpoch = 0;
-onSchemaRegistryClear(() => {
-  schemaRegistryEpoch += 1;
-});
-
 /** The pattern this slot has already opened, when it is still usable. */
 export function openedSidecarSurface(
   state: SidecarSurfaceState,
 ): Pattern | undefined {
-  return state.patternEpoch === schemaRegistryEpoch ? state.pattern : undefined;
+  return state.patternEpoch === schemaRegistryEpoch()
+    ? state.pattern
+    : undefined;
 }
 
 /**
@@ -1703,7 +1700,7 @@ export function openSidecarSurface(
 ): Promise<Pattern | undefined> {
   const opened = openedSidecarSurface(state);
   if (opened !== undefined) return Promise.resolve(opened);
-  const epoch = schemaRegistryEpoch;
+  const epoch = schemaRegistryEpoch();
   // An open started in an epoch that has since ended would answer with a
   // pattern whose schema references nothing can resolve, so it is left to
   // settle on its own and a fresh one is asked instead.
@@ -1722,7 +1719,7 @@ export function openSidecarSurface(
       // started one joins it, and otherwise a fresh one starts here. The
       // caller is handed a live answer either way, rather than a dead one or an
       // error account written over a surface still on its way.
-      if (epoch !== schemaRegistryEpoch) {
+      if (epoch !== schemaRegistryEpoch()) {
         return openSidecarSurface(runtime, state, piece, surface, options);
       }
       if (pattern !== undefined) {

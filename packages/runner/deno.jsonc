@@ -67,6 +67,7 @@
     "./cfc/owner-adoption": "./src/cfc/owner-adoption.ts",
     "./cfc/policy-application": "./src/cfc/policy-application.ts",
     "./cfc/clause": "./src/cfc/clause.ts",
+    "./cfc/trust": "./src/cfc/trust.ts",
     "./cfc/label-view-core": "./src/cfc/label-view-core.ts",
     "./cfc/represents-principal": "./src/cfc/represents-principal.ts",
     "./executor/host": "./src/executor/host.ts",

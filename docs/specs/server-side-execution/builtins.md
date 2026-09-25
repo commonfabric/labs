@@ -159,15 +159,21 @@ sent. The post-commit effect writes an `AgentRun` record — the request fields,
 `state: queued` — in the requesting space under the requester's user instance,
 re-reading the request under its own transaction so the record carries that
 read's labels, and appends a `{run, host}` entry to the home-space index a
-runner process subscribes to. The runner claims the record, runs the harness as
-the requester, and writes the terminal fields as an authored client; the
-builtin reads the record and never writes it again, which is what keeps the
-runner's authored writes and the effect's derived creation from ever
-overlapping. Inputs reach the record as links, so what the sink gate measures
-is the task text plus the pointer label of each reference. A request naming a
-tool the requester's registered runner does not offer settles with
-`INVALID_INPUT` before it is staged, and one whose consumed label exceeds its
-own `maxConfidentiality` settles the same way.
+runner process subscribes to. The record commits outside the wave, as an effect
+completion does. The index entry is a bookkeeping write that seals into the
+wave, and when the requester's home space is not the served space it crosses
+there on the delegated carriage of the run that staged the request
+(serving-loop.md §3d). A wave that drops the index write has it issued once
+more. A record whose index write is refused, dropped twice, or withdrawn with
+its wave for any other reason ends `refused`. The runner claims the record, runs
+the harness as the requester, and writes the terminal fields as an authored
+client; the builtin reads the record and never writes it again, which is what
+keeps the runner's authored writes and the effect's derived creation from ever
+overlapping. Inputs reach the record as links, so what the sink gate measures is
+the task text plus the pointer label of each reference. A request naming a tool
+the requester's registered runner does not offer settles with `INVALID_INPUT`
+before it is staged, and one whose consumed label exceeds its own
+`maxConfidentiality` settles the same way.
 
 Named queues retain their issued work when inputs are cleared. Queued
 `generateText` and `generateObject` publish each completion even when a later

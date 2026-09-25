@@ -1366,8 +1366,7 @@ function finalizeReactiveActionCommit(
     if (
       node.registrationToken !== registrationToken ||
       outcome.error?.readDependencyWithdrawn !== true ||
-      (outcome.error as { waveWithdrawalCause?: string } | undefined)
-          ?.waveWithdrawalCause !== "contribution-dropped" ||
+      outcome.error?.waveWithdrawalCause !== "contribution-dropped" ||
       (!state.nodes.isEffect(args.action) &&
         !state.nodes.isComputation(args.action))
     ) return;

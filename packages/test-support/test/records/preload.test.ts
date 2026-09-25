@@ -35,10 +35,6 @@ const FIXTURE_CONFIG = {
       .href,
     "@std/testing/bdd/real": "jsr:@std/testing@^1.0.19/bdd",
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
-    "@records/registration": new URL(
-      "../../src/records/registration.ts",
-      import.meta.url,
-    ).href,
   },
 };
 
@@ -344,26 +340,29 @@ describe("emptied", () => {
 });
 `;
 
-// Two modules that register a suite for whoever calls them, one
-// declaring itself machinery and one not. What each leaf's file comes
-// out as is the whole of what the declaration does.
-const DECLARED_REGISTRAR = `import { describe, it } from "@std/testing/bdd";
-import { registerFrameworkModule } from "@records/registration";
-registerFrameworkModule(import.meta.url);
-export function suite(title: string): void {
-  describe(title, () => {
-    it("leaf", () => {});
-  });
+// A module that registers tests for whichever file calls it, the way a
+// shared suite does: leaves inside the caller's own describe, and a
+// top-level test named by the caller.
+const REGISTRAR = `import { it } from "@std/testing/bdd";
+export function leaves(): void {
+  it("kept", () => {});
+  it("dropped", () => {});
+}
+export function test(name: string): void {
+  Deno.test(name, () => {});
 }
 `;
 
-const BARE_REGISTRAR = `import { describe, it } from "@std/testing/bdd";
-export function suite(title: string): void {
-  describe(title, () => {
-    it("leaf", () => {});
-  });
-}
+/** A test file registering all of its tests through `REGISTRAR`. */
+function registeredThrough(title: string): string {
+  return `import { describe } from "@std/testing/bdd";
+import { leaves, test } from "./registrar.ts";
+describe("${title}", () => {
+  leaves();
+});
+test("${title} bare");
 `;
+}
 
 const BARE_FILE = `Deno.test("bare kept", () => {});
 Deno.test("bare dropped", () => {});
@@ -654,25 +653,45 @@ describe("preload", () => {
     }
   });
 
-  it("attributes a suite a declared registrar built to its caller", async () => {
+  it("attributes a test a helper module registered to the file the run was given", async () => {
     const fixture = await makeFixture({
-      "declared.ts": DECLARED_REGISTRAR,
-      "bare.ts": BARE_REGISTRAR,
-      "declared.test.ts":
-        `import { suite } from "./declared.ts";\nsuite("declared");\n`,
-      "bare.test.ts": `import { suite } from "./bare.ts";\nsuite("bare");\n`,
+      "registrar.ts": REGISTRAR,
+      "one.test.ts": registeredThrough("one"),
+      "two.test.ts": registeredThrough("two"),
     });
     try {
-      const run = await runFixture(fixture, [
-        "declared.test.ts",
-        "bare.test.ts",
-      ]);
+      const run = await runFixture(fixture, ["one.test.ts", "two.test.ts"]);
       assert(run.success, output(run));
       const names = await readNameMaps(fixture.spool);
-      expect(names.get("declared > leaf")).toEqual("declared.test.ts");
-      // Undeclared, so the map names the module that called `describe`
-      // rather than the file that asked it to.
-      expect(names.get("bare > leaf")).toEqual("bare.ts");
+      expect(names.get("one > kept")).toEqual("one.test.ts");
+      expect(names.get("one bare")).toEqual("one.test.ts");
+      expect(names.get("two > kept")).toEqual("two.test.ts");
+      expect(names.get("two bare")).toEqual("two.test.ts");
+      expect([...names.values()]).not.toContain("registrar.ts");
+    } finally {
+      await Deno.remove(fixture.dir, { recursive: true });
+    }
+  });
+
+  it("skips a test a helper module registered by the file the run was given", async () => {
+    const fixture = await makeFixture({
+      "registrar.ts": REGISTRAR,
+      "one.test.ts": registeredThrough("one"),
+      "two.test.ts": registeredThrough("two"),
+    });
+    try {
+      const run = await runFixture(fixture, ["one.test.ts", "two.test.ts"], {
+        skips: { "one.test.ts": ["one > dropped", "one bare"] },
+      });
+      assert(run.success, output(run));
+      const reported = await outcomes(fixture);
+      expect(reported.get("one > kept")).toEqual("pass");
+      expect(reported.get("one > dropped")).toEqual("skip");
+      expect(reported.get("one bare")).toEqual("skip");
+      // The other file registered the same leaves through the same
+      // module, and the list names nothing of it.
+      expect(reported.get("two > dropped")).toEqual("pass");
+      expect(reported.get("two bare")).toEqual("pass");
     } finally {
       await Deno.remove(fixture.dir, { recursive: true });
     }

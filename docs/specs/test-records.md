@@ -132,7 +132,10 @@ The registration preload is such a module, and it replaces what it takes:
 it writes a name-to-file map into the spool, and ingestion lays that over
 what the report says. The map holds each name `Deno.test` was called with
 and, for a file written with `describe` and `it`, the whole chain of each
-leaf. A hook a file declares outside every `describe` has no suite to
+leaf. Every name maps to the test file the process runs, which is
+`Deno.mainModule`, whichever module made the call: a file that registers
+its cases through a shared module is the file its records carry, and the
+file its skip list is keyed by. A hook a file declares outside every `describe` has no suite to
 hold it, so the bdd runner makes one named `global` and every suite that
 file goes on to run sits inside it; the chain each leaf is named by opens
 with that name. A suite title two files share says nothing about either
@@ -233,6 +236,19 @@ and calls it a duration, so which of the three a record holds is decided
 by its name.
 A batch that ended badly is written as a failure, and a test in it
 failing is enough to end it badly.
+
+The job that scores a run's coverage writes what the run's tests covered
+the same way. It is a check no lane can be asked to run, since it reads
+what every lane produced, so it records no test; what it writes are
+measurements, like a lane's, rather than records of a check. Each figure is a record named
+`ci-lane coverage group <group>` or `ci-lane coverage set <suite>/<member>`
+whose `durationMs` holds a count of uncovered lines, and a run whose
+pattern compile cache was not restored also carries
+`ci-lane coverage cold`. The job ships them only from a push, under the
+artifact name `coverage` (`COVERAGE_ARTIFACT`), so that a reader finds a
+day's figures by listing for the objects the relay names after it.
+`coverageRecords` and `coverageFiguresOf` in
+`@commonfabric/test-support/records` write and read them.
 
 A consumer that builds anything per test excludes them first: pass
 rates, durations, a run's verdict per test, the sixty-second list, and

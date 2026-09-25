@@ -9,8 +9,7 @@
  * add it to the DESCRIPTORS array below.
  *
  * Note: Plaid uses a non-standard OAuth flow and remains a manual import
- * in app.ts. The shared /api/integrations/bg route is registered on the
- * first provider router with valid credentials.
+ * in app.ts.
  */
 
 import { getLogger } from "@commonfabric/utils/logger";
@@ -27,7 +26,6 @@ import {
 } from "./oauth2-common/oauth2-common.handlers.ts";
 import {
   createOAuth2Routes,
-  type OAuth2BackgroundIntegrationRoute,
   type OAuth2CallbackRoute,
   type OAuth2LoginRoute,
   type OAuth2LogoutRoute,
@@ -127,15 +125,8 @@ async function resolveProviderConfig(
 /**
  * Create a fully wired Hono router for a single OAuth2 provider.
  * Returns `null` if credentials are missing (logs a warning).
- *
- * @param includeBgRoute  Whether to include the shared /api/integrations/bg route.
- *   The bg handler is provider-agnostic (only calls setBGPiece) but must live
- *   on exactly one router to avoid duplicate-route conflicts.
  */
-async function createProviderRouter(
-  descriptor: ProviderDescriptor,
-  includeBgRoute: boolean,
-) {
+async function createProviderRouter(descriptor: ProviderDescriptor) {
   if (!descriptor.clientId || !descriptor.clientSecret) {
     logger.warn(
       "Missing OAuth credentials (clientId/clientSecret), skipping provider",
@@ -155,7 +146,7 @@ async function createProviderRouter(
   // The generic factory handlers return broader types than the route schemas
   // declare (e.g. Record<string, unknown> vs specific fields). We cast to the
   // route-specific handler types here; runtime behavior is correct.
-  let router = createRouter()
+  const router = createRouter()
     .openapi(routes.login, handlers.login as AppRouteHandler<OAuth2LoginRoute>)
     .openapi(
       routes.callback,
@@ -169,15 +160,6 @@ async function createProviderRouter(
       routes.logout,
       handlers.logout as AppRouteHandler<OAuth2LogoutRoute>,
     );
-
-  if (includeBgRoute) {
-    router = router.openapi(
-      routes.backgroundIntegration,
-      handlers.backgroundIntegration as AppRouteHandler<
-        OAuth2BackgroundIntegrationRoute
-      >,
-    );
-  }
 
   router.use(
     `/api/integrations/${descriptor.name}-oauth/*`,
@@ -198,19 +180,10 @@ async function createProviderRouter(
  *
  * Uses `Promise.allSettled` so one provider's failure doesn't block others.
  * Providers with missing credentials are silently skipped (logged as warning).
- * The shared `/api/integrations/bg` route is assigned to the first provider.
  */
 export async function buildProviderRouters() {
-  // Assign bg route to the first descriptor that has valid credentials
-  let bgAssignedIndex = DESCRIPTORS.findIndex(
-    (d) => d.clientId && d.clientSecret,
-  );
-  if (bgAssignedIndex === -1) bgAssignedIndex = 0; // fallback
-
   const results = await Promise.allSettled(
-    DESCRIPTORS.map((descriptor, index) =>
-      createProviderRouter(descriptor, index === bgAssignedIndex)
-    ),
+    DESCRIPTORS.map((descriptor) => createProviderRouter(descriptor)),
   );
 
   const routers = [];

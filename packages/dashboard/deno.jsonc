@@ -5,17 +5,18 @@
   },
   "tasks": {
     "watch": "deno run --watch --allow-net --allow-run=deno --allow-read --allow-write --allow-env server.ts",
-    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
-    "deno-test": "deno run --allow-env --allow-read --allow-write --allow-run test/runner.ts",
-    // Resvg's Linux loader checks the C library through Node's process report,
-    // which reads CPU, network-interface, and hostname information.
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test browser-test",
     // The run grant cannot be narrowed to `deno`: these tests start the Deno
     // running them, and Deno resolves an allowlist entry of `deno` through
     // `PATH`, which is a different binary when the shell's Deno is not the pin.
     // A task line runs the Deno running the task, so asking that Deno for its
-    // own path allows exactly the one binary the tests start.
-    "test-favicon-raster": "deno test --shuffle=$(deno task -q test-seed) --allow-read --allow-write --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" --allow-ffi --allow-sys=cpus,networkInterfaces,hostname favicon-raster.test.ts regenerate-favicons.test.ts",
-    "test-browser": "deno run --allow-env --allow-read --allow-write --allow-run --allow-net ../deno-web-test/cli.ts **/*.browser.test.ts",
+    // own path allows exactly the one binary the tests start. The two favicon
+    // files load Resvg through FFI, which is as good as every permission, and
+    // Resvg's Linux loader reads system information besides, so they run
+    // under `--allow-all`. The preload gives each process a cache directory of
+    // its own.
+    "deno-test": "deno run --allow-env --allow-read --allow-write --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-sharded-test-files.ts DASHBOARD_TEST_SHARD dashboard . --all-access=favicon-raster.test.ts,regenerate-favicons.test.ts -- --preload=test/cache-directory-preload.ts --allow-env --allow-read --allow-write --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" --ignore='**/*.browser.test.ts' --shuffle=$(deno task -q test-seed)",
+    "browser-test": "deno run --allow-env --allow-read --allow-write --allow-run --allow-net ../deno-web-test/cli.ts **/*.browser.test.ts",
     "regenerate-favicons": "deno run --allow-read --allow-write=favicon-png.generated.ts --allow-ffi --allow-sys=cpus,networkInterfaces,hostname regenerate-favicons.ts"
   }
 }

@@ -14,6 +14,7 @@ import { emptyServingLoopStats } from "../../src/executor/stats.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
+import { sessionDemandOf } from "../support/session-demand.ts";
 
 const owner = await Identity.fromPassphrase("terminal confirmation owner");
 const service = await Identity.fromPassphrase("terminal confirmation service");
@@ -113,9 +114,11 @@ describe("SpaceServer", () => {
     };
     const facade = new Proxy(server, {
       get(target, key, receiver) {
-        if (key === "demandedInstancesForSpace") {
+        if (key === "demandForSpace") {
           return () =>
-            demanded ? [{ id: ids[0], scope, scopeKey, root: true }] : [];
+            sessionDemandOf(
+              demanded ? [{ id: ids[0], scope, scopeKey, root: true }] : [],
+            );
         }
         const value = Reflect.get(target, key, receiver);
         return typeof value === "function" ? value.bind(target) : value;

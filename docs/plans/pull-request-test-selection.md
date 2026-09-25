@@ -397,7 +397,7 @@ table is the migration's checklist.
 | `generated-patterns` | `Generated Patterns Integration Tests (1..2)` | — | `deno`, `compile-cache` |
 | `package-integration` | `Package Integration Tests (3 suites)` | — | `deno`, `toolshed-baked`, `browser` |
 | `package-integration-opposite` | the posture opposite the server-execution default | resolved arm variant | `deno`, `toolshed-baked-opposite`, `browser` |
-| `deployed-topology` | the background-service and cf-harness default-posture gates | — | `deno`, `toolshed`, `bg-piece-service-binary` |
+| `deployed-topology` | the cf-harness default-posture gate | — | `deno`, `toolshed` |
 | `cli-core` | `CLI Integration Tests (3 suites)` | — | `deno`, `toolshed`, `cf`, `jq` |
 | `cli-fuse` | the FUSE steps of the third CLI suite | — | `deno`, `toolshed`, `cf`, `fuse` |
 | `cli-deno` | the Deno-based CLI integration step | — | `deno`, `toolshed`, `cf` |
@@ -405,7 +405,7 @@ table is the migration's checklist.
 | `pattern-integration-opposite` | the posture opposite the server-execution default | resolved arm variant | `deno`, `toolshed-baked-opposite`, `browser`, `compile-cache` |
 | `pattern-reload` | `Pattern Reload Integration Tests` | — | `deno`, `local-dev-servers`, `browser` |
 | `pattern-unit` | `Pattern Unit Tests (1..4)` | — | `deno`, `cf`, `compile-cache` |
-| `binaries` | the compile inside `Build Binary (toolshed)` and the two beside it | — | `deno` |
+| `binaries` | the compiles inside `Build Binary (toolshed)` and `Build Binary (cf)` | — | `deno` |
 | `binaries-opposite` | the toolshed compile whose shell is opposite the server-execution default | resolved arm variant | `deno` |
 
 The server-execution suites now keep stable `default` and `opposite` roles.
@@ -438,7 +438,7 @@ mandatory. This gives removing a skip the same safe rollout behavior as
 adding a new test. The existing rule that the skip registry must be empty
 when server execution becomes the default remains unchanged.
 
-The build jobs (`Build Binary (toolshed)` and the three beside it) do not
+The build jobs (`Build Binary (toolshed)` and the two beside it) do not
 become suites for the reason they exist today. They are not tests; they
 are setup, and as setup they become capability providers.
 
@@ -690,7 +690,7 @@ disappear.
 Four properties come from intercepting at registration rather than on the
 command line. The list is a file named by an environment variable, so
 nothing is bounded by argument length. Names match exactly, so nothing
-needs escaping. The list is keyed by registering file and name together,
+needs escaping. The list is keyed by test file and name together,
 because the same test name occurs in more than one file and the preload
 already computes the file for its attribution work. And no test file
 changes at all: a suite that already passes `--preload` takes a second
@@ -985,8 +985,8 @@ Letting each test file call `Deno.test` itself was measured and
 rejected. A case's class name follows the lexical call site, so a helper
 may compute `ignore` and may even build the whole `TestDefinition` while
 the report still names the test file; that would free the file
-attribution and retire the name map, the spool, the stack read and the
-container case with it. It costs a line in each of 2,241 test files, and
+attribution and retire the name map, the spool and the container case
+with it. It costs a line in each of 2,241 test files, and
 a file missing that line runs no tests and reports none. Trading a
 silent green run of nothing, in the system whose whole purpose is to
 notice, against the deletion of machinery that works and has caused none
@@ -1003,13 +1003,12 @@ and to decide per test whether to wrap at all. The fixture runner does
 not replace it, but stands between the file and the registrar lexically,
 which costs the same class name and puts it on the same list.
 
-Five things a registrar of ours can offer are the whole of what those
+Four things a registrar of ours can offer are the whole of what those
 three do. A callback told of each leaf as it registers, with its file
 and its identity. A predicate consulted at registration, so that a
 listed leaf registers as ignored. Options carried from a `describe` or
-an `it` through to the test. A wrapper a suite installs once and the
-registrar runs around every leaf's body. And a way for a helper that
-builds tests to say which file it builds them for.
+an `it` through to the test. And a wrapper a suite installs once and the
+registrar runs around every leaf's body.
 
 That holds only while the registrar is the only caller of `Deno.test`,
 which it is not today: 553 test files call it directly, at 7,327 sites.
@@ -1023,18 +1022,16 @@ lint rule of the kind the tree already carries for self-imports holds
 the invariant afterwards.
 
 What goes with the replacements is the machinery for seeing around them,
-which is two registries of the modules in the way, kept in step by hand.
+which is a registry of the modules in the way, kept by hand.
 `MACHINERY_MODULE_SUFFIXES` is an array of path tails that ingestion
-reads to refuse a class name naming machinery rather than a test file.
-`registerFrameworkModule` is a function each such module calls on
-itself, adding its URL to a set the stack walk reads to step past its
-frames. A module that stands in the way has to appear in both, and one
-registrar leaves neither anything to name.
+reads to refuse a class name naming machinery rather than a test file,
+and one registrar leaves it nothing to name.
 
-Three readers of the call stack become one with them, and that one can
-raise `Error.stackTraceLimit` around its own capture and take the
-repository root from `Deno.cwd()` or its own `import.meta.url` rather
-than climbing to a `.git` directory.
+The file itself needs none of this. Deno runs each test file in a realm
+of its own with that file as `Deno.mainModule`, and that is where the
+preload takes a test's file from, so a test a helper module registers
+belongs to the file that imported the helper, and the path is the one
+the command named and the skip list is keyed by.
 
 The name map stays, because the file has to reach the process that
 writes the record and that is not the process that knows it. A record's
@@ -1068,21 +1065,18 @@ that feeds them. Everything else stays as it is, that being the name
 map, the spool, the preload's wrapper for a bare `Deno.test`, the JUnit
 ingestion and the skip list.
 
-Two things this does not reach are worth naming so they are not mistaken
-for solved. A run killed at its bound writes no JUnit report at all, so
+One thing this does not reach is worth naming so it is not mistaken for
+solved. A run killed at its bound writes no JUnit report at all, so
 every case it had already passed is lost, which the specification's
 claim that a killed run's records are worth reading does not currently
-hold for. And `Error.stackTraceLimit` is 10, which eight wrapper frames
-would exhaust; fourteen nested `describe` levels do not, because the
-innermost frame that is not machinery is the test file whatever the
-nesting, so this is a hazard rather than a live fault.
+hold for.
 
 Not measured: `it.only`, parallel execution, a step inside a leaf, and
 what a `beforeAll` that throws should do to the rest of its group.
 
 ### The work this adds
 
-- [x] The preload reads a skip list keyed by registering file and name,
+- [x] The preload reads a skip list keyed by test file and name,
       and registers a listed bare `Deno.test` as ignored rather than
       dropping it.
 - [x] `@commonfabric/test-support` gains a `describe` and `it` that
@@ -1219,7 +1213,6 @@ batches.
 | `local-dev-servers` | The whole local dev stack, brought up by `deno task integration` on a chosen port offset | 15–20 seconds |
 | `toolshed-baked` | The same, from a compiled binary, whose baked shell a browser can drive | 42 seconds to build, or 17 to restore |
 | `toolshed-baked-opposite` | The same, from a binary whose shell carries the server-execution define opposite the default | 42 seconds to build, or 17 to restore |
-| `bg-piece-service-binary` | The compiled background service used by its deployed-topology gate | about 30 seconds to build, or under a second to restore |
 | `cf` | The `cf` command-line tool on the path | as above |
 | `compile-cache` | Restores a pattern compile byte cache | 3 seconds |
 
@@ -1236,7 +1229,7 @@ the Deno cache that the `deno` capability restores, so starting from
 source costs a few seconds. The full run on `main` keeps the
 compiled-binary path, because it needs the binary anyway for attestation
 and deployment. A suite that only talks to the server's API takes this
-one, which is why the CLI suites and the deployed-topology gates do.
+one, which is why the CLI suites and the deployed-topology gate do.
 
 **The baked capabilities cannot.** The browser shell is a bundle compiled
 into the binary, so a server run from source answers the API and serves no
@@ -1258,9 +1251,10 @@ shell's service worker, to the Deno release that `mise.toml` pins, or to a
 JSON file an import reaches therefore moves the key like a change to any
 other source. Those graphs start from each entry point and from each module
 in a path the compile embeds with `--include`, because `deno compile`
-follows the imports of both. The toolshed binary leaves out the patterns'
-integration tests, so the test harness modules only those tests import are
-not embedded either.
+follows the imports of both. The toolshed binary leaves out the files in
+the pattern trees that it never serves: the integration tests, the recorded
+compatibility baselines, every other test file, and every iframe guest
+source. The modules only those files import are not embedded either.
 
 A binary is also made from the environment it is built in, because the
 shell bundle bakes environment variables in as compile-time defines. So a
@@ -3203,11 +3197,11 @@ system: no per-person anything, no ranking, nothing that could be read as
 a scoreboard.
 
 That tile is live, ahead of the rest of this plan. It reads the
-repository-wide `coverage-debt: workspace uncovered lines` figure out of
-each `main` run's `perf-metrics` artifact, which the full run on `main`
-produces today and goes on producing under selection. The full run
-produces it by merging every report its lanes wrote, which is the same
-merge the present gate does over the present matrix's artifacts.
+repository-wide `workspace` figure from the coverage measurements each
+`main` run writes into the record store, which the full run on `main` writes
+today and goes on writing under selection. The full run produces it by
+merging every report its lanes wrote, which is the same merge the present
+gate does over the present matrix's artifacts.
 
 The `ACCEPT_COVERAGE_DEBT` markers stay. They are how somebody says "yes,
 knowingly", and they remain the right escape hatch whether or not anything
@@ -3554,14 +3548,12 @@ forced set no lane reported, and the gate treats the two alike. An
 unforced set whose reports name nothing is reported, as an unforced set
 no run measured is.
 
-The publisher fills those numbers from the `perf-metrics` artifact of each
-run on `main` it has not read yet, and carries forward what the previous
-manifest held for the rest of the window. Reading one run's figures costs
-an artifact listing and a download, and a week holds far more runs than a
-four-hourly publish should ask about, so what each run reads is the
-handful since the last one. A publisher run that cannot read them at all
-publishes what the previous manifest held, and every set with no baseline
-is reported rather than gated.
+The publisher fills those numbers from the coverage measurements of the
+`main` runs among the objects it folds, and carries forward what the previous
+manifest held for the rest of the window. A publish folds only what no
+earlier one folded, so what each adds is the runs since the last one. A
+run whose line never reached the store contributes no baseline, and every
+set with no baseline is reported rather than gated.
 
 ### Why this one is sound
 
@@ -4114,8 +4106,9 @@ answers somewhere people can see them.
       variant records, and replace the plan's projection inputs.
 - [x] Dashboard tiles: the flake list, what the newest manifest would
       select, and the coverage debt trend. The trend reads the
-      repository-wide figure each `main` run's `perf-metrics` artifact
-      already carries, so it needed nothing from the rest of this work.
+      repository-wide figure from the coverage measurements each `main`
+      run writes into the record store, so it needs nothing from the rest
+      of this work.
 - [x] The `deno task test-selection` entry point and its modes: `dials`,
       `coverage`, `explain <identity>`, and `plan` with `--dry-run` and
       `--verify`. Every mode that packs reads the topology, so the
@@ -4294,12 +4287,10 @@ exercised on the branch on its own.
       already reads `deno-test` where a member defines one, so this is an
       edit to two manifests and nothing else.
 - [x] The publisher carries each measured set's figure and its commit in
-      the manifest, read from the `perf-metrics` artifact of each `main`
-      run it has not read yet and carried forward from the previous
-      manifest for the rest of the window.
-      `.github/workflows/test-selection.yml` gains `actions: read` for it,
-      and a run without the credential publishes what the previous
-      manifest held rather than failing.
+      the manifest, read from the coverage measurements of the `main` runs it
+      folds and carried forward from the previous manifest for the rest of
+      the window. It reads them from the record store, so it needs no
+      GitHub credential for them.
 - [ ] The publisher's summary names the exclusion-list entries that would
       now fit the run's budget, and the measured sets past
       `LOCAL_COVERAGE_MAX_SECONDS`. Both read the fitted costs of the
@@ -4352,12 +4343,11 @@ exercised on the branch on its own.
       pull request ran a test is settled by its own run's records, and the
       manifest it resolved answers why it did not; the two together are
       honest both before and after the lanes land. The measured-set rise
-      reads a set's figure out of the run's `perf-metrics` artifact,
-      under the metric name `measuredSetCoverageMetric` builds, so it
-      reads the quantity the gate compares rather than the source group
-      over the same member that a selected run only samples. The full run
-      publishes those figures, so the note is silent until it does and
-      needs nothing further then.
+      reads a set's figure out of the run's own coverage artifact, so it
+      reads the quantity the gate compares rather than the source group over
+      the same member that a selected run only samples. The full run
+      publishes those figures, so the note is silent until it does and needs
+      nothing further then.
 - [ ] The reporter's note for a test too flaky for pull requests that
       failed every one of its runs at this commit and passed every one at
       the parent. It needs the full run's extra runs to exist before it can
@@ -4390,13 +4380,21 @@ exercised on the branch on its own.
       baselines name, because it asks git whether the branch contains
       one; a checkout too shallow to answer reports every set as having
       no baseline, which turns the gate off without failing anything.
-- [ ] The full run's half of the same, which only the lanes can carry.
-      Each `full-tests` lane uploads its coverage the same way, and the
-      job that publishes `perf-metrics` merges every report for the
-      repository-wide figure and reads each set's report for the figure
-      `measuredSetCoverageMetric` names. Both come out of the same
-      reports; the merge is what the present `Coverage Check` job already
-      does over the present matrix's artifacts.
+- [ ] The full run's half of the same, which only the lanes can carry. Each
+      `full-tests` lane uploads its coverage the same way, and the job that
+      writes the run's coverage measurements merges every report for the
+      repository-wide figure and reads each set's report for that set's
+      figure. Both come out of the same reports; the merge is what the
+      present `Coverage Check` job already does over the present matrix's
+      artifacts.
+- [ ] That job, `Coverage Report`, writes its measurements into a spool
+      named by `CF_TEST_RECORDS_DIR` and ships them from a push through
+      `test-records-ship` with `artifact: coverage`, the step the
+      `Coverage Check` job carries today, and uploads no `perf-metrics`.
+      `tasks/coverage-report.ts` takes `--reports` alone. Deleting
+      `tasks/coverage-check.ts` removes the last reader of that artifact,
+      and the run-listing and artifact code in `tasks/ci-check-lib.ts` that
+      only it used goes with it.
 - [ ] `tasks/ci-workflow.test.ts` updated for the new anchors and shapes,
       including that the shared lane ship step carries no job-wide variant.
 - [ ] Documentation, in the same pull request rather than after it:

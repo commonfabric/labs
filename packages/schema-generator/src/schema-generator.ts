@@ -13,7 +13,10 @@ import type {
 } from "./interface.ts";
 import { attachUiContract, getUiContractHint } from "./ui-contract.ts";
 import { PrimitiveFormatter } from "./formatters/primitive-formatter.ts";
-import { ObjectFormatter } from "./formatters/object-formatter.ts";
+import {
+  getWrapperSchemaFromCallable,
+  ObjectFormatter,
+} from "./formatters/object-formatter.ts";
 import { ArrayFormatter } from "./formatters/array-formatter.ts";
 import {
   CommonFabricFormatter,
@@ -32,6 +35,7 @@ import {
   detectWrapperViaNode,
   getNamedTypeKey,
   getPropertyNameText,
+  isFunctionLike,
   safeGetIndexTypeOfType,
   safeGetTypeOfSymbolAtLocation,
 } from "./type-utils.ts";
@@ -1733,6 +1737,25 @@ export class SchemaGenerator {
             // that only the resolved type retains. A wrapper with that type
             // must know this node's members were not fully interpreted.
             context.uninterpretedTypeNodes?.push(typeNode);
+            continue;
+          }
+
+          // A print reads as the property would in the object type it was
+          // printed from, where a callable is left out unless it makes a
+          // stream, cell or database.
+          const printedType = context.printedFrom?.(member.type);
+          if (printedType && isFunctionLike(printedType)) {
+            const wrapperSchema = getWrapperSchemaFromCallable(
+              printedType,
+              checker,
+            );
+            if (wrapperSchema) {
+              const uiContract = getUiContractHint(context, member.type);
+              properties[propName] = uiContract
+                ? attachUiContract(wrapperSchema, uiContract)
+                : wrapperSchema;
+              if (!member.questionToken) required.push(propName);
+            }
             continue;
           }
 

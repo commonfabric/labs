@@ -3244,6 +3244,12 @@ export interface ISpaceReplica extends ISpace {
 }
 
 /**
+ * Why a wave withdrew a sealed contribution. A contribution drop is retryable
+ * in place; an explicit wave abandon is expected enclosing-lifecycle teardown.
+ */
+export type WaveWithdrawalCause = "contribution-dropped" | "wave-abandoned";
+
+/**
  * The wave commit step's per-sealed-commit disposition (serving-loop.md
  * §3d). `committed` carries the wave commit's accepted store seq — the
  * sealed commit's pending writes promote to confirmed at that seq.
@@ -3268,9 +3274,8 @@ export type SealedCommitVerdict =
       message: string;
       superseded?: true;
       /** Structured withdrawal classification for consumers that must not
-       * parse diagnostic prose. A contribution drop is retryable in place;
-       * an explicit wave abandon is expected enclosing-lifecycle teardown. */
-      cause?: "contribution-dropped" | "wave-abandoned";
+       * parse diagnostic prose. */
+      cause?: WaveWithdrawalCause;
     };
   };
 

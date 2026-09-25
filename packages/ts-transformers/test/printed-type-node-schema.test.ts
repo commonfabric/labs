@@ -2,11 +2,13 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
+import { CrossStageState } from "../src/core/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import {
   callSchemas,
   callsNamed,
   collect,
+  emittedSchemas,
   literalToValue,
   parseModule,
   patternSchemas,
@@ -46,16 +48,63 @@ export default pattern<Input<${argument}>>(({ c }) => ({
   };
 }
 
-/** The input and result schemas of the first `lift()` in `source`. */
-async function liftSchemas(source: string): Promise<unknown[]> {
+/**
+ * The input and result schemas of the one `lift()` in `source` whose callback
+ * reads `read`.
+ */
+async function liftSchemas(
+  source: string,
+  read: string,
+): Promise<{ input: unknown; result: unknown }> {
   const output = await transformSource(source, {
     types: COMMONFABRIC_TYPES,
     typeCheck: true,
   });
-  const [lift] = callsNamed(parseModule(output), "lift");
-  return lift!.arguments
-    .filter(ts.isSatisfiesExpression)
-    .map((argument) => literalToValue(argument.expression));
+  const root = parseModule(output);
+  const lifts = callsNamed(root, "lift").filter((lift) =>
+    lift.arguments[0]?.getText(root).includes(read)
+  );
+  if (lifts.length !== 1) {
+    throw new Error(`Expected one lift reading ${read}, found ${lifts.length}`);
+  }
+  const [, input, result] = lifts[0]!.arguments;
+  const schema = (argument: ts.Expression | undefined) => {
+    if (!argument || !ts.isSatisfiesExpression(argument)) {
+      throw new Error("Expected a schema literal");
+    }
+    return literalToValue(argument.expression);
+  };
+  return { input: schema(input), result: schema(result) };
+}
+
+/**
+ * The element schema of a list `computed()` declares as `element[]`, whose
+ * `profile` cell the view reads only for display, so narrowing unfolds each
+ * printed element.
+ */
+async function narrowedElement(
+  element: string,
+  declarations = "",
+): Promise<unknown> {
+  const output = await transformSource(
+    `import { type Cell, computed, pattern, type Stream, UI } from "commonfabric";
+type ProfileCell = Cell<{ name?: string }>;
+${declarations}
+export default pattern<{ profiles: ProfileCell[] }>(({ profiles }) => {
+  const participants = computed<${element}[]>(() =>
+    profiles.map((profile) => ({ name: "someone", profile } as ${element}))
+  );
+  return {
+    [UI]: <div>{participants.map((p) => <cf-profile-badge $profile={p.profile} />)}</div>,
+  };
+});`,
+    { types: COMMONFABRIC_TYPES, typeCheck: true },
+  );
+  return emittedSchemas(parseModule(output))
+    .map((schema) =>
+      (schema.properties as Schema | undefined)?.element as Schema | undefined
+    )
+    .find((found) => found !== undefined);
 }
 
 /** The schema of a `Box` whose `value` has the schema `value`. */
@@ -97,6 +146,48 @@ describe("printed type node schema", () => {
           required: ["text"],
           asCell: ["cell"],
         }),
+        scope: "user",
+      };
+
+      expect(capture).toEqual(scoped);
+      expect(result).toEqual(scoped);
+    });
+
+    it("reads the instantiated fields of a scoped tuple holding an empty tuple", async () => {
+      const { capture, result } = await schemasOfBinding(
+        "PerUser<[Box<T>, []]>",
+        "number",
+      );
+      const scoped = {
+        type: "array",
+        items: {
+          anyOf: [{ type: "array", items: false }, box({ type: "number" })],
+        },
+        scope: "user",
+      };
+
+      expect(capture).toEqual(scoped);
+      expect(result).toEqual(scoped);
+    });
+
+    it("keeps a cell argument in a scoped tuple holding an empty tuple", async () => {
+      const { capture, result } = await schemasOfBinding(
+        "PerUser<[Box<T>, []]>",
+        "Writable<{ text: string }>",
+      );
+      const scoped = {
+        type: "array",
+        items: {
+          anyOf: [
+            { type: "array", items: false },
+            box({
+              type: "object",
+              properties: { text: { type: "string" } },
+              required: ["text"],
+              asCell: ["cell"],
+            }),
+          ],
+        },
         scope: "user",
       };
 
@@ -181,7 +272,10 @@ export default pattern<{ n: number }>(({ n }) => ({
     });
   });
 
-  describe("a type the checker will not print", () => {
+  describe("a type holding an empty tuple", () => {
+    // `Default<[]>` resolves to `[] & brand`, and the checker prints a type
+    // holding `[]` only when asked to.
+
     for (
       const [item, itemSchema] of [
         ["string", { type: "string" }],
@@ -257,20 +351,61 @@ export default function contextualCell() {
       });
     }
 
-    it("reads an array of cells with an empty default by its type", async () => {
-      const [, result] = await liftSchemas(
+    it("keeps the cell boundary of an array of cells with an empty default", async () => {
+      const { result } = await liftSchemas(
         `${IMPORTS}interface Item { title: string; attachments: Writable<any>[] | Default<[]>; }
 interface Input { item: Item; }
 export default pattern<Input>(({ item }) => {
   const attachments = computed(() => item.attachments ?? []);
   return { count: computed(() => attachments.length) };
 });`,
+        "item.attachments",
       );
 
       expect(result).toEqual({
         type: "array",
         items: { asCell: ["cell"] },
         default: [],
+      });
+    });
+
+    it("keeps the items and default of an element type the module does not import through capability narrowing", async () => {
+      const output = await transformFiles({
+        "/queue.tsx":
+          `import { type Default, pattern, type PerUser, Writable } from "commonfabric";
+interface Run { status: string; }
+export interface Entry { host: string; run: PerUser<Writable<Run>>; }
+interface QueueIO { entries: Writable<Entry[] | Default<[]>>; }
+export default pattern<QueueIO, QueueIO>(({ entries }) => ({ entries }));`,
+        "/main.tsx":
+          `import { computed, pattern, Writable } from "commonfabric";
+import Queue from "./queue.tsx";
+export default pattern<{ n: number }>(() => {
+  const queue = Queue({ entries: Writable.of([]) });
+  return {
+    status: computed(() => queue.entries.get()[0]?.run.get().status ?? ""),
+  };
+});`,
+      }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+      const [input] = callSchemas(parseModule(output["/main.tsx"]!), "lift");
+      const queue = (input!.properties as Schema).queue as Schema;
+
+      expect((queue.properties as Schema).entries).toEqual({
+        type: "array",
+        items: { $ref: "#/$defs/Entry" },
+        default: [],
+        asCell: ["readonly"],
+      });
+      expect((input!.$defs as Schema).Entry).toEqual({
+        type: "object",
+        properties: {
+          host: { type: "string" },
+          run: {
+            $ref: "#/$defs/Run",
+            asCell: [{ kind: "cell", scope: "user" }],
+          },
+        },
+        required: ["host", "run"],
       });
     });
   });
@@ -821,6 +956,391 @@ interface Meta { confidentiality: Labels }`,
           });
         });
       }
+    });
+  });
+
+  describe("a pass reading inside a print", () => {
+    // A pass that narrows, shrinks, or marks identity inside a print reads the
+    // print's unfolding, each part printed afresh from its type, and leaves no
+    // piece of the print for schema generation to read as a node.
+
+    it("reads a member naming a type the module does not import by its type", async () => {
+      const output = await transformSource(
+        `import { computed, generateObject, pattern, UI } from "commonfabric";
+interface Item { content: string; }
+interface Sentiment { label: string; }
+export default pattern<{ items: Item[] }>(({ items }) => {
+  const analyses = items.map((item) => ({
+    content: item.content,
+    analysis: generateObject<Sentiment>({ prompt: item.content }),
+  }));
+  return {
+    [UI]: (
+      <div>
+        {analyses.map((entry, i) => (
+          <div key={i}>
+            {computed(() => {
+              const pending = entry.analysis.pending;
+              const label = entry.analysis.result?.label;
+              return pending ? "…" : label;
+            })}
+          </div>
+        ))}
+      </div>
+    ),
+  };
+});`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      // The element schema of the callback mapping `analyses`.
+      const element = emittedSchemas(parseModule(output))
+        .map((schema) =>
+          (schema.properties as Schema | undefined)?.element as
+            | Schema
+            | undefined
+        )
+        .find((element) =>
+          (element?.properties as Schema | undefined)?.analysis
+        );
+
+      expect(element).toMatchObject({
+        properties: {
+          analysis: {
+            type: "object",
+            properties: {
+              pending: { type: "boolean" },
+              result: {
+                anyOf: [{ type: "undefined" }, { $ref: "#/$defs/Sentiment" }],
+              },
+            },
+          },
+        },
+      });
+    });
+
+    it("narrows a cell inside a printed literal and reads its other members by type", async () => {
+      const output = await transformSource(
+        `import { type Cell, computed, pattern, UI } from "commonfabric";
+type ProfileCell = Cell<{ name?: string }>;
+export default pattern<{ profiles: ProfileCell[] }>(({ profiles }) => {
+  const participants = computed<{ name: string; profile: ProfileCell }[]>(() =>
+    profiles.map((profile) => ({ name: "someone", profile }))
+  );
+  return {
+    [UI]: <div>{participants.map((p) => <cf-profile-badge $profile={p.profile} />)}</div>,
+  };
+});`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const element = emittedSchemas(parseModule(output))
+        .map((schema) =>
+          (schema.properties as Schema | undefined)?.element as
+            | Schema
+            | undefined
+        )
+        .find((element) => element !== undefined);
+
+      expect(element).toEqual({
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          profile: {
+            type: "object",
+            properties: { name: { type: "string" } },
+            asCell: ["readonly"],
+          },
+        },
+        required: ["name", "profile"],
+      });
+    });
+
+    it("narrows a scoped cell inside its scope wrapper", async () => {
+      // Only the scope wrapper names the scope, so the narrowed cell is put
+      // back inside it.
+      const output = await transformSource(
+        `import { computed, pattern, UI, Writable } from "commonfabric";
+export default pattern<Record<string, never>>(() => {
+  const confirming = Writable.perSession.of<boolean>(false);
+  const isConfirming = computed(() => confirming.get());
+  return { [UI]: <div>{isConfirming ? "yes" : "no"}</div> };
+});`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const root = parseModule(output);
+      const [lift] = callsNamed(root, "lift");
+      const captures = lift!.typeArguments![0]! as ts.TypeLiteralNode;
+      const confirming = captures.members.find(ts.isPropertySignature)!;
+
+      expect(confirming.type!.getText(root)).toBe(
+        "__cfHelpers.PerSession<__cfHelpers.ReadonlyCell<boolean>>",
+      );
+      expect((callSchemas(root, "lift")[0]!.properties as Schema).confirming)
+        .toEqual({
+          type: "boolean",
+          asCell: [{ kind: "readonly", scope: "session" }],
+        });
+    });
+
+    it("reads a scoped cell inside a printed value by its type", async () => {
+      // The optional member prints as a union holding the scoped cell: the
+      // union unfolds, and the scoped cell is kept whole rather than taken
+      // apart.
+      const { input: capture } = await liftSchemas(
+        `import { computed, pattern, wish, Writable, type PerUser } from "commonfabric";
+interface Note { title: string; }
+export default pattern<{ x: string }>(() => {
+  const found = wish<{ note?: PerUser<Writable<Note>>; count: number }>({
+    query: "#note",
+    headless: true,
+  });
+  return { title: computed(() => found.result?.note?.get()?.title) };
+});`,
+        "found.result?.note",
+      );
+
+      expect((capture as Schema).properties).toMatchObject({
+        found: {
+          properties: {
+            result: {
+              properties: {
+                note: {
+                  $ref: "#/$defs/Note",
+                  asCell: [{ kind: "cell", scope: "user" }],
+                },
+              },
+            },
+          },
+        },
+      });
+    });
+
+    it("reads elements compared only by identity inside a printed value as comparable", async () => {
+      // Reading `title` as well leaves nothing to shrink, so the node the
+      // identity pass builds is the one schema generation reads.
+      const { input: capture } = await liftSchemas(
+        `import { computed, equals, pattern, Writable } from "commonfabric";
+interface Note { title: string; body: string; }
+export default pattern<{
+  doc: Writable<{ notes?: Note[]; title: string }>;
+  self: Note;
+}>(({ doc, self }) => ({
+  found: computed(() =>
+    doc.get().title +
+    String((doc.get().notes ?? []).some((n) => equals(n, self)))
+  ),
+}));`,
+        "doc.get().notes",
+      );
+
+      expect((capture as Schema).properties).toMatchObject({
+        doc: {
+          properties: {
+            notes: {
+              type: "array",
+              items: { type: "unknown", asCell: ["comparable"] },
+            },
+            title: { type: "string" },
+          },
+        },
+      });
+    });
+
+    it("prints the value of a cell inside a printed value, expanded, where the expansion holds an empty tuple", async () => {
+      // With empty tuples printable, the cell's value is printed expanded, and
+      // keeps its items and default.
+      const { input: capture } = await liftSchemas(
+        `import { Cell, computed, Default, pattern, wish } from "commonfabric";
+interface Entry { readonly profile: Cell<{ name: string }>; }
+type EntriesValue = Entry[] | Default<[]>;
+export default pattern<{ x: string }>(() => {
+  const found = wish<{ entries: Cell<EntriesValue>; label: string }>({
+    query: "#entries",
+    headless: true,
+  });
+  return {
+    out: computed(() =>
+      found.result?.label + String(found.result?.entries.get().length)
+    ),
+  };
+});`,
+        "found.result?.entries",
+      );
+
+      expect((capture as Schema).properties).toMatchObject({
+        found: {
+          properties: {
+            result: {
+              anyOf: [{
+                properties: {
+                  entries: {
+                    type: "array",
+                    items: { $ref: "#/$defs/Entry" },
+                    default: [],
+                    asCell: ["cell"],
+                  },
+                },
+              }, { type: "undefined" }],
+            },
+          },
+        },
+      });
+    });
+
+    it("shrinks the aliased value of a cell inside a printed value", async () => {
+      // The value is printed expanded, so shrinking reaches inside the union
+      // the alias names.
+      const { input: capture } = await liftSchemas(
+        `import { computed, pattern, Writable } from "commonfabric";
+type Item =
+  | { kind: "a"; x: string; extra: string }
+  | { kind: "b"; y: string; extra: string };
+export default pattern<{ list: Writable<Item>[] }>(({ list }) => ({
+  first: computed(() => list[1]?.get().kind),
+}));`,
+        "list[1]",
+      );
+
+      const kindOnly = (kind: string) => ({
+        type: "object",
+        properties: { kind: { type: "string", enum: [kind] } },
+        required: ["kind"],
+      });
+      expect((capture as Schema).properties).toEqual({
+        list: {
+          type: "array",
+          items: { anyOf: [kindOnly("a"), kindOnly("b")], asCell: ["cell"] },
+        },
+      });
+    });
+
+    it("keeps a printed literal with a symbol-keyed property whole", async () => {
+      // A symbol-keyed property says something only as a whole, so the print
+      // is not shrunk to the member read.
+      const { input: capture } = await liftSchemas(
+        `import { computed, pattern, Writable } from "commonfabric";
+declare const tag: unique symbol;
+export default pattern<{
+  doc: Writable<{ name: string; extra: string; [tag]: number }>;
+}>(({ doc }) => ({
+  n: computed(() => doc.get().name),
+}));`,
+        "doc.get().name",
+      );
+
+      expect((capture as Schema).properties).toEqual({
+        doc: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            extra: { type: "string" },
+          },
+          required: ["name", "extra"],
+          asCell: ["readonly"],
+        },
+      });
+    });
+
+    it("keeps a symbol-keyed printed literal whole where a cell in it would be narrowed", async () => {
+      const element = await narrowedElement(
+        `{ name: string; profile: ProfileCell; [tag]: number }`,
+        "declare const tag: unique symbol;",
+      );
+
+      expect(element).toMatchObject({
+        properties: { profile: { asCell: ["cell"] } },
+      });
+    });
+
+    it("keeps a symbol-keyed printed literal whole where identity paths reach inside", async () => {
+      const { input: capture } = await liftSchemas(
+        `import { computed, equals, pattern, Writable } from "commonfabric";
+declare const tag: unique symbol;
+interface Note { title: string; body: string; }
+export default pattern<{
+  doc: Writable<{ notes: Note[]; title: string; [tag]: number }>;
+  self: Note;
+}>(({ doc, self }) => ({
+  found: computed(() =>
+    doc.get().title + String(doc.get().notes.some((n) => equals(n, self)))
+  ),
+}));`,
+        "doc.get().notes",
+      );
+
+      expect((capture as Schema).properties).toMatchObject({
+        doc: {
+          properties: { notes: { items: { $ref: "#/$defs/Note" } } },
+        },
+      });
+    });
+
+    it("keeps the index signature of a printed literal a cell is narrowed in", async () => {
+      const element = await narrowedElement(
+        `{ name: string; profile: ProfileCell; [key: string]: unknown }`,
+      );
+
+      expect(element).toMatchObject({
+        properties: { profile: { asCell: ["readonly"] } },
+        additionalProperties: { type: "unknown" },
+      });
+    });
+
+    it("leaves a method out of a printed literal a cell is narrowed in", async () => {
+      const element = await narrowedElement(
+        `{ name: string; profile: ProfileCell; send(): Stream<number> }`,
+      );
+
+      expect(Object.keys((element as Schema).properties as Schema)).toEqual([
+        "name",
+        "profile",
+      ]);
+    });
+
+    it("holds a printed nullable scoped value's nullish alternatives inside its scope wrapper", async () => {
+      const { input: capture } = await liftSchemas(
+        `import { pattern, wish, Writable, type PerUser } from "commonfabric";
+interface Named { name: string; }
+export default pattern<{ x: string }>(() => {
+  const found = wish<Writable<PerUser<Named>>>({ query: "#named", headless: true });
+  const name = found.result?.get()?.name;
+  return { name };
+});`,
+        "found.result",
+      );
+
+      expect((capture as Schema).properties).toEqual({
+        found: {
+          type: "object",
+          properties: {
+            result: {
+              anyOf: [{ type: "undefined" }, { $ref: "#/$defs/Named" }],
+              scope: "user",
+              asCell: ["readonly"],
+            },
+          },
+        },
+      });
+    });
+
+    it("refuses a type argument that holds a piece of a print", async () => {
+      // A state saying each `string` keyword was built below a print stands in
+      // for a pass that took a print apart.
+      const root = ts.factory.createKeywordTypeNode(
+        ts.SyntaxKind.UnknownKeyword,
+      );
+      class PieceState extends CrossStageState {
+        override printedWithin(node: ts.Node): ts.TypeNode | undefined {
+          return node.kind === ts.SyntaxKind.StringKeyword
+            ? root
+            : super.printedWithin(node);
+        }
+      }
+
+      await expect(transformSource(
+        `import { toSchema } from "commonfabric";
+export const schema = toSchema<{ name: string }>();`,
+        { types: COMMONFABRIC_TYPES, state: new PieceState() },
+      )).rejects.toThrow("reached schema generation outside that node");
     });
   });
 });

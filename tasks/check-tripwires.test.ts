@@ -1,6 +1,11 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { dirname, fromFileUrl, join } from "@std/path";
-import { checkTripwire, main, TRIPWIRES } from "./check-tripwires.ts";
+import {
+  checkTripwire,
+  main,
+  shippingJobs,
+  TRIPWIRES,
+} from "./check-tripwires.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
@@ -169,4 +174,26 @@ Deno.test("main reports every failure and exits non-zero", async () => {
   assertEquals(code, 1);
   assertEquals(reported.length, 1);
   assertStringIncludes(reported[0], "deno task something");
+});
+
+//
+// Which jobs ship records
+//
+
+Deno.test("a job shipping only the run's coverage is not counted as shipping records", async () => {
+  const root = await Deno.makeTempDir({ prefix: "tripwire-shippers-" });
+  try {
+    await Deno.mkdir(`${root}/.github/workflows`, { recursive: true });
+    const job = (id: string, artifact: string) =>
+      `  ${id}:\n    steps:\n      - uses: ./.github/actions/test-records-ship\n` +
+      `        with:\n          artifact: ${artifact}\n`;
+    await Deno.writeTextFile(
+      `${root}/.github/workflows/deno.yml`,
+      `jobs:\n${job("check", "check")}${job("coverage-check", "coverage")}` +
+        `${job("test", "unit-1")}  build:\n    steps: []\n`,
+    );
+    assertEquals(await shippingJobs(root), ["check", "test"]);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
 });

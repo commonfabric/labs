@@ -36,6 +36,7 @@ weeks later.
 | 6 | Trusted-mark threat model | policy record | `runner` | n/a | `test/cfc-ui-contract.test.ts` — `host embedding contract: trusted-mark threat model` |
 | 7 | Pinning is owner-gated | policy record | `patterns` | n/a | `system/profile-home.owner-gated.test.ts` |
 | 8 | Snapshot sharing | trusted host API | `runtime-client`, `runner` | available | `runtime-client/test/backends/snapshot-share.test.ts`; `runtime-client/test/snapshot-share.test.ts` |
+| 9 | Custody seal and trust configuration | trusted host API | `runtime-client`, `runner`, `ui` | available | `runtime-client/test/backends/custody-seal.test.ts`; `runtime-client/test/custody-seal.test.ts`; `runtime-client/test/backends/initialization-data-reach.test.ts`; `ui/src/v2/components/cf-custody-seal/` |
 
 ---
 
@@ -441,6 +442,54 @@ crosses IPC.
 source-schema rejection, preview binding, client isolation, one-use consent, and
 disposal. `packages/runtime-client/test/snapshot-share.test.ts` holds the public
 client API and wire shapes.
+
+---
+
+## 9. Custody seal and trust configuration
+
+A host declares the trust statements its worker runtime evaluates concept guards
+under with `RuntimeClientOptions.cfcTrustConfig`, which reaches the worker as
+`InitializationData.cfcTrustConfig` and the runtime as
+`RuntimeOptions.cfcTrustConfig`. A default profile that trusts a reviewed
+custody policy as a trusted declassifier is one statement naming that policy's
+exact `policyDigest` and one delegation to its verifier. The configuration is
+part of the runtime's security context, so an attach asserting another one is
+refused. Configurations compare by the digest the runner gives the configuration
+it normalizes, so key order, a key written as `undefined`, and an empty list
+written out or left out do not refuse an attach. Absent a trust configuration,
+no concept guard is satisfied and every custody seal is refused.
+
+`RuntimeClient.prepareCustodySeal({ draft, terms, policy, allowedSources })`
+prepares a [custody seal](../specs/cfc-custody-seal.md). Each field is a cell
+reference: the actor's draft, the room's terms document, a cell holding the
+room's policy reference, and the actor's source policy, which must be in the
+actor's home space. The worker reads each and returns an opaque `id`, the actor,
+the room space, the room's readers from its access list, the terms, the instance
+digest, the policy, the sources the draft draws on, and the exact stance. The
+worker read every field and checked the seal's invariants over them. The terms'
+optional `question` and `answers` are display fields it does not check: nothing
+verifies that the room's policy releases only those answers.
+
+The trusted host shows that preview and requires a trusted user confirmation
+before calling `RuntimeClient.commitCustodySeal(id)`, which returns the
+actor's receipt. The worker builds the renderer-trusted `CustodySeal` gesture
+itself; the request carries no event. The seal is bound to what the actor
+reviewed: at commit it reads the draft, the terms, the room's readers, the
+policy cell and the source policy again, and a changed value in any of them,
+or a changed actor, makes the review stale. The transaction that writes the
+entry then verifies that every one of those reads still holds, so a change that
+lands after the commit's checks and before the entry is written refuses the
+seal too. A policy cell that now holds another reference refuses the seal
+rather than sealing the reference that was reviewed. Each confirmation is
+consumed once, including on a failed commit. `cancelCustodySeal(id)`, client
+detachment and backend disposal discard pending consent, and a preview belongs
+to the client that prepared it. A client that detaches while its commit is in
+flight aborts it: nothing is sealed unless the entry's transaction was sent
+before the client left. A commit aborted after the receipt was written leaves
+a receipt with no entry, which is how the actor's home space records a seal
+that did not commit. As with snapshot
+sharing, an embedder exposing this transport to untrusted content delegates the
+actor's consent. `cf-custody-seal` is the component that drives it.
 
 ---
 

@@ -41,6 +41,7 @@ type LabelQueryableCell = {
 type LinkedValueMetadata = {
   metadata: CfcMetadata;
   path: readonly string[];
+  space: string;
 };
 
 // `readFailed` distinguishes a genuine metadata read error (fail closed) from a
@@ -59,6 +60,15 @@ type LinkedValueMetadataResult = {
 export type CfcLabelViewStatus = {
   view: CfcLabelView | undefined;
   readFailed: boolean;
+};
+
+/**
+ * {@link CfcLabelViewStatus}, plus the spaces of the documents whose stored
+ * metadata contributed to the view — where a module policy the label selects
+ * has its manifest installed (spec §4.4.1).
+ */
+export type CfcLabelViewSource = CfcLabelViewStatus & {
+  spaces: readonly string[];
 };
 
 const storedMetadataForCell = (
@@ -109,7 +119,7 @@ const linkedValueMetadataForCell = (
     return {
       linkedValue: metadata === undefined
         ? undefined
-        : { metadata, path: target.path },
+        : { metadata, path: target.path, space: target.space },
       readFailed: false,
     };
   } catch {
@@ -126,18 +136,38 @@ const linkedValueMetadataForCell = (
 export const cfcLabelViewForCellWithStatus = (
   cell: unknown,
 ): CfcLabelViewStatus => {
+  const { view, readFailed } = cfcLabelViewSourceForCell(cell);
+  return { view, readFailed };
+};
+
+/**
+ * {@link cfcLabelViewForCellWithStatus}, also naming the spaces of the
+ * documents the view was read from. A carried view has no document and
+ * contributes no space.
+ */
+export const cfcLabelViewSourceForCell = (
+  cell: unknown,
+): CfcLabelViewSource => {
   if (
     !isObjectOrArray(cell) ||
     typeof cell.getAsNormalizedFullLink !== "function"
   ) {
-    return { view: getCarriedCfcLabelView(cell), readFailed: false };
+    return {
+      view: getCarriedCfcLabelView(cell),
+      readFailed: false,
+      spaces: [],
+    };
   }
 
   let link: NormalizedFullLink;
   try {
     link = (cell as LabelQueryableCell).getAsNormalizedFullLink();
   } catch {
-    return { view: getCarriedCfcLabelView(cell), readFailed: false };
+    return {
+      view: getCarriedCfcLabelView(cell),
+      readFailed: false,
+      spaces: [],
+    };
   }
 
   const stored = storedMetadataForCell(cell as LabelQueryableCell, link);
@@ -148,6 +178,15 @@ export const cfcLabelViewForCellWithStatus = (
     linked.linkedValue?.path ?? [],
   );
 
+  const spaces: string[] = [];
+  if (metadataView !== undefined) spaces.push(link.space);
+  const linkedSpace = linked.linkedValue?.space;
+  if (
+    linkedValueView !== undefined && linkedSpace !== undefined &&
+    !spaces.includes(linkedSpace)
+  ) {
+    spaces.push(linkedSpace);
+  }
   return {
     view: mergeCfcLabelViews([
       metadataView,
@@ -155,6 +194,7 @@ export const cfcLabelViewForCellWithStatus = (
       getCarriedCfcLabelView(cell),
     ]),
     readFailed: stored.readFailed || linked.readFailed,
+    spaces,
   };
 };
 

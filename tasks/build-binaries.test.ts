@@ -102,7 +102,6 @@ function recordingBuildDependencies(
     buildShell: record("buildShell"),
     prepareWorkspace: record("prepareWorkspace"),
     buildToolshed: record("buildToolshed"),
-    buildBgPieceService: record("buildBgPieceService"),
     buildCli: record("buildCli"),
     revertWorkspace: record("revertWorkspace"),
     ...overrides,
@@ -123,8 +122,9 @@ async function renderComputedVersionModule(root: string): Promise<string> {
 /**
  * Build a minimal tree holding the files `build-binaries` reads and writes: a
  * manifest with a frontend-only `compilerOptions.types`, a lockfile, a file
- * under every fingerprint input, the committed version module, and the
- * toolshed and cli directories for the COMPILED build markers.
+ * under every fingerprint input, the committed version module, the toolshed
+ * and cli directories for the COMPILED build markers, and the pattern trees
+ * the toolshed embeds.
  *
  * The inputs come from `compileFingerprintGlobs()` rather than being listed
  * here, because a fingerprint input this tree lacks fails every test in this
@@ -146,6 +146,11 @@ async function makeFakeRepo(): Promise<string> {
   );
   await Deno.mkdir(`${root}/packages/toolshed`, { recursive: true });
   await Deno.mkdir(`${root}/packages/cli`, { recursive: true });
+  for (
+    const tree of new BuildConfig({ root, toolshedFlags: [] }).patternPaths()
+  ) {
+    await Deno.mkdir(tree, { recursive: true });
+  }
   return root;
 }
 
@@ -179,14 +184,6 @@ Deno.test("BuildConfig resolves workspace paths against the root", async () => {
     assertEquals(
       config.toolshedEntryPath(),
       join(root, "packages", "toolshed", "index.ts"),
-    );
-    assertEquals(
-      config.bgPieceServiceEntryPath(),
-      join(root, "packages", "background-piece-service", "src", "main.ts"),
-    );
-    assertEquals(
-      config.bgPieceServiceWorkerPath(),
-      join(root, "packages", "background-piece-service", "src", "worker.ts"),
     );
     assertEquals(
       config.toolshedEnvPath(),
@@ -232,6 +229,43 @@ Deno.test("BuildConfig resolves workspace paths against the root", async () => {
         "compile-cache-version.ts",
       ),
     );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("the toolshed leaves out the pattern files it never serves", async () => {
+  const root = await makeFakeRepo();
+  try {
+    const config = new BuildConfig({ root, toolshedFlags: [] });
+    const [patterns, connector] = config.patternPaths();
+    const served = [
+      join(patterns, "counter", "counter.tsx"),
+      join(patterns, "iframe-game", "main.tsx"),
+      join(patterns, "iframe-game", "contract.ts"),
+      join(patterns, "notebook", "guest.ts"),
+      join(connector, "main.tsx"),
+    ];
+    const unserved = [
+      join(patterns, "counter", "counter.test.ts"),
+      join(patterns, "counter", "counter.test.tsx"),
+      join(patterns, "iframe-game", "guest.ts"),
+      join(patterns, "iframe-game", "editor", "guest.tsx"),
+      join(patterns, "iframe-game", "interaction.browser.test.ts"),
+      join(patterns, "integration", "helpers.ts"),
+      join(patterns, "baselines", "counter", "counter.tsx", "a.json"),
+      join(connector, "logic.test.ts"),
+    ];
+    for (const file of [...served, ...unserved]) {
+      await writeFile(file, "export {};\n");
+    }
+    const excluded = config.excludePaths("toolshed");
+    const isExcluded = (file: string) =>
+      excluded.some((at) => isWithin(at, file));
+
+    assertEquals(unserved.filter((file) => !isExcluded(file)), []);
+    assertEquals(served.filter(isExcluded), []);
+    assertEquals(config.excludePaths("cf"), []);
   } finally {
     await Deno.remove(root, { recursive: true });
   }
@@ -345,6 +379,64 @@ Deno.test("BuildConfig reads nothing outside BINARY_SOURCES", async () => {
   }
 });
 
+/** What `deno info` reports about the module graph reached from its roots. */
+interface ModuleGraph {
+  /** The module importing each of the roots, which `deno info` starts at. */
+  rootModule: string;
+  modules: { specifier: string; error?: string }[];
+}
+
+/**
+ * Returns the npm packages, as `name@version`, whose modules `graph` imports.
+ * `deno info` names such a module `npm:/<name>@<version>`, followed by the
+ * path of the module within the package when the import names one.
+ */
+function importedNpmPackages(graph: ModuleGraph): Set<string> {
+  return new Set(
+    graph.modules.flatMap(({ specifier }) =>
+      specifier.match(/^npm:\/((?:@[^/]+\/)?[^/@]+@[^/]+)/)?.[1] ?? []
+    ),
+  );
+}
+
+/**
+ * Returns the module graph reached from `roots`, resolved against the
+ * lockfile of `repo`, and fails when any module in it does not resolve.
+ */
+async function moduleGraph(
+  repo: string,
+  roots: readonly string[],
+): Promise<ModuleGraph> {
+  const rootModule = await Deno.makeTempFile({ suffix: ".ts" });
+  try {
+    await Deno.writeTextFile(
+      rootModule,
+      roots.map((at) => `import ${JSON.stringify(toFileUrl(at).href)};\n`)
+        .join(""),
+    );
+    const { success, stdout, stderr } = await runDenoCommandWithTemporaryLock({
+      root: repo,
+      args: (lock) => [
+        "info",
+        "--json",
+        "--lock",
+        lock,
+        "--frozen",
+        rootModule,
+      ],
+    });
+    assert(success, new TextDecoder().decode(stderr));
+    const info = JSON.parse(new TextDecoder().decode(stdout)) as Omit<
+      ModuleGraph,
+      "rootModule"
+    >;
+    assertEquals(info.modules.filter(({ error }) => error !== undefined), []);
+    return { ...info, rootModule };
+  } finally {
+    await Deno.remove(rootModule);
+  }
+}
+
 /**
  * Script modules, as opposed to declaration files: the modules among a path
  * it embeds whose imports `deno compile` follows.
@@ -403,7 +495,6 @@ Deno.test("each binary's modules and assets stay within BINARY_SOURCES", async (
   const roots = [
     buildBinariesScript,
     config.toolshedEntryPath(),
-    config.bgPieceServiceEntryPath(),
     config.cliEntryPath(),
     join(shell, "..", "felt", "cli.ts"),
     shellConfigPath,
@@ -415,48 +506,49 @@ Deno.test("each binary's modules and assets stay within BINARY_SOURCES", async (
       roots.push(...await followedModules(at, config.excludePaths(binary)));
     }
   }
-  const rootModule = await Deno.makeTempFile({ suffix: ".ts" });
-  try {
-    await Deno.writeTextFile(
-      rootModule,
-      roots.map((at) => `import ${JSON.stringify(toFileUrl(at).href)};\n`)
-        .join(""),
-    );
-    const { success, stdout, stderr } = await runDenoCommandWithTemporaryLock({
-      root: repo,
-      args: (lock) => [
-        "info",
-        "--json",
-        "--lock",
-        lock,
-        "--frozen",
-        rootModule,
-      ],
-    });
-    assert(success, new TextDecoder().decode(stderr));
-    const info = JSON.parse(new TextDecoder().decode(stdout)) as {
-      modules: { specifier: string; error?: string }[];
-    };
-    assertEquals(info.modules.filter(({ error }) => error !== undefined), []);
-    const reached = new Set(info.modules.map(({ specifier }) => specifier));
-    assertEquals(
-      roots.filter((at) => !reached.has(toFileUrl(at).href)),
-      [],
-    );
-    for (const specifier of reached) {
-      if (!specifier.startsWith("file:")) continue;
-      const at = fromFileUrl(specifier);
-      if (at === rootModule) continue;
-      const within = relative(repo, at);
-      if (!withinBinarySources(within)) outside.add(within);
-    }
-  } finally {
-    await Deno.remove(rootModule);
+  const { modules, rootModule } = await moduleGraph(repo, roots);
+  const reached = new Set(modules.map(({ specifier }) => specifier));
+  assertEquals(
+    roots.filter((at) => !reached.has(toFileUrl(at).href)),
+    [],
+  );
+  for (const specifier of reached) {
+    if (!specifier.startsWith("file:")) continue;
+    const at = fromFileUrl(specifier);
+    if (at === rootModule) continue;
+    const within = relative(repo, at);
+    if (!withinBinarySources(within)) outside.add(within);
   }
   assertEquals([...outside].sort(), []);
   assert(
     roots.includes(join(config.patternPaths()[0], "counter", "counter.tsx")),
   );
+});
+
+Deno.test("the toolshed's pattern trees reach no npm package of their own", async () => {
+  // Every module in a pattern tree the toolshed embeds is a root of its
+  // module graph, and `deno compile` embeds each npm package that graph
+  // imports, with that package's dependencies. So a pattern-tree module that
+  // imports an npm package the rest of the toolshed does not import adds that
+  // whole package to the binary.
+  const repo = fromFileUrl(new URL("../", import.meta.url));
+  const config = new BuildConfig({ root: repo, toolshedFlags: [] });
+  const trees = config.patternPaths();
+  const unread = unreadPaths(config);
+  const server = [config.toolshedEntryPath()];
+  const patterns: string[] = [];
+  for (const at of config.includePaths("toolshed")) {
+    if (unread.has(at)) continue;
+    const modules = await followedModules(at, config.excludePaths("toolshed"));
+    (trees.includes(at) ? patterns : server).push(...modules);
+  }
+  assert(patterns.length > 0);
+  const serverPackages = importedNpmPackages(await moduleGraph(repo, server));
+  assert(serverPackages.size > 0);
+  const added = [
+    ...importedNpmPackages(await moduleGraph(repo, [...server, ...patterns])),
+  ].filter((name) => !serverPackages.has(name));
+  assertEquals(added.sort(), []);
 });
 
 /**
@@ -500,7 +592,7 @@ Deno.test("the shell configuration reads no host variable", async () => {
 });
 
 Deno.test("requestedBinaries selects all binaries or named subsets", () => {
-  assertEquals(requestedBinaries([]), ["toolshed", "bg-piece-service", "cf"]);
+  assertEquals(requestedBinaries([]), ["toolshed", "cf"]);
   assertEquals(requestedBinaries(["toolshed"]), ["toolshed"]);
   assertEquals(requestedBinaries(["cf", "toolshed"]), ["toolshed", "cf"]);
   assertEquals(requestedBinaries(["cf", "cf"]), ["cf"]);
@@ -511,7 +603,7 @@ Deno.test("requestedBinaries rejects unknown build targets", () => {
   assertThrows(
     () => requestedBinaries(["unknown"]),
     Error,
-    'Unknown binary "unknown". Expected one or more of: toolshed, bg-piece-service, cf',
+    'Unknown binary "unknown". Expected one or more of: toolshed, cf',
   );
   assertThrows(
     () => requestedBinaries(["--cli-only", "toolshed"]),
@@ -562,7 +654,6 @@ Deno.test("BuildConfig selects named binaries and rejects conflicting options", 
     assertEquals(config.binaries, ["toolshed", "cf"]);
     assertEquals(config.cliOnly, false);
     assertEquals(config.builds("toolshed"), true);
-    assertEquals(config.builds("bg-piece-service"), false);
     assertEquals(config.builds("cf"), true);
 
     const duplicateCliConfig = new BuildConfig({
@@ -572,6 +663,7 @@ Deno.test("BuildConfig selects named binaries and rejects conflicting options", 
     });
     assertEquals(duplicateCliConfig.binaries, ["cf"]);
     assertEquals(duplicateCliConfig.cliOnly, true);
+    assertEquals(duplicateCliConfig.builds("toolshed"), false);
 
     assertThrows(
       () => new BuildConfig({ root, toolshedFlags: [], binaries: [] }),
@@ -605,15 +697,6 @@ Deno.test("build runs only the steps required by each binary", async () => {
           "buildShell",
           "prepareWorkspace",
           "buildToolshed",
-          "revertWorkspace",
-        ],
-      },
-      {
-        binaries: ["bg-piece-service"] as const,
-        expected: [
-          "ensureDistDir",
-          "prepareWorkspace",
-          "buildBgPieceService",
           "revertWorkspace",
         ],
       },
@@ -892,19 +975,17 @@ Deno.test("each build step throws naming its output when its command fails", asy
     const {
       buildShell,
       buildToolshed,
-      buildBgPieceService,
       buildCli,
     } = defaultBuildDependencies;
     const steps: [(config: BuildConfig) => Promise<void>, string][] = [
       [buildShell, "Failed to build shell app"],
       [buildToolshed, "Failed to build toolshed binary"],
-      [buildBgPieceService, "Failed to build background piece service binary"],
       [buildCli, "Failed to build CLI binary"],
     ];
     for (const [step, message] of steps) {
       await assertRejects(() => step(config), Error, message);
     }
-    for (const binary of ["toolshed", "bg-piece-service", "cf"]) {
+    for (const binary of ["toolshed", "cf"]) {
       assert(!(await exists(config.distPath(binary))), binary);
     }
   } finally {

@@ -11,7 +11,7 @@
  * is left for the encoder to reject rather than being broken here.
  */
 
-import type { FabricExecValue } from "@commonfabric/api";
+import type { FabricExecPlainObject, FabricExecValue } from "@commonfabric/api";
 import { isPlainObject } from "@commonfabric/utils/types";
 
 /**
@@ -189,9 +189,18 @@ type AnyFunction = (...args: never[]) => unknown;
  * A `FabricExecValue` comes back as one, as long as nothing stands in for a
  * value through `replaceOther`: an artifact's encodable form is itself a
  * `FabricExecValue`, as the `toEncodableForm` protocol's type says, and nothing
- * else changes kind. Any other value comes back as `unknown`, since the walk
+ * else changes kind. A `FabricExecPlainObject` comes back as a
+ * `FabricExecPlainObject` on the same terms, since a record is copied rather
+ * than replaced, and a copy of a record is a record. What would make one an
+ * artifact is an own `toEncodableForm` key holding a builder artifact, which
+ * nothing builds. Any other value comes back as `unknown`, since the walk
  * leaves whatever it does not recognize as it is.
  */
+export function replaceArtifacts(
+  value: FabricExecPlainObject,
+  onCopy: OnCopy,
+  hooks?: { isLeaf?: WalkHooks["isLeaf"]; replaceOther?: undefined },
+): FabricExecPlainObject;
 export function replaceArtifacts(
   value: FabricExecValue,
   onCopy: OnCopy,
@@ -274,9 +283,8 @@ function replace(
     //
     // A null-prototype object is excluded too -- hence the `false` argument to
     // `isPlainObject()`. It is not a `FabricPlainObject`, so it is not the
-    // walk's to rewrite. That is not the same as the conversion refusing one:
-    // `tagOfConvertibleJsValueElseNull()` reports it as `Object`. Whether to
-    // accept it is the conversion's question, asked of the value as it stands.
+    // walk's to rewrite. Whether to accept it is the conversion's question,
+    // asked of the value as it stands (and the conversion refuses one).
     return replaced(value, hooks, seen, onCopy);
   }
 

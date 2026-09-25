@@ -5,6 +5,7 @@ import {
   memberTestFiles,
   parseTestTask,
   readShardedRunnerArguments,
+  runnerPaths,
   taskEnvironment,
   testBatches,
   unmatchedGlobs,
@@ -517,6 +518,7 @@ describe("resolving which task a member's tests run through", () => {
     const tasks = await memberTasks(dir);
     expect(tasks.denoTestTask).toBe("deno-test");
     expect(tasks.browserTest).toBe(true);
+    expect(tasks.browserPaths).toEqual(["test/*.test.ts"]);
   });
 
   it("reaches through a task written as a dependency list", async () => {
@@ -555,6 +557,41 @@ describe("resolving which task a member's tests run through", () => {
   it("reports a member that says it has no tests as no surface", async () => {
     const dir = await member({ tasks: { test: "echo 'No tests defined.'" } });
     expect((await memberTasks(dir)).present).toBe(false);
+  });
+});
+
+describe("reading the paths a test runner's task names", () => {
+  it("takes the words after the script that are not flags", () => {
+    expect(
+      runnerPaths(
+        "deno run --allow-read ../deno-web-test/cli.ts --verbose " +
+          "'**/*.browser.test.ts' a.test.ts",
+      ),
+    ).toEqual(["**/*.browser.test.ts", "a.test.ts"]);
+  });
+
+  it("reads past the assignments standing before the command", () => {
+    expect(runnerPaths("HEADLESS=1 deno run -A cli.ts a.test.ts"))
+      .toEqual(["a.test.ts"]);
+  });
+
+  it("names nothing for a runner given no paths", () => {
+    expect(runnerPaths("deno run -A ../deno-web-test/cli.ts")).toEqual([]);
+  });
+
+  it("names nothing for a task that is not a deno run", () => {
+    expect(runnerPaths("deno test -A a.test.ts")).toEqual([]);
+    expect(runnerPaths("")).toEqual([]);
+  });
+
+  it("names nothing for a deno run naming no script", () => {
+    expect(runnerPaths("deno run -A")).toEqual([]);
+  });
+
+  it("names nothing for a task that is two commands", () => {
+    expect(
+      runnerPaths("deno run -A cli.ts a.test.ts && deno run -A cli.ts b"),
+    ).toEqual([]);
   });
 });
 

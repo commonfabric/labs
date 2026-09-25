@@ -1,9 +1,8 @@
 /**
- * A refresh re-validates the schema-document closure over everything the
- * graph has delivered. The scans that feed it are answered from the graph
- * state's own per-version record — every scope, the closure's own documents
- * included — so the documents a refresh scans again are the ones that
- * changed.
+ * A refresh scans the documents it delivers for embedded schema refs. The
+ * scans are answered from the graph state's own per-version record — every
+ * scope, the closure's own documents included — so the documents a refresh
+ * scans again are the ones that changed.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -123,8 +122,7 @@ describe("v2-refresh-schema-ref-scans", () => {
         expect(refreshed).not.toBeNull();
         expect([...refreshed!.updates.values()].map((entity) => entity.id))
           .toEqual([root]);
-        // The closure was re-validated over all three delivered documents,
-        // but only the one that changed was scanned again: the unchanged
+        // Only the document that changed was scanned again: the unchanged
         // space-scoped argument and the per-user profile — which no
         // engine-wide cache holds — were answered from the state's record.
         expect(refreshed!.stats.schemaRefScans).toBe(1);
@@ -205,8 +203,8 @@ describe("v2-refresh-schema-ref-scans", () => {
         expect(tracked.stats.schemaRefScans).toBe(1);
         expectRecordPerVersion(tracked.state);
 
-        // A refresh over the unchanged root re-validates the whole closure
-        // from the record and scans nothing.
+        // A refresh over the unchanged root answers it from the record and
+        // scans nothing.
         const refreshed = refreshTrackedGraph(
           space,
           engine,

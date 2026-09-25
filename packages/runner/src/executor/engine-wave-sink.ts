@@ -109,6 +109,7 @@ export class EngineWaveCommitSink implements WaveCommitSink {
       scopeKeyByOpIndex: ReadonlyMap<number, string>,
     ) => { attachments: Map<string, string>; detach: () => void })
     | undefined;
+  readonly #onHomeRefused: (() => void) | undefined;
 
   /**
    * Replay keying — the stage-F choice, made and enforced here: the
@@ -163,12 +164,18 @@ export class EngineWaveCommitSink implements WaveCommitSink {
       operations: readonly Operation[],
       scopeKeyByOpIndex: ReadonlyMap<number, string>,
     ) => { attachments: Map<string, string>; detach: () => void };
+
+    /** Called when applying a home batch throws, before `commitWave`
+     * returns the refusal, so that whatever the refusal changes is in
+     * place by the time the caller reads it. */
+    onHomeRefused?: () => void;
   }) {
     this.#engineFor = options.engineFor;
     this.#sessionId = options.sessionId;
     this.#principal = options.principal;
     this.#localSeq = options.localSeqRef ?? { value: 0 };
     this.#sqliteAttachmentsFor = options.sqliteAttachmentsFor;
+    this.#onHomeRefused = options.onHomeRefused;
   }
 
   currentHeads(
@@ -404,6 +411,7 @@ export class EngineWaveCommitSink implements WaveCommitSink {
       }
       return Promise.resolve({ ok: { seq: applied.seq } });
     } catch (error) {
+      if (batch.home) this.#onHomeRefused?.();
       return Promise.resolve(waveCommitFailureResult(error));
     }
   }

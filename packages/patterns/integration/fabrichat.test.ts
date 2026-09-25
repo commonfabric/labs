@@ -1,7 +1,8 @@
 /**
- * FabriChat in a browser, with real profiles: two people each create one
- * through the form FabriChat offers, send, and see each other's messages marked
- * as verified.
+ * FabriChat in a browser, with real profiles: three people each create one
+ * through the form FabriChat offers. The first two send and see each other's
+ * messages marked as verified. The second and third react to the first
+ * person's message, and the first person sees who reacted.
  */
 import { debugStr } from "@commonfabric/data-model";
 import { env, Page, waitForCondition } from "@commonfabric/integration";
@@ -15,6 +16,7 @@ import {
   PiecesController,
 } from "./pieces-controller.ts";
 import {
+  clickCfButton,
   clickTrustedAction,
   fillCfInput,
   waitForRuntimeIdle,
@@ -24,9 +26,14 @@ import {
 const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
 
 // Trusted action names: the runtime's profile create form, and FabriChat's
-// send (`fabrichat/chat.tsx`).
+// send and reaction (`fabrichat/chat.tsx`).
 const PROFILE_CREATE_ACTION = "CreateProfile";
 const SEND_ACTION = "FabriChatSend";
+const REACT_ACTION = "FabriChatReact";
+
+// The control on each message that opens its reaction picker. The first one
+// enabled is on the oldest message.
+const ADD_REACTION = 'cf-button[aria-label="Add reaction"]';
 
 /** What one rendered message's authorship element reports. */
 interface AuthorshipReport {
@@ -49,6 +56,7 @@ describe("fabrichat integration test", () => {
 
   let firstIdentity: Identity;
   let secondIdentity: Identity;
+  let thirdIdentity: Identity;
   let cc: PiecesController;
   let pieceId: string;
   let pieceSinkCancel: (() => void) | undefined;
@@ -57,6 +65,7 @@ describe("fabrichat integration test", () => {
   beforeAll(async () => {
     firstIdentity = await Identity.generate({ implementation: "noble" });
     secondIdentity = await Identity.generate({ implementation: "noble" });
+    thirdIdentity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
       space: SPACE_NAME,
       apiUrl: new URL(API_URL),
@@ -85,7 +94,7 @@ describe("fabrichat integration test", () => {
     await cc?.dispose();
   });
 
-  it("lets each person join with their own profile and send", async () => {
+  it("lets each person join with their own profile, send, and react", async () => {
     const page = shell.page();
 
     await shell.goto({
@@ -109,8 +118,72 @@ describe("fabrichat integration test", () => {
     await waitForText(page, "#fabrichat-messages", "Grace Hopper");
     await waitForVerified(page, "Hi Ada, Grace here");
     await waitForVerified(page, "Hello from Ada");
+
+    // With the picker open on Ada's message, and no reactions yet, the first
+    // reaction control on the page is the picker's first cat.
+    await clickCfButton(page, ADD_REACTION);
+    await clickTrustedAction(page, REACT_ACTION);
+    await waitForText(page, "#fabrichat-messages", "😺 1");
+
+    await shell.goto({
+      frontendUrl: FRONTEND_URL,
+      view: { spaceName: SPACE_NAME, pieceId },
+      identity: thirdIdentity,
+    });
+    await waitForText(page, "#fabrichat-messages", "😺 1");
+    await createProfile(page, "Julie Sussman");
+    // The count under Ada's message is now the first reaction control, and
+    // clicking it adds the viewer's own.
+    await clickTrustedAction(page, REACT_ACTION);
+    await waitForText(page, "#fabrichat-messages", "😺 2");
+
+    await shell.goto({
+      frontendUrl: FRONTEND_URL,
+      view: { spaceName: SPACE_NAME, pieceId },
+      identity: firstIdentity,
+    });
+    await waitForText(page, "#fabrichat-messages", "😺 2");
+    await waitForReactorCard(page, ["Grace Hopper", "Julie Sussman"]);
   });
 });
+
+/**
+ * Focuses the first reaction count and waits for its card to show, naming each
+ * of `names`.
+ */
+async function waitForReactorCard(
+  page: Page,
+  names: readonly string[],
+): Promise<void> {
+  await waitForRuntimeIdle(page);
+  await page.evaluate(() => {
+    function collect(root: Document | ShadowRoot, found: Element[]) {
+      for (const element of root.querySelectorAll("*")) {
+        if (element.tagName.toLowerCase() === "cf-hover-card") {
+          found.push(element);
+        }
+        if (element.shadowRoot) collect(element.shadowRoot, found);
+      }
+    }
+    const found: Element[] = [];
+    collect(document, found);
+    // The `cf-button` host is what takes focus from a keyboard.
+    const count = found[0]?.querySelector<HTMLElement>("cf-button");
+    if (!count) {
+      throw new Error("There is no reaction count to focus.");
+    }
+    count.focus();
+  });
+  await waitForCondition(
+    page,
+    (probe, expected: readonly string[]) =>
+      probe.collect("cf-hover-card").some((card) =>
+        (card as HTMLElement & { open?: boolean }).open === true &&
+        expected.every((name) => probe.deepText(card).includes(name))
+      ),
+    { args: [names] },
+  );
+}
 
 /** Creates the viewer's profile through the form FabriChat offers. */
 async function createProfile(page: Page, name: string): Promise<void> {

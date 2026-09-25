@@ -103,7 +103,7 @@ import {
 } from "./cfc/types.ts";
 import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
-import { waveRunContextOf } from "./executor/wave.ts";
+import { type DelegatedCarriage, waveRunContextOf } from "./executor/wave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
@@ -518,7 +518,9 @@ export type ServerRunInfo = {
    * protocol.md §2b): the compile-cache / program-materialization
    * writeback into a piece's OWN space, riding the carriage of the
    * provisioning or demanding run that triggered it — the served mirror
-   * of the client committing the program under the user's own session.
+   * of the client committing the program under the user's own session —
+   * and the `agent` effect's index entry in the requester's home space,
+   * riding the carriage of the run that staged the request.
    * The wave's conflict machinery still treats the contribution as
    * bookkeeping (rebase-or-drop; the writeback's own retry re-issues);
    * only the accept gate and the foreign batch's delegated admission
@@ -526,10 +528,7 @@ export type ServerRunInfo = {
    * bookkeeping, protocol.md §1's "The SpaceServer's own writes") and
    * never derived by the stamper — the caller attributes the trigger,
    * or the foreign write stays refused (fail-closed). */
-  delegated?: {
-    acting: { user: string; session?: string };
-    capabilityRef: string;
-  };
+  delegated?: DelegatedCarriage;
 };
 
 /**
@@ -2105,10 +2104,11 @@ export class Runtime {
    * Wait until the runtime is fully settled: the scheduler is idle, storage is
    * synced, AND every in-flight async builtin operation (`trackAsyncWork`) has
    * completed — including the reactive cascade its result writeback triggers.
-   * This is the "wait for everything, including async builtin I/O" companion to
-   * `idle()` (which intentionally returns before that I/O so handlers don't
-   * block on the network). Bounded: a builtin whose result re-triggers more
-   * async work converges in a few rounds.
+   * Re-checked until all of those hold at once, because each can restart the
+   * others. This is the "wait for everything, including async builtin I/O"
+   * companion to `idle()` (which intentionally returns before that I/O so
+   * handlers don't block on the network). Bounded: a builtin whose result
+   * re-triggers more async work converges in a few rounds.
    */
   async settled(maxRounds = 50): Promise<void> {
     for (let round = 0; round < maxRounds; round++) {
@@ -2119,6 +2119,9 @@ export class Runtime {
       // rechecks scheduler work whenever pending commits drain.
       await this.scheduler.idleWithPendingCommits();
       await this.storageManager.synced();
+      // Work queued while storage synced is work the barrier above has
+      // stopped watching.
+      if (!this.scheduler.isIdleWithPendingCommits()) continue;
       if (this.#pendingAsyncWork.size === 0) return;
       await Promise.allSettled([...this.#pendingAsyncWork.keys()]);
     }
@@ -2162,6 +2165,7 @@ export class Runtime {
     while (!signal?.aborted) {
       await this.scheduler.idleWithPendingCommits();
       await this.storageManager.synced();
+      if (!this.scheduler.isIdleWithPendingCommits()) continue;
       const relevant = [...this.#pendingAsyncWork]
         .filter(([, key]) => key === undefined || key === ownerKey)
         .map(([promise]) => promise);
@@ -2795,6 +2799,23 @@ export class Runtime {
     ) {
       stampSpeculationRunContext(tx, info);
     }
+  }
+
+  /**
+   * The delegated carriage a bookkeeping write into `space` is stamped with
+   * ({@link ServerRunInfo.delegated}): `carriage` when `space` is not the
+   * space this runtime serves, and none otherwise, since a write into the
+   * served space, and every write off the serving posture, is the runtime's
+   * own.
+   */
+  delegationForWriteTo(
+    space: MemorySpace,
+    carriage: ServerRunInfo["delegated"],
+  ): Pick<ServerRunInfo, "delegated"> {
+    const served = this.storageManager.servingHomeSpace;
+    return carriage !== undefined && served !== undefined && space !== served
+      ? { delegated: carriage }
+      : {};
   }
 
   /**

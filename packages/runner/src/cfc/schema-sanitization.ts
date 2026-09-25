@@ -32,6 +32,7 @@ import {
   isCellKind,
   isSchemaScope,
 } from "../scope.ts";
+import { fabricAwareEqualThroughViews } from "../view-equality.ts";
 import type { CfcConfClause } from "./clause.ts";
 import { clauseAlternatives, isOrClause } from "./clause.ts";
 import {
@@ -1650,6 +1651,16 @@ export function relaxDefaultedRequired(
   return relaxed as JSONSchema;
 }
 
+/**
+ * Validates `value` against `schema`, returning the failure's message, or
+ * `undefined` when it validates.
+ *
+ * `value` may hold query-result views: the default merge hands over the parts
+ * it added nothing to as the views they were read through. An `enum`, a
+ * `const` or `uniqueItems` compares the part of `value` it applies to with
+ * `fabricAwareEqualThroughViews()`, which decides each view as the stored
+ * value it reads.
+ */
 export const validateSchemaValue = (
   schema: JSONSchema,
   value: unknown,
@@ -1873,13 +1884,13 @@ const validateAgainstSchemaUncached = (
 
     if (
       Array.isArray(schema.enum) &&
-      !schema.enum.some((entry) => fabricAwareEqual(entry, value))
+      !schema.enum.some((entry) => fabricAwareEqualThroughViews(entry, value))
     ) {
       return mismatch("value is not in enum");
     }
     if (
       Object.hasOwn(schema, "const") &&
-      !fabricAwareEqual(schema.const, value)
+      !fabricAwareEqualThroughViews(schema.const, value)
     ) {
       return mismatch("value does not match const");
     }
@@ -2159,7 +2170,7 @@ function validateStrictSchemaConstraints(
         if (!Object.hasOwn(value, index)) continue;
         if (
           value.slice(0, index).some((entry) =>
-            fabricAwareEqual(entry, value[index])
+            fabricAwareEqualThroughViews(entry, value[index])
           )
         ) {
           return mismatch("array items are not unique");

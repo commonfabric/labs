@@ -31,6 +31,7 @@ import {
 import type { IFCLabel } from "./label-view-core.ts";
 import {
   type ExchangeRule,
+  isExactModulePolicyRef,
   lowerCfcPolicyTemplateRules,
   type PolicyArtifactManifestV1,
   type PolicyRecord,
@@ -305,40 +306,11 @@ const policyRefHomeClauses = (
   return homes;
 };
 
-const MODULE_POLICY_REF_KEYS = new Set([
-  "type",
-  "policyRefKind",
-  "moduleIdentity",
-  "symbol",
-  "policyDigest",
-  "subject",
-]);
-
 const isModulePolicyCandidate = (value: Record<string, unknown>): boolean =>
   value.policyRefKind === "module" ||
   ["moduleIdentity", "symbol", "policyDigest"].some((key) =>
     Object.hasOwn(value, key)
   );
-
-const isExactModulePolicyRef = (
-  value: unknown,
-): value is CfcModulePolicyRefAtom => {
-  if (!isObjectNotArray(value)) return false;
-  if (
-    value.type !== CFC_ATOM_TYPE.Policy || value.policyRefKind !== "module" ||
-    typeof value.moduleIdentity !== "string" ||
-    value.moduleIdentity.length === 0 || typeof value.symbol !== "string" ||
-    value.symbol.length === 0 || typeof value.policyDigest !== "string" ||
-    value.policyDigest.length === 0 ||
-    !(
-      (typeof value.subject === "string" && value.subject.length > 0) ||
-      isCfcFieldCommitment(value.subject)
-    )
-  ) {
-    return false;
-  }
-  return Object.keys(value).every((key) => MODULE_POLICY_REF_KEYS.has(key));
-};
 
 const collectSelectedModulePolicyRefs = (
   confidentiality: readonly CfcConfClause[],

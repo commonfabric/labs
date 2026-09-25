@@ -284,14 +284,19 @@ about anything a host serves.
 Opening a missing runtime-supplied piece revalidates the deployment's advertised
 identity. Resolved source may be shared within a reconciler for the same
 destination space, full source URL, and advertised identity. Retention is bounded
-by entry count and source string size. Every caller still compiles and verifies
-that identity in its destination space, including source-closure persistence on
-a compiler cache hit. Compilation or identity failure retires the source used by
-that attempt so a later open can retry. Disposal cancels pending source work and
-prevents an open still syncing or compiling from supplying a pattern. Existing
-pieces continue to reconcile their own recorded origins independently of this
-source sharing. Registry changes continue to invalidate compiled sidecar
-surfaces; retained source contains no compiled patterns or schema references.
+by entry count and source string size. An open that finds no verified pattern
+for that source compiles it and verifies that identity in its destination space,
+including source-closure persistence on a compiler cache hit. The pattern that
+open verified is retained with the source and answers later opens for the same
+destination, URL, and identity without compiling again, because that destination
+already holds its closure. It answers only within the schema registry epoch that
+compiled it: its serialized graph carries `cid:` schema references that a
+registry clear retires, so an open after a clear compiles again. Compilation or
+identity failure retires the source used by that attempt, with any pattern kept
+beside it, so a later open can retry. Disposal cancels pending source work and
+prevents an open still syncing or compiling from supplying or retaining a
+pattern. Existing pieces continue to reconcile their own recorded origins
+independently of this source sharing.
 
 A piece that pattern code instantiates — a nested pattern, a piece a handler
 creates with `inSpace` — runs a module of the instantiating program, and what it

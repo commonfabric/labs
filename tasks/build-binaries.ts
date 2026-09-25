@@ -1,5 +1,5 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --allow-run
-import { exists } from "@std/fs";
+import { exists, walkSync } from "@std/fs";
 import * as path from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
 import {
@@ -8,6 +8,7 @@ import {
   renderVersionModule,
 } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 import { CONNECTOR_PATTERN_SOURCES } from "../packages/connectors/pattern-sources.ts";
+import { BASELINES_DIR, isIframeGuestSource } from "./pattern-files.ts";
 
 export interface BuildConfigInitializer {
   root: string;
@@ -16,13 +17,14 @@ export interface BuildConfigInitializer {
   cliOnly?: boolean;
 }
 
-export const BINARY_NAMES = ["toolshed", "bg-piece-service", "cf"] as const;
+export const BINARY_NAMES = ["toolshed", "cf"] as const;
 export type BinaryName = (typeof BINARY_NAMES)[number];
 
 /**
  * Everything a built binary is made from, as repository-relative files and
  * directories (a directory ends in `/`): the Deno release `mise.toml` pins,
- * which `deno compile` embeds in every binary; this script; the workspace
+ * which `deno compile` embeds in every binary; this script and the pattern
+ * file classification it imports; the workspace
  * manifest and lockfile; the port table the servers import; and the trees
  * that the entry points' module graphs and every `--include` reach. A CI lane
  * keys the binaries it caches on the tracked contents of these, so a change
@@ -32,6 +34,7 @@ export type BinaryName = (typeof BINARY_NAMES)[number];
 export const BINARY_SOURCES = [
   "mise.toml",
   "tasks/build-binaries.ts",
+  "tasks/pattern-files.ts",
   "deno.jsonc",
   "deno.lock",
   "ports.json",
@@ -174,19 +177,6 @@ export class BuildConfig {
     return this.#path("packages", "toolshed", "index.ts");
   }
 
-  bgPieceServiceEntryPath() {
-    return this.#path("packages", "background-piece-service", "src", "main.ts");
-  }
-
-  bgPieceServiceWorkerPath() {
-    return this.#path(
-      "packages",
-      "background-piece-service",
-      "src",
-      "worker.ts",
-    );
-  }
-
   toolshedEnvPath() {
     return this.#path("packages", "toolshed", "COMPILED");
   }
@@ -244,8 +234,6 @@ export class BuildConfig {
       this.shellProjectPath(),
       this.toolshedProjectPath(),
       this.toolshedEntryPath(),
-      this.bgPieceServiceEntryPath(),
-      this.bgPieceServiceWorkerPath(),
       this.staticAssetsPath(),
       ...this.patternPaths(),
       this.staticTypesPath(),
@@ -275,8 +263,6 @@ export class BuildConfig {
           this.staticAssetsPath(),
           ...this.patternPaths(),
         ];
-      case "bg-piece-service":
-        return [this.bgPieceServiceWorkerPath(), this.staticAssetsPath()];
       case "cf":
         return [
           this.staticTypesPath(),
@@ -295,13 +281,30 @@ export class BuildConfig {
    * Returns the paths within `includePaths()` that `deno compile` does not
    * embed in `binary` on their own account. A module among them is still
    * embedded when an embedded module imports it. The toolshed leaves out the
-   * patterns' integration tests, with their helpers and fixtures, which are
-   * test code rather than patterns the toolshed is asked to serve.
+   * files in the pattern trees that it never serves to a runtime: the
+   * integration tests with their helpers and fixtures, the recorded
+   * compatibility baselines, every other test file, and every iframe guest
+   * source. Those files are the ones in the pattern trees that import
+   * npm packages, which `deno compile` would otherwise embed too.
    */
   excludePaths(binary: BinaryName): string[] {
-    return binary === "toolshed"
-      ? [this.#path("packages", "patterns", "integration")]
-      : [];
+    if (binary !== "toolshed") return [];
+    const directories = [
+      this.#path("packages", "patterns", "integration"),
+      this.#path(...BASELINES_DIR.split("/")),
+    ];
+    const files = this.patternPaths().flatMap((tree) =>
+      Array.from(
+        walkSync(tree, { includeDirs: false }),
+        (entry) => entry.path,
+      ).filter((file) =>
+        (/\.test\.tsx?$/.test(file) || isIframeGuestSource(file, tree)) &&
+        !directories.some((directory) =>
+          file.startsWith(`${directory}${path.SEPARATOR}`)
+        )
+      )
+    );
+    return [...directories, ...files.sort()];
   }
 
   distDir() {
@@ -322,7 +325,6 @@ export type BuildDependencies = {
   buildShell(config: BuildConfig): Promise<void>;
   prepareWorkspace(config: BuildConfig): Promise<void>;
   buildToolshed(config: BuildConfig): Promise<void>;
-  buildBgPieceService(config: BuildConfig): Promise<void>;
   buildCli(config: BuildConfig): Promise<void>;
   revertWorkspace(config: BuildConfig): Promise<void>;
 };
@@ -332,7 +334,6 @@ export const defaultBuildDependencies: BuildDependencies = {
   buildShell,
   prepareWorkspace,
   buildToolshed,
-  buildBgPieceService,
   buildCli,
   revertWorkspace,
 };
@@ -349,9 +350,6 @@ export async function build(
     if (config.builds("toolshed")) await dependencies.buildShell(config);
     await dependencies.prepareWorkspace(config);
     if (config.builds("toolshed")) await dependencies.buildToolshed(config);
-    if (config.builds("bg-piece-service")) {
-      await dependencies.buildBgPieceService(config);
-    }
     if (config.builds("cf")) await dependencies.buildCli(config);
   } catch (e: unknown) {
     buildError = e as Error;
@@ -436,33 +434,6 @@ async function buildToolshed(config: BuildConfig): Promise<void> {
   console.log("Toolshed binary built successfully");
 }
 
-async function buildBgPieceService(config: BuildConfig): Promise<void> {
-  console.log("Building background piece service binary...");
-  const { success } = await new Deno.Command(Deno.execPath(), {
-    args: [
-      ...lockedCompileArgs(config),
-      // Run `--no-check` here, as the `--include`'d
-      // `es2023.d.ts` file will attempt to be checked
-      // as a non-static asset. Checking should be done
-      // prior to building.
-      "--no-check",
-      "--output",
-      config.distPath("bg-piece-service"),
-      ...embedArgs(config, "bg-piece-service"),
-      "-A", // All permissions
-      "--unstable-worker-options", // Required by bg-piece-service
-      config.bgPieceServiceEntryPath(),
-    ],
-    cwd: config.root,
-    stdout: "inherit",
-    stderr: "inherit",
-  }).output();
-  if (!success) {
-    throw new Error("Failed to build background piece service binary");
-  }
-  console.log("Background piece service binary built successfully");
-}
-
 async function buildCli(config: BuildConfig): Promise<void> {
   console.log("Building CLI binary...");
   // Figure out the full list requested by typescript and
@@ -540,6 +511,11 @@ function lockedCompileArgs(config: BuildConfig): string[] {
     "--lock",
     config.workspaceLockPath(),
     "--frozen=true",
+    // Embed only the npm packages the binary's module graph reaches, rather
+    // than every npm package in the lockfile. A package that a binary loads
+    // only through a specifier the compile cannot read statically must be
+    // named with `--include npm:<package>`.
+    "--exclude-unused-npm",
   ];
 }
 

@@ -2878,22 +2878,6 @@ export class PatternManager {
   }
 
   /**
-   * Attaches the trigger's delegated carriage (`protocol.md` §2b) ONLY for a
-   * write target FOREIGN to the serving manager's home space. Home-space
-   * writebacks and every client writeback are plain bookkeeping and carry
-   * none.
-   */
-  #writebackDelegationFor(
-    space: MemorySpace,
-    delegated: WritebackDelegation | undefined,
-  ): { delegated?: WritebackDelegation } {
-    const home = this.#runtime.storageManager.servingHomeSpace;
-    return delegated !== undefined && home !== undefined && space !== home
-      ? { delegated }
-      : {};
-  }
-
-  /**
    * Writes the module set into `space` and AWAITS it, tracking the in-flight
    * promise in `#compileCacheWrites` + `#pendingCacheWriteBacks` (so graceful
    * shutdown and closure replication can observe it). A failure PROPAGATES and
@@ -3132,7 +3116,7 @@ export class PatternManager {
       this.#runtime.stampServerRun(tx, {
         actionId: `compile-cache/source-writeback/${entryIdentity}`,
         kind: "bookkeeping",
-        ...this.#writebackDelegationFor(space, delegated),
+        ...this.#runtime.delegationForWriteTo(space, delegated),
       });
       committedModuleDelegations = writeSourceDocs(
         this.#runtime,
@@ -3223,7 +3207,7 @@ export class PatternManager {
         this.#runtime.stampServerRun(tx, {
           actionId: `compile-cache/writeback/${entryIdentity}`,
           kind: "bookkeeping",
-          ...this.#writebackDelegationFor(space, delegated),
+          ...this.#runtime.delegationForWriteTo(space, delegated),
         });
         chunkDelegations = writeSourceAndCompiledDocs(
           this.#runtime,

@@ -1,84 +1,46 @@
 # Scheduled Work in the Server
 
-*A pattern declares the cadence it wants to wake on, the space's own serving
-runtime honors it, and the background piece service is deleted rather than
-carried forward.*
+*A pattern declares the cadence it wants to wake on, and the space's own
+serving runtime honors it.*
 
-**Status:** the replacement capability is proposed and exploratory; the
-deletion it enables is already an owner ruling ·
-**Updated:** 2026-09-02
+**Status:** proposed and exploratory ·
+**Updated:** 2026-09-24
 
-The same day D12 ruled the background piece service sunset, the owner also
-ruled that its work should *not* be migrated, on the grounds that "bgUpdater is
-not in practical use today and will come back in a simpler form". This is a
-shape for that simpler form: a way for a pattern to declare that it wants
-waking on an interval, honored by the serving runtime the executor already
-hosts. One step of it needs a further ruling before it could be built.
+Nothing wakes a piece on a timer. A pattern can declare a `bgUpdater` stream,
+but nothing polls it. The owner has ruled that this capability may stay absent,
+on the grounds that "bgUpdater is not in practical use today and will come back
+in a simpler form". This is a shape for that simpler form: a way for a pattern
+to declare that it wants waking on an interval, honored by the serving runtime
+the executor already hosts. One step of it needs a further ruling before it
+could be built.
 
-The document is in three parts and they are separable. Part 1 is the
-replacement. Part 2 is the deletion. Part 3 is compute accounting, which is a
-different problem that neither of the others depends on.
+The document has two parts, and they are separable. Part 1 is the capability.
+Part 3 is compute accounting, which is a different problem that Part 1 does not
+depend on to function. Part 2, the deletion of the background piece service, is
+complete; its inventory and reasoning are recorded in
+[the history of this plan](../history/plans/scheduled-work-part-2-background-service-deletion.md).
 
 ---
 
 ## What is already decided
 
 The [D12 ruling](../history/specs/server-side-execution/passivity-arc-orchestration.md)
-sunsets the background piece service, and describes it in terms worth quoting
-because they explain why the deletion is a goal rather than a chore. The
-service is "a runtime that runs pieces on the server by pretending to be a
-client". The ruling calls it a pre-existing workaround for the serving gap, and
-says that closing that gap is what makes it redundant. It is recorded as the
-first deletion of a whole component the arc has earned.
+settles where server-side work on pieces runs. It rejects "a runtime that runs
+pieces on the server by pretending to be a client", and calls such a runtime a
+workaround for the serving gap that closing the gap makes redundant.
 
 The live spec carries this forward in its own statement of what is being built:
-toolshed routes its own pattern needs through the executor, and the background
-piece service stays sunset.
-
-The sequencing was ruled in the same place, in four steps: close the serving
-gap, then migrate the service's work onto the executor, then sunset the
-service, and flip the flag last.
-
-Events have since overtaken two of those steps, and §2.2 records what that
-leaves. The flip has landed: `SERVER_EXECUTION_DEFAULT_ENABLED` is now
-`true`, so the executor serves by default and the soak is running. It landed
-with the background piece service still in the tree, which is the opposite of
-the ruled order.
-
-The second step reads as though the replacement gates the deletion. It does
-not, because a second ruling the same day removed it:
-
-> bgUpdater is not in practical use today and will come back in a simpler
-> form, so rather than migrating this service, disable it
-
-So the deletion does not wait for anything in Part 1. The owner's premise is
-that the capability can lapse, because nothing depends on it in practice, and
-that it returns later in a simpler form. There is no production deployment for
-that premise to have stopped being true of, so it holds without qualification:
-no registrations have accrued, and nothing is relying on a background poll.
-
-Two further clauses constrain this document directly. The service must keep
-working until it is retired, and silencing it early does not count as the
-sunset. And it must not be given executor authority as a stopgap, because that
-would re-authorize a component already decided for deletion.
-
-The two parts are therefore genuinely independent. Everything the background
-service does is redundant once the executor serves spaces, with one exception:
-waking a piece on a timer when nobody is watching. The ruling's position is
-that this exception may simply go away for a while. Part 1 is a proposal for
-what it should look like when it comes back, and Part 2 can proceed without
-it.
+toolshed routes its own pattern needs through the executor. Part 1 therefore
+extends the executor rather than adding a process.
 
 Nothing is broken today and no user is waiting on this. Part 1 is about what
 the product should be able to do rather than a repair, so it can be held to
 whatever bar seems right, including waiting for Part 3, at no cost to anyone.
-Part 2 is cheap for the same reason: there is nothing to preserve.
 
 ## Why the executor does not already cover it
 
-The executor now serves by default, so this is a question about the shipped
-system rather than about an arm behind a flag. The serving loop is lazy by
-design, and the laziness is precisely what leaves this gap.
+The serving loop is lazy by design, and the laziness is precisely what leaves
+this gap.
 
 A space is active when it has at least one live client session or undelivered
 events. Otherwise it may be parked, with its runtime disposed and its lease
@@ -124,6 +86,11 @@ anything, which is what a scheduler needs.
 The value is a list so that one pattern can declare more than one cadence.
 `intervalMinutes` says how often. `callback` is the stream the wake sends to.
 
+A pattern's existing `bgUpdater` stream would need no change to be scheduled.
+It is an ordinary stream, and a pattern can already wire it to a button's
+`onClick` as a manual refresh. Naming it as a `callback` would add a scheduled
+sender beside the button without replacing it.
+
 ### Validation
 
 The transformer would enforce three rules, since it is already the place that
@@ -139,7 +106,7 @@ than clamped, following the convention the `#now/N` bounds already set.
 The list has a small maximum length. A pattern declaring dozens of cadences is
 more likely to be a mistake than an intention.
 
-## Part 1 — The replacement
+## Part 1 — The capability
 
 ### 1.1 The step that needs a ruling
 
@@ -230,10 +197,9 @@ declaration should be read as naming what it demands, not merely when.
 
 ### 1.5 This puts background compute in the toolshed process
 
-The background service runs in its own process under its own identity. A piece
-that wedges it takes down background execution and nothing else. Part 1 gives
-that property up, and it gives it up at the moment Part 1 ships rather than at
-the moment the old service is deleted.
+Part 1 runs scheduled work in the toolshed process. If scheduled work ran in a
+separate process, a piece that wedged that process would stop only scheduled
+work. In the toolshed process, a wedged piece stops everything toolshed serves.
 
 The existing per-space budgets pace outbound network effects, and the
 consequence-flush deadline bounds how long a wave may hold a commit open.
@@ -244,148 +210,21 @@ preempted.
 
 So a scheduled wake is a way for a pattern author to schedule unbounded
 synchronous work inside the process that also serves the storage WebSocket.
-That is a property of Part 1, not a cost of the migration, and it does not
-become safer by keeping the old service around. Part 3 is what would bound it.
-Whether Part 1 should ship before that bound exists is an open question below.
+That is a property of Part 1. Part 3 is what would bound it. Whether Part 1
+should ship before that bound exists is an open question below.
 
 ### 1.6 What Part 1 does not do
 
-It does not run anything when the server is down. The proposal moves the
-requirement from "the user runs a background service" to "the server the user
-already depends on is running". That is a smaller ask, and it is not the same
+It does not run anything when the server is down. The proposal requires only
+that the server the user already depends on is running. That is not the same
 as working while everything is off.
 
 It does not bound how much work a wake performs. That is Part 3.
 
-## Part 2 — Deleting the background piece service
-
-The inventory and the ordering constraints, so that the deletion can be scoped
-as its own change.
-
-### 2.1 This has been done once already
-
-The v1 arc executed this deletion. The service was disabled under the flag in
-`f945d1ed0` and deleted in `9c9513317`, a change of −6754 and +282 lines,
-reachable locally on `upstream/codex/server-execution-flags-on`.
-
-That branch is a v1 archive and is marked "do not merge", so the commit is not
-a patch to apply. It is a worked inventory, and reading it saves rediscovering
-the parts of the deletion that are not obvious. Two of its decisions are
-recorded below because they were arrived at by finding out the hard way.
-
-### 2.2 The ordering, and the premise to re-check
-
-The ruling put the sunset before the flip. The flip landed first, with the
-service still present, so the deletion is now a cleanup behind a shipped change
-rather than a step ahead of one. What survives of the ruling is the half that
-was never about ordering: the sunset does not wait for a replacement, because
-the owner ruled the capability may lapse.
-
-That makes one question live rather than hypothetical. A runtime under the flag
-that is not the serving runtime — which is what the background service's worker
-is — defaults to the speculation overlay and "thereby loses the
-derivation-commit path by construction"
-([`runtime.ts:538`](../../packages/runner/src/runtime.ts:538)). The service
-depends on that path when it starts a piece. It now resolves the default ON in
-any ordinary deployment, so whatever that costs it, it costs it today.
-
-The flip PR discharged the review finding that no gate exercised these binaries
-in the ON arm. There is now a deployed-topology posture gate that runs the real
-`bg-piece-service` binary against a serving toolshed
-([`posture-gate.test.ts`](../../packages/background-piece-service/integration/posture-gate.test.ts)),
-and the service logs the posture it resolved. Read what that gate claims,
-though: the binary starts, opens a session, reads and watches the registry,
-reports ON, and shuts down cleanly on SIGTERM. It does not run a piece. Whether
-a poll can still drive a `bgUpdater` handler to a durable commit under the
-default arm is not covered by it, and is the open question above.
-
-v1 did not rely on that structural loss. It added an explicit bail gated on the
-flag, and the reason was specific to v1: a live background registration made
-the memory engine refuse to acquire or renew an execution lease, so the service
-structurally locked the executor out of every space it served. That machinery
-does not exist in v2 — there are no references to it on main — so the v2
-deletion does not inherit that reason, only the ordering.
-
-**The premise holds, and nothing needs re-checking to confirm it.** The ruling
-rests on "bgUpdater is not in practical use today", and there is no production
-deployment for that to have stopped being true of. The v1 commit worried that
-the registered set "is not derivable from this repo (it accrues as users
-connect accounts)". Nothing has accrued, so the set is empty and the concern is
-moot.
-
-What remains is source-level. One pattern on main declares a `bgUpdater`
-stream, a test pattern that exists to exercise the service. It is code
-referring to a mechanism being removed, not users depending on it.
-
-Note also that a `bgUpdater` stream is not only a polling target. A pattern can
-wire its own `bgUpdater` to a button's `onClick`, so the same stream serves as
-the manual refresh path. Deleting the service does not require deleting the
-streams, and v1 did not delete them.
-
-### 2.3 The servability oracle is empty
-
-The ruling names a use for the service that expires when it does. Every piece
-it runs today is a piece the executor must be able to run tomorrow, so its
-workload would be a ready-made coverage list for the serving gap.
-
-That instruction assumes a running deployment with a workload. There is none,
-so the oracle has nothing in it and this step cannot be performed as written.
-
-The pattern in §2.2 is the repository's own statement of what wanted background
-execution, so it is the coverage list by default, and a weaker one — it is the
-test pattern that exists to exercise the service. What it cannot tell you is
-whether anyone actually ran it, or whether it ran successfully — a question the
-service could not have answered reliably either, since its README records that
-an updater doing asynchronous work returns while that work is still in flight,
-so failures go unobserved. The oracle was going to over-report even when it had
-something in it.
-
-### 2.4 Inventory
-
-The `packages/background-piece-service` package, including its worker,
-worker-controller, and space-manager machinery, and the `bg-piece-service`
-binary target in `tasks/build-binaries.ts`.
-
-The `--bg-updater` arm of the local development scripts, the corresponding
-sections of the local development documentation, and the package's entry in
-`tasks/check.sh`.
-
-The `gideon-tests/test-background-manual-trigger.tsx` pattern, which exists to
-exercise the service.
-
-**v1 kept two things this deletion can take.** Both were kept for reasons that
-depended on a running deployment, and neither reason survives without one.
-
-v1 kept the registry write side, moving `setBGPiece` out of the deleted package
-into a new `packages/toolshed/routes/integrations/bg-registry.ts`, because
-`POST /api/integrations/bg` had a live caller in the `cf-updater` element and
-no-oping the write would have left that button reporting success while
-registering nothing. With nothing calling it, the honest move is to delete the
-route and the element together rather than to relocate a writer for a reader
-that is also going.
-
-v1 kept the registry data, because "the set of pieces that asked for background
-execution is not derivable from this repo" and "a replacement
-standing-registration mechanism will want it". Nothing accrued, so there is no
-data to preserve and Part 1 inherits no registrations. It starts from the
-declarations in the patterns themselves, which is where it should start anyway.
-
-### 2.5 What the deletion buys
-
-The deletion now retires machinery the flip had to build. The deployed-topology
-posture gate exists to prove this binary resolves the right arm; a binary that
-no longer ships needs no such proof, so the gate, the integration test, and the
-startup posture log line go with it.
-
-It also settles the §2.2 question by removing its subject. Deciding whether the
-service can still commit under the default arm is only worth the investigation
-if the service has a future, and it does not.
-
 ## Part 3 — Compute accounting
 
-Separate from both. Part 1 does not depend on it to function, Part 2 does not
-depend on it at all, and it would be worth doing even if scheduled wakes never
-existed.
+Separate from Part 1, which does not depend on it to function. It would be
+worth doing even if scheduled wakes never existed.
 
 The concern is a piece that wakes on a schedule, computes something expensive,
 and produces data that nothing ever reads.
@@ -461,11 +300,11 @@ may make a large part of the rest of Part 3 unnecessary.
 2. Is the jitter for spreading load or for unpredictability? The answer decides
    whether the offset is hash-derived or freshly drawn, and the two are not
    compatible.
-3. Should Part 1 ship before a compute bound exists? Since the deletion does
-   not wait for Part 1, Part 1 is free to wait for Part 3, and the argument in
-   §1.5 says it probably should: without a bound, a scheduled wake is a way for
-   a pattern author to run unbounded synchronous work inside the process
-   serving the storage WebSocket. The cost of waiting is that the capability
+3. Should Part 1 ship before a compute bound exists? Nothing waits for Part 1,
+   so Part 1 is free to wait for Part 3, and the argument in §1.5 says it
+   probably should: without a bound, a scheduled wake is a way for a pattern
+   author to run unbounded synchronous work inside the process serving the
+   storage WebSocket. The cost of waiting is that the capability
    stays absent for longer, which the ruling has already accepted.
 4. What happens to a piece created while its space is parked? An authored
    admission alone does not activate a space, so a piece created by another
@@ -481,15 +320,10 @@ may make a large part of the rest of Part 3 unnecessary.
 ## Acceptance
 
 Part 1 would need: a pattern declaring `[SCHEDULE]` firing its callback with no
-browser open and no background service running; the next due time surviving a
-toolshed restart; a wake demanding only the callback's subgraph, shown by the
-demand counters; and the transformer rejecting a sub-sixty-minute interval, a
-computed interval, and an over-long list.
-
-Part 2 would need the five declaring patterns shown to run under the executor,
-which is the whole of the coverage list now that the oracle is empty. It does
-not need Part 1, and it does not need the `bgUpdater` streams removed — v1 kept
-them, and one of them is a manual refresh button.
+browser open; the next due time surviving a toolshed restart; a wake demanding
+only the callback's subgraph, shown by the demand counters; and the transformer
+rejecting a sub-sixty-minute interval, a computed interval, and an over-long
+list.
 
 Part 3 would need a ledger that survives restart, a demonstration that a space
 over its budget is not activated for a scheduled wake, and evidence that
@@ -500,11 +334,11 @@ what the serving loop's own testing rules already require.
 
 ## Alternatives considered
 
-**Keep the background service and give it per-piece intervals.** Foreclosed by
-D12 and by the ruling against migrating it, and independently by the flip that
-has now landed: a non-serving runtime under the flag loses the
-derivation-commit path, so the service has no future in the served world
-regardless of what features it grows.
+**Run pieces on a timer in a separate process that acts as a client.**
+Foreclosed by D12. It is also foreclosed independently: with server execution
+on, a runtime that is not the serving runtime loses the derivation-commit path
+([`runtime.ts`](../../packages/runner/src/runtime.ts)), so such a process
+could not commit what its pieces derive.
 
 **Make `#now/N` durable instead of adding a declaration.** Attractive, because
 the declaration already exists in a form patterns use. It fails on discovery:
@@ -513,11 +347,11 @@ index it. It also conflates "give me the current time" with "wake me up", which
 are different requests sharing a mechanism today.
 
 **Run scheduled work in a separate process that talks to the executor.** This
-keeps the process isolation §1.5 gives up, which is the one real advantage the
-background service has. It is not the background service resurrected, because
-such a process would hold no runtime and pretend to be no client — it would
-only tell the executor when to wake a space. If open question 3 resolves
-against shipping Part 1 unbounded, this is where to look next.
+keeps the process isolation §1.5 gives up, which is the one real advantage of a
+separate process. It is not the previous alternative, because such a process
+would hold no runtime and act as no client — it would only tell the executor
+when to wake a space. If open question 3 resolves against shipping Part 1
+unbounded, this is where to look next.
 
 ## Out of scope
 

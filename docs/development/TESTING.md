@@ -62,9 +62,9 @@ The package's `test` task in its `deno.jsonc` names what it runs, and
 prints each command line as it runs it, which shows where the flag was
 appended.
 
-A handful of packages run a test runner of their own — `packages/dashboard`
-and `packages/identity` among them — and appended arguments reach whatever that
-runner does with them, which its own source says.
+A package can run a test runner of its own, as `packages/identity` does, and
+appended arguments reach whatever that runner does with them, which its own
+source says.
 
 A test's name is also its identity in the run-record store, so a renamed test
 must be listed in `tasks/test-identity-aliases/` to keep its recorded
@@ -365,11 +365,12 @@ of plain `deno test` discovery, and once as the argument list handed to
 `deno-web-test`. Adding a browser test means naming the file and nothing
 further.
 
-The two matches need not sit on one task line. `packages/dashboard` spreads
-them across the runner script its test task starts and the `test-browser` task
-that runner then calls. What matters is that both are the same glob, so neither
-can fall behind the other. The package-level task remains the one command
-authors and the root workspace runner invoke, and it owns every step.
+The two matches sit on two task lines, `deno-test` and `browser-test`, which
+the package's `test` task runs in turn. What matters is that both are the same
+glob, so neither can fall behind the other. The test topology reads the second
+one to find the files the browser half runs. The package-level task remains the
+one command authors and the root workspace runner invoke, and it owns every
+step.
 
 The glob hands its files to `deno-web-test` in the order the shell expands
 them, which is alphabetical rather than the order anyone chose. Tests in one
@@ -632,7 +633,7 @@ a path holding a space one argument:
 ```
 
 A test launched from a script can read `Deno.execPath()` directly, as
-`packages/dashboard/test/runner.ts` does with `--allow-run=${Deno.execPath()},git`.
+`tasks/run-member-tests.test.ts` does with `--allow-run=${deno}`.
 
 That a task's `deno` is the running one rather than one found on `PATH` is what
 makes the computed form name the right binary, so

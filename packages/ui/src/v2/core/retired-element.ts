@@ -21,8 +21,10 @@ import { BaseElement } from "./base-element.ts";
  * So a retired element keeps a definition that renders its children and does
  * nothing else. It stays a known element, its props keep their declared
  * meaning, and the subtree underneath it goes on working. It is loud rather
- * than fatal: one console warning per element per session at runtime, and an
- * `@deprecated` JSX declaration so authoring flags it at edit time. Patterns
+ * than fatal: one console warning per element per session at runtime. It has
+ * no JSX declaration, because declaring a retired element in
+ * `JSX.IntrinsicElements` stops spaces with stored source that names it from
+ * rendering; new source that names it therefore fails to type-check. Patterns
  * get rewritten off it at their own pace; the stub leaves only when nothing
  * durable names it any more.
  */

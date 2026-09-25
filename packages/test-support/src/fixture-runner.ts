@@ -1,12 +1,6 @@
 import { beforeAll, describe, it } from "@std/testing/bdd";
 import { walkSync } from "@std/fs/walk";
 import { basename, isAbsolute, relative, resolve, SEPARATOR } from "@std/path";
-import { registerFrameworkModule } from "./records/registration.ts";
-
-// A suite registered through this runner belongs to the file that asked
-// for it, not to this module, so the file attribution walks past these
-// frames on its way out to the caller.
-registerFrameworkModule(import.meta.url);
 
 export interface Fixture {
   readonly rootDir: string;

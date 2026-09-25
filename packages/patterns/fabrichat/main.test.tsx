@@ -21,6 +21,7 @@ import {
   type FabriChatProfile,
   FabriChatRoom,
   type MessagesValue,
+  type ReactionsValue,
 } from "./chat.tsx";
 
 type FabriChatRoomInputArg = Parameters<typeof FabriChatRoom>[0];
@@ -62,6 +63,7 @@ const composerDisabled = (root: unknown): unknown =>
 
 export default pattern(() => {
   const messages = Writable.of<MessagesValue>([] as MessagesValue);
+  const reactions = Writable.of<ReactionsValue>([] as ReactionsValue);
 
   // The two Sams are different people who share a name.
   const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
@@ -88,24 +90,28 @@ export default pattern(() => {
     myName: "Alice",
     myAvatar: "",
     messages,
+    reactions,
   } as FabriChatRoomInputArg);
   const bob = FabriChatRoom({
     myProfile: bobProfile,
     myName: "Bob",
     myAvatar: "",
     messages,
+    reactions,
   } as FabriChatRoomInputArg);
   const samOne = FabriChatRoom({
     myProfile: samOneProfile,
     myName: "Sam",
     myAvatar: "",
     messages,
+    reactions,
   } as FabriChatRoomInputArg);
   const samTwo = FabriChatRoom({
     myProfile: samTwoProfile,
     myName: "Sam",
     myAvatar: "",
     messages,
+    reactions,
   } as FabriChatRoomInputArg);
   // One viewer whose name is known before their profile, and one whose
   // profile is known before their name.
@@ -114,12 +120,14 @@ export default pattern(() => {
     myName: "Pending",
     myAvatar: "",
     messages,
+    reactions,
   } as FabriChatRoomInputArg);
   const noName = FabriChatRoom({
     myProfile: namelessProfile,
     myName: "",
     myAvatar: "",
     messages,
+    reactions,
   } as FabriChatRoomInputArg);
 
   const assert_starts_empty = assert(() =>

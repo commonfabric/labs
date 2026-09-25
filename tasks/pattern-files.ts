@@ -47,10 +47,16 @@ const NON_PATTERN_FILES = new Set([
   "mod.ts",
 ]);
 
-const NON_PATTERN_BASENAMES = new Set([
-  "contract.ts",
+/** The file names of an iframe pattern's browser-only guest sources. */
+const IFRAME_GUEST_BASENAMES = new Set([
   "guest.ts",
   "guest.tsx",
+]);
+
+/** The file names in an iframe pattern's directory that are not entries. */
+const NON_PATTERN_BASENAMES = new Set([
+  "contract.ts",
+  ...IFRAME_GUEST_BASENAMES,
 ]);
 
 const NON_PATTERN_PREFIXES = [
@@ -127,12 +133,30 @@ export function isPatternSource(
   if (path.endsWith(".test.ts") || path.endsWith(".test.tsx")) return false;
   const key = patternKey(path, patternsDir);
   if (NON_PATTERN_FILES.has(key)) return false;
-  const segments = key.split("/");
-  if (
-    segments[0].startsWith("iframe-") &&
-    NON_PATTERN_BASENAMES.has(segments.at(-1)!)
-  ) return false;
+  const fileName = iframeFileName(key);
+  if (fileName !== undefined && NON_PATTERN_BASENAMES.has(fileName)) {
+    return false;
+  }
   return !NON_PATTERN_PREFIXES.some((prefix) => key.startsWith(prefix));
+}
+
+/**
+ * Whether a path under the patterns root is an iframe pattern's guest source:
+ * browser code that the iframe wrapper generator bundles into the pattern's
+ * generated `main.tsx`, and that the pattern compiler never loads.
+ */
+export function isIframeGuestSource(
+  path: string,
+  patternsDir: string,
+): boolean {
+  const fileName = iframeFileName(patternKey(path, patternsDir));
+  return fileName !== undefined && IFRAME_GUEST_BASENAMES.has(fileName);
+}
+
+/** The file name of a pattern key that lies in an iframe pattern's tree. */
+function iframeFileName(key: string): string | undefined {
+  const segments = key.split("/");
+  return segments[0].startsWith("iframe-") ? segments.at(-1) : undefined;
 }
 
 export async function collectPatternFiles(

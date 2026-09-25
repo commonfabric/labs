@@ -36,6 +36,7 @@ import {
 import {
   decodeMemoryBoundary,
   resolveScopeKey,
+  type ScopeKey,
   type SessionViewInterest,
   streamEntriesDocId,
   type StreamEventsDocValue,
@@ -61,6 +62,7 @@ import {
 } from "../src/executor/stats.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { ArrivalLog, awaitEach } from "./support/serving-waits.ts";
+import { sessionDemandOf } from "./support/session-demand.ts";
 
 const spaceSigner = await Identity.fromPassphrase("space-server test space");
 const space = spaceSigner.did() as MemorySpace;
@@ -909,7 +911,7 @@ describe("stage G SpaceServer recovery seams", () => {
   //
 
   // W0 (d′) SCRATCH: these seams hand-feed DEMAND with no client session.
-  // Under (d′) demand is the tracked-ids CLOSURE (`demandedInstancesForSpace`
+  // Under (d′) demand is the tracked-ids CLOSURE (`demandForSpace`
   // rows: instance-keyed, `root` marked) — a client watching a piece's
   // result with its schema tracks the result doc AND the `computed:` docs
   // it links to (the writers of those are the demand roots; the root doc
@@ -927,16 +929,10 @@ describe("stage G SpaceServer recovery seams", () => {
       identity?: { principal?: string; sessionId?: string };
     }>,
   ) => {
-    const rows: Array<{
-      id: string;
-      scope: "space" | "user" | "session";
-      scopeKey: string;
-      identity?: { principal?: string; sessionId?: string };
-      root: boolean;
-    }> = [];
+    const rows: MemoryV2Server.DemandedInstanceRow[] = [];
     for (const root of roots) {
       const scope = (root.scope ?? "space") as "space" | "user" | "session";
-      let scopeKey = "space";
+      let scopeKey: ScopeKey = "space";
       if (scope !== "space") {
         try {
           scopeKey = resolveScopeKey(scope, {
@@ -978,8 +974,8 @@ describe("stage G SpaceServer recovery seams", () => {
   ): typeof server =>
     new Proxy(server, {
       get(target, prop, receiver) {
-        if (prop === "demandedInstancesForSpace") {
-          return () => demandRowsFor(roots);
+        if (prop === "demandForSpace") {
+          return () => sessionDemandOf(demandRowsFor(roots));
         }
         const value = Reflect.get(target, prop, receiver);
         return typeof value === "function" ? value.bind(target) : value;
@@ -1155,12 +1151,12 @@ describe("stage G SpaceServer recovery seams", () => {
     const rootId = rootCell.getAsNormalizedFullLink().id;
 
     // Point the demand facade at it (swapped in via the server's
-    // observer seam: the SpaceServer reads demandedInstancesForSpace on
-    // every demand pass, so overriding the method on the shared server
-    // object works mid-flight).
-    const originalWatched = server.demandedInstancesForSpace.bind(server);
-    (server as { demandedInstancesForSpace: unknown })
-      .demandedInstancesForSpace = () => demandRowsFor([{ id: rootId }]);
+    // observer seam: the SpaceServer reads demandForSpace on every demand
+    // pass, so overriding the method on the shared server object works
+    // mid-flight).
+    const originalWatched = server.demandForSpace.bind(server);
+    (server as { demandForSpace: unknown }).demandForSpace = () =>
+      sessionDemandOf(demandRowsFor([{ id: rootId }]));
     try {
       // Fire a demand pass; the absent root confirms no-meta and
       // terminalizes (not-yet and never are indistinguishable HERE —
@@ -1244,8 +1240,123 @@ describe("stage G SpaceServer recovery seams", () => {
       expect(stats.structureLoadTerminal).toBe(1);
       expect(stats.structureLoadFailures).toBe(0);
     } finally {
-      (server as { demandedInstancesForSpace: unknown })
-        .demandedInstancesForSpace = originalWatched;
+      (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
+    }
+  });
+
+  it("holds W below a terminal root's re-arming input while the shadow floor defers its retry, then covers it once the retry runs", async () => {
+    // The floor is stubbed as in the clamp case above, and sits ABOVE the
+    // re-arming input: the replica has applied the creation commit, and
+    // shadows only a later, unrelated write. The floor alone would let W
+    // cover the creation commit before the retry loads the piece.
+
+    const stats = emptyServingLoopStats();
+    const rootName = "rearm-held-root";
+    const created = newSpaceServer({ stats });
+    expect(await created.activate()).toBe(true);
+    const runtime = servingRuntime!;
+    const replica = runtime.storageManager.open(space)
+      .replica as unknown as {
+        unappliedForeignSeqFloor?: () => number | undefined;
+        shadowFlipObserver?: () => void;
+      };
+    const rootId = runtime.getCell<{ total?: number }>(
+      space,
+      rootName,
+      undefined,
+    ).getAsNormalizedFullLink().id;
+    const derivedCommitted = () => {
+      const row = engine.database.prepare(
+        `SELECT c.class AS class FROM revision r
+           JOIN "commit" c ON c.seq = r.commit_seq
+           WHERE r.id LIKE 'computed:%' ORDER BY r.seq DESC LIMIT 1`,
+      ).get() as { class: string } | undefined;
+      return row?.class === "derived";
+    };
+
+    const originalWatched = server.demandForSpace.bind(server);
+    (server as { demandForSpace: unknown }).demandForSpace = () =>
+      sessionDemandOf(demandRowsFor([{ id: rootId }]));
+    try {
+      await awaitEach(cycles, () => {
+        created.noteDemandChanged();
+        return stats.structureLoadTerminal === 1;
+      });
+
+      const creatorManager = EmulatedStorageManager.connectTo(server, {
+        as: spaceSigner,
+      });
+      const creator = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: creatorManager,
+      });
+      try {
+        const compiled = await creator.patternManager.compilePattern({
+          main: "/main.tsx",
+          files: [{
+            name: "/main.tsx",
+            contents: [
+              "import { computed, pattern } from 'commonfabric';",
+              "export default pattern<{ n: number }, { total: number }>(",
+              "  ({ n }) => ({ total: computed(() => n + 7) }),",
+              ");",
+            ].join("\n"),
+          }],
+        }, { space });
+        const argument = creator.getCell<{ n: number }>(
+          space,
+          "rearm-held-arg",
+          undefined,
+        );
+        const creatorRoot = creator.getCell<{ total?: number }>(
+          space,
+          rootName,
+          undefined,
+        );
+        await argument.sync();
+        await creatorRoot.sync();
+        const tx = creator.edit();
+        argument.withTx(tx).set({ n: 1 });
+        creator.run(tx, compiled, argument, creatorRoot);
+        expect((await tx.commit()).error).toBeUndefined();
+        await creator.idle();
+        await creator.storageManager.synced();
+      } finally {
+        await creator.dispose();
+        await creatorManager.close();
+      }
+      const creationSeq = Engine.serverSeq(engine);
+      const shadowedSeq =
+        (await server.writeDocument(space, "of:rearm-held-shadow", { n: 1 }))
+          .seq;
+      let floor: number | undefined = shadowedSeq;
+      replica.unappliedForeignSeqFloor = () => floor;
+      created.enqueueCommit({
+        space,
+        seq: creationSeq,
+        class: "authored",
+        sessionId: "session:rearm-held-creator",
+        writes: [{ id: rootId, scopeKey: "space" }],
+      });
+      created.enqueueCommit({
+        space,
+        seq: shadowedSeq,
+        class: "system",
+        sessionId: "session:rearm-held-shadow",
+        writes: [{ id: "of:rearm-held-shadow", scopeKey: "space" }],
+      });
+
+      await awaitEach(cycles, () => stats.structureLoadRearmed === 1);
+      expect(created.watermark).toBeLessThan(creationSeq);
+      expect(derivedCommitted()).toBe(false);
+
+      floor = undefined;
+      replica.shadowFlipObserver?.();
+      await awaitEach(cycles, () => created.watermark >= shadowedSeq);
+      expect(derivedCommitted()).toBe(true);
+      expect(stats.structureLoadFailures).toBe(0);
+    } finally {
+      (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
     }
   });
 
