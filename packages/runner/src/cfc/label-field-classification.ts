@@ -107,9 +107,12 @@ export const LABEL_FIELD_CLASSIFICATION:
     entry({ type: CFC_ATOM_TYPE.LinkReference }, ["target"], "commitment"),
     // TransformedBy's artifact digest and operation are public trust anchors.
     // Input references reveal source topology, so persist them as commitments;
-    // nested witness atoms are classified again under their own families.
+    // nested witness atoms are classified again under their own families. An
+    // unrecognized retained identity payload is opaque so it cannot disclose
+    // code layout.
     entry({ type: CFC_ATOM_TYPE.TransformedBy }, ["codeHash"], "public"),
     entry({ type: CFC_ATOM_TYPE.TransformedBy }, ["operation"], "public"),
+    entry({ type: CFC_ATOM_TYPE.TransformedBy }, ["identity"], "commitment"),
     entry(
       { type: CFC_ATOM_TYPE.TransformedBy },
       ["inputs", "ref"],

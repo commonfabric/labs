@@ -100,6 +100,7 @@ Default assignments (initial table, revisable per family):
 | `LinkReference.source/target` | commitment (paths), public (space? no — commitment) | display/provenance only; nothing dereferences the persisted copy |
 | `TransformedBy.codeHash` / `.operation` | public | content-addressed trust anchors used by operation patterns |
 | `TransformedBy.inputs[].ref` | commitment | source topology; persisted policy evidence does not dereference the copy |
+| unrecognized retained `TransformedBy.identity` | commitment | the whole payload is opaque, so code layout cannot cross the space boundary |
 | `authored-by` / `represents-principal` `.subject` | public | product-displayed attribution, minted under the acting principal's own authority |
 | `HasRole` / `UserSurfaceInput.user` / vouched-channel `ExternalIngest.audience` | commitment | evidence families; equality-consumed; fetch-ingest provenance has no audience |
 

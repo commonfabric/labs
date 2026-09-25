@@ -864,12 +864,18 @@ describe("TransformedBy input witnesses", () => {
         expect(witnessOperationsOf(runtime, "ballot")).toEqual([
           "commitStances",
         ]);
-        expect(inputsOf(runtime, "ballot")).toHaveLength(2);
+        const inputs = inputsOf(runtime, "ballot");
+        expect(inputs).toHaveLength(2);
         expect(
-          inputsOf(runtime, "ballot").some((input) =>
-            input.witnesses === undefined
-          ),
-        ).toBe(true);
+          inputs.find((input) => input.ref.id === inputRef("committed").id)
+            ?.witnesses?.map((witness) =>
+              (witness as { operation?: unknown }).operation
+            ),
+        ).toEqual(["commitStances"]);
+        expect(
+          inputs.find((input) => input.ref.id !== inputRef("committed").id)
+            ?.witnesses,
+        ).toBeUndefined();
       });
     });
 
@@ -964,6 +970,26 @@ describe("TransformedBy input witnesses", () => {
       expect(inputWitnessDepth(atom)).toBe(INPUT_WITNESS_MAX_DEPTH);
       const [retained] = retainedInputWitnesses([atom]);
       expect(inputWitnessDepth(retained)).toBe(INPUT_WITNESS_MAX_DEPTH - 1);
+    });
+
+    it("treats malformed witness containers as witness-free opaque data", () => {
+      const noInputs = {
+        type: CFC_ATOM_TYPE.TransformedBy,
+        codeHash: "cf:module/malformed",
+        inputs: "not-an-array",
+      } as unknown as CfcAtom;
+      expect(inputWitnessDepth("not-an-atom")).toBe(0);
+      expect(inputWitnessDepth(noInputs)).toBe(0);
+      expect(retainedInputWitnesses([noInputs])).toEqual([noInputs]);
+
+      const malformedInput = {
+        type: CFC_ATOM_TYPE.TransformedBy,
+        codeHash: "cf:module/malformed",
+        inputs: [null],
+      } as unknown as CfcAtom;
+      expect(retainedInputWitnesses([malformedInput])).toEqual([
+        malformedInput,
+      ]);
     });
   });
 });

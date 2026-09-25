@@ -145,7 +145,8 @@ type DriftFlag = Confidential<Flag, [PolicyOf<typeof driftFlagRules>]>;
   `THIS_POLICY.moduleIdentity` is the content identity of the module defining
   the rules. The second is how a rule names a function of its own module in a
   `TransformedBy` operation pattern
-  (`{ codeHash: THIS_POLICY.moduleIdentity, operation }`)
+  (`{ type: "https://commonfabric.org/cfc/atom/TransformedBy", codeHash:
+  THIS_POLICY.moduleIdentity, operation: "exportName" }`)
   without spelling a hash that changes with every edit of the module or of its
   imports. `operation` is the function's export name, so a blessed function must
   be exported under that one name; a rule naming anything else never fires.

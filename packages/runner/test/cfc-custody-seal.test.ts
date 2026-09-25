@@ -387,8 +387,14 @@ const witnessed = (box: Cell<unknown>) => ({
   }],
 });
 
+const matchingAtom = (
+  integrity: readonly unknown[],
+  pattern: AtomPattern,
+): unknown =>
+  integrity.find((atom) => matchAtomPattern(pattern, atom as never) !== null);
+
 const containsMatch = (integrity: readonly unknown[], pattern: AtomPattern) =>
-  integrity.some((atom) => matchAtomPattern(pattern, atom as never) !== null);
+  matchingAtom(integrity, pattern) !== undefined;
 
 describe("cfc-custody-seal", () => {
   describe("the box", () => {
@@ -423,7 +429,13 @@ describe("cfc-custody-seal", () => {
         await fixture.seal(bob);
         await fixture.seal(carol);
         const integrity = await project(fixture, carol, box);
-        expect(containsMatch(integrity, witnessed(box))).toBe(true);
+        const atom = matchingAtom(integrity, witnessed(box)) as Record<
+          string,
+          unknown
+        >;
+        expect(atom).toBeDefined();
+        expect(Object.hasOwn(atom, "identity")).toBe(false);
+        expect(Object.hasOwn(atom, "inputWitness")).toBe(false);
       } finally {
         await fixture.dispose();
       }

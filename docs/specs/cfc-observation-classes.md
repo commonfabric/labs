@@ -173,8 +173,9 @@ replaces a child, so attribution on any carried `derived` or `structure` entry
 meets across the writers of its path: a transaction writing at, above, or below
 the entry's path (for a `*` template, its container's) leaves on it only the
 `TransformedBy` operation its own join carries. A later write by the same
-operation refreshes the stamp with the new exact atom and its current inputs;
-a writer under another operation, or under none, leaves the entry naming no function — also
+operation identity (matching both `codeHash` and `operation`) refreshes the
+stamp with the new exact atom and its current inputs; a writer under another
+operation identity, or under none, leaves the entry naming no function — also
 when that transaction read nothing and carries no labels of its own, since a
 write below a stamp carrying `TransformedBy` admits its document to the persist
 step whatever the join. The meet covers `TransformedBy` only: a hereditary

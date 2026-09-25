@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { hashStringOf } from "@commonfabric/data-model";
 
 import {
   cellLabelsAt,
@@ -92,7 +93,13 @@ const readSnapshot = snapshot([
 const PIECE = entity("piece");
 const ROOTED = entity("rooted");
 
-const LIFT = { codeHash: "of:builtin/llm", operation: "llm" };
+const LIFT = {
+  codeHash: hashStringOf({
+    format: "commonfabric/cfc/builtin-registry/v1",
+    operation: "llm",
+  }),
+  operation: "llm",
+};
 
 /**
  * Two documents to narrow into. `PIECE` labels two of its paths and leaves a
@@ -342,8 +349,10 @@ describe("console/cell-labels", () => {
           derived(LIFT),
         ]),
       );
-      expect(labels.transformedBy).toEqual(["llm in of:builtin/llm"]);
-      expect(labels.entries[0].transformedBy).toBe("llm in of:builtin/llm");
+      expect(labels.transformedBy).toEqual([`llm in ${LIFT.codeHash}`]);
+      expect(labels.entries[0].transformedBy).toBe(
+        `llm in ${LIFT.codeHash}`,
+      );
     });
 
     it("returns an exported operation in its module artifact", () => {
@@ -658,7 +667,7 @@ describe("console/cell-labels", () => {
       it("returns `derived` true and the producer when the narrowed path holds one", () => {
         const labels = cellLabelsAt(piece, `/${PIECE}/briefing`);
         expect(labels?.derived).toBe(true);
-        expect(labels?.transformedBy).toEqual(["llm in of:builtin/llm"]);
+        expect(labels?.transformedBy).toEqual([`llm in ${LIFT.codeHash}`]);
       });
 
       it("returns the atom at a path the reference reaches through a `value` segment", () => {

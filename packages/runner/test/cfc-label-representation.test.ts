@@ -199,6 +199,34 @@ describe("CFC label representation transform (inv-12 Stage 1)", () => {
       }]);
     });
 
+    it("commits an unrecognized retained TransformedBy identity payload", () => {
+      const identity = {
+        kind: "verified",
+        moduleIdentity: "cf:module/old",
+        sourceFile: "private/source.ts",
+        bindingPath: ["privateBinding"],
+      };
+      const transformed = transformCfcLabelForCrossSpacePersist({
+        integrity: [{
+          type: CFC_ATOM_TYPE.TransformedBy,
+          codeHash: "cf:module/new",
+          inputs: [{
+            ref: { space: alice, id: "of:input", path: [] },
+            witnesses: [{
+              type: CFC_ATOM_TYPE.TransformedBy,
+              identity,
+            }],
+          }],
+        }],
+      });
+      const outer = transformed.integrity?.[0] as {
+        inputs: Array<{ witnesses: Array<{ identity: unknown }> }>;
+      };
+      expect(outer.inputs[0].witnesses[0].identity).toEqual(
+        commitCfcFieldValue(identity),
+      );
+    });
+
     it("keeps authored-by / represents-principal subjects public", () => {
       const label = {
         integrity: [

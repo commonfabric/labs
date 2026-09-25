@@ -50,6 +50,9 @@ describe("CFC label-field classification (inv-12 / SC-25)", () => {
       ]),
     ).toBe("commitment");
     expect(
+      classifyLabelField({ type: CFC_ATOM_TYPE.TransformedBy }, ["identity"]),
+    ).toBe("commitment");
+    expect(
       classifyLabelField({ kind: "authored-by" }, ["subject"]),
     ).toBe("public");
     expect(

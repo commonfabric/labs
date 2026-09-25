@@ -307,8 +307,9 @@ Per materialization it mints, whole-field:
   consumption time (the checkpoint's own prior mints; op authorship from
   verified commit signers). Per §4.5.1.1 the mint says which trusted
   implementation ran and what evidence it checked — it does not claim the
-  output inherits any input atom. It is minted fresh per materialization and
-  drops in the meet as value-bound evidence.
+  output inherits any input atom. It is minted fresh per materialization and is
+  excluded from the hereditary meet on later value-changing transitions as
+  value-bound evidence.
 - **Checkpoint granularity is the confidentiality honesty unit.** The
   materialized field's derived confidentiality follows the default transition
   over what the materializing computation consumed: the checkpoint plus ops

@@ -252,6 +252,10 @@ describe("module-policy exchange evaluation", () => {
         moduleIdentity: MODULE,
         symbol: "tally",
       },
+      inputWitness: {
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity: { kind: "builtin", builtinId: "legacy-source" },
+      },
     };
     const result = evaluateExchangeRules(
       { confidentiality: [selected], integrity: [legacyEvidence] },
