@@ -1535,7 +1535,47 @@ describe("cfc-custody-seal", () => {
             maxItems: 2,
           },
           [[true]],
-          /elements may not be arrays/,
+          /array inside an array's elements/,
+        ],
+        [
+          {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                x: { type: "array", items: { type: "boolean" }, maxItems: 2 },
+              },
+              additionalProperties: false,
+            },
+            maxItems: 2,
+          },
+          [{ x: [true] }],
+          /array inside an array's elements/,
+        ],
+        [
+          {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                o: {
+                  type: "object",
+                  properties: {
+                    x: {
+                      type: "array",
+                      items: { type: "boolean" },
+                      maxItems: 2,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              additionalProperties: false,
+            },
+            maxItems: 2,
+          },
+          [],
+          /array inside an array's elements/,
         ],
         [
           { type: "boolean", maxItems: 2 },

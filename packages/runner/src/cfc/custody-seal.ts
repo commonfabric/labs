@@ -400,9 +400,12 @@ const UNUSED_PROPERTY: unique symbol = Symbol("unused property");
  * enumerated primitives, composed by closed objects and by arrays whose one
  * `items` schema is itself inert and whose length `maxItems` bounds. An array
  * is a list of closed values, as a rating per option is, and never free text:
- * every element meets the same inert schema, and no element is itself an
- * array. Like an object of enumerated fields, it carries as many bits as its
- * elements do, which is what `maxItems` bounds.
+ * every element meets the same inert schema, and no array appears anywhere
+ * inside an array's elements. Like an object of enumerated fields, it is a
+ * bounded payload rather than an instruction: it carries what its elements
+ * carry, up to `maxItems` of them, plus `log₂(maxItems − minItems + 1)` bits
+ * in its length, and an array of bounded numbers is a payload of that many
+ * numbers.
  *
  * @throws If the schema admits free text or any other open-ended leaf, or if
  *   the value does not satisfy it.
@@ -411,6 +414,7 @@ const checkInertStance = (
   schema: unknown,
   value: unknown,
   path: readonly (string | number)[] = [],
+  insideArray = false,
 ): void => {
   // A property the value leaves out still has its schema checked, so an
   // optional open-ended property is refused whether or not a value uses it.
@@ -499,7 +503,12 @@ const checkInertStance = (
       ) refuse("`required` names a key the object does not declare");
       if (!checksValue) {
         for (const [key, entry] of Object.entries(properties as object)) {
-          checkInertStance(entry, UNUSED_PROPERTY, [...path, key]);
+          checkInertStance(
+            entry,
+            UNUSED_PROPERTY,
+            [...path, key],
+            insideArray,
+          );
         }
         return;
       }
@@ -518,6 +527,7 @@ const checkInertStance = (
           entry,
           Object.hasOwn(record, key) ? record[key] : UNUSED_PROPERTY,
           [...path, key],
+          insideArray,
         );
       }
       return;
@@ -536,25 +546,23 @@ const checkInertStance = (
         typeof minItems !== "number" || !Number.isInteger(minItems) ||
         minItems < 0 || minItems > (maxItems as number)
       ) refuse("`minItems` must be an integer no greater than `maxItems`");
-      // One level of list: an array of arrays would multiply the bound by
-      // itself at each level.
-      if (isObjectNotArray(items) && items.type === "array") {
-        refuse("an array's elements may not be arrays");
-      }
+      // One level of list: an array anywhere inside an array's elements,
+      // directly or within an object, would multiply the bound by itself.
+      if (insideArray) refuse("an array inside an array's elements");
       if (!checksValue) {
-        checkInertStance(items, UNUSED_PROPERTY, [...path, "items"]);
+        checkInertStance(items, UNUSED_PROPERTY, [...path, "items"], true);
         return;
       }
       // The element schema is checked on its own first, so an array the value
       // leaves empty is held to the same schema as a full one.
-      checkInertStance(items, UNUSED_PROPERTY, [...path, "items"]);
+      checkInertStance(items, UNUSED_PROPERTY, [...path, "items"], true);
       if (!Array.isArray(value)) refuse("the value is not an array");
       const list = value as unknown[];
       if (
         list.length < (minItems as number) || list.length > (maxItems as number)
       ) refuse("the array's length is outside its bounds");
       for (let index = 0; index < list.length; index++) {
-        checkInertStance(items, list[index], [...path, index]);
+        checkInertStance(items, list[index], [...path, index], true);
       }
       return;
     }

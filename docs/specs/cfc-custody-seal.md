@@ -94,13 +94,15 @@ if any holds something else, so the value checked is the value committed.
 - **The value is instruction-inert.** `stanceSchema` may admit only booleans,
   `null`, numbers with a finite `minimum` and `maximum`, `const` and `enum`
   primitives, closed objects of these, and arrays of these, at most eight
-  levels deep. An array names one `items` schema, itself inert and not an
-  array, and an integer `maxItems` of at most 64, with an optional `minItems`
-  no greater; tuple forms, `prefixItems` and the other array keywords are
-  refused, as is an array keyword on a node that is not an array. A list of
-  ratings, one per option, is such an array. An array is not free text, but
-  like an object of enumerated fields it carries as many bits as its elements
-  do. The schema admits no free strings, including in a
+  levels deep. An array names one `items` schema, itself inert, and an
+  integer `maxItems` of at most 64, with an optional `minItems` no greater; no
+  array may appear anywhere inside an array's elements, directly or within an
+  object. Tuple forms, `prefixItems` and the other array keywords are refused,
+  as is an array keyword on a node that is not an array. A list of ratings, one
+  per option, is such an array. An array is not free text, but like an object
+  of enumerated fields it is a payload: its elements' bits, up to `maxItems` of
+  them, plus `log₂(maxItems − minItems + 1)` bits in its length, and an array
+  of bounded numbers carries that many numbers. The schema admits no free strings, including in a
   property or an element the value leaves out. The value must satisfy the
   schema.
 - **The actor holds a seat** in the terms.
