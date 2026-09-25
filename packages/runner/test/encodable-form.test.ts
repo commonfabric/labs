@@ -17,6 +17,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import type { FabricExecPlainObject, FabricExecValue } from "@commonfabric/api";
 import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
 import { dataUriFromValue } from "@commonfabric/data-model/codec-data-uri";
 import { Identity } from "@commonfabric/identity";
@@ -494,6 +495,29 @@ describe("encodable-form", () => {
         const { seen } = copies({ first: shared, second: shared });
         expect(seen.filter((c) => c.original === shared).length).toBe(1);
       });
+    });
+  });
+
+  describe("replaceArtifacts() typing", () => {
+    it("types a `FabricExecPlainObject` argument as one in its result", () => {
+      // Asserted when the file is type-checked: the carrier is never called.
+      // A record is copied rather than replaced, so the narrower overload
+      // holds; a `FabricExecValue` argument gets no such promise.
+
+      function carrier(record: FabricExecPlainObject, value: FabricExecValue) {
+        const fromRecord: FabricExecPlainObject = replaceArtifacts(
+          record,
+          () => {},
+        );
+        // @ts-expect-error a `FabricExecValue` argument is typed only as one
+        const fromValue: FabricExecPlainObject = replaceArtifacts(
+          value,
+          () => {},
+        );
+        return { fromRecord, fromValue };
+      }
+
+      expect(typeof carrier).toBe("function");
     });
   });
 
