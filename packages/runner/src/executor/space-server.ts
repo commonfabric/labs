@@ -273,12 +273,11 @@ export type SpaceServerPolicy = {
   parkDisposeTimeoutMs?: number;
 
   /** The host's failure-park re-activation backoff (read by the
-   * ExecutorHost, not the SpaceServer): after N consecutive
-   * loop failures or initialization lease losses of one space, its next
-   * re-activation is delayed
-   * `min(base·2^(N−1), max)` — a permanently failing space rebuilds at
-   * a bounded rate instead of once per admission. A successfully
-   * committed wave clears the streak. */
+   * ExecutorHost, not the SpaceServer): after N consecutive parks of one
+   * space other than idle parks and parks on a rival's lease, its next
+   * re-activation is delayed `min(base·2^(N−1), max)` — a permanently
+   * failing space rebuilds at a bounded rate. An idle park or a
+   * successfully committed wave clears the streak. */
   failureParkBackoffBaseMs?: number;
 
   failureParkBackoffMaxMs?: number;
@@ -1179,8 +1178,8 @@ export class SpaceServer implements TransactionSealDestination {
 
   /** Resolves when this SpaceServer has fully parked: its runtime
    * disposed, and its lease released or the release's failure logged
-   * (the row expires by TTL either way). The host chains re-activation
-   * on it when a session-open or admission races a park in progress. */
+   * (the row expires by TTL either way). The host chains its
+   * re-evaluation of the space's ACTIVE criteria on it. */
   get whenParked(): Promise<void> {
     return this.#parked.promise;
   }
@@ -1299,6 +1298,11 @@ export class SpaceServer implements TransactionSealDestination {
           operations,
           scopeKeyByOpIndex,
         ),
+      // A lapse the renewal drivers have not reached yet shows first as the
+      // memory server refusing a derived commit (serving-loop.md §2).
+      onHomeRefused: () => {
+        this.#confirmLease(engine);
+      },
     });
     this.#sink = this.#options.decorateWaveCommitSink?.(sink, space) ?? sink;
     // The effect channel (stage G, serving-loop.md §4–§5). Phase 6
@@ -2917,15 +2921,25 @@ export class SpaceServer implements TransactionSealDestination {
       if (!engine.database.open) return undefined;
       if (
         !scopeKeyApplicableTo(address.scopeKey, own) &&
-        liveExecutionLeaseHolder(engine, this.#options.space) !== this.#holder
-      ) {
-        this.#renew();
-        if (
-          liveExecutionLeaseHolder(engine, this.#options.space) !== this.#holder
-        ) return undefined;
-      }
+        !this.#confirmLease(engine)
+      ) return undefined;
       return read(address);
     };
+  }
+
+  /**
+   * Whether the space's lease row names this holder live. A row that does
+   * not runs the renew arm, which ends the tenure and then reacquires or
+   * parks, and the row is read again after it. A closed engine confirms
+   * nothing.
+   */
+  #confirmLease(engine: Engine.Engine): boolean {
+    if (!engine.database.open) return false;
+    const holds = () =>
+      liveExecutionLeaseHolder(engine, this.#options.space) === this.#holder;
+    if (holds()) return true;
+    this.#renew();
+    return holds();
   }
 
   /** The mid-wave renew (stage C tuning T3): called from the serving
@@ -3083,9 +3097,9 @@ export class SpaceServer implements TransactionSealDestination {
       // Zombie guard: an ACTIVE space whose loop died would renew its
       // lease forever while serving nothing — no successor can acquire,
       // and no cycle ever runs. Park instead: the lease releases, and
-      // the host's activation hooks (admission / session open) recover
-      // the space with a fresh runtime — the same recovery arm as every
-      // other abort (serving-loop.md §6 step 2's recompute-on-demand).
+      // the host re-activates a space that still has demand with a
+      // fresh runtime (serving-loop.md §1) — the same recovery arm as
+      // every other abort (§6 step 2's recompute-on-demand).
       await this.park("loop-failed");
     } finally {
       this.#loopRunning = false;
@@ -6481,7 +6495,7 @@ export class SpaceServer implements TransactionSealDestination {
    * `runtime.dispose()` forever (its loopback loads died with the
    * crashed wave), and a park gated on that dispose never resolves
    * `#parked` — every recovery the host chains behind `whenParked`
-   * (`#reactivateAfterPark`, fired on each subsequent admission) then
+   * (`#reactivateAfterPark`) then
    * waits for eternity and the space is never served again, while
    * events keep appending durably. By the time dispose runs, the park's
    * semantic obligations are already met: the loop is stopped, the wave
@@ -6546,8 +6560,8 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   /** Park (serving-loop.md §1): release the lease, dispose the runtime.
-   * A park racing an incoming commit self-heals — the admission hook
-   * re-fires on the next admission and the host re-activates. */
+   * Once the park completes, the host re-activates a space that still
+   * meets the ACTIVE criteria, unless a rival's lease caused the park. */
   async park(reason: string): Promise<void> {
     // A park already in flight — the renew arm's lease-lost park runs
     // unawaited — is what a second caller waits for: the host's close

@@ -27,16 +27,13 @@
 
 import {
   ALIAS_DIRECTORY,
+  type CoverageFigures,
   type FlakeEvidence,
   type TestIdentity,
   testIdentityKey,
   testIdentityOfKey,
   type TestRecord,
 } from "@commonfabric/test-support/records";
-import {
-  coverageMetricGroupName,
-  coverageMetricMeasuredSet,
-} from "../ci-check-lib.ts";
 import { isLaneMeasurement } from "../lane-measurement.ts";
 import type { WithheldReason } from "./manifest.ts";
 import {
@@ -67,9 +64,6 @@ export type Verdict = "pass" | "fail" | "mixed" | "skip";
 
 /** What every identity in one run did, by its canonical key. */
 export type RunOutcomes = ReadonlyMap<string, Verdict>;
-
-/** Uncovered lines per coverage metric, as a run measured them. */
-export type CoverageFigures = ReadonlyMap<string, number>;
 
 /**
  * Folds a run's records into one verdict per identity, leaving out the
@@ -389,39 +383,6 @@ function byIdentity(
 }
 
 /**
- * Every source group in a set of figures: a package's source measured by
- * every test the run ran. Under selection a pull request measures a
- * sample of this, so it is a trend rather than something to compare.
- */
-export function groupFigures(figures: CoverageFigures): Map<string, number> {
-  return figuresNamed(figures, coverageMetricGroupName);
-}
-
-/**
- * Every measured set's figure: one member's source measured by one
- * suite's tests alone. A run measures the whole of this however much of
- * the corpus it ran, which is what makes it the one figure worth
- * comparing between two runs.
- */
-export function measuredSetFigures(
-  figures: CoverageFigures,
-): Map<string, number> {
-  return figuresNamed(figures, coverageMetricMeasuredSet);
-}
-
-function figuresNamed(
-  figures: CoverageFigures,
-  nameOf: (metric: string) => string | null,
-): Map<string, number> {
-  const named = new Map<string, number>();
-  for (const [metric, lines] of figures) {
-    const name = nameOf(metric);
-    if (name !== null) named.set(name, lines);
-  }
-  return named;
-}
-
-/**
  * The rise in the repository's whole uncovered-line count, when there is
  * one worth mentioning.
  *
@@ -433,12 +394,15 @@ function figuresNamed(
  * A change that touched no source at all is not asked about. The
  * repository-wide figure moves a little between runs on its own, so a
  * documentation or workflow change would otherwise be told about a rise
- * it could not have caused.
+ * it could not have caused. Nor is a pair of runs only one of which found
+ * the compile cache cold: a cold run reaches compile branches a warm one
+ * does not, so its count sits lower with nothing about the tests changed.
  */
 export function coverageRise(input: ReportInput): CoverageRise | undefined {
   if (input.touched.size === 0) return undefined;
-  const wasBy = groupFigures(input.coverageBefore);
-  const isBy = groupFigures(input.coverage);
+  if (input.coverageBefore.cold !== input.coverage.cold) return undefined;
+  const wasBy = input.coverageBefore.groups;
+  const isBy = input.coverage.groups;
   const before = wasBy.get("workspace");
   const after = isBy.get("workspace");
   if (before === undefined || after === undefined) return undefined;
@@ -470,8 +434,8 @@ export function measuredSetRises(input: ReportInput): MeasuredSetRise[] {
   // lines any set's tests reach, and the figures move a little between
   // runs on their own.
   if (input.touched.size === 0) return [];
-  const before = measuredSetFigures(input.coverageBefore);
-  const after = measuredSetFigures(input.coverage);
+  const before = input.coverageBefore.sets;
+  const after = input.coverage.sets;
   const { reached, ran } = input.coverageGate;
   const rises: MeasuredSetRise[] = [];
   for (const [set, lines] of after) {

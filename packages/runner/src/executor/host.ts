@@ -68,11 +68,11 @@ const logger = getLogger("executor-host", { enabled: true, level: "warn" });
 
 // The failure-park re-activation backoff (the lunch-wall cascade flag):
 // with park liveness in place, a PERMANENTLY failing loop turns from
-// zombie into crash-loop — every admission chains a re-activation, each
-// rebuilds a full runtime, fails, and parks (~300 reactivations/s
-// observed). Streak-based exponential delay, the same 25·2^n shape as
-// the commit-backpressure precedent (scheduler/backpressure.ts), capped;
-// a successfully committed wave clears the streak.
+// zombie into crash-loop — every park of a space with demand chains a
+// re-activation, each rebuilds a full runtime, fails, and parks.
+// Streak-based exponential delay, the same 25·2^n shape as the
+// commit-backpressure precedent (scheduler/backpressure.ts), capped; an
+// idle park or a successfully committed wave clears the streak.
 const DEFAULT_FAILURE_PARK_BACKOFF_BASE_MS = 25;
 const DEFAULT_FAILURE_PARK_BACKOFF_MAX_MS = 30_000;
 
@@ -193,10 +193,10 @@ export class ExecutorHost {
    * contiguity). */
   readonly #sinkLocalSeq = { value: 0 };
 
-  /** Consecutive loop failures or initialization lease losses per space.
-   * This backoff streak is incremented at each failure park, cleared by a
-   * successfully committed wave — real served progress, not merely a
-   * runtime that got built (every crash-loop tenure builds one). */
+  /** Consecutive failure parks per space: every park except an idle one
+   * and one on a rival's lease. This backoff streak is cleared by an idle
+   * park or a successfully committed wave — real served progress, not
+   * merely a runtime that got built (every crash-loop tenure builds one). */
   readonly #failureParkStreaks = new Map<string, number>();
 
   /** Wakers for in-flight backoff sleeps — close() flushes them so a
@@ -403,11 +403,7 @@ export class ExecutorHost {
           }
           buffered.push(notice);
         }
-        this.#reactivateAfterPark(
-          existing,
-          notice.space as MemorySpace,
-          notice.warm === true,
-        );
+        this.#reactivateAfterPark(existing, notice.space as MemorySpace);
       }
       return;
     }
@@ -492,21 +488,22 @@ export class ExecutorHost {
    * event-only admission racing the park (a delegated cross-space
    * delivery with no client anywhere) chains through here, and a
    * sessions-only gate declined it — the delivered event sat unserved
-   * until an unrelated trigger. A WARM notice racing the park (`warm`)
-   * satisfies the gate the same way — the staged setup is durable and
-   * undemanded, exactly the state the warm request exists for. The
-   * notice itself travels through `#pendingNotices` (buffered by the
-   * caller, drained at the successor's registration), NOT as an
-   * argument: several warm notices in one park window share ONE
-   * reactivation, and only a buffer merges them all (the #6191
-   * review's P1). */
-  #reactivateAfterPark(
-    parking: SpaceServer,
-    space: MemorySpace,
-    warm = false,
-  ): void {
+   * until an unrelated trigger. A WARM notice buffered in
+   * `#pendingNotices` satisfies the gate the same way — the staged
+   * setup is durable and undemanded, exactly the state the warm request
+   * exists for. The buffer, drained at the successor's registration,
+   * is what carries it: several warm notices in one park window share
+   * ONE reactivation, and only a buffer merges them all (the #6191
+   * review's P1). A park during initialization completes before its
+   * activation unwinds, so the gate waits for any activation in flight
+   * rather than joining it. */
+  #reactivateAfterPark(parking: SpaceServer, space: MemorySpace): void {
     void parking.whenParked.then(async () => {
+      await this.#activating.get(space)?.promise;
       if (this.#closed || this.#spaces.get(space)?.active) return;
+      const warm = this.#pendingNotices.get(space)?.some((notice) =>
+        notice.warm === true
+      );
       if (
         !warm &&
         !this.#options.server.hasLiveSessionsForSpace(space, {
@@ -547,16 +544,6 @@ export class ExecutorHost {
         if (this.#activating.get(space) === activation) {
           this.#activating.delete(space);
         }
-      }).then((retry) => {
-        if (retry !== undefined) {
-          this.#reactivateAfterPark(
-            retry,
-            space,
-            this.#pendingNotices.get(space)?.some((notice) =>
-              notice.warm === true
-            ),
-          );
-        }
       }),
     };
     this.#activating.set(space, activation);
@@ -567,14 +554,14 @@ export class ExecutorHost {
     space: MemorySpace,
     pending: AdmittedCommitNotice[],
     consumedWarm: AdmittedCommitNotice[],
-  ): Promise<SpaceServer | undefined> {
+  ): Promise<void> {
     if (this.#closed || this.#spaces.get(space)?.active) return;
     const streak = this.#failureParkStreaks.get(space) ?? 0;
     if (streak > 0) {
-      // Failure-park backoff: the space's last tenure(s) died in
-      // loop failures or initialization lease losses. Delay this rebuild;
-      // admissions meanwhile buffer into #pendingNotices behind this #activating
-      // entry (never dropped, never additional activations).
+      // Failure-park backoff: the space's last tenure(s) ended in
+      // failure parks. Delay this rebuild; admissions meanwhile buffer
+      // into #pendingNotices behind this #activating entry (never
+      // dropped, never additional activations).
       const delayMs = failureParkBackoffDelayMs(streak, this.#options.policy);
       this.#stats.reactivationBackoffs += 1;
       logger.warn("reactivation-backoff", () => [
@@ -598,7 +585,6 @@ export class ExecutorHost {
       // (see #sinkLocalSeq: a home sink's foreign provisioning batches
       // land in other spaces' engines under this same session).
       const localSeqRef = this.#sinkLocalSeq;
-      let lostInitializationLease = false;
       const server = new SpaceServer({
         space,
         server: this.#options.server,
@@ -627,19 +613,22 @@ export class ExecutorHost {
               error,
             ]);
           }
-          // Loop failure and initialization lease loss extend the backoff
-          // streak; an idle park clears it. Other parks
-          // that say nothing about the space's health — lease loss,
-          // host close — leave it alone; a committed wave (below) is
-          // what clears it on the serving path.
-          lostInitializationLease = reason === "activation-lease-lost";
-          if (reason === "loop-failed" || lostInitializationLease) {
+          // A park on a rival's lease leaves the space to the rival.
+          // Any other park may leave a space that still meets the ACTIVE
+          // criteria unserved, so the host re-evaluates them once the
+          // park completes (serving-loop.md §1). An idle park clears the
+          // backoff streak and every other park extends it, so a space
+          // that keeps failing re-activates at a widening interval; a
+          // committed wave (below) clears it on the serving path.
+          const rivalHoldsLease = reason === "lease-unavailable" ||
+            reason === "lease-lost";
+          if (reason === "idle") {
+            this.#failureParkStreaks.delete(space);
+          } else if (!rivalHoldsLease) {
             this.#failureParkStreaks.set(
               space,
               (this.#failureParkStreaks.get(space) ?? 0) + 1,
             );
-          } else if (reason === "idle") {
-            this.#failureParkStreaks.delete(space);
           }
           // Delete by IDENTITY: a successor activation may already have
           // registered over this entry (the M5 park race), and the
@@ -647,6 +636,7 @@ export class ExecutorHost {
           if (this.#spaces.get(space) === server) {
             this.#spaces.delete(space);
           }
+          if (!rivalHoldsLease) this.#reactivateAfterPark(server, space);
           // No flag re-assert needed: the host's OWN enabler (claimed
           // at construction, shared refcount with Runtime enablers)
           // keeps the ambient flag on until close — a parked runtime's
@@ -700,7 +690,7 @@ export class ExecutorHost {
         this.#spaces.delete(space);
         this.#rebufferConsumedWarm(space, consumedWarm);
         this.#options.onActivationSettled?.(space, "refused");
-        return lostInitializationLease ? server : undefined;
+        return;
       }
       this.#options.onActivationSettled?.(space, "active");
       if (this.#closed) {

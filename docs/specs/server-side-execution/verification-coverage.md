@@ -244,6 +244,13 @@ Delta 2026-08-05 — stage F lands (the serving loop; this PR):
   watermark-only advance over the withdrawn derivations;
   re-activation's fresh-runtime recompute-on-demand is the only
   post-abort arm), pinned with a deterministic mid-wave interleave.
+  The same test pins that re-activation: the client's session is
+  still live, so the host re-activates the space with a fresh tenure,
+  after the failure-park backoff, with no further trigger. Two sibling
+  tests pin the same re-activation after a serving-loop failure and
+  after a failed activation; each opens the client's session with a
+  read, so that no write races the park and re-activates the space by
+  the admission path instead.
 - serving-loop §6 step 2's re-mark: PARTIAL by design in Phase 1 —
   activation runs `selectStaleBasisInstances` and surfaces the stale
   set (counted, logged), and recovery CORRECTNESS rides
@@ -1230,7 +1237,12 @@ nod, 2026-08-07; recorded in the plan's stage list):**
   with the pre-blip tenure, so the first real seal after a same-process
   reacquire aborts `lease-lost` and PARKS the space — the "survived
   blip keeps serving" path is reachable only on a space quiet across the
-  tick; owner: the P7 renew-blip / wedge arms.
+  tick; owner: the P7 renew-blip / wedge arms. (a) CLOSED
+  (2026-09-24): a derived commit the engine refuses while the row no
+  longer names the holder live runs the renew arm, so the tenure ends
+  at the first refused commit and its wave aborts and parks
+  (serving-loop §2); pinned in `executor-serving-loop.test.ts` with
+  both renewal drivers held off.
   **CLOSED — leg 2 of 2 LANDED (fan-out stage B, 2026-08-17; owner
   ruling 2026-08-16 "if a space scoped calculation gets narrowed to
   user, it'll have to run for all users that demand it").** The

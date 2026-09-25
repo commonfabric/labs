@@ -82,7 +82,11 @@ const IDLE_RUNTIME_DOCUMENT = `<!DOCTYPE html>
 <body><x-root-view></x-root-view>
 <script>
   globalThis.commonfabric = {
-    rt: { dispose: () => Promise.resolve(), getPendingRequests: () => [] },
+    rt: {
+      dispose: () => Promise.resolve(),
+      getPendingRequests: () => [],
+      getLoggerCounts: () => Promise.resolve({ counts: { total: 0 } }),
+    },
   };
 </script>
 </body></html>`;
@@ -103,6 +107,91 @@ const REFUSING_RUNTIME_DOCUMENT = `<!DOCTYPE html>
   globalThis.commonfabric = {
     rt: {
       getPendingRequests: () => { throw new Error("the connection is gone"); },
+    },
+  };
+</script>
+</body></html>`;
+
+// A booted shell whose runtime's worker has logged three kinds of warning or
+// error, two of them with the same number of errors, and one message at `debug`
+// only, which is neither. The counts are shaped as the worker
+// reports them: by logger, then by message, with `total` beside each level.
+const LOGGING_RUNTIME_DOCUMENT = `<!DOCTYPE html>
+<html><head><title>Common Fabric</title></head>
+<body><x-root-view></x-root-view>
+<script>
+  globalThis.commonfabric = {
+    rt: {
+      getPendingRequests: () => [],
+      getLoggerCounts: () => Promise.resolve({
+        counts: {
+          total: 13,
+          scheduler: {
+            total: 2,
+            "schedule-error": { debug: 0, info: 0, warn: 0, error: 2, total: 2 },
+          },
+          "storage.v2": {
+            total: 5,
+            "sync-load-failure": {
+              debug: 0,
+              info: 0,
+              warn: 1,
+              error: 3,
+              total: 4,
+            },
+            "quiet": { debug: 1, info: 0, warn: 0, error: 0, total: 1 },
+          },
+          runner: {
+            total: 6,
+            "action-failed": { debug: 0, info: 0, warn: 4, error: 2, total: 6 },
+          },
+        },
+      }),
+    },
+  };
+</script>
+</body></html>`;
+
+// A booted shell whose runtime still reports its requests, but whose worker
+// never answers the request for its logs, and one whose request is refused.
+const WEDGED_WORKER_DOCUMENT = `<!DOCTYPE html>
+<html><head><title>Common Fabric</title></head>
+<body><x-root-view></x-root-view>
+<script>
+  globalThis.commonfabric = {
+    rt: {
+      getPendingRequests: () => [
+        { msgId: 3, type: "runtime:getLoggerCounts", ageMs: 1200 },
+      ],
+      getLoggerCounts: () => new Promise(() => {}),
+    },
+  };
+</script>
+</body></html>`;
+const REFUSING_WORKER_DOCUMENT = `<!DOCTYPE html>
+<html><head><title>Common Fabric</title></head>
+<body><x-root-view></x-root-view>
+<script>
+  globalThis.commonfabric = {
+    rt: {
+      getLoggerCounts: () => Promise.reject(new Error("the worker has gone")),
+    },
+  };
+</script>
+</body></html>`;
+
+// A booted shell whose page answers until it is asked for the worker's logs,
+// and then holds its main thread for good.
+const WEDGING_WORKER_READ_DOCUMENT = `<!DOCTYPE html>
+<html><head><title>Common Fabric</title></head>
+<body><x-root-view></x-root-view>
+<script>
+  globalThis.commonfabric = {
+    rt: {
+      getPendingRequests: () => [],
+      getLoggerCounts: () => {
+        while (true) { /* hold the main thread */ }
+      },
     },
   };
 </script>
@@ -156,6 +245,22 @@ function handle(request: Request): Response {
       });
     case "/refusing-runtime":
       return new Response(REFUSING_RUNTIME_DOCUMENT, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    case "/logging-runtime":
+      return new Response(LOGGING_RUNTIME_DOCUMENT, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    case "/wedged-worker":
+      return new Response(WEDGED_WORKER_DOCUMENT, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    case "/wedging-worker-read":
+      return new Response(WEDGING_WORKER_READ_DOCUMENT, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    case "/refusing-worker":
+      return new Response(REFUSING_WORKER_DOCUMENT, {
         headers: { "content-type": "text/html; charset=utf-8" },
       });
   }
@@ -320,6 +425,80 @@ describe("shell-failure-reports", () => {
       expect(probe.runtime).toBe(true);
       expect(probe.pendingRequests).toBeUndefined();
       expect(probe.pendingRequestsError).toContain("the connection is gone");
+    });
+
+    it("returns the worker's warnings and errors, most errors then most warnings first", async () => {
+      await load("/logging-runtime");
+
+      const probe = await readShellPageProbe(page);
+      expect(probe.workerProblems).toEqual([
+        {
+          logger: "storage.v2",
+          message: "sync-load-failure",
+          warn: 1,
+          error: 3,
+        },
+        { logger: "runner", message: "action-failed", warn: 4, error: 2 },
+        { logger: "scheduler", message: "schedule-error", warn: 0, error: 2 },
+      ]);
+      expect(probe.workerProblemsError).toBeUndefined();
+    });
+
+    it("returns an empty list for a worker that has logged no warning or error", async () => {
+      await load("/idle-runtime");
+
+      const probe = await readShellPageProbe(page);
+      expect(probe.workerProblems).toEqual([]);
+    });
+
+    it("returns no worker logs for a runtime that does not report them", async () => {
+      await load("/silent-runtime");
+
+      const probe = await readShellPageProbe(page);
+      expect(probe.workerProblems).toBeUndefined();
+      expect(probe.workerProblemsError).toBeUndefined();
+    });
+
+    it("returns the rest of the probe when the worker never answers", async () => {
+      await load("/wedged-worker");
+
+      const probe = await readShellPageProbe(page, { workerBudgetMs: 100 });
+      expect(probe.workerProblems).toBeUndefined();
+      expect(probe.workerProblemsError).toContain(
+        "the worker did not answer within 100ms",
+      );
+      expect(probe.pendingRequests).toEqual([
+        { msgId: 3, type: RequestType.GetLoggerCounts, ageMs: 1200 },
+      ]);
+    });
+
+    it("returns the reason when the worker refuses to report its logs", async () => {
+      await load("/refusing-worker");
+
+      const probe = await readShellPageProbe(page);
+      expect(probe.workerProblems).toBeUndefined();
+      expect(probe.workerProblemsError).toContain("the worker has gone");
+    });
+
+    it("returns the page it read when the page stops answering during the worker read", async () => {
+      // Its own browser, because the wedge below is permanent: the page's main
+      // thread is held for good once the worker's logs are asked for.
+      const wedged = await Browser.launch();
+      try {
+        const wedgedPage = await wedged.newPage(
+          `${origin}/wedging-worker-read`,
+        );
+        const probe = await readShellPageProbe(wedgedPage, {
+          workerBudgetMs: 100,
+        });
+        expect(probe.rootView).toBe(true);
+        expect(probe.pendingRequests).toEqual([]);
+        expect(probe.workerProblemsError).toContain(
+          "the page did not answer within 10100ms",
+        );
+      } finally {
+        await wedged.close();
+      }
     });
 
     it("returns the console messages the page retained", async () => {
@@ -645,6 +824,96 @@ describe("shell-failure-reports", () => {
         "  pending runtime requests: reading them threw: " +
           "Error: the connection is gone",
       );
+    });
+
+    describe("worker warnings and errors", () => {
+      // These render a probe built here, as the pending-request cases do, and
+      // assert a whole line for the same reason: the lines they choose between
+      // differ by a few words.
+
+      it("names each warning or error the worker logged, and its counts", () => {
+        const lines = describedLines({
+          workerProblems: [
+            {
+              logger: "storage.v2",
+              message: "sync-load-failure",
+              warn: 1,
+              error: 3,
+            },
+            {
+              logger: "scheduler",
+              message: "schedule-error",
+              warn: 0,
+              error: 2,
+            },
+          ],
+        });
+        expect(lines).toContain(
+          "  worker warnings and errors (2 kinds, most errors first):",
+        );
+        expect(lines).toContain(
+          "    storage.v2 sync-load-failure: 3 error, 1 warn",
+        );
+        expect(lines).toContain(
+          "    scheduler schedule-error: 2 error, 0 warn",
+        );
+      });
+
+      it("lists twenty kinds of warning and error and counts the rest", () => {
+        const lines = describedLines({
+          workerProblems: Array.from({ length: 23 }, (_, index) => ({
+            logger: "runner",
+            message: `problem-${index}`,
+            warn: 0,
+            error: 23 - index,
+          })),
+        });
+        expect(lines).toContain("    runner problem-19: 4 error, 0 warn");
+        expect(lines).not.toContain("    runner problem-20: 3 error, 0 warn");
+        expect(lines).toContain("    and 3 more");
+      });
+
+      it("names a single kind of warning or error without a plural", () => {
+        expect(
+          describedLines({
+            workerProblems: [
+              { logger: "runner", message: "action-failed", warn: 1, error: 0 },
+            ],
+          }),
+        ).toContain(
+          "  worker warnings and errors (1 kind, most errors first):",
+        );
+      });
+
+      it("reports that a worker with no warning or error logged has none", () => {
+        expect(describedLines({ workerProblems: [] })).toContain(
+          "  worker warnings and errors: none",
+        );
+      });
+
+      it("reports that a page carrying no runtime has no worker to ask", () => {
+        expect(describedLines({ runtime: false })).toContain(
+          "  worker warnings and errors: none, the page carries no runtime",
+        );
+      });
+
+      it("reports a runtime that does not report its worker's logs", () => {
+        expect(describedLines({})).toContain(
+          "  worker warnings and errors: this runtime does not report them",
+        );
+      });
+
+      it("reports why the worker's logs could not be read", () => {
+        expect(
+          describedLines({
+            workerProblemsError:
+              "Error: the worker did not answer within 30000ms",
+          }),
+        ).toContain(
+          "  worker warnings and errors: reading them failed: " +
+            "Error: the worker did not answer within 30000ms",
+        );
+      });
     });
   });
 

@@ -497,12 +497,14 @@ describe("executor-warm-request", () => {
       );
       expect(host!.spaceServer(pSpace)).toBeUndefined();
 
-      // The recovery trigger: a SECOND warm notice (a later provisioning
-      // batch) activates the space for real. The re-buffered first
-      // notice must ride along — the successor's demand pass must hold
-      // BOTH staged roots (+ the session's re-terminalizing watch root):
-      // delta +3. Before the fix the count stopped at +2 — c1's warm
-      // demand died with the failed activation.
+      // The recovery: the failed activation's park re-activates the
+      // space after the failure-park backoff (the session is live and c1
+      // is re-buffered), and a SECOND warm notice (a later provisioning
+      // batch) arriving meanwhile joins that activation. The re-buffered
+      // first notice must ride along — the successor's demand pass must
+      // hold BOTH staged roots (+ the session's re-terminalizing watch
+      // root): delta +3. Before the fix the count stopped at +2 — c1's
+      // warm demand died with the failed activation.
       server.noteExecutorCommit({
         space: pSpace,
         seq: serverSeq(pEngine),

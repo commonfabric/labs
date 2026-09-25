@@ -147,19 +147,16 @@ a record: archive it to `docs/history/plans/` following the procedure in
   intent listener, the ruled double-dispatch implementation, the
   acceptance and the owner ruling set); it archives beside the stage-C
   closeout when that build lands.
-- [Scheduled work in the server](scheduled-work-in-the-server.md) proposes the
-  simpler form D12 said bgUpdater would come back as: a pattern declares the
-  cadence it wants to wake on, and the space's own serving runtime honors it,
-  so background work stops needing a separate process anyone has to run and
-  keep online. Waking a piece on a timer with nobody watching is the one thing
-  the background piece service does that the executor does not, and the ruling
-  accepts that capability lapsing in the meantime — nothing depends on it, so
-  nothing is broken while it is gone. Three separable parts: the replacement,
-  the already-ruled deletion, which waits for nothing here and has a worked v1
-  inventory to read, and compute accounting, which neither of the others
-  depends on. The replacement rests on a further ruling, because a
-  scheduled wake would be the second issuer of warm demand where the spec pins
-  the count at one.
+- [Scheduled work in the server](scheduled-work-in-the-server.md) proposes a
+  simpler form for bgUpdater, which the owner ruled will come back later: a
+  pattern declares the cadence it wants to wake on, and the space's own
+  serving runtime honors it, so background work needs no separate process
+  anyone has to run and keep online. Nothing wakes a piece on a timer with nobody watching, and the ruling
+  accepts that capability being absent in the meantime — nothing depends on
+  it. Two separable parts: the capability, and compute accounting, which the
+  capability does not depend on to function. The capability rests on a further
+  ruling, because a scheduled wake would be the second issuer of warm demand
+  where the spec pins the count at one.
 - [Revision-keyed schema memo](revision-keyed-schema-memo.md) designs a
   cross-evaluation, per-document memo of schema-walk computation on the
   memory server, keyed by each document's revision so validity needs no
