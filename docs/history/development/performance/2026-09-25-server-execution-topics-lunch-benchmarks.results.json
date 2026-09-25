@@ -4,7 +4,9 @@
  "arms": {
   "A": "serverExecution=true (server, shell define, clients)",
   "B": "A plus SERVER_EXECUTION_STORE_READ_THROUGH=true",
-  "C": "serverExecution=false everywhere"
+  "C": "serverExecution=false everywhere",
+  "firstPass": "serverExecution=true, one store accumulating every bench",
+  "D": "as A, fresh store, the 1184-vote read-scale case alone"
  },
  "firstPass_on": {
   "readscale": {
@@ -172,6 +174,11 @@
     "p75Ms": 30782,
     "minMs": 24065,
     "maxMs": 33316
+   }
+  },
+  "burst10": {
+   "vote burst 10x10": {
+    "failed": "[voter-7] awaitEventConsequences timed out after 120000ms"
    }
   },
   "seedMs": {
@@ -437,7 +444,17 @@
     "meanMs": 368.7
    },
    "profileWishRuns": 65,
-   "profileWishSendError": 62
+   "profileWishSendError": 62,
+   "profileWallMs": 81392,
+   "compileCacheEvaluate": {
+    "count": 32,
+    "meanMs": 64.16
+   },
+   "compileCacheMisses": 2
+  },
+  "A_servingLoopBeforeCold1": {
+   "wavesClosed": 584,
+   "wavesBudgetExhausted": 620
   },
   "B_seed30": {
    "waveCycles": 336,
@@ -453,7 +470,8 @@
     "cyclesP50": 47
    },
    "events": 72,
-   "distinctCoverageInstants": 27
+   "distinctCoverageSeconds": 27,
+   "largestSameSecondCoverage": 19
   },
   "firstPass_coldBoard": {
    "demandPasses": 46,
@@ -464,7 +482,7 @@
     "meanMs": 72.6
    }
   },
-  "A_burst10x10_coverage": {
+  "firstPass_burst10x10_coverage": {
    "events": 130,
    "p50Ms": 172333,
    "maxMs": 252138,
@@ -481,7 +499,8 @@
    "sendEncode": {
     "count": 14660,
     "meanMs": 8.81
-   }
+   },
+   "profileWallMs": 518228
   },
   "D_rs1184": {
    "demandedInstancesMax": 17653,
@@ -497,7 +516,12 @@
     24.5,
     56.9,
     14.5
-   ]
+   ],
+   "profileWallMs": 1991820
+  },
+  "firstPass_burst10x10_cycles": {
+   "wavesClosed": 700,
+   "wavesBudgetExhausted": 844
   }
  },
  "profileSelfShares": {
@@ -517,5 +541,26 @@
    "collectMaterializerWritersForLog": 0.022
   },
   "seed30_topicsPatternFrames": 0.0007
+ },
+ "workerProfiles": {
+  "coldBoardIdleShare": {
+   "firstPass": [
+    0.87,
+    0.843
+   ],
+   "A_cold1": 0.863
+  },
+  "A_warmBoardInclusiveMs": {
+   "render": [
+    992,
+    929,
+    919
+   ],
+   "validateAndTransform": [
+    682,
+    695,
+    605
+   ]
+  }
  }
 }

@@ -8,9 +8,12 @@ reason: "Point-in-time measurement and attribution of the Topics and lunch-poll 
 # Topics and lunch-poll benchmarks with server execution on
 
 The four Topics and lunch-poll benchmark files run with `serverExecution` on,
-then profiled until each cost had a named source. Every figure below is in
+then profiled until each cost had a named source. Every measured figure below
+is in
 [`2026-09-25-server-execution-topics-lunch-benchmarks.results.json`](2026-09-25-server-execution-topics-lunch-benchmarks.results.json)
-beside this file, under the key each section names.
+beside this file, under the key each section names, except the discarded
+profiling artifact described under the setup; constants such as the flush
+deadline and the park interval are quoted from the source.
 
 ## Setup and limits
 
@@ -64,9 +67,11 @@ checked in source.
 | read scale, 1184 votes | failed twice | not run | 809 ms |
 | board scale, 100 topics | 8,559 ms (first pass) | not run | not run |
 
-The 10×10 burst failed because one voter's consequences had not arrived after
-120 s; the serving loop's own settle series put that space's event coverage at
-a median of 172 s and a maximum of 252 s. The first pass's 1184-vote viewer
+The 10×10 burst failed in both the first pass and arm A. In arm A one voter's
+consequences had not arrived after 120 s (`A.burst10`); in the first pass, the
+serving loop's own settle series put that space's event coverage at a median of
+172 s and a maximum of 252 s (`serverCounters.firstPass_burst10x10_coverage`).
+The first pass's 1184-vote viewer
 never rendered the options. One of arm D's viewers did, and completed the
 untimed diagnostic vote (`D_on_readscale1184_diagnosticSample`); the run then
 failed on the same render probe as the first pass, a later viewer's options
@@ -80,12 +85,17 @@ resolved. Arms A and C, and the first pass, passed it.
 
 ### The serving loop is one serial queue, and it is saturated
 
-*Source: `serverCounters.A_seed30`, `serverCounters.A_burst5`.*
+*Source: `serverCounters.A_seed30`, `serverCounters.A_burst5`,
+`serverCounters.A_servingLoopBeforeCold1`,
+`serverCounters.firstPass_burst10x10_cycles`,
+`workerProfiles.coldBoardIdleShare`.*
 
 Seeding thirty topics ran 381 wave cycles at a mean of 194 ms, 74 s of an 81 s
-command; the 5×5 burst ran 2,422 cycles at 210 ms, 508 s of 518 s. More cycles
-exhausted the 100 ms flush deadline than committed. The browser worker was 84
-to 87% idle during the slow board loads: the client waits on the server.
+profile; the 5×5 burst ran 2,422 cycles at 210 ms, 508 s of 518 s. Under server
+execution on, more cycles exhausted the 100 ms flush deadline than closed a
+wave: 620 against 584 in arm A up to its first board probe, and 844 against 700
+over the first pass's 10×10 burst. The browser worker was 84 to 87% idle during
+the slow board loads: the client waits on the server.
 
 ### The watermark starves while input keeps arriving
 
@@ -93,7 +103,7 @@ to 87% idle during the slow board loads: the client waits on the server.
 
 During the seed, event-appended value writes reached watermark coverage at a
 median of 9.4 s and a p90 of 27 s, after a median of 47 cycles. The 72 events
-were covered at 27 distinct instants, one of them covering 19: an exhausted
+were covered within 27 distinct seconds, one second covering 19: an exhausted
 cycle carries no watermark movement, so coverage waits for input to pause and
 then arrives in a batch.
 
@@ -103,7 +113,7 @@ then arrives in a batch.
 
 A space with no live session parks after `DEFAULT_IDLE_PARK_MS` (30 s) plus up
 to one more idle wait, disposing its runtime. The next board load then took
-21.9 to 22.8 s against 3.1 to 3.9 s within the window, and 15.8 s with
+21.9 to 22.8 s against 3.1 to 4.0 s within the window, and 15.8 s with
 read-through. Server side, that load ran 46 demand passes totalling 21.1 s,
 restarting every demanded piece and syncing each one's cells over the loopback
 session (`watchAddSync`, 207 at a mean of 73 ms). Off, the same board loaded
@@ -118,11 +128,12 @@ demanded-instance list from every session's tracked entries, then walks every
 row, known key and root key. The source names an incremental form as a
 follow-on for when the union reaches tens of thousands; the 1184-vote poll
 reached 17,653 demanded instances. There, 7,968 passes took 1,151 s of a
-1,992 s run, and the pass and its callees held about 40% of server self time.
-The same run lost its execution lease ten times, averaged 19.3 s per
-`scheduler/execute`, and answered `/_health` in 14 to 57 s. Pairs of spaces
-losing their leases in the same second recur through the lunch runs, which is
-a process-wide stall rather than one space's work.
+1,992 s run. `#loadDemandedStructure`, `demandedInstancesForSpace` and the
+`emit` closure inside it held 31.6% of server self time between them, and
+`trackedIdsFromEntries`, which `demandedInstancesForSpace` also calls, another
+4.4%. The same run lost its execution lease ten times, averaged 19.3 s per
+`scheduler/execute`, and answered `/_health` in 14 to 57 s, which is a
+process-wide stall rather than one space's work.
 
 ### Materializer overlap is tested once per read, against every read
 
@@ -151,32 +162,36 @@ document the session has ever received. The `closure` phase ran 10,327 times at
 `readStateForScopeKey` and `readRowForBranch` in `packages/memory/v2/engine.ts`
 query the branch head twice, the branch status and the branch row before the
 document row, and the decoded-document cache is consulted only after all five.
-Native SQLite frames were 14% of the burst's self time, and binding their
-string parameters added another 2.6%.
+Unnamed native frames, whose callers in the profile are SQLite statement
+calls, were 14% of the burst's self time.
 
 ### A profile-less viewer compiles a sidecar per topic
 
 *Source: `serverCounters.A_seed30`.*
 
 Seeding thirty topics ran the `#profile` wish 65 times, 62 ending in
-`send-error`, and compiled 32 times with two cache write-backs. Each cache-hit
-compile still resolved, read the cache and evaluated the module graph, about
-150 to 215 ms. `SourceReconciler.#resolveSupplied` calls `compilePattern`,
-which bypasses the in-process `compileOrGetPattern` dedupe.
+`send-error`, and compiled 32 times at a mean of 369 ms, only two of them
+missing the compile cache. A cache hit still resolves the program, reads the
+cache and evaluates the module graph; the evaluation alone averaged 64 ms
+(`compileCacheEvaluate`). `SourceReconciler.#resolveSupplied` calls
+`compilePattern`, which bypasses the in-process `compileOrGetPattern` dedupe.
 
 ### The warm board is client work
 
-A warm 30-topic board load under server execution on spent its worker time on
-rendering (about 0.93 s), `validateAndTransform` (0.64 s) and restarting the
-topic patterns the client still runs (0.36 s). The topics pattern's own frames
-were 0.07% of server self time over a seed, in line with the 0.1% the
-perf-investigation skill records for a client profile.
+*Source: `workerProfiles.A_warmBoardInclusiveMs`,
+`profileSelfShares.seed30_topicsPatternFrames`.*
+
+Arm A's three warm 30-topic board loads spent their worker time on rendering
+(0.92 to 0.99 s inclusive), on `validateAndTransform` (0.61 to 0.70 s) and on
+restarting the topic patterns the client still runs. The topics pattern's own
+frames were 0.07% of server self time over a seed, in line with the 0.1% the
+perf-investigation skill records for a profile of fifty topic creates.
 
 ## Claims checked
 
 | Claim | Where | Result here |
 | --- | --- | --- |
-| read-through runs the served journey in roughly a third of the time | `EXPERIMENTAL_OPTIONS.md`, `SERVER_EXECUTION_STORE_READ_THROUGH` | not reproduced: `journey` 6.19 s against 6.89 s; seeds 28 to 46% faster; cold board 31% faster |
-| a 10×10 burst takes 2.6 s on a four-core CI host | `BENCHMARKS.md` | reproduced off, at 2.90 s; on, it does not complete |
+| read-through runs the served journey in roughly a third of the time | `EXPERIMENTAL_OPTIONS.md`, `SERVER_EXECUTION_STORE_READ_THROUGH` | not reproduced: `journey` 6.19 s against 6.89 s; seeds 17 to 46% faster; cold board 31% faster |
+| a 10×10 burst takes 2.6 s on a four-core CI host | `BENCHMARKS.md` | consistent off, at 2.90 s on this four-core host; on, it does not complete |
 | the topics pattern's frames are about 0.1% of self time | perf-investigation skill | reproduced on the server, at 0.07% |
-| three and a third times the topics costs eight times the seed time | `BENCHMARKS.md` | on: 30 topics in 79 to 125 s, 100 in 519 s; not measured off at 100 |
+| three and a third times the topics costs eight times the seed time | `BENCHMARKS.md` | not reproduced on: in the first pass, 100 topics took 519 s against 83 to 85 s for 30, about six times; not measured off at 100 |

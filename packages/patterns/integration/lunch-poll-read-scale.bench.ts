@@ -2,7 +2,7 @@
  * A rendered lunch-poll vote update across declared vote-list sizes.
  * Setup and an instrumented diagnostic vote are outside the timed interval;
  * timed votes run with read accounting disabled. `EXPERIMENTAL_SERVER_EXECUTION`
- * selects the arm and requires a matching local toolshed and shell.
+ * selects the arm, which requires a local toolshed and shell running it too.
  */
 
 import { debugStr } from "@commonfabric/data-model";
