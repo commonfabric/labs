@@ -674,30 +674,30 @@ delivery and traversal split the work in two layers:
   Traversal does not recurse into `cid:` documents.
 - **Result assembly** owns delivery: it scans every complete document the
   query delivers — link positions and the `schema` metadata member —
-  verifies each referenced closure against the space's
-  own store, and joins it to the delivered set and watch set — failing
-  the query on a hole. An assembly over a graph the session already
-  holds — a refresh, or an added watch that extends the graph — walks
-  only the closures of the documents it delivers, and stops at each
-  schema document an earlier assembly of that graph delivered: that
-  assembly verified the document and its whole closure against this
-  store before delivering either, and the commit boundary never
-  replaces or removes an installed `cid:` document, so an established
-  reference cannot come to resolve differently through the store's
-  API. A schema document an assembly tracked before failing was never
-  delivered, so it is not established. A delivered document's previous
-  version contributes its references as well, so a `cid:` document
-  arriving at a new version is checked against the hash it verified as.
-  What such an assembly does not re-read is a closure document altered
-  out of band beneath an unchanged referrer; an evaluation that builds
-  its graph afresh — the first watch on a branch, or a full
-  re-evaluation — reads that closure from the store and fails on it,
-  unless the evaluation cache answers it. An
-  assembly failure means the patch shape that escapes
-  commit-time validation (see Resolution), out-of-band tampering, or a
-  store predating that validation — never a transient condition, since
-  the commit boundary validates every closure it collects and preserves
-  every installed document. A
+  verifies each referenced closure against the space's own store, and
+  joins it to the delivered set and watch set — failing the query on a
+  hole. An assembly over a graph the session already holds — a refresh,
+  or an added watch that extends the graph — walks only the closures of
+  the documents it delivers, and stops at each schema document recorded
+  in the graph's entities after verification: the assembly that recorded
+  it verified the document and its whole closure against this store
+  before recording either, and the commit boundary never replaces or
+  removes an installed `cid:` document, so an established reference
+  cannot come to resolve differently through the store's API. A schema
+  document an assembly tracked before failing was never recorded in the
+  entities, so it is not established, and the next assembly that reaches
+  it verifies and delivers it. A delivered document's previous version
+  contributes its references as well, so a `cid:` document arriving at a
+  new version is checked against the hash it verified as. What such an
+  assembly does not re-read is a closure document altered out of band
+  beneath an unchanged referrer; an evaluation that builds its graph
+  afresh — the first watch on a branch, or a full re-evaluation — reads
+  that closure from the store and fails on it, unless the evaluation
+  cache answers it. An assembly failure means the patch shape that
+  escapes commit-time validation (see Resolution), out-of-band
+  tampering, or a store predating that validation — never a transient
+  condition, since the commit boundary validates every closure it
+  collects and preserves every installed document. A
   request-shaped evaluation (watch installation, an initial query)
   answers its caller with the diagnostic as a QueryError; the fan-out
   refresh logs the failure and skips the affected session's frame,

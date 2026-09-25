@@ -381,5 +381,165 @@ describe("v2-refresh-schema-closure", () => {
         ).toThrow("did not verify in this space");
       });
     });
+
+    it("delivers a valid schema document that a failed refresh tracked but never delivered when an added root references it", async () => {
+      // The refresh's traversal tracks `fresh` through the carrier's link
+      // before the closure pass fails on `bad`'s reference to a document the
+      // space does not hold, so the tracker holds `fresh` while the graph's
+      // entities do not.
+
+      const bad = "of:refresh-closure-bad";
+      const other = "of:refresh-closure-other";
+      const absentHash = internSchemaAsTaggedHashString({
+        type: "null",
+        title: "refresh-closure-extension-absent",
+      });
+      await withEngine((engine) => {
+        commit(engine, 1, [
+          { op: "set", id: `cid:${leafHash}`, value: { value: leafSchema } },
+          {
+            op: "set",
+            id: carrier,
+            value: { value: { x: linkWithSchemaRef(leafHash) } },
+          },
+          {
+            op: "set",
+            id: bad,
+            value: { value: { x: linkWithSchemaRef(leafHash) } },
+          },
+        ]);
+        const { state } = trackGraph(
+          space,
+          engine,
+          {
+            roots: [
+              { id: carrier, selector: { path: [], schema: true } },
+              { id: bad, selector: { path: [], schema: false } },
+            ],
+          },
+          undefined,
+          identity,
+        );
+        commit(engine, 2, [
+          {
+            op: "set",
+            id: `cid:${freshLeafHash}`,
+            value: { value: freshLeafSchema },
+          },
+          { op: "set", id: `cid:${freshHash}`, value: { value: freshSchema } },
+          {
+            op: "set",
+            id: carrier,
+            value: { value: { x: linkWithSchemaRef(freshHash) } },
+          },
+          {
+            op: "set",
+            id: other,
+            value: { value: { x: linkWithSchemaRef(freshHash) } },
+          },
+        ]);
+        patchLinkSchemaRef(engine, 3, bad, absentHash);
+        expect(() =>
+          refreshTrackedGraph(
+            space,
+            engine,
+            state,
+            new Set([toDirtyKey(carrier), toDirtyKey(bad)]),
+          )
+        ).toThrow("is not stored in this space");
+        expect(state.tracker.has(docKey(`cid:${freshHash}`))).toBe(true);
+        expect(state.entities.has(docKey(`cid:${freshHash}`))).toBe(false);
+        const extended = extendTrackedGraph(space, engine, state, {
+          roots: [{ id: other, selector: { path: [], schema: false } }],
+        });
+        expect([...extended.updates.keys()].sort()).toEqual(
+          [
+            docKey(other),
+            docKey(`cid:${freshHash}`),
+            docKey(`cid:${freshLeafHash}`),
+          ].sort(),
+        );
+      });
+    });
+
+    it("throws when an added root references a `cid:` document the graph holds at an earlier version than a failed refresh scanned", async () => {
+      // Only an out-of-band write can give a `cid:` document a second
+      // version. The graph holds `fresh` at its first version, whose content
+      // is no schema document. The refresh delivering its second version
+      // scans that version as the schema document `fresh`, then fails on its
+      // forged leaf, so the scan records a version the graph never held.
+
+      const other = "of:refresh-closure-other";
+      const fresh = `cid:${freshHash}`;
+      await withEngine((engine) => {
+        commit(engine, 1, [
+          { op: "set", id: `cid:${leafHash}`, value: { value: leafSchema } },
+          {
+            op: "set",
+            id: `cid:${freshLeafHash}`,
+            value: { value: freshLeafSchema },
+          },
+          { op: "set", id: fresh, value: { value: freshSchema } },
+          {
+            op: "set",
+            id: other,
+            value: { value: { x: linkWithSchemaRef(leafHash) } },
+          },
+        ]);
+        engine.database.prepare(
+          `UPDATE revision SET data = :data WHERE id = :id`,
+        ).run({
+          data: encodeMemoryBoundary({ value: "refresh-closure-blob" }),
+          id: fresh,
+        });
+        const { state } = trackGraph(
+          space,
+          engine,
+          { roots: [{ id: fresh, selector: { path: [], schema: false } }] },
+          undefined,
+          identity,
+        );
+        const heldSeq = state.entities.get(docKey(fresh))?.seq;
+        expect(heldSeq).toBeDefined();
+        patchLinkSchemaRef(engine, 2, other, freshHash);
+        const { seq } = engine.database.prepare(
+          `SELECT MAX(seq) AS seq FROM "commit"`,
+        ).get() as { seq: number };
+        engine.database.prepare(
+          `UPDATE revision SET seq = :seq, commit_seq = :seq, data = :data
+           WHERE id = :id`,
+        ).run({
+          seq,
+          data: encodeMemoryBoundary({ value: freshSchema }),
+          id: fresh,
+        });
+        engine.database.prepare(
+          `UPDATE head SET seq = :seq WHERE id = :id`,
+        ).run({ seq, id: fresh });
+        engine.database.prepare(
+          `UPDATE revision SET data = :data WHERE id = :id`,
+        ).run({
+          data: encodeMemoryBoundary({
+            value: { type: "boolean", title: "forged" },
+          }),
+          id: `cid:${freshLeafHash}`,
+        });
+        expect(() =>
+          refreshTrackedGraph(
+            space,
+            engine,
+            state,
+            new Set([toDirtyKey(fresh)]),
+          )
+        ).toThrow("did not verify in this space");
+        expect(state.entities.get(docKey(fresh))?.seq).toBe(heldSeq);
+        expect(state.schemaRefs.get(docKey(fresh))?.seq).toBe(seq);
+        expect(() =>
+          extendTrackedGraph(space, engine, state, {
+            roots: [{ id: other, selector: { path: [], schema: false } }],
+          })
+        ).toThrow("did not verify in this space");
+      });
+    });
   });
 });

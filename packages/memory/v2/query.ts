@@ -89,7 +89,13 @@ export type TrackedGraphState = {
    * re-walk clears by). */
   missesOf: Map<string, Set<string>>;
 
+  /** The documents this graph delivered, at the version delivered. A
+   * document joins only after the assembly delivering it verified its
+   * whole schema-document closure, which is what lets a later assembly
+   * stop at a schema document held here without reading it (see
+   * `assembleSchemaDocClosures`). */
   entities: Map<QueryDocKey, EntitySnapshot>;
+
   memo: SchemaMemo;
   manager: EngineObjectManager;
 
@@ -1246,9 +1252,12 @@ export class SchemaClosureError extends Error {
  * established closure costs no read. What the walk does not see is the
  * store altered out of band beneath an unchanged referrer; an evaluation
  * that builds its graph afresh, rather than taking it from the evaluation
- * cache, reads it again. A delivered document's previous version contributes its refs too,
- * which is what re-checks a `cid:` document delivered at a new version
- * against the hash it verified as.
+ * cache, reads it again. A delivered document's previous version
+ * contributes its refs too, which is what re-checks a `cid:` document
+ * delivered at a new version against the hash it verified as. Every
+ * schema document the walk verifies that `established` does not hold at
+ * the version read joins the additions, whether or not the tracker
+ * already holds it.
  *
  * Verification is against THIS space's stored content — a verified copy in
  * the realm registry never stands in for the space's own (the
@@ -1366,11 +1375,12 @@ const assembleSchemaDocClosures = (
         new Set([hash]),
         scans,
       );
-      if (!tracker.has(key)) {
-        trackerAdds.push(key);
-        if (!delivered.has(key)) {
-          additions.set(key, snapshot);
-        }
+      if (!tracker.has(key)) trackerAdds.push(key);
+      // What the graph delivered is its entities, not its tracker: the
+      // traversal of a pass that failed may have tracked this document
+      // without its closure ever being delivered.
+      if (!delivered.has(key) && established.get(key)?.seq !== snapshot.seq) {
+        additions.set(key, snapshot);
       }
     },
   });
