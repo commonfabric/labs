@@ -247,7 +247,7 @@ export {
 } from "./space-membership.ts";
 export {
   CFC_PREFIX_PROVENANCE_MAX_WRITES,
-  describeSinkReleaseRefusal,
+  decideSinkRelease,
   flowLabelWorkExists,
   flowReadExcluded,
   gatedSinkRequestExists,
@@ -255,6 +255,10 @@ export {
   prepareBoundaryCommit,
   storedCfcEnvelopeMergeIssue,
 } from "./prepare.ts";
+export type {
+  CfcSinkDecision,
+  CfcSinkDecisionFailure,
+} from "./sink-decision.ts";
 export type {
   CfcPrefixBoundSource,
   CfcPrefixProvenanceSummary,

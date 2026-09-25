@@ -446,13 +446,13 @@ what is about to be released through a transaction, and fit that
 transaction's consumed join to the destination's ceiling, which for a model's
 context is the empty one. What is released is a value. A reference the tool
 hands back names the result without carrying it, so it is not measured, and a
-refusal withholds the values while the reference goes out. `describeSinkReleaseRefusal` (runner `cfc/prepare.ts`) is that
-measurement, and it shares `atomsOutsideCeiling` and the refusal-detail
-construction with the in-commit sink gate, so a clause outside a ceiling on
-one route is outside it on the other. Two differences are worth recording:
-the host route measures what releasing the answer resolved rather than what a
-whole transaction consumed, and it applies no exchange-rule rewriting, so it
-refuses a clause a policy evaluation would have discharged. A residual stands where a declared entry did reach a
+refusal withholds the values while the reference goes out.
+`decideSinkRelease` (runner `cfc/prepare.ts`) is that measurement. It shares
+the committed sink gate's exchange-aware decision: boundary context, trust,
+selected policy manifest, evaluation mode, exhaustion behavior, and fit. The
+host route differs only in measuring what releasing the answer resolved and in
+being non-consuming: a single-use grant is unsatisfied rather than claimed. A
+residual stands where a declared entry did reach a
 computed document, from a schema-carrying write: it stops being a write
 ceiling there, and stays a read floor.
 

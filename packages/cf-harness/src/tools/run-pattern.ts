@@ -14,7 +14,8 @@ import {
   type CfcRefusalAttribution,
   type CfcRefusalDetail,
   type CfcRefusalGate,
-  describeSinkReleaseRefusal,
+  type CfcSinkDecision,
+  decideSinkRelease,
   renderCfcAtom,
   selectReferencedCfcSchemaDefs,
   validateAgainstSchema,
@@ -518,6 +519,11 @@ const RUN_PATTERN_OPAQUE_REFUSAL_MESSAGE =
   "the pattern ran but the space's policy refused to commit its result: " +
   "flow enforcement rejected the write at the commit boundary, so the " +
   `result never landed. ${RUN_PATTERN_REFUSAL_ARTIFACT_NOTE}`;
+
+/** What a release decision without an actionable ceiling detail is told. */
+const RUN_PATTERN_OPAQUE_RELEASE_REFUSAL_MESSAGE =
+  "the pattern ran but the space's policy could not admit its values at " +
+  `the release boundary. ${RUN_PATTERN_REFUSAL_ARTIFACT_NOTE}`;
 
 /**
  * Where an agent-supplied input landed. A refusal names the reads that
@@ -1533,7 +1539,7 @@ export const runPatternTool: HarnessToolDefinition<
     const releaseGateRejects =
       pieces.runtime.cfcEnforcementMode !== "disabled" &&
       pieces.runtime.cfcEnforcementMode !== "observe";
-    let releaseRefusal: CfcRefusalDetail | undefined;
+    let sinkDecision!: CfcSinkDecision;
     let attributionTraces: readonly CfcDereferenceTrace[] = [];
     let rawValue: unknown;
     const measureRelease = async () => {
@@ -1564,7 +1570,7 @@ export const runPatternTool: HarnessToolDefinition<
         }
         // Copied before the abort below, which clears them.
         attributionTraces = [...inputsTx.getCfcState().dereferenceTraces];
-        return describeSinkReleaseRefusal(
+        return decideSinkRelease(
           releaseTx,
           inputsTx,
           RUN_PATTERN_ANSWER_SINK,
@@ -1581,23 +1587,26 @@ export const runPatternTool: HarnessToolDefinition<
     // waiting for. The measurement abandons its own transactions whichever
     // way the race goes.
     const measuring = (async () => {
-      releaseRefusal = await measureRelease();
+      sinkDecision = await measureRelease();
     })();
     if (await raceWithAbort(measuring, signal) === "aborted") {
       stopPiece(piece.getCell());
       return cancelledOutput();
     }
-
     // The measurement is read HERE, before the exits below, because every
     // one of them is an exit the boundary already decided at: a run whose
     // result fails to settle after the fit still had the fit performed, and a
     // decision left behind at such an exit is the very decision the trace was
     // missing. What it found goes one of two ways. Where the ladder
-    // rejects, the values are withheld and the refusal reaches the model as
-    // data and as an instruction, with its reason kept for the artifact.
+    // rejects, the values are withheld. A definitive fit refusal reaches the
+    // model as data and as an instruction; an evaluation failure gets an
+    // opaque instruction, with either raw reason kept for the artifact.
     // Where it does not, the values go out and the measurement is still an
     // answer about this run, which only the artifact can carry.
-    const withheldRefusal = releaseGateRejects ? releaseRefusal : undefined;
+    const releaseBlocked = sinkDecision.status !== "fit";
+    const withheldByDecision = releaseGateRejects && releaseBlocked;
+    const releaseRefusal = sinkDecision.refusal;
+    const withheldRefusal = withheldByDecision ? releaseRefusal : undefined;
     const withheld = withheldRefusal === undefined
       ? undefined
       : await describeRefusal([withheldRefusal]);
@@ -1605,6 +1614,7 @@ export const runPatternTool: HarnessToolDefinition<
       releaseGateRejects || releaseRefusal === undefined
         ? undefined
         : await describeRefusal([releaseRefusal]);
+    const releaseObserved = !releaseGateRejects && releaseBlocked;
     const measured = withheld ?? releaseObservation;
     /**
      * The same measurement said as a decision, which is what reaches the
@@ -1616,9 +1626,9 @@ export const runPatternTool: HarnessToolDefinition<
      * effect without its terms.
      */
     releaseDecision = {
-      reasonCode: withheld !== undefined
+      reasonCode: withheldByDecision
         ? "cfc_release_withheld"
-        : releaseObservation !== undefined
+        : releaseObserved
         ? "cfc_release_observed"
         : "cfc_release_allowed",
       boundary: "release",
@@ -2062,12 +2072,13 @@ export const runPatternTool: HarnessToolDefinition<
       }
     }
     const refusedValues = parsedResultSchema !== undefined &&
-      withheld !== undefined;
+      withheldByDecision;
     const outputConcerns = observedOutputs.flatMap(({ concern }) =>
       refusedValues && concern.concern === "pending" ? [] : [concern]
     );
     const retainedCauses = [
       withheldRefusal?.reason,
+      sinkDecision.failure?.reason,
       probeThrown,
       observedOutputCause(observedOutputs),
     ].filter(
@@ -2079,7 +2090,7 @@ export const runPatternTool: HarnessToolDefinition<
       resultRef,
       resultRefSchema: pattern.resultSchema,
       pieceId: piece.id,
-      ...(withheld === undefined
+      ...(!withheldByDecision
         ? {
           pending: capturedOutputs.some(({ concern }) =>
             concern.concern === "pending"
@@ -2091,8 +2102,10 @@ export const runPatternTool: HarnessToolDefinition<
         : {}),
       ...(refusedValues
         ? {
-          valueError: policyRefusalMessage(withheld, "release"),
-          policyRefusal: withheld,
+          valueError: withheld === undefined
+            ? RUN_PATTERN_OPAQUE_RELEASE_REFUSAL_MESSAGE
+            : policyRefusalMessage(withheld, "release"),
+          ...(withheld === undefined ? {} : { policyRefusal: withheld }),
         }
         : {
           ...(value !== undefined ? { value } : {}),

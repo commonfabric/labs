@@ -137,7 +137,11 @@ side-effect checks as a directly supplied reference. The converse holds too:
 minting or returning a handle to the model is not a release. A handle names a
 referent without carrying it, so a tool MAY return one for a result whose
 labels a model-context ceiling refuses, and a release ceiling applies only to
-a value that crosses into model context.
+a value that crosses into model context. A harness that performs the release
+fit on the host MUST use the authoritative runner sink decision, including its
+boundary context, trust closure, selected policy manifest, evaluation mode,
+exhaustion behavior, and fit semantics. A non-committing host check MUST NOT
+consume a single-use grant and MUST fail closed when a rule depends on one.
 
 **AH-CFC-19.** Handle mappings are sensitive provenance evidence. Their access,
 retention, child-transfer, and model-disclosure boundaries MUST be at least as

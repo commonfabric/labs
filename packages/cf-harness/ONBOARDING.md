@@ -658,9 +658,10 @@ The boundaries that affect this onboarding are:
   `resultSchema` requests computed values beyond those flags. If the ceiling
   refuses those requested values, the call still receives the handle, with
   `value` withheld, a `valueError` that explains why and names the input
-  carrying the label, and `policyRefusal` as structured data. Declassification
-  by policy — releasing a value under one policy and refusing it under another —
-  remains open.
+  carrying the label, and `policyRefusal` as structured data. The runner-owned
+  decision applies the selected exchange policy before that fit; exhaustion or
+  unavailable policy resolution withholds the value, and the host observes
+  single-use grants without consuming them.
 - CT-2187 and CT-2191: the audit's known findings in section 7.
 - CT-2155 clause 5: the console's web routes carry no credential. The `Host`
   allowlist is the whole of the request gate, and the network the console is

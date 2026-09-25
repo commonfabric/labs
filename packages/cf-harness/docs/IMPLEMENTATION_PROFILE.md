@@ -244,7 +244,11 @@ space's piece list. Naming is the separate `assign_slug` tool: it takes a handle
 token referring to a piece plus a slug, registers the piece in the list, points
 the slug at it, and returns the slug and, when possible, an openable URL.
 Cancellation of `run_pattern` stops the created piece. The session separately
-records its Fabric CFC enforcement and flow-label posture.
+records its Fabric CFC enforcement and flow-label posture. Before returning a
+value, `run_pattern` asks the runner's exchange-aware sink decision to fit the
+measured label against the model-context ceiling. That observational decision
+uses the committed sink gate's boundary, trust, policy-selection, mode,
+exhaustion, and fit semantics, but cannot consume a single-use grant.
 
 Current child profiles are `default`, `browser`, `web_fetch`, `web_search`, and
 `pattern-author`. Each profile supplies an exact tool/network/skill policy.

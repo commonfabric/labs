@@ -1507,7 +1507,7 @@
       g_release: {
         t: "Value release",
         status: "partial",
-        short: "ceiling, no policy",
+        short: "exchange-aware fit",
         boundary: "TCB → model context",
       },
       g_write: {
@@ -1858,7 +1858,7 @@
         kind: "Harness",
         band: "agent",
         body:
-          `<p>The prompt loop. It builds the context, offers only the configured tools, and mediates every tool call: mode × effect class × prompt-slot authority. It swaps cell addresses to <code>cfh:a:</code> tokens in everything model-bound and resolves tokens in model-authored arguments before policy evaluation and dispatch.</p><p>The parent resolves a user-supplied piece slug with <code>resolve_piece</code> before author delegation or registry discovery. It uses the input-cell attachment resolver in the session's space and returns only a handle; reading and revising source remains on the pattern-author child. Missing slugs are actionable errors, and a failed read is unknown rather than absence.</p><p>It does not evaluate policy; it transports evidence, applies the selected exposure posture, and records what it decided. It decides tool mediation, observation rendering, reference admission, and the <code>run_pattern</code> answer ceiling with harness rules (the answer ceiling is a harness constant fitted with a runner helper). CT-2175 recommends moving that last one into the runner.</p>`,
+          `<p>The prompt loop. It builds the context, offers only the configured tools, and mediates every tool call: mode × effect class × prompt-slot authority. It swaps cell addresses to <code>cfh:a:</code> tokens in everything model-bound and resolves tokens in model-authored arguments before policy evaluation and dispatch.</p><p>The parent resolves a user-supplied piece slug with <code>resolve_piece</code> before author delegation or registry discovery. It uses the input-cell attachment resolver in the session's space and returns only a handle; reading and revising source remains on the pattern-author child. Missing slugs are actionable errors, and a failed read is unknown rather than absence.</p><p>It does not evaluate CFC policy itself; it transports evidence, applies the selected exposure posture, and records what it decided. It decides tool mediation, observation rendering, and reference admission. For a <code>run_pattern</code> answer, it asks the runner for the same exchange-aware sink decision a committed sink uses, in observing mode so the host cannot consume a single-use grant.</p>`,
         threats: ["t9", "t4"],
         close: [
           "Tool-level decisions have no label input at all; labels only reach a decision at the sinks the runner owns.",
@@ -2104,12 +2104,12 @@
       },
       g_release: {
         body:
-          `<p><code>run_pattern</code> reads the result under the runner and fits the consumed labels against a public-only answer ceiling. A reference-only answer is not a release, so the handle always comes back; only the values a <code>resultSchema</code> asks for are gated, and a refusal names the input that carried the label. The pre-flight that measures a live-cell input reads it as the value it holds rather than as the handle, so a <code>SqliteDb</code> input is measured by its descriptor instead of being refused by a schema that describes the contents.</p><p>A run can also carry a read ceiling of its own — <code>--max-confidentiality</code>, or <code>cfc.maxConfidentiality</code> in the run manifest — which the runner applies before returning cell payloads. Session-scoped queries meet that ceiling into row filtering. Shared queries retain one labeled materialization, and their array shape carries every row's confidentiality so a reader outside that label cannot observe values, membership, or row counts. A delegated child inherits the same bounded session; resolving an inherited handle confers no exception. It is a second read boundary, drawn here in words rather than as its own diamond.</p>`,
+          `<p><code>run_pattern</code> reads the result under the runner and asks the runner-owned sink decision to fit the consumed labels against a public-only answer ceiling. That decision uses the boundary context, trust, selected manifest, policy mode, exchange exhaustion and label fit of a committed sink. The host observes rather than consumes single-use grants, so a rule that depends on one fails closed here. A reference-only answer is not a release, so the handle always comes back; only the values a <code>resultSchema</code> asks for are gated, and a refusal names the input that carried the label. The pre-flight that measures a live-cell input reads it as the value it holds rather than as the handle, so a <code>SqliteDb</code> input is measured by its descriptor instead of being refused by a schema that describes the contents.</p><p>A run can also carry a read ceiling of its own — <code>--max-confidentiality</code>, or <code>cfc.maxConfidentiality</code> in the run manifest — which the runner applies before returning cell payloads. Session-scoped queries meet that ceiling into row filtering. Shared queries retain one labeled materialization, and their array shape carries every row's confidentiality so a reader outside that label cannot observe values, membership, or row counts. A delegated child inherits the same bounded session; resolving an inherited handle confers no exception. It is a second read boundary, drawn here in words rather than as its own diamond.</p>`,
         why:
           "This is the guarantee the product sells: computation goes to the data and the model gets a name, not the number.",
         links: [["ceiling gates values, not the handle", 6759]],
         close: [
-          "The fit skips the runner's policy evaluation, so no exchange rule can discharge <code>finance</code> here yet. Policy A vs policy B (released under one, refused under the other) is the smallest honest experiment (CT-2175).",
+          "The assembled model context still has no runner-owned <code>model-context</code> sink; the exchange-aware decision applies only to values requested from <code>run_pattern</code> (CT-2175 question 2).",
         ],
         threats: ["t8", "t19"],
       },

@@ -18,7 +18,7 @@ subsumes another. Their current homes and defaults:
 | `cfcFlowLabels` | `off` · `observe` · `persist` | `persist` | whether the per-tx **flow join is derived and persisted** as `derived` label components (S16) |
 | `cfcWriteFloor` | `off` · `observe` · `enforce` | `enforce` | whether the **write-side `requiredIntegrity` floor** (SC-18, Epic D3) is checked against the written value's integrity |
 | `cfcTriggerReadGating` | `false` · `true` | `true` | whether the **§8.9.2 trigger reads** — the addresses whose invalidating writes scheduled this run — join the enforcement consumed sets: the sink-request ceiling and the `requiredIntegrity` input gate (SC-3 / H5; [runtime.ts](../../packages/runner/src/runtime.ts) `cfcTriggerReadGating`, [types.ts](../../packages/runner/src/cfc/types.ts) `CfcTriggerReadGating`, consumed in [prepare.ts](../../packages/runner/src/cfc/prepare.ts) `triggerReadSources`) |
-| `cfcPolicyEvaluation` | `off` · `observe` · `enforce` | `enforce` | whether the **exchange-rule evaluator** (spec §4.4.5, Epic B5) rewrites gated labels to a fueled fixpoint before the sink-request ceiling and `requiredIntegrity` input gates fit them. `observe` evaluates + diagnoses divergence but decides on the *un-rewritten* label; `enforce` decides on the *rewritten* label and **fails closed on fuel exhaustion or policy-lookup failure**. ([runtime.ts](../../packages/runner/src/runtime.ts) `cfcPolicyEvaluation` + `cfcPolicyRecords`, consumed in [prepare.ts](../../packages/runner/src/cfc/prepare.ts) `evaluateGatedConfidentiality`) |
+| `cfcPolicyEvaluation` | `off` · `observe` · `enforce` | `enforce` | whether the **exchange-rule evaluator** (spec §4.4.5, Epic B5) rewrites gated labels to a fueled fixpoint before the sink-request ceiling and `requiredIntegrity` input gates fit them. `observe` evaluates + diagnoses divergence but decides on the *un-rewritten* label; `enforce` decides on the *rewritten* label and **fails closed on fuel exhaustion or policy-lookup failure**. ([runtime.ts](../../packages/runner/src/runtime.ts) `cfcPolicyEvaluation` + `cfcPolicyRecords`, consumed in [sink-decision.ts](../../packages/runner/src/cfc/sink-decision.ts) `evaluateGatedConfidentiality`) |
 
 They are orthogonal because they gate different things: the **enforcement mode**
 decides what happens to a recorded reason (ignore / diagnose / reject); the
@@ -492,18 +492,19 @@ The strict-only delta is:
   handed. Where the host is the one releasing — the `run_pattern` tool
   answering a model with the values a piece computed — there is no request
   to record and no commit to gate, so that tool measures the release itself,
-  against a public ceiling, through `describeSinkReleaseRefusal`
+  against a public ceiling, through `decideSinkRelease`
   ([run-pattern.ts](../../packages/cf-harness/src/tools/run-pattern.ts)).
-  What it measures is the values a `resultSchema` asks for. The result
-  reference it returns names the result without carrying it, so a call that
-  asks for no values is not measured, and a refusal withholds the values
-  while the reference goes out with them: a handle is not a release. The two
-  routes fit their joins with one membership predicate, so a clause outside
-  a ceiling on one is outside it on the other. They differ in what reaches
-  the join: the host route measures what releasing the values resolved, and
-  applies no exchange-rule rewriting to it, so a clause a policy evaluation
-  would have discharged is withheld there. The ladder governs it like any
-  other gate — at `disabled` and `observe` it records nothing that
+  The host decision and committed sink-request gate share the same boundary
+  context, trust closure, selected policy manifest, policy-evaluation mode,
+  fuel-exhaustion behavior, and ceiling-fit semantics. The host decision is
+  observational: it never claims a single-use grant, and a rule depending on
+  one therefore fails closed there. An enforcing committed sink decision may
+  consume that grant atomically with the release. What the host measures is
+  the values a `resultSchema` asks for. The result reference it returns names
+  the result without carrying it, so a call that asks for no values is not
+  measured, and a refusal withholds the values while the reference goes out
+  with them: a handle is not a release. The ladder governs the decision like
+  any other gate — at `disabled` and `observe` it records nothing that
   withholds.
 
   The exemption is not a hole. A path counts as meta only while no payload
