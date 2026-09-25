@@ -8,9 +8,11 @@
  * accept only the canonical spelling: a trusted surface checking an author
  * claim asks this of the claim's label, `cf-cfc-authorship` on the main thread
  * and the HTML renderer's text integrity boundary in the worker. The module
- * depends on nothing but the label view's type and `@commonfabric/utils`, so
- * that either can import it without the rest of the CFC machinery.
+ * depends on nothing but the label view's type, `@commonfabric/utils`, and
+ * `@commonfabric/identity/did`, so that either can import it without the rest
+ * of the CFC machinery.
  */
+import { isWellFormedDID } from "@commonfabric/identity/did";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { CfcLabelView } from "./label-view-core.ts";
 
@@ -20,7 +22,7 @@ const REPRESENTS_PRINCIPAL = "represents-principal";
  * The kinds of integrity atom that name a principal as their `subject`: the
  * current-principal claim family. A pattern may attach one only with the
  * subject left for the runtime to resolve, which `prepare.ts` checks with
- * {@link principalClaimSpelling} and {@link principalClaimSubject}.
+ * {@link principalClaimSpelling} and {@link subjectResemblesPrincipal}.
  */
 export const PRINCIPAL_CLAIM_KINDS: ReadonlySet<string> = new Set([
   "authored-by",
@@ -81,24 +83,6 @@ export const principalClaimSubject = (
 export const subjectResemblesPrincipal = (subject: unknown): boolean =>
   typeof subject === "string" &&
   subject.trim().toLowerCase().startsWith("did:");
-
-/**
- * Longest DID a `represents-principal` subject may be. A runtime writes the
- * acting principal's `did:key`, which is well under this.
- */
-const MAX_DID_LENGTH = 256;
-
-/**
- * A DID as a runtime writes one: a lowercase method name and a method-specific
- * identifier of the characters DID syntax allows, with no whitespace.
- */
-const WELL_FORMED_DID =
-  /^did:[a-z0-9]+:(?:[A-Za-z0-9._:-]|%[0-9A-Fa-f]{2})*(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})$/;
-
-/** Whether `value` is a DID written exactly as a runtime writes one. */
-export const isWellFormedDID = (value: unknown): value is string =>
-  typeof value === "string" && value.length <= MAX_DID_LENGTH &&
-  WELL_FORMED_DID.test(value);
 
 /**
  * The DID a `represents-principal` integrity atom names: the subject

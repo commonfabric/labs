@@ -146,157 +146,6 @@ const writeAsAlice = async (schema: JSONSchema, cause: string) => {
   }
 };
 
-describe("represents-principal writer check", () => {
-  const forgeries: [string, () => unknown[]][] = [
-    ["the object form naming another DID", () => [{
-      kind: "represents-principal",
-      subject: bob.did(),
-    }]],
-    ["the string form", () => [`represents-principal:${bob.did()}`]],
-    ["the string form with a padded subject", () => [
-      `represents-principal: ${bob.did()} `,
-    ]],
-    ["a subject padded with spaces", () => [{
-      kind: "represents-principal",
-      subject: ` ${bob.did()}`,
-    }]],
-    ["a subject padded with a newline", () => [{
-      kind: "represents-principal",
-      subject: `${bob.did()}\n`,
-    }]],
-    ["an atom with extra keys", () => [{
-      kind: "represents-principal",
-      subject: ` ${bob.did()}`,
-      note: "decoy",
-    }]],
-    ["an author field beside the placeholder subject", () => [{
-      kind: "authored-by",
-      subject: CURRENT_PRINCIPAL,
-      author: bob.did(),
-    }]],
-    ["a subject spelled in capitals", () => [{
-      kind: "represents-principal",
-      subject: bob.did().replace("did:", "DID:"),
-    }]],
-    ["a claim nested in another atom", () => [{
-      type: "https://example.com/wrapper",
-      inner: { kind: "represents-principal", subject: bob.did() },
-    }]],
-    ["the string form in a nested array", () => [[
-      `represents-principal:${bob.did()}`,
-    ]]],
-    ["the string form in capitals", () => [
-      `Represents-Principal:${bob.did()}`,
-    ]],
-    ["a forged atom beside a legitimate one", () => [
-      { kind: "represents-principal", subject: CURRENT_PRINCIPAL },
-      `represents-principal:${bob.did()}`,
-    ]],
-  ];
-
-  it("refuses a pattern writing the string form with no write policy", async () => {
-    // Without a placeholder there is nothing for writeAuthorizedBy and
-    // uiContract to guard, so the bare schema is the cheapest forgery.
-    const { error, principals } = await writeAsAlice(
-      {
-        type: "object",
-        properties: {
-          name: {
-            type: "string",
-            ifc: { addIntegrity: [`represents-principal:${bob.did()}`] },
-          },
-        },
-        required: ["name"],
-      } as JSONSchema,
-      "represents-principal-writer-bare-string",
-    );
-    expect(principals).not.toContain(bob.did());
-    expect(error).toContain("current-principal integrity");
-  });
-
-  for (const [name, atoms] of forgeries) {
-    it(`refuses a pattern writing ${name} for another principal`, async () => {
-      const { error, principals } = await writeAsAlice(
-        claimSchema(atoms()),
-        `represents-principal-writer-${name}`,
-      );
-      expect(principals).not.toContain(bob.did());
-      expect(error).toContain("current-principal integrity");
-    });
-  }
-
-  it("refuses an ownerPrincipal write that attests a second principal", async () => {
-    const { error, principals } = await writeAsAlice(
-      claimSchema([
-        { kind: "represents-principal", subject: alice.did() },
-        { kind: "represents-principal", subject: bob.did() },
-      ], { ownerPrincipal: alice.did() }),
-      "represents-principal-writer-owner-second",
-    );
-    expect(principals).not.toContain(bob.did());
-    expect(error).toContain("current-principal integrity");
-  });
-
-  it("refuses a forged claim on the root while the write reaches a field", async () => {
-    const { error, principals } = await writeAsAlice(
-      {
-        type: "object",
-        properties: { name: { type: "string" } },
-        required: ["name"],
-        ifc: {
-          addIntegrity: [
-            { kind: "represents-principal", subject: CURRENT_PRINCIPAL },
-            `represents-principal:${bob.did()}`,
-          ],
-          writeAuthorizedBy: {
-            __ctWriterIdentityOf: {
-              file: "/attacker.tsx",
-              path: ["writeName"],
-            },
-          },
-          uiContract,
-        },
-      } as JSONSchema,
-      "represents-principal-writer-root",
-    );
-    expect(principals).not.toContain(bob.did());
-    expect(error).toContain("current-principal integrity");
-  });
-
-  it("commits a literal subject that names no principal", async () => {
-    // A demo can label its own message `authored-by` a made-up author; no
-    // reader resolves that subject to a principal.
-    const { error } = await writeAsAlice(
-      claimSchema([{ kind: "authored-by", subject: "alice" }]),
-      "represents-principal-writer-literal-name",
-    );
-    expect(error).toBeUndefined();
-  });
-
-  it("commits a self-attestation through the runtime placeholder", async () => {
-    const { error, principals } = await writeAsAlice(
-      claimSchema([{
-        kind: "represents-principal",
-        subject: CURRENT_PRINCIPAL,
-      }]),
-      "represents-principal-writer-self",
-    );
-    expect(error).toBeUndefined();
-    expect(principals).toEqual([alice.did()]);
-  });
-
-  it("commits an ownerPrincipal self-attestation naming the owner literally", async () => {
-    const { error, principals } = await writeAsAlice(
-      claimSchema([{ kind: "represents-principal", subject: alice.did() }], {
-        ownerPrincipal: alice.did(),
-      }),
-      "represents-principal-writer-owner-self",
-    );
-    expect(error).toBeUndefined();
-    expect(principals).toEqual([alice.did()]);
-  });
-});
-
 // Every subject a principal claim of either kind names in the label stored on
 // `target`'s document.
 const storedClaimSubjects = (
@@ -321,127 +170,280 @@ const storedClaimSubjects = (
   );
 };
 
-describe("represents-principal on a link write", () => {
-  // Alice's pattern commits a source document, then, in a second transaction,
-  // writes into a new document the link `linkFor` builds to it. Returns the
-  // principal claim subjects stored on the new document.
-  const linkAsAlice = async (
-    cause: string,
-    sourceSchema: JSONSchema | undefined,
-    linkFor: (source: ReturnType<Runtime["getCell"]>) => unknown,
-  ) => {
-    const { runtime, storageManager } = createRuntime();
-    try {
-      const seed = runtime.edit();
-      actAsPatternFor(seed, alice.did());
-      const source = runtime.getCell(
-        alice.did(),
-        `${cause}-source`,
-        sourceSchema,
-        seed,
-      );
-      source.set({ name: "Ada" });
-      if (sourceSchema !== undefined) {
-        recordTrustedEdit(seed, source.getAsNormalizedFullLink());
-      }
-      seed.prepareCfc();
-      const seeded = await seed.commit();
-      expect(seeded.error).toBeUndefined();
-
-      const tx = runtime.edit();
-      actAsPatternFor(tx, alice.did());
-      const target = runtime.getCell(alice.did(), `${cause}-target`, {}, tx);
-      target.set(linkFor(source) as never);
-      tx.prepareCfc();
-      const result = await tx.commit();
-      return {
-        error: result.error?.message,
-        subjects: storedClaimSubjects(
-          runtime,
-          target.getAsNormalizedFullLink(),
-        ),
-      };
-    } finally {
-      await runtime.dispose();
-      await storageManager.close();
-    }
-  };
-
-  const plainSource: JSONSchema = {
-    type: "object",
-    properties: { name: { type: "string" } },
-  };
-
-  const labeledSource: JSONSchema = {
-    ...plainSource,
-    ifc: { integrity: ["source-mark"] },
-  } as JSONSchema;
-
-  it("stores no claim a link's own schema names", async () => {
-    const { error, subjects } = await linkAsAlice(
-      "represents-principal-link-schema",
-      labeledSource,
-      (source) =>
-        source.asSchema({
-          ...plainSource,
-          ifc: {
-            integrity: ["harmless"],
-            addIntegrity: [
-              { kind: "represents-principal", subject: bob.did() },
-              { kind: "authored-by", subject: bob.did() },
-              { kind: "represents-principal", subject: CURRENT_PRINCIPAL },
-            ],
-          },
-        } as JSONSchema),
-    );
-    expect(error).toBeUndefined();
-    expect(subjects).not.toContain(bob.did());
-    // The placeholder in a link schema is not a trusted edit either.
-    expect(subjects).not.toContain(alice.did());
-  });
-
-  it("stores no claim a link's carried label view names", async () => {
-    const { error, subjects } = await linkAsAlice(
-      "represents-principal-link-view",
-      labeledSource,
-      (source) => {
-        const link = source.getAsLink() as {
-          "/": Record<string, Record<string, unknown>>;
-        };
-        link["/"][LINK_V1_TAG].cfcLabelView = {
-          version: 1,
-          entries: [{
-            path: [],
-            label: {
-              integrity: [
-                "harmless",
-                { kind: "represents-principal", subject: bob.did() },
-              ],
-            },
-          }, {
-            path: ["name"],
-            label: {
-              integrity: [{ kind: "authored-by", subject: bob.did() }],
-            },
-          }],
-        };
-        return link;
-      },
-    );
-    expect(error).toBeUndefined();
-    expect(subjects).not.toContain(bob.did());
-  });
-
-  it("carries the claim the source's own stored label holds", async () => {
-    const { error, subjects } = await linkAsAlice(
-      "represents-principal-link-genuine",
-      claimSchema([{
+describe("represents-principal writer check", () => {
+  describe("on a schema write", () => {
+    const forgeries: [string, () => unknown[]][] = [
+      ["the object form naming another DID", () => [{
+        kind: "represents-principal",
+        subject: bob.did(),
+      }]],
+      ["the string form", () => [`represents-principal:${bob.did()}`]],
+      ["the string form with a padded subject", () => [
+        `represents-principal: ${bob.did()} `,
+      ]],
+      ["a subject padded with spaces", () => [{
+        kind: "represents-principal",
+        subject: ` ${bob.did()}`,
+      }]],
+      ["a subject padded with a newline", () => [{
+        kind: "represents-principal",
+        subject: `${bob.did()}\n`,
+      }]],
+      ["an extra key beside the placeholder subject", () => [{
         kind: "represents-principal",
         subject: CURRENT_PRINCIPAL,
-      }]),
-      (source) => source.key("name"),
-    );
-    expect(error).toBeUndefined();
-    expect(subjects).toEqual([alice.did()]);
+        owner: bob.did(),
+      }]],
+      ["an author field beside the placeholder subject", () => [{
+        kind: "authored-by",
+        subject: CURRENT_PRINCIPAL,
+        author: bob.did(),
+      }]],
+      ["a subject spelled in capitals", () => [{
+        kind: "represents-principal",
+        subject: bob.did().replace("did:", "DID:"),
+      }]],
+      ["a claim nested in another atom", () => [{
+        type: "https://example.com/wrapper",
+        inner: { kind: "represents-principal", subject: bob.did() },
+      }]],
+      ["the string form in a nested array", () => [[
+        `represents-principal:${bob.did()}`,
+      ]]],
+      ["the string form in capitals", () => [
+        `Represents-Principal:${bob.did()}`,
+      ]],
+      ["a forged atom beside a legitimate one", () => [
+        { kind: "represents-principal", subject: CURRENT_PRINCIPAL },
+        `represents-principal:${bob.did()}`,
+      ]],
+    ];
+
+    it("refuses a pattern writing the string form with no write policy", async () => {
+      // Without a placeholder there is nothing for writeAuthorizedBy and
+      // uiContract to guard, so the bare schema is the cheapest forgery.
+      const { error, principals } = await writeAsAlice(
+        {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              ifc: { addIntegrity: [`represents-principal:${bob.did()}`] },
+            },
+          },
+          required: ["name"],
+        } as JSONSchema,
+        "represents-principal-writer-bare-string",
+      );
+      expect(principals).not.toContain(bob.did());
+      expect(error).toContain("current-principal integrity");
+    });
+
+    for (const [name, atoms] of forgeries) {
+      it(`refuses a pattern writing ${name} for another principal`, async () => {
+        const { error, principals } = await writeAsAlice(
+          claimSchema(atoms()),
+          `represents-principal-writer-${name}`,
+        );
+        expect(principals).not.toContain(bob.did());
+        expect(error).toContain("current-principal integrity");
+      });
+    }
+
+    it("refuses an ownerPrincipal write that attests a second principal", async () => {
+      const { error, principals } = await writeAsAlice(
+        claimSchema([
+          { kind: "represents-principal", subject: alice.did() },
+          { kind: "represents-principal", subject: bob.did() },
+        ], { ownerPrincipal: alice.did() }),
+        "represents-principal-writer-owner-second",
+      );
+      expect(principals).not.toContain(bob.did());
+      expect(error).toContain("current-principal integrity");
+    });
+
+    it("refuses a forged claim on the root while the write reaches a field", async () => {
+      const { error, principals } = await writeAsAlice(
+        {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+          ifc: {
+            addIntegrity: [
+              { kind: "represents-principal", subject: CURRENT_PRINCIPAL },
+              `represents-principal:${bob.did()}`,
+            ],
+            writeAuthorizedBy: {
+              __ctWriterIdentityOf: {
+                file: "/attacker.tsx",
+                path: ["writeName"],
+              },
+            },
+            uiContract,
+          },
+        } as JSONSchema,
+        "represents-principal-writer-root",
+      );
+      expect(principals).not.toContain(bob.did());
+      expect(error).toContain("current-principal integrity");
+    });
+
+    it("commits a literal subject that names no principal", async () => {
+      // A demo can label its own message `authored-by` a made-up author; no
+      // reader resolves that subject to a principal.
+      const { error } = await writeAsAlice(
+        claimSchema([{ kind: "authored-by", subject: "alice" }]),
+        "represents-principal-writer-literal-name",
+      );
+      expect(error).toBeUndefined();
+    });
+
+    it("commits a self-attestation through the runtime placeholder", async () => {
+      const { error, principals } = await writeAsAlice(
+        claimSchema([{
+          kind: "represents-principal",
+          subject: CURRENT_PRINCIPAL,
+        }]),
+        "represents-principal-writer-self",
+      );
+      expect(error).toBeUndefined();
+      expect(principals).toEqual([alice.did()]);
+    });
+
+    it("commits an ownerPrincipal self-attestation naming the owner literally", async () => {
+      const { error, principals } = await writeAsAlice(
+        claimSchema([{ kind: "represents-principal", subject: alice.did() }], {
+          ownerPrincipal: alice.did(),
+        }),
+        "represents-principal-writer-owner-self",
+      );
+      expect(error).toBeUndefined();
+      expect(principals).toEqual([alice.did()]);
+    });
+  });
+
+  describe("on a link write", () => {
+    // Alice's pattern commits a source document, then, in a second transaction,
+    // writes into a new document the link `linkFor` builds to it. Returns the
+    // principal claim subjects stored on the new document.
+    const linkAsAlice = async (
+      cause: string,
+      sourceSchema: JSONSchema | undefined,
+      linkFor: (source: ReturnType<Runtime["getCell"]>) => unknown,
+    ) => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const seed = runtime.edit();
+        actAsPatternFor(seed, alice.did());
+        const source = runtime.getCell(
+          alice.did(),
+          `${cause}-source`,
+          sourceSchema,
+          seed,
+        );
+        source.set({ name: "Ada" });
+        if (sourceSchema !== undefined) {
+          recordTrustedEdit(seed, source.getAsNormalizedFullLink());
+        }
+        seed.prepareCfc();
+        const seeded = await seed.commit();
+        expect(seeded.error).toBeUndefined();
+
+        const tx = runtime.edit();
+        actAsPatternFor(tx, alice.did());
+        const target = runtime.getCell(alice.did(), `${cause}-target`, {}, tx);
+        target.set(linkFor(source) as never);
+        tx.prepareCfc();
+        const result = await tx.commit();
+        return {
+          error: result.error?.message,
+          subjects: storedClaimSubjects(
+            runtime,
+            target.getAsNormalizedFullLink(),
+          ),
+        };
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+
+    const plainSource: JSONSchema = {
+      type: "object",
+      properties: { name: { type: "string" } },
+    };
+
+    const labeledSource: JSONSchema = {
+      ...plainSource,
+      ifc: { integrity: ["source-mark"] },
+    } as JSONSchema;
+
+    it("stores no claim a link's own schema names", async () => {
+      const { error, subjects } = await linkAsAlice(
+        "represents-principal-link-schema",
+        labeledSource,
+        (source) =>
+          source.asSchema({
+            ...plainSource,
+            ifc: {
+              integrity: ["harmless"],
+              addIntegrity: [
+                { kind: "represents-principal", subject: bob.did() },
+                { kind: "authored-by", subject: bob.did() },
+                { kind: "represents-principal", subject: CURRENT_PRINCIPAL },
+              ],
+            },
+          } as JSONSchema),
+      );
+      expect(error).toBeUndefined();
+      expect(subjects).not.toContain(bob.did());
+      // The placeholder in a link schema is not a trusted edit either.
+      expect(subjects).not.toContain(alice.did());
+    });
+
+    it("stores no claim a link's carried label view names", async () => {
+      const { error, subjects } = await linkAsAlice(
+        "represents-principal-link-view",
+        labeledSource,
+        (source) => {
+          const link = source.getAsLink() as {
+            "/": Record<string, Record<string, unknown>>;
+          };
+          link["/"][LINK_V1_TAG].cfcLabelView = {
+            version: 1,
+            entries: [{
+              path: [],
+              label: {
+                integrity: [
+                  "harmless",
+                  { kind: "represents-principal", subject: bob.did() },
+                ],
+              },
+            }, {
+              path: ["name"],
+              label: {
+                integrity: [{ kind: "authored-by", subject: bob.did() }],
+              },
+            }],
+          };
+          return link;
+        },
+      );
+      expect(error).toBeUndefined();
+      expect(subjects).not.toContain(bob.did());
+    });
+
+    it("carries the claim the source's own stored label holds", async () => {
+      const { error, subjects } = await linkAsAlice(
+        "represents-principal-link-genuine",
+        claimSchema([{
+          kind: "represents-principal",
+          subject: CURRENT_PRINCIPAL,
+        }]),
+        (source) => source.key("name"),
+      );
+      expect(error).toBeUndefined();
+      expect(subjects).toEqual([alice.did()]);
+    });
   });
 });
