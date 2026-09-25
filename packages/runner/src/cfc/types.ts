@@ -526,7 +526,6 @@ export type ImplementationIdentity =
 
     sourceFile?: string;
     bindingPath?: string[];
-    codeHash?: string;
   }
   | { kind: "unsupported"; className: string; reason: string };
 

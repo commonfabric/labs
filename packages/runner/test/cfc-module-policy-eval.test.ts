@@ -1,6 +1,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
+import {
+  CFC_ATOM_TYPE,
+  cfcAtom,
+  type CfcJsonValue,
+} from "@commonfabric/api/cfc";
 import {
   buildCfcPolicyArtifactManifest,
   type PolicyArtifactManifestV1,
@@ -72,11 +76,8 @@ const blessingArtifact = (moduleIdentity: string) =>
           confidentiality: [{ thisPolicy: true }],
           integrity: [{
             type: CFC_ATOM_TYPE.TransformedBy,
-            identity: {
-              kind: "verified",
-              moduleIdentity: { thisPolicyField: "moduleIdentity" },
-              symbol: "tally",
-            },
+            codeHash: { thisPolicyField: "moduleIdentity" },
+            operation: "tally",
           }],
         },
         postCondition: { confidentiality: [], integrity: [] },
@@ -88,12 +89,9 @@ const blessingArtifact = (moduleIdentity: string) =>
 
 const transformedBy = (moduleIdentity: string, symbol: string) => ({
   type: CFC_ATOM_TYPE.TransformedBy,
-  identity: {
-    kind: "verified",
-    moduleIdentity,
-    symbol,
-    codeHash: "fid1:code",
-  },
+  codeHash: moduleIdentity,
+  operation: symbol,
+  inputs: [],
 });
 
 describe("module-policy exchange evaluation", () => {
@@ -241,6 +239,63 @@ describe("module-policy exchange evaluation", () => {
     const otherModule = release(transformedBy("sha256:edited", "tally"));
     expect(otherModule.firings).toEqual([]);
     expect(otherModule.label.confidentiality).toEqual([selected]);
+  });
+
+  it("refuses legacy-shaped evidence under the current manifest", () => {
+    const blessing = blessingArtifact(MODULE);
+    const selected = cfcAtom.modulePolicyRef(
+      MODULE,
+      SYMBOL,
+      blessing.policyDigest,
+      ALICE_SPACE,
+    );
+    const legacyEvidenceVariants: CfcJsonValue[] = [
+      {
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity: {
+          kind: "verified",
+          moduleIdentity: MODULE,
+          symbol: "tally",
+        },
+        inputWitness: {
+          type: CFC_ATOM_TYPE.TransformedBy,
+          identity: { kind: "builtin", builtinId: "legacy-source" },
+        },
+      },
+      {
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity: {
+          kind: "verified",
+          moduleIdentity: MODULE,
+          symbol: "tally",
+          codeHash: "sha256:legacy-function",
+        },
+      },
+      {
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity: {
+          kind: "verified",
+          moduleIdentity: MODULE,
+          symbol: "tally",
+          codeHash: MODULE,
+        },
+      },
+    ];
+
+    for (const legacyEvidence of legacyEvidenceVariants) {
+      const result = evaluateExchangeRules(
+        { confidentiality: [selected], integrity: [legacyEvidence] },
+        undefined,
+        {
+          modulePolicyResolver: () => blessing,
+        },
+      );
+
+      expect(result.resolutionFailures).toEqual([]);
+      expect(result.firings).toEqual([]);
+      expect(result.label.confidentiality).toEqual([selected]);
+      expect(result.label.integrity).toEqual([legacyEvidence]);
+    }
   });
 
   it("rejects malformed module-reference candidates", () => {

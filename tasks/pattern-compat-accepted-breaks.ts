@@ -889,4 +889,20 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "a Loom panel's new optional addedByProfile reads as a narrowed union branch under the baseline recorded before it",
     record: "docs/history/loom-panel-adder-profile-break.md",
   },
+  {
+    pattern: "cfc-exchange-rules/blessed-computation.tsx",
+    baselines: ["20260924T153051Z-6YvT2oA4V8_lByEi"],
+    paths: ["argument.briefs[]"],
+    reason:
+      "the TransformedBy wire migration to `{codeHash, operation?, inputs:[{ref, witnesses?}]}` changes the policy manifest and therefore the input IFC contract; values labeled under the migrated manifest receive new-shape evidence, while previously persisted values remain judged by the digest-pinned manifest they name, so release and refusal behavior is unchanged",
+    record: "docs/history/specs/cfc-s16-default-transition-design.md",
+  },
+  {
+    pattern: "cfc-exchange-rules/blessed-object.tsx",
+    baselines: ["20260924T153321Z-aNS-4QMEm-bSTeHE"],
+    paths: ["argument.briefs[]"],
+    reason:
+      "the TransformedBy wire migration to `{codeHash, operation?, inputs:[{ref, witnesses?}]}` changes the policy manifest and therefore the input IFC contract; values labeled under the migrated manifest receive new-shape evidence, while previously persisted values remain judged by the digest-pinned manifest they name, so release and refusal behavior is unchanged",
+    record: "docs/history/specs/cfc-s16-default-transition-design.md",
+  },
 ];

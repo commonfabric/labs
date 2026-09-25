@@ -8,7 +8,7 @@
  * One instance of a custody room is `(P, D)`: `P` names the room's policy with
  * the room space `S` as its subject, and `D` is the digest of the room's
  * terms. Each seal writes one entry into the instance's box, a single document
- * in `S` whose every location carries `TransformedBy{builtin cfc-custody-seal}`,
+ * in `S` whose every location carries the seal operation's `TransformedBy`,
  * so a transformation that reads the whole box earns the input witness
  * (`docs/specs/cfc-transformed-by-input-witnesses.md`) and a transformation
  * that reads anything else beside it does not.
@@ -58,6 +58,7 @@ import {
   clausesEqual,
 } from "./clause.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
+import { builtinArtifactCodeHash } from "./implementation-identity.ts";
 import { cfcPolicyManifestDocId } from "./policy.ts";
 import { collectConsumedLabel } from "./prepare.ts";
 import { CfcReadCeilingError } from "./read-ceiling.ts";
@@ -258,7 +259,8 @@ const ENTRY_KEY_DOMAIN = "cfc-custody-seal/entry-key/v1\n";
 
 const SEALED_BY = {
   type: CFC_ATOM_TYPE.TransformedBy,
-  identity: { kind: "builtin", builtinId: CUSTODY_SEAL_WRITER },
+  codeHash: builtinArtifactCodeHash(CUSTODY_SEAL_WRITER),
+  operation: CUSTODY_SEAL_WRITER,
 };
 
 /** Whether `value` is a record with exactly the keys named. */
@@ -628,18 +630,20 @@ const absentOrSealed = (
   return (readStoredCfcMetadata(tx, link)?.labelMap.entries ?? []).some(
     (entry) =>
       entry.path.length === 0 && entry.origin === "derived" &&
-      (entry.label.integrity ?? []).some((atom) => deepEqual(atom, SEALED_BY)),
+      (entry.label.integrity ?? []).some((atom) =>
+        matchAtomPattern(SEALED_BY, atom) !== null
+      ),
   );
 };
 
 /**
  * Whether the anchor at `link` is absent, or holds exactly the value and the
- * label the seal gives it: one declared root clause and no integrity on any
- * entry. An anchor some other code created with another clause, or holding a
- * link whose target the seal's read would follow, would taint every entry or
- * leave it unattributed; one carrying integrity would hand that integrity,
- * and any `TransformedBy` witness in it, to every entry, since the anchor is
- * the entry transaction's one labeled read.
+ * label the seal gives it: one declared root clause and no integrity except
+ * the seal operation's own derivation evidence. An anchor some other code
+ * created with another clause, or holding a link whose target the seal's read
+ * would follow, would taint every entry or leave it unattributed; foreign
+ * integrity would be handed to every entry, since the anchor is the entry
+ * transaction's one labeled read.
  */
 const absentOrAnchor = (
   tx: IExtendedStorageTransaction,
@@ -653,7 +657,13 @@ const absentOrAnchor = (
   if (stored === undefined) return true;
   if (!deepEqual(stored, { instance })) return false;
   const entries = readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [];
-  if (entries.some((entry) => (entry.label.integrity ?? []).length > 0)) {
+  if (
+    entries.some((entry) =>
+      (entry.label.integrity ?? []).some((atom) =>
+        matchAtomPattern(SEALED_BY, atom) === null
+      )
+    )
+  ) {
     return false;
   }
   const labeled = entries.filter((entry) =>

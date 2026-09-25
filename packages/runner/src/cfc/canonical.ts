@@ -1,4 +1,6 @@
 import { hashStringOf } from "@commonfabric/data-model";
+import type { CfcAtom, CfcTransformedByInput } from "@commonfabric/api/cfc";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { getLogger } from "@commonfabric/utils/logger";
 import { normalizeCellScope } from "../scope.ts";
 import type { CfcConfClause } from "./clause.ts";
@@ -19,6 +21,43 @@ import type {
 } from "./types.ts";
 import { cloneCfcLabelView, type IFCLabel } from "./label-view-core.ts";
 import { isOrClause, normalizeClause } from "./clause.ts";
+import { compareByCanonicalHash, uniqueCfcAtoms } from "./atoms.ts";
+
+/**
+ * Canonical input list for one `TransformedBy` atom. Repeated observations of
+ * a reference collapse by witness meet; distinct references stay distinct.
+ */
+export const canonicalizeTransformedByInputs = (
+  inputs: readonly CfcTransformedByInput[],
+): CfcTransformedByInput[] => {
+  const meet = (left: readonly CfcAtom[], right: readonly CfcAtom[]) =>
+    left.filter((atom) => right.some((other) => deepEqual(atom, other)));
+  const byRef = new Map<string, CfcTransformedByInput>();
+  for (const input of inputs) {
+    const key = hashStringOf(input.ref);
+    const previous = byRef.get(key);
+    const witnesses = uniqueCfcAtoms(input.witnesses ?? []).sort(
+      compareByCanonicalHash,
+    );
+    if (previous === undefined) {
+      byRef.set(key, {
+        ref: input.ref,
+        ...(witnesses.length === 0 ? {} : { witnesses }),
+      });
+      continue;
+    }
+    const shared = meet(previous.witnesses ?? [], witnesses);
+    byRef.set(key, {
+      ref: input.ref,
+      ...(shared.length === 0 ? {} : { witnesses: shared }),
+    });
+  }
+  return [...byRef.values()].sort((left, right) => {
+    const leftHash = hashStringOf(left.ref);
+    const rightHash = hashStringOf(right.ref);
+    return leftHash < rightHash ? -1 : leftHash > rightHash ? 1 : 0;
+  });
+};
 
 /**
  * Returns a canonical-form logical path: any leading `"value"` element

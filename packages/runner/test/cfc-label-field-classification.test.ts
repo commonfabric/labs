@@ -35,24 +35,23 @@ describe("CFC label-field classification (inv-12 / SC-25)", () => {
     ).toBe("commitment");
     expect(
       classifyLabelField({ type: CFC_ATOM_TYPE.TransformedBy }, [
-        "identity",
-        "sourceFile",
-      ]),
-    ).toBe("commitment");
-    expect(
-      classifyLabelField({ type: CFC_ATOM_TYPE.TransformedBy }, [
-        "identity",
-        "bindingPath",
-      ]),
-    ).toBe("commitment");
-    // Trust statements bind the content-addressed moduleIdentity instead —
-    // it stays public.
-    expect(
-      classifyLabelField({ type: CFC_ATOM_TYPE.TransformedBy }, [
-        "identity",
-        "moduleIdentity",
+        "codeHash",
       ]),
     ).toBe("public");
+    expect(
+      classifyLabelField({ type: CFC_ATOM_TYPE.TransformedBy }, [
+        "operation",
+      ]),
+    ).toBe("public");
+    expect(
+      classifyLabelField({ type: CFC_ATOM_TYPE.TransformedBy }, [
+        "inputs",
+        "ref",
+      ]),
+    ).toBe("commitment");
+    expect(
+      classifyLabelField({ type: CFC_ATOM_TYPE.TransformedBy }, ["identity"]),
+    ).toBe("commitment");
     expect(
       classifyLabelField({ kind: "authored-by" }, ["subject"]),
     ).toBe("public");
@@ -88,9 +87,15 @@ describe("CFC label-field classification (inv-12 / SC-25)", () => {
     expect(
       classifyLabelField({ kind: "unknown-claim" }, ["subject"]),
     ).toBeUndefined();
+    expect(
+      classifyLabelField({ type: CFC_ATOM_TYPE.TransformedBy }, [
+        "identity",
+        "sourceFile",
+      ]),
+    ).toBeUndefined();
     // A field path is exact, not a prefix.
     expect(
-      classifyLabelField({ type: CFC_ATOM_TYPE.TransformedBy }, ["identity"]),
+      classifyLabelField({ type: CFC_ATOM_TYPE.TransformedBy }, ["inputs"]),
     ).toBeUndefined();
   });
 

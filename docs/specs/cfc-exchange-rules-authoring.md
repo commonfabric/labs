@@ -144,10 +144,11 @@ type DriftFlag = Confidential<Flag, [PolicyOf<typeof driftFlagRules>]>;
   is the concrete subject bound at label creation, and
   `THIS_POLICY.moduleIdentity` is the content identity of the module defining
   the rules. The second is how a rule names a function of its own module in a
-  `TransformedBy` identity pattern
-  (`{ kind: "verified", moduleIdentity: THIS_POLICY.moduleIdentity, symbol }`)
+  `TransformedBy` operation pattern
+  (`{ type: "https://commonfabric.org/cfc/atom/TransformedBy", codeHash:
+  THIS_POLICY.moduleIdentity, operation: "exportName" }`)
   without spelling a hash that changes with every edit of the module or of its
-  imports. `symbol` is the function's export name, so a blessed function must
+  imports. `operation` is the function's export name, so a blessed function must
   be exported under that one name; a rule naming anything else never fires.
   Because
   the binding comes from the selected reference, a label created under one

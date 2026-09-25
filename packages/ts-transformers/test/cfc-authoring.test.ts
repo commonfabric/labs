@@ -644,11 +644,8 @@ Deno.test("THIS_POLICY.moduleIdentity lowers to a field reference, not the defin
       pre: {
         integrity: [{
           type: "https://commonfabric.org/cfc/atom/TransformedBy",
-          identity: {
-            kind: "verified",
-            moduleIdentity: THIS_POLICY.moduleIdentity,
-            symbol: "tally",
-          },
+          codeHash: THIS_POLICY.moduleIdentity,
+          operation: "tally",
         }],
       },
       post: { dropClause: true },
@@ -664,11 +661,8 @@ Deno.test("THIS_POLICY.moduleIdentity lowers to a field reference, not the defin
     confidentiality: [{ thisPolicy: true }],
     integrity: [{
       type: "https://commonfabric.org/cfc/atom/TransformedBy",
-      identity: {
-        kind: "verified",
-        moduleIdentity: { thisPolicyField: "moduleIdentity" },
-        symbol: "tally",
-      },
+      codeHash: { thisPolicyField: "moduleIdentity" },
+      operation: "tally",
     }],
   });
 });

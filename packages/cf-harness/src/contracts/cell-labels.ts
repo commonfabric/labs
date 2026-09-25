@@ -20,8 +20,9 @@ export const HARNESS_CELL_LABELS_TYPE = "cf-harness.cell-labels";
  * for an object atom and the whole string for a bare string atom; `name` is
  * the last segment of that URL, which is what a label reads as. `fields`
  * carries everything else the atom said about itself — a `TransformedBy`
- * atom's `identity`, a `Resource` atom's `class` and `subject` — so an atom
- * this contract has no name for still arrives whole. A field the space
+ * atom's `codeHash`, `operation`, and `inputs`, a `Resource` atom's `class`
+ * and `subject` — so an atom this contract has no name for still arrives
+ * whole. A field the space
  * committed rather than stored reads as its commitment object, so nothing
  * here may be assumed to be a string.
  */
@@ -80,9 +81,10 @@ export interface HarnessCellLabelEntry {
 
   /**
    * The provenance atom lifted out of `integrity`, when one rides at this
-   * path: which implementation produced the value. Its `identity` resolves a
-   * derived value to the exact lifted function, which is what makes a derived
-   * label something to follow rather than something to take on trust.
+   * path: which implementation produced the value. Its `codeHash` and
+   * optional `operation` name the artifact and operation, which is what makes
+   * a derived label something to follow rather than something to take on
+   * trust.
    */
   transformedBy?: HarnessCfcAtom;
 

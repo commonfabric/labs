@@ -5,6 +5,7 @@ import {
   CFC_SYSTEM_STRING_ATOMS,
   type CfcAtom,
   cfcAtom,
+  type CfcTransformedByInput,
 } from "@commonfabric/api/cfc";
 import {
   emptySchemaObject,
@@ -150,6 +151,7 @@ import {
   mintTransformedBy,
   retainedInputWitnesses,
 } from "./input-witness.ts";
+import { transformedByOperation } from "./implementation-identity.ts";
 import {
   atomsOutsideCeiling,
   type CfcFloorTrustContext,
@@ -3093,21 +3095,14 @@ const deriveFlowJoinImpl = (
   // so the meet is usually empty until inputs are universally certified —
   // staged conformance per SC-9, never over-claiming.)
   let hereditaryMeet: CfcAtom[] | undefined;
-  // The implementation identity the join is attributed to (see the
-  // `TransformedBy` mint below), and the input witnesses retained for it:
-  // the meet, over every confidential observation, of what that observation
-  // carried at all of its confidential locations (`input-witness.ts`).
-  // `undefined` until a confidential observation arrives, and never computed
-  // when there is no identity to attribute the join to.
+  // The build-stable operation identity the join is attributed to (see the
+  // `TransformedBy` mint below), and one exact record per consumed content
+  // reference. Witnesses meet only within a reference; distinct inputs never
+  // erase one another's evidence (`input-witness.ts`).
   const writeIdentity = tx.getCfcState().writeIdentity;
   const identity = writeIdentity.multiple ? undefined : writeIdentity.identity;
-  let inputWitnesses: CfcAtom[] | undefined;
-  const noteInputWitnesses = (held: readonly CfcAtom[] | undefined): void => {
-    if (held === undefined) return;
-    inputWitnesses = inputWitnesses === undefined
-      ? [...held]
-      : meetInputWitnesses(inputWitnesses, held);
-  };
+  const operation = transformedByOperation(identity);
+  const inputs: CfcTransformedByInput[] = [];
   const labeledSpaces = options?.collectLabeledSpaces === true
     ? new Set<MemorySpace>()
     : undefined;
@@ -3222,13 +3217,9 @@ const deriveFlowJoinImpl = (
           observation.nonRecursive,
         );
         document.labels.set(labelKey, label);
-        // Skipped once the meet is empty, which no later observation can
-        // refill; the `undefined` cached then is never read into a nonempty
-        // meet.
         document.witnesses.set(
           labelKey,
-          entries === undefined || identity === undefined ||
-            inputWitnesses?.length === 0
+          entries === undefined || operation === undefined
             ? undefined
             : observationInputWitnesses(
               entries,
@@ -3237,11 +3228,6 @@ const deriveFlowJoinImpl = (
             ),
         );
       }
-      // Every observation counts toward the input witnesses, `followRef`
-      // included: which reference sits at a slot is information the
-      // transformation consumed, and a pointer the endorsed writer did not
-      // write must not pass as its input.
-      noteInputWitnesses(document.witnesses.get(labelKey));
       // Any observation with label CONTENT marks its space as a label
       // contributor. Deliberately over-approximate for integrity (an
       // observation whose hereditary atoms all meet away still marks its
@@ -3268,6 +3254,15 @@ const deriveFlowJoinImpl = (
       if (observation.shape === "followRef") {
         return false;
       }
+      if (operation !== undefined) {
+        const witnesses = document.witnesses.get(labelKey);
+        inputs.push({
+          ref: { space, id, path: [...logicalPath] },
+          ...(witnesses === undefined || witnesses.length === 0
+            ? {}
+            : { witnesses }),
+        });
+      }
       const hereditary = (label?.integrity ?? []).filter((atom) =>
         atomPropagationClass(atom) === "hereditary"
       );
@@ -3292,11 +3287,6 @@ const deriveFlowJoinImpl = (
     if (observation.confidentiality.length === 0) continue;
     labeledSpaces?.add(observation.target.space);
     atoms.push(...observation.confidentiality);
-    // The input-witness meet is not the hereditary one: it quantifies over
-    // every confidential input, so a confidential input that carries no
-    // evidence, as label metadata does not, empties it
-    // (docs/specs/cfc-transformed-by-input-witnesses.md).
-    noteInputWitnesses([]);
   }
   for (
     const observation of tx.getCfcState().externalContentObservations ?? []
@@ -3309,10 +3299,16 @@ const deriveFlowJoinImpl = (
       for (const space of observation.labeledSpaces) labeledSpaces.add(space);
     }
     atoms.push(...(observation.flow.confidentiality ?? []));
-    // `observation.flow` is itself a flow join, whose integrity is a meet
-    // over what the content consumed, so it overstates no input.
-    if ((observation.flow.confidentiality?.length ?? 0) > 0) {
-      noteInputWitnesses(retainedInputWitnesses(observation.flow.integrity));
+    if (operation !== undefined) {
+      const witnesses = retainedInputWitnesses(observation.flow.integrity);
+      inputs.push({
+        ref: {
+          space: observation.source.space,
+          id: observation.source.id,
+          path: [...observation.source.path],
+        },
+        ...(witnesses.length === 0 ? {} : { witnesses }),
+      });
     }
     const hereditary = (observation.flow.integrity ?? []).filter((atom) =>
       atomPropagationClass(atom) === "hereditary"
@@ -3325,21 +3321,22 @@ const deriveFlowJoinImpl = (
   }
   const confidentiality = uniqueCfcAtoms(atoms);
   const integrity: CfcAtom[] = [...(hereditaryMeet ?? [])];
-  // Derivation provenance (§8.9.3 TransformedBy): the identity that wrote,
-  // and the input witnesses retained beside it (`input-witness.ts`). The
+  // Derivation provenance (§8.7.1 TransformedBy): the build-stable operation
+  // that wrote and the exact input records retained beside it. The
   // flow join is one per-tx label stamped on every written doc, so the
   // identity must hold for the whole tx: minted only when every
   // non-privileged write was authored under the same defined identity,
   // captured at write time (see `CfcTxState.writeIdentity`) — not whichever
   // identity is current at prepare, which a later run in the same tx may
   // have changed and which an unattributed write must not borrow. Ambiguity
-  // omits the atoms (fail-safe under-claim). Minted only alongside an entry
-  // that exists anyway; runtime-minted (schema-forgery gated).
+  // omits the atom (fail-safe under-claim). Minted under the same nonempty
+  // flow condition as the attribution it replaces, and only alongside an
+  // entry that exists anyway; runtime-minted (schema-forgery gated).
   if (
-    identity !== undefined &&
+    operation !== undefined &&
     (confidentiality.length > 0 || integrity.length > 0)
   ) {
-    integrity.push(...mintTransformedBy(identity, inputWitnesses));
+    integrity.push(mintTransformedBy(operation, inputs));
   }
   return {
     confidentiality,
@@ -8437,10 +8434,11 @@ export function* prepareBoundaryCommitSteps(
     // what the stamp labels, and holds only while nothing else writes there.
     // A write at, above, or below a carried stamp's path (for a `*` template,
     // its container's) changes what the stamp labels, so the carried stamp
-    // keeps only the `TransformedBy` atoms this transaction's join carries as
-    // well: attribution meets across the writers of a path. Membership stamps
-    // survive a slot write that adds a key, which is what makes this
-    // necessary rather than merely tidy.
+    // keeps an operation only when this transaction's join names it as well.
+    // The carried atom is replaced by this transaction's exact atom so its
+    // input list never describes a prior write. Membership stamps survive a
+    // slot write that adds a key, which is what makes this necessary rather
+    // than merely tidy.
     const carriedStampLabel = (
       entry: LabelMapEntry,
       entryPath: readonly string[],
@@ -8460,10 +8458,17 @@ export function* prepareBoundaryCommitSteps(
       ) {
         return entry.label;
       }
-      const kept = integrity.filter((atom) =>
-        !isTransformedByAtom(atom) ||
-        flowTransformedBy.some((minted) => deepEqual(minted, atom))
-      );
+      const carriedOperations = integrity.filter(isTransformedByAtom);
+      const sameOperation = (left: CfcAtom, right: CfcAtom): boolean =>
+        isObjectOrArray(left) && isObjectOrArray(right) &&
+        left.codeHash === right.codeHash &&
+        left.operation === right.operation;
+      const kept = [
+        ...integrity.filter((atom) => !isTransformedByAtom(atom)),
+        ...flowTransformedBy.filter((minted) =>
+          carriedOperations.some((carried) => sameOperation(minted, carried))
+        ),
+      ];
       const { integrity: _dropped, ...rest } = entry.label;
       return kept.length > 0 ? { ...rest, integrity: kept } : rest;
     };

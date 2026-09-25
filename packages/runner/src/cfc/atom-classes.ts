@@ -42,7 +42,7 @@ const CLASS_BY_TYPE = new Map<string, PropagationClass>([
   [CFC_ATOM_TYPE.LlmDerived, "provenance"],
   [CFC_ATOM_TYPE.Origin, "provenance"],
   [CFC_ATOM_TYPE.PromptSlotInfluence, "provenance"],
-  [CFC_ATOM_TYPE.TransformedBy, "provenance"],
+  [CFC_ATOM_TYPE.TransformedBy, "value-bound"],
   [CFC_ATOM_TYPE.UserSurfaceInput, "provenance"],
   // Event/boundary/role evidence (spec §15.4): facts about a specific render,
   // acknowledgment, sink emission, assessment, boundary evaluation, or role

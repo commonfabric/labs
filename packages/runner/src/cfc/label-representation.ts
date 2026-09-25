@@ -116,7 +116,7 @@ export const containsCfcFieldCommitment = (value: unknown): boolean => {
  * The walk is family-scoped (see `LabelFieldClassificationEntry.field`): a
  * record carrying a string `type` or `kind` is an ATOM and (re)sets the
  * classification context; nested plain records extend the field path within
- * the current atom (`TransformedBy.identity.sourceFile`); arrays pass
+ * the current atom (`TransformedBy.inputs[].ref`); arrays pass
  * through without extending the path (table paths never address indices —
  * elements are either atoms, which reset context, or opaque values). A
  * field classified `commitment` is replaced by its digest marker; `public`
@@ -149,9 +149,8 @@ const transformValue = (
   // A record is an ATOM (classification-context reset) when it carries a
   // string `type` (the canonical URI families), or a string `kind` that names
   // a table-classified claim family. A bare `kind` outside that set is a
-  // variant discriminator on a nested record (`ImplementationIdentity.kind`
-  // inside `TransformedBy.identity`), which must EXTEND the current atom's
-  // field path so multi-segment table rows keep resolving.
+  // variant discriminator on a nested record, which must EXTEND the current
+  // atom's field path so multi-segment table rows keep resolving.
   const isAtom = typeof (value as { type?: unknown }).type === "string" ||
     (typeof (value as { kind?: unknown }).kind === "string" &&
       CLASSIFIED_KIND_FAMILIES.has((value as { kind: string }).kind));
