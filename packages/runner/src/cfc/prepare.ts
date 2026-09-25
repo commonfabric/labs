@@ -6221,6 +6221,51 @@ type LinkLabelDeriver = {
   ) => IFCLabel | undefined;
 };
 
+/** Whether repeated pending sources form a document graph without cycles. */
+const hasSharedAcyclicLinkSources = (
+  linkWrites: ReadonlyMap<string, readonly LinkWritePolicyInput[]>,
+): boolean => {
+  if (linkWrites.size < 2) return false;
+  const sources = new Set<string>();
+  let shared = false;
+  for (const inputs of linkWrites.values()) {
+    for (const input of inputs) {
+      const source = targetKey(input.source);
+      if (!linkWrites.has(source)) continue;
+      if (sources.has(source)) shared = true;
+      sources.add(source);
+    }
+  }
+  if (!shared) return false;
+
+  // A document cycle can make a result depend on the caller's expansion path.
+  // Removing every source-free document proves that no such dependency exists.
+  const dependents = new Map<string, string[]>();
+  const pending = new Map<string, number>();
+  for (const [target, inputs] of linkWrites) {
+    let count = 0;
+    for (const input of inputs) {
+      const source = targetKey(input.source);
+      if (!linkWrites.has(source)) continue;
+      const downstream = dependents.get(source) ?? [];
+      downstream.push(target);
+      dependents.set(source, downstream);
+      count++;
+    }
+    pending.set(target, count);
+  }
+  const ready = [...pending].filter(([, count]) => count === 0)
+    .map(([key]) => key);
+  for (let index = 0; index < ready.length; index++) {
+    for (const dependent of dependents.get(ready[index]) ?? []) {
+      const remaining = pending.get(dependent)! - 1;
+      pending.set(dependent, remaining);
+      if (remaining === 0) ready.push(dependent);
+    }
+  }
+  return ready.length === pending.size;
+};
+
 /**
  * Resolves staged source references from transaction evidence, independently of
  * which document's metadata has been persisted by preparation. A reference at
@@ -6261,13 +6306,23 @@ const createLinkLabelDeriver = (
 
     /** Finite paths needed by a source projection, floor, or carried view. */
     requested: readonly RequestedPath[];
+
+    /** Results shared by sibling branches within this metadata snapshot. */
+    memo?: Map<LinkWritePolicyInput, DerivedLink>;
   };
 
-  const emptyWalk = (): Walk => ({
-    aliases: new Set(),
-    expanded: new Set(),
-    requested: [],
-  });
+  let shareDerivations: boolean | undefined;
+  const emptyWalk = (): Walk => {
+    shareDerivations ??= hasSharedAcyclicLinkSources(linkWrites);
+    return {
+      aliases: new Set(),
+      expanded: new Set(),
+      requested: [],
+      // Preparation writes source metadata between public derivation calls.
+      // Each call therefore owns its cache, even within one transaction.
+      ...(shareDerivations ? { memo: new Map() } : {}),
+    };
+  };
 
   // The labels the references staged into the source document bring to the
   // source path, or the refusals of the first one that cannot be derived.
@@ -6326,6 +6381,7 @@ const createLinkLabelDeriver = (
         aliases: covers ? walk.aliases : new Set(),
         expanded: walk.expanded,
         requested,
+        memo: walk.memo,
       });
       if (resolved.reasons.length > 0) return { reasons: resolved.reasons };
       // A downstream hop sees the representation the upstream hop persists,
@@ -6394,10 +6450,20 @@ const createLinkLabelDeriver = (
         ],
       };
     }
+    // Projection requests carry dependencies on the caller's source values.
+    // Only an unprojected result can be shared by distinct sibling branches.
+    const memo = requested.length === 0 ? walk.memo : undefined;
+    const cached = memo?.get(input);
+    if (cached !== undefined) {
+      tx.noteCfcPreparationWork?.("stagedReferenceCacheHits");
+      return cached;
+    }
+    tx.noteCfcPreparationWork?.("stagedReferenceDerivations");
     const pending = pendingSourceView(input, {
       aliases: new Set([...walk.aliases, input]),
       expanded: new Set([...walk.expanded, input]),
       requested,
+      memo: walk.memo,
     });
     if (pending.reasons.length > 0) {
       return { entries: [], reasons: pending.reasons };
@@ -6437,10 +6503,12 @@ const createLinkLabelDeriver = (
       identity,
       metadataResolver,
     );
-    return {
+    const resolved = {
       ...derived,
       label: derived.reasons.length === 0 ? result.label : undefined,
     };
+    memo?.set(input, resolved);
+    return resolved;
   };
 
   const persisted = (input: LinkWritePolicyInput): DerivedLink =>

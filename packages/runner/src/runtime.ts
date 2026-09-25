@@ -873,6 +873,12 @@ export interface CfcRuntimeStats {
   /** Authoritative cover lookups for carried link-view entries. */
   authoritativeCoverCalls: number;
 
+  /** Uncached staged-reference label derivations. */
+  stagedReferenceDerivations: number;
+
+  /** Staged-reference label results reused within one derivation. */
+  stagedReferenceCacheHits: number;
+
   /** Child templates minted by flow persistence. */
   flowTemplateEntriesMinted: number;
 
@@ -929,6 +935,8 @@ const initialCfcRuntimeStats = (): CfcRuntimeStats => ({
   overlapWildcardQueries: 0,
   overlapConcreteQueries: 0,
   authoritativeCoverCalls: 0,
+  stagedReferenceDerivations: 0,
+  stagedReferenceCacheHits: 0,
   flowTemplateEntriesMinted: 0,
   flowTemplateContainers: 0,
   cfcPreparedTx: 0,

@@ -10,6 +10,10 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [Compact CFC label maps](compact-cfc-label-maps.md) proposes shared label
+  subtrees, graph-aware policy queries, and a reader-first stored-format migration
+  to bound the cost of staged reference diamonds.
+
 - [Shuffled test order: what is left to build](test-order-shuffle.md) carries
   the piece the shuffle does not yet have: a shuffle inside this repository's
   own `describe()` and `it()`, which every test file already resolves to,
