@@ -52,6 +52,7 @@ import {
   SERVER_EXECUTION_ATTENTION_DOC_ID,
   SERVER_EXECUTION_EFFECTS_DOC_ID,
   SERVER_EXECUTION_WATERMARK_DOC_ID,
+  STREAM_ENTRIES_DOC_PREFIX,
   type StreamEventEntry,
   type StreamEventsDocValue,
   toDirtyKey,
@@ -3840,10 +3841,21 @@ export class SpaceServer implements TransactionSealDestination {
    * Helper for `#drainFeed()`, which under the store read-through
    * posture re-reads the documents one admitted commit wrote, for those
    * the serving replica holds, so its scheduler sees the change a session
-   * watch would otherwise have delivered. The loop's own derived commits
-   * are skipped: the replica confirmed those at its seal, and re-reading
-   * them would only cost the engine a read per written document. Returns
-   * whether the record's writes reached the replica. A read or
+   * watch would otherwise have delivered. Of the loop's own derived
+   * commits only the stream sidecars are re-read. Admission rewrites a
+   * sidecar a derived commit touches: it stamps each appended entry's
+   * `seq` and `firedAt` and recomputes the stream's `eventWatermark`, so
+   * the sidecar the store holds is not the one the replica sealed, and
+   * the drain queues an entry only once the replica's view holds it at
+   * its stamped seq. Admission also rewrites the effects doc, stamping
+   * each intent's `issuedIn` and dropping an appended intent whose nonce
+   * the store already holds; the loop reads neither from the replica,
+   * since retirement scans the store and an intent is a tail append the
+   * store resolves, so that doc is not re-read. Any other document an
+   * own commit writes holds what the replica sealed, merged at most with
+   * a foreign commit whose own record the feed carries, so re-reading it
+   * here would only cost the engine a read.
+   * Returns whether the record's writes reached the replica. A read or
    * integration that throws leaves the record to the next cycle, which
    * retries it: the drain must not consume a record whose writes never
    * reached the replica, since the watermark would then cover an input
@@ -3857,14 +3869,16 @@ export class SpaceServer implements TransactionSealDestination {
     runtime: Runtime,
   ): boolean {
     if (this.#options.policy?.storeReadThrough !== true) return true;
-    if (record.class === "derived" && record.holder === this.#holder) {
-      return true;
-    }
+    const writes = record.class === "derived" && record.holder === this.#holder
+      ? record.writes.filter((write) =>
+        write.id.startsWith(STREAM_ENTRIES_DOC_PREFIX)
+      )
+      : record.writes;
     try {
       this.#options.stats.storeRefreshes +=
         runtime.storageManager.integrateStoreWrites?.(
           this.#options.space,
-          record.writes,
+          writes,
         ) ?? 0;
     } catch (error) {
       const attempts = this.#storeRefreshFailure?.seq === record.seq

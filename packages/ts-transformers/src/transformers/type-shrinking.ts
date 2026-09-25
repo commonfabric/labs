@@ -1,5 +1,6 @@
 import ts from "typescript";
 import type { SchemaScope } from "@commonfabric/api";
+import { getCellWrapperInfo } from "@commonfabric/schema-generator/cell-brand";
 import {
   isCommonFabricSymbol,
   resolvesToCommonFabricSymbol,
@@ -668,6 +669,7 @@ function shrinkArrayElementTypeNode(
   checker?: ts.TypeChecker,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
   state?: CrossStageState,
+  sourceFile?: ts.SourceFile,
 ): ts.TypeNode {
   let shrunkElement = buildShrunkTypeNodeFromTypeNode(
     elementType,
@@ -677,6 +679,7 @@ function shrinkArrayElementTypeNode(
     typeRegistry,
     state,
     fullShapeItemPaths,
+    sourceFile,
   ) ?? elementType;
   if (
     isAnyOrUnknownTypeNode(shrunkElement) &&
@@ -767,10 +770,36 @@ export function isCellLikeTypeNode(node: ts.TypeNode): boolean {
  * own, not the wrapper's, and `readAuthoredTypeNode()` reads through the ones
  * that can be read through. A reference the transformer builds — one qualified
  * by its helper namespace, or one the checker cannot resolve — is judged by
- * its spelling alone (`isCellLikeTypeNode()`).
+ * its spelling alone.
  */
 function namesCellWrapper(
   node: ts.TypeNode,
+  checker: ts.TypeChecker,
+): node is ts.TypeReferenceNode {
+  return namesCommonFabricType(node, CELL_LIKE_TYPE_NODE_NAMES, checker);
+}
+
+/**
+ * Returns `true` for a reference to one of `commonfabric`'s scope wrappers
+ * (`SCOPE_WRAPPER_NAMES`), judged as `namesCellWrapper()` judges a cell
+ * wrapper.
+ */
+function namesScopeWrapper(
+  node: ts.TypeNode,
+  checker: ts.TypeChecker,
+): node is ts.TypeReferenceNode {
+  return namesCommonFabricType(node, SCOPE_WRAPPER_NAMES, checker);
+}
+
+/**
+ * Helper for `namesCellWrapper()` and `namesScopeWrapper()`, which returns
+ * `true` for a reference whose name resolves, through its import binding, to
+ * a type `commonfabric` declares under one of `names`, and for one the checker
+ * cannot resolve whose spelling is one of `names`.
+ */
+function namesCommonFabricType(
+  node: ts.TypeNode,
+  names: ReadonlySet<string>,
   checker: ts.TypeChecker,
 ): node is ts.TypeReferenceNode {
   if (!ts.isTypeReferenceNode(node)) return false;
@@ -781,12 +810,11 @@ function namesCellWrapper(
     ? node.typeName
     : node.typeName.right;
   const symbol = helper ? undefined : checker.getSymbolAtLocation(name);
-  if (!symbol) return isCellLikeTypeNode(node);
+  if (!symbol) return names.has(name.text);
   const declared = symbol.flags & ts.SymbolFlags.Alias
     ? checker.getAliasedSymbol(symbol)
     : symbol;
-  return CELL_LIKE_TYPE_NODE_NAMES.has(declared.getName()) &&
-    isCommonFabricSymbol(declared);
+  return names.has(declared.getName()) && isCommonFabricSymbol(declared);
 }
 
 function getTypeReferenceNodeName(
@@ -948,6 +976,7 @@ function buildShrunkTypeNodeFromType(
         typeRegistry,
         state,
         normalizedFullShapePaths,
+        sourceFile,
       );
     }
     return node;
@@ -1295,6 +1324,103 @@ function getScopeWrapper(
   };
 }
 
+/**
+ * Returns `true` for a cell whose scope a `commonfabric` scope wrapper names,
+ * as `Writable.perSession.of()` returns. Only the alias names the scope, so a
+ * node built from the cell's structure would drop it.
+ */
+function isScopedCellType(type: ts.Type, checker: ts.TypeChecker): boolean {
+  const symbol = type.aliasSymbol;
+  const scoped = type.aliasTypeArguments?.[0];
+  return !!symbol && !!scoped && SCOPE_WRAPPER_NAMES.has(symbol.name) &&
+    isCellLikeType(scoped, checker) &&
+    resolvesToCommonFabricSymbol(symbol, checker, symbol.name);
+}
+
+/** A scope wrapper around a cell, taken apart: its name, cell, and type. */
+interface ScopedCellParts {
+  readonly name: string;
+  readonly cell: ts.TypeNode;
+  readonly type: ts.Type | undefined;
+}
+
+/**
+ * Returns the parts of a `commonfabric` scope wrapper around a cell that
+ * `node` writes out (`PerUser<Writable<T>>`, or the `__cfHelpers.PerUser<...>`
+ * a pass builds), or `undefined` for any other node. The type is the one
+ * `node` is registered with, or resolves to, and names the wrapper under
+ * whatever name its reference was imported as.
+ */
+function scopedCellNode(
+  node: ts.TypeNode,
+  checker: ts.TypeChecker,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+): ScopedCellParts | undefined {
+  const cell = ts.isTypeReferenceNode(node)
+    ? node.typeArguments?.[0]
+    : undefined;
+  if (
+    !cell || !namesScopeWrapper(node, checker) ||
+    !namesCellWrapper(cell, checker)
+  ) {
+    return undefined;
+  }
+  const type = getTypeFromTypeNodeWithFallback(node, checker, typeRegistry);
+  const alias = type?.aliasSymbol?.name;
+  return {
+    name: alias && SCOPE_WRAPPER_NAMES.has(alias)
+      ? alias
+      : getTypeReferenceNodeName(node as ts.TypeReferenceNode)!,
+    cell,
+    type,
+  };
+}
+
+/**
+ * Helper for `applyCellCapabilityPathsToTypeNode()`, which returns the parts
+ * of a scope wrapper around a cell that `node` holds, as `scopedCellNode()`
+ * does, or, for a print of one, its cell printed afresh from its type.
+ */
+function scopedCellParts(
+  node: ts.TypeNode,
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+  factory: ts.NodeFactory,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
+): ScopedCellParts | undefined {
+  const printedType = state?.printedFrom(node);
+  if (!printedType) return scopedCellNode(node, checker, typeRegistry);
+  if (!isScopedCellType(printedType, checker)) return undefined;
+  return {
+    name: printedType.aliasSymbol!.name,
+    cell: typeToTypeNodeWithRegistry(
+      printedType.aliasTypeArguments![0]!,
+      { checker, factory, sourceFile, state },
+      typeRegistry,
+    ),
+    type: printedType,
+  };
+}
+
+/**
+ * Wraps `node`, a cell a pass rebuilt, in the scope wrapper `name`, and
+ * registers the wrapper with `type`, the scoped cell's own type: schema
+ * generation dispatches on that type, reads the scope from the wrapper's name,
+ * and reads the cell from `node`, keeping any narrowing it carries.
+ */
+function wrapScopedCell(
+  node: ts.TypeNode,
+  name: string,
+  type: ts.Type | undefined,
+  factory: ts.NodeFactory,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+): ts.TypeNode {
+  const wrapper = createHelperWrapperTypeNode(node, name, factory);
+  if (type) typeRegistry?.set(wrapper, type);
+  return wrapper;
+}
+
 /** The `Default` wrappers `wrapTypeNodeWithRestoredDefault()` built. */
 const RESTORED_DEFAULTS = new WeakSet<ts.TypeNode>();
 
@@ -1354,7 +1480,65 @@ function buildShrunkTypeNodeFromTypeNode(
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
   state?: CrossStageState,
   fullShapePaths: readonly (readonly string[])[] = [],
+  sourceFile?: ts.SourceFile,
 ): ts.TypeNode | undefined {
+  const printedType = state?.printedFrom(node);
+  // A scoped cell's print is kept whole: only its alias names its scope.
+  // Narrowing rebuilds it around its cell, which is shrunk through the rebuilt
+  // wrapper.
+  if (printedType && checker && isScopedCellType(printedType, checker)) {
+    return undefined;
+  }
+  // A printed node is not taken apart: it is shrunk as its unfolding, or not
+  // at all.
+  if (printedType && isUnfoldableKind(node)) {
+    const unfolded = checker && sourceFile &&
+      unfoldPrint(
+        node,
+        printedType,
+        checker,
+        sourceFile,
+        factory,
+        typeRegistry,
+        state,
+      );
+    if (!unfolded) return undefined;
+    const shrunk = buildShrunkTypeNodeFromTypeNode(
+      unfolded,
+      paths,
+      factory,
+      checker,
+      typeRegistry,
+      state,
+      fullShapePaths,
+      sourceFile,
+    );
+    return shrunk === unfolded ? node : shrunk;
+  }
+
+  // A scope wrapper around a cell is shrunk as the cell it scopes.
+  const scopedCell = checker && scopedCellNode(node, checker, typeRegistry);
+  if (scopedCell) {
+    const shrunk = buildShrunkTypeNodeFromTypeNode(
+      scopedCell.cell,
+      paths,
+      factory,
+      checker,
+      typeRegistry,
+      state,
+      fullShapePaths,
+      sourceFile,
+    );
+    if (!shrunk) return undefined;
+    return shrunk === scopedCell.cell ? node : wrapScopedCell(
+      shrunk,
+      scopedCell.name,
+      scopedCell.type,
+      factory,
+      typeRegistry,
+    );
+  }
+
   const normalized = uniquePaths(paths);
   const normalizedFullShapePaths = uniquePaths(fullShapePaths);
   if (normalized.length === 0) {
@@ -1387,6 +1571,7 @@ function buildShrunkTypeNodeFromTypeNode(
             typeRegistry,
             state,
             normalizedFullShapePaths,
+            sourceFile,
           );
           if (shrunkInner && shrunkInner !== inner) {
             return factory.updateTypeReferenceNode(
@@ -1458,6 +1643,7 @@ function buildShrunkTypeNodeFromTypeNode(
             checker,
             typeRegistry,
             state,
+            sourceFile,
           );
           const arrayNode = factory.createArrayTypeNode(shrunkElement);
           if (checker) {
@@ -1475,6 +1661,7 @@ function buildShrunkTypeNodeFromTypeNode(
             checker,
             typeRegistry,
             state,
+            sourceFile,
           );
           return factory.updateArrayTypeNode(node, shrunkElement);
         }
@@ -1492,6 +1679,7 @@ function buildShrunkTypeNodeFromTypeNode(
             checker,
             typeRegistry,
             state,
+            sourceFile,
           );
           return factory.updateTypeOperatorNode(
             node,
@@ -1515,6 +1703,7 @@ function buildShrunkTypeNodeFromTypeNode(
             checker,
             typeRegistry,
             state,
+            sourceFile,
           );
           return factory.updateTypeReferenceNode(
             node,
@@ -1534,7 +1723,7 @@ function buildShrunkTypeNodeFromTypeNode(
               resolvedType,
               normalized,
               checker,
-              node.getSourceFile(),
+              sourceFile ?? node.getSourceFile(),
               factory,
               typeRegistry,
               state,
@@ -1558,6 +1747,7 @@ function buildShrunkTypeNodeFromTypeNode(
       typeRegistry,
       state,
       normalizedFullShapePaths,
+      sourceFile,
     );
   }
 
@@ -1577,6 +1767,7 @@ function buildShrunkTypeNodeFromTypeNode(
       typeRegistry,
       state,
       normalizedFullShapePaths,
+      sourceFile,
     ) ?? inner;
     return factory.updateTypeReferenceNode(
       node,
@@ -1600,6 +1791,7 @@ function buildShrunkTypeNodeFromTypeNode(
         typeRegistry,
         state,
         normalizedFullShapePaths,
+        sourceFile,
       );
       if (!shrunk) return undefined;
       // If the shrunk type is identical to the original declaration (same
@@ -1632,6 +1824,7 @@ function buildShrunkTypeNodeFromTypeNode(
         typeRegistry,
         state,
         normalizedFullShapePaths,
+        sourceFile,
       );
       if (s && s !== member) {
         changed = true;
@@ -1720,6 +1913,15 @@ function resolveMembersFromDeclaration(
     return undefined;
   }
   seen.add(decl);
+
+  // A generic declaration's members are written in terms of its parameters,
+  // which say nothing of the arguments an instantiation binds them to.
+  if (
+    (ts.isTypeAliasDeclaration(decl) || ts.isInterfaceDeclaration(decl)) &&
+    decl.typeParameters?.length
+  ) {
+    return undefined;
+  }
 
   if (ts.isTypeAliasDeclaration(decl) && ts.isTypeLiteralNode(decl.type)) {
     return decl.type.members;
@@ -1832,6 +2034,7 @@ function shrinkTypeLiteralMembers(
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
   state?: CrossStageState,
   fullShapePaths: readonly (readonly string[])[] = [],
+  sourceFile?: ts.SourceFile,
 ): ts.TypeNode | undefined {
   const grouped = groupPathsByHead(normalizedPaths);
   const fullShapeGrouped = groupPathsByHead(fullShapePaths);
@@ -1855,6 +2058,7 @@ function shrinkTypeLiteralMembers(
       typeRegistry,
       state,
       fullShapeGrouped.get(propertyName) ?? [],
+      sourceFile,
     ) ?? member.type;
 
     result.push(
@@ -2688,13 +2892,14 @@ function createHelperWrapperTypeNode(
   node: ts.TypeNode,
   wrapperName: string,
   factory: ts.NodeFactory,
+  rest: readonly ts.TypeNode[] = [],
 ): ts.TypeNode {
   return factory.createTypeReferenceNode(
     factory.createQualifiedName(
       factory.createIdentifier("__cfHelpers"),
       factory.createIdentifier(wrapperName),
     ),
-    [node],
+    [node, ...rest],
   );
 }
 
@@ -2741,6 +2946,19 @@ function extractCellLikeInnerTypeNode(
   typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
   state: CrossStageState | undefined,
 ): ts.TypeNode | undefined {
+  // A printed node is not taken apart: its value is printed from its type.
+  const printedType = state?.printedFrom(node);
+  if (printedType) {
+    return printedCellValueTypeNode(
+      printedType,
+      checker,
+      sourceFile,
+      factory,
+      typeRegistry,
+      state,
+    );
+  }
+
   // A nullable cell handle keeps its value alternatives inside the inferred
   // capability wrapper. Read the narrowed syntax before consulting cached types.
   if (ts.isUnionTypeNode(node)) {
@@ -2838,10 +3056,10 @@ function extractCellLikeInnerTypeNode(
  *
  * A wrapper written out is recognized by its name, as schema generation
  * recognizes it, and names its payload. Otherwise the value's type is read,
- * from the cell's type or, for a value node printed from a type, which the
- * checker reads as `any`, by resolving the name it prints in `sourceFile`, and
- * the payload is printed from the types the scope brand is intersected with,
- * one alternative per member of a union the brand was distributed over.
+ * from the cell's type or, for a value node printed from a type, from the type
+ * it was printed from, and the payload is printed from the types the scope
+ * brand is intersected with, one alternative per member of a union the brand
+ * was distributed over.
  */
 function moveNullishIntoScopeWrapper(
   value: ts.TypeNode,
@@ -2858,17 +3076,16 @@ function moveNullishIntoScopeWrapper(
     ? entityNameRight(written.typeName)
     : undefined;
 
-  const namedScope = name && scopeForWrapperName(name.text);
+  // A printed node is not taken apart: its scope and payload are read from
+  // the type it was printed from.
+  const printedType = state?.printedFrom(written);
+  const namedScope = !printedType && name && scopeForWrapperName(name.text);
   if (namedScope) {
     const payload = (written as ts.TypeReferenceNode).typeArguments?.[0];
     return payload && wrapInScope([payload], namedScope, nullish, factory);
   }
 
-  const valueType = cellValueType ??
-    (name && ts.isIdentifier((written as ts.TypeReferenceNode).typeName) &&
-        !(written as ts.TypeReferenceNode).typeArguments?.length
-      ? declaredTypeInScope(name, sourceFile, checker)
-      : undefined);
+  const valueType = cellValueType ?? printedType;
   const brand = valueType && getScopeBrand(valueType, checker);
   if (!brand) return undefined;
   const alternatives: ts.TypeNode[] = [];
@@ -2904,22 +3121,97 @@ function wrapInScope(
 }
 
 /**
- * The declared type of the non-generic type `name` denotes in `sourceFile`'s
- * scope, an import followed to what it imports.
+ * Helper for `extractCellLikeInnerTypeNode()`, which returns, for the type a
+ * node was printed from, the value type node of the cell it holds, printed
+ * from the type arguments its wrapper was given, or, for a nullable union of
+ * cells, the union of each cell's value and the nullish alternatives, which a
+ * scoped value holds inside its scope wrapper
+ * (`moveNullishIntoScopeWrapper()`). Returns `undefined` for a type that holds
+ * no cell, and for a nullable union holding a stream or a database.
  */
-function declaredTypeInScope(
-  name: ts.Identifier,
-  sourceFile: ts.SourceFile,
+function printedCellValueTypeNode(
+  type: ts.Type,
   checker: ts.TypeChecker,
-): ts.Type | undefined {
-  let symbol = checker.getSymbolAtLocation(name) ??
-    checker.resolveName(name.text, sourceFile, ts.SymbolFlags.Type, false);
-  if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
-    symbol = checker.getAliasedSymbol(symbol);
+  sourceFile: ts.SourceFile,
+  factory: ts.NodeFactory,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
+): ts.TypeNode | undefined {
+  const print = (printable: ts.Type) =>
+    typeToTypeNodeWithRegistry(
+      printable,
+      { checker, factory, sourceFile, state },
+      typeRegistry,
+    );
+  if (type.isUnion()) {
+    const members: ts.TypeNode[] = [];
+    const nullish: ts.TypeNode[] = [];
+    const values: { node: ts.TypeNode; type: ts.Type | undefined }[] = [];
+    for (const member of type.types) {
+      if (member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)) {
+        const printed = print(member);
+        members.push(printed);
+        nullish.push(printed);
+        continue;
+      }
+      if (
+        isStreamCellType(member, checker) || isSqliteCellType(member, checker)
+      ) {
+        return undefined;
+      }
+      const inner = printedCellValueTypeNode(
+        member,
+        checker,
+        sourceFile,
+        factory,
+        typeRegistry,
+        state,
+      );
+      if (!inner) return undefined;
+      members.push(inner);
+      values.push({ node: inner, type: unwrapCellLikeType(member, checker) });
+    }
+    if (values.length === 0) return undefined;
+    // A scoped value holds the nullish alternatives inside its scope wrapper,
+    // as for an authored node (`moveNullishIntoScopeWrapper()`).
+    const scoped = values.length === 1 && nullish.length > 0
+      ? moveNullishIntoScopeWrapper(
+        values[0]!.node,
+        values[0]!.type,
+        nullish,
+        checker,
+        sourceFile,
+        factory,
+        typeRegistry,
+        state,
+      )
+      : undefined;
+    return scoped ?? factory.createUnionTypeNode(members);
   }
-  return symbol && (symbol.flags & ts.SymbolFlags.Type) !== 0
-    ? checker.getDeclaredTypeOfSymbol(symbol)
-    : undefined;
+  if (!isCellLikeType(type, checker)) return undefined;
+  const [value] = cellTypeArguments(type, checker);
+  return value && print(value);
+}
+
+/**
+ * Helper for `printedCellValueTypeNode()` and `unfoldPrint()`, which
+ * returns the type arguments of the cell wrapper `type` instantiates, as the
+ * wrapper was given them, so that an alias among them keeps its name:
+ * `Cell<EntriesValue>` yields `EntriesValue`, which the cell's value type
+ * would expand. A cell-like type with no wrapper reference yields its value
+ * type.
+ */
+function cellTypeArguments(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): readonly ts.Type[] {
+  const typeRef = getCellWrapperInfo(type, checker)?.typeRef;
+  const parameters = typeRef?.target.typeParameters?.length;
+  if (typeRef && parameters) {
+    return checker.getTypeArguments(typeRef).slice(0, parameters);
+  }
+  const value = unwrapCellLikeType(type, checker);
+  return value ? [value] : [];
 }
 
 function selectCellPathCapability(
@@ -3033,6 +3325,33 @@ function applyCellCapabilityPathsToTypeNode(
     return node;
   }
 
+  // A printed node is not taken apart: a cell inside a printed literal is
+  // narrowed in its unfolding.
+  const printedType = state?.printedFrom(node);
+  if (printedType) {
+    if (!ts.isTypeLiteralNode(node)) return node;
+    const unfolded = unfoldPrint(
+      node,
+      printedType,
+      checker,
+      sourceFile,
+      factory,
+      typeRegistry,
+      state,
+    );
+    if (!unfolded) return node;
+    const narrowed = applyCellCapabilityPathsToTypeNode(
+      unfolded,
+      paths,
+      factory,
+      checker,
+      sourceFile,
+      typeRegistry,
+      state,
+    );
+    return narrowed === unfolded ? node : narrowed;
+  }
+
   if (ts.isParenthesizedTypeNode(node)) {
     const updated = applyCellCapabilityPathsToTypeNode(
       node.type,
@@ -3068,13 +3387,22 @@ function applyCellCapabilityPathsToTypeNode(
     }
 
     let updated = member.type;
-    const memberSemanticType = getTypeFromTypeNodeWithFallback(
+    const scopedCell = scopedCellParts(
       updated,
+      checker,
+      sourceFile,
+      factory,
+      typeRegistry,
+      state,
+    );
+    const cellNode = scopedCell?.cell ?? updated;
+    const memberSemanticType = getTypeFromTypeNodeWithFallback(
+      cellNode,
       checker,
       typeRegistry,
     );
     const inner = extractCellLikeInnerTypeNode(
-      updated,
+      cellNode,
       checker,
       sourceFile,
       factory,
@@ -3088,10 +3416,25 @@ function applyCellCapabilityPathsToTypeNode(
           inner,
           capability,
           factory,
-          preservedWrapperFor(updated, memberSemanticType, checker),
+          preservedWrapperFor(cellNode, memberSemanticType, checker),
         );
-        if (typeRegistry && isCellLikeType(memberSemanticType, checker)) {
+        // A nullable cell's value alternatives are inside the wrapper, which
+        // stands for a cell, so it is registered only with a cell's own type.
+        if (
+          typeRegistry && memberSemanticType &&
+          !memberSemanticType.isUnion() &&
+          isCellLikeType(memberSemanticType, checker)
+        ) {
           typeRegistry.set(updated, memberSemanticType);
+        }
+        if (scopedCell) {
+          updated = wrapScopedCell(
+            updated,
+            scopedCell.name,
+            scopedCell.type,
+            factory,
+            typeRegistry,
+          );
         }
       }
     } else {
@@ -3123,6 +3466,168 @@ function applyCellCapabilityPathsToTypeNode(
   });
 
   return changed ? factory.createTypeLiteralNode(members) : node;
+}
+
+/**
+ * Returns `true` for a node of a kind a pass reading its structure looks
+ * inside: a type literal, a union, an array, or a cell reference with a type
+ * argument. A print of one of these is read through its unfolding
+ * (`unfoldPrint()`), and as a whole where it has none.
+ */
+function isUnfoldableKind(node: ts.TypeNode): boolean {
+  if (
+    ts.isTypeLiteralNode(node) || ts.isUnionTypeNode(node) ||
+    ts.isArrayTypeNode(node)
+  ) {
+    return true;
+  }
+  if (ts.isTypeOperatorNode(node)) {
+    return node.operator === ts.SyntaxKind.ReadonlyKeyword &&
+      ts.isArrayTypeNode(node.type);
+  }
+  return ts.isTypeReferenceNode(node) && !!node.typeArguments?.length &&
+    isCellLikeTypeNode(node);
+}
+
+/**
+ * Returns a node standing for `type`, which `node` was printed from, built one
+ * level deep: a node of the print's own kind, each type node below it printed
+ * from its own type. A pass reading the structure of a print reads its
+ * unfolding in its place, so nothing the pass builds holds a piece of the
+ * print, and each part it keeps is read by its type. Returns `undefined` for a
+ * print whose kind no pass looks inside (`isUnfoldableKind()`), or whose type
+ * says something only as a whole: a union with a `Default` brand, or an object
+ * with a property keyed by a symbol.
+ */
+function unfoldPrint(
+  node: ts.TypeNode,
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+  factory: ts.NodeFactory,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
+): ts.TypeNode | undefined {
+  const print = (printable: ts.Type) =>
+    typeToTypeNodeWithRegistry(
+      printable,
+      { checker, factory, sourceFile, state },
+      typeRegistry,
+    );
+  if (ts.isTypeLiteralNode(node)) {
+    return unfoldPrintedObjectType(
+      type,
+      checker,
+      sourceFile,
+      factory,
+      typeRegistry,
+      state,
+    );
+  }
+  if (ts.isUnionTypeNode(node) && type.isUnion()) {
+    if (type.types.some((member) => getDefaultMarkerPayload(member, checker))) {
+      return undefined;
+    }
+    return factory.createUnionTypeNode(type.types.map(print));
+  }
+  const readonlyArray = ts.isTypeOperatorNode(node) &&
+    node.operator === ts.SyntaxKind.ReadonlyKeyword &&
+    ts.isArrayTypeNode(node.type);
+  if (ts.isArrayTypeNode(node) || readonlyArray) {
+    const element = getArrayElementType(type, checker);
+    if (!element) return undefined;
+    const array = factory.createArrayTypeNode(print(element));
+    return readonlyArray
+      ? factory.createTypeOperatorNode(ts.SyntaxKind.ReadonlyKeyword, array)
+      : array;
+  }
+  if (ts.isTypeReferenceNode(node) && isCellLikeTypeNode(node)) {
+    const wrapper = getCellWrapperInfo(type, checker);
+    const [argument, ...rest] = cellTypeArguments(type, checker);
+    // The value is printed expanded, so a pass can read inside it, unless
+    // the printer cannot write the expansion: then it is the argument the
+    // wrapper was given, which keeps an alias's name.
+    const value = unwrapCellLikeType(type, checker);
+    const expanded = value && print(value);
+    const printed = expanded &&
+        (expanded.kind !== ts.SyntaxKind.UnknownKeyword ||
+          isAnyOrUnknownType(value!))
+      ? expanded
+      : argument && print(argument);
+    return wrapper && printed
+      ? createHelperWrapperTypeNode(
+        printed,
+        wrapper.kind,
+        factory,
+        rest.map(print),
+      )
+      : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Helper for `unfoldPrint()`, which returns a type literal holding the
+ * properties and index signatures of `type`, the object type a literal was
+ * printed from, each printed from its own type. Methods are left out, as
+ * schema generation reads none. Returns `undefined` for a type with a property
+ * keyed by a symbol, which has no name to write it under.
+ */
+function unfoldPrintedObjectType(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+  factory: ts.NodeFactory,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
+): ts.TypeLiteralNode | undefined {
+  const print = (printable: ts.Type) =>
+    typeToTypeNodeWithRegistry(
+      printable,
+      { checker, factory, sourceFile, state },
+      typeRegistry,
+    );
+  const members: ts.TypeElement[] = [];
+  for (const property of checker.getPropertiesOfType(type)) {
+    if ((property.flags & ts.SymbolFlags.Method) !== 0) continue;
+    if (String(property.escapedName).startsWith("__@")) return undefined;
+    const declaration = property.valueDeclaration ??
+      property.declarations?.[0] ?? sourceFile;
+    const optional = (property.flags & ts.SymbolFlags.Optional) !== 0;
+    const propertyType = checker.getTypeOfSymbolAtLocation(
+      property,
+      declaration,
+    );
+    // An optional property is written without the `undefined` its
+    // optionality adds to its type, as the printer writes it.
+    const written = optional && propertyType.isUnion()
+      ? propertyType.types.filter((member) =>
+        (member.flags & ts.TypeFlags.Undefined) === 0
+      )
+      : [propertyType];
+    members.push(factory.createPropertySignature(
+      undefined,
+      createPropertyName(property.getName(), factory),
+      optional ? factory.createToken(ts.SyntaxKind.QuestionToken) : undefined,
+      written.length === 1
+        ? print(written[0]!)
+        : factory.createUnionTypeNode(written.map(print)),
+    ));
+  }
+  for (const index of checker.getIndexInfosOfType(type)) {
+    members.push(factory.createIndexSignature(
+      undefined,
+      [factory.createParameterDeclaration(
+        undefined,
+        undefined,
+        "key",
+        undefined,
+        print(index.keyType),
+      )],
+      print(index.type),
+    ));
+  }
+  return factory.createTypeLiteralNode(members);
 }
 
 function createIdentityOnlyReplacementTypeNode(
@@ -3315,6 +3820,8 @@ function applyIdentityOnlyPathsToTypeNode(
   checker: ts.TypeChecker,
   semanticType?: ts.Type,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  sourceFile?: ts.SourceFile,
+  state?: CrossStageState,
 ): ts.TypeNode {
   const normalized = uniquePaths(paths);
   const normalizedCellLikePaths = uniquePaths(cellLikePaths);
@@ -3341,6 +3848,61 @@ function applyIdentityOnlyPathsToTypeNode(
     );
   }
 
+  // A printed node is not taken apart: identity paths reaching inside it are
+  // applied to its unfolding, or not at all.
+  const printedType = state?.printedFrom(node);
+  if (printedType && isUnfoldableKind(node)) {
+    const unfolded = sourceFile &&
+      unfoldPrint(
+        node,
+        printedType,
+        checker,
+        sourceFile,
+        factory,
+        typeRegistry,
+        state,
+      );
+    if (!unfolded) return node;
+    const updated = applyIdentityOnlyPathsToTypeNode(
+      unfolded,
+      normalized,
+      normalizedCellLikePaths,
+      normalizedComparableCellLikePaths,
+      factory,
+      checker,
+      resolvedSemanticType,
+      typeRegistry,
+      sourceFile,
+      state,
+    );
+    return updated === unfolded ? node : updated;
+  }
+
+  // A scope wrapper around a cell has identity paths applied to the cell it
+  // scopes.
+  const scopedCell = scopedCellNode(node, checker, typeRegistry);
+  if (scopedCell) {
+    const updated = applyIdentityOnlyPathsToTypeNode(
+      scopedCell.cell,
+      normalized,
+      normalizedCellLikePaths,
+      normalizedComparableCellLikePaths,
+      factory,
+      checker,
+      undefined,
+      typeRegistry,
+      sourceFile,
+      state,
+    );
+    return updated === scopedCell.cell ? node : wrapScopedCell(
+      updated,
+      scopedCell.name,
+      scopedCell.type,
+      factory,
+      typeRegistry,
+    );
+  }
+
   if (ts.isParenthesizedTypeNode(node)) {
     const updated = applyIdentityOnlyPathsToTypeNode(
       node.type,
@@ -3351,6 +3913,8 @@ function applyIdentityOnlyPathsToTypeNode(
       checker,
       resolvedSemanticType,
       typeRegistry,
+      sourceFile,
+      state,
     );
     return updated === node.type
       ? node
@@ -3379,6 +3943,8 @@ function applyIdentityOnlyPathsToTypeNode(
         checker,
         itemSemanticType,
         typeRegistry,
+        sourceFile,
+        state,
       );
       if (updated === node.elementType) {
         return node;
@@ -3401,6 +3967,8 @@ function applyIdentityOnlyPathsToTypeNode(
         checker,
         itemSemanticType,
         typeRegistry,
+        sourceFile,
+        state,
       );
       if (updated === node.type.elementType) {
         return node;
@@ -3429,6 +3997,8 @@ function applyIdentityOnlyPathsToTypeNode(
         checker,
         itemSemanticType,
         typeRegistry,
+        sourceFile,
+        state,
       );
       if (updated === inner) {
         return node;
@@ -3475,6 +4045,8 @@ function applyIdentityOnlyPathsToTypeNode(
           checker,
         ),
         typeRegistry,
+        sourceFile,
+        state,
       );
       if (updated === member.type) {
         return member;
@@ -3513,6 +4085,8 @@ function applyIdentityOnlyPathsToTypeNode(
       checker,
       unwrapCellLikeType(resolvedSemanticType, checker) ?? resolvedSemanticType,
       typeRegistry,
+      sourceFile,
+      state,
     );
     if (updated === inner) {
       return node;
@@ -3560,6 +4134,8 @@ function applyIdentityOnlyPathsToTypeNode(
             checker,
           ),
           typeRegistry,
+          sourceFile,
+          state,
         );
         if (updated === member.type) {
           return member;
@@ -3596,6 +4172,8 @@ function applyIdentityOnlyPathsToTypeNode(
         checker,
         resolvedSemanticType,
         typeRegistry,
+        sourceFile,
+        state,
       );
       if (updated !== member) {
         changed = true;
@@ -3954,6 +4532,8 @@ export function applyShrinkAndWrap(
         checker,
         baseType,
         context?.state.typeRegistry,
+        sourceFile,
+        context?.state,
       )
       : applyCapabilityDefaultsToTypeNode(
         baseTypeNode,
@@ -3993,6 +4573,8 @@ export function applyShrinkAndWrap(
       checker,
       baseType,
       context?.state.typeRegistry,
+      sourceFile,
+      context?.state,
     )
     : identityPaths.length > 0
     ? applyIdentityOnlyPathsToTypeNode(
@@ -4004,6 +4586,8 @@ export function applyShrinkAndWrap(
       checker,
       baseType,
       context?.state.typeRegistry,
+      sourceFile,
+      context?.state,
     )
     : baseTypeNode;
   let shrunk: ts.TypeNode | undefined;
@@ -4045,6 +4629,7 @@ export function applyShrinkAndWrap(
         context?.state.typeRegistry,
         context?.state,
         fullShapePaths,
+        sourceFile,
       );
       shrunk = choosePreferredShrinkCandidate(
         "type",
@@ -4067,6 +4652,7 @@ export function applyShrinkAndWrap(
         context?.state.typeRegistry,
         context?.state,
         fullShapePaths,
+        sourceFile,
       );
       const typeDriven = baseType && identityPaths.length === 0
         ? buildShrunkTypeNodeFromType(
@@ -4104,6 +4690,8 @@ export function applyShrinkAndWrap(
       checker,
       baseType,
       context?.state.typeRegistry,
+      sourceFile,
+      context?.state,
     );
     shrunk = next;
   }

@@ -938,16 +938,14 @@ function inferSchemaContextualType(
 }
 
 /**
- * The `T` TypeScript inferred for a `wish()` call written without a type
- * argument, when the call has a contextual type to infer it from.
+ * The first type argument TypeScript inferred for a call with a contextual type.
  *
- * The schema `wish()` takes describes `T`, the resource the wish asks for; the
- * runtime wraps it in the `WishState<T>` the call returns. The contextual type
- * is that result, so it is not the schema's type: the inference that takes
- * `T` out of it is the call's own, whatever wrapper or alias the result sits
- * behind. A call with no contextual type gets no schema.
+ * `wish()` and `generateObject()` take schemas describing `T`; their return
+ * types wrap it in state. The resolved signature retains `T` independently of
+ * those wrappers and their optional fields. A call with no contextual type
+ * gets no inferred schema.
  */
-function inferWishTypeArgument(
+function inferContextualTypeArgument(
   node: ts.CallExpression,
   checker: ts.TypeChecker,
 ): ts.Type | undefined {
@@ -4182,7 +4180,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           factory,
           typeRegistry,
           context.state,
-          () => inferWishTypeArgument(node, checker),
+          () => inferContextualTypeArgument(node, checker),
         );
 
         const schemaCall = createRegisteredSchemaCallFromResolvedType(
@@ -4232,11 +4230,11 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           typeRegistry,
           context.state,
           () => {
-            const contextualType = inferSchemaContextualType(node, checker);
-            const objectProp = contextualType?.getProperty("object");
-            return objectProp
-              ? checker.getTypeOfSymbolAtLocation(objectProp, node)
-              : undefined;
+            const inferred = inferContextualTypeArgument(node, checker);
+            // An inferred `any` supplies no result shape for an LLM schema.
+            return inferred && (inferred.flags & ts.TypeFlags.Any)
+              ? undefined
+              : inferred;
           },
         );
 
@@ -4248,22 +4246,22 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
         );
 
         if (schemaCall) {
+          // Caller options follow the generated schema so authored schemas
+          // reached through spreads or computed keys take precedence.
           let newOptions: ts.Expression;
           if (args.length > 0 && ts.isObjectLiteralExpression(args[0]!)) {
-            // Add schema property to existing object literal
             newOptions = factory.createObjectLiteralExpression(
               [
-                ...(args[0] as ts.ObjectLiteralExpression).properties,
                 factory.createPropertyAssignment("schema", schemaCall),
+                ...(args[0] as ts.ObjectLiteralExpression).properties,
               ],
               true,
             );
           } else if (args.length > 0) {
-            // Options is an expression (not literal) -> { ...opts, schema: ... }
             newOptions = factory.createObjectLiteralExpression(
               [
-                factory.createSpreadAssignment(args[0]!),
                 factory.createPropertyAssignment("schema", schemaCall),
+                factory.createSpreadAssignment(args[0]!),
               ],
               true,
             );

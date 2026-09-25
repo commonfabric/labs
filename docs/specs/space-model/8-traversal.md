@@ -195,18 +195,34 @@ Defaults:
 
 ### Detection Rules
 
-`hasAsCell(schema)` is true when:
+`hasAsCell(schema)` reads the schema with its root `$ref` resolved, local or
+external, and is true when:
 
 - schema object has `asCell` property
-- or schema has `anyOf` and every option matches `hasAsCell`
-- or schema has `oneOf` and every option matches `hasAsCell`
+- or schema has `anyOf` and every option declares a handle, read the same way
+  against the definitions of the schema it sits in
+- or schema has `oneOf` and every option does, likewise
 
 Notes:
 
-- This check is shallow for `anyOf`/`oneOf` options; refs inside options are not fully resolved before this check.
+- A definition declares the handle for every position of its type: a position
+  written `{ "$ref": "#/$defs/Profile" }` is a handle exactly when `Profile`
+  declares `asCell`, as `{ "$ref": "#/$defs/Profile", "asCell": ["cell"] }` is
+  at the reference. When the object creator mints a handle from a link whose
+  schema declares none itself, it reads the schema through its root `$ref` to
+  the handle the definition declares; a schema that declares its handle at the
+  reference, or declares none, it uses as written.
+- A union of references to handle definitions declares a handle as the same union with `asCell` at each reference does. A union that reaches itself through an option is read once, and declares no handle by way of itself.
 - This check determines traversal boundary behavior, not whether final output is a JS Cell object. Output shape still depends on the active `objectCreator`.
 
 ### Behavior by Value Shape
+
+The runtime shortcuts below are taken where the schema declares the handle at
+its root, itself or through its root `$ref`. A union that declares its handle
+only through its options leaves which option's handle it is to the value, so
+its branches are traversed and their merge mints the handle, as it does across
+a link. As at a property, the reads that traversal makes at an array element
+resolve the reference and are not conflict dependencies.
 
 | Value shape | `traverseCells = false` (runtime transform path) | `traverseCells = true` (query path) |
 | --- | --- | --- |
@@ -290,6 +306,7 @@ Traversal is intentionally not a full JSON-Schema validator. Notable differences
 Behavior in this spec is verified by:
 
 - `packages/runner/test/traverse.test.ts`
+- `packages/runner/test/handle-declared-by-definition.test.ts`
 - `packages/runner/test/query.test.ts`
 - `packages/runner/test/schema-view.test.ts`
 
@@ -300,6 +317,7 @@ These include regression tests for:
 - the sibling-keyword merge into combinator branches, under a schema that
   refuses the properties it does not name
 - defaults via resolved `$ref`
+- a handle declared by the definition a position names by `$ref`
 - cycle-tracker cleanup
 
 ---

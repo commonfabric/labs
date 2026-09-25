@@ -70,6 +70,7 @@ import { isOpaqueReference, opaqueReference } from "./back-to-cell.ts";
 import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
+  resolveRootRefForStructure,
 } from "./cfc.ts";
 import { cfcEnvelopeLabelDocumentHashes } from "./cfc/label-documents.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
@@ -880,6 +881,169 @@ export function resolveSchemaRefsCanonical(
     _resolvedRefCache.set(schema, cached);
   }
   return cached === null ? undefined : cached;
+}
+
+/** One reading of a schema's handle declaration by `declaresAsCell()`. */
+interface HandleReading {
+  /** The option lists being read further up. */
+  readonly open: Set<readonly JSONSchema[]>;
+
+  /**
+   * Whether every option of a list read so far declares a handle, with the
+   * definitions it was read against.
+   */
+  readonly verdicts: Map<
+    readonly JSONSchema[],
+    { readonly definitions: unknown; readonly every: boolean }
+  >;
+
+  /**
+   * The lists a union reached again while they were being read further up,
+   * and took there as declaring no handle.
+   */
+  readonly assumed: Set<readonly JSONSchema[]>;
+}
+
+/**
+ * Helper for `SchemaObjectTraverser.hasAsCell()`, which reads the handle
+ * declaration off `schema` with its root `$ref` resolved
+ * ({@link resolveRootRefForStructure}): its own `asCell` entry, or one that
+ * every `anyOf` or every `oneOf` option declares. An option is read the same
+ * way, against the definitions of the schema it sits in, so a union of
+ * references to handle definitions declares a handle as the same union with
+ * `asCell` at each reference does.
+ *
+ * A reading reads each option list once, so definitions the lists share are
+ * read once however many reach them. A union that reaches a list still being
+ * read further up takes it as declaring no handle, since reading it again
+ * proves nothing. Where a list taken that way turns out to declare a handle
+ * after all, what was read through it may have fallen short, so the reading
+ * runs again, keeping the lists found to declare one: those hold however the
+ * lists further up read. Each further run finds a list the ones before did
+ * not, so there are at most as many runs as lists, plus one.
+ */
+function declaresAsCell(schema: JSONSchema | undefined): boolean {
+  const reading: HandleReading = {
+    open: new Set(),
+    verdicts: new Map(),
+    assumed: new Set(),
+  };
+  for (;;) {
+    const declares = readsAsHandle(schema, reading);
+    let settled = true;
+    for (const options of reading.assumed) {
+      if (reading.verdicts.get(options)?.every === true) {
+        settled = false;
+        break;
+      }
+    }
+    if (settled) return declares;
+    for (const [options, verdict] of reading.verdicts) {
+      if (!verdict.every) reading.verdicts.delete(options);
+    }
+    reading.assumed.clear();
+  }
+}
+
+/** Whether `schema` declares a handle, within `reading`. */
+function readsAsHandle(
+  schema: JSONSchema | undefined,
+  reading: HandleReading,
+): boolean {
+  if (schema === undefined || typeof schema === "boolean") {
+    return false;
+  }
+  const declaring = resolveRootRefForStructure(schema);
+  if (ContextualFlowControl.getAsCellValues(declaring).length > 0) {
+    return true;
+  }
+  for (const options of [declaring.anyOf, declaring.oneOf]) {
+    if (
+      Array.isArray(options) &&
+      everyOptionReadsAsHandle(options, declaring.$defs, reading)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether every option in `options` declares a handle, read against
+ * `definitions`, within `reading`.
+ */
+function everyOptionReadsAsHandle(
+  options: readonly JSONSchema[],
+  definitions: JSONSchemaObj["$defs"],
+  reading: HandleReading,
+): boolean {
+  const known = reading.verdicts.get(options);
+  if (known !== undefined && known.definitions === definitions) {
+    return known.every;
+  }
+  if (reading.open.has(options)) {
+    reading.assumed.add(options);
+    return false;
+  }
+  reading.open.add(options);
+  try {
+    const every = options.every((option) =>
+      readsAsHandle(cfcSchemaWithInheritedDefs(option, definitions), reading)
+    );
+    reading.verdicts.set(options, { definitions, every });
+    return every;
+  } finally {
+    reading.open.delete(options);
+  }
+}
+
+/**
+ * `SchemaObjectTraverser.hasAsCell()` verdicts for memoizable schemas that
+ * take resolving to read — a root `$ref`, or `anyOf` or `oneOf` options — which
+ * the traversal reads once for every property and every array element under
+ * one. A verdict reached through an external reference embeds registry
+ * content, so the registry clear swaps the cache.
+ */
+let _handleVerdicts = new WeakMap<JSONSchemaObj, boolean>();
+
+onSchemaRegistryClear(() => {
+  _handleVerdicts = new WeakMap();
+});
+
+/**
+ * Like {@link declaresAsCell}, except that the verdict is kept per schema
+ * identity where the schema is memoizable. A verdict reached while an external
+ * resolution missed is not kept, since the document can still arrive.
+ */
+function declaresAsCellMemoized(schema: JSONSchemaObj): boolean {
+  if (!isMemoizableSchemaInput(schema)) return declaresAsCell(schema);
+  const cached = _handleVerdicts.get(schema);
+  if (cached !== undefined) return cached;
+  const missesBefore = externalResolutionMissCount();
+  const verdict = declaresAsCell(schema);
+  if (externalResolutionMissCount() === missesBefore) {
+    _handleVerdicts.set(schema, verdict);
+  }
+  return verdict;
+}
+
+/**
+ * Whether `schema` declares a handle at its root, itself or through the
+ * definition its root `$ref` names. A union whose every option declares a
+ * handle is a handle as well (`SchemaObjectTraverser.hasAsCell()`), but which
+ * option's handle turns on the value, so the union's branches are traversed
+ * and their merge mints it.
+ *
+ * Every handle an eager read reaches is asked this, so a handle written at the
+ * root is answered without resolving anything, and only a root `$ref` that
+ * carries no handle of its own is read through.
+ */
+function declaresHandleAtRoot(schema: JSONSchema | undefined): boolean {
+  if (!isObjectNotArray(schema)) return false;
+  if (ContextualFlowControl.getAsCellValues(schema).length > 0) return true;
+  return typeof schema.$ref === "string" &&
+    ContextualFlowControl.getAsCellValues(resolveRootRefForStructure(schema))
+        .length > 0;
 }
 
 /**
@@ -5072,11 +5236,14 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // If we've asked for cells in the array and we don't need to traverse cells,
       // add the created cell instead. We check asCellOrStream regardless of
       // whether the value is a link — inline objects should also become cells
-      // when the schema says asCell, to avoid reading nested data on the
-      // parent's reactive transaction.
+      // when the schema declares the handle at its root, to avoid reading
+      // nested data on the parent's reactive transaction. A union whose options
+      // declare the handles declares none there: it is traversed below, and the
+      // merge of its branches mints the handle.
       if (
         !this.traverseCells &&
-        SchemaObjectTraverser.hasAsCell(curSelector.schema)
+        SchemaObjectTraverser.hasAsCell(curSelector.schema) &&
+        declaresHandleAtRoot(curSelector.schema)
       ) {
         // For my cell link, curDoc currently points to the last
         // redirect target, but we want cell properties to be based on the
@@ -5100,10 +5267,21 @@ export class SchemaObjectTraverser<V extends FabricValue>
         const plan = !this.traverseCells && curSelector.schema !== undefined
           ? preparePlainSchemaPlan(curSelector.schema)
           : undefined;
-        const { ok: val, error } = (plan === undefined
-          ? undefined
-          : this.#traversePlainSchema(curDoc, plan)) ??
-          this.traverseWithSelector(curDoc, curSelector);
+        const traverseElement = () =>
+          (plan === undefined
+            ? undefined
+            : this.#traversePlainSchema(curDoc, plan)) ??
+            this.traverseWithSelector(curDoc, curSelector);
+        // An element reaching here as a handle is a union of handles, whose
+        // branches are traversed to mint it; as for a property, those reads
+        // resolve the reference and are not conflict dependencies.
+        const { ok: val, error } = !this.traverseCells &&
+            SchemaObjectTraverser.hasAsCell(curSelector.schema)
+          ? this.tx.runWithAmbientReadMeta(
+            excludeReadFromConflict,
+            traverseElement,
+          )
+          : traverseElement();
         if (error !== undefined) {
           // If our item doesn't match our schema, we may be able to use
           // undefined or null if those are valid according to our schema.
@@ -5199,10 +5377,14 @@ export class SchemaObjectTraverser<V extends FabricValue>
         path: appendToPath(doc.address.path, propKey),
       };
       // If we have a link, the traverseWithSchema will handle that for us.
-      // If we have a value, we instead need to handle it ourselves
+      // If we have a value, we instead need to handle it ourselves, where the
+      // schema declares the handle at its root. A union whose options declare
+      // the handles declares none there: it is traversed below, and the merge
+      // of its branches mints the handle.
       if (
         !this.traverseCells &&
         SchemaObjectTraverser.hasAsCell(propSchema) &&
+        declaresHandleAtRoot(propSchema) &&
         !isSigilLink(propValue)
       ) {
         // Intentionally treat asCell/asStream as an opaque boundary in
@@ -5501,38 +5683,31 @@ export class SchemaObjectTraverser<V extends FabricValue>
   }
 
   /**
-   * Check whether the schema specifies asCell
+   * Returns whether the schema declares a handle: an `asCell` entry, of
+   * whatever kind.
+   *
+   * The schema's root `$ref` is resolved first, local or external
+   * ({@link resolveRootRefForStructure}): a definition declares the handle for
+   * every position of its type, so `{ $ref: "#/$defs/Profile" }` declares one
+   * exactly when `Profile` does, as `{ $ref, asCell }` does at the reference.
    *
    * This handling gets a little blurry with anyOf or oneOf schemas, and
    * in those cases, we base the value on whether every option has the flag.
+   * An option is read the same way, through its root `$ref` against the
+   * definitions of the schema it sits in, and a union that reaches itself
+   * through an option declares no handle by way of itself.
    *
    * A future improvement is to operate on pre-processed schemas, where the
    * asCell and asStream flags are factored out when possible.
-   *
-   * We do not resolve references in the anyOf or oneOf options, which means
-   * we don't need to worry about cycles, but it also means we may miss some
-   * references that should be asCell.
-   *
-   * @param schema
-   * @returns
    */
   static hasAsCell(schema: JSONSchema | undefined): boolean {
     if (schema === undefined || typeof schema === "boolean") {
       return false;
     }
-    const asCellValues = ContextualFlowControl.getAsCellValues(schema);
-    if (
-      asCellValues.length > 0 ||
-      (Array.isArray(schema.anyOf) &&
-        schema.anyOf.every((option) =>
-          SchemaObjectTraverser.hasAsCell(option)
-        )) ||
-      (Array.isArray(schema.oneOf) &&
-        schema.oneOf.every((option) => SchemaObjectTraverser.hasAsCell(option)))
-    ) {
-      return true;
-    }
-    return false;
+    return typeof schema.$ref === "string" || Array.isArray(schema.anyOf) ||
+        Array.isArray(schema.oneOf)
+      ? declaresAsCellMemoized(schema)
+      : ContextualFlowControl.getAsCellValues(schema).length > 0;
   }
 
   #applyDefault(

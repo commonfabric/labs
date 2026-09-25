@@ -29,6 +29,7 @@ import { createCell, isCell } from "./cell.ts";
 import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
+  resolveRootRefForStructure,
 } from "./cfc.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { CfcLabelViewRebaser } from "./cfc/label-view-rebaser.ts";
@@ -208,6 +209,26 @@ const asCellCompoundSchemaForValue = (
     }
   }
   return undefined;
+};
+
+/**
+ * `schema`, or, where it declares no handle itself and its root `$ref` names a
+ * definition that does, that definition read through the reference
+ * ({@link resolveRootRefForStructure}): a definition declares the handle for
+ * every position of its type. A schema that declares its handle at the
+ * reference, or declares none, is used as written.
+ */
+const withHandleDeclaredByDefinition = (
+  schema: JSONSchemaObj,
+): JSONSchemaObj => {
+  if (ContextualFlowControl.getAsCellValues(schema).length > 0) return schema;
+  // `hasAsCell()` keeps its verdict per schema, so a position that declares
+  // no handle through its reference is settled without resolving it again.
+  if (!SchemaObjectTraverser.hasAsCell(schema)) return schema;
+  const declaring = resolveRootRefForStructure(schema);
+  return ContextualFlowControl.getAsCellValues(declaring).length > 0
+    ? declaring
+    : schema;
 };
 
 export type CellViewRef = {
@@ -1822,8 +1843,10 @@ class TransformObjectCreator
       const structuralSchema = isObjectNotArray(link.schema)
         ? resolveExternalRootRefForStructure(link.schema)
         : link.schema;
-      const schema = asCellCompoundSchemaForValue(structuralSchema, value) ??
-        structuralSchema;
+      const schema = withHandleDeclaredByDefinition(
+        asCellCompoundSchemaForValue(structuralSchema, value) ??
+          structuralSchema,
+      );
       const asCellValues = ContextualFlowControl.getAsCellValues(schema);
       if (asCellValues.length > 0) {
         // We'll use the first asCell for the outermost, and pass the rest

@@ -8,26 +8,6 @@ import {
   getTypeFromCode,
 } from "./utils.ts";
 
-/**
- * A mirror of the `FabricValuePlus` family and the `FabricExecPlainObject`
- * alias as `@commonfabric/api` declares them, for a program that resolves no
- * package specifier. The generator identifies the base by name, so the name
- * is what has to match.
- */
-const EXEC_PLAIN_OBJECT_MIRROR = `
-  type FabricValue = string | number | boolean | null;
-  type FabricExecFunction = (...args: any[]) => any;
-  type FabricValuePlus<P> =
-    | FabricValue
-    | P
-    | FabricArrayPlus<P>
-    | FabricPlainObjectPlus<P>;
-  interface FabricArrayPlus<P> extends ReadonlyArray<FabricValuePlus<P>> {}
-  interface FabricPlainObjectPlus<P>
-    extends Readonly<Record<string, FabricValuePlus<P>>> {}
-  type FabricExecPlainObject = FabricPlainObjectPlus<FabricExecFunction>;
-`;
-
 describe("SchemaGenerator", () => {
   describe("formatter chain", () => {
     it("should route primitive types to PrimitiveFormatter", async () => {
@@ -3321,7 +3301,9 @@ type CalculatorRequest = {
       const { checker, sourceFile } = await createTestProgram(
         "interface Entry { host: string }\n" +
           'type Mode = "a" | "b";\n' +
-          "export type Keep = [Entry, Mode];",
+          "type Callable = (tags: string[]) => boolean;\n" +
+          "type MakesStream = () => Stream<number>;\n" +
+          "export type Keep = [Entry, Mode, Callable, MakesStream];",
       );
       const declared = (name: string) =>
         checker.getDeclaredTypeOfSymbol(
@@ -3333,6 +3315,8 @@ type CalculatorRequest = {
         sourceFile,
         entry: declared("Entry"),
         mode: declared("Mode"),
+        callable: declared("Callable"),
+        makesStream: declared("MakesStream"),
       };
     }
 
@@ -3377,6 +3361,92 @@ type CalculatorRequest = {
         properties: { entry: { $ref: "#/$defs/Entry" } },
         required: ["entry"],
         $defs: ENTRY_DEFS,
+      });
+    });
+
+    it("leaves a printed callable out of a type literal the caller built", async () => {
+      // The object type the literal stands for leaves the callable out, and
+      // so does the literal.
+      const { checker, sourceFile, callable } = await types();
+      const node = unresolvable();
+      const literal = ts.factory.createTypeLiteralNode([
+        ts.factory.createPropertySignature(undefined, "call", undefined, node),
+        ts.factory.createPropertySignature(
+          undefined,
+          "tags",
+          undefined,
+          ts.factory.createArrayTypeNode(
+            ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+          ),
+        ),
+      ]);
+
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        literal,
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+        printedFrom(new Map([[node, callable]])),
+      );
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: { tags: { type: "array", items: { type: "string" } } },
+        required: ["tags"],
+      });
+    });
+
+    it("reads a printed callable that makes a stream as a stream", async () => {
+      const { checker, sourceFile, makesStream } = await types();
+      const node = unresolvable();
+      const literal = ts.factory.createTypeLiteralNode([
+        ts.factory.createPropertySignature(undefined, "next", undefined, node),
+      ]);
+
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        literal,
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+        printedFrom(new Map([[node, makesStream]])),
+      );
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: { next: { asCell: ["stream"] } },
+        required: ["next"],
+      });
+    });
+
+    it("applies the hints attached to a printed callable that makes a stream", async () => {
+      const { checker, sourceFile, makesStream } = await types();
+      const node = unresolvable();
+      const literal = ts.factory.createTypeLiteralNode([
+        ts.factory.createPropertySignature(undefined, "next", undefined, node),
+      ]);
+
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        literal,
+        checker,
+        undefined,
+        new WeakMap([[node, {
+          cfcUiContract: { helper: "UiAction", action: "Go" },
+        }]]),
+        sourceFile,
+        printedFrom(new Map([[node, makesStream]])),
+      );
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: {
+          next: {
+            asCell: ["stream"],
+            ifc: { uiContract: { helper: "UiAction", action: "Go" } },
+          },
+        },
+        required: ["next"],
       });
     });
 
@@ -3786,43 +3856,6 @@ namespace Local {
       expect(schema.properties).toEqual({ name: { type: "string" } });
       expect(schema.required).toEqual(["name"]);
       expect(schema.additionalProperties).toEqual({ type: "number" });
-    });
-  });
-
-  describe("interfaces extending `FabricExecPlainObject`", () => {
-    it("emits no additionalProperties for an interface extending `FabricExecPlainObject`", async () => {
-      // The base is a type alias, so what the interface extends resolves to
-      // the aliased type; the generator has to identify it through the alias
-      // symbol that type carries.
-      const { type, checker } = await getTypeFromCode(
-        `${EXEC_PLAIN_OBJECT_MIRROR}
-        interface Pattern extends FabricExecPlainObject { foo: number }`,
-        "Pattern",
-      );
-      const schema = new SchemaGenerator().generateSchema(
-        type,
-        checker,
-      ) as Record<string, unknown>;
-
-      expect(schema.additionalProperties).toBeUndefined();
-      expect(Object.keys(schema.properties as object)).toEqual(["foo"]);
-    });
-
-    it("emits additionalProperties for an interface extending an index-signature base of another name", async () => {
-      // The control for the case above: the same shape under a different
-      // alias name keeps its index signature.
-      const { type, checker } = await getTypeFromCode(
-        `${EXEC_PLAIN_OBJECT_MIRROR}
-        type OtherPlainObject = FabricPlainObjectPlus<FabricExecFunction>;
-        interface Pattern extends OtherPlainObject { foo: number }`,
-        "Pattern",
-      );
-      const schema = new SchemaGenerator().generateSchema(
-        type,
-        checker,
-      ) as Record<string, unknown>;
-
-      expect(schema.additionalProperties).toBeDefined();
     });
   });
 

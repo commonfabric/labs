@@ -70,12 +70,12 @@ const __cfHandler_1 = __cfHelpers.handler({
     properties: {
         log: {
             anyOf: [{
+                    type: "undefined"
+                }, {
                     type: "array",
                     items: {
                         type: "string"
                     }
-                }, {
-                    type: "undefined"
                 }],
             asCell: ["writeonly"]
         }

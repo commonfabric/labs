@@ -279,7 +279,16 @@ SpaceServer outbox ──(e)──► network; results re-enter via (a)
   document is answered from the replica, and the feed's admitted
   commits (plane (d)) re-read the documents the replica holds — so the
   runtime walks the schema once, over what it actually reads, and the
-  memory server never walks it for the serving session at all. The
+  memory server never walks it for the serving session at all. Of the
+  loop's own commits the feed re-reads only the stream sidecars:
+  admission stamps each appended entry's seq and `firedAt` and advances
+  the stream's `eventWatermark` in the sidecar the store keeps, and the
+  event drain queues an entry only once the replica's view holds it at
+  that seq. Admission also stamps `issuedIn` into the effects doc's
+  intents and drops an intent whose nonce the store already holds, but
+  the loop reads neither from the replica: retirement scans the store,
+  and an intent is a tail append the store resolves. Every other write
+  of the loop's own the replica already holds as sealed. The
   read-through preserves the frame validator's delivery guarantee: it
   reads the `cid:` schema documents referenced by an accessed document's
   link positions or schema metadata, and follows the schema documents'

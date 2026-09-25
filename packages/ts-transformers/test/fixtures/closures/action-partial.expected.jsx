@@ -21,11 +21,7 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
     type: "object",
     properties: {
         a: {
-            anyOf: [{
-                    type: "string"
-                }, {
-                    type: "undefined"
-                }],
+            type: ["string", "undefined"],
             asCell: ["readonly"]
         }
     }
@@ -34,19 +30,16 @@ const __cfHandler_2 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
     type: "object",
     properties: {
         b: {
-            anyOf: [{
-                    type: "number"
-                }, {
-                    type: "undefined"
-                }],
+            type: ["number", "undefined"],
             asCell: ["readonly"]
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, (_, { b }) => console.log(b));
 // FIXTURE: action-partial
-// Verifies: Partial<BaseState> produces optional (anyOf undefined|type) capture schemas in handlers
-//   action(() => console.log(a)) → handler(false, { a: { anyOf: [undefined, string] } }, ...)({ a })
-// Context: Partial<> makes properties optional; capture schemas reflect this with anyOf union
+// Verifies: Partial<BaseState> produces optional capture schemas in handlers
+//   action(() => console.log(a)) → handler(false, { a: { type: ["string", "undefined"], asCell: ["readonly"] } }, ...)({ a })
+// Context: Partial<> makes properties optional; capture schemas reflect this
+//   with `undefined` in the property's type list
 export default pattern((__cf_pattern_input) => {
     const a = __cf_pattern_input.key("a");
     const b = __cf_pattern_input.key("b");

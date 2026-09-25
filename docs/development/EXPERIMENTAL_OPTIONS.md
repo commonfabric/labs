@@ -1554,6 +1554,26 @@ the per-epic implementation notes).
   record. What stands between it and a default is soak with the posture forced
   on. The end state is on by default, then the session read path for the home
   space goes.
+- **Status on 2026-09-25.** Implemented, off by default. The feed's refresh
+  re-reads the stream sidecars the serving loop's own commits touch: admission
+  stamps each appended entry's seq and advances the stream's `eventWatermark`
+  in the sidecar the store keeps, and the event drain queues an entry only once
+  the serving replica's view holds it at that seq. Without that re-read a
+  same-space event a served handler emits into a sidecar, and that the drain
+  has to dispatch, is deferred on every drain pass, and every later event in
+  the space waits behind it. That is how
+  the topic-board navigation benchmark's `comment` segment stalled under the
+  posture in [#8068](https://github.com/commonfabric/labs/pull/8068): the
+  profile-create surface's handler emits such an event to seed the new
+  Profile's name. `packages/runner/test/executor-events-down.test.ts` pins the
+  re-read. Measured in #8068's record
+  ([`docs/history/development/performance/2026-09-25-server-execution-topics-lunch-benchmarks.md`](../history/development/performance/2026-09-25-server-execution-topics-lunch-benchmarks.md)),
+  one run per arm on a shared four-core machine, with the browser, the bench
+  process and the toolshed contending for it: the served navigation `journey`
+  ran in 6.19 s against 6.89 s without the posture, a difference within that
+  record's noise floor of about a fifth; seeding a 30-topic board took 63 to
+  67 s against 79 to 125 s; and a cold board load after the space parked took
+  15.8 s against 21.9 to 22.8 s.
 - **Status on 2026-09-11.** Implemented, off by default. With the posture
   forced on, the runner's executor suites pass except two steps whose
   expectations are session-specific: a precondition probe that reads the
@@ -1564,8 +1584,7 @@ the per-epic implementation notes).
   `packages/runner/test/executor-fan-out.test.ts`: the run that discovers
   session depth serves the session instance at the moved ratchet, and a later
   session-scoped write re-runs it under the session key. The toolshed-backed
-  integration lanes pass. Measured on the topic-board navigation benchmark:
-  the served journey runs in roughly a third of the time.
+  integration lanes pass.
 - **Path to removal.** Soak with the posture forced on, flip the default, then
   delete the knob and the home-space session read path it replaces.
 

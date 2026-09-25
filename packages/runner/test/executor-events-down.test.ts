@@ -46,6 +46,7 @@ import type { Cell } from "../src/cell.ts";
 import type {
   IExtendedStorageTransaction,
   MemorySpace,
+  URI,
 } from "../src/storage/interface.ts";
 import { ReplicaLoadFailureError } from "../src/storage/interface.ts";
 import { RetryImmediately } from "../src/scheduler/retry-immediately.ts";
@@ -2907,6 +2908,60 @@ describe("Phase 3 events-down (serving side)", () => {
       id: argument.getAsNormalizedFullLink().id,
     });
     expect((doc?.value as { value?: number })?.value).toBe(11);
+    cancelDemand();
+  });
+
+  it("holds the store's admission-stamped sidecar in the serving replica under the store read-through posture once its own wave commits a same-space cascade", async () => {
+    // The served run of `first` marks its own entry consequenced and
+    // appends `second`'s entry to another sidecar, and the serving replica
+    // seals both sidecars itself. As the wave commits, admission stamps the
+    // appended entry's `seq` and advances each touched stream's
+    // `eventWatermark`, so the sidecars the store holds are not the ones
+    // the replica sealed. With no session watch to deliver them, the feed's
+    // refresh of the loop's own commit is the one path that brings them
+    // into the replica. A drain queues an entry only once the replica's view
+    // holds it at its stamped seq, so a view left with a sealed copy defers
+    // every later event in the space.
+
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const { argument, result } = await standUp(clientRuntime, CASCADE_PATTERN, {
+      arg: "cascade-read-through-arg",
+      result: "cascade-read-through-result",
+    });
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+
+    host = newHost({
+      flushDeadlineMs: 5_000,
+      idleParkMs: 600_000,
+      storeReadThrough: true,
+    });
+    result.key("first").send({});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitAdmitted(server, () => {
+      const doc = Engine.read(engine, {
+        id: argument.getAsNormalizedFullLink().id,
+      });
+      return ((doc?.value as { value?: number })?.value ?? 0) === 11;
+    });
+    // A cycle past the wave that committed the cascade, so its feed record
+    // has been drained.
+    await kickAndSettle(engine);
+
+    const replica = servingManager!.open(space).replica;
+    const sidecars = sidecarIdsIn(engine);
+    expect(sidecars.length).toBe(2);
+    for (const id of sidecars) {
+      const stored = Engine.read(engine, { id })?.value as StreamEventsDocValue;
+      for (const entry of stored.entries ?? []) {
+        expect(typeof entry.seq).toBe("number");
+      }
+      expect(replica.getDocument(id as URI)?.value).toEqual(stored);
+    }
+    expect(host.stats().events.visibilityDeferrals).toBe(0);
     cancelDemand();
   });
 
