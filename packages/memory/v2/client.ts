@@ -57,6 +57,14 @@ import { containsReservedSchemaRefSubstring } from "./sync-schema-ref.ts";
 import { expandServerMessageSchemas } from "./sync-schema-table.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
 
+/**
+ * The result of one pass through a session's watch-mutation chain that gave
+ * its turn back instead of sending (see `SpaceSession`'s `#runWatchMutation()`).
+ */
+const WATCH_MUTATION_RELEASED: unique symbol = Symbol(
+  "watch mutation released",
+);
+
 const logger = getLogger("memory.v2.client", {
   enabled: true,
   level: "error",
@@ -1183,11 +1191,16 @@ export class SpaceSession {
     return result.view;
   }
 
-  /** Replaces watches, or replays the owned set after queued changes apply. */
+  /**
+   * Replaces watches, or replays the owned set after queued changes apply.
+   * `options.restore` is for `restore()` alone: it marks the re-establishment,
+   * the one watch mutation sent while its session is still restoring.
+   */
   async watchSetSync(
     watches: WatchSpec[] | undefined,
     holdings?: SessionHolding[],
     views?: ViewInterest[],
+    options?: { restore?: boolean },
   ): Promise<WatchMutationResult> {
     this.#assertOpen();
     if (
@@ -1237,6 +1250,7 @@ export class SpaceSession {
         };
       },
       watches === undefined ? "apply" : "issue",
+      options?.restore === true,
     );
   }
 
@@ -1581,6 +1595,7 @@ export class SpaceSession {
           this.#viewsDirty || this.#viewInterests.length > 0
             ? this.#viewInterests
             : undefined,
+          { restore: true },
         );
         if (!isEmptySync(sync)) {
           view.emit(sync);
@@ -1787,14 +1802,73 @@ export class SpaceSession {
    * derived from session state (`watchRemoveSync`) passes `sendAfter: "apply"`,
    * which also holds `send` until every preceding response has been applied;
    * it still claims its place in issue order, so later mutations wait behind
-   * it.
+   * it. `restoring` marks `restore()`'s own re-establishment, which sends while
+   * its session is still restoring.
    */
   async #runWatchMutation<R, T>(
     send: () => Promise<R>,
     apply: (result: R) => T,
     sendAfter: "issue" | "apply" = "issue",
+    restoring = false,
   ): Promise<T> {
     this.#assertOpen();
+    // An ordinary mutation never holds its turn on the chain while it waits
+    // for a restore. `restore()` re-establishes the watch set through this
+    // chain and cannot finish before that request is answered, so a turn held
+    // across the wait is one the restore queues behind, and the reconnect
+    // carrying it never completes. A mutation whose turn comes while a restore
+    // is pending gives the turn back unsent, waits for the restore off the
+    // chain, and queues again. The restore's own `watch.set` is exempt: it is
+    // how the restore finishes.
+    for (;;) {
+      if (!restoring && this.#watchMutationWaitsForRestore()) {
+        await this.#whenWatchMutationsMaySend();
+      }
+      const outcome = await this.#queueWatchMutation(
+        send,
+        apply,
+        sendAfter,
+        () => restoring || !this.#watchMutationWaitsForRestore(),
+      );
+      if (outcome !== WATCH_MUTATION_RELEASED) return outcome;
+    }
+  }
+
+  /**
+   * Whether a watch mutation sent now would have to wait for a restore: the
+   * connection is down (the reconnect that restores this session is running),
+   * or this session's own restore has not completed. Each is something
+   * `#whenWatchMutationsMaySend()` can wait on, so a released mutation always
+   * blocks on a real event rather than spinning.
+   */
+  #watchMutationWaitsForRestore(): boolean {
+    return !this.#client.isConnected() || this.#restoreComplete !== undefined;
+  }
+
+  /**
+   * Helper for `#runWatchMutation()`, which waits out the reconnect in
+   * progress, if any, and then this session's restore, if one is pending.
+   * Throws the session's close error when the session closes meanwhile, and
+   * the client's error when it gives up reconnecting.
+   */
+  async #whenWatchMutationsMaySend(): Promise<void> {
+    this.#assertOpen();
+    await this.#client.restoreConnection();
+    await this.#restoreComplete?.promise;
+    this.#assertOpen();
+  }
+
+  /**
+   * One pass through the watch-mutation chain. `maySend` is asked when this
+   * mutation's turn comes; when it says no, nothing is sent, the turn passes
+   * on, and the pass resolves to `WATCH_MUTATION_RELEASED`.
+   */
+  async #queueWatchMutation<R, T>(
+    send: () => Promise<R>,
+    apply: (result: R) => T,
+    sendAfter: "issue" | "apply",
+    maySend: () => boolean,
+  ): Promise<T | typeof WATCH_MUTATION_RELEASED> {
     if (!this.#concurrentWatchRefresh) {
       // Single-flight (default): send + apply run together, chained on the
       // prior mutation's completion. Nothing is issued until the previous
@@ -1805,7 +1879,7 @@ export class SpaceSession {
       // watch view between the response resolving and `apply` running.
       const previous = this.#watchApply;
       const current = previous.catch(() => undefined).then(async () =>
-        apply(await send())
+        maySend() ? apply(await send()) : WATCH_MUTATION_RELEASED
       );
       this.#watchApply = current.then(() => undefined, () => undefined);
       return await current;
@@ -1826,8 +1900,9 @@ export class SpaceSession {
     const readyToIssue = sendAfter === "apply"
       ? Promise.all([this.#watchIssue, previousApply])
       : this.#watchIssue;
-    let response!: Promise<R>;
+    let response: Promise<R> | undefined;
     const issued = readyToIssue.catch(() => undefined).then(() => {
+      if (!maySend()) return;
       response = send();
       // Attach a rejection handler immediately: a later request may reject
       // while an earlier mutation is still pending, which would otherwise
@@ -1840,7 +1915,9 @@ export class SpaceSession {
     const current = Promise.all([
       previousApply.catch(() => undefined),
       issued,
-    ]).then(() => response).then((result) => apply(result));
+    ]).then(async () =>
+      response === undefined ? WATCH_MUTATION_RELEASED : apply(await response)
+    );
     this.#watchApply = current.then(() => undefined, () => undefined);
     return await current;
   }
