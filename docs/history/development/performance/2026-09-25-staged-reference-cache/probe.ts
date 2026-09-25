@@ -1,5 +1,6 @@
 /** Measures staged reference graph preparation, keeping setup outside timing. */
 import { Session } from "node:inspector/promises";
+import { sha256 } from "@commonfabric/content-hash";
 import { Identity } from "@commonfabric/identity";
 import type { JSONSchema } from "../../../../../packages/runner/src/builder/types.ts";
 import { readStoredCfcMetadata } from "../../../../../packages/runner/src/cfc/metadata.ts";
@@ -101,12 +102,7 @@ async function measure(depth: number, width: number, order: string) {
     inspect.abort();
     const serialized = JSON.stringify(views);
     const bytes = new TextEncoder().encode(serialized);
-    const hash = [
-      ...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
-    ]
-      .map((byte) =>
-        byte.toString(16).padStart(2, "0")
-      ).join("");
+    const hash = sha256(bytes).toHex();
     const root = views[0].entries;
     const leaves = root.filter((entry) =>
       entry.path.length === depth + 1 &&

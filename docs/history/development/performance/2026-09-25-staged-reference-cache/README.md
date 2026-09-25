@@ -46,7 +46,9 @@ arm has its production work counters enabled.
 
 ## Diamond preparation
 
-Milliseconds; each cell is median / minimum across five process runs.
+Binary diamonds (width 2), in milliseconds; each cell is median / minimum
+across five process runs. The width-1 sweep records remain in `paired.jsonl`;
+the dedicated warmed chain series is reported separately below.
 
 | Depth | Staging order | Baseline          | Cache           |
 | ----- | ------------- | ----------------- | --------------- |
