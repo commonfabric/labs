@@ -28,11 +28,20 @@ import {
   type Server as MemoryServer,
 } from "@commonfabric/memory/v2/server";
 import { acquireServerExecutionEnabler } from "@commonfabric/memory/v2";
-import { selectPendingStreamEventDocs } from "@commonfabric/memory/v2/engine";
+import {
+  type Engine,
+  selectPendingStreamEventDocs,
+  serverSeq,
+} from "@commonfabric/memory/v2/engine";
 import { getLogger } from "@commonfabric/utils/logger";
 import type { Runtime } from "../runtime.ts";
 import type { MemorySpace } from "../storage/interface.ts";
 import {
+  type ParkedRuntimeHandle,
+  ParkedServingRuntime,
+} from "./parked-runtime.ts";
+import {
+  awaitDisposeTimeboxed,
   LIFECYCLE_VERB_SPACE_PARKED,
   type LifecycleVerb,
   type RuntimeFactoryContext,
@@ -75,6 +84,13 @@ const logger = getLogger("executor-host", { enabled: true, level: "warn" });
 // idle park or a successfully committed wave clears the streak.
 const DEFAULT_FAILURE_PARK_BACKOFF_BASE_MS = 25;
 const DEFAULT_FAILURE_PARK_BACKOFF_MAX_MS = 30_000;
+
+// Parked-runtime retention (serving-loop.md §1, "Parking"): how long, and
+// how many, idle-parked runtimes the host keeps for their spaces' next
+// tenures. The spec's paragraph states the memory each costs and why these
+// defaults.
+const DEFAULT_PARKED_RUNTIME_RETENTION_MS = 10 * 60_000;
+const DEFAULT_MAX_PARKED_RUNTIMES = 8;
 
 const failureParkBackoffDelayMs = (
   streak: number,
@@ -203,6 +219,19 @@ export class ExecutorHost {
    * delayed re-activation never stalls shutdown. */
   readonly #backoffWakers = new Set<() => void>();
 
+  /**
+   * Runtimes kept from idle parks, by space, each with the timer that ends
+   * its retention. Insertion order is park order, so the first entry is the
+   * one kept longest.
+   */
+  readonly #parkedRuntimes = new Map<string, {
+    parked: ParkedServingRuntime;
+    expiry: ReturnType<typeof setTimeout>;
+  }>();
+
+  /** Disposals of parked runtimes still running; close() waits them out. */
+  readonly #parkedDisposals = new Set<Promise<void>>();
+
   readonly #stats: ServingLoopStats = emptyServingLoopStats();
   #releaseServerExecution: () => void = () => {};
   #closed = false;
@@ -281,6 +310,10 @@ export class ExecutorHost {
       outbox: { ...this.#stats.outbox },
       lease: { ...this.#stats.lease },
       lifecycleVerbs: { ...this.#stats.lifecycleVerbs },
+      parkedRuntimes: {
+        ...this.#stats.parkedRuntimes,
+        held: this.#parkedRuntimes.size,
+      },
       activeSpaces,
       watermarkLag,
     };
@@ -590,7 +623,16 @@ export class ExecutorHost {
         server: this.#options.server,
         engine,
         serviceIdentity: this.#options.serviceIdentity,
-        createRuntime: (context) => this.#options.createRuntime(space, context),
+        // A runtime kept from the space's last idle park serves this tenure
+        // when the store has not moved since; otherwise the factory builds
+        // one. Called once the tenure holds the lease.
+        createRuntime: (context) => {
+          const parked = this.#takeParkedRuntime(space, engine);
+          return parked !== undefined
+            ? Promise.resolve(parked)
+            : this.#options.createRuntime(space, context);
+        },
+        retainParkedRuntime: (handle) => this.#retainParkedRuntime(handle),
         localSeqRef,
         stats: this.#stats,
         policy: this.#options.policy,
@@ -750,6 +792,109 @@ export class ExecutorHost {
   }
 
   /**
+   * Keeps the runtime of a tenure that parked idle for the space's next
+   * tenure (serving-loop.md §1, "Parking"), fenced, for up to
+   * `parkedRuntimeRetentionMs` and within `maxParkedRuntimes`. Returns the
+   * fenced instance, or `undefined` — retention off, or the host closed —
+   * to have the tenure dispose the runtime.
+   */
+  #retainParkedRuntime(
+    handle: ParkedRuntimeHandle,
+  ): ParkedServingRuntime | undefined {
+    const retentionMs = this.#options.policy?.parkedRuntimeRetentionMs ??
+      DEFAULT_PARKED_RUNTIME_RETENTION_MS;
+    const maxRuntimes = this.#options.policy?.maxParkedRuntimes ??
+      DEFAULT_MAX_PARKED_RUNTIMES;
+    if (this.#closed || retentionMs <= 0 || maxRuntimes <= 0) return;
+    const { space } = handle;
+    // A tenure takes its space's parked runtime when it activates, so a
+    // runtime still kept here is one that tenure turned down or never
+    // reached; the newer park supersedes it.
+    this.#discardParkedRuntime(space);
+    const parked = new ParkedServingRuntime(handle);
+    // Deferred: the taint arrives inside a storage notification or a
+    // seal, and the dispose must not run inside either.
+    parked.onTainted = () =>
+      queueMicrotask(() => this.#discardParkedRuntime(space, parked));
+    this.#parkedRuntimes.set(space, {
+      parked,
+      expiry: setTimeout(
+        () => this.#discardParkedRuntime(space, parked),
+        retentionMs,
+      ),
+    });
+    this.#stats.parkedRuntimes.retained += 1;
+    while (this.#parkedRuntimes.size > maxRuntimes) {
+      const [oldest] = this.#parkedRuntimes.keys();
+      this.#discardParkedRuntime(oldest);
+    }
+    return parked;
+  }
+
+  /**
+   * The runtime kept from `space`'s last idle park, unfenced for the
+   * tenure now activating, when the space's store head is still the one
+   * that park recorded and nothing tainted it; `undefined` otherwise, in
+   * which case a runtime that was kept is disposed.
+   */
+  #takeParkedRuntime(
+    space: MemorySpace,
+    engine: Engine,
+  ): { runtime: Runtime; dispose: () => Promise<void> } | undefined {
+    const entry = this.#parkedRuntimes.get(space);
+    if (entry === undefined) return undefined;
+    this.#parkedRuntimes.delete(space);
+    clearTimeout(entry.expiry);
+    const taken = entry.parked.take(serverSeq(engine));
+    if (taken === undefined) {
+      this.#disposeParkedRuntime(entry.parked);
+      return undefined;
+    }
+    this.#stats.parkedRuntimes.reused += 1;
+    return taken;
+  }
+
+  /**
+   * Stops keeping `space`'s parked runtime and disposes it — only when it
+   * is `parked`, if that is given, so that a late expiry or taint cannot
+   * end a newer park's runtime.
+   */
+  #discardParkedRuntime(space: string, parked?: ParkedServingRuntime): void {
+    const entry = this.#parkedRuntimes.get(space);
+    if (entry === undefined) return;
+    if (parked !== undefined && entry.parked !== parked) return;
+    this.#parkedRuntimes.delete(space);
+    clearTimeout(entry.expiry);
+    this.#disposeParkedRuntime(entry.parked);
+  }
+
+  /**
+   * Helper for the retention methods above, which disposes a parked
+   * runtime that will not be reused, counted, with `close()` able to wait
+   * for it. The dispose runs under the park's dispose deadline
+   * (`SpaceServerPolicy.parkDisposeTimeoutMs`), so that one that hangs
+   * cannot hold `close()` open.
+   */
+  #disposeParkedRuntime(parked: ParkedServingRuntime): void {
+    this.#stats.parkedRuntimes.discarded += 1;
+    const space = parked.space;
+    const disposal = awaitDisposeTimeboxed(parked.dispose(), {
+      policy: this.#options.policy,
+      stats: this.#stats,
+      space,
+      overrun: (timeoutMs) =>
+        `space ${space}: disposing a parked runtime overran ` +
+        `${timeoutMs}ms; abandoning it`,
+    }).catch((error) => {
+      logger.warn("parked-runtime-dispose-failed", () => [
+        `space ${space}: disposing a parked runtime failed`,
+        error,
+      ]);
+    }).finally(() => this.#parkedDisposals.delete(disposal));
+    this.#parkedDisposals.add(disposal);
+  }
+
+  /**
    * Park every space and detach from the memory server. Settles once every
    * park has finished; a park that failed is rethrown then, several as an
    * `AggregateError`.
@@ -791,6 +936,12 @@ export class ExecutorHost {
     );
     this.#spaces.clear();
     this.#pendingNotices.clear();
+    // The parked runtimes go too, and like the parks above they are waited
+    // out: each disposes against the memory server the caller closes next.
+    for (const space of [...this.#parkedRuntimes.keys()]) {
+      this.#discardParkedRuntime(space);
+    }
+    await Promise.allSettled([...this.#parkedDisposals]);
     // The host's enabler releases; the ambient flag resets only when no
     // other enabler (an explicitly-enabled Runtime) is still live.
     this.#releaseServerExecution();

@@ -65,6 +65,10 @@ import {
   type Server as MemoryServer,
 } from "@commonfabric/memory/v2/server";
 
+import type {
+  ParkedRuntimeHandle,
+  ParkedServingRuntime,
+} from "./parked-runtime.ts";
 import { ViewPlanPublisher } from "./view-plan-publisher.ts";
 
 /** The deferral backstop cadence: with NO input arriving at all, a
@@ -251,6 +255,21 @@ export type SpaceServerPolicy = {
   /** serving-loop.md §1's IDLE_PARK_MS. */
   idleParkMs?: number;
 
+  /**
+   * How long the host keeps the runtime of a space that parked idle, for
+   * the space's next tenure to serve with (read by the ExecutorHost;
+   * serving-loop.md §1, "Parking"). `0` disposes every runtime at its
+   * park.
+   */
+  parkedRuntimeRetentionMs?: number;
+
+  /**
+   * How many parked runtimes the host keeps at once, across its spaces
+   * (read by the ExecutorHost); keeping one more disposes the
+   * longest-kept. `0` disposes every runtime at its park.
+   */
+  maxParkedRuntimes?: number;
+
   renewIntervalMs?: number;
 
   /** OW54's owner-ratified cumulative confirmed failed-state budget. */
@@ -349,6 +368,18 @@ export type SpaceServerOptions = {
   policy?: SpaceServerPolicy;
   onParked?: (reason: string) => void;
 
+  /**
+   * Offered the tenure's runtime when the tenure parks idle, in place of
+   * disposing it (serving-loop.md §1, "Parking"). Returns the fenced
+   * instance holding it when the caller keeps it, and `undefined` to have
+   * the tenure dispose it as usual. A park for any other reason disposes
+   * its runtime without asking: a lost lease, a failed loop or a host
+   * closing leaves nothing a successor should build on.
+   */
+  retainParkedRuntime?: (
+    handle: ParkedRuntimeHandle,
+  ) => ParkedServingRuntime | undefined;
+
   /** Internal deterministic-verification seam around the engine-direct wave
    * sink. Production omits it; tests can causally reject one identified wave
    * without replacing storage or parsing logs. */
@@ -403,6 +434,59 @@ export type SpaceServerOptions = {
 const DEFAULT_FLUSH_DEADLINE_MS = 100;
 const DEFAULT_IDLE_PARK_MS = 30_000;
 const DEFAULT_PARK_DISPOSE_TIMEOUT_MS = 5_000;
+
+/**
+ * Awaits `pending`, a runtime dispose, under the park's dispose deadline
+ * (`SpaceServerPolicy.parkDisposeTimeoutMs`). Rejects as `pending` does
+ * when it fails in time. On overrun the dispose is abandoned: counted in
+ * `stats.parkDisposeTimeouts`, logged as an error with `overrun`'s
+ * message, and left running with its eventual outcome logged, while the
+ * returned promise resolves.
+ */
+export async function awaitDisposeTimeboxed(
+  pending: Promise<void>,
+  options: {
+    policy: SpaceServerPolicy | undefined;
+    stats: ServingLoopStats;
+    space: string | undefined;
+    overrun: (timeoutMs: number) => string;
+  },
+): Promise<void> {
+  const timeoutMs = options.policy?.parkDisposeTimeoutMs ??
+    DEFAULT_PARK_DISPOSE_TIMEOUT_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const winner = await Promise.race([
+    pending.then(
+      () => "disposed" as const,
+      () => "failed" as const,
+    ),
+    new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), timeoutMs);
+    }),
+  ]);
+  if (timer !== undefined) clearTimeout(timer);
+  // Re-awaited so that the caller sees the dispose's own error.
+  if (winner === "failed") return pending;
+  if (winner === "disposed") return;
+  options.stats.parkDisposeTimeouts += 1;
+  logger.error("park-dispose-timeout", options.overrun(timeoutMs));
+  // The abandoned dispose keeps running; observe its eventual fate so a
+  // late completion is visible and a late rejection never becomes an
+  // unhandled rejection.
+  pending.then(
+    () => {
+      logger.warn("park-dispose-late", () => [
+        `space ${options.space}: abandoned park dispose completed late`,
+      ]);
+    },
+    (error) => {
+      logger.warn("park-dispose-late-failed", () => [
+        `space ${options.space}: abandoned park dispose failed late`,
+        error,
+      ]);
+    },
+  );
+}
 
 /**
  * Phase 5's foreign re-mark decision (serving-loop.md §3b's cross-space
@@ -528,6 +612,9 @@ export type LifecycleVerb<T> = {
 export const LIFECYCLE_VERB_SPACE_PARKED =
   "the space parked before the lifecycle verb ran";
 
+/** The reason carried by a seal a tenure refuses once it has parked. */
+export const SEAL_AFTER_PARK_REFUSED = "seal-after-park-refused";
+
 type QueuedLifecycleVerb = {
   verb: LifecycleVerb<unknown>;
   resolve: (receipt: unknown) => void;
@@ -576,6 +663,16 @@ export class SpaceServer implements TransactionSealDestination {
   #runtime: Runtime | undefined;
   #viewPlanPublisher = new ViewPlanPublisher();
   #disposeRuntime: (() => Promise<void>) | undefined;
+
+  /** The fenced runtime this tenure handed over when it parked idle. */
+  #retainedAs: ParkedServingRuntime | undefined;
+
+  /**
+   * Whether this tenure refused a write because it had parked. A runtime
+   * that tried to write after its park is never offered on.
+   */
+  #refusedWriteAfterPark = false;
+
   #sink: WaveCommitSink | undefined;
   #renewTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -1281,9 +1378,12 @@ export class SpaceServer implements TransactionSealDestination {
     if (storeReadThrough !== undefined) {
       runtime.storageManager.installStoreReadThrough?.(space, storeReadThrough);
     }
-    // MINOR-2: the fresh runtime's demand-root counters start at 0.
-    this.#lastFoldedDemandEnters = 0;
-    this.#lastFoldedDemandLeaves = 0;
+    // MINOR-2: fold from where this runtime's demand-root counters stand —
+    // 0 on a fresh runtime, and wherever the last tenure folded them to on
+    // one retained across an idle park.
+    const demandRootCounters = runtime.scheduler.demandRootCounters;
+    this.#lastFoldedDemandEnters = demandRootCounters.enters;
+    this.#lastFoldedDemandLeaves = demandRootCounters.leaves;
     const sink = new EngineWaveCommitSink({
       engineFor: (s) => s === space ? engine : this.#foreignEngineFor(s),
       sessionId: this.#holder,
@@ -1437,14 +1537,13 @@ export class SpaceServer implements TransactionSealDestination {
 
     // Recovery/warm start are the same move (serving-loop.md §6 step 2):
     // the activation scan computes the stale (action, instance) set
-    // from the basis index and SURFACES it (counted, logged). Phase-1
-    // truth, stated plainly: the scan does not yet seed scheduler
-    // dirtiness — a fresh runtime holds no materialized graph to mark,
-    // and recovery CORRECTNESS rides recompute-on-demand (a demanded
-    // pull recomputes regardless, which is what makes the fresh-start
-    // path sound). The index's skip-still-current warm-start VALUE
-    // materializes when a later stage carries a materialized graph
-    // across activation.
+    // from the basis index and SURFACES it (counted, logged). The scan
+    // does not seed scheduler dirtiness. A fresh runtime holds no
+    // materialized graph to mark, and its recovery CORRECTNESS rides
+    // recompute-on-demand (a demanded pull recomputes regardless). A
+    // runtime kept from an idle park holds one, and is taken only while
+    // the store head is the one its tenure parked at (serving-loop.md §1,
+    // "Parking"), so what its graph holds clean is still current.
     const scanHead = Engine.serverSeq(engine);
     const { stale, foreignReadInstances } = selectStaleBasisInstances(
       engine,
@@ -1857,6 +1956,23 @@ export class SpaceServer implements TransactionSealDestination {
   //
 
   seal(tx: IExtendedStorageTransaction): Promise<Result<Unit, CommitError>> {
+    // A transaction opened during this tenure and closed after it parked
+    // commits nothing: the lease is released and no loop remains to
+    // commit a wave. When the runtime outlived the park, the refusal is
+    // what keeps a successor tenure from being handed a runtime that
+    // tried to write in between.
+    if (this.#parkRequested) {
+      this.#noteRefusedWriteAfterPark();
+      return Promise.resolve({
+        error: {
+          name: "StorageTransactionAborted",
+          message: `space ${this.#options.space}: the transaction closed ` +
+            "after its serving tenure parked; nothing commits once the " +
+            "lease is released (serving-loop.md §2)",
+          reason: new Error(SEAL_AFTER_PARK_REFUSED),
+        },
+      });
+    }
     // A transaction stamped `directCommit` commits to the store on its own
     // (docs/features/server-pattern-lifecycle.md): serialized on the same
     // chain as wave seals, since it applies to the replica overlay through
@@ -2007,6 +2123,15 @@ export class SpaceServer implements TransactionSealDestination {
     tx: IExtendedStorageTransaction,
     row: OutboxAppendRow,
   ): void {
+    if (this.#parkRequested) {
+      // The same refusal `seal()` gives a transaction outliving the tenure.
+      this.#noteRefusedWriteAfterPark();
+      throw new Error(
+        `space ${this.#options.space}: a cross-space event append was ` +
+          "staged after its serving tenure parked; nothing commits once " +
+          "the lease is released (serving-loop.md §2)",
+      );
+    }
     const wave = this.#openWave();
     this.#waveByTx.set(tx, wave);
     wave.enqueueOutboundAppend(tx, row);
@@ -6523,59 +6648,26 @@ export class SpaceServer implements TransactionSealDestination {
     this.#viewPlanPublisher.dispose();
     const dispose = this.#disposeRuntime;
     if (dispose === undefined) return;
-    const timeoutMs = this.#options.policy?.parkDisposeTimeoutMs ??
-      DEFAULT_PARK_DISPOSE_TIMEOUT_MS;
-    const pending = dispose();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const winner = await Promise.race([
-      pending.then(
-        () => "disposed" as const,
-        () => "failed" as const,
-      ),
-      new Promise<"timeout">((resolve) => {
-        timer = setTimeout(() => resolve("timeout"), timeoutMs);
-      }),
-    ]);
-    if (timer !== undefined) clearTimeout(timer);
-    if (winner === "failed") {
-      // Re-await so the caller's catch logs the error (the existing
-      // park-dispose-failed arm).
-      return pending;
-    }
-    if (winner === "timeout") {
-      this.#options.stats.parkDisposeTimeouts += 1;
-      logger.error(
-        "park-dispose-timeout",
+    // A dispose that fails in time rejects here, for the caller's
+    // park-dispose-failed arm to log.
+    await awaitDisposeTimeboxed(dispose(), {
+      policy: this.#options.policy,
+      stats: this.#options.stats,
+      space: this.#options.space,
+      overrun: (timeoutMs) =>
         `space ${this.#options.space}: runtime dispose overran ` +
-          `${timeoutMs}ms during park (${reason}); abandoning the ` +
-          "factory handle and completing the park — loop stopped, " +
-          "wave abandoned, seal chain drained; lease releases and " +
-          "whenParked resolves now (park liveness)",
-      );
-      // The abandoned dispose keeps running; observe its eventual fate
-      // so a late completion is visible and a late rejection never
-      // becomes an unhandled rejection.
-      pending.then(
-        () => {
-          logger.warn("park-dispose-late", () => [
-            `space ${this.#options.space}: abandoned park dispose ` +
-            "completed late",
-          ]);
-        },
-        (error) => {
-          logger.warn("park-dispose-late-failed", () => [
-            `space ${this.#options.space}: abandoned park dispose ` +
-            "failed late",
-            error,
-          ]);
-        },
-      );
-    }
+        `${timeoutMs}ms during park (${reason}); abandoning the ` +
+        "factory handle and completing the park — loop stopped, " +
+        "wave abandoned, seal chain drained; lease releases and " +
+        "whenParked resolves now (park liveness)",
+    });
   }
 
-  /** Park (serving-loop.md §1): release the lease, dispose the runtime.
-   * Once the park completes, the host re-activates a space that still
-   * meets the ACTIVE criteria, unless a rival's lease caused the park. */
+  /** Park (serving-loop.md §1): release the lease, and either hand the
+   * runtime to `retainParkedRuntime` — an idle park, when the caller keeps
+   * it — or dispose it, as every other park does. Once the park
+   * completes, the host re-activates a space that still meets the ACTIVE
+   * criteria, unless a rival's lease caused the park. */
   async park(reason: string): Promise<void> {
     // A park already in flight — the renew arm's lease-lost park runs
     // unawaited — is what a second caller waits for: the host's close
@@ -6590,6 +6682,13 @@ export class SpaceServer implements TransactionSealDestination {
 
   async #parkResources(reason: string): Promise<void> {
     const wasActive = this.#active;
+    // Only an idle park offers the runtime on (serving-loop.md §1,
+    // "Parking"): the loop settled, nothing was queued, and no session
+    // demanded anything, so the runtime holds a served state a successor
+    // can take up as it stands.
+    const offerRuntime = reason === "idle" && wasActive &&
+      this.#runtime !== undefined &&
+      this.#options.retainParkedRuntime !== undefined;
     this.#active = false;
     this.#parkRequested = true;
     this.#structureLoadAbort.abort();
@@ -6630,6 +6729,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#attentionSealWriteBlocked.clear();
     this.#deliveryWriteBlockedAt.clear();
     this.#uncommittedDeliveryFailureEpochs.clear();
+    if (offerRuntime) this.#leaveDemandedEntities(this.#runtime!);
     this.#demandedRoots.clear();
     this.#demandersByKey.clear();
     this.#demandedPairCount = 0;
@@ -6673,6 +6773,15 @@ export class SpaceServer implements TransactionSealDestination {
     this.#currentWave = undefined;
     await this.#sealChain;
     wave?.abandon(`parked: ${reason}`);
+    // An effect this tenure admitted and has not retired is tied to the
+    // outbox closed below. A held dispatch is dropped there, and only a
+    // fresh runtime's memo re-miss fires it again; a dispatched one
+    // completes after the close, and a successor would commit that
+    // completion without the identity carriage this outbox holds for it.
+    const effectsSettled = (this.#outbox?.inflightCount ?? 0) === 0 &&
+      [...this.#pendingEffectsByWave.values()].every((batches) =>
+        batches.length === 0
+      );
     // Stage G: an abandoned wave's deferred effects are DISCARDED with
     // it — the runtime below is disposed, so this is the
     // crash-equivalent path §4/§6 already cover (the effect re-misses
@@ -6690,6 +6799,7 @@ export class SpaceServer implements TransactionSealDestination {
     // work for a dead runtime after re-activation rebuilt the outbox.
     this.#outbox?.close();
     this.#outbox = undefined;
+    let detached = false;
     try {
       if (this.#runtime !== undefined) {
         this.#runtime.asyncWorkObserver = undefined;
@@ -6705,19 +6815,30 @@ export class SpaceServer implements TransactionSealDestination {
           .shadowFlipObserver = undefined;
       }
       this.#runtime?.clearSealDestination();
+      detached = true;
     } catch (error) {
       logger.warn("park-runtime-cleanup-failed", () => [
         "runtime observer cleanup during park failed",
         error,
       ]);
     }
-    try {
-      await this.#disposeRuntimeTimeboxed(reason);
-    } catch (error) {
-      logger.warn("park-dispose-failed", () => [
-        "runtime dispose during park failed",
-        error,
-      ]);
+    // A runtime whose observers did not all detach still reports into this
+    // tenure, one whose open wave was just abandoned holds runs its
+    // scheduler counts as done whose writes never committed, and one with
+    // effects unsettled holds work only a fresh runtime recovers; each is
+    // disposed rather than offered on.
+    if (
+      !(offerRuntime && detached && wave === undefined && effectsSettled &&
+        this.#offerRuntime())
+    ) {
+      try {
+        await this.#disposeRuntimeTimeboxed(reason);
+      } catch (error) {
+        logger.warn("park-dispose-failed", () => [
+          "runtime dispose during park failed",
+          error,
+        ]);
+      }
     }
     this.#runtime = undefined;
     this.#disposeRuntime = undefined;
@@ -6738,5 +6859,65 @@ export class SpaceServer implements TransactionSealDestination {
     ]);
     this.#options.onParked?.(reason);
     this.#parked.resolve();
+  }
+
+  /**
+   * Helper for `#parkResources()`, which offers the detached runtime to
+   * `retainParkedRuntime` and returns whether it was kept. The store head
+   * it records is read after the tenure's last seal settled, so it covers
+   * everything the tenure committed. A runtime that tried to write after
+   * the park is not offered.
+   */
+  #offerRuntime(): boolean {
+    if (this.#refusedWriteAfterPark) return false;
+    const runtime = this.#runtime!;
+    const dispose = this.#disposeRuntime!;
+    this.#viewPlanPublisher.dispose();
+    try {
+      this.#retainedAs = this.#options.retainParkedRuntime!({
+        runtime,
+        dispose,
+        space: this.#options.space,
+        head: Engine.serverSeq(this.#options.engine),
+      });
+    } catch (error) {
+      logger.warn("park-retain-failed", () => [
+        `space ${this.#options.space}: retaining the parked runtime failed; ` +
+        "disposing it instead",
+        error,
+      ]);
+      return false;
+    }
+    return this.#retainedAs !== undefined;
+  }
+
+  /**
+   * Helper for `#parkResources()`, which releases every demanded entity
+   * this tenure entered on `runtime`'s scheduler before the runtime is
+   * offered on. The successor tenure's demand pass enters what its own
+   * sessions demand, so an entity left entered here would stay a demand
+   * root that nothing ever leaves. Addressed as the demand pass addresses
+   * a departed key.
+   */
+  #leaveDemandedEntities(runtime: Runtime): void {
+    for (const key of this.#demandersByKey.keys()) {
+      const sep = key.indexOf("\0");
+      runtime.scheduler.leaveDemandedEntity({
+        space: this.#options.space,
+        id: key.slice(sep + 1),
+        scope: scopeOfScopeKey(key.slice(0, sep)) as CellScope,
+      });
+    }
+  }
+
+  /**
+   * Helper for `seal()` and `stageOutboundAppend()`, which records a write
+   * refused because this tenure had parked: on this tenure while its
+   * runtime has not been offered yet, and on the fenced instance holding
+   * it once it has.
+   */
+  #noteRefusedWriteAfterPark(): void {
+    this.#refusedWriteAfterPark = true;
+    this.#retainedAs?.noteRefusedWrite();
   }
 }
