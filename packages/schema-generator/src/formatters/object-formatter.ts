@@ -205,29 +205,6 @@ function shouldSkipInternalProperty(
 }
 
 /**
- * `FabricExecPlainObject` is used as a compile-time constraint on internal
- * execution graph types. Its inherited index signature does not describe
- * authored data accepted by a pattern, so it must not become a JSON Schema
- * `additionalProperties` declaration. The name is a type alias, so a base
- * declared through it resolves to the aliased type and carries the alias as
- * its alias symbol; that is what identifies it.
- */
-function hasFabricExecPlainObjectBase(
-  type: ts.Type,
-  checker: ts.TypeChecker,
-): boolean {
-  if ((type.flags & ts.TypeFlags.Object) === 0) return false;
-
-  const objectType = type as ts.ObjectType;
-  if ((objectType.objectFlags & ts.ObjectFlags.Interface) === 0) return false;
-
-  return (checker.getBaseTypes(type as ts.InterfaceType) ?? []).some((base) =>
-    (base.aliasSymbol ?? base.getSymbol())?.getName() ===
-      "FabricExecPlainObject"
-  );
-}
-
-/**
  * Formatter for object types (interfaces, type literals, etc.)
  */
 export class ObjectFormatter implements TypeFormatter {
@@ -390,9 +367,7 @@ export class ObjectFormatter implements TypeFormatter {
     // Handle string/number index signatures → additionalProperties with description
     const stringIndex = checker.getIndexTypeOfType(type, ts.IndexKind.String);
     const numberIndex = checker.getIndexTypeOfType(type, ts.IndexKind.Number);
-    const chosenIndex = hasFabricExecPlainObjectBase(type, checker)
-      ? undefined
-      : stringIndex ?? numberIndex;
+    const chosenIndex = stringIndex ?? numberIndex;
     if (chosenIndex) {
       const apSchema = this.#schemaGenerator.formatChildType(
         chosenIndex,

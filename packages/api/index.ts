@@ -51,25 +51,31 @@ export * from "@commonfabric/data-model/api";
 /**
  * A value that can appear in an in-memory fabric execution graph.
  *
- * Unlike a {@link FabricValue}, a `FabricExecValue` may contain functions and
- * therefore is not necessarily durable or serializable: it is
- * `FabricValuePlus` at {@link FabricExecFunction}, so a function may sit at
- * the top or inside any container.
+ * Unlike a {@link FabricValue}, a `FabricExecValue` may contain functions,
+ * patterns, and modules, and therefore is not necessarily durable or
+ * serializable: it is `FabricValuePlus` at {@link FabricExecPlusType}, so any
+ * of those may sit at the top or inside any container.
  */
-export type FabricExecValue = FabricValuePlus<FabricExecFunction>;
+export type FabricExecValue = FabricValuePlus<FabricExecPlusType>;
+
+/**
+ * What a {@link FabricExecValue} admits beyond a {@link FabricValue}: a
+ * function, a {@link Pattern}, or a {@link Module}.
+ *
+ * A pattern and a module are each a member in their own right rather than a
+ * plain object of execution values. Each declares the members it has, and
+ * neither is a record that any string key may be added to.
+ */
+export type FabricExecPlusType = FabricExecFunction | Pattern | Module;
 
 /** A callable leaf in a {@link FabricExecValue} graph. */
 export type FabricExecFunction = (...args: any[]) => any;
 
 /** Read-only array of fabric execution values. */
-export type FabricExecArray = FabricArrayPlus<FabricExecFunction>;
+export type FabricExecArray = FabricArrayPlus<FabricExecPlusType>;
 
-/**
- * Read-only plain object whose string-keyed values are execution values.
- * `Pattern` and `Module` extend it, and the schema generator recognizes that
- * base by this name.
- */
-export type FabricExecPlainObject = FabricPlainObjectPlus<FabricExecFunction>;
+/** Read-only plain object whose string-keyed values are execution values. */
+export type FabricExecPlainObject = FabricPlainObjectPlus<FabricExecPlusType>;
 
 //
 // Runtime Constants
@@ -1613,12 +1619,12 @@ export type AnyCellWrapping<T> =
 // TODO(seefeld): Subset of internal type, just enough to make it
 // differentiated. But this isn't part of the public API, so we need to find a
 // different way to handle this.
-export interface Pattern extends FabricExecPlainObject {
+export interface Pattern {
   argumentSchema: JSONSchema;
   resultSchema: JSONSchema;
   defaultScope?: CellScope;
 }
-export interface Module extends FabricExecPlainObject {
+export interface Module {
   type: "ref" | "javascript" | "pattern" | "raw" | "isolated" | "passthrough";
   defaultScope?: CellScope;
 }
