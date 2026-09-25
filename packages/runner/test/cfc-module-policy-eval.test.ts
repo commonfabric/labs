@@ -294,6 +294,7 @@ describe("module-policy exchange evaluation", () => {
       expect(result.resolutionFailures).toEqual([]);
       expect(result.firings).toEqual([]);
       expect(result.label.confidentiality).toEqual([selected]);
+      expect(result.label.integrity).toEqual([legacyEvidence]);
     }
   });
 
