@@ -46,6 +46,21 @@ export default pattern(() => {
       b: { ...entry(2, ["yes", "yes", "yes"]), terms: "{}" },
     },
   });
+  // Terms that are not JSON, and terms that name no seats.
+  const unreadable = CustodyProjector({
+    terms: null,
+    policy: true,
+    box: {
+      a: { ...entry(1, ["yes", "yes", "yes"]), terms: "not json" },
+    },
+  });
+  const seatless = CustodyProjector({
+    terms: null,
+    policy: true,
+    box: {
+      a: { ...entry(1, ["yes", "yes", "yes"]), terms: "{}" },
+    },
+  });
   const empty = CustodyProjector({} as Input);
 
   const assert_most_yes_without_a_no = assert(() => agreed.choice === "tacos");
@@ -58,6 +73,16 @@ export default pattern(() => {
   const assert_empty_box_agrees_on_nothing = assert(() =>
     empty.choice === NO_AGREEMENT
   );
+  const assert_unreadable_terms_agree_on_nothing = assert(() =>
+    unreadable.choice === NO_AGREEMENT && seatless.choice === NO_AGREEMENT
+  );
+  const assert_first_rating_read = assert(() => agreed.rating === "yes");
+  const assert_no_terms_before_proposal = assert(() => empty.terms === null);
+  const assert_proposal_writes_terms = assert(() =>
+    empty.terms?.question === "Where should we eat?" &&
+    empty.terms?.seats.length === 0 &&
+    empty.terms?.answers.includes(NO_AGREEMENT) === true
+  );
 
   return {
     [TESTS]: [
@@ -65,10 +90,17 @@ export default pattern(() => {
       { assertion: assert_incomplete_room_agrees_on_nothing },
       { assertion: assert_mixed_terms_agree_on_nothing },
       { assertion: assert_empty_box_agrees_on_nothing },
+      { assertion: assert_unreadable_terms_agree_on_nothing },
+      { assertion: assert_first_rating_read },
+      { assertion: assert_no_terms_before_proposal },
+      { action: empty.propose, event: { seats: [] } },
+      { assertion: assert_proposal_writes_terms },
     ],
     agreed,
     incomplete,
     mixed,
+    unreadable,
+    seatless,
     empty,
   };
 });
