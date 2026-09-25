@@ -539,11 +539,10 @@ describe("cfc-custody-seal", () => {
       }
     });
 
-    it("leaves the projector no witness after other code replaces the whole box with a primitive", async () => {
-      // The runtime does not refuse this one write: a primitive written over
-      // the root of a document whose writer claim is on that root. What keeps
-      // it from laundering anything is that the replacement is not the seal's,
-      // so the projector's inputs no longer carry the seal's witness.
+    it("refuses other code replacing the whole box with a primitive", async () => {
+      // A primitive written over the root of a document whose writer claim is
+      // on that root changes the claimed value, so the claim refuses it
+      // (#8024). The box keeps what the seal wrote.
       const fixture = await setup();
       try {
         const { box } = await fixture.seal(alice);
@@ -552,6 +551,7 @@ describe("cfc-custody-seal", () => {
         await syncManifest(runtime);
         const local = runtime.getCellFromLink(box.getAsNormalizedFullLink());
         await local.sync();
+        const before = local.getRaw();
         const tx = runtime.edit();
         tx.setCfcImplementationIdentity({
           kind: "verified",
@@ -560,13 +560,11 @@ describe("cfc-custody-seal", () => {
           bindingPath: ["replace"],
         });
         local.withTx(tx).set("gone" as never);
-        expect((await tx.commit()).error).toBeUndefined();
-        const integrity = await project(fixture, carol, box);
-        expect(integrity).toContainEqual({
-          type: CFC_ATOM_TYPE.TransformedBy,
-          identity: PROJECT,
-        });
-        expect(integrity).not.toContainEqual(witnessed);
+        const { error } = await tx.commit();
+        expect(String((error as Error | undefined)?.message)).toContain(
+          "writeAuthorizedBy requires a trusted builtin identity at /",
+        );
+        expect(local.getRaw()).toEqual(before);
       } finally {
         await fixture.dispose();
       }
