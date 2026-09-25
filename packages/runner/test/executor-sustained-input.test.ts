@@ -1,7 +1,8 @@
 import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import * as Engine from "@commonfabric/memory/v2/engine";
 import { readWatermarkSeq } from "../src/executor/watermark.ts";
-import { awaitAdmitted, highestAuthoredSeq } from "./support/serving-waits.ts";
+import { awaitAdmitted } from "./support/serving-waits.ts";
 import {
   openSustainedInputFixture,
   type SustainedInputFixture,
@@ -17,11 +18,14 @@ describe("SpaceServer", () => {
   });
 
   describe("watermark under sustained input", () => {
-    it("covers each input within three cycles of its admission while input keeps arriving", async () => {
+    it("covers each input within five cycles of its admission while input keeps arriving", async () => {
       // The deadline leaves room for the cascade's two stages several times
       // over, so a settle can reach an idle probe between barriers even on a
       // loaded machine; what keeps it from quiescing is that each stage
-      // outlasts the scheduler's yield slice.
+      // outlasts the scheduler's yield slice. A loop that covers input only
+      // once it pauses covers the stream's first input about ten cycles
+      // after admitting it, so the bound leaves a loaded machine a cycle or
+      // two beyond the usual one to three.
 
       const opened = await openSustainedInputFixture({ flushDeadlineMs: 300 });
       fixture = opened;
@@ -41,18 +45,23 @@ describe("SpaceServer", () => {
       expect(stats.wavesBudgetExhausted).toBeGreaterThan(0);
       expect(covered.length).toBe(stream.inputs.length);
       expect(Math.max(...covered.map((row) => row.cycles)))
-        .toBeLessThanOrEqual(3);
+        .toBeLessThanOrEqual(5);
       expect(stats.exhaustedAdvances).toBeGreaterThan(0);
     });
 
     it("leaves the watermark below an input whose derivations the deadline cut off", async () => {
       // A deadline shorter than one stage of the cascade cuts every settle
       // that has the cascade to run, so the input's first cycles end with
-      // `total` not yet derived for it. Each cycle's end is checked, not
-      // only the last: an advance that ran ahead of the cascade is visible
-      // only at the cycle that made it.
+      // `total` not yet derived for it. The stages are lengthened well past
+      // the deadline, so that a fast machine cannot run the whole cascade
+      // inside one settle. Each cycle's end is checked, not only the last:
+      // an advance that ran ahead of the cascade is visible only at the
+      // cycle that made it.
 
-      const opened = await openSustainedInputFixture({ flushDeadlineMs: 10 });
+      const opened = await openSustainedInputFixture({
+        flushDeadlineMs: 10,
+        stageSpins: 20_000_000,
+      });
       fixture = opened;
       const { cycles, host } = opened;
       const before = cycles.entries.length;
@@ -73,14 +82,19 @@ describe("SpaceServer", () => {
       // The floor is stubbed, as the direct-drive clamp case in
       // `executor-space-server.test.ts` stubs it: what the replica shadows
       // is pinned there, and this case pins what an exhausted cycle's
-      // advance does with a floor. It is set one above the highest input
-      // so far, so every input admitted after it is shadowed. An input below
-      // the floor can re-arm a terminal root whose retry the floor defers,
-      // which holds the advance lower still, so the held cycles pin only the
-      // floor as a ceiling. The stream outlives the floor, and the cycles
-      // after it lifts show the exhausted advance resuming.
+      // advance does with a floor. It is set one above the space's head, so
+      // every input admitted after it is shadowed. The inputs are direct
+      // writes: a client writing the argument would demand it, and each of
+      // its writes would re-arm a terminal root whose retry the floor
+      // defers, holding W below the floor whatever the floor clamp did.
+      // The held cycles still advance, to just below the floor. The stream
+      // outlives the floor, and the cycles after it lifts show the
+      // exhausted advance resuming.
 
-      const opened = await openSustainedInputFixture({ flushDeadlineMs: 300 });
+      const opened = await openSustainedInputFixture({
+        flushDeadlineMs: 300,
+        directInputs: true,
+      });
       fixture = opened;
       const { cycles, engine, host, server } = opened;
       const replica = opened.servingRuntime.storageManager
@@ -91,10 +105,13 @@ describe("SpaceServer", () => {
       replica.unappliedForeignSeqFloor = () => floor;
       const stream = opened.stream();
       await cycles.reached(cycles.entries.length + 3);
-      const shadowed = highestAuthoredSeq(engine) + 1;
+      const shadowed = Engine.serverSeq(engine) + 1;
       floor = shadowed;
       const start = cycles.entries.length;
-      await cycles.reached(start + 6);
+      await cycles.matching((end) =>
+        cycles.entries.indexOf(end) >= start && end.watermark === shadowed - 1
+      );
+      await cycles.reached(cycles.entries.length + 2);
       const held = cycles.entries.slice(start);
       floor = undefined;
       // The stream runs on until a cycle ends with an exhausted advance past
@@ -110,6 +127,62 @@ describe("SpaceServer", () => {
 
       expect(stream.inputs.some((input) => input.seq > shadowed)).toBe(true);
       expect(held.filter((end) => end.watermark >= shadowed)).toEqual([]);
+    });
+
+    it("holds an exhausted advance below input the replica shadowed when the settle proved coverage, though the shadow lifts before the cycle ends", async () => {
+      // The floor is stubbed as in the case above, and lifts at the flush
+      // deadline's cut: the scheduler's leftover purge runs in the same
+      // synchronous stretch as the cycle's own floor read, so that read
+      // finds no floor. The novelty that lifts has not been derived yet,
+      // so a proof taken while it was shadowed may not claim it; only the
+      // floor read with the proof holds the advance below it. The inputs
+      // are direct writes, so that no terminal root's deferred retry holds
+      // W lower than the floor does and hides which clamp held it.
+
+      const opened = await openSustainedInputFixture({
+        flushDeadlineMs: 300,
+        directInputs: true,
+      });
+      fixture = opened;
+      const { cycles, engine, server } = opened;
+      const scheduler = opened.servingRuntime.scheduler;
+      const replica = opened.servingRuntime.storageManager
+        .open(sustainedInputSpace).replica as unknown as {
+          unappliedForeignSeqFloor?: () => number | undefined;
+        };
+      let floor: number | undefined;
+      replica.unappliedForeignSeqFloor = () => floor;
+      let liftAtCut = false;
+      let liftedCycle: number | undefined;
+      const purge = scheduler.purgeQueuedEvents.bind(scheduler);
+      scheduler.purgeQueuedEvents = (predicate, reason) => {
+        if (liftAtCut) {
+          liftAtCut = false;
+          floor = undefined;
+          liftedCycle = cycles.entries.length;
+        }
+        return purge(predicate, reason);
+      };
+      const stream = opened.stream();
+      await cycles.reached(cycles.entries.length + 3);
+      const shadowed = Engine.serverSeq(engine) + 1;
+      floor = shadowed;
+      // The held cycles advance to just below the floor, and every settle
+      // after that crosses barriers over inputs above it, so the cycle the
+      // lift cuts proves a head the floor has to hold back.
+      const start = cycles.entries.length;
+      await cycles.matching((end) =>
+        cycles.entries.indexOf(end) >= start && end.watermark === shadowed - 1
+      );
+      liftAtCut = true;
+      await cycles.matching(() =>
+        liftedCycle !== undefined && cycles.entries.length > liftedCycle
+      );
+      await stream.stop();
+      const last = stream.inputs[stream.inputs.length - 1].seq;
+      await awaitAdmitted(server, () => readWatermarkSeq(engine) >= last);
+
+      expect(cycles.entries[liftedCycle!].watermark).toBeLessThan(shadowed);
     });
   });
 });

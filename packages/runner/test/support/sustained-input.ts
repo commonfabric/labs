@@ -31,24 +31,28 @@ const aliceSigner = await Identity.fromPassphrase("sustained input alice");
 /** The space the fixture serves. */
 export const sustainedInputSpace = spaceSigner.did() as MemorySpace;
 
-/** Two chained derivations, each a spin long enough that the serving
- * scheduler yields a macrotask between them. `total` is `n * 7 + 1` once
- * both have run for `n`. */
-const CASCADE_PATTERN = [
-  "import { computed, pattern } from 'commonfabric';",
-  "const spin = (seed: number): number => {",
-  "  let x = seed;",
-  "  for (let i = 0; i < 3000000; i++) x = (x * 31 + i) % 1000003;",
-  "  return x;",
-  "};",
-  "export default pattern<{ n: number }, { stage: number; total: number }>(",
-  "  ({ n }) => {",
-  "    const stage = computed(() => (spin(n) >= 0 ? n * 7 : 0));",
-  "    const total = computed(() => (spin(stage) >= 0 ? stage + 1 : 0));",
-  "    return { stage, total };",
-  "  },",
-  ");",
-].join("\n");
+/** Iterations of each cascade stage's spin unless a fixture asks for more:
+ * enough that the serving scheduler yields a macrotask between the stages. */
+const DEFAULT_STAGE_SPINS = 3_000_000;
+
+/** Two chained derivations, each a spin of `stageSpins` iterations. `total`
+ * is `n * 7 + 1` once both have run for `n`. */
+const cascadePattern = (stageSpins: number): string =>
+  [
+    "import { computed, pattern } from 'commonfabric';",
+    "const spin = (seed: number): number => {",
+    "  let x = seed;",
+    `  for (let i = 0; i < ${stageSpins}; i++) x = (x * 31 + i) % 1000003;`,
+    "  return x;",
+    "};",
+    "export default pattern<{ n: number }, { stage: number; total: number }>(",
+    "  ({ n }) => {",
+    "    const stage = computed(() => (spin(n) >= 0 ? n * 7 : 0));",
+    "    const total = computed(() => (spin(stage) >= 0 ? stage + 1 : 0));",
+    "    return { stage, total };",
+    "  },",
+    ");",
+  ].join("\n");
 
 /** The store's state as one wave cycle ends. */
 export interface CycleEnd {
@@ -104,9 +108,18 @@ export interface SustainedInputFixture {
 /**
  * Opens a served space whose serving loop cuts its settles at
  * `flushDeadlineMs`, with the client already demanding the cascade's result.
+ * `stageSpins` lengthens each cascade stage, for a case that needs one stage
+ * to outlast the deadline itself on however fast a machine. `directInputs`
+ * has the memory server's direct-write path write the inputs instead of the
+ * client, which then neither syncs nor demands the argument document, so no
+ * input re-arms a terminal root whose deferred retry would hold W back.
  */
 export const openSustainedInputFixture = async (
-  { flushDeadlineMs }: { flushDeadlineMs: number },
+  { flushDeadlineMs, stageSpins = DEFAULT_STAGE_SPINS, directInputs = false }: {
+    flushDeadlineMs: number;
+    stageSpins?: number;
+    directInputs?: boolean;
+  },
 ): Promise<SustainedInputFixture> => {
   const space = sustainedInputSpace;
   const server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
@@ -143,7 +156,7 @@ export const openSustainedInputFixture = async (
       servingRuntime = runtime;
       const compiled = await runtime.patternManager.compilePattern({
         main: "/main.tsx",
-        files: [{ name: "/main.tsx", contents: CASCADE_PATTERN }],
+        files: [{ name: "/main.tsx", contents: cascadePattern(stageSpins) }],
       }, { space });
       const argument = runtime.getCell<{ n: number }>(space, "arg");
       const result = runtime.getCell<{ stage: number; total: number }>(
@@ -196,9 +209,15 @@ export const openSustainedInputFixture = async (
   result.sink(() => {});
   await activations.matching((outcome) => outcome === "active");
   const argument = client.getCell<{ n: number }>(space, "arg");
-  await argument.sync();
+  const argumentId = argument.getAsNormalizedFullLink().id;
+  // A client that writes the argument demands it, and a demanded document
+  // with no pattern of its own is a terminal root that each write re-arms.
+  if (!directInputs) await argument.sync();
 
   const write = async (n: number): Promise<number> => {
+    if (directInputs) {
+      return (await server.writeDocument(space, argumentId, { n })).seq;
+    }
     const tx = client.edit();
     argument.withTx(tx).set({ n });
     const committed = await tx.commit();
