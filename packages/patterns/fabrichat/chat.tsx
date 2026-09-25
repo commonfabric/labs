@@ -427,7 +427,11 @@ export const FabriChatMessageRow = pattern<
                     </cf-button>
                     <cf-vstack slot="card" gap="1">
                       {tally.reactors.map((reactor) => (
-                        <cf-profile-badge size="sm" $profile={reactor} />
+                        <cf-profile-badge
+                          size="sm"
+                          noNavigate
+                          $profile={reactor}
+                        />
                       ))}
                     </cf-vstack>
                   </cf-hover-card>

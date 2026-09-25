@@ -11,10 +11,15 @@ const CARD_GAP_PX = 6;
  *
  * The card is a popover in the browser's top layer, so no ancestor that clips
  * its overflow can cut it off. It sits above the content, or below when there
- * is no room above, and moves inward from the window's edges, placed again
- * whenever its size changes, since what it shows can arrive after it opens. It
- * hides when the pointer and focus have both left, and when the page scrolls,
- * since it is placed against where the content was when it appeared.
+ * is no room above, and moves inward from the window's edges. It is placed
+ * again whenever its size changes, since what it shows can arrive after it
+ * opens, and whenever anything scrolls, so that it follows its content. It
+ * hides when the pointer and focus have both left.
+ *
+ * The pointer cannot reach the card, so what it shows is for reading, not for
+ * clicking. The card's content is the caller's, as is the content it belongs
+ * to, so a caller that wants the card read as a description of that content
+ * points `aria-describedby` from one to the other.
  *
  * @element cf-hover-card
  *
@@ -78,7 +83,8 @@ export class CFHoverCard extends BaseElement {
   };
 
   #onScroll = () => {
-    this.#hide();
+    const card = this.#card;
+    if (card && this.open) this.#place(card);
   };
 
   /** Whether the card is showing. */
@@ -99,6 +105,10 @@ export class CFHoverCard extends BaseElement {
     this.removeEventListener("pointerleave", this.#onPointerLeave);
     this.removeEventListener("focusin", this.#onFocusIn);
     this.removeEventListener("focusout", this.#onFocusOut);
+    // A focused element that leaves the document gets no `focusout`, so what
+    // was inside is forgotten here rather than carried into a reconnection.
+    this.#pointerInside = false;
+    this.#focusInside = false;
     this.#hide();
     super.disconnectedCallback();
   }
@@ -106,7 +116,7 @@ export class CFHoverCard extends BaseElement {
   override render() {
     return html`
       <slot></slot>
-      <div class="card" part="card" role="tooltip" popover="manual">
+      <div class="card" part="card" popover="manual">
         <slot name="card"></slot>
       </div>
     `;

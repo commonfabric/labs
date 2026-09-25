@@ -14,12 +14,11 @@ import {
   Writable,
 } from "commonfabric";
 import {
-  childNodes,
+  countElements,
   findNode,
   findNodeByProp,
   fireClick,
   isButton,
-  readValue,
 } from "../test/vnode-helpers.ts";
 import {
   commitReact,
@@ -87,19 +86,6 @@ const pickerButtonCount = (root: unknown): number =>
   FABRICHAT_REACJI.filter((emoji) =>
     findNode(root, isButton(emoji)) !== undefined
   ).length;
-
-// How many elements named `name` sit under `root`, counting nested ones.
-const countElements = (root: unknown, name: string): number => {
-  const value = readValue(root) as { name?: unknown } | undefined;
-  const self = value !== undefined && value !== null &&
-      typeof value === "object" && readValue(value.name) === name
-    ? 1
-    : 0;
-  return childNodes(value).reduce<number>(
-    (sum, child) => sum + countElements(child, name),
-    self,
-  );
-};
 
 const addReactionButton = (root: unknown): unknown =>
   findNodeByProp(root, "aria-label", "Add reaction");
@@ -243,6 +229,7 @@ export default pattern(() => {
   });
   const assert_row_shows_a_badge_per_reactor = assert(() =>
     countElements(aliceSeesFirst[UI], "cf-hover-card") === 2 &&
+    // The sender's badge, and one for each reactor: two cats and one cry.
     countElements(aliceSeesFirst[UI], "cf-profile-badge") === 1 + 3
   );
   const assert_linked_viewer_sees_own_marked = assert(() =>

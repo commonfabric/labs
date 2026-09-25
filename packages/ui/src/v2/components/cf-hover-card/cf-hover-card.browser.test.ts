@@ -6,6 +6,18 @@ function cardRect(element: CFHoverCard): DOMRect {
   return element.shadowRoot!.querySelector(".card")!.getBoundingClientRect();
 }
 
+/**
+ * Resolves after the browser has drawn two more frames. A `ResizeObserver`
+ * reports after the first frame's animation callbacks, and a scroll the browser
+ * makes for a focus is reported by then too, so a callback in the second frame
+ * runs after the card has been placed again.
+ */
+function twoFrames(): Promise<void> {
+  return new Promise((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  );
+}
+
 /** Mounts a card whose content is a button, placed `top` pixels down. */
 async function mount(top: number): Promise<{
   element: CFHoverCard;
@@ -101,16 +113,50 @@ Deno.test("cf-hover-card places its card below its content at the top of the win
   }
 });
 
-Deno.test("cf-hover-card hides its card when the page scrolls", async () => {
-  const { element } = await mount(200);
+Deno.test("cf-hover-card keeps its card above its content as the page scrolls", async () => {
+  // Room to scroll in both directions around the content.
+  const spacer = document.createElement("div");
+  spacer.style.height = "6000px";
+  document.body.append(spacer);
+  const { element } = await mount(2000);
   try {
+    globalThis.scrollTo(0, 1600);
+    await twoFrames();
+    expect(globalThis.scrollY).toBe(1600);
     element.dispatchEvent(new PointerEvent("pointerenter"));
     expect(element.open).toBe(true);
 
-    document.dispatchEvent(new Event("scroll"));
-    expect(element.open).toBe(false);
+    const scrolled = new Promise((resolve) =>
+      globalThis.addEventListener("scroll", resolve, { once: true })
+    );
+    globalThis.scrollBy(0, 100);
+    expect(globalThis.scrollY).toBe(1700);
+    await scrolled;
+    expect(element.open).toBe(true);
+    const anchorTop = element.getBoundingClientRect().top;
+    expect(cardRect(element).bottom).toBeLessThanOrEqual(anchorTop);
+    expect(cardRect(element).bottom).toBeGreaterThan(anchorTop - 10);
   } finally {
     element.remove();
+    spacer.remove();
+    globalThis.scrollTo(0, 0);
+  }
+});
+
+Deno.test("cf-hover-card shows its card when focus reaches content below the fold", async () => {
+  const { element, button } = await mount(4000);
+  try {
+    // Focus scrolls the content into view, and the card must survive that.
+    button.focus();
+    await twoFrames();
+    expect(globalThis.scrollY).toBeGreaterThan(0);
+    expect(element.open).toBe(true);
+    expect(cardRect(element).bottom).toBeLessThanOrEqual(
+      element.getBoundingClientRect().top,
+    );
+  } finally {
+    element.remove();
+    globalThis.scrollTo(0, 0);
   }
 });
 
@@ -126,13 +172,27 @@ Deno.test("cf-hover-card keeps its card above its content as the card grows", as
     extra.style.height = "120px";
     element.querySelector('[slot="card"]')!.after(extra);
     extra.slot = "card";
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-    );
+    await twoFrames();
     expect(cardRect(element).height).toBeGreaterThan(120);
     expect(cardRect(element).bottom).toBeLessThanOrEqual(
       element.getBoundingClientRect().top,
     );
+  } finally {
+    element.remove();
+  }
+});
+
+Deno.test("cf-hover-card forgets focus it held when it is moved", async () => {
+  const { element, button } = await mount(200);
+  try {
+    button.focus();
+    element.remove();
+    document.body.append(element);
+    await element.updateComplete;
+
+    element.dispatchEvent(new PointerEvent("pointerenter"));
+    element.dispatchEvent(new PointerEvent("pointerleave"));
+    expect(element.open).toBe(false);
   } finally {
     element.remove();
   }

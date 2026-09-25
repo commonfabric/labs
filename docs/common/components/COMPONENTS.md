@@ -662,8 +662,11 @@ A small card that appears beside its content while the pointer rests on the
 content or focus is inside it, as a reaction count shows who reacted. What the
 card shows goes in the `card` slot. The card sits above the content, or below
 when there is no room above, in the browser's top layer, so no ancestor that
-clips its overflow can cut it off. It hides when the pointer and focus have
-both left, and when the page scrolls.
+clips its overflow can cut it off, and it follows the content as the page
+scrolls. It hides when the pointer and focus have both left. The pointer cannot
+reach the card, so what it shows is for reading, not for clicking; to have it
+read as a description of its content, point `aria-describedby` from the content
+to the element in the `card` slot.
 
 Showing and hiding is the component's own, so hovering runs no handler and
 writes no state.
