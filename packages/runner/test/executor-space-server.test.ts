@@ -1274,9 +1274,9 @@ describe("stage G SpaceServer recovery seams", () => {
       return row?.class === "derived";
     };
 
-    const originalWatched = server.demandedInstancesForSpace.bind(server);
-    (server as { demandedInstancesForSpace: unknown })
-      .demandedInstancesForSpace = () => demandRowsFor([{ id: rootId }]);
+    const originalWatched = server.demandForSpace.bind(server);
+    (server as { demandForSpace: unknown }).demandForSpace = () =>
+      sessionDemandOf(demandRowsFor([{ id: rootId }]));
     try {
       await awaitEach(cycles, () => {
         created.noteDemandChanged();
@@ -1356,8 +1356,7 @@ describe("stage G SpaceServer recovery seams", () => {
       expect(derivedCommitted()).toBe(true);
       expect(stats.structureLoadFailures).toBe(0);
     } finally {
-      (server as { demandedInstancesForSpace: unknown })
-        .demandedInstancesForSpace = originalWatched;
+      (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
     }
   });
 
