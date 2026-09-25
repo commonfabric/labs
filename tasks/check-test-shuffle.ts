@@ -66,11 +66,6 @@ const RUNNERS: readonly Runner[] = [
     implementation: "tasks/run-sharded-test-files.ts",
   },
   {
-    command: "test/runner.ts",
-    kind: "shuffles",
-    implementation: "packages/dashboard/test/runner.ts",
-  },
-  {
     command: "deno-web-test/cli.ts",
     kind: "shuffles",
     implementation: "packages/deno-web-test/runner.ts",

@@ -1,7 +1,6 @@
 {
   "workspace": [
     "./packages/api",
-    "./packages/background-piece-service",
     "./packages/piece",
     "./packages/cli",
     "./packages/connectors/agents/connector",

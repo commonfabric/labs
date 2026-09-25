@@ -1,5 +1,4 @@
 import type { Tokens } from "@cmd-johnson/oauth2-client";
-import { setBGPiece } from "@commonfabric/background-piece";
 import { OAuth2TokenSchema } from "@commonfabric/runner";
 import type { JSONSchema } from "@commonfabric/runner";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -13,8 +12,6 @@ import type {
 } from "./oauth2-common.types.ts";
 import {
   clearAuthData,
-  createBackgroundIntegrationErrorResponse,
-  createBackgroundIntegrationSuccessResponse,
   createCallbackResponse,
   createLoginErrorResponse,
   createLoginSuccessResponse,
@@ -28,7 +25,6 @@ import {
   persistTokens,
   tokenToGenericAuthData,
 } from "./oauth2-common.utils.ts";
-import { runtime } from "@/index.ts";
 
 /**
  * Strip the `schema` field from a serialized cell-link JSON string.
@@ -65,16 +61,13 @@ function stripSchemaFromCellId(authCellId: string): string {
  */
 function encodeOAuthState(data: {
   authCellId: string;
-  integrationPieceId: string;
   codeVerifier: string;
   scopes?: string[];
 }): string {
   // Single-letter keys to minimize payload:
-  // a = authCellId (schema-stripped), p = integrationPieceId,
-  // v = codeVerifier, s = scopes
+  // a = authCellId (schema-stripped), v = codeVerifier, s = scopes
   const compact: Record<string, unknown> = {
     a: stripSchemaFromCellId(data.authCellId),
-    p: data.integrationPieceId,
     v: data.codeVerifier,
   };
   if (data.scopes && data.scopes.length > 0) {
@@ -92,7 +85,6 @@ function encodeOAuthState(data: {
  */
 function decodeOAuthState(state: string): {
   authCellId: string;
-  integrationPieceId: string;
   codeVerifier: string;
   scopes?: string[];
 } | null {
@@ -103,7 +95,6 @@ function decodeOAuthState(state: string): {
     if (parsed.a && parsed.v) {
       return {
         authCellId: parsed.a,
-        integrationPieceId: parsed.p,
         codeVerifier: parsed.v,
         scopes: parsed.s,
       };
@@ -113,7 +104,6 @@ function decodeOAuthState(state: string): {
     if (parsed.authCellId && parsed.codeVerifier) {
       return parsed as {
         authCellId: string;
-        integrationPieceId: string;
         codeVerifier: string;
         scopes?: string[];
       };
@@ -173,7 +163,6 @@ export function createOAuth2Handlers(
 
       const stateParam = encodeOAuthState({
         authCellId: payload.authCellId,
-        integrationPieceId: payload.integrationPieceId,
         codeVerifier,
         scopes: payload.scopes,
       });
@@ -318,27 +307,6 @@ export function createOAuth2Handlers(
 
       await persistTokens(tokenData, decodedState.authCellId, authSchema);
 
-      // Register for background updates
-      try {
-        const authCellLink = JSON.parse(decodedState.authCellId);
-        const space = authCellLink.space;
-        const integrationPieceId = decodedState?.integrationPieceId;
-
-        if (space && integrationPieceId) {
-          await setBGPiece({
-            space,
-            pieceId: integrationPieceId,
-            integration: config.name,
-            runtime,
-          });
-        }
-      } catch (error) {
-        logger.error(
-          "Failed to register piece for background updates, continuing anyway",
-          error,
-        );
-      }
-
       const callbackResult: CallbackResult = {
         success: true,
         message: "Authentication successful",
@@ -452,26 +420,7 @@ export function createOAuth2Handlers(
     }
   }
 
-  /** BACKGROUND INTEGRATION (shared, not provider-specific) */
-  async function backgroundIntegration(c: Context) {
-    try {
-      const payload = await c.req.json();
-      await setBGPiece({
-        space: payload.space,
-        pieceId: payload.pieceId,
-        integration: payload.integration,
-        runtime,
-      });
-      return createBackgroundIntegrationSuccessResponse(c, "success");
-    } catch (_error) {
-      return createBackgroundIntegrationErrorResponse(
-        c,
-        "Failed to process background integration request",
-      );
-    }
-  }
-
-  return { login, callback, refresh, logout, backgroundIntegration };
+  return { login, callback, refresh, logout };
 }
 
 // Re-export response helpers and utils needed by provider-specific code

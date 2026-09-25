@@ -600,7 +600,6 @@ The boundaries where encoding occurs in the current architecture:
 |----------|----------|-----------|
 | **Persistence** | `memory` ↔ database | read/write |
 | **Iframe sandbox** | `runner` ↔ `iframe-sandbox` | postMessage |
-| **Background service** | `shell` ↔ `background-piece-service` | worker messages |
 | **Network sync** | `toolshed` ↔ remote peers | WebSocket/HTTP |
 | **Cross-space** | space A ↔ space B | if in separate processes |
 

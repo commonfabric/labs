@@ -20,10 +20,11 @@ name: Pull Request Comments
 # it produces is counted anywhere.
 #
 # The run report reads three runs' records: the one it reports on, the one
-# before it on this branch, and the pull request's own. The last two are
-# read from the record store, where the relay put them. The first has only
-# just finished, so it is read from that run's own artifacts, which hold
-# the same bytes the relay is at that moment shipping.
+# before it on this branch, and the pull request's own. The pull request's
+# records are read from the record store, where the relay put them. The two
+# on this branch are read from their own artifacts, which are readable the
+# moment a run ends, while the relay may still be shipping them; those
+# artifacts also hold each run's coverage measurements.
 #
 # It follows the CI workflow rather than the relay, because a workflow_run
 # payload describes the run it names and not the run that triggered it: a

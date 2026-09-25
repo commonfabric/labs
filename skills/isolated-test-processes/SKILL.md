@@ -74,8 +74,7 @@ command's `--lock` flag.
   because `deno` inside a task runs the Deno running the task whatever `PATH`
   says — `packages/test-support/src/isolated-deno.test.ts` pins that with a
   decoy `deno` on the child's `PATH`. From a script, read `Deno.execPath()`
-  directly, as `packages/dashboard/test/runner.ts` does with
-  `--allow-run=${Deno.execPath()},git`.
+  directly, as `tasks/run-member-tests.test.ts` does with `--allow-run=${deno}`.
 
 - End a child Deno that is done, or that waits only on input the test controls,
   by closing that input, and then await its `status`. Do not signal it. The

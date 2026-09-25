@@ -13,7 +13,6 @@
 ./scripts/restart-local-dev.sh --force       # Force kill first
 ./scripts/restart-local-dev.sh --clear-cache # Clear disposable caches (preserves spaces)
 ./scripts/restart-local-dev.sh --dangerously-clear-all-spaces # Clear databases/spaces
-./scripts/restart-local-dev.sh --bg-updater  # Also start background-piece-service
 ./scripts/start-local-dev.sh --cf-harness    # ...and a cf-harness console
 ./scripts/check-local-dev.sh          # Health check both servers
 ./scripts/share-pattern-via-tailscale.sh packages/patterns/lunch-poll/main.tsx  # Host a pattern + share on your tailnet
@@ -61,7 +60,7 @@ binaries do: `start-local-dev.sh` defaults `COMMIT_SHA` to the checkout's
 current HEAD, and an explicit value in the environment overrides that default:
 
 ```bash
-COMMIT_SHA="<some-other-sha>" ./scripts/start-local-dev.sh --bg-updater
+COMMIT_SHA="<some-other-sha>" ./scripts/start-local-dev.sh
 ```
 
 The script's children inherit the value: toolshed uses it as the source-run
@@ -173,8 +172,7 @@ export CF_IDENTITY="$PWD/.cf/shared-dev.key"
 ```
 The local toolshed itself runs as the identity derived from the passphrase
 `"implicit trust"`. Derive that key only when the CLI must act as the server's
-operator/admin (`add-admin-piece`, the background piece service, deploying
-system home patterns):
+operator/admin (deploying system home patterns):
 ```bash
 deno run -A packages/cli/mod.ts id derive "implicit trust" > claude.key
 export CF_IDENTITY="$PWD/claude.key"
@@ -391,75 +389,3 @@ own enforcement is a separate setting and is unchanged by it.
 When the home space and the runner's own toolshed are different deployments,
 `--api-url` names the first and `--local-api-url` the second. The
 [CLI README](../../packages/cli/README.md#agent-runner) describes the command.
-
----
-
-## Background Piece Service (Optional)
-
-The background-piece-service polls registered pieces and triggers their `bgUpdater` handlers server-side. This is **optional** - only needed if you're testing background/scheduled piece execution.
-
-### Quick Setup (Recommended)
-
-Use the `--bg-updater` flag with the local dev scripts:
-
-```bash
-./scripts/start-local-dev.sh --bg-updater
-# or
-./scripts/restart-local-dev.sh --bg-updater
-```
-
-This waits for toolshed to be healthy, then starts the background service. The service log is at `packages/background-piece-service/local-dev-bg.log`. The stop script will also clean up the background service process. The system space cell is auto-created when a piece is first registered (e.g., during Google OAuth).
-
-### Manual Setup
-
-If you prefer manual control:
-
-```bash
-# 1. Ensure toolshed is running (uses "implicit trust" identity in dev mode)
-./scripts/restart-local-dev.sh
-
-# 2. Start the background service from source
-cd packages/background-piece-service
-OPERATOR_PASS="implicit trust" API_URL="http://localhost:8000" deno task start
-```
-
-> **Optional:** The `add-admin-piece` task deploys an admin dashboard piece
-> into the system space. It is **not** required for normal background-service
-> operation -- the system space cell is bootstrapped automatically by
-> `setBGPiece()` during the OAuth callback when a piece is first registered.
-> Run it only if you want the admin dashboard:
->
-> ```bash
-> cd packages/background-piece-service
-> OPERATOR_PASS="implicit trust" API_URL="http://localhost:8000" deno task add-admin-piece
-> ```
-
-### Registering a Piece for Background Updates
-
-Pieces must be registered to receive background polling:
-
-```bash
-# Via curl
-curl -X POST http://localhost:8000/api/integrations/bg \
-  -H "Content-Type: application/json" \
-  -d '{"pieceId":"fid1:abc...","space":"did:key:z6Mk...","integration":"my-integration"}'
-```
-
-Or use the `<cf-updater>` component in your piece's UI.
-
-### Key Details
-
-- **Polling interval**: 60 seconds (default)
-- **Identity**: Must match toolshed's identity (in dev mode: `OPERATOR_PASS="implicit trust"`)
-- **bgUpdater triggers**: Service sends `{}` to the piece's `bgUpdater` Stream
-- **Logs**: Watch service output for `Successfully executed piece` messages
-
-### Troubleshooting
-
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `CompilerError: no exported member 'pattern'` | Binary version mismatch | Run `deno task build-binaries` |
-| `AuthorizationError` on system space | System space not yet bootstrapped | Register a piece (e.g., via OAuth) to auto-create it, or run optional `add-admin-piece` |
-| Piece not polling | Not registered | Register via `/api/integrations/bg` |
-
-See `packages/background-piece-service/AGENTS.md` for more details.

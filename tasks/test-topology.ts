@@ -26,7 +26,7 @@ import { loadCliSuites } from "./test-topology/cli.ts";
 import { loadGateSuites } from "./test-topology/gates.ts";
 import { loadPackageIntegrationSuites } from "./test-topology/package-integration.ts";
 import { loadPatternSuites } from "./test-topology/patterns.ts";
-import { loadUnitSuites } from "./test-topology/unit.ts";
+import { loadUnitSuites, RUNS_WHOLE } from "./test-topology/unit.ts";
 import type { Suite } from "./test-topology/suite.ts";
 
 export type {
@@ -57,7 +57,7 @@ export async function loadTopology(
 ): Promise<Suite[]> {
   return [
     ...await loadGateSuites(root),
-    ...await loadUnitSuites(root),
+    ...await loadUnitSuites(root, RUNS_WHOLE),
     ...await loadPatternSuites(root),
     ...await loadPackageIntegrationSuites(root),
     ...await loadCliSuites(root),

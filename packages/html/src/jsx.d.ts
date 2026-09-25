@@ -2954,7 +2954,6 @@ interface CFChatElement extends CFHTMLElement {}
 interface CFMessageBeadsElement extends CFHTMLElement {}
 interface CFAttachmentsBarElement extends CFHTMLElement {}
 interface CFFragmentElement extends CFHTMLElement {}
-interface CFUpdaterElement extends CFHTMLElement {}
 interface CFGoogleOAuthElement extends CFHTMLElement {}
 interface CFOAuthElement extends CFHTMLElement {}
 interface CFCanvasElement extends CFHTMLElement {}
@@ -3010,6 +3009,7 @@ interface CFCustodySealElement extends CFHTMLElement {}
 interface CFBadgeElement extends CFHTMLElement {}
 interface CFChipElement extends CFHTMLElement {}
 interface CFEmptyStateElement extends CFHTMLElement {}
+interface CFHoverRevealElement extends CFHTMLElement {}
 interface CFProgressElement extends CFHTMLElement {}
 interface CFSkeletonElement extends CFHTMLElement {}
 interface CFSeparatorElement extends CFHTMLElement {}
@@ -3079,11 +3079,6 @@ interface CFSecretViewerAttributes<T> extends CFHTMLAttributes<T> {
   "label"?: string;
   "value"?: string;
   "trailing-chars"?: number;
-}
-
-interface CFUpdaterAttributes<T> extends CFHTMLAttributes<T> {
-  "integration"?: string;
-  "$state"?: CellLike<any>;
 }
 
 interface CFPieceAttributes<T> extends CFHTMLAttributes<T> {
@@ -4386,6 +4381,10 @@ interface CFEmptyStateAttributes<T> extends CFHTMLAttributes<T> {
   "message"?: string | CellLike<string>;
 }
 
+interface CFHoverRevealAttributes<T> extends CFHTMLAttributes<T> {
+  "revealed"?: boolean | CellLike<boolean>;
+}
+
 interface CFProgressAttributes<T> extends CFHTMLAttributes<T> {
   "value"?: number | CellLike<number>;
   "max"?: number | CellLike<number>;
@@ -5272,10 +5271,6 @@ declare global {
         CFIframeAttributes<CFIFrameElement>,
         CFIFrameElement
       >;
-      "cf-updater": CFDOM.DetailedHTMLProps<
-        CFUpdaterAttributes<CFUpdaterElement>,
-        CFUpdaterElement
-      >;
       "cf-google-oauth": CFDOM.DetailedHTMLProps<
         CFGoogleOAuthAttributes<CFGoogleOAuthElement>,
         CFGoogleOAuthElement
@@ -5431,6 +5426,10 @@ declare global {
       "cf-empty-state": CFDOM.DetailedHTMLProps<
         CFEmptyStateAttributes<CFEmptyStateElement>,
         CFEmptyStateElement
+      >;
+      "cf-hover-reveal": CFDOM.DetailedHTMLProps<
+        CFHoverRevealAttributes<CFHoverRevealElement>,
+        CFHoverRevealElement
       >;
       "cf-tile": CFDOM.DetailedHTMLProps<
         CFTileAttributes<CFTileElement>,
