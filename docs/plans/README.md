@@ -68,6 +68,11 @@ a record: archive it to `docs/history/plans/` following the procedure in
   for honest coverage of the active organization repositories.
 - [cf-harness Codex subscription authentication](cf-harness-codex-subscription-auth.md)
   tracks the remaining shipping gates after the core implementation.
+- [CFC spec conformance](cfc-spec-conformance.md) sequences the small pull
+  requests that bring the runner, cf-harness, the FUSE adapter and the
+  runsc-cfc sandbox into line with the CFC specification's label-flow rules:
+  exchange evaluated where labels are consumed, the agent node, labels assigned
+  at the source, and measured sandbox execution.
 - [CFC exchange-rule authoring](cfc-exchange-rule-authoring.md) tracks the
   remaining owner decisions and blocked stages for exchange rules.
 - [CFC llm-sink admission](cfc-llm-sink-admission.md) tracks the
