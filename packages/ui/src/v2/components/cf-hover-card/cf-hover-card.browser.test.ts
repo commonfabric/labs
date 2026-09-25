@@ -214,7 +214,8 @@ Deno.test("cf-hover-card shows its card for a pointer that arrives before it ren
 Deno.test("cf-hover-card keeps its card in the window when it goes below", async () => {
   const { element } = await mount(20);
   const tall = element.querySelector<HTMLElement>('[slot="card"]')!;
-  tall.style.height = `${globalThis.innerHeight - 100}px`;
+  // Too tall to fit above content this near the top, or below it either.
+  tall.style.height = `${globalThis.innerHeight - 40}px`;
   try {
     element.dispatchEvent(new PointerEvent("pointerenter"));
     expect(element.open).toBe(true);
