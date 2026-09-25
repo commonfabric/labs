@@ -1,0 +1,566 @@
+{
+ "machine": "Intel Xeon @ 2.80GHz, 4 cores, 15 GB, Linux; Deno 2.9.4; Chromium 141; source-run toolshed and shell (start-local-dev.sh --inspect) co-hosted with the browser and bench process",
+ "revision": "207df133322d97120369e1f30164116658dd958a plus the read-scale posture-check change",
+ "arms": {
+  "A": "serverExecution=true (server, shell define, clients)",
+  "B": "A plus SERVER_EXECUTION_STORE_READ_THROUGH=true",
+  "C": "serverExecution=false everywhere",
+  "firstPass": "serverExecution=true, one store accumulating every bench",
+  "D": "as A, fresh store, the 1184-vote read-scale case alone"
+ },
+ "firstPass_on": {
+  "readscale": {
+   "74 votes": {
+    "n": 4,
+    "avgMs": 896,
+    "p75Ms": 1015,
+    "minMs": 603,
+    "maxMs": 1188
+   },
+   "296 votes": {
+    "n": 4,
+    "avgMs": 2665,
+    "p75Ms": 3954,
+    "minMs": 1024,
+    "maxMs": 4548
+   },
+   "1184 votes": {
+    "failed": "Timed out waiting for \"body\" to contain \"Lunch 13\". Last probe: \n```\n{\n  selector: \"body\",\n  matches: [\n    {\n      tagName: \"body\",\n      text: \"fa46cbd0-e116-"
+   }
+  },
+  "scale": {
+   "100": {
+    "n": 4,
+    "avgMs": 8559,
+    "p75Ms": 8587,
+    "minMs": 8451,
+    "maxMs": 8653
+   },
+   "reopen 100": {
+    "n": 4,
+    "avgMs": 401,
+    "p75Ms": 405,
+    "minMs": 378,
+    "maxMs": 438
+   }
+  },
+  "nav": {
+   "load": {
+    "n": 6,
+    "avgMs": 523,
+    "p75Ms": 531,
+    "minMs": 498,
+    "maxMs": 568
+   },
+   "sign in": {
+    "n": 6,
+    "avgMs": 587,
+    "p75Ms": 562,
+    "minMs": 512,
+    "maxMs": 858
+   },
+   "board": {
+    "n": 6,
+    "avgMs": 3660,
+    "p75Ms": 3746,
+    "minMs": 3394,
+    "maxMs": 3765
+   },
+   "open topic": {
+    "n": 6,
+    "avgMs": 1018,
+    "p75Ms": 1028,
+    "minMs": 981,
+    "maxMs": 1083
+   },
+   "crossref": {
+    "n": 6,
+    "avgMs": 796,
+    "p75Ms": 821,
+    "minMs": 759,
+    "maxMs": 842
+   },
+   "journey": {
+    "n": 6,
+    "avgMs": 6834,
+    "p75Ms": 6849,
+    "minMs": 6611,
+    "maxMs": 7485
+   },
+   "comment": {
+    "n": 6,
+    "avgMs": 1003,
+    "p75Ms": 1206,
+    "minMs": 503,
+    "maxMs": 2412
+   },
+   "backlink": {
+    "n": 6,
+    "avgMs": 907,
+    "p75Ms": 937,
+    "minMs": 857,
+    "maxMs": 975
+   }
+  },
+  "seedMs": {
+   "navBoard": 84915,
+   "navCommentBoard": 82676,
+   "scale100": 519175
+  }
+ },
+ "A": {
+  "nav": {
+   "load": {
+    "n": 6,
+    "avgMs": 500,
+    "p75Ms": 517,
+    "minMs": 476,
+    "maxMs": 526
+   },
+   "sign in": {
+    "n": 6,
+    "avgMs": 721,
+    "p75Ms": 583,
+    "minMs": 530,
+    "maxMs": 1533
+   },
+   "board": {
+    "n": 6,
+    "avgMs": 3772,
+    "p75Ms": 3972,
+    "minMs": 3568,
+    "maxMs": 3991
+   },
+   "open topic": {
+    "n": 6,
+    "avgMs": 983,
+    "p75Ms": 1018,
+    "minMs": 946,
+    "maxMs": 1022
+   },
+   "crossref": {
+    "n": 6,
+    "avgMs": 806,
+    "p75Ms": 812,
+    "minMs": 767,
+    "maxMs": 833
+   },
+   "journey": {
+    "n": 6,
+    "avgMs": 6893,
+    "p75Ms": 6884,
+    "minMs": 6510,
+    "maxMs": 7829
+   },
+   "comment": {
+    "n": 6,
+    "avgMs": 633,
+    "p75Ms": 580,
+    "minMs": 485,
+    "maxMs": 1110
+   },
+   "backlink": {
+    "n": 6,
+    "avgMs": 934,
+    "p75Ms": 965,
+    "minMs": 906,
+    "maxMs": 972
+   }
+  },
+  "burst5": {
+   "vote burst 5x5": {
+    "n": 11,
+    "avgMs": 28682,
+    "p75Ms": 30782,
+    "minMs": 24065,
+    "maxMs": 33316
+   }
+  },
+  "burst10": {
+   "vote burst 10x10": {
+    "failed": "[voter-7] awaitEventConsequences timed out after 120000ms"
+   }
+  },
+  "seedMs": {
+   "profiledSeed30": 79237,
+   "navBoard": 124961,
+   "navCommentBoard": 87567
+  }
+ },
+ "B": {
+  "nav": {
+   "load": {
+    "n": 6,
+    "avgMs": 506,
+    "p75Ms": 527,
+    "minMs": 460,
+    "maxMs": 534
+   },
+   "sign in": {
+    "n": 6,
+    "avgMs": 537,
+    "p75Ms": 540,
+    "minMs": 528,
+    "maxMs": 545
+   },
+   "board": {
+    "n": 6,
+    "avgMs": 3000,
+    "p75Ms": 3001,
+    "minMs": 2952,
+    "maxMs": 3088
+   },
+   "open topic": {
+    "n": 6,
+    "avgMs": 1002,
+    "p75Ms": 1015,
+    "minMs": 965,
+    "maxMs": 1022
+   },
+   "crossref": {
+    "n": 6,
+    "avgMs": 808,
+    "p75Ms": 818,
+    "minMs": 791,
+    "maxMs": 848
+   },
+   "journey": {
+    "n": 6,
+    "avgMs": 6194,
+    "p75Ms": 6751,
+    "minMs": 5854,
+    "maxMs": 6809
+   },
+   "comment": {
+    "failed": "Unable to find a button matching \"Send\" to click. Last probe: \n```\n{\n  selector: \"cf-button, button, a\",\n  match: \"exact\",\n  needle: \"Send\",\n  candidates: [\n   "
+   },
+   "backlink": {
+    "n": 6,
+    "avgMs": 913,
+    "p75Ms": 936,
+    "minMs": 845,
+    "maxMs": 962
+   }
+  },
+  "burst5": {
+   "vote burst 5x5": {
+    "n": 11,
+    "avgMs": 23132,
+    "p75Ms": 24726,
+    "minMs": 20824,
+    "maxMs": 24960
+   }
+  },
+  "commentRerun": {
+   "comment": {
+    "failed": "waitForCondition did not resolve within 300000ms.\n  awaited condition: async (probe, nameInput, sendLabel)=>{ const settle = globalThis.commonfabric?.viewSettle"
+   }
+  },
+  "seedMs": {
+   "profiledSeed30": 66177,
+   "navBoard": 67273,
+   "navCommentBoard": 63158
+  }
+ },
+ "C": {
+  "nav": {
+   "load": {
+    "n": 6,
+    "avgMs": 493,
+    "p75Ms": 504,
+    "minMs": 453,
+    "maxMs": 523
+   },
+   "sign in": {
+    "n": 6,
+    "avgMs": 689,
+    "p75Ms": 739,
+    "minMs": 502,
+    "maxMs": 744
+   },
+   "board": {
+    "n": 6,
+    "avgMs": 2791,
+    "p75Ms": 2828,
+    "minMs": 2730,
+    "maxMs": 2830
+   },
+   "open topic": {
+    "n": 6,
+    "avgMs": 1034,
+    "p75Ms": 1051,
+    "minMs": 984,
+    "maxMs": 1111
+   },
+   "crossref": {
+    "n": 6,
+    "avgMs": 797,
+    "p75Ms": 812,
+    "minMs": 751,
+    "maxMs": 830
+   },
+   "journey": {
+    "n": 6,
+    "avgMs": 5889,
+    "p75Ms": 6025,
+    "minMs": 5631,
+    "maxMs": 6121
+   },
+   "comment": {
+    "n": 6,
+    "avgMs": 469,
+    "p75Ms": 497,
+    "minMs": 432,
+    "maxMs": 506
+   },
+   "backlink": {
+    "n": 6,
+    "avgMs": 909,
+    "p75Ms": 925,
+    "minMs": 897,
+    "maxMs": 925
+   }
+  },
+  "readscale": {
+   "74 votes": {
+    "n": 4,
+    "avgMs": 556,
+    "p75Ms": 550,
+    "minMs": 538,
+    "maxMs": 595
+   },
+   "296 votes": {
+    "n": 4,
+    "avgMs": 786,
+    "p75Ms": 792,
+    "minMs": 764,
+    "maxMs": 815
+   },
+   "1184 votes": {
+    "n": 4,
+    "avgMs": 809,
+    "p75Ms": 820,
+    "minMs": 788,
+    "maxMs": 837
+   }
+  },
+  "burst5": {
+   "vote burst 5x5": {
+    "n": 11,
+    "avgMs": 482,
+    "p75Ms": 509,
+    "minMs": 416,
+    "maxMs": 577
+   }
+  },
+  "burst10": {
+   "vote burst 10x10": {
+    "n": 11,
+    "avgMs": 2904,
+    "p75Ms": 3038,
+    "minMs": 2648,
+    "maxMs": 3078
+   }
+  },
+  "seedMs": {
+   "seed30": 52013,
+   "navBoard": 51655,
+   "navCommentBoard": 50715
+  }
+ },
+ "boardProbeMs": {
+  "firstPass_on": {
+   "coldAfterIdle": [
+    21890,
+    22804
+   ],
+   "warm": [
+    3137
+   ]
+  },
+  "A": {
+   "cold1": 22771,
+   "warm": [
+    3841,
+    3713,
+    3955,
+    3519
+   ]
+  },
+  "B": {
+   "cold1": 15759,
+   "warm": [
+    3788,
+    3471,
+    3507,
+    3811
+   ]
+  },
+  "C": {
+   "cold1": 3609,
+   "warm": [
+    3227,
+    3159,
+    3227,
+    3105
+   ]
+  }
+ },
+ "D_on_readscale1184": {
+  "1184 votes": {
+   "failed": "Timed out waiting for \"body\" to contain \"Lunch 13\". Last probe: \n```\n{\n  selector: \"body\",\n  matches: [\n    {\n      tagName: \"body\",\n      text: \"84438636-90cd-"
+  }
+ },
+ "D_on_readscale1184_diagnosticSample": {
+  "runs": 193,
+  "accesses": 5967,
+  "maxAccesses": 3554,
+  "linkHops": 6523
+ },
+ "C_readscale_diagnosticSamples": {
+  "74": {
+   "runs": 58,
+   "accesses": 738,
+   "maxAccesses": 147
+  },
+  "296": {
+   "runs": 52,
+   "accesses": 1066,
+   "maxAccesses": 302
+  },
+  "1184": {
+   "runs": 29,
+   "accesses": 448,
+   "maxAccesses": 355
+  }
+ },
+ "firstPass_on_readscale296_diagnosticSamples": "alternating {runs:52,accesses:1066} and {runs:157,accesses:3126}",
+ "serverCounters": {
+  "A_seed30": {
+   "waveCycles": 381,
+   "cycleMeanMs": 194.2,
+   "compileToRecordGraph": {
+    "count": 32,
+    "meanMs": 368.7
+   },
+   "profileWishRuns": 65,
+   "profileWishSendError": 62,
+   "profileWallMs": 81392,
+   "compileCacheEvaluate": {
+    "count": 32,
+    "meanMs": 64.16
+   },
+   "compileCacheMisses": 2
+  },
+  "A_servingLoopBeforeCold1": {
+   "wavesClosed": 584,
+   "wavesBudgetExhausted": 620
+  },
+  "B_seed30": {
+   "waveCycles": 336,
+   "cycleMeanMs": 211.6,
+   "storeReads": 5380
+  },
+  "A_seedEventCoverage": {
+   "eventAppendValueOnly": {
+    "n": 55,
+    "p50Ms": 9387,
+    "p90Ms": 27295,
+    "maxMs": 36495,
+    "cyclesP50": 47
+   },
+   "events": 72,
+   "distinctCoverageSeconds": 27,
+   "largestSameSecondCoverage": 19
+  },
+  "firstPass_coldBoard": {
+   "demandPasses": 46,
+   "demandPassMs": 21130,
+   "waveCycles": 86,
+   "watchAddSync": {
+    "count": 207,
+    "meanMs": 72.6
+   }
+  },
+  "firstPass_burst10x10_coverage": {
+   "events": 130,
+   "p50Ms": 172333,
+   "maxMs": 252138,
+   "maxCycles": 895,
+   "drainInFlightSkips": 32266
+  },
+  "A_burst5": {
+   "waveCycles": 2422,
+   "cycleMeanMs": 209.8,
+   "refreshWalkClosure": {
+    "count": 10327,
+    "meanMs": 9.12
+   },
+   "sendEncode": {
+    "count": 14660,
+    "meanMs": 8.81
+   },
+   "profileWallMs": 518228
+  },
+  "D_rs1184": {
+   "demandedInstancesMax": 17653,
+   "demandPasses": 7968,
+   "demandPassMs": 1151155,
+   "leaseLost": 10,
+   "schedulerExecute": {
+    "count": 55,
+    "meanMs": 19297
+   },
+   "healthResponseSeconds": [
+    18.7,
+    24.5,
+    56.9,
+    14.5
+   ],
+   "profileWallMs": 1991820
+  },
+  "firstPass_burst10x10_cycles": {
+   "wavesClosed": 700,
+   "wavesBudgetExhausted": 844
+  }
+ },
+ "profileSelfShares": {
+  "A_burst5_server": {
+   "garbageCollector": 0.151,
+   "sqliteNativeAnon": 0.14,
+   "refreshTrackedGraphInclusive": 0.226,
+   "assembleSchemaDocClosuresInclusive": 0.172
+  },
+  "D_rs1184_server": {
+   "garbageCollector": 0.139,
+   "loadDemandedStructure": 0.136,
+   "demandedInstancesForSpace": 0.093,
+   "emit": 0.087,
+   "readsOverlapWrites": 0.067,
+   "trackedIdsFromEntries": 0.044,
+   "collectMaterializerWritersForLog": 0.022
+  },
+  "seed30_topicsPatternFrames": 0.0007
+ },
+ "workerProfiles": {
+  "coldBoardIdleShare": {
+   "firstPass": [
+    0.87,
+    0.843
+   ],
+   "A_cold1": 0.863
+  },
+  "A_warmBoardInclusiveMs": {
+   "render": [
+    992,
+    929,
+    919
+   ],
+   "validateAndTransform": [
+    682,
+    695,
+    605
+   ]
+  }
+ }
+}

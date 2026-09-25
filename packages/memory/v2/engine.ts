@@ -852,18 +852,6 @@ FROM branch
 WHERE name = :branch
 `;
 
-const SELECT_BRANCH_STATUS = `
-SELECT status
-FROM branch
-WHERE name = :branch
-`;
-
-const SELECT_BRANCH_HEAD_SEQ = `
-SELECT head_seq
-FROM branch
-WHERE name = :branch
-`;
-
 const SELECT_BRANCHES = `
 SELECT name, parent_branch, fork_seq, created_seq, head_seq, status
 FROM branch
@@ -922,8 +910,6 @@ interface PreparedStatements {
   selectBlob: PreparedStatement;
   selectBranch: PreparedStatement;
   selectBranches: PreparedStatement;
-  selectBranchHeadSeq: PreparedStatement;
-  selectBranchStatus: PreparedStatement;
   selectCommitRevisions: PreparedStatement;
   selectCurrentLocal: PreparedStatement;
   selectCurrentEntityId: PreparedStatement;
@@ -1059,6 +1045,25 @@ export type Engine = {
    * durable. Absent outside {@link applyCommit}.
    */
   stagedDocumentCache?: Map<string, DocumentCacheEntry>;
+
+  /**
+   * Rows of the `branch` table, by branch name, as read outside a
+   * transaction.
+   *
+   * Every read resolves its branch's existence, head and fork point, and the
+   * table changes far less often than it is read. {@link runBranchWrite} is
+   * the one way the engine writes it, and clears this map when it does. An
+   * entry is recorded only outside a transaction, so a miss inside one reads
+   * SQLite, and nothing a transaction wrote is remembered before it commits
+   * or left behind when it rolls back.
+   *
+   * An entry is served without asking SQLite because this engine's
+   * connection is the only one that writes its store. A write through any
+   * other connection goes unseen here until this engine next writes the
+   * table. A name with no row is never recorded, so the map is bounded by
+   * the branches that exist rather than by the names readers ask for.
+   */
+  branchStates: Map<BranchName, Readonly<BranchState>>;
 };
 
 /** The first stale confirmed read of an entity on a branch in a declared scope. */
@@ -1580,8 +1585,6 @@ const prepareStatements = (database: Database): PreparedStatements => ({
   selectBlob: database.prepare(SELECT_BLOB),
   selectBranch: database.prepare(SELECT_BRANCH),
   selectBranches: database.prepare(SELECT_BRANCHES),
-  selectBranchHeadSeq: database.prepare(SELECT_BRANCH_HEAD_SEQ),
-  selectBranchStatus: database.prepare(SELECT_BRANCH_STATUS),
   selectCommitRevisions: database.prepare(SELECT_COMMIT_REVISIONS),
   selectCurrentLocal: database.prepare(SELECT_CURRENT_LOCAL),
   selectCurrentEntityId: database.prepare(SELECT_CURRENT_ENTITY_ID),
@@ -2069,6 +2072,7 @@ export const open = async (
     ...(documentCacheCoordinator === undefined
       ? {}
       : { documentCacheCoordinator }),
+    branchStates: new Map(),
   };
 };
 
@@ -2138,32 +2142,33 @@ export const createBranch = (
   } = {},
 ): BranchState =>
   engine.database.transaction((txEngine: Engine) => {
+    // A copy, since the engine may be holding the state it read.
     if (name === DEFAULT_BRANCH) {
-      return getBranch(txEngine, DEFAULT_BRANCH)!;
+      return { ...requireBranch(txEngine, DEFAULT_BRANCH) };
     }
     const existing = getBranch(txEngine, name);
     if (existing !== null) {
-      return existing;
+      return { ...existing };
     }
     const parentBranch = options.parentBranch ?? DEFAULT_BRANCH;
-    ensureReadableBranch(txEngine, parentBranch);
-    const forkSeq = options.forkSeq ?? headSeq(txEngine, parentBranch);
-    txEngine.statements.insertBranch.run({
+    const parent = requireBranch(txEngine, parentBranch);
+    const forkSeq = options.forkSeq ?? parent.headSeq;
+    runBranchWrite(txEngine, txEngine.statements.insertBranch, {
       name,
       parent_branch: parentBranch,
       fork_seq: forkSeq,
       created_seq: forkSeq,
       head_seq: forkSeq,
     });
-    return getBranch(txEngine, name)!;
+    return { ...requireBranch(txEngine, name) };
   }).immediate(engine);
 
 export const deleteBranch = (
   engine: Engine,
   branch: BranchName,
 ): void => {
-  ensureReadableBranch(engine, branch);
-  engine.statements.deleteBranch.run({ branch });
+  requireBranch(engine, branch);
+  runBranchWrite(engine, engine.statements.deleteBranch, { branch });
 };
 
 export const listBranches = (engine: Engine): BranchState[] => {
@@ -2490,13 +2495,7 @@ const readStateForScopeKey = (
   },
 ): EntityState | null => {
   const declaredScope = scope ?? scopeOfScopeKey(scopeKey);
-  const targetSeq = seq ?? headSeq(engine, branch);
-  const resolved = readRowForBranch(engine, {
-    id,
-    scopeKey,
-    branch,
-    seq: targetSeq,
-  });
+  const resolved = readRowForBranch(engine, { id, scopeKey, branch, seq });
   if (resolved === null) {
     return null;
   }
@@ -2739,12 +2738,7 @@ WHERE branch = :branch AND id = :id AND op != 'delete'
 export const headSeq = (
   engine: Engine,
   branch: BranchName = DEFAULT_BRANCH,
-): number => {
-  const row = engine.statements.selectBranchHeadSeq.get({
-    branch,
-  }) as { head_seq: number } | undefined;
-  return row?.head_seq ?? 0;
-};
+): number => getBranch(engine, branch)?.headSeq ?? 0;
 
 export const serverSeq = (engine: Engine): number => {
   return (engine.statements.selectServerSeq.get() as { seq: number }).seq;
@@ -5243,7 +5237,9 @@ const applyCommitTransaction = (
   }
 
   const branch = commit.branch ?? DEFAULT_BRANCH;
-  ensureActiveBranch(engine, branch);
+  if (requireBranch(engine, branch).status !== "active") {
+    throw new Error(`branch is not active: ${branch}`);
+  }
 
   // A sessionless delegated chain has NO session instance (scopes.md
   // §5: a sessionless actor's session-scoped write is an ERROR —
@@ -6185,7 +6181,7 @@ const applyCommitTransaction = (
     maintainStreamEventWatermarks(engine, branch, seq, sessionId, revisions);
   }
 
-  engine.statements.updateBranchHead.run({ branch, seq });
+  runBranchWrite(engine, engine.statements.updateBranchHead, { branch, seq });
   materializeSnapshots(engine, branch, revisions);
 
   return {
@@ -6604,7 +6600,7 @@ const validateConfirmedReads = (
   const staleInstances = new Map<BranchName, Map<ScopeKey, Set<EntityId>>>();
   for (const read of commit.reads.confirmed) {
     const readBranch = read.branch ?? branch;
-    ensureReadableBranch(engine, readBranch);
+    requireBranch(engine, readBranch);
     const scopeKey = resolveScopeKey(read.scope, scopeContext);
     const scope = read.scope ?? DEFAULT_SCOPE;
     let staleScopes = staleInstances.get(readBranch);
@@ -7384,20 +7380,33 @@ const reconstructPatchedDocument = (
   };
 };
 
+/**
+ * Helper for {@link readStateForScopeKey}, which finds the row holding
+ * `options.id` on `options.branch` as of `options.seq`, or as of the branch's
+ * head when no seq is given. A branch that holds no row inherits its parent's
+ * as of the fork point.
+ *
+ * @throws When the branch does not exist, or when the seq lies outside the
+ * branch's history.
+ */
 const readRowForBranch = (
   engine: Engine,
   options: {
     id: EntityId;
     scopeKey: string;
     branch: BranchName;
-    seq: number;
+    seq?: number;
   },
 ): { row: ReadRow; branch: BranchName } | null => {
-  ensureReadableBranch(engine, options.branch);
-  assertReadableSeq(engine, options.branch, options.seq);
+  const state = requireBranch(engine, options.branch);
+  const seq = options.seq ?? state.headSeq;
+  const minSeq = options.branch === DEFAULT_BRANCH ? 0 : state.createdSeq;
+  if (seq < minSeq || seq > state.headSeq) {
+    throw new Error(`seq ${seq} is out of range for branch ${options.branch}`);
+  }
 
   const currentRow =
-    (options.seq === headSeq(engine, options.branch)
+    (seq === state.headSeq
       ? engine.statements.selectCurrentLocal.get({
         branch: options.branch,
         id: options.id,
@@ -7407,30 +7416,74 @@ const readRowForBranch = (
         branch: options.branch,
         id: options.id,
         scope_key: options.scopeKey,
-        seq: options.seq,
+        seq,
       })) as ReadRow | undefined;
   if (currentRow !== undefined) {
     return { row: currentRow, branch: options.branch };
   }
 
-  const branch = getBranch(engine, options.branch);
-  if (branch?.parentBranch === null || branch?.parentBranch === undefined) {
+  if (state.parentBranch === null) {
     return null;
   }
-  const inheritedSeq = Math.min(options.seq, branch.forkSeq ?? 0);
   return readRowForBranch(engine, {
     id: options.id,
     scopeKey: options.scopeKey,
-    branch: branch.parentBranch,
-    seq: inheritedSeq,
+    branch: state.parentBranch,
+    seq: Math.min(seq, state.forkSeq ?? 0),
   });
 };
 
-const getBranch = (engine: Engine, branch: BranchName): BranchState | null => {
+/**
+ * Returns the `branch` row for `branch`, or `null` when there is none, from
+ * {@link Engine.branchStates} when it holds the row. The state returned may
+ * be the one the engine holds, which is why it is read-only.
+ */
+const getBranch = (
+  engine: Engine,
+  branch: BranchName,
+): Readonly<BranchState> | null => {
+  const known = engine.branchStates.get(branch);
+  if (known !== undefined) {
+    return known;
+  }
   const row = engine.statements.selectBranch.get({
     branch,
   }) as BranchRow | undefined;
-  return row ? toBranchState(row) : null;
+  if (row === undefined) {
+    return null;
+  }
+  const state = toBranchState(row);
+  // Inside a transaction the row may be one the transaction wrote, which a
+  // rollback would take back.
+  if (!engine.database.inTransaction) {
+    engine.branchStates.set(branch, state);
+  }
+  return state;
+};
+
+/** Like {@link getBranch}, except that a branch with no row throws. */
+const requireBranch = (
+  engine: Engine,
+  branch: BranchName,
+): Readonly<BranchState> => {
+  const state = getBranch(engine, branch);
+  if (state === null) {
+    throw new Error(`unknown branch: ${branch}`);
+  }
+  return state;
+};
+
+/**
+ * Runs `statement`, which writes the `branch` table, then clears
+ * {@link Engine.branchStates}, which may no longer match that table.
+ */
+const runBranchWrite = (
+  engine: Engine,
+  statement: PreparedStatement,
+  ...params: Parameters<PreparedStatement["run"]>
+): void => {
+  statement.run(...params);
+  engine.branchStates.clear();
 };
 
 const toBranchState = (row: BranchRow): BranchState => ({
@@ -7441,42 +7494,6 @@ const toBranchState = (row: BranchRow): BranchState => ({
   headSeq: row.head_seq,
   status: row.status,
 });
-
-const assertReadableSeq = (
-  engine: Engine,
-  branch: BranchName,
-  seq: number,
-): void => {
-  const state = getBranch(engine, branch);
-  if (state === null) {
-    throw new Error(`unknown branch: ${branch}`);
-  }
-  const minSeq = branch === DEFAULT_BRANCH ? 0 : state.createdSeq;
-  if (seq < minSeq || seq > state.headSeq) {
-    throw new Error(`seq ${seq} is out of range for branch ${branch}`);
-  }
-};
-
-const ensureReadableBranch = (engine: Engine, branch: BranchName): void => {
-  const row = engine.statements.selectBranchStatus.get({
-    branch,
-  }) as { status: string } | undefined;
-  if (!row) {
-    throw new Error(`unknown branch: ${branch}`);
-  }
-};
-
-const ensureActiveBranch = (engine: Engine, branch: BranchName): void => {
-  const row = engine.statements.selectBranchStatus.get({
-    branch,
-  }) as { status: string } | undefined;
-  if (!row) {
-    throw new Error(`unknown branch: ${branch}`);
-  }
-  if (row.status !== "active") {
-    throw new Error(`branch is not active: ${branch}`);
-  }
-};
 
 /**
  * The revision a cached document belongs to. Every part of the address is
