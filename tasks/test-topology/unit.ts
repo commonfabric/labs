@@ -72,21 +72,9 @@ const BROWSER_SUFFIX = "#browser-test";
  */
 export const RUNS_WHOLE: ReadonlyMap<string, string> = new Map([
   [
-    "./packages/dashboard",
-    "its tests run through `test/runner.ts`, which splits them into three " +
-    "commands by the permissions each file needs and by whether it needs a " +
-    "browser",
-  ],
-  [
     "./packages/identity",
     "its tests run in a browser through deno-web-test, which takes no file " +
     "list from a lane",
-  ],
-  [
-    "./packages/patterns",
-    "its first pass runs under `test-import-map.json`, which replaces the " +
-    "workspace's map so that `commonfabric` names the shim under " +
-    "`tools/test-support/` that its tests are written against",
   ],
 ]);
 
@@ -114,9 +102,9 @@ interface Member {
   browserTest: boolean;
 
   /**
-   * The test files the Deno-only half declines, which is what the
-   * browser half runs. The browser half is one unit whatever it holds,
-   * so these are files the topology accounts for without enumerating.
+   * The test files the browser half runs. The browser half is one unit
+   * whatever it holds, so these are files the topology accounts for
+   * without enumerating.
    */
   browserFiles: string[];
 }
@@ -145,6 +133,13 @@ async function readMember(
 ): Promise<Member | undefined> {
   const memberDir = path.resolve(root, memberPath);
   const tasks = await memberTasks(memberDir);
+  if (tasks.browserTest && tasks.browserPaths.length === 0) {
+    throw new Error(
+      `\`${memberPath}\`'s \`browser-test\` task names no files the ` +
+        `topology can read. Write it as a \`deno run\` of its runner followed ` +
+        `by the paths or globs it runs.`,
+    );
+  }
   const whole = tasks.present && tasks.denoHalf &&
     tasks.denoTest === undefined;
   if (whole !== runsWhole.has(memberPath)) {
@@ -191,20 +186,17 @@ async function readMember(
   member.files = (await memberTestFiles(memberDir, tasks.denoTest))
     .map(relative);
   member.run = tasks.denoTest;
-  if (member.browserTest) {
-    // What the Deno-only half ignores is what the browser half runs. A
-    // member that splits its halves by a name — `*.browser.test.ts` — is
-    // otherwise a member whose browser files no suite claims, because
-    // the browser unit is one unit rather than one per file. The same
-    // paths the task names, read without its ignores, so the difference
-    // is what an ignore took out rather than what the task never looked
-    // at.
-    const everything = new Set(
-      (await memberTestFiles(memberDir, { ...tasks.denoTest, ignores: [] }))
-        .map(relative),
-    );
-    for (const file of member.files) everything.delete(file);
-    member.browserFiles = [...everything].sort();
+  if (tasks.browserTest) {
+    // The browser unit is one unit rather than one per file, so without
+    // this a member that splits its halves by a name — `*.browser.test.ts`
+    // — is a member whose browser files no suite claims. They are the
+    // files the browser half's task names, rather than every file the
+    // Deno-only half ignores, because the Deno-only half may also ignore
+    // files that another suite runs.
+    member.browserFiles = (await memberTestFiles(memberDir, {
+      paths: tasks.browserPaths,
+      ignores: [],
+    })).map(relative);
   }
   return member;
 }

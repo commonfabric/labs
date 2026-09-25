@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
+  coverageRecords,
   sampleEntry,
   sampleManifest,
   testIdentityKey,
@@ -15,6 +16,7 @@ import type { TestRecord } from "@commonfabric/test-support/records";
 import type { RunOutcomes } from "./test-selection/report.ts";
 import { buildZip } from "./zip-testing.ts";
 import {
+  coverageOfRun,
   isReportable,
   main,
   manifestView,
@@ -125,26 +127,15 @@ async function recordsZip(
   );
 }
 
-/** One run's metrics artifact, carrying the two figures a case names. */
-async function metricsZip(
+/** One run's coverage artifact, carrying the figures a case names. */
+async function coverageZip(
   uncovered: Readonly<Record<string, number>>,
 ): Promise<Uint8Array> {
-  return await buildZip(
-    "perf-metrics.json",
-    new TextEncoder().encode(JSON.stringify({
-      version: 1,
-      generatedAt: "2026-09-07T06:00:00Z",
-      metrics: Object.entries(uncovered).map(([group, lines]) => ({
-        name: `coverage-debt: ${group} uncovered lines`,
-        runId: 1,
-        runUrl: "https://ci/run/1",
-        sha: "a".repeat(40),
-        createdAt: "2026-09-07T06:00:00Z",
-        durationSeconds: lines,
-      })),
-    })),
-    0,
-  );
+  return await recordsZip(coverageRecords({
+    groups: new Map(Object.entries(uncovered)),
+    sets: new Map(),
+    cold: false,
+  }));
 }
 
 /** One test's record, which is all any of these cases needs of one. */
@@ -229,14 +220,14 @@ async function reporting(
     }
     if (url.endsWith("/zip")) {
       const id = Number(url.match(/artifacts\/(\d+)\/zip/)![1]);
-      // An artifact id over a hundred is a run's metrics; under it, the
+      // An artifact id over a hundred is a run's coverage; under it, the
       // records of the run with that id.
       if (id > 100) {
         const lines = world.uncovered?.[id - 100];
         if (lines === undefined) {
           return new Response("no", { status: 404, statusText: "Not Found" });
         }
-        return new Response(await metricsZip(lines) as BodyInit, {
+        return new Response(await coverageZip(lines) as BodyInit, {
           status: 200,
         });
       }
@@ -248,18 +239,17 @@ async function reporting(
     }
     if (url.includes("/artifacts")) {
       const id = Number(url.match(/runs\/(\d+)\/artifacts/)![1]);
-      return Response.json({
-        total_count: 2,
-        artifacts: [
-          { id, name: "test-records-Test", size_in_bytes: 1, expired: false },
-          {
-            id: id + 100,
-            name: "perf-metrics",
-            size_in_bytes: 1,
-            expired: false,
-          },
-        ],
-      });
+      // A run the case gives no figures for uploaded no coverage.
+      const artifacts = [
+        { id, name: "test-records-Test", size_in_bytes: 1, expired: false },
+        ...world.uncovered?.[id] === undefined ? [] : [{
+          id: id + 100,
+          name: "test-records-coverage-a1",
+          size_in_bytes: 1,
+          expired: false,
+        }],
+      ];
+      return Response.json({ total_count: artifacts.length, artifacts });
     }
     if (/\/pulls\/\d+$/.test(url)) {
       if (world.pullRequest === false) {
@@ -643,6 +633,62 @@ describe("post-main-report", () => {
     // one an earlier attempt correctly made.
     it("says nothing at all when one artifact could not be read", async () => {
       expect(await unreadable()).toBeUndefined();
+    });
+  });
+
+  describe("coverageOfRun()", () => {
+    it("returns the figures of the newest coverage upload", async () => {
+      // Two attempts' uploads, listed oldest first: the re-run found the
+      // compile cache warm where the first had not.
+      const zips: Record<number, Uint8Array> = {
+        9: await recordsZip(coverageRecords({
+          groups: new Map([["workspace", 900]]),
+          sets: new Map(),
+          cold: false,
+        })),
+        5: await recordsZip(coverageRecords({
+          groups: new Map([["workspace", 1000]]),
+          sets: new Map(),
+          cold: true,
+        })),
+      };
+      const original = globalThis.fetch;
+      globalThis.fetch = ((input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const id = Number(url.match(/artifacts\/(\d+)\/zip/)![1]);
+        return Promise.resolve(
+          new Response(zips[id]! as BodyInit, { status: 200 }),
+        );
+      }) as typeof fetch;
+      const upload = (id: number, name: string) => ({
+        id,
+        name,
+        size_in_bytes: 1,
+        expired: false,
+      });
+      try {
+        expect(
+          await coverageOfRun(7, [
+            upload(5, "test-records-coverage-a1"),
+            upload(7, "test-records-check-a2"),
+            upload(9, "test-records-coverage-a2"),
+          ]),
+        ).toEqual({
+          groups: new Map([["workspace", 900]]),
+          sets: new Map(),
+          cold: false,
+        });
+      } finally {
+        globalThis.fetch = original;
+      }
+    });
+
+    it("returns no figure for a run with no coverage upload", async () => {
+      expect(await coverageOfRun(7, [])).toEqual({
+        groups: new Map(),
+        sets: new Map(),
+        cold: false,
+      });
     });
   });
 

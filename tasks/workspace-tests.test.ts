@@ -804,15 +804,17 @@ Deno.test("the workspace's capable members are read from their manifests", async
       "./packages/runner",
       "./packages/api",
       "./packages/memory",
+      "./packages/dashboard",
+      "./packages/patterns",
     ]
   ) {
     assertEquals(capable.has(member), true, `${member} should take the flag`);
   }
   // A browser harness, which does not.
   assertEquals(
-    capable.has("./packages/dashboard"),
+    capable.has("./packages/identity"),
     false,
-    "./packages/dashboard should not",
+    "./packages/identity should not",
   );
 });
 
@@ -961,8 +963,9 @@ Deno.test("a recording leaf is given the preload and a write it needs", async ()
   // A member behind the sharded runner is read by the flags its leaf takes,
   // which here grant a write anywhere.
   assertEquals(recording.get("./packages/cli"), [preload]);
+  assertEquals(recording.get("./packages/dashboard"), [preload]);
   // A member whose task cannot take the preload takes nothing at all.
-  assertEquals(recording.get("./packages/dashboard"), []);
+  assertEquals(recording.get("./packages/identity"), []);
 });
 
 //

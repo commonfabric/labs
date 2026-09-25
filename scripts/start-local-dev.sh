@@ -45,7 +45,6 @@ PORT_IN_USE_EXIT=3
 # Parse command line arguments
 FORCE=false
 WATCH=false
-BG_UPDATER=false
 # The console is opt-in and stays that way. An inherited loom variable is a
 # fact about the process tree, not a request for a console, and a flag is the
 # only thing loom needs to know about cf-harness.
@@ -70,10 +69,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --allow-skill-scripts)
             CF_HARNESS_ALLOW_SKILL_SCRIPTS_FLAG=true
-            shift
-            ;;
-        --bg-updater)
-            BG_UPDATER=true
             shift
             ;;
         --inspect)
@@ -167,11 +162,9 @@ fi
 
 SHELL_LOG="$SCRIPT_DIR/../packages/shell/local-dev-shell.log"
 TOOLSHED_LOG="$SCRIPT_DIR/../packages/toolshed/local-dev-toolshed.log"
-BG_LOG="$SCRIPT_DIR/../packages/background-piece-service/local-dev-bg.log"
 CONSOLE_LOG="$SCRIPT_DIR/../packages/cf-harness/local-dev-console.log"
 SHELL_PID=""
 TOOLSHED_PID=""
-BG_PID=""
 CONSOLE_PID=""
 
 # With --force, kill anything already listening on the port so the server can
@@ -234,7 +227,6 @@ kill_tree() {
 
 cleanup_started_processes() {
     kill_tree "$CONSOLE_PID"
-    kill_tree "$BG_PID"
     kill_tree "$TOOLSHED_PID"
     kill_tree "$SHELL_PID"
 }
@@ -487,79 +479,25 @@ $console_holder, not the console this launch started"
     fi
 fi
 
-# Print the toolshed URL on success (when not using --bg-updater, which prints after health check)
-if [[ "$BG_UPDATER" != "true" ]]; then
-    echo "Development servers started successfully!"
-    echo "  Shell:    http://localhost:$SHELL_PORT"
-    echo "  Toolshed: http://localhost:$TOOLSHED_PORT"
-    if [[ "$INSPECT" == "true" ]]; then
-        echo "  Inspect:  127.0.0.1:$INSPECT_PORT"
-    fi
-    if [[ "$PORT_OFFSET" -ne 0 ]]; then
-        echo "  Offset:   $PORT_OFFSET"
-    fi
-    if [[ "$CF_HARNESS" == "true" ]]; then
-        echo "  Console:  http://127.0.0.1:$CONSOLE_PORT"
-    elif [[ -n "$CONSOLE_STATUS" ]]; then
-        echo "  Console:  NOT RUNNING — $CONSOLE_STATUS"
-    fi
-    echo "Shell log file: packages/shell/local-dev-shell.log"
-    echo "Toolshed log file: packages/toolshed/local-dev-toolshed.log"
-    if [[ "$CF_HARNESS" == "true" || -n "$CONSOLE_STATUS" ]]; then
-        echo "Console log file: packages/cf-harness/local-dev-console.log"
-    fi
+# Print the server URLs on success
+echo "Development servers started successfully!"
+echo "  Shell:    http://localhost:$SHELL_PORT"
+echo "  Toolshed: http://localhost:$TOOLSHED_PORT"
+if [[ "$INSPECT" == "true" ]]; then
+    echo "  Inspect:  127.0.0.1:$INSPECT_PORT"
 fi
-
-# Optionally start background-piece-service for bgUpdater polling
-if [[ "$BG_UPDATER" == "true" ]]; then
-    echo ""
-    echo "Starting background-piece-service..."
-
-    # Kill any previously running bg service to avoid orphaned processes
-    BG_PID_FILE="$SCRIPT_DIR/../.bg-piece-service.pid"
-    if [[ -f "$BG_PID_FILE" ]]; then
-        OLD_BG_PID=$(cat "$BG_PID_FILE")
-        if kill -0 "$OLD_BG_PID" 2>/dev/null; then
-            echo "  Stopping previous bg service (PID $OLD_BG_PID)..."
-            kill "$OLD_BG_PID" 2>/dev/null
-            sleep 1
-            if kill -0 "$OLD_BG_PID" 2>/dev/null; then
-                echo "  Force killing previous bg service..."
-                kill -9 "$OLD_BG_PID" 2>/dev/null
-            fi
-        fi
-        rm -f "$BG_PID_FILE"
-    fi
-
-    echo "  Toolshed is ready."
-
-    # Start the background service directly (not via deno task, for reliable PID tracking)
-    cd "$SCRIPT_DIR/../packages/background-piece-service"
-    OPERATOR_PASS="implicit trust" API_URL="http://localhost:$TOOLSHED_PORT" \
-        deno run -A --unstable-worker-options src/main.ts \
-        > "$BG_LOG" 2>&1 &
-    BG_PID=$!
-    cd "$SCRIPT_DIR/.."
-    sleep 2
-    ensure_process_running "background service" "$BG_PID" "$BG_LOG"
-
-    # Save PID for stop script
-    echo "$BG_PID" > "$BG_PID_FILE"
-
-    echo "  Background service: PID $BG_PID (polling bgUpdater every 60s)"
-    echo "  Log file: packages/background-piece-service/local-dev-bg.log"
-    echo ""
-    echo "Development servers started successfully!"
-    echo "  Shell:    http://localhost:$SHELL_PORT"
-    echo "  Toolshed: http://localhost:$TOOLSHED_PORT"
-    if [[ "$INSPECT" == "true" ]]; then
-        echo "  Inspect:  127.0.0.1:$INSPECT_PORT"
-    fi
-    if [[ "$PORT_OFFSET" -ne 0 ]]; then
-        echo "  Offset:   $PORT_OFFSET"
-    fi
-    echo "Shell log file: packages/shell/local-dev-shell.log"
-    echo "Toolshed log file: packages/toolshed/local-dev-toolshed.log"
+if [[ "$PORT_OFFSET" -ne 0 ]]; then
+    echo "  Offset:   $PORT_OFFSET"
+fi
+if [[ "$CF_HARNESS" == "true" ]]; then
+    echo "  Console:  http://127.0.0.1:$CONSOLE_PORT"
+elif [[ -n "$CONSOLE_STATUS" ]]; then
+    echo "  Console:  NOT RUNNING — $CONSOLE_STATUS"
+fi
+echo "Shell log file: packages/shell/local-dev-shell.log"
+echo "Toolshed log file: packages/toolshed/local-dev-toolshed.log"
+if [[ "$CF_HARNESS" == "true" || -n "$CONSOLE_STATUS" ]]; then
+    echo "Console log file: packages/cf-harness/local-dev-console.log"
 fi
 
 if [[ "$KEEP_ALIVE" == "true" ]]; then

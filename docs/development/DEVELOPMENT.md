@@ -1054,8 +1054,8 @@ deno task integration patterns counter
 - Runs integration tests with `API_URL` pointing to the local server
 - **Automatically stops servers after tests complete**
 
-**Available packages:** `runner`, `runtime-client`, `shell`,
-`background-piece-service`, `patterns`, `cli`, `generated-patterns`
+**Available packages:** `runner`, `runtime-client`, `shell`, `patterns`, `cli`,
+`generated-patterns`
 
 **Log files:** After servers start, check these if something goes wrong:
 

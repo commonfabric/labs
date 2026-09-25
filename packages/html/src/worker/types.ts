@@ -9,6 +9,7 @@ import type { CfcAtom } from "@commonfabric/api/cfc";
 import type { Cancel, Cell, JSONSchema } from "@commonfabric/runner";
 import type {
   CfcConfClause,
+  CfcModulePolicySource,
   RenderConfidentialityResolver,
   SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
@@ -408,6 +409,16 @@ export interface WorkerReconcilerOptions {
    * upgrade (Stage-1 sync snapshot only; still sound, just less precise).
    */
   membershipProvider?: SpaceMembershipProvider;
+
+  /**
+   * The module-policy manifest source backing
+   * {@link resolveRenderConfidentiality}. When present, a rendered cell whose
+   * label selects a module policy (`PolicyOf<...>`) subscribes to that
+   * policy's manifest document within its cancel group, so a cell sealed
+   * because the manifest had not synced re-renders once it arrives. Absent →
+   * no reactive upgrade; the sync snapshot still gates soundly.
+   */
+  modulePolicySource?: Pick<CfcModulePolicySource, "subscribe">;
 }
 
 /**

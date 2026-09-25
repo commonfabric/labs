@@ -22,7 +22,6 @@ import { FragmentWriter } from "@commonfabric/test-support/records";
 // Directory paths (no glob expansion needed).
 const DIRS = [
   "packages/api",
-  "packages/background-piece-service",
   "packages/cf-harness",
   "packages/cli",
   "packages/connectors/agents/connector",

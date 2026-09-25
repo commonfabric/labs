@@ -483,7 +483,7 @@ describe("running a member that cannot be handed a subset", () => {
     expect(suite.whole).toEqual(["packages/bakery#browser-test"]);
   });
 
-  it("accounts for the files the Deno-only half declines", async () => {
+  it("accounts for the files the browser half's task names", async () => {
     // A member that splits its halves by a name keeps the browser files
     // out of the `deno test` run, and the browser half is one unit
     // whatever it holds. Without saying so, those files would be test
@@ -494,7 +494,8 @@ describe("running a member that cannot be handed a subset", () => {
         tasks: {
           test: { dependencies: ["deno-test", "browser-test"] },
           "deno-test": "deno test --allow-read --ignore='**/*.browser.test.ts'",
-          "browser-test": "deno run -A ../deno-web-test/cli.ts oven.test.ts",
+          "browser-test":
+            "deno run -A ../deno-web-test/cli.ts **/*.browser.test.ts",
         },
         files: ["test/glaze.test.ts", "test/oven.browser.test.ts"],
       },
@@ -511,9 +512,8 @@ describe("running a member that cannot be handed a subset", () => {
 
   it("leaves out a file neither half of a split member runs", async () => {
     // A task naming its own paths passes over everything outside them,
-    // and what it passes over is not what the browser half runs. Only
-    // the files an ignore took out belong to the browser half, so a file
-    // outside the task's paths is claimed by neither.
+    // and what it passes over is not what the browser half runs, so a
+    // file outside both halves' paths is claimed by neither.
 
     const root = await workspace({
       "./packages/bakery": {
@@ -521,7 +521,8 @@ describe("running a member that cannot be handed a subset", () => {
           test: { dependencies: ["deno-test", "browser-test"] },
           "deno-test":
             "deno test --allow-read --ignore='**/*.browser.test.ts' test",
-          "browser-test": "deno run -A ../deno-web-test/cli.ts oven.test.ts",
+          "browser-test":
+            "deno run -A ../deno-web-test/cli.ts **/*.browser.test.ts",
         },
         files: [
           "test/glaze.test.ts",
@@ -531,6 +532,56 @@ describe("running a member that cannot be handed a subset", () => {
       },
     });
     const suite = workspaceUnit(await loadUnitSuites(root));
+    expect(suite.units).not.toContain(
+      "packages/bakery/integration/proof.test.ts",
+    );
+    expect(suite.sources).toEqual([
+      "packages/bakery/test/oven.browser.test.ts",
+    ]);
+  });
+
+  it("throws for a browser half whose task names no files it can read", async () => {
+    const root = await workspace({
+      "./packages/bakery": {
+        tasks: {
+          test: { dependencies: ["deno-test", "browser-test"] },
+          "deno-test": "deno test --allow-read --ignore='**/*.browser.test.ts'",
+          "browser-test": "deno run -A ../deno-web-test/cli.ts",
+        },
+        files: ["test/glaze.test.ts", "test/oven.browser.test.ts"],
+      },
+    });
+    await expect(loadUnitSuites(root)).rejects.toThrow(
+      "`./packages/bakery`'s `browser-test` task names no files the " +
+        "topology can read.",
+    );
+  });
+
+  it("leaves out a file the Deno-only half ignores for another suite", async () => {
+    // Another suite runs `integration/`, so the ignore that keeps it out
+    // of the `deno test` run does not make it the browser half's.
+
+    const root = await workspace({
+      "./packages/bakery": {
+        tasks: {
+          test: { dependencies: ["deno-test", "browser-test"] },
+          "deno-test": "deno test --allow-read --ignore='integration' " +
+            "--ignore='**/*.browser.test.ts' .",
+          "browser-test":
+            "deno run -A ../deno-web-test/cli.ts **/*.browser.test.ts",
+        },
+        files: [
+          "test/glaze.test.ts",
+          "test/oven.browser.test.ts",
+          "integration/proof.test.ts",
+        ],
+      },
+    });
+    const suite = workspaceUnit(await loadUnitSuites(root));
+    expect(suite.units).toEqual([
+      "packages/bakery/test/glaze.test.ts",
+      "packages/bakery#browser-test",
+    ]);
     expect(suite.sources).toEqual([
       "packages/bakery/test/oven.browser.test.ts",
     ]);

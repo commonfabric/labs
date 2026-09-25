@@ -1,0 +1,26 @@
+{
+  "argumentSchema": {
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "catalog/stories/cf-hover-reveal-story.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "controls": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      }
+    },
+    "required": [
+      "controls",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

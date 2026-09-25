@@ -28,6 +28,7 @@ The status corrections in this register are bounded to the rows below:
 | OW28-supersession-family / OW28-instance-family | Partial: shared fetch, `fetchProgram`, and direct LLM user/session isolation are covered. Caller-specific lifecycle, initialization, and remaining provider/tool read obligations are detailed below. |
 | OW30 | Stream sibling validation is fixed; the non-Stream counter/container observation remains unresolved. |
 | OW31 residual (vii) | Read-triggered remount is implemented; automatic replay of the entire watch set remains separate. |
+| OW41 | Partial: a demand pass over unchanged demand, with no warm key captured since the last pass, does no per-row work — the memory server keeps each session's share of the demand set and the SpaceServer reconciles only the keys whose rows changed and the newly captured warm keys (serving-loop.md §7, `demandKeysReconciled`). A session whose demand changes is still rebuilt and compared whole, so a pass after a change costs that session's closure; the first pass of a tenure and the pass after one whose reconcile threw partway reconcile every key. |
 | OW55 | Open: serving pattern-source trust, with root creation and wish sidecars among its consumers. |
 | OW56 finding 2 | Closed: source following has one owner, the opener. ON upload and instantiate run on the serving runtime; source updates, other client creation paths, and compiled-byte trust remain separate OW56 work. |
 | OW58 | Closed: resolved-error notice commits release the drain guard. |
@@ -243,6 +244,13 @@ Delta 2026-08-05 — stage F lands (the serving loop; this PR):
   watermark-only advance over the withdrawn derivations;
   re-activation's fresh-runtime recompute-on-demand is the only
   post-abort arm), pinned with a deterministic mid-wave interleave.
+  The same test pins that re-activation: the client's session is
+  still live, so the host re-activates the space with a fresh tenure,
+  after the failure-park backoff, with no further trigger. Two sibling
+  tests pin the same re-activation after a serving-loop failure and
+  after a failed activation; each opens the client's session with a
+  read, so that no write races the park and re-activates the space by
+  the admission path instead.
 - serving-loop §6 step 2's re-mark: PARTIAL by design in Phase 1 —
   activation runs `selectStaleBasisInstances` and surfaces the stale
   set (counted, logged), and recovery CORRECTNESS rides
@@ -1229,7 +1237,12 @@ nod, 2026-08-07; recorded in the plan's stage list):**
   with the pre-blip tenure, so the first real seal after a same-process
   reacquire aborts `lease-lost` and PARKS the space — the "survived
   blip keeps serving" path is reachable only on a space quiet across the
-  tick; owner: the P7 renew-blip / wedge arms.
+  tick; owner: the P7 renew-blip / wedge arms. (a) CLOSED
+  (2026-09-24): a derived commit the engine refuses while the row no
+  longer names the holder live runs the renew arm, so the tenure ends
+  at the first refused commit and its wave aborts and parks
+  (serving-loop §2); pinned in `executor-serving-loop.test.ts` with
+  both renewal drivers held off.
   **CLOSED — leg 2 of 2 LANDED (fan-out stage B, 2026-08-17; owner
   ruling 2026-08-16 "if a space scoped calculation gets narrowed to
   user, it'll have to run for all users that demand it").** The

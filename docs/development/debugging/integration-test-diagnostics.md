@@ -10,10 +10,13 @@ What the failure probe contains, and where each piece lives:
 - **The wait's own report** (`describeConditionWaitFailure`, in
   [`utils.ts`](../../../packages/integration/utils.ts)) — the source the page
   ran, the arguments it was given one to a line, the last throw the predicate
-  itself made, and the page it ran out against: document URL and title,
-  response status, the view and identity `globalThis.app` holds, and the
-  browser console tail. Every `waitForCondition` renders this, in every suite;
-  the rest of this list is what the patterns suite adds on top of it.
+  itself made, and the page it ran out against: document URL and title, response
+  status, the view and identity `globalThis.app` holds, the messages the runtime
+  worker has logged at `warn` or `error` with their counts, and the browser
+  console tail. The worker's own console does not reach the page, so those
+  counts are the report's view of the worker. Every `waitForCondition` renders
+  this, in every suite; the rest of this list is what the patterns suite adds on
+  top of it.
 - **Fill phase ledger** (`__cfFillDiag`, in
   [`cfc-browser-helpers.ts`](../../../packages/patterns/integration/cfc-browser-helpers.ts))
   — per-selector progress through the fill (settled → found → visible → filled

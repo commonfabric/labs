@@ -41,11 +41,7 @@ on:
         description: Days of submissions to read (default 2, or 60 with a cold start)
         required: false
 
-# `actions: read` is what lets the publisher read the `perf-metrics`
-# artifact of each recent run on main, which is where the coverage gate's
-# baselines come from. Read-only, and over this repository's own runs.
 permissions:
-  actions: read
   contents: read
   id-token: write
 
@@ -113,7 +109,6 @@ jobs:
           TEST_SELECTION_PREFIX: ${{ vars.TEST_SELECTION_PREFIX }}
           PUBLISH_BOOTSTRAP: ${{ inputs.bootstrap }}
           PUBLISH_DAYS: ${{ inputs.days }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           args=()

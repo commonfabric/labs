@@ -5,7 +5,7 @@
  * The EXPERIMENTAL_* → ExperimentalOptions mapping (including its tri-state
  * unset/true/false fidelity) now lives in the runner's canonical
  * `experimentalOptionsFromEnv` / `EXPERIMENTAL_ENV_VARS` (CT-1814), shared by
- * toolshed, the CLI, and the background-piece-service; its coverage lives in
+ * toolshed and the CLI; its coverage lives in
  * `packages/runner/test/runtime-presets.test.ts`.
  */
 

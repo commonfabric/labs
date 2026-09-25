@@ -18,6 +18,7 @@ import type { SealedCommitVerdict } from "../../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
 import { readValueAtPath } from "../../src/storage/v2-path.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
+import { sessionDemandOf } from "../support/session-demand.ts";
 
 const owner = await Identity.fromPassphrase("terminal structure owner");
 const service = await Identity.fromPassphrase("terminal structure service");
@@ -179,13 +180,15 @@ describe("SpaceServer", () => {
           };
           const facade = new Proxy(server, {
             get(target, key, receiver) {
-              if (key === "demandedInstancesForSpace") {
+              if (key === "demandForSpace") {
                 return (
                   requestedSpace: string,
                   options: { excludePrincipal?: string },
                 ) =>
-                  target.demandedInstancesForSpace(requestedSpace, options)
-                    .map((row) => ({ ...row, root: row.id === rootId }));
+                  sessionDemandOf(
+                    target.demandedInstancesForSpace(requestedSpace, options)
+                      .map((row) => ({ ...row, root: row.id === rootId })),
+                  );
               }
               const value = Reflect.get(target, key, receiver);
               return typeof value === "function" ? value.bind(target) : value;

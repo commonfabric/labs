@@ -36,6 +36,7 @@ import {
 import {
   decodeMemoryBoundary,
   resolveScopeKey,
+  type ScopeKey,
   type SessionViewInterest,
   streamEntriesDocId,
   type StreamEventsDocValue,
@@ -61,6 +62,7 @@ import {
 } from "../src/executor/stats.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { ArrivalLog, awaitEach } from "./support/serving-waits.ts";
+import { sessionDemandOf } from "./support/session-demand.ts";
 
 const spaceSigner = await Identity.fromPassphrase("space-server test space");
 const space = spaceSigner.did() as MemorySpace;
@@ -909,7 +911,7 @@ describe("stage G SpaceServer recovery seams", () => {
   //
 
   // W0 (d′) SCRATCH: these seams hand-feed DEMAND with no client session.
-  // Under (d′) demand is the tracked-ids CLOSURE (`demandedInstancesForSpace`
+  // Under (d′) demand is the tracked-ids CLOSURE (`demandForSpace`
   // rows: instance-keyed, `root` marked) — a client watching a piece's
   // result with its schema tracks the result doc AND the `computed:` docs
   // it links to (the writers of those are the demand roots; the root doc
@@ -927,16 +929,10 @@ describe("stage G SpaceServer recovery seams", () => {
       identity?: { principal?: string; sessionId?: string };
     }>,
   ) => {
-    const rows: Array<{
-      id: string;
-      scope: "space" | "user" | "session";
-      scopeKey: string;
-      identity?: { principal?: string; sessionId?: string };
-      root: boolean;
-    }> = [];
+    const rows: MemoryV2Server.DemandedInstanceRow[] = [];
     for (const root of roots) {
       const scope = (root.scope ?? "space") as "space" | "user" | "session";
-      let scopeKey = "space";
+      let scopeKey: ScopeKey = "space";
       if (scope !== "space") {
         try {
           scopeKey = resolveScopeKey(scope, {
@@ -978,8 +974,8 @@ describe("stage G SpaceServer recovery seams", () => {
   ): typeof server =>
     new Proxy(server, {
       get(target, prop, receiver) {
-        if (prop === "demandedInstancesForSpace") {
-          return () => demandRowsFor(roots);
+        if (prop === "demandForSpace") {
+          return () => sessionDemandOf(demandRowsFor(roots));
         }
         const value = Reflect.get(target, prop, receiver);
         return typeof value === "function" ? value.bind(target) : value;
@@ -1155,12 +1151,12 @@ describe("stage G SpaceServer recovery seams", () => {
     const rootId = rootCell.getAsNormalizedFullLink().id;
 
     // Point the demand facade at it (swapped in via the server's
-    // observer seam: the SpaceServer reads demandedInstancesForSpace on
-    // every demand pass, so overriding the method on the shared server
-    // object works mid-flight).
-    const originalWatched = server.demandedInstancesForSpace.bind(server);
-    (server as { demandedInstancesForSpace: unknown })
-      .demandedInstancesForSpace = () => demandRowsFor([{ id: rootId }]);
+    // observer seam: the SpaceServer reads demandForSpace on every demand
+    // pass, so overriding the method on the shared server object works
+    // mid-flight).
+    const originalWatched = server.demandForSpace.bind(server);
+    (server as { demandForSpace: unknown }).demandForSpace = () =>
+      sessionDemandOf(demandRowsFor([{ id: rootId }]));
     try {
       // Fire a demand pass; the absent root confirms no-meta and
       // terminalizes (not-yet and never are indistinguishable HERE —
@@ -1244,8 +1240,7 @@ describe("stage G SpaceServer recovery seams", () => {
       expect(stats.structureLoadTerminal).toBe(1);
       expect(stats.structureLoadFailures).toBe(0);
     } finally {
-      (server as { demandedInstancesForSpace: unknown })
-        .demandedInstancesForSpace = originalWatched;
+      (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
     }
   });
 

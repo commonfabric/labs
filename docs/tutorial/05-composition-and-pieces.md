@@ -179,16 +179,6 @@ reactive function of durable shared state*, whose result is durable shared
 state, inside a list comprehension, synced to every user of the space. That
 sentence is the product.
 
-## Background execution
-
-A piece can keep working with no browser open. A pattern that exposes a
-`bgUpdater` stream (or registers via the `cf-updater` component) gets picked
-up by the **background piece service**, which re-runs each registered piece
-on a fixed cadence (every 60 s by default), sending to that stream
-server-side — same graph, same cells, headless executor (details in
-Chapter 11). This is how "summarize my feed every morning" works without
-anyone keeping a tab open.
-
 ---
 
 **Next:** [Chapter 6 — The development workflow](06-workflow.md): actually

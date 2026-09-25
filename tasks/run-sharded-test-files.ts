@@ -36,6 +36,7 @@ const PROFILES = {
   piece: { weights: PIECE_TEST_WEIGHTS, defaultWeight: 0.2 },
   tasks: { weights: TASK_TEST_WEIGHTS, defaultWeight: 0.2 },
   cli: { weights: {}, defaultWeight: 1 },
+  dashboard: { weights: {}, defaultWeight: 1 },
 } as const;
 
 type ProfileName = keyof typeof PROFILES;
