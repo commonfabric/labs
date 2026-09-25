@@ -1,7 +1,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { connect, loopback, type Transport } from "../v2/client.ts";
+import {
+  type Client,
+  connect,
+  loopback,
+  type SpaceSession,
+  type Transport,
+} from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
 import { decodeMemoryBoundary, type EntitySnapshot } from "../v2.ts";
 import {
@@ -73,6 +79,57 @@ function outageTransport(server: Server) {
   };
 }
 
+/**
+ * Two servers standing for one host before and after it restarts: the second
+ * holds none of the first's sessions, so a reconnect to it cannot resume one
+ * and has to re-open it, which is when `restore()` re-establishes the session's
+ * watch set.
+ */
+function restartedServers(
+  name: string,
+  options: { subscriptionRefreshDelayMs?: number } = {},
+): { before: Server; after: Server } {
+  const server = (phase: string) =>
+    new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL(`memory://reconnect-watch-${name}-${phase}`),
+      ...options,
+    });
+  return { before: server("before"), after: server("after") };
+}
+
+/**
+ * Writes document `of:<id>` in `space` through `writerClient`, and returns the
+ * ids of the entities in the next update `session` receives. The document is
+ * among them only if the server holds a watch of `session`'s on it.
+ */
+async function idsInNextUpdateAfterWrite(
+  session: SpaceSession,
+  writerClient: Client,
+  space: string,
+  id: string,
+): Promise<string[]> {
+  const updates = (await session.watchAddSync([])).view.subscribe();
+  const writer = await writerClient.mount(
+    space,
+    {},
+    testSessionOpenAuthFactory,
+  );
+  await writer.transact({
+    localSeq: 1,
+    reads: { confirmed: [], pending: [] },
+    operations: [{
+      op: "set",
+      id: `of:${id}`,
+      value: { value: { written: true } },
+    }],
+  });
+  const next = await updates.next();
+  return (next.value?.entities ?? []).map((entity: EntitySnapshot) =>
+    entity.id
+  );
+}
+
 describe("v2-client-reconnect-watch", () => {
   // A watch mutation that finds its session disconnected or restoring waits
   // for the restore. `restore()` re-establishes the watch set through the same
@@ -86,14 +143,7 @@ describe("v2-client-reconnect-watch", () => {
   for (const concurrentWatchRefresh of [false, true]) {
     describe(`with concurrentWatchRefresh ${concurrentWatchRefresh}`, () => {
       it("completes the reconnect when a watch was added while the host was down", async () => {
-        const before = new Server({
-          ...testSessionOpenServerOptions,
-          store: new URL("memory://reconnect-watch-outage-before"),
-        });
-        const after = new Server({
-          ...testSessionOpenServerOptions,
-          store: new URL("memory://reconnect-watch-outage-after"),
-        });
+        const { before, after } = restartedServers("outage");
         const host = outageTransport(before);
         const client = await connect({ transport: host.transport });
         try {
@@ -132,14 +182,7 @@ describe("v2-client-reconnect-watch", () => {
         // wire when the connection drops, so its turn comes only after the
         // drop, with the connection already down.
 
-        const before = new Server({
-          ...testSessionOpenServerOptions,
-          store: new URL("memory://reconnect-watch-queued-before"),
-        });
-        const after = new Server({
-          ...testSessionOpenServerOptions,
-          store: new URL("memory://reconnect-watch-queued-after"),
-        });
+        const { before, after } = restartedServers("queued");
         const host = outageTransport(before);
         const client = await connect({ transport: host.transport });
         try {
@@ -191,14 +234,7 @@ describe("v2-client-reconnect-watch", () => {
         // client and reads the update back, which it can only do if the
         // server holds the watch.
 
-        const before = new Server({
-          ...testSessionOpenServerOptions,
-          store: new URL("memory://reconnect-watch-reopen-before"),
-          subscriptionRefreshDelayMs: 0,
-        });
-        const after = new Server({
-          ...testSessionOpenServerOptions,
-          store: new URL("memory://reconnect-watch-reopen-after"),
+        const { before, after } = restartedServers("reopen", {
           subscriptionRefreshDelayMs: 0,
         });
         const host = outageTransport(before);
@@ -230,25 +266,12 @@ describe("v2-client-reconnect-watch", () => {
           expect(connectedAtReopen).toBe(true);
           await added;
 
-          const updates = (await session.watchAddSync([])).view.subscribe();
-          const writer = await writerClient.mount(
-            SPACE,
-            {},
-            testSessionOpenAuthFactory,
-          );
-          await writer.transact({
-            localSeq: 1,
-            reads: { confirmed: [], pending: [] },
-            operations: [{
-              op: "set",
-              id: "of:during",
-              value: { value: { written: true } },
-            }],
-          });
-          const next = await updates.next();
           expect(
-            (next.value?.entities ?? []).map((entity: EntitySnapshot) =>
-              entity.id
+            await idsInNextUpdateAfterWrite(
+              session,
+              writerClient,
+              SPACE,
+              "during",
             ),
           ).toContain("of:during");
         } finally {
@@ -265,14 +288,7 @@ describe("v2-client-reconnect-watch", () => {
         // is reopening: the client is connected, and the second session has
         // neither reopened nor started its restore.
 
-        const before = new Server({
-          ...testSessionOpenServerOptions,
-          store: new URL("memory://reconnect-watch-second-before"),
-          subscriptionRefreshDelayMs: 0,
-        });
-        const after = new Server({
-          ...testSessionOpenServerOptions,
-          store: new URL("memory://reconnect-watch-second-after"),
+        const { before, after } = restartedServers("second", {
           subscriptionRefreshDelayMs: 0,
         });
         const host = outageTransport(before);
@@ -310,25 +326,12 @@ describe("v2-client-reconnect-watch", () => {
           expect(connectedAtReopen).toBe(true);
           await added;
 
-          const updates = (await second.watchAddSync([])).view.subscribe();
-          const writer = await writerClient.mount(
-            SECOND_SPACE,
-            {},
-            testSessionOpenAuthFactory,
-          );
-          await writer.transact({
-            localSeq: 1,
-            reads: { confirmed: [], pending: [] },
-            operations: [{
-              op: "set",
-              id: "of:during",
-              value: { value: { written: true } },
-            }],
-          });
-          const next = await updates.next();
           expect(
-            (next.value?.entities ?? []).map((entity: EntitySnapshot) =>
-              entity.id
+            await idsInNextUpdateAfterWrite(
+              second,
+              writerClient,
+              SECOND_SPACE,
+              "during",
             ),
           ).toContain("of:during");
         } finally {
