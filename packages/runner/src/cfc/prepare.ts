@@ -4223,8 +4223,8 @@ const schemaTypeMatchesValue = (
 
 // Thrown when a policy `$ref` cannot be resolved against its own document, so
 // the value condition cannot be evaluated. It propagates past the matcher's
-// boolean combinators (notably `oneOf`'s exactly-one count, where neither
-// `true` nor `false` reliably biases toward "applies") and is caught at the
+// boolean combinators, so no `allOf` branch can turn it into "does not
+// apply", and is caught at the
 // `wildcardPolicyMatchesValue` boundary, which fails closed by treating the
 // ifc entry as applying — mirroring the unresolvable-LINK branch (audit S17).
 class UnevaluablePolicyRefError extends Error {}
@@ -4238,11 +4238,28 @@ const policySchemaMatchesValue = (
   // unresolvable against its own document fails closed.
   root: JSONSchema = schema,
 ): boolean => {
-  // Keep this narrow matcher aligned with resolveSchemaForValue() in
-  // schema.ts. This copy is intentionally local because CFC policy checks must
-  // fail closed on unresolved refs and partial wildcard writes.
+  // This narrow matcher follows resolveSchemaForValue() in schema.ts except
+  // where applying the policy is the safe answer. It is kept local because
+  // CFC policy checks must fail closed: on unresolved refs, partial wildcard
+  // writes, links below the policy's path (which match any condition), and
+  // `oneOf` (which applies when any branch matches, where value resolution
+  // selects a branch only when exactly one matches).
   if (typeof schema === "boolean") {
     return schema;
+  }
+  // A link says nothing about the value it leads to, so it may match any
+  // condition, and the entry applies: the same rule `canBranchMatch()` in
+  // traverse.ts follows. `wildcardPolicyMatchesValue` follows the one link
+  // that stands at the policy's own path; a link below it, such as a
+  // pattern result's redirect link to the cell holding a field, is not
+  // followed. Checking a link's shape against a `type` or `const` refused
+  // the entry for every such value, which dropped the declared label and
+  // skipped the entry's write requirements (`writeAuthorizedBy`,
+  // `ownerPrincipal`). Following it instead would read every linked
+  // document into the commit, and the document a link leads to can change
+  // after the commit, so the condition would hold only for that moment.
+  if (isPrimitiveCellLink(value)) {
+    return true;
   }
   const schemaRoot = root;
   if (typeof schema.$ref === "string") {
@@ -4289,28 +4306,27 @@ const policySchemaMatchesValue = (
       policySchemaMatchesValue(branch, value, schemaRoot)
     );
   }
+  // `oneOf` applies when any branch matches, as `anyOf` does. Requiring
+  // exactly one would let a value that matches two branches, such as one
+  // holding a link that matches every branch, exclude the entry.
   if (Array.isArray(schema.oneOf)) {
-    return schema.oneOf.filter((branch) =>
+    return schema.oneOf.some((branch) =>
       policySchemaMatchesValue(branch, value, schemaRoot)
-    ).length === 1;
+    );
   }
   if (Array.isArray(schema.allOf)) {
     return schema.allOf.every((branch) =>
       policySchemaMatchesValue(branch, value, schemaRoot)
     );
   }
-  // A link matches by what it is, not by what a `properties` condition would
-  // read off the record a legacy one is written as. `isPrimitiveCellLink()`
-  // recognizes whichever form the active regime uses, so it takes a
-  // `FabricLink` out of the walk question's way as well; a modern argument
-  // link arriving here is what makes that load-bearing rather than tidy.
+  // A link never reaches this arm: it matched above, in whichever form
+  // `isPrimitiveCellLink()` recognizes, a `FabricLink` included, rather than
+  // having a `properties` condition read off the record a legacy one is
+  // written as.
   //
   // A `FabricPrimitive` carries no property for a `properties` condition to
   // read, so it falls past this arm.
-  if (
-    !isPrimitiveCellLink(value) && isWalkableObjectOrArray(value) &&
-    isObjectOrArray(schema.properties)
-  ) {
+  if (isWalkableObjectOrArray(value) && isObjectOrArray(schema.properties)) {
     return Object.entries(schema.properties).every(([key, childSchema]) =>
       value[key] === undefined ||
       policySchemaMatchesValue(childSchema, value[key], schemaRoot)

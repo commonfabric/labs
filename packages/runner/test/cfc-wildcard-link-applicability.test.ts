@@ -1,4 +1,4 @@
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   FabricBytes,
@@ -78,6 +78,124 @@ describe("CFC wildcard policy applicability on unresolvable links", () => {
 
     expect(wildcardPolicyMatchesValue(tx, target, policySchema, linkValue))
       .toBe(false);
+  });
+});
+
+describe("CFC wildcard policy applicability on links below the policy's path", () => {
+  // A pattern result holds each field as a redirect link to the cell that
+  // stores it. A policy whose condition names those fields' types must still
+  // apply to such a value: a link says nothing about what it leads to.
+  const space = "did:key:nested-link" as const;
+  const target = { space, id: "of:guarded" as const, scope: "space" as const };
+  // Every cell a nested link below leads to resolves, in this transaction, to
+  // a number: a value no condition here accepts. A matcher that followed a
+  // nested link would read it and exclude the entry; the counts show the
+  // matcher consults neither the transaction's writes nor its reads.
+  let lookups = 0;
+  let reads = 0;
+  const tx = {
+    getWriteDetails: () => {
+      lookups++;
+      return [
+        "of:name-cell",
+        "of:avatar-cell",
+        "of:kind-cell",
+        "of:mode-cell",
+        "of:field-cell",
+      ].map((id) => ({
+        address: { id, scope: "space", path: ["value"] },
+        value: 42,
+      }));
+    },
+    readValueOrThrow: () => {
+      reads++;
+      return 42;
+    },
+  } as unknown as IExtendedStorageTransaction;
+  afterEach(() => {
+    expect(lookups).toBe(0);
+    expect(reads).toBe(0);
+    lookups = 0;
+    reads = 0;
+  });
+  const link = (id: string) => ({
+    "/": {
+      [LINK_V1_TAG]: {
+        id,
+        path: [] as string[],
+        space,
+        scope: "space",
+        overwrite: "redirect",
+      },
+    },
+  });
+  const profileCondition = {
+    type: "object",
+    properties: { name: { type: "string" }, avatar: { type: "string" } },
+    ifc: { writeAuthorizedBy: ["trusted-handler"] },
+  } as const satisfies JSONSchema;
+
+  it("applies when a field the condition types as a string holds a link", () => {
+    expect(
+      wildcardPolicyMatchesValue(tx, target, profileCondition, {
+        name: link("of:name-cell"),
+        avatar: link("of:avatar-cell"),
+      }),
+    ).toBe(true);
+  });
+
+  it("applies when a link stands where a `const` or `enum` is required", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        kind: { const: "url" },
+        mode: { enum: ["a", "b"] },
+      },
+    } as const satisfies JSONSchema;
+    expect(
+      wildcardPolicyMatchesValue(tx, target, schema, {
+        kind: link("of:kind-cell"),
+        mode: link("of:mode-cell"),
+      }),
+    ).toBe(true);
+  });
+
+  it("still does not apply when a plain field contradicts the condition beside a link", () => {
+    const schema = {
+      type: "object",
+      properties: { kind: { const: "url" }, name: { type: "string" } },
+    } as const satisfies JSONSchema;
+    expect(
+      wildcardPolicyMatchesValue(tx, target, schema, {
+        kind: "piece",
+        name: link("of:name-cell"),
+      }),
+    ).toBe(false);
+  });
+
+  it("applies a `oneOf` whose branches a nested link matches more than one of", () => {
+    // Each branch conditions the same field differently, and the value holds a
+    // link there, which matches both. Requiring exactly one branch would
+    // exclude the entry.
+    const schema = {
+      oneOf: [
+        { type: "object", properties: { field: { type: "string" } } },
+        { type: "object", properties: { field: { type: "number" } } },
+      ],
+    } as const satisfies JSONSchema;
+    expect(
+      wildcardPolicyMatchesValue(tx, target, schema, {
+        field: link("of:field-cell"),
+      }),
+    ).toBe(true);
+  });
+
+  it("applies a `oneOf` that plain values match in more than one branch", () => {
+    const schema = {
+      oneOf: [{ type: "number" }, { type: "integer" }],
+    } as const satisfies JSONSchema;
+    expect(wildcardPolicyMatchesValue(tx, target, schema, 3)).toBe(true);
+    expect(wildcardPolicyMatchesValue(tx, target, schema, "3")).toBe(false);
   });
 });
 

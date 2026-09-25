@@ -883,25 +883,53 @@ export function resolveSchemaRefsCanonical(
   return cached === null ? undefined : cached;
 }
 
+/**
+ * A value for each option list and the definitions it is read against. One
+ * list can be read against more than one set of definitions within a reading,
+ * where a union with no definitions to hand its options holds options that
+ * carry definitions of their own, and it means what those definitions make it
+ * mean.
+ */
+type ByReading<T> = Map<readonly JSONSchema[], Map<unknown, T>>;
+
+/** The value `map` holds for `options` read against `definitions`. */
+function readingEntry<T>(
+  map: ByReading<T>,
+  options: readonly JSONSchema[],
+  definitions: unknown,
+): T | undefined {
+  return map.get(options)?.get(definitions);
+}
+
+/** Sets the value `map` holds for `options` read against `definitions`. */
+function setReadingEntry<T>(
+  map: ByReading<T>,
+  options: readonly JSONSchema[],
+  definitions: unknown,
+  value: T,
+): void {
+  const byDefinitions = map.get(options);
+  if (byDefinitions === undefined) {
+    map.set(options, new Map([[definitions, value]]));
+  } else {
+    byDefinitions.set(definitions, value);
+  }
+}
+
 /** One reading of a schema's handle declaration by `declaresAsCell()`. */
 interface HandleReading {
   /** The option lists being read further up. */
-  readonly open: Set<readonly JSONSchema[]>;
+  readonly open: ByReading<true>;
+
+  /** Whether every option of a list read so far declares a handle. */
+  readonly verdicts: ByReading<boolean>;
 
   /**
-   * Whether every option of a list read so far declares a handle, with the
-   * definitions it was read against.
+   * The lists, each with the definitions it is read against, that a union
+   * reached again while they were being read further up, and took there as
+   * declaring no handle.
    */
-  readonly verdicts: Map<
-    readonly JSONSchema[],
-    { readonly definitions: unknown; readonly every: boolean }
-  >;
-
-  /**
-   * The lists a union reached again while they were being read further up,
-   * and took there as declaring no handle.
-   */
-  readonly assumed: Set<readonly JSONSchema[]>;
+  readonly assumed: [readonly JSONSchema[], unknown][];
 }
 
 /**
@@ -913,35 +941,37 @@ interface HandleReading {
  * references to handle definitions declares a handle as the same union with
  * `asCell` at each reference does.
  *
- * A reading reads each option list once, so definitions the lists share are
- * read once however many reach them. A union that reaches a list still being
- * read further up takes it as declaring no handle, since reading it again
- * proves nothing. Where a list taken that way turns out to declare a handle
- * after all, what was read through it may have fallen short, so the reading
- * runs again, keeping the lists found to declare one: those hold however the
- * lists further up read. Each further run finds a list the ones before did
- * not, so there are at most as many runs as lists, plus one.
+ * A reading reads each option list once for each set of definitions it is
+ * read against, so definitions the lists share are read once however many
+ * reach them. A union that reaches a list still being read further up
+ * against the same definitions takes it as declaring no handle, since reading
+ * it again proves nothing. Where a list taken that way turns out to declare a
+ * handle after all, what was read through it may have fallen short, so the
+ * reading runs again, keeping the lists found to declare one: those hold
+ * however the lists further up read. A list is taken that way only while it
+ * is open, so the same run reads it to a verdict, and a run that follows is
+ * caused by a list the runs before it had not found to declare a handle and
+ * reads that list from its verdict. So there are at most as many runs as
+ * lists read, plus one.
  */
 function declaresAsCell(schema: JSONSchema | undefined): boolean {
   const reading: HandleReading = {
-    open: new Set(),
+    open: new Map(),
     verdicts: new Map(),
-    assumed: new Set(),
+    assumed: [],
   };
   for (;;) {
     const declares = readsAsHandle(schema, reading);
-    let settled = true;
-    for (const options of reading.assumed) {
-      if (reading.verdicts.get(options)?.every === true) {
-        settled = false;
-        break;
+    const settled = reading.assumed.every(([options, definitions]) =>
+      readingEntry(reading.verdicts, options, definitions) !== true
+    );
+    if (settled) return declares;
+    for (const byDefinitions of reading.verdicts.values()) {
+      for (const [definitions, every] of byDefinitions) {
+        if (!every) byDefinitions.delete(definitions);
       }
     }
-    if (settled) return declares;
-    for (const [options, verdict] of reading.verdicts) {
-      if (!verdict.every) reading.verdicts.delete(options);
-    }
-    reading.assumed.clear();
+    reading.assumed.length = 0;
   }
 }
 
@@ -977,23 +1007,21 @@ function everyOptionReadsAsHandle(
   definitions: JSONSchemaObj["$defs"],
   reading: HandleReading,
 ): boolean {
-  const known = reading.verdicts.get(options);
-  if (known !== undefined && known.definitions === definitions) {
-    return known.every;
-  }
-  if (reading.open.has(options)) {
-    reading.assumed.add(options);
+  const known = readingEntry(reading.verdicts, options, definitions);
+  if (known !== undefined) return known;
+  if (readingEntry(reading.open, options, definitions)) {
+    reading.assumed.push([options, definitions]);
     return false;
   }
-  reading.open.add(options);
+  setReadingEntry(reading.open, options, definitions, true);
   try {
     const every = options.every((option) =>
       readsAsHandle(cfcSchemaWithInheritedDefs(option, definitions), reading)
     );
-    reading.verdicts.set(options, { definitions, every });
+    setReadingEntry(reading.verdicts, options, definitions, every);
     return every;
   } finally {
-    reading.open.delete(options);
+    reading.open.get(options)?.delete(definitions);
   }
 }
 
