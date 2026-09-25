@@ -1,6 +1,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
+import {
+  CFC_ATOM_TYPE,
+  cfcAtom,
+  type CfcJsonValue,
+} from "@commonfabric/api/cfc";
 import {
   buildCfcPolicyArtifactManifest,
   type PolicyArtifactManifestV1,
@@ -245,29 +249,52 @@ describe("module-policy exchange evaluation", () => {
       blessing.policyDigest,
       ALICE_SPACE,
     );
-    const legacyEvidence = {
-      type: CFC_ATOM_TYPE.TransformedBy,
-      identity: {
-        kind: "verified",
-        moduleIdentity: MODULE,
-        symbol: "tally",
-      },
-      inputWitness: {
-        type: CFC_ATOM_TYPE.TransformedBy,
-        identity: { kind: "builtin", builtinId: "legacy-source" },
-      },
-    };
-    const result = evaluateExchangeRules(
-      { confidentiality: [selected], integrity: [legacyEvidence] },
-      undefined,
+    const legacyEvidenceVariants: CfcJsonValue[] = [
       {
-        modulePolicyResolver: () => blessing,
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity: {
+          kind: "verified",
+          moduleIdentity: MODULE,
+          symbol: "tally",
+        },
+        inputWitness: {
+          type: CFC_ATOM_TYPE.TransformedBy,
+          identity: { kind: "builtin", builtinId: "legacy-source" },
+        },
       },
-    );
+      {
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity: {
+          kind: "verified",
+          moduleIdentity: MODULE,
+          symbol: "tally",
+          codeHash: "sha256:legacy-function",
+        },
+      },
+      {
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity: {
+          kind: "verified",
+          moduleIdentity: MODULE,
+          symbol: "tally",
+          codeHash: MODULE,
+        },
+      },
+    ];
 
-    expect(result.resolutionFailures).toEqual([]);
-    expect(result.firings).toEqual([]);
-    expect(result.label.confidentiality).toEqual([selected]);
+    for (const legacyEvidence of legacyEvidenceVariants) {
+      const result = evaluateExchangeRules(
+        { confidentiality: [selected], integrity: [legacyEvidence] },
+        undefined,
+        {
+          modulePolicyResolver: () => blessing,
+        },
+      );
+
+      expect(result.resolutionFailures).toEqual([]);
+      expect(result.firings).toEqual([]);
+      expect(result.label.confidentiality).toEqual([selected]);
+    }
   });
 
   it("rejects malformed module-reference candidates", () => {
