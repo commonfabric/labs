@@ -211,6 +211,18 @@ Normative behavior:
    verified against the writer's own module, never the importer's. The
    direct-root `toSchema<WriteAuthorizedBy<…>>()` path and nested claims
    resolve the binding to its declaration the same way.
+8. A policy written through a user alias has its binding read where the alias
+   writes it, with the alias's parameters replaced by the reference's
+   arguments: through a chain of plain aliases, or through the one branch of a
+   conditional alias that is not `never`. A binding that cannot be read that
+   way, such as one passed through a parameter the conditional checks, or one
+   in a conditional with more than one such branch, must fail compilation with
+   `cfc-write-authorized-by:unread` rather than yield a schema with no write
+   restriction. A reload of stored source fails the same way: the error guards
+   a write restriction, not an authoring shape, and a pattern does not run
+   without the restriction its author wrote. A schema
+   generated from a type alone, such as a computed's capture, has no reference
+   to read a binding from: it carries no write claim, and nothing reports that.
 
 One valid marker shape is:
 

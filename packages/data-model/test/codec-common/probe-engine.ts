@@ -457,6 +457,18 @@ export class ProbeEngine extends BaseCodecEngine<
   }
 }
 
+/** The primitive types the probe registry makes self-representing. */
+const SELF_REP_TYPE_NAMES = [
+  "null",
+  "boolean",
+  "number",
+  "string",
+  "bigint",
+] as const;
+
+/** One of {@link SELF_REP_TYPE_NAMES}. */
+type SelfRepTypeName = typeof SELF_REP_TYPE_NAMES[number];
+
 /**
  * This format, as a `CodecRegistry` needs one. Its symbol is its own: nothing
  * binds a codec under it, since every codec here is registered directly.
@@ -467,13 +479,15 @@ const PROBE_FORMAT: WireFormat<ProbeValue> = Object.freeze({
 
 /**
  * Builds an engine over a registry carrying the three codecs above, plus the
- * self-representing primitives a walk needs to get anywhere.
+ * self-representing primitives a walk needs to get anywhere, less any that
+ * `omitSelfRep` names.
  */
 export function newProbeEngine(
   options?: {
     lenient?: boolean;
     record?: HostRecord;
     extraCodecs?: readonly CodecForFormat<ProbeValue>[];
+    omitSelfRep?: readonly SelfRepTypeName[];
   },
 ): {
   engine: ProbeEngine;
@@ -494,8 +508,10 @@ export function newProbeEngine(
   registry.register(new ThrowingCodec());
   registry.register(new RejectingCodec());
   registry.register(new RefusingCodec());
-  for (const t of ["null", "boolean", "number", "string", "bigint"] as const) {
-    registry.registerSelfRep(t);
+  for (const t of SELF_REP_TYPE_NAMES) {
+    if (!options?.omitSelfRep?.includes(t)) {
+      registry.registerSelfRep(t);
+    }
   }
   for (const codec of options?.extraCodecs ?? []) {
     registry.register(codec);

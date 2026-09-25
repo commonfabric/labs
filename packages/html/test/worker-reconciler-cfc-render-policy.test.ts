@@ -79,6 +79,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     kind: "authored-by",
     subject: signer.did(),
   };
+  const OTHER_PRINCIPAL = "did:key:z6MkotherPrincipalWhoDidNotWriteThisText";
 
   try {
     const tx = runtime.edit();
@@ -201,6 +202,55 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         },
       },
     });
+    // Profiles labeled the way a Fabric profile is: each owner-protected field
+    // carries its owner's `represents-principal`, and the root carries none.
+    const seedFieldLabeledProfile = (
+      cause: string,
+      owners: { name: string; avatar: string },
+    ) => {
+      const profile = runtime.getCell<{ name: string; avatar: string }>(
+        signer.did(),
+        cause,
+        undefined,
+        tx,
+      );
+      writeSeedEnvelopeDoc(tx, signer.did());
+      seedStoredEnvelope(tx, {
+        space: signer.did(),
+        id: profile.getAsNormalizedFullLink().id!,
+        type: "application/json",
+        path: [],
+      }, {
+        value: { name: "Alice", avatar: "A" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: (["name", "avatar"] as const).map((field) => ({
+              path: [field],
+              label: {
+                integrity: [{
+                  kind: "represents-principal",
+                  subject: owners[field],
+                }],
+              },
+            })),
+          },
+        },
+      });
+    };
+    seedFieldLabeledProfile("cfc-render-policy-field-labeled-profile", {
+      name: signer.did(),
+      avatar: signer.did(),
+    });
+    // The signer owns the field whose path sorts first in the stored label, so
+    // a reader taking the first principal it finds would admit the signer's
+    // text; only one requiring every principal blocks it.
+    seedFieldLabeledProfile("cfc-render-policy-two-owner-profile", {
+      name: OTHER_PRINCIPAL,
+      avatar: signer.did(),
+    });
     const authoredByProfileText = runtime.getCell<string>(
       signer.did(),
       "cfc-render-policy-authored-by-profile-text",
@@ -257,6 +307,14 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     const authoredByProfileTextCell = runtime.getCell<string>(
       signer.did(),
       "cfc-render-policy-authored-by-profile-text",
+    );
+    const fieldLabeledProfileCell = runtime.getCell<{ name: string }>(
+      signer.did(),
+      "cfc-render-policy-field-labeled-profile",
+    );
+    const twoOwnerProfileCell = runtime.getCell<{ name: string }>(
+      signer.did(),
+      "cfc-render-policy-two-owner-profile",
     );
     const dummyTx = runtime.edit();
     const dummyCell = runtime.getCell(
@@ -1310,6 +1368,74 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           assertEquals(
             renderedText.includes("Content hidden by integrity policy"),
             false,
+          );
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "strict text integrity derives authorship from a profile labeled on its fields",
+      async () => {
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+        });
+        const root: WorkerVNode = {
+          type: "vnode",
+          name: "cf-cfc-authorship",
+          props: {
+            verifyTextIntegrity: true,
+            author: fieldLabeledProfileCell as never,
+          },
+          children: [authoredByProfileTextCell as never],
+        };
+
+        const cancel = reconciler.mount(root);
+        try {
+          await t.settle();
+
+          const renderedText = collector.getOpsOfType("create-text")
+            .map((op) => op.text);
+          assertEquals(renderedText.includes("Profile-authored note"), true);
+          assertEquals(
+            renderedText.includes("Content hidden by integrity policy"),
+            false,
+          );
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "strict text integrity blocks text under a profile whose fields name two principals",
+      async () => {
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+        });
+        const root: WorkerVNode = {
+          type: "vnode",
+          name: "cf-cfc-authorship",
+          props: {
+            verifyTextIntegrity: true,
+            author: twoOwnerProfileCell as never,
+          },
+          children: [authoredByProfileTextCell as never],
+        };
+
+        const cancel = reconciler.mount(root);
+        try {
+          await t.settle();
+
+          const renderedText = collector.getOpsOfType("create-text")
+            .map((op) => op.text);
+          assertEquals(renderedText.includes("Profile-authored note"), false);
+          assertEquals(
+            renderedText.includes("Content hidden by integrity policy"),
+            true,
           );
         } finally {
           cancel();

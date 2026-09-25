@@ -264,6 +264,15 @@ describe("RealmCodecEngine", () => {
         .toThrow(/no applicable codec/);
     });
 
+    it("throws when given a null-prototype object, rather than passing it along as a record", () => {
+      const nullProto = Object.assign(Object.create(null), { a: 1 });
+
+      expect(() => realmFromFabricValue(nullProto))
+        .toThrow("Cannot encode null-prototype object");
+      expect(() => realmFromFabricValue({ nested: nullProto }))
+        .toThrow("Cannot encode null-prototype object");
+    });
+
     it("does not hand out the bytes an encoded `FabricBytes` holds", () => {
       const bytes = new FabricBytes(new Uint8Array([1, 2, 3]));
       const state = new Uint8Array(

@@ -599,6 +599,18 @@ Deno.test("order-independent policy extraction covers the full static authoring 
       "duplicate field",
     ],
     [
+      rule('pre: { integrity: [{ kind: "x", __proto__: { y: 1 } }] },'),
+      'reserved field "__proto__"',
+    ],
+    [
+      rule('pre: { integrity: [{ kind: "x", "__proto__": { y: 1 } }] },'),
+      'reserved field "__proto__"',
+    ],
+    [
+      rule('pre: { integrity: [{ kind: "x", constructor: "y" }] },'),
+      'reserved field "constructor"',
+    ],
+    [
       `const release = exchangeRule({ appliesTo: THIS_POLICY, pre: { integrity: [{ kind: "x" }] }, post: { dropClause: true } }); export const rules = exchangeRules([release]);`,
       "must be exported",
     ],
@@ -623,6 +635,42 @@ Deno.test("order-independent policy extraction covers the full static authoring 
   for (const [source, message] of invalidCases) {
     assertThrows(() => compilePolicySource(source), Error, message);
   }
+});
+
+Deno.test("THIS_POLICY.moduleIdentity lowers to a field reference, not the defining identity", () => {
+  const [artifact] = compilePolicySource(`
+    export const releaseTally = exchangeRule({
+      appliesTo: THIS_POLICY,
+      pre: {
+        integrity: [{
+          type: "https://commonfabric.org/cfc/atom/TransformedBy",
+          identity: {
+            kind: "verified",
+            moduleIdentity: THIS_POLICY.moduleIdentity,
+            symbol: "tally",
+          },
+        }],
+      },
+      post: { dropClause: true },
+    });
+    export const rules = exchangeRules([releaseTally]);
+  `);
+
+  assertEquals(artifact.manifest.moduleIdentity, "sha256:policy");
+  const rule = artifact.manifest.template.exchangeRules[0] as {
+    preCondition?: unknown;
+  };
+  assertEquals(rule.preCondition, {
+    confidentiality: [{ thisPolicy: true }],
+    integrity: [{
+      type: "https://commonfabric.org/cfc/atom/TransformedBy",
+      identity: {
+        kind: "verified",
+        moduleIdentity: { thisPolicyField: "moduleIdentity" },
+        symbol: "tally",
+      },
+    }],
+  });
 });
 
 Deno.test("authoring transformer diagnoses every invalid module binding form", async () => {

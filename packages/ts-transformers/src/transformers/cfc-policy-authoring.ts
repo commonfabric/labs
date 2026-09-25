@@ -4,13 +4,21 @@ import {
   type FabricValue,
   hashStringOf,
 } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray, isUnsafeObjectKey } from "@commonfabric/utils/types";
 import { TransformationContext, Transformer } from "../core/mod.ts";
 import type { CfcPolicyCompilerManifestV1 } from "../core/runtime-contract.ts";
 import { unwrapExpression } from "../utils/expression.ts";
 
 const USER = "https://commonfabric.org/cfc/atom/User";
 const HAS_ROLE = "https://commonfabric.org/cfc/atom/HasRole";
+
+// The `THIS_POLICY` fields a rule may reference; each lowers to a
+// `thisPolicyField` pattern the evaluator binds from the selected policy.
+const THIS_POLICY_FIELDS: ReadonlySet<string> = new Set([
+  "subject",
+  "moduleIdentity",
+]);
+
 export const CFC_AUTHORING_MODULES = new Set([
   "commonfabric/cfc",
   "@commonfabric/api/cfc-authoring",
@@ -107,6 +115,12 @@ const evaluateStatic = (
           "computed policy declaration fields are not supported",
         );
       }
+      if (isUnsafeObjectKey(key)) {
+        throw new StaticAuthoringError(
+          property.name,
+          `reserved field "${key}"`,
+        );
+      }
       if (Object.hasOwn(result, key)) {
         throw new StaticAuthoringError(
           property.name,
@@ -125,9 +139,9 @@ const evaluateStatic = (
     ts.isPropertyAccessExpression(node) &&
     ts.isIdentifier(node.expression) &&
     imports.thisPolicy.has(node.expression.text) &&
-    node.name.text === "subject"
+    THIS_POLICY_FIELDS.has(node.name.text)
   ) {
-    return { thisPolicyField: "subject" };
+    return { thisPolicyField: node.name.text };
   }
 
   if (ts.isCallExpression(node)) {

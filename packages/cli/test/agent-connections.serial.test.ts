@@ -5,8 +5,10 @@ import { join } from "@std/path";
 import type { HarnessPromptLoopResult } from "@commonfabric/cf-harness/prompt-loop";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import {
+  experimentalOptionsFromEnv,
   getPatternEnvironment,
   resolveEntryIdentity,
   Runtime,
@@ -18,6 +20,7 @@ import {
   type AgentRunRecord,
   AgentRunRecordSchema,
 } from "@commonfabric/runner/agent-run";
+import { listenServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { startAgentRunner } from "../commands/agent.ts";
@@ -46,6 +49,28 @@ export default pattern(() => {
 });
 `;
 
+/**
+ * The posture every runtime here runs, the agent runner's included: the
+ * environment's explicit value, else the first-party default, as a deployed
+ * entry point resolves it.
+ */
+const serverExecution = experimentalOptionsFromEnv(Deno.env.get)
+  .serverExecution ?? SERVER_EXECUTION_DEFAULT_ENABLED;
+
+/**
+ * Starts a memory server standing in for one toolshed, with a serving loop
+ * when the posture is ON, as a toolshed has one then.
+ */
+function startHost(
+  options: {
+    serve?: (request: Request) => Response | undefined;
+  } = {},
+): Promise<{ url: URL; close(): Promise<void> }> {
+  return serverExecution
+    ? listenServingMemoryServer(options)
+    : Promise.resolve(StandaloneMemoryServer.start(options));
+}
+
 describe("agent-connections", () => {
   it("registers at home and completes a run on another host through the default result session", async () => {
     const directory = await Deno.makeTempDir({ prefix: "agent-connections-" });
@@ -59,7 +84,7 @@ describe("agent-connections", () => {
           ? Promise.resolve(HOME_SOURCE)
           : Promise.reject(new Error(`Unexpected pattern module: ${path}`)),
     );
-    const homeServer = StandaloneMemoryServer.start({
+    const homeServer = await startHost({
       serve: (request) => {
         const url = new URL(request.url);
         if (url.pathname === HOME_PATH) {
@@ -72,12 +97,12 @@ describe("agent-connections", () => {
         }
       },
     });
-    const recordServer = StandaloneMemoryServer.start();
+    const recordServer = await startHost();
     const connect = (url: URL) =>
       new Runtime(runtimePresets.remoteClient({
         apiUrl: url,
         storageManager: StorageManager.open({ as: identity, memoryHost: url }),
-        experimental: { serverExecution: false },
+        experimental: { serverExecution },
       }));
     const home = connect(homeServer.url);
     const remote = connect(recordServer.url);
@@ -208,7 +233,7 @@ describe("agent-connections", () => {
     const directory = await Deno.makeTempDir({ prefix: "agent-connections-" });
     const identityPath = join(directory, "identity.key");
     await Deno.writeFile(identityPath, await Identity.generatePkcs8());
-    const recordServer = StandaloneMemoryServer.start();
+    const recordServer = await startHost();
     const originalEnvironment = getPatternEnvironment();
     const homeUrl = new URL("https://home.example.test");
     setPatternEnvironment({ apiUrl: homeUrl });

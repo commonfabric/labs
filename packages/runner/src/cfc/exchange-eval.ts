@@ -404,16 +404,22 @@ const isThisPolicyPattern = (value: unknown): boolean =>
   isObjectOrArray(value) && Object.keys(value).length === 1 &&
   value.thisPolicy === true;
 
-const isThisPolicySubjectPattern = (value: unknown): boolean =>
+const isThisPolicyFieldPattern = (
+  value: unknown,
+  field: "subject" | "moduleIdentity",
+): boolean =>
   isObjectOrArray(value) && Object.keys(value).length === 1 &&
-  value.thisPolicyField === "subject";
+  value.thisPolicyField === field;
 
 const bindThisPolicy = (
   value: unknown,
   reference: CfcModulePolicyRefAtom,
 ): unknown => {
   if (isThisPolicyPattern(value)) return reference;
-  if (isThisPolicySubjectPattern(value)) return reference.subject;
+  if (isThisPolicyFieldPattern(value, "subject")) return reference.subject;
+  if (isThisPolicyFieldPattern(value, "moduleIdentity")) {
+    return reference.moduleIdentity;
+  }
   if (Array.isArray(value)) {
     return value.map((entry) => bindThisPolicy(entry, reference));
   }

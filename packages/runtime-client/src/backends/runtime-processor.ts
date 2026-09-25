@@ -88,7 +88,7 @@ import {
   SpaceHostValidationError,
 } from "@commonfabric/runner";
 import {
-  cfcLabelViewForCell,
+  cfcLabelViewForResolvedCell,
   createRenderConfidentialityResolver,
   createRuntimeSpaceMembershipProvider,
   markRendererTrustedEvent,
@@ -1381,10 +1381,14 @@ export class RuntimeProcessor {
     if (!request.includeCfcLabel) {
       return { value: converted, ...refField };
     }
-    // This reads the display label with `cfcLabelViewForCell()` and redacts
-    // `Caveat.source` from it, as `handleCellGetCfcLabel()` does. Returning
-    // the label with the value saves the caller a second round trip.
-    const cfcLabel = cfcLabelViewForCell(cell);
+    // This reads the display label with `cfcLabelViewForResolvedCell()` and
+    // redacts `Caveat.source` from it, as `handleCellGetCfcLabel()` does.
+    // Returning the label with the value saves the caller a second round trip.
+    // The value read above resolved the same links and kicked any cross-space
+    // targets already, so the label read kicks none of its own.
+    const cfcLabel = cfcLabelViewForResolvedCell(cell, {
+      kickCrossSpaceTargets: false,
+    });
     return {
       value: converted,
       ...refField,
@@ -1952,8 +1956,10 @@ export class RuntimeProcessor {
     // schema is client-supplied view context, not trusted label provenance.
     const { schema: _schema, ...cellRef } = request.cell;
     const cell = getCell(this.#runtime, cellRef);
-    // This reads the label with `cfcLabelViewForCell()`, which reads what the
-    // store holds now and does not sync the cell. When the store holds no
+    // This reads the label with `cfcLabelViewForResolvedCell()`, which reads
+    // what the store holds now, following a link the path crosses part way
+    // through to the document that holds the value, and does not sync the
+    // cell or any document along its path. When the store holds no
     // label metadata for the cell, `cfcLabel` in the response is `undefined`.
     // That covers a document the store has not loaded as well as a cell with
     // no label. Keeping the cell current is the caller's job. A caller that
@@ -1961,7 +1967,9 @@ export class RuntimeProcessor {
     // each update then carries the label as read for that update. We redact
     // `Caveat.source` from the label for display.
     const totalStart = performance.now();
-    const cfcLabel = cfcLabelViewForCell(cell);
+    const cfcLabel = cfcLabelViewForResolvedCell(cell, {
+      kickCrossSpaceTargets: false,
+    });
     const response = {
       cfcLabel: cfcLabel === undefined
         ? undefined

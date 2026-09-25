@@ -261,7 +261,13 @@ The strict-only delta is:
   artifacts", and a transaction MUST NOT persist a module-policy reference
   unless that same transaction create-only installs the byte-verified manifest
   (spec §4.4.2) — which the writer-fit reject would otherwise make impossible
-  at this level. Implementation in
+  at this level. Create-only means an install never overwrites: it writes the
+  manifest only where the transaction read the document as absent, and that
+  confirmed read turns a manifest another writer created meanwhile into a
+  retryable conflict, whose retry accepts the same bytes and refuses different
+  ones. It carries no `receipt-exists` pin, because every participant of a
+  shared space installs the same content-addressed document, and a permanent
+  rejection there would drop the participant's labeled write. Implementation in
   [prepare.ts](../../packages/runner/src/cfc/prepare.ts) (`prepareBoundaryCommit`
   flow-persist stamping), asserted both ways in
   [cfc-writer-fit.test.ts](../../packages/runner/test/cfc-writer-fit.test.ts).

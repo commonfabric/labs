@@ -702,4 +702,101 @@ export type Wrapped<T> = Owned<T, typeof setName>;`,
     const root = parseModule(files["/main.tsx"]);
     expect(resolved(callSchemas(root, "lift")[1])).toMatchObject(expected);
   });
+
+  // A conditional alias the checker resolves to the policy holds the writer in
+  // its own arguments, in whatever order its parameters take.
+  const conditionalPrelude =
+    `import { handler, pattern, Writable, WriteAuthorizedBy } from "commonfabric";
+const setName = handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); });
+const other = handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); });
+type Guarded<X, B> = X extends string ? WriteAuthorizedBy<X, B> : never;
+type Crossed<A, B> = B extends unknown ? WriteAuthorizedBy<string, A> : never;
+type Checked<B> = B extends unknown ? WriteAuthorizedBy<string, B> : never;
+`;
+
+  it("keeps the writer a conditional alias passes to the policy", async () => {
+    const diagnostics: TransformationDiagnostic[] = [];
+    const root = parseModule(
+      await transformSource(
+        `${conditionalPrelude}export default pattern<{ name: string }, { guarded: Guarded<string, typeof setName>; crossed: Crossed<typeof setName, typeof other> }>(
+  ({ name }) => ({ guarded: name, crossed: name }),
+);`,
+        {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        },
+      ),
+    );
+
+    expect(diagnostics.filter(isError)).toEqual([]);
+    const writer = {
+      writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["setName"] } },
+    };
+    expect(patternSchemas(root).output).toMatchObject({
+      properties: { guarded: { ifc: writer }, crossed: { ifc: writer } },
+    });
+  });
+
+  it("reports nothing for a policy written directly, whose claim the transformer mints", async () => {
+    // The direct `WriteAuthorizedBy` path hands the schema generator the
+    // payload's node and mints the claim itself, so the generator has no
+    // binding to read there, and no alias it was written through.
+    const diagnostics: TransformationDiagnostic[] = [];
+    const root = parseModule(
+      await transformSource(
+        `${conditionalPrelude}interface Named { name: string }
+export default pattern(() => {
+  const plain = new Writable<WriteAuthorizedBy<string, typeof setName>>("").for("plain");
+  const named = new Writable<WriteAuthorizedBy<Named, typeof setName>>({ name: "" }).for("named");
+  return { plain, named, setName: setName({ name: plain }) };
+});`,
+        {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        },
+      ),
+    );
+
+    expect(diagnostics.filter(isError)).toEqual([]);
+    expect(
+      diagnostics.filter((diagnostic) =>
+        diagnostic.type === "cfc-write-authorized-by:unread"
+      ),
+    ).toEqual([]);
+    const writer = {
+      writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["setName"] } },
+    };
+    expect(patternSchemas(root).output).toMatchObject({
+      properties: { plain: { ifc: writer }, named: { ifc: writer } },
+    });
+  });
+
+  it("refuses a writer it cannot read, stored source included", async () => {
+    // A reload of stored source is refused too: the error guards a write
+    // restriction, which a pattern does not run without.
+    const severities = async (storedSource: boolean) => {
+      const diagnostics: TransformationDiagnostic[] = [];
+      await transformSource(
+        `${conditionalPrelude}export default pattern<{ name: string }, { name: Checked<typeof setName> }>(
+  ({ name }) => ({ name }),
+);`,
+        {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+          storedSource,
+        },
+      );
+      return diagnostics
+        .filter((diagnostic) =>
+          diagnostic.type === "cfc-write-authorized-by:unread"
+        )
+        .map((diagnostic) => diagnostic.severity);
+    };
+
+    expect(await severities(false)).toEqual(["error"]);
+    expect(await severities(true)).toEqual(["error"]);
+  });
 });

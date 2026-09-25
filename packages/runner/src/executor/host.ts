@@ -759,7 +759,11 @@ export class ExecutorHost {
     });
   }
 
-  /** Park every space and detach from the memory server. */
+  /**
+   * Park every space and detach from the memory server. Settles once every
+   * park has finished; a park that failed is rethrown then, several as an
+   * `AggregateError`.
+   */
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
@@ -787,7 +791,9 @@ export class ExecutorHost {
     // still being disposed against a memory server the caller closes
     // next. The park's own dispose deadline bounds this wait; a dispose
     // it abandons is the crash-equivalent path the park logs and counts.
-    await Promise.all(
+    // Every park is waited out even when one fails, for the same reason:
+    // the others are still disposing against that memory server.
+    const parks = await Promise.allSettled(
       [...this.#spaces.values()].map(async (server) => {
         await server.park("host-closed");
         await server.whenParked;
@@ -798,5 +804,15 @@ export class ExecutorHost {
     // The host's enabler releases; the ambient flag resets only when no
     // other enabler (an explicitly-enabled Runtime) is still live.
     this.#releaseServerExecution();
+    const failures = parks.flatMap((park) =>
+      park.status === "rejected" ? [park.reason] : []
+    );
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        `${failures.length} spaces failed to park while the host closed`,
+      );
+    }
   }
 }

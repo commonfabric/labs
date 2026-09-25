@@ -721,10 +721,12 @@ bench file drives one runtime against storage it alone holds, so a write
 conflict cannot arise in one, and the cost of a contended write — the rejected
 commit, the rolled-back optimistic write, the re-run — is invisible to all of
 them. This one runs ten runtimes, each in its own Deno worker, through
-`packages/patterns/integration/multi-runtime-harness.ts`. With server execution
-disabled, the harness hosts an in-process storage server. With
-`EXPERIMENTAL_SERVER_EXECUTION=true`, it uses the serving toolshed at `API_URL`;
-start that toolshed with the same setting. Both modes use ordinary worker
+`packages/patterns/integration/multi-runtime-harness.ts`. The benchmark passes
+the harness no `apiUrl`, so it hosts an in-process storage server whether or
+not `API_URL` is set, matching the resolved posture: a plain one when server
+execution resolves OFF, and one with a serving loop attached when it resolves
+ON, by `EXPERIMENTAL_SERVER_EXECUTION=true` or by the first-party default.
+Both modes use ordinary worker
 clients, without a browser or renderer mounts. The view-scoped web-client flag
 therefore does not activate selective replication in this benchmark. Use the
 browser Topics benchmarks to measure that mode, and hold server execution

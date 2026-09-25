@@ -2381,9 +2381,13 @@ corresponding `CF_API_URL`, `CF_IDENTITY`, and `CF_SPACE` variables. They return
 JSON and require no existing memory session to redeem.
 
 - `cf space invite create --access READ --ttl 3600 --max-uses 2` creates an
-  invitation. Access is READ or WRITE, TTL is 1–2,592,000 seconds, and max uses
-  is 1–1,000 (default 1). Output includes the bearer code; `--shell <origin>`
-  also produces a join URL whose code is in the fragment.
+  invitation. Access is READ, WRITE, or OWNER, TTL is 1–2,592,000 seconds, and
+  max uses is 1–1,000 (default 1). Only an explicit owner of the space can
+  create an invitation, and an OWNER invitation makes whoever holds the link a
+  full owner, able to change the space's ACL and issue invitations of its own.
+  Redemption never lowers access someone already has. Output includes the bearer
+  code; `--shell <origin>` also produces a join URL whose code is in the
+  fragment. The link carries no access; the service holds it.
 - `cf space invite redeem <invite-id> --code-file <path>` reads the code from a
   file; `--code-file -` reads stdin. The signing identity receives the grant.
 - `cf space invite list` lists active metadata without codes or verifiers.

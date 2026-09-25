@@ -57,6 +57,45 @@ const ref = (subject: string) =>
 
 const resolver = () => artifact;
 
+// A policy that blesses one function of its own defining module: the rule
+// names the function by symbol and reaches the module through THIS_POLICY.
+const blessingArtifact = (moduleIdentity: string) =>
+  buildCfcPolicyArtifactManifest({
+    formatVersion: 1,
+    moduleIdentity,
+    symbol: SYMBOL,
+    template: {
+      templateVersion: 1,
+      exchangeRules: [{
+        name: "releaseTally",
+        preCondition: {
+          confidentiality: [{ thisPolicy: true }],
+          integrity: [{
+            type: CFC_ATOM_TYPE.TransformedBy,
+            identity: {
+              kind: "verified",
+              moduleIdentity: { thisPolicyField: "moduleIdentity" },
+              symbol: "tally",
+            },
+          }],
+        },
+        postCondition: { confidentiality: [], integrity: [] },
+      }],
+      dependencies: { authorityOnly: [], dataBearing: [] },
+      integrityRequirements: {},
+    },
+  });
+
+const transformedBy = (moduleIdentity: string, symbol: string) => ({
+  type: CFC_ATOM_TYPE.TransformedBy,
+  identity: {
+    kind: "verified",
+    moduleIdentity,
+    symbol,
+    codeHash: "fid1:code",
+  },
+});
+
 describe("module-policy exchange evaluation", () => {
   it("resolves only a selected manifest and releases its home clause", () => {
     let calls = 0;
@@ -174,6 +213,34 @@ describe("module-policy exchange evaluation", () => {
     });
     expect(result.label).toBe(label);
     expect(result.resolutionFailures).toHaveLength(1);
+  });
+
+  it("binds THIS_POLICY.moduleIdentity to the selected policy's module", () => {
+    const blessing = blessingArtifact(MODULE);
+    const selected = cfcAtom.modulePolicyRef(
+      MODULE,
+      SYMBOL,
+      blessing.policyDigest,
+      ALICE_SPACE,
+    );
+    const release = (evidence: ReturnType<typeof transformedBy>) =>
+      evaluateExchangeRules({ confidentiality: [selected] }, undefined, {
+        modulePolicyResolver: () => blessing,
+        integrity: [evidence],
+      });
+
+    const released = release(transformedBy(MODULE, "tally"));
+    expect(released.resolutionFailures).toEqual([]);
+    expect(released.firings).toHaveLength(1);
+    expect(released.label.confidentiality).toEqual([]);
+
+    const otherSymbol = release(transformedBy(MODULE, "echo"));
+    expect(otherSymbol.firings).toEqual([]);
+    expect(otherSymbol.label.confidentiality).toEqual([selected]);
+
+    const otherModule = release(transformedBy("sha256:edited", "tally"));
+    expect(otherModule.firings).toEqual([]);
+    expect(otherModule.label.confidentiality).toEqual([selected]);
   });
 
   it("rejects malformed module-reference candidates", () => {

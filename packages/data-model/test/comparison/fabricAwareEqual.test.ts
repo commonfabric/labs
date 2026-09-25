@@ -318,7 +318,7 @@ describe("fabricAwareEqual()", () => {
 
     it("returns `false` for a null-prototype record against a plain one", () => {
       // This walk separates records by constructor even when their contents
-      // agree; `valueEqual()` treats both prototypes as plain records.
+      // agree; `valueEqual()` refuses the null-prototype one outright.
 
       const nullProto = Object.create(null) as Record<string, unknown>;
       nullProto.a = 1;

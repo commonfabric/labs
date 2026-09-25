@@ -292,6 +292,35 @@ describe("Schema: Capability wrapper types", () => {
     expect(result).toEqual({ type: "string", asCell: ["writeonly"] });
   });
 
+  it("reads a synthetic wrapper printed without its argument from the resolved wrapper", async () => {
+    // The printer leaves out an argument equal to the parameter's default,
+    // so a narrowed node can name no payload; the resolved `Cell<T>` holds it.
+    const { checker, sourceFile } = await createTestProgram(
+      "interface X { authored: Cell<string>; }",
+    );
+    const symbol = checker.getSymbolsInScope(
+      sourceFile,
+      ts.SymbolFlags.Interface,
+    ).find((candidate) => candidate.name === "X");
+    if (!symbol) throw new Error("Interface X not found");
+    const authored = checker.getDeclaredTypeOfSymbol(symbol)
+      .getProperty("authored");
+    if (!authored) throw new Error("Property X.authored not found");
+
+    const schema = new SchemaGenerator().generateSchema(
+      checker.getTypeOfSymbolAtLocation(authored, sourceFile),
+      checker,
+      ts.factory.createTypeReferenceNode(
+        ts.factory.createQualifiedName(
+          ts.factory.createIdentifier("__cfHelpers"),
+          ts.factory.createIdentifier("ReadonlyCell"),
+        ),
+      ),
+    );
+
+    expect(schema).toEqual({ type: "string", asCell: ["readonly"] });
+  });
+
   describe("a synthetic node narrowing a resolved wrapper", () => {
     // The transformer narrows `Cell<T>` to `__cfHelpers.ReadonlyCell<...>` and
     // prints `T` inside it when it holds no authored node for `T`. Each case

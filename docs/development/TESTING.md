@@ -523,6 +523,74 @@ overriding a true global default, or a true web override with the global default
 false. Restart the servers through the integration runner for each combination
 so the browser bundle is rebuilt with that environment.
 
+### The ON topology in one process
+
+A runtime on the ON arm commits the event a handler is fired with and nothing
+else; the handler runs on a serving loop beside the memory server. A test that
+hosts its own memory server and runs a client ON therefore needs that loop
+too. Without it the server admits the event and nothing ever delivers it, so
+a wait on the consequence never resolves and the test hangs rather than
+failing.
+
+`@commonfabric/runner/executor/serving-memory-server.deno` supplies the pair:
+a memory server over a fresh non-persistent store, with an `ExecutorHost`
+attached whose serving runtimes are built by the same factory toolshed uses.
+It comes in two shapes, by how the test's clients reach it:
+
+- `startServingMemoryServer({ apiUrl })` is reached in-process. Clients connect
+  with `EmulatedStorageManager.connectTo(serving.server, ...)`, and session
+  opens are authorized by the principal they name, as with
+  `newLoopbackServer()`.
+- `listenServingMemoryServer()` also listens on a localhost websocket at
+  `serving.url`, for a runtime built with the `remoteClient` preset — in the
+  test's realm, in a Deno Worker, or in a subprocess. It wraps
+  `StandaloneMemoryServer`, verifies signed session opens as toolshed does, and
+  takes the same `serve` option for the plain HTTP requests that address
+  receives. Its serving runtimes compile against `serving.url` unless given an
+  `apiUrl`.
+
+Both return a handle that `await using` closes, serving loop first. The host
+keeps the process's ambient server-execution flag on while it lives, so a
+runtime in the same realm that asks for the OFF arm runs ON beside it. The
+serving loop's own options pass through: `policy`, the `on*` diagnostic hooks,
+and `ensureSpaceRoots`, which defaults to `false` here, the switch the serving
+loop keeps for tests. `prepareStorageManager` hands the test each serving
+runtime's storage manager before the runtime is built, which is where a stub on
+one of its providers goes.
+
+```ts
+// Shown at module scope.
+import { Identity } from "@commonfabric/identity";
+import { Runtime } from "@commonfabric/runner";
+import { startServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
+import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+
+const alice = await Identity.fromPassphrase("alice");
+await using serving = await startServingMemoryServer({
+  apiUrl: new URL(import.meta.url),
+});
+const storageManager = EmulatedStorageManager.connectTo(serving.server, {
+  as: alice,
+});
+const runtime = new Runtime({
+  apiUrl: new URL(import.meta.url),
+  storageManager,
+  experimental: { serverExecution: true },
+});
+```
+
+`serving.idle()` covers the memory server and not the loop: it says the server
+has applied what it received, while a served consequence may still be in a
+wave. Wait for the consequence itself, the way any other test waits for a
+value.
+
+A test that should follow whichever posture a run resolves, rather than fixing
+one, resolves it as a deployed entry point does — the explicit
+`EXPERIMENTAL_SERVER_EXECUTION`, else `SERVER_EXECUTION_DEFAULT_ENABLED` — and
+starts a serving server for ON and a plain one for OFF. The pattern
+`MultiRuntimeHarness` and `packages/cli/test/agent-connections.serial.test.ts`
+do this, so each runs on whichever arm the CI role selects.
+
 ### Tests that start Deno
 
 For deliberate import-map and lockfile changes, follow the

@@ -276,6 +276,14 @@ export interface CreateHarnessPromptLoopOptions
 
   promptCacheMode?: "implicit" | "explicit";
   reasoningEffort?: string;
+
+  /**
+   * Reasoning effort for the `research` tool's private model turns. Research
+   * runs on its own model rather than the run's, so this is set apart from
+   * `reasoningEffort`; unset, the provider's default applies.
+   */
+  researchReasoningEffort?: string;
+
   compactThreshold?: number;
 
   /**
@@ -2963,6 +2971,7 @@ export class CfHarnessPromptLoop {
   readonly #cacheAffinityKey?: string;
   readonly #promptCacheMode?: "implicit" | "explicit";
   readonly #reasoningEffort?: string;
+  readonly #researchReasoningEffort?: string;
   readonly #compactThreshold?: number;
   readonly #subagentCompositionGuidance: boolean;
   readonly #trustedPatternRecords = new Map<string, TrustedPatternRecord>();
@@ -3098,6 +3107,7 @@ export class CfHarnessPromptLoop {
     this.#cacheAffinityKey = options.cacheAffinityKey;
     this.#promptCacheMode = options.promptCacheMode;
     this.#reasoningEffort = options.reasoningEffort;
+    this.#researchReasoningEffort = options.researchReasoningEffort;
     this.#compactThreshold = options.compactThreshold;
     this.#subagentCompositionGuidance = options.subagentCompositionGuidance ??
       true;
@@ -3725,6 +3735,9 @@ export class CfHarnessPromptLoop {
           ...(this.#reasoningEffort !== undefined
             ? { reasoningEffort: this.#reasoningEffort }
             : {}),
+          ...(this.#researchReasoningEffort !== undefined
+            ? { researchReasoningEffort: this.#researchReasoningEffort }
+            : {}),
           ...(this.#promptCacheMode !== undefined
             ? { promptCacheMode: this.#promptCacheMode }
             : {}),
@@ -3765,6 +3778,9 @@ export class CfHarnessPromptLoop {
     // and tokens beside a delegation's.
     const runResearch = createResearchRunner({
       modelClient: this.modelClient,
+      ...(this.#researchReasoningEffort !== undefined
+        ? { reasoningEffort: this.#researchReasoningEffort }
+        : {}),
       onAttempt: recordModelAttempt,
       onUsage: recordModelUsage,
     });
@@ -5888,6 +5904,11 @@ export class CfHarnessPromptLoop {
         : {}),
       ...(this.#reasoningEffort !== undefined && inheritsParentModel
         ? { reasoningEffort: this.#reasoningEffort }
+        : {}),
+      // Research runs on its own model whatever the child's is, so its effort
+      // reaches every child.
+      ...(this.#researchReasoningEffort !== undefined
+        ? { researchReasoningEffort: this.#researchReasoningEffort }
         : {}),
       maxModelTurns,
       allowedToolIds: childAllowedToolIds,

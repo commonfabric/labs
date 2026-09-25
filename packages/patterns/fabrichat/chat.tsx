@@ -4,7 +4,9 @@
  *
  * A message names its sender by linking the sender's profile, and it is written
  * only by `commitSend`, reached from the composer's reviewed surface. The
- * runtime labels each stored message `authored-by` the principal who sent it.
+ * runtime labels each stored message `authored-by` the principal who sent it,
+ * and `cf-cfc-authorship` marks the message verified when that principal owns
+ * the profile the message links.
  *
  * The room takes the viewer's profile as an input rather than wishing for it,
  * so that `main.tsx` supplies the real `#profile` and a test can supply a
@@ -46,7 +48,10 @@ export interface FabriChatMessage {
   /** The profile the sender sent under. */
   authorProfile: ProfileCell;
 
-  /** The sender's profile name when the message was sent. */
+  /**
+   * The sender's profile name when the message was sent, or `""` when the
+   * profile has no name or the name had not yet reached the handler.
+   */
   authorName: string;
 
   /** The sender's profile avatar (a URL or a glyph) when the message was sent. */
@@ -114,8 +119,12 @@ export const participantsOf = (
 
 /**
  * Appends the submitted text as a message from the viewer. It refuses an empty
- * message, and it refuses to send before the viewer's profile and profile name
- * are both known.
+ * message, and it refuses to send before the viewer's profile is known. The
+ * profile name is kept only as a snapshot, so it does not hold a send back: a
+ * profile's name can reach the handler later than the profile does, when the
+ * handler runs apart from the viewer's page, and the profile itself names the
+ * sender. The profile can lag the same way, and a send the handler refuses for
+ * want of it is spent, like any event a handler declines.
  */
 export const commitSend = handler<
   SubmittedTextEvent,
@@ -129,13 +138,15 @@ export const commitSend = handler<
 >((event, { myProfile, myName, myAvatar, messages }) => {
   const body = (event?.target?.value ?? "").trim();
   const authorName = (myName ?? "").trim();
-  if (!body || !authorName || myProfile?.get() === undefined) {
+  // The message stores the profile cell itself, not the link that reached it,
+  // and it is that cell's value that decides whether the send goes ahead.
+  const profile = myProfile?.resolveAsCell();
+  if (!body || profile?.get() === undefined) {
     return;
   }
 
-  // The message stores the profile cell itself, not the link that reached it.
   messages.push({
-    authorProfile: myProfile.resolveAsCell(),
+    authorProfile: profile,
     authorName,
     authorAvatar: (myAvatar ?? "").trim(),
     body,
@@ -150,7 +161,10 @@ export interface FabriChatRoomInput {
   /** The viewer's profile, which holds no value while it is unknown. */
   myProfile: ProfileCell | undefined;
 
-  /** The viewer's profile name, empty while it is unknown. */
+  /**
+   * The viewer's profile name, or `""` while it is unknown or when the profile
+   * has none.
+   */
   myName: string;
 
   /** The viewer's profile avatar (a URL or a glyph), empty if none. */
@@ -184,9 +198,7 @@ export const FabriChatRoom = pattern<FabriChatRoomInput, FabriChatRoomOutput>(
       participantsOf(messages.get() as FabriChatMessage[])
     );
     const isEmpty = computed(() => (messages.get() ?? []).length === 0);
-    const cannotSend = computed(() =>
-      myProfile?.get() === undefined || (myName ?? "") === ""
-    );
+    const cannotSend = computed(() => myProfile?.get() === undefined);
 
     return {
       [NAME]: "FabriChat",
@@ -235,8 +247,12 @@ export const FabriChatRoom = pattern<FabriChatRoomInput, FabriChatRoomOutput>(
                   size="sm"
                   $profile={message.authorProfile}
                 />
-                <cf-vstack gap="0" style={{ flex: "1", minWidth: "0" }}>
-                  <cf-text variant="body-compact">{message.authorName}</cf-text>
+                <cf-cfc-authorship
+                  $value={message.body}
+                  $author={message.authorProfile}
+                  authorName={message.authorName || undefined}
+                  style={{ flex: "1", minWidth: "0" }}
+                >
                   <cf-text
                     variant="body"
                     block
@@ -247,7 +263,7 @@ export const FabriChatRoom = pattern<FabriChatRoomInput, FabriChatRoomOutput>(
                   >
                     {message.body}
                   </cf-text>
-                </cf-vstack>
+                </cf-cfc-authorship>
               </div>
             ))}
             {isEmpty

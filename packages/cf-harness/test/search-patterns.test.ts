@@ -8,6 +8,7 @@ import type { HarnessFetch } from "../src/contracts/http-fetch.ts";
 import { PatternIndexClient } from "../src/pattern-index/client.ts";
 import {
   isSearchPatternsToolSuccessOutput,
+  patternIndexDeclaredType,
   searchPatternsTool,
   type SearchPatternsToolErrorOutput,
   type SearchPatternsToolSuccessOutput,
@@ -159,6 +160,85 @@ const createEngine = (index?: IndexStub): CfHarnessEngine =>
   });
 
 describe("search-patterns", () => {
+  describe("patternIndexDeclaredType()", () => {
+    const LEDGER_RESULT = {
+      type: "object",
+      properties: {
+        month: { type: "string" },
+        rows: {
+          type: "array",
+          items: { $ref: "#/$defs/LedgerTransaction" },
+        },
+        pending: { type: "boolean" },
+        currency: { $ref: "#/$defs/Currency" },
+      },
+      required: ["month", "rows", "pending", "currency"],
+      $defs: {
+        LedgerTransaction: {
+          type: "object",
+          properties: {
+            transaction_id: { type: "string" },
+            merchant_name: { type: "string" },
+            signed_amount: { type: "number" },
+            category: { $ref: "#/$defs/CategoryWithAVeryLongDescriptiveName" },
+          },
+          required: [
+            "transaction_id",
+            "merchant_name",
+            "signed_amount",
+            "category",
+          ],
+        },
+        CategoryWithAVeryLongDescriptiveName: {
+          type: "object",
+          properties: {
+            primary: { type: "string" },
+            detailed: { type: "string" },
+            confidence_level: { type: "string" },
+          },
+          required: ["primary", "detailed", "confidence_level"],
+        },
+        Currency: { type: "string" },
+        Unreferenced: {
+          type: "object",
+          properties: { never: { type: "string" } },
+        },
+        month: {
+          type: "object",
+          properties: { never_used_under_this_name: { type: "string" } },
+        },
+      },
+    };
+
+    it("writes out each named definition the type refers to, and the ones those refer to", () => {
+      const rendered = patternIndexDeclaredType(LEDGER_RESULT as never)!;
+
+      expect(rendered).toContain("rows: LedgerTransaction[]");
+      expect(rendered).toContain("type LedgerTransaction = {");
+      expect(rendered).toContain("merchant_name: string");
+      expect(rendered).toContain("signed_amount: number");
+      expect(rendered).toContain(
+        "type CategoryWithAVeryLongDescriptiveName = {",
+      );
+      expect(rendered).toContain("confidence_level: string");
+      expect(rendered).not.toContain("Unreferenced");
+      // A property named like a definition is not a reference to it.
+      expect(rendered).not.toContain("type month =");
+      // A definition small enough to inline is inlined, not written out.
+      expect(rendered).toContain("currency: string");
+      expect(rendered).not.toContain("type Currency =");
+    });
+
+    it("adds nothing to a type that names no definition", () => {
+      expect(
+        patternIndexDeclaredType({
+          type: "object",
+          properties: { amounts: { type: "array", items: { type: "number" } } },
+        }),
+      ).not.toContain("type ");
+    });
+  });
+
   it("keeps inherited evidence attributed in the model's search result", async () => {
     const signals = {
       uses: 10,

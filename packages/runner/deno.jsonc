@@ -12,7 +12,9 @@
     // silent-backstop-guard.test.ts spawns the Deno running the task
     // (`Deno.execPath()`, which a bare `deno` entry does not permit — Deno
     // resolves the allowlist through PATH) to run a fixture under this preload.
-    "deno-test": "ENV=test deno test --shuffle=$(deno task -q test-seed) --no-check --preload=test/clock-preload.ts --allow-ffi --allow-env --allow-read --allow-write=/tmp,/var/folders --allow-run=git,deno,\"$(deno eval \"console.log(Deno.execPath())\")\" test/**/*.test.ts test/**/*.test.tsx",
+    // --allow-net=127.0.0.1: serving-memory-server.test.ts listens on a
+    // localhost websocket and connects a client to it.
+    "deno-test": "ENV=test deno test --shuffle=$(deno task -q test-seed) --no-check --preload=test/clock-preload.ts --allow-ffi --allow-env --allow-net=127.0.0.1 --allow-read --allow-write=/tmp,/var/folders --allow-run=git,deno,\"$(deno eval \"console.log(Deno.execPath())\")\" test/**/*.test.ts test/**/*.test.tsx",
     "bench": {
       "description": "Run Cell benchmarks for performance analysis",
       "command": "deno bench --allow-read --allow-write --allow-net --allow-ffi --allow-env --no-check test/*.bench.ts"
@@ -61,12 +63,16 @@
     "./toolshed-http-auth": "./src/toolshed-http-auth.ts",
     "./cfc": "./src/cfc/mod.ts",
     "./cfc/share-snapshot": "./src/cfc/share-snapshot.ts",
+    "./cfc/custody-seal": "./src/cfc/custody-seal.ts",
     "./cfc/owner-adoption": "./src/cfc/owner-adoption.ts",
     "./cfc/policy-application": "./src/cfc/policy-application.ts",
     "./cfc/clause": "./src/cfc/clause.ts",
     "./cfc/label-view-core": "./src/cfc/label-view-core.ts",
+    "./cfc/represents-principal": "./src/cfc/represents-principal.ts",
     "./executor/host": "./src/executor/host.ts",
     "./executor/loopback-storage": "./src/executor/loopback-storage.ts",
+    "./executor/serving-memory-server.deno": "./src/executor/serving-memory-server.deno.ts",
+    "./executor/serving-runtime": "./src/executor/serving-runtime.ts",
     "./executor/stats": "./src/executor/stats.ts",
     "./executor/watermark": "./src/executor/watermark.ts",
     "./cfc/migration-reason": "./src/cfc/migration-reason.ts",

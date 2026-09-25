@@ -120,6 +120,21 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/profile-inbox-piece-break.md",
   },
   {
+    // The record's scope moved from the value onto the handle once the schema
+    // generator stopped dropping a scope wrapper reached through an alias. The
+    // recorded contracts carry no scope at all; the argument now caps the
+    // handle at `user`, which every record the `agent` builtin creates meets.
+    pattern: "system/agent-run.tsx",
+    baselines: [
+      "20260920T164352Z-nTSuqgfjRzkwXIgf",
+      "20260920T170445Z-TMoN6scQaXVlTvPW",
+    ],
+    paths: ["argument.run"],
+    reason:
+      "the run argument's scope moved onto the handle as a user cap, which the recorded unscoped contracts read as a changed asCell entry; the linked records are user-scoped documents the cap admits",
+    record: "docs/history/agent-run-record-handle-scope-break.md",
+  },
+  {
     // The same ruling seen from the profile itself: the proof names the
     // first of the two fields that left.
     pattern: "system/profile-home.tsx",

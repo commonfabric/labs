@@ -740,6 +740,14 @@ describe("JsonCodecEngine", () => {
       expect(() => jsonCodecEngine.encode(new Map() as unknown as FabricValue))
         .toThrow("no applicable codec");
     });
+
+    it("throws on a null-prototype object, rather than writing it as a record", () => {
+      const { jsonCodecEngine } = makeTestCodec();
+      const nullProto = Object.assign(Object.create(null), { a: 1 });
+
+      expect(() => jsonCodecEngine.encode({ nested: nullProto }))
+        .toThrow("Cannot encode null-prototype object");
+    });
   });
 
   describe("dense arrays", () => {

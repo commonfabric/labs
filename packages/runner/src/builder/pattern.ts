@@ -44,6 +44,12 @@ import {
   SUBPATTERN_ARGUMENT_BUILTIN_REFS,
 } from "./builtin-replayability.ts";
 import { closureCaptureErrorMessage } from "./closure-capture-diagnostic.ts";
+import {
+  pushOntoFrameStack,
+  pushOntoRootFrameStack,
+  removeFromFrameStack,
+  topFrame,
+} from "./frame-context.ts";
 import { toJSONMethod } from "./json-member.ts";
 import { connectInputAndOutputs } from "./node-utils.ts";
 import { brandTrustedPattern, noteDerivedCopy } from "./pattern-metadata.ts";
@@ -1153,8 +1159,6 @@ function anonymousSpaceName(frame: Frame): string {
   return toURI(createRef({ inSpace: ordinal }, frame.cause));
 }
 
-const frames: Frame[] = [];
-
 /**
  * Pushes a frame that inherits the runtime, transaction, space and
  * implementation identity of the frame beneath it, unless it is a
@@ -1182,8 +1186,24 @@ export function pushFrame(frame: Partial<Frame> = {}): Frame {
     ...frame,
   };
 
-  frames.push(result);
+  pushOntoFrameStack(result);
   return result;
+}
+
+/**
+ * Pushes `runtime`'s default frame onto the root frame stack, whatever context
+ * the call is made in, and returns it. It carries the runtime and nothing else:
+ * whatever frame is on top when a runtime is constructed belongs to someone
+ * else, and its space and transaction would outlive it on the root stack.
+ */
+export function pushRuntimeDefaultFrame(runtime: Runtime): Frame {
+  const frame: Frame = {
+    reactives: new Set(),
+    generatedIdCounter: 0,
+    runtime,
+  };
+  pushOntoRootFrameStack(frame);
+  return frame;
 }
 
 export function pushFrameFromCause(
@@ -1235,24 +1255,24 @@ export function pushFrameFromCause(
     ...(eventTime !== undefined && { eventTime }),
     ...(unsafe_binding ? { unsafe_binding } : {}),
   };
-  frames.push(frame);
+  pushOntoFrameStack(frame);
   return frame;
 }
 
 /**
- * Removes `frame` from the stack, wherever on it the frame sits: disposing one
- * runtime while another has pushed a frame over it removes one from the middle.
- * A frame that is no longer on the stack is left alone.
+ * Removes `frame` from the current frame context's stack or the root stack,
+ * wherever on it the frame sits (see `removeFromFrameStack`).
  */
 export function popFrame(frame: Frame): void {
-  const index = frames.indexOf(frame);
-  if (index !== -1) {
-    frames.splice(index, 1);
-  }
+  removeFromFrameStack(frame);
 }
 
+/**
+ * Returns the innermost frame visible to the current code: the top of its own
+ * frame context's stack, else of the root stack (see `frame-context.ts`).
+ */
 export function getTopFrame(): Frame | undefined {
-  return frames.length ? frames[frames.length - 1] : undefined;
+  return topFrame();
 }
 
 /** The full type of the `pattern` function including all overloads. */

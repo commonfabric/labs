@@ -1372,9 +1372,33 @@ requires the runtime to distinguish its own container-scaffolding reads from
 application reads (a machinery-read class beyond those of §18.6.2)", which is
 that marker, named as something the spec does not yet have.
 
+## From the input-witnessed `TransformedBy` (2026-09-23)
+
+Design of record: [`cfc-transformed-by-input-witnesses.md`](cfc-transformed-by-input-witnesses.md).
+
+**SC-43 [reconcile] `TransformedBy`'s input witnesses as standalone summary
+atoms — §8.9.3, §8.7.1, §15.** `open`. Three passages give the atom three
+shapes: §15's registry row and §4.5.4 carry `inputs: Array<{ ref, witnesses?
+}>`, §8.7.1 carries parallel `inputs` and `inputIntegrity` arrays, and §8.9.3's
+code sketch carries the §15 form. None says how an exchange rule reads a
+per-input list, and the §4.4.5 pattern calculus has no quantifier to do it with:
+an array pattern matches elementwise at equal length. The runtime mints the
+conservative summary §8.9.3 already permits, as standalone atoms:
+`TransformedBy{identity}` beside one `TransformedBy{identity, inputWitness: W}`
+per atom `W` that held at every confidential input location, with no input
+references. Proposed edit: make the summary form a registered alternative to
+`inputs` in §15, with its meaning stated once (the transformer wrote the value,
+and every confidential input it consumed carried `W`), and give §8.7.1's
+parallel `inputs` and `inputIntegrity` arrays the §15 shape; state in §8.7.2
+that a rule releasing an endorsed transformer's output guards on the
+witness-bearing form, since the identity alone admits any caller's choice of
+input; and note in §8.9.3 that input references are a read-path channel when
+persisted, which is a reason to prefer the summary where no consumer
+dereferences them.
+
 ## From the stored write-requirement enforcement (#8024, 2026-09-24)
 
-**SC-44 [normative] A module delegation is a verifier step — §8.15.6.**
+**SC-45 [normative] A module delegation is a verifier step — §8.15.6.**
 `open`. §8.15.6 says an updated handler MUST NOT inherit its predecessor's
 write authority. The runtime lets a republished module write a field whose
 stored `writeAuthorizedBy` names its predecessor when a delegation from the
@@ -1389,7 +1413,7 @@ registering the successor as a delegate of the predecessor). The attested
 successor then satisfies claims naming the predecessor. Name who may attest
 (the trusted update paths) and that the attestation is per space.
 
-**SC-45 [normative] Claims beneath a link position belong to the linked
+**SC-46 [normative] Claims beneath a link position belong to the linked
 document — §8.15 + §8.12.** `open`. A schema can describe, beneath a position
 that holds a link, the fields of the document linked there, with their writer
 claims (a home document's profile links carry the profile pattern's field
@@ -1404,7 +1428,7 @@ stating these rules, and a note in §8.15.3 ("authority is a property of the
 schema, not the value") that which document a schema position describes
 depends on whether the value there is a link.
 
-**SC-46 [normative] Release — §8.15.12 (new) + §8.12.3.** `open`. §8.12.3's
+**SC-47 [normative] Release — §8.15.12 (new) + §8.12.3.** `open`. §8.12.3's
 strictly additive label evolution has no carve-out for re-describing what a
 store's schema says about other documents. Proposed clause: in the
 runtime-authorized transaction that installs a pattern over its own piece's
@@ -1413,17 +1437,17 @@ describes beneath a position that, as the document stood before the
 transaction, held only links, or held nothing under a position that itself
 carries a writer claim, belong to the linked documents and are re-described
 by the release; (b) a stamped claim may adopt a stored
-unstamped claim per SC-47. Every other writer is held to strict monotonicity.
+unstamped claim per SC-48. Every other writer is held to strict monotonicity.
 Note that both rules rest on swap authority (who may move a piece's pattern
 pointer), which §8.15 should name.
 
-**SC-47 [normative] Adopting an unstamped writer claim — §8.15.1.** `open`.
+**SC-48 [normative] Adopting an unstamped writer claim — §8.15.1.** `open`.
 §8.15.1 names a writer by artifact hash and symbol. Claims stored before the
 runtime stamped them carry only a file spelling, which differs across compile
 roots. An unstamped claim authorizes no writer. The runtime lets a stamped
 claim adopt one when both name the same export and the same file below a
 known pattern root, and only when the stamp is one the transaction can vouch
-for: a module of the program a release installs (SC-46), or the verified
+for: a module of the program a release installs (SC-47), or the verified
 writer the stamp itself names (its module, source file and export). Proposed edit: state that adoption is a
 one-time authenticated migration of legacy claims, and that once stored claims
 are stamped the file-correspondence rules are retired.

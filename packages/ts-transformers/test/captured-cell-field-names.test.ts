@@ -4,7 +4,7 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { emittedSchemas, parseModule } from "./transformed-ast.ts";
-import { transformSource } from "./utils.ts";
+import { transformFiles, transformSource } from "./utils.ts";
 
 describe("captured cell value fields", () => {
   for (const builder of ["computed", "assert"]) {
@@ -97,6 +97,93 @@ describe("captured cell value fields", () => {
         ],
       });
     }
+  });
+
+  for (
+    const { spelling, declarations } of [
+      { spelling: "PerUser<Data>", declarations: "" },
+      { spelling: "Scoped", declarations: "type Scoped = PerUser<Data>;" },
+      {
+        spelling: "Either",
+        declarations:
+          "type Other = { count: number; label: string };\ntype Either = PerUser<Data | Other>;",
+      },
+    ]
+  ) {
+    it(`keeps the scope of an optional ${spelling} cell at the capture's top level`, async () => {
+      // An optional cell's capture folds `undefined` into the cell's value,
+      // and a scope wrapper may not be a union member, so the `undefined`
+      // goes inside the wrapper instead.
+
+      const output = await transformSource(
+        `import { cellFromUrl, computed, pattern, type PerUser } from "commonfabric";
+        type Data = { count: number; unused: string };
+        ${declarations}
+        export default pattern<{ url: string }>(({ url }) => {
+          const resolved = cellFromUrl<${spelling}>({ url, writable: true });
+          return { count: computed(() => resolved.cell?.get()?.count ?? 0) };
+        });`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+
+      const resolvedSchemas = emittedSchemas(parseModule(output)).flatMap(
+        (schema) => {
+          const properties = schema.properties;
+          return isObjectOrArray(properties) && "resolved" in properties
+            ? [properties.resolved]
+            : [];
+        },
+      );
+      const alternatives = spelling === "Either"
+        ? [{ $ref: "#/$defs/Data" }, { $ref: "#/$defs/Other" }]
+        : [{ $ref: "#/$defs/Data" }];
+      expect(resolvedSchemas).toEqual([{
+        type: "object",
+        properties: {
+          cell: {
+            anyOf: [...alternatives, { type: "undefined" }],
+            scope: "user",
+            asCell: ["readonly"],
+          },
+        },
+      }]);
+    });
+  }
+
+  it("keeps the scope of an optional cell of an imported scope wrapper alias", async () => {
+    // The capture prints the alias by the name the module imports it under.
+
+    const output = await transformFiles(
+      {
+        "/records.ts": `import type { PerUser } from "commonfabric";
+        export type Data = { count: number; unused: string };
+        export type Scoped = PerUser<Data>;`,
+        "/main.tsx":
+          `import { cellFromUrl, computed, pattern } from "commonfabric";
+        import type { Scoped } from "./records.ts";
+        export default pattern<{ url: string }>(({ url }) => {
+          const resolved = cellFromUrl<Scoped>({ url, writable: true });
+          return { count: computed(() => resolved.cell?.get()?.count ?? 0) };
+        });`,
+      },
+      { types: COMMONFABRIC_TYPES, typeCheck: true },
+    );
+
+    const cells = emittedSchemas(parseModule(output["/main.tsx"]!)).flatMap(
+      (schema) => {
+        const resolved = isObjectOrArray(schema.properties)
+          ? (schema.properties as Record<string, unknown>).resolved
+          : undefined;
+        return isObjectOrArray(resolved) && isObjectOrArray(resolved.properties)
+          ? [(resolved.properties as Record<string, unknown>).cell]
+          : [];
+      },
+    );
+    expect(cells).toEqual([{
+      anyOf: [{ $ref: "#/$defs/Data" }, { type: "undefined" }],
+      scope: "user",
+      asCell: ["readonly"],
+    }]);
   });
 
   for (

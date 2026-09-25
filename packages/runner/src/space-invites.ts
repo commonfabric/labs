@@ -17,7 +17,9 @@ import {
 export {
   buildInviteLink,
   createInviteCredentials,
+  INVITE_ACCESS,
   inviteCodeVerifier,
+  isInviteAccess,
   normalizeInviteHost,
   parseInviteLink,
   SPACE_INVITE_CAPABILITY,

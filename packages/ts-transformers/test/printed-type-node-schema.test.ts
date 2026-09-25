@@ -6,6 +6,7 @@ import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import {
   callSchemas,
   callsNamed,
+  collect,
   literalToValue,
   parseModule,
   patternSchemas,
@@ -181,6 +182,81 @@ export default pattern<{ n: number }>(({ n }) => ({
   });
 
   describe("a type the checker will not print", () => {
+    for (
+      const [item, itemSchema] of [
+        ["string", { type: "string" }],
+        ["unknown", { type: "unknown" }],
+        ["Writable<{ title: string }>", {
+          type: "object",
+          properties: { title: { type: "string" } },
+          required: ["title"],
+          asCell: ["cell"],
+        }],
+      ] as const
+    ) {
+      for (
+        const resource of [
+          `Default<${item}[], []>`,
+          `${item}[] | Default<[]>`,
+        ]
+      ) {
+        it(`injects the resource schema for a contextual wish of \`${resource}\``, async () => {
+          const output = await transformSource(
+            `import { type Default, type Writable, wish, type WishState } from "commonfabric";
+export default function contextualWish() {
+  const contextual: WishState<${resource}> = wish({ query: "#items" });
+  return contextual;
+}`,
+            { types: COMMONFABRIC_TYPES, typeCheck: true },
+          );
+          const expected = { type: "array", items: itemSchema, default: [] };
+
+          expect(callSchemas(parseModule(output), "wish")).toEqual([expected]);
+        });
+      }
+    }
+
+    for (
+      const resource of ["Default<string[], []>", "string[] | Default<[]>"]
+    ) {
+      it(`injects the contextual \`${resource}\` schema on \`Cell.for()\``, async () => {
+        const output = await transformSource(
+          `import { Cell, type Default, type Writable } from "commonfabric";
+export default function contextualCell() {
+  const cell: Writable<${resource}> = Cell.for("items");
+  return cell;
+}`,
+          { types: COMMONFABRIC_TYPES, typeCheck: true },
+        );
+
+        expect(callSchemas(parseModule(output), "asSchema")).toEqual([{
+          type: "array",
+          items: { type: "string" },
+          default: [],
+        }]);
+      });
+
+      it(`injects the contextual \`${resource}\` schema and user scope on \`new Writable()\``, async () => {
+        const output = await transformSource(
+          `import { type Default, type PerUser, Writable } from "commonfabric";
+export default function contextualCell() {
+  const cell: PerUser<Writable<${resource}>> = new Writable();
+  return cell;
+}`,
+          { types: COMMONFABRIC_TYPES, typeCheck: true },
+        );
+        const [cell] = collect(parseModule(output), ts.isNewExpression);
+
+        expect(cell!.arguments).toHaveLength(2);
+        expect(literalToValue(cell!.arguments![1]!)).toEqual({
+          type: "array",
+          items: { type: "string" },
+          default: [],
+          scope: "user",
+        });
+      });
+    }
+
     it("reads an array of cells with an empty default by its type", async () => {
       const [, result] = await liftSchemas(
         `${IMPORTS}interface Item { title: string; attachments: Writable<any>[] | Default<[]>; }
@@ -523,6 +599,129 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
             });
           },
         );
+      }
+    });
+
+    describe("a CFC alias whose type the checker reduced", () => {
+      // `Confidential<string | null, …>` is `string & carrier` once
+      // `null & carrier` is nothing, and the reduced type keeps no alias name.
+      // A written reference still names the policy; a type alone has only its
+      // carrier, which holds the labels but cannot spell a writer binding.
+      for (
+        const [spelling, declaration, a, input, output] of [
+          [
+            "a nullable value written directly",
+            "",
+            `Confidential<string | null, ["secret"]>`,
+            {
+              anyOf: [{ type: "string" }, { type: "null" }],
+              ifc: { confidentiality: ["secret"] },
+            },
+            { type: "string", ifc: { confidentiality: ["secret"] } },
+          ],
+          [
+            "a nullable object written directly",
+            "",
+            `Confidential<{ title: string } | null, ["secret"]>`,
+            {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: { title: { type: "string" } },
+                  required: ["title"],
+                },
+                { type: "null" },
+              ],
+              ifc: { confidentiality: ["secret"] },
+            },
+            {
+              type: "object",
+              properties: { title: { type: "string" } },
+              required: ["title"],
+              ifc: { confidentiality: ["secret"] },
+            },
+          ],
+          [
+            "a nullable value's writer written directly",
+            `const setName = handler<{ name: string }, { name: Writable<string | null> }>((event, { name }) => { name.set(event.name); });`,
+            "WriteAuthorizedBy<string | null, typeof setName>",
+            {
+              anyOf: [{ type: "string" }, { type: "null" }],
+              ifc: {
+                writeAuthorizedBy: {
+                  __ctWriterIdentityOf: {
+                    file: "/main.tsx",
+                    path: ["setName"],
+                  },
+                },
+              },
+            },
+            { type: "string" },
+          ],
+          [
+            "a nullable projection",
+            `type P<T, Path extends readonly string[]> = ProjectionOf<T | null, Path>;`,
+            `P<{ t: string }, ["x/y", "m~n"]>`,
+            {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: { t: { type: "string" } },
+                  required: ["t"],
+                },
+                { type: "null" },
+              ],
+              ifc: { projection: { from: "/", path: "/x~1y/m~0n" } },
+            },
+            {
+              type: "object",
+              properties: { t: { type: "string" } },
+              required: ["t"],
+              ifc: { projection: { from: "/", path: "/x~1y/m~0n" } },
+            },
+          ],
+          [
+            "a nullable value",
+            `type Sec<T> = Confidential<T | null, ["secret"]>;`,
+            "Sec<string>",
+            {
+              anyOf: [{ type: "string" }, { type: "null" }],
+              ifc: { confidentiality: ["secret"] },
+            },
+            { type: "string", ifc: { confidentiality: ["secret"] } },
+          ],
+          [
+            "a nullable array in another label's payload",
+            `type Sec<T> = Confidential<T[] | null, ["secret"]>;`,
+            `Integrity<Sec<string>, ["trusted"]>`,
+            {
+              anyOf: [
+                { type: "array", items: { type: "string" } },
+                { type: "null" },
+              ],
+              ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
+            },
+            {
+              type: "array",
+              items: { type: "string" },
+              ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
+            },
+          ],
+        ] as const
+      ) {
+        it(`keeps the metadata of ${spelling}`, async () => {
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, handler, Integrity, pattern, ProjectionOf, Writable, WriteAuthorizedBy } from "commonfabric";
+${declaration}
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+          const schemas = patternSchemas(parseModule(files["/main.tsx"]!));
+          // The argument is read from its written reference, which keeps
+          // `null`; the result from the reduced type, which has none.
+          expect((schemas.input.properties as Schema).a).toEqual(input);
+          expect((schemas.output.properties as Schema).a).toEqual(output);
+        });
       }
     });
 

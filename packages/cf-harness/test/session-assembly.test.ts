@@ -43,6 +43,8 @@ const parityArguments = (
     "32",
     "--reasoning-effort",
     "high",
+    "--research-reasoning-effort",
+    "high",
     "--skills-root",
     skillsRoot,
     "--fabric-api-url",
@@ -84,6 +86,8 @@ const parityArguments = (
     "--max-model-turns",
     "32",
     "--reasoning-effort",
+    "high",
+    "--research-reasoning-effort",
     "high",
     "--skills-root",
     skillsRoot,
@@ -166,6 +170,11 @@ describe("session-assembly", () => {
         expect(harnessSessionEngineOptions(server)).toEqual(
           harnessSessionEngineOptions(cli),
         );
+        // Equal options would also pass if both surfaces dropped the setting.
+        expect(harnessSessionEngineOptions(server).researchReasoningEffort)
+          .toBe("high");
+        expect(harnessSessionEngineOptions(cli).researchReasoningEffort)
+          .toBe("high");
       } finally {
         await cleanup();
       }

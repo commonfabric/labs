@@ -612,12 +612,12 @@ describe("validation", () => {
 
     describe("given a record membership refuses", () => {
       it("returns `false` for a null-prototype object", () => {
-        // The narrowing `isFabricPlainObject()` accepts this one; membership
-        // requires an `Object.prototype`-rooted record.
+        // Membership and the narrowing `isFabricPlainObject()` agree here:
+        // both require an `Object.prototype`-rooted record.
 
         const obj = Object.create(null) as Record<string, never>;
 
-        expect(isFabricPlainObject(obj as FabricValue)).toBe(true);
+        expect(isFabricPlainObject(obj as FabricValue)).toBe(false);
         expect(isValidFabricPlainObject(obj)).toBe(false);
       });
 

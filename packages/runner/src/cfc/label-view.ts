@@ -162,6 +162,16 @@ export const cfcLabelViewForCell = (
   cell: unknown,
 ): CfcLabelView | undefined => cfcLabelViewForCellWithStatus(cell).view;
 
+/** Options for a label read that resolves the cell's path through links. */
+export type ResolvedLabelReadOptions = {
+  /**
+   * Whether resolving the path kicks a sync of each hop target in another
+   * space. On by default. A reader that resolves a link its caller's value
+   * read has already resolved, and so already kicked, turns it off.
+   */
+  kickCrossSpaceTargets?: boolean;
+};
+
 type ResolvedMetadataResult = StoredMetadataResult & {
   /** The resolved doc's path, which the view is rebased against. */
   path: readonly string[];
@@ -182,6 +192,7 @@ type ResolvedMetadataResult = StoredMetadataResult & {
 const resolvedMetadataForCell = (
   cell: LabelQueryableCell,
   link: NormalizedFullLink,
+  options: ResolvedLabelReadOptions,
 ): ResolvedMetadataResult => {
   if (!cell.runtime) {
     return { metadata: undefined, readFailed: false, path: link.path };
@@ -196,6 +207,9 @@ const resolvedMetadataForCell = (
     // against that transaction's accounting like any other crossing.
     const resolved = resolveLink(cell.runtime, tx, link, "value", {
       markIfcCrossings: true,
+      ...(options.kickCrossSpaceTargets === false
+        ? { kickCrossSpaceTargets: false }
+        : {}),
     });
     return {
       metadata: readStoredCfcMetadata(tx, {
@@ -215,9 +229,10 @@ const resolvedMetadataForCell = (
  * {@link cfcLabelViewForCellWithStatus}, plus the label stored on the doc the
  * selected path RESOLVES to.
  *
- * For an inspection surface that answers "what is the label here" about a path
- * a person typed, the one-hop read is not enough: a path that crosses a link
- * part way through reports no label for a value that plainly carries one. This
+ * For an inspection or display surface that answers "what is the label here"
+ * about a path a person typed or a value a view is bound to, the one-hop read
+ * is not enough: a path that crosses a link part way through reports no label
+ * for a value that plainly carries one. This
  * merges the resolved doc's stored label into the same view, rebased so its
  * entries stay relative to the selected cell.
  *
@@ -230,6 +245,7 @@ const resolvedMetadataForCell = (
  */
 export const cfcLabelViewForResolvedCellWithStatus = (
   cell: unknown,
+  options: ResolvedLabelReadOptions = {},
 ): CfcLabelViewStatus => {
   const unresolved = cfcLabelViewForCellWithStatus(cell);
   if (
@@ -246,7 +262,11 @@ export const cfcLabelViewForResolvedCellWithStatus = (
     return unresolved;
   }
 
-  const resolved = resolvedMetadataForCell(cell as LabelQueryableCell, link);
+  const resolved = resolvedMetadataForCell(
+    cell as LabelQueryableCell,
+    link,
+    options,
+  );
   return {
     view: mergeCfcLabelViews([
       unresolved.view,
@@ -255,6 +275,19 @@ export const cfcLabelViewForResolvedCellWithStatus = (
     readFailed: unresolved.readFailed || resolved.readFailed,
   };
 };
+
+/**
+ * The label view a display surface shows for a cell: the view-only form of
+ * {@link cfcLabelViewForResolvedCellWithStatus}. A value bound to a label
+ * display is commonly reached across a link part way along its path, as a
+ * list element that links to the document holding the value, and the label
+ * that vouches for that value is stored on the linked document.
+ */
+export const cfcLabelViewForResolvedCell = (
+  cell: unknown,
+  options: ResolvedLabelReadOptions = {},
+): CfcLabelView | undefined =>
+  cfcLabelViewForResolvedCellWithStatus(cell, options).view;
 
 /**
  * Fail-closed label acquisition for the LLM-observation egress path (audit 22),

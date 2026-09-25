@@ -50,8 +50,8 @@ respected.
 
 ## `addUnique` and `removeByValue` need an actual cell
 
-This is the rule that breaks migrations, and it fails silently in both
-directions.
+This is the rule that breaks migrations. Handed a value read back through
+`.get()`, both methods throw.
 
 Both methods compare the argument against the array's **stored** elements. An
 element that is an object is its own entity, so the stored element is a link,
@@ -67,31 +67,27 @@ isCell(candidate)
 ```
 
 A value read back out of `.get()` is a query-result proxy. It carries a link,
-but it is not a cell, so it takes the `valueEqual` branch and is compared
-against a link sigil, which it never equals. The consequences:
+but it is not a cell, so it would take the `valueEqual` branch and be compared
+against a link sigil, which it never equals: a removal would remove nothing,
+and an add would append a second element for a key that already has one. So
+both methods refuse one, before they read the array:
 
 ```ts
 // Shown for illustration only.
-// Silently removes nothing. `row` is a proxy, not a cell.
+// Throws. `row` is a proxy, not a cell.
 for (const row of items.get().filter((r) => r.name === name)) {
   items.removeByValue(row);
 }
 
-// Silently adds a duplicate, for the same reason.
+// Throws, for the same reason.
 items.addUnique(items.get().find((r) => r.name === name));
 ```
 
-The compiler reports both, as `mergeable-write:value-argument`. It reports the
-call whenever the collection's elements are objects and the argument is
-certainly not a cell, and it stays quiet where the value form is right: an
-argument it cannot decide, and a collection of scalars, which store inline
-rather than as links and so do compare by value. The check exists because
-neither the type system nor the runtime can: the parameter is declared
-`U | AnyCell<U>`, so both forms type-check, and the call succeeds either way.
-
-Neither call reports anything. The first is a no-op, so code that reads as a
-cleanup does nothing at all. The second is worse than a no-op: it appends a
-second element for a key that already has one.
+Nothing reports the mistake before the handler runs: the parameter is declared
+`U | AnyCell<U>`, so both forms type-check. The value form is right for a
+collection of scalars, which store inline rather than as links and so compare by
+value; a scalar read back through `.get()` is the value itself, not a proxy, so
+the refusal leaves that form alone.
 
 Pass a cell instead — the cell from `elementById(key)`, or the element cell
 from `key(index)`:
@@ -107,12 +103,12 @@ items.removeByValue(entry);    // compares by link, removes correctly
 ### Event data is a cell only if its type says so
 
 The same rule catches handler inputs. A handler whose event type names a plain
-type receives a proxy, and `addUnique` on it silently duplicates:
+type receives a proxy, and `addUnique` on it throws:
 
 ```ts
 // Shown for illustration only.
 // The event field is a plain type, so `piece` arrives as a proxy and this
-// never dedups.
+// throws.
 handler<
   { piece: MentionablePiece },
   { pieceRegistry: Writable<MentionablePiece[]> }
@@ -132,8 +128,8 @@ handler<
 
 If a handler nearby compares the same value with `equals(a, b)` rather than by
 identity, that is a sign the value is a link-carrying proxy rather than a cell:
-`equals` resolves links before comparing, so it works where `addUnique` does
-not.
+`equals` resolves links before comparing, so it accepts what `addUnique`
+refuses.
 
 ## Finish the migration: remove the read
 
@@ -196,8 +192,8 @@ stays in the conflict set, so the migration does not buy the merge behavior it
 was for: writers still conflict and retry, exactly as they did before.
 
 A legacy element can be removed, but only through a cell. `elementById` does not
-address one — that is what makes it legacy — and `removeByValue` of its content
-is the silent no-op above. The scan that found the element also gives its index,
+address one — that is what makes it legacy — and `removeByValue` refuses its
+content, as above. The scan that found the element also gives its index,
 and `items.key(index)` is a cell for it, so `removeByValue(items.key(index))`
 removes it. That cell is positional: it resolves against the snapshot the
 handler read, so a concurrent insert or removal ahead of it addresses a
@@ -206,12 +202,10 @@ commit carrying a stale read is rejected and retries — and it is the same read
 that costs the merge behavior. The fallback is contended by construction, not
 broken.
 
-The failure to avoid is handing `removeByValue` the element's content rather
+The mistake to avoid is handing `removeByValue` the element's content rather
 than its cell. The scan has just produced the content, so it is the natural
-thing to reach for, and it removes nothing. The keyed write beside it does
-something, so the result is a permanent duplicate: the legacy element and the
-keyed element both live in the list, both render, and both feed whatever reads
-the list. Nothing reports any of it.
+thing to reach for, and `removeByValue` throws on it: the content is a proxy
+read back through `.get()`, not the element's cell. Pass the positional cell.
 
 If existing data really must be carried across, prefer a one-shot repair to a
 scan in every handler. It pays the whole-list read once rather than on every

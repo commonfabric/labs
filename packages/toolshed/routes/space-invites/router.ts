@@ -3,6 +3,7 @@ import { bodyLimit } from "@hono/hono/body-limit";
 import { cors } from "@hono/hono/cors";
 import { z } from "@hono/zod-openapi";
 import {
+  INVITE_ACCESS,
   normalizeInviteHost,
   SPACE_INVITE_CAPABILITY,
   SpaceInviteError,
@@ -20,7 +21,7 @@ const schemas = {
   create: z.object({
     inviteId,
     codeVerifier: secret,
-    access: z.enum(["READ", "WRITE"]),
+    access: z.enum(INVITE_ACCESS),
     ttlSeconds: z.number().int().min(1).max(
       SPACE_INVITE_CAPABILITY.maxTtlSeconds,
     ),
