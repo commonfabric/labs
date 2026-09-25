@@ -502,8 +502,9 @@ describe("fabric special objects through the runner's walks", () => {
     it("hands a stored `FabricError` through `mergeSchemaDefaults()` whole", () => {
       // The read hands back a view whose prototype is `Object.prototype` (the
       // identity case above), which the merge's plain-object test takes for a
-      // record. The merge asks `isFabricInstanceOrView()` first and hands the
-      // view back as the leaf `traverseDAG` made it.
+      // record, and the slot's schema declares a default inside it, which the
+      // record path would add. The merge asks `isFabricInstanceOrView()` first
+      // and hands the view back as the leaf `traverseDAG` made it.
       const cell = runtime.getCell<{ err: unknown }>(
         space,
         "walks-merge-defaults-error",
@@ -517,7 +518,12 @@ describe("fabric special objects through the runner's walks", () => {
       const view = cell.get();
       const merged = mergeSchemaDefaults(view, undefined, {
         type: "object",
-        properties: { err: { type: "object" } },
+        properties: {
+          err: {
+            type: "object",
+            properties: { note: { type: "string", default: "filled" } },
+          },
+        },
       }, { mergeMaterializedLinks: true });
       expect(merged.err).toBe(view.err);
       expect((merged.err as object).constructor.name).toBe("FabricError");
