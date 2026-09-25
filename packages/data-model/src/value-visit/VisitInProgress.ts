@@ -527,7 +527,10 @@ export class VisitInProgress<
 
     try {
       for (const [key, value] of entries) {
-        const keyResult = this.#handleMappingAsAppropriate(key, doKeys ? this.#visitValue(key) : undefined);
+        const keyResult = this.#handleMappingAsAppropriate(
+          key,
+          doKeys ? this.#visitValue(key) : undefined,
+        );
         let keyMappedTo: string | undefined;
 
         switch (keyResult?.type) {
@@ -546,7 +549,10 @@ export class VisitInProgress<
           }
         }
 
-        const valueResult = this.#handleMappingAsAppropriate(value, doValues ? this.#visitValue(value) : undefined);
+        const valueResult = this.#handleMappingAsAppropriate(
+          value,
+          doValues ? this.#visitValue(value) : undefined,
+        );
         let valueMappedTo: ResultType | undefined;
 
         switch (valueResult?.type) {
@@ -664,15 +670,24 @@ export class VisitInProgress<
   /**
    * Asserts that the given value is a valid `FabricPlainObject` property key.
    */
-  #assertValidPlainObjectKey(original: string, value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>): string {
+  #assertValidPlainObjectKey(
+    original: string,
+    value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
+  ): string {
     if (typeof value !== "string") {
       throw new Error(
         debugStr`Visit of key $quote${original} mapped to non-string: $quote${value}`,
       );
     } else if (isUnsafeObjectKey(value)) {
-      throw new Error(
-        debugStr`Visit of key $quote${original} mapped to unsafe key: $quote${value}`,
-      );
+      if (original === value) {
+        throw new Error(
+          debugStr`Visit of unsafe key $quote${original} mapped to itself.`
+        );
+      } else {
+        throw new Error(
+          debugStr`Visit of key $quote${original} mapped to unsafe key: $quote${value}`,
+        );
+      }
     }
 
     return value;
