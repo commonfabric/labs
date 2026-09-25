@@ -16,6 +16,7 @@ import {
 import {
   countElements,
   findNode,
+  findNodeById,
   findNodeByProp,
   fireClick,
   isButton,
@@ -251,6 +252,23 @@ export default pattern(() => {
     talliesText(aliceSeesSecond.tallies) === "😺 1*" &&
     talliesText(aliceSeesFirst.tallies) === "😺 2*, 😿 1*"
   );
+  const assert_card_ids_unique = assert(() => {
+    const ids = [...aliceSeesFirst.tallies, ...aliceSeesSecond.tallies].map(
+      (tally) => tally.cardId,
+    );
+    return ids.length === 3 && new Set(ids).size === 3 &&
+      ids.every((id) => !id.includes("unsaved"));
+  });
+  const assert_count_described_by_its_card = assert(() => {
+    const [cats] = aliceSeesFirst.tallies;
+    return findNodeByProp(
+          aliceSeesFirst[UI],
+          "aria-describedby",
+          cats.cardId,
+        ) !==
+        undefined &&
+      findNodeById(aliceSeesFirst[UI], cats.cardId) !== undefined;
+  });
   const assert_unoffered_emoji_refused = assert(() =>
     storedIn(reactions).length === 4
   );
@@ -302,6 +320,8 @@ export default pattern(() => {
       { assertion: assert_taken_back_reaction_can_return },
       { action: aliceCatsSecond, trustedUi: reactGesture },
       { assertion: assert_each_message_tallies_its_own },
+      { assertion: assert_card_ids_unique },
+      { assertion: assert_count_described_by_its_card },
       { action: aliceOffersADog, trustedUi: reactGesture },
       { assertion: assert_unoffered_emoji_refused },
       { action: pendingCatsFirst, trustedUi: reactGesture },
