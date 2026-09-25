@@ -314,13 +314,22 @@ A result that took something standing in for a traversal, itself or through a
 branch below it, holds only for its round, so it is returned but not memoized.
 The traversal that began the position is memoized once its rounds settle.
 
-The schema-only walks that evaluate a union branch by branch without a value —
-the type pruning behind `schemaAcceptsType()` and `isOpaquePosition()`, and the
-`asCell` follow cap (`ContextualFlowControl.getAsCellFollowScopeCap()`) — come
-back to such a union through its reference in the same way. Each walks a branch
-list once along its path: walking it again decides nothing new, so it adds no
-match to an `anyOf` or `oneOf`, no constraint to an `allOf`, and no narrower
-follow cap.
+The schema-only walks that evaluate a union branch by branch without a value
+come back to such a union through its reference in the same way.
+
+- The type pruning behind `schemaAcceptsType()` and `isOpaquePosition()`
+  reaches what a union comes to as a least fixed point in rounds, as traversal
+  does. A branch list reached again while it is being read matches nothing in
+  the first round, whichever of `anyOf`, `oneOf` and `allOf` holds it. In each
+  later round it comes to what it came to in the round before.
+- A round reads each branch list once, and reads every list even after another
+  has ruled the value out, so every round reaches the same lists. The rounds
+  stop at the first in which each list reached again came to what stood in for
+  it. `R = allOf(null, R)` accepts no type, just as traversal matches no value
+  against it.
+- The `asCell` follow cap (`ContextualFlowControl.getAsCellFollowScopeCap()`)
+  walks a branch list once along its path. Walking it again decides nothing
+  new, so it adds no narrower cap.
 
 ---
 

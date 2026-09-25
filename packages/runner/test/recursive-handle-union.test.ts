@@ -12,6 +12,7 @@
 
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
@@ -25,6 +26,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { isCell } from "../src/cell.ts";
+import { ContextualFlowControl } from "../src/cfc.ts";
 import { Runtime } from "../src/runtime.ts";
 import { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -545,7 +547,11 @@ describe("recursive handle union", () => {
       expect(schemaAcceptsType(schema, "string")).toBe(false);
     });
 
-    it("returns `true` for `null` and `false` for a string through an `allOf`", () => {
+    it("returns `false` for `null` and for a string through an `allOf` that holds only itself beside `null`", () => {
+      // Every value of `Recursive` would have to be a `Recursive` already,
+      // which no finite reading of it finds: traversal matches no value
+      // against it, and so the type pruning accepts no type.
+
       const schema = {
         $ref: "#/$defs/Recursive",
         $defs: {
@@ -555,8 +561,83 @@ describe("recursive handle union", () => {
         },
       } as const satisfies JSONSchema;
 
+      expect(schemaAcceptsType(schema, "null")).toBe(false);
+      expect(schemaAcceptsType(schema, "string")).toBe(false);
+    });
+
+    it("returns `true` for `null` and `false` for a string through an `allOf` beside a branch that matches", () => {
+      const schema = {
+        $ref: "#/$defs/Recursive",
+        $defs: {
+          Recursive: {
+            anyOf: [{ type: "null" }, {
+              allOf: [{ $ref: "#/$defs/Recursive" }, { type: "null" }],
+            }],
+          },
+        },
+      } as const satisfies JSONSchema;
+
       expect(schemaAcceptsType(schema, "null")).toBe(true);
       expect(schemaAcceptsType(schema, "string")).toBe(false);
+    });
+
+    it("returns `true` for `null` where a definition first read inside a cycle is reached again beside it", () => {
+      // `R` is `X` together with `Y`, `X` is `Y` or `null`, and `Y` is `X`
+      // together with `null`. `Y` is first read inside `X`, where `X` is
+      // still being read and so matches nothing yet, and `R` meets `Y` again
+      // once `X` is done. Every one of them accepts `null`, which the first
+      // round alone does not find.
+
+      const schema = {
+        $ref: "#/$defs/R",
+        $defs: {
+          R: { allOf: [{ $ref: "#/$defs/X" }, { $ref: "#/$defs/Y" }] },
+          X: { anyOf: [{ $ref: "#/$defs/Y" }, { type: "null" }] },
+          Y: { allOf: [{ $ref: "#/$defs/X" }, { type: "null" }] },
+        },
+      } as const satisfies JSONSchema;
+
+      expect(schemaAcceptsType(schema, "null")).toBe(true);
+      expect(schemaAcceptsType(schema, "string")).toBe(false);
+    });
+
+    it("resolves at most twice the references for twice the definitions, each naming the next two", () => {
+      // Every definition but the first two is reached from the two before
+      // it, so reading each path to it anew resolves exponentially often; a
+      // resolution count past the bound below fails the case at once.
+
+      const definitions = (count: number) =>
+        ({
+          $ref: "#/$defs/R0",
+          $defs: Object.fromEntries(
+            Array.from({ length: count }, (_, i) => [`R${i}`, {
+              anyOf: [
+                { type: "null" },
+                { $ref: `#/$defs/R${(i + 1) % count}` },
+                { $ref: `#/$defs/R${(i + 2) % count}` },
+              ],
+            }]),
+          ),
+        }) as JSONSchema;
+      const resolve = ContextualFlowControl.resolveSchemaRefs;
+      let resolutions = 0;
+      using _counted = stub(
+        ContextualFlowControl,
+        "resolveSchemaRefs",
+        (...args: Parameters<typeof resolve>) => {
+          if (++resolutions > 10_000) throw new Error("resolved without end");
+          return resolve.apply(ContextualFlowControl, args);
+        },
+      );
+      const resolutionsFor = (count: number) => {
+        resolutions = 0;
+        expect(schemaAcceptsType(definitions(count), "null")).toBe(true);
+        return resolutions;
+      };
+
+      const few = resolutionsFor(16);
+      const many = resolutionsFor(32);
+      expect(many).toBeLessThanOrEqual(2 * few);
     });
   });
 });

@@ -6248,23 +6248,94 @@ function appendPartsToPath(path: ValuePath, parts: string[]): ValuePath {
   return [...path, ...parts] as ValuePath;
 }
 
+/** One reading of a schema's validity for a value type by `schemaTypeValidity()`. */
+interface TypeReading {
+  /** The value type the reading asks about. */
+  readonly valueType: JSONSchemaTypes;
+
+  /**
+   * What the reading keeps about branch lists, from the first one it reads.
+   * A schema with no `allOf`, `anyOf` or `oneOf` is read without it.
+   */
+  lists?: BranchListReading;
+}
+
+/** What a `TypeReading` keeps about the branch lists it reads. */
+interface BranchListReading {
+  /** The branch lists being read further up. */
+  readonly open: ByReading<true>;
+
+  /** What each branch list read in the current round came to. */
+  readonly validities: ByReading<TypeValidity>;
+
+  /**
+   * What stands in for a branch list reached again while it is being read
+   * further up: what it came to in the round before. A list with none matches
+   * nothing.
+   */
+  readonly standIns: ByReading<TypeValidity>;
+
+  /**
+   * The branch lists, each with the definitions it is read against, reached
+   * again in the current round while they were being read further up.
+   */
+  readonly reachedAgain: [readonly JSONSchema[], unknown][];
+}
+
 /**
  * Canonical schema/type matching (extracted from SchemaObjectTraverser so the
  * write path can share it): whether a schema can match a value of the given
  * type name, with the same $ref resolution and allOf/anyOf/oneOf handling the
  * read-side validation uses.
  *
- * `walking` holds the branch lists being walked further up. A schema that
- * reaches itself again through a `$ref` — a union whose handle branch names
- * the union — presents one of them again, since resolution hands back a
- * definition's own list rather than a copy. Walking it again decides nothing
- * new, so it adds no constraint to an `allOf` and no match to an `anyOf` or
- * `oneOf`.
+ * A schema that reaches itself again through a `$ref` — a union whose handle
+ * branch names the union — presents one of its branch lists again, since
+ * resolution hands back a definition's own list rather than a copy. A list
+ * reached again while it is being read stands for what it comes to, which the
+ * reading reaches as a least fixed point in rounds, as traversal does. The
+ * first round takes such a list as matching nothing, whatever combinator
+ * holds it, and each later round takes what the list came to in the round
+ * before. A round reads each list once for each set of definitions it is read
+ * against, so definitions that several lists share are read once however many
+ * reach them.
+ *
+ * Every list is read whether or not another has already ruled the value out,
+ * so every round reaches the same lists at the same points. In the order
+ * `False`, `True`, `Unknown`, what a combinator comes to only moves up as what
+ * it combines moves up, so each list comes to at least what it came to the
+ * round before. A round in which every list reached again came to what stood
+ * in for it is the least fixed point, and each list can move up only twice, so
+ * the rounds number at most one more than twice the lists reached again.
  */
 function schemaTypeValidity(
   schema: JSONSchema,
   valueType: JSONSchemaTypes,
-  walking?: Set<readonly JSONSchema[]>,
+): TypeValidity {
+  const reading: TypeReading = { valueType };
+  for (;;) {
+    const validity = typeValidityWithin(schema, reading);
+    const lists = reading.lists;
+    if (lists === undefined) return validity;
+    const settled = lists.reachedAgain.every(([options, definitions]) =>
+      readingEntry(lists.validities, options, definitions) ===
+        (readingEntry(lists.standIns, options, definitions) ??
+          TypeValidity.False)
+    );
+    if (settled) return validity;
+    for (const [options, byDefinitions] of lists.validities) {
+      for (const [definitions, listValidity] of byDefinitions) {
+        setReadingEntry(lists.standIns, options, definitions, listValidity);
+      }
+    }
+    lists.validities.clear();
+    lists.reachedAgain.length = 0;
+  }
+}
+
+/** What `schema` comes to for the reading's value type, within `reading`. */
+function typeValidityWithin(
+  schema: JSONSchema,
+  reading: TypeReading,
 ): TypeValidity {
   let resolved: JSONSchema | undefined = schema;
   if (isObjectOrArray(schema) && "$ref" in schema) {
@@ -6284,6 +6355,7 @@ function schemaTypeValidity(
     return TypeValidity.False;
   }
   const schemaObj = resolved as JSONSchemaObj;
+  const valueType = reading.valueType;
   // Check the top level type flag
   let typeValidity: TypeValidity.True | TypeValidity.Unknown | undefined;
   if ("type" in schemaObj) {
@@ -6317,108 +6389,21 @@ function schemaTypeValidity(
       throw new Error("Invalid schema type");
     }
   }
-  // Limited allOf handling
-  let allOfValidity: TypeValidity.True | TypeValidity.Unknown | undefined;
-  if (schemaObj.allOf && !walking?.has(schemaObj.allOf)) {
-    walking ??= new Set();
-    walking.add(schemaObj.allOf);
-    try {
-      // unknown & T => T
-      let match: TypeValidity.True | TypeValidity.Unknown | undefined;
-      for (const option of schemaObj.allOf) {
-        const valid = schemaTypeValidity(
-          cfcSchemaWithInheritedDefs(option, schemaObj.$defs),
-          valueType,
-          walking,
-        );
-        // ignore undefined result (unknown type), but if any option returns
-        // false, the whole thing is false
-        if (valid === TypeValidity.False) {
-          return TypeValidity.False;
-        } else if (valid === TypeValidity.True) {
-          match = TypeValidity.True;
-        } else if (valid === TypeValidity.Unknown && match === undefined) {
-          match = TypeValidity.Unknown;
-        }
-      }
-      allOfValidity = match ?? TypeValidity.True;
-    } finally {
-      walking.delete(schemaObj.allOf);
-    }
-  }
-  // Limited anyOf handling
-  let anyOfValidity: TypeValidity.True | TypeValidity.Unknown | undefined;
-  if (schemaObj.anyOf) {
-    // unknown | T => unknown
-    let match: TypeValidity.True | TypeValidity.Unknown | undefined;
-    if (!walking?.has(schemaObj.anyOf)) {
-      walking ??= new Set();
-      walking.add(schemaObj.anyOf);
-      try {
-        for (const option of schemaObj.anyOf) {
-          if (ContextualFlowControl.isTrueSchema(option)) {
-            // unknown | any => any
-            match = TypeValidity.True;
-            break;
-          }
-          const valid = schemaTypeValidity(
-            cfcSchemaWithInheritedDefs(option, schemaObj.$defs),
-            valueType,
-            walking,
-          );
-          if (valid === TypeValidity.False) {
-            continue;
-          } else if (match !== TypeValidity.Unknown) {
-            match = valid;
-          }
-        }
-      } finally {
-        walking.delete(schemaObj.anyOf);
-      }
-    }
-    if (match === undefined) {
-      return TypeValidity.False;
-    } else {
-      anyOfValidity = match;
-    }
-  }
-  // Limited oneOf handling
-  // This is handled the same as anyOf here
-  let oneOfValidity: TypeValidity.True | TypeValidity.Unknown | undefined;
-  if (schemaObj.oneOf) {
-    let match: TypeValidity.True | TypeValidity.Unknown | undefined;
-    if (!walking?.has(schemaObj.oneOf)) {
-      walking ??= new Set();
-      walking.add(schemaObj.oneOf);
-      try {
-        for (const option of schemaObj.oneOf) {
-          if (ContextualFlowControl.isTrueSchema(option)) {
-            // unknown | any => any
-            match = TypeValidity.True;
-            break;
-          }
-          const valid = schemaTypeValidity(
-            cfcSchemaWithInheritedDefs(option, schemaObj.$defs),
-            valueType,
-            walking,
-          );
-          if (valid === TypeValidity.False) {
-            continue;
-          } else if (match !== TypeValidity.Unknown) {
-            // this may be more than one, but we don't know that the rest of
-            // the validation will pass, so don't reject.
-            match = valid;
-          }
-        }
-      } finally {
-        walking.delete(schemaObj.oneOf);
-      }
-    }
-    if (match === undefined) {
-      return TypeValidity.False;
-    } else {
-      oneOfValidity = match;
-    }
+  // Limited allOf, anyOf, and oneOf handling; oneOf is handled the same as
+  // anyOf. Each list is read even once another has ruled the value out.
+  const definitions = schemaObj.$defs;
+  const allOfValidity = schemaObj.allOf &&
+    branchListValidity(schemaObj.allOf, "allOf", definitions, reading);
+  const anyOfValidity = schemaObj.anyOf &&
+    branchListValidity(schemaObj.anyOf, "anyOf", definitions, reading);
+  const oneOfValidity = schemaObj.oneOf &&
+    branchListValidity(schemaObj.oneOf, "anyOf", definitions, reading);
+  if (
+    allOfValidity === TypeValidity.False ||
+    anyOfValidity === TypeValidity.False ||
+    oneOfValidity === TypeValidity.False
+  ) {
+    return TypeValidity.False;
   }
   // We can't rule out a matched type based on the logical `not` clause,
   // so we don't deal with that here.
@@ -6437,6 +6422,99 @@ function schemaTypeValidity(
     return TypeValidity.True;
   }
   return TypeValidity.Unknown;
+}
+
+/**
+ * What the branch list `options`, read against `definitions`, comes to within
+ * `reading`: every option together for an `allOf`, and any one of them for an
+ * `anyOf` or a `oneOf`.
+ */
+function branchListValidity(
+  options: readonly JSONSchema[],
+  combinator: "allOf" | "anyOf",
+  definitions: JSONSchemaObj["$defs"],
+  reading: TypeReading,
+): TypeValidity {
+  if (reading.lists === undefined) {
+    reading.lists = {
+      open: new Map(),
+      validities: new Map(),
+      standIns: new Map(),
+      reachedAgain: [],
+    };
+  }
+  const lists = reading.lists;
+  const known = readingEntry(lists.validities, options, definitions);
+  if (known !== undefined) return known;
+  if (readingEntry(lists.open, options, definitions)) {
+    lists.reachedAgain.push([options, definitions]);
+    return readingEntry(lists.standIns, options, definitions) ??
+      TypeValidity.False;
+  }
+  setReadingEntry(lists.open, options, definitions, true);
+  try {
+    const listValidity = combinator === "allOf"
+      ? everyOptionValidity(options, definitions, reading)
+      : someOptionValidity(options, definitions, reading);
+    setReadingEntry(lists.validities, options, definitions, listValidity);
+    return listValidity;
+  } finally {
+    lists.open.get(options)?.delete(definitions);
+  }
+}
+
+/** What an `allOf` over `options` comes to: unknown & T => T. */
+function everyOptionValidity(
+  options: readonly JSONSchema[],
+  definitions: JSONSchemaObj["$defs"],
+  reading: TypeReading,
+): TypeValidity {
+  let ruledOut = false;
+  let match: TypeValidity.True | TypeValidity.Unknown | undefined;
+  for (const option of options) {
+    const valid = typeValidityWithin(
+      cfcSchemaWithInheritedDefs(option, definitions),
+      reading,
+    );
+    // ignore undefined result (unknown type), but if any option returns
+    // false, the whole thing is false
+    if (valid === TypeValidity.False) {
+      ruledOut = true;
+    } else if (valid === TypeValidity.True) {
+      match = TypeValidity.True;
+    } else if (match === undefined) {
+      match = TypeValidity.Unknown;
+    }
+  }
+  return ruledOut ? TypeValidity.False : match ?? TypeValidity.True;
+}
+
+/** What an `anyOf` or `oneOf` over `options` comes to: unknown | T => unknown. */
+function someOptionValidity(
+  options: readonly JSONSchema[],
+  definitions: JSONSchemaObj["$defs"],
+  reading: TypeReading,
+): TypeValidity {
+  let match: TypeValidity.True | TypeValidity.Unknown | undefined;
+  for (const option of options) {
+    if (ContextualFlowControl.isTrueSchema(option)) {
+      // unknown | any => any
+      match = TypeValidity.True;
+      break;
+    }
+    const valid = typeValidityWithin(
+      cfcSchemaWithInheritedDefs(option, definitions),
+      reading,
+    );
+    if (valid === TypeValidity.False) {
+      continue;
+    } else if (match !== TypeValidity.Unknown) {
+      // For a oneOf this may be more than one, but we don't know that the
+      // rest of the validation will pass, so don't reject.
+      match = valid;
+    }
+  }
+  return match ?? TypeValidity.False;
 }
 
 /**
