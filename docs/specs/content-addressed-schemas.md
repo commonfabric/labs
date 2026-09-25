@@ -29,7 +29,7 @@ stores each module's text as one, and its records link to them.
 
 ## Last Updated
 
-2026-09-10
+2026-09-25
 
 ## Motivation
 
@@ -676,9 +676,21 @@ delivery and traversal split the work in two layers:
   query delivers — link positions and the `schema` metadata member —
   verifies each referenced closure against the space's
   own store, and joins it to the delivered set and watch set — failing
-  the query on a hole. A refresh revalidates the established delivery
-  state too, so a corrupted dependency fails even under an unchanged
-  referrer. An assembly failure means the patch shape that escapes
+  the query on a hole. A session's assemblies after its first — a
+  refresh, an added watch — walk only the closures of the documents they
+  deliver, and stop at each schema document the session already holds
+  verified: an earlier assembly verified that document and its whole
+  closure against this store, the commit boundary never replaces or
+  removes an installed `cid:` document, and the client retains the copy
+  it was delivered, so an established reference cannot come to resolve
+  differently through the store's API. A delivered document's previous
+  version contributes its references as well, so a `cid:` document
+  arriving at a new version is checked against the hash it verified as.
+  What such an assembly does not re-read is a closure document altered
+  out of band beneath an unchanged referrer; an evaluation that reads
+  that closure from the store — a watch installation or a full
+  re-evaluation the evaluation cache does not answer — fails on it. An
+  assembly failure means the patch shape that escapes
   commit-time validation (see Resolution), out-of-band tampering, or a
   store predating that validation — never a transient condition, since
   the commit boundary validates every closure it collects and preserves

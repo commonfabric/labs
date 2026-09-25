@@ -128,7 +128,7 @@ definition differs, reject the request and require the client to use
 `session.watch.set` to replace the full watch set.
 
 Watch additions stage changes to graph selectors, missed-target ownership,
-document caches, schema dependency counts, and operation cursors. Evaluation,
+document caches, schema reference scans, and operation cursors. Evaluation,
 operation snapshot attachment, and wire conversion finish before publication.
 Once the engine is acquired, the captured session must still be the registry's
 current session. Staging through publication then runs synchronously:
@@ -146,9 +146,11 @@ entries, operation watches, and remaining misses on every branch. The last
 miss owner leaving must retire an interest unless another source still owns
 it. Watch replacement recomputes complete provenance; normalizing an accepted
 list with duplicate IDs also recomputes it because an operation owner can
-depart. Schema dependency counts bound refresh revalidation by distinct schema
-hashes, while every dependency still verifies against the space's own stored
-closure, including when its referrer has not changed.
+depart. A refresh's schema-closure pass walks only the closures of the documents
+it delivers, and stops at schema documents the graph already established, so
+its cost follows the changed documents rather than every schema hash the session
+holds; `docs/specs/content-addressed-schemas.md`, under "Traversal and sync",
+states what that pass verifies and what it leaves to a fresh evaluation.
 
 ## 5. Transaction Contract
 

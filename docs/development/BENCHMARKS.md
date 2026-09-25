@@ -1424,6 +1424,26 @@ The
 [local encoding measurement](../history/development/performance/2026-09-14-encode-pointer.md)
 records interleaved comparisons and their limits.
 
+## Refresh schema-closure walk
+
+`packages/memory/test/v2-refresh-schema-closure.bench.ts` measures a push
+refresh of a tracked graph after a commit to a document that carries no schema
+reference, for a graph already delivered 10, 100, or 1,000 schema documents
+through a carrier whose links reference each of them. Each sample commits the
+next tally value and then times `refreshTrackedGraph()` over that one dirty
+document; fixture construction, the commit, and the check that the refresh
+delivered only the tally are outside the timed interval.
+
+The refresh walks only the closures its changed documents reference and stops
+at schema documents the graph already established, so its cost should not grow
+with the schema count. The documents one untimed refresh reads go to stderr per
+fixture — one, the tally, at every size — which is the count to compare when a
+timing moves. Run with:
+
+```sh
+deno bench -A --json packages/memory/test/v2-refresh-schema-closure.bench.ts
+```
+
 ## String tuple keys
 
 `packages/utils/test/string-tuple-key.bench.ts` measures encoding 256 distinct
