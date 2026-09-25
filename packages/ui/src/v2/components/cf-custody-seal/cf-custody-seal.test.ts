@@ -86,10 +86,13 @@ const preview: Preview = {
   stance: "sushi",
 };
 
+/** What the host's commit answers, with the receipt's type left open. */
+type Sealed = Awaited<ReturnType<RuntimeClient["commitCustodySeal"]>>;
+
 /** Gives each workflow independent handles and controllable host operations. */
 function setup(overrides: Partial<{
   prepare: RuntimeClient["prepareCustodySeal"];
-  commit: RuntimeClient["commitCustodySeal"];
+  commit: (id: string) => Promise<Sealed>;
   cancel: RuntimeClient["cancelCustodySeal"];
   element: HeadlessSeal;
 }> = {}) {
@@ -489,9 +492,7 @@ describe("CFCustodySeal confirmation", () => {
   });
 
   it("links the box it sealed into even when a binding changes while it commits", async () => {
-    const pending = Promise.withResolvers<
-      Awaited<ReturnType<RuntimeClient["commitCustodySeal"]>>
-    >();
+    const pending = Promise.withResolvers<Sealed>();
     const element = new OpenDialogSeal();
     using state = setup({ element, commit: () => pending.promise });
     const written: unknown[] = [];
@@ -573,9 +574,7 @@ describe("CFCustodySeal confirmation", () => {
   });
 
   it("shows no failure from a seal whose binding changed while it committed", async () => {
-    const pending = Promise.withResolvers<
-      Awaited<ReturnType<RuntimeClient["commitCustodySeal"]>>
-    >();
+    const pending = Promise.withResolvers<Sealed>();
     const element = new OpenDialogSeal();
     using state = setup({ element, commit: () => pending.promise });
     await element.accessForTestingOnly.prepare();
@@ -590,9 +589,7 @@ describe("CFCustodySeal confirmation", () => {
   });
 
   it("announces nothing when a binding changes while the seal commits", async () => {
-    const pending = Promise.withResolvers<
-      Awaited<ReturnType<RuntimeClient["commitCustodySeal"]>>
-    >();
+    const pending = Promise.withResolvers<Sealed>();
     const element = new OpenDialogSeal();
     using state = setup({ element, commit: () => pending.promise });
     const sealed: Event[] = [];

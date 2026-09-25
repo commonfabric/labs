@@ -142,13 +142,14 @@ describe("represents-principal", () => {
 
     it("refuses a claim in any form the runtime does not mint", () => {
       // authorPrincipalCandidates reads each of these as naming DID.
-      for (
-        const atom of [
-          `represents-principal:${DID}`,
-          { kind: "represents-principal", subject: ` ${DID}` },
-          { kind: "represents-principal", subject: DID, scope: "x" },
-        ]
-      ) {
+      const atoms: NonNullable<
+        CfcLabelView["entries"][number]["label"]["integrity"]
+      > = [
+        `represents-principal:${DID}`,
+        { kind: "represents-principal", subject: ` ${DID}` },
+        { kind: "represents-principal", subject: DID, scope: "x" },
+      ];
+      for (const atom of atoms) {
         const label = view([{ path: ["name"], label: { integrity: [atom] } }]);
         expect(authorPrincipalCandidates(label)).toEqual([DID]);
         expect(exactPrincipalAttestations(label)).toBeUndefined();
