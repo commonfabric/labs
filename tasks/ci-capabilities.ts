@@ -36,7 +36,6 @@ export type CapabilityId =
   | "toolshed"
   | "toolshed-baked"
   | "toolshed-baked-opposite"
-  | "bg-piece-service-binary"
   | "cf"
   | "local-dev-servers"
   | "compile-cache";
@@ -169,9 +168,7 @@ function serverExecutionDefine(
 }
 
 /** The name of a binary a lane keeps in `BINARY_CACHE_DIR`. */
-export type CachedBinaryName =
-  | `toolshed-baked-${ServerExecutionCiRole}`
-  | "bg-piece-service";
+export type CachedBinaryName = `toolshed-baked-${ServerExecutionCiRole}`;
 
 /** How a lane builds one binary it keeps in `BINARY_CACHE_DIR`. */
 export interface CachedBinary {
@@ -208,7 +205,6 @@ export function cachedBinaries(
   return {
     "toolshed-baked-default": toolshed("default"),
     "toolshed-baked-opposite": toolshed("opposite"),
-    "bg-piece-service": { build: "bg-piece-service", bakes: {} },
   };
 }
 
@@ -743,22 +739,6 @@ const toolshedBaked = bakedToolshed("default");
 const toolshedBakedOpposite = bakedToolshed("opposite");
 
 /**
- * The compiled background-piece-service binary used by its deployed-topology
- * gate. That gate deliberately starts the shipped artifact rather than a
- * source process, so the binary is a capability like the baked Toolshed.
- */
-const bgPieceServiceBinary: Capability = {
-  id: "bg-piece-service-binary",
-  description: "the compiled background-piece-service binary",
-  needs: ["deno"],
-  async open(context) {
-    return exported({
-      BG_PIECE_SERVICE_BIN: await cachedBinary(context, "bg-piece-service"),
-    });
-  },
-};
-
-/**
  * The `cf` command line by name. `bin/cf` runs from source and works out
  * which checkout it belongs to, so putting the directory on the path is
  * the whole of it — no binary to build and nothing to download.
@@ -823,7 +803,6 @@ export const CAPABILITIES: ReadonlyMap<CapabilityId, Capability> = new Map(
     toolshed,
     toolshedBaked,
     toolshedBakedOpposite,
-    bgPieceServiceBinary,
     cf,
     localDevServers,
     compileCache,

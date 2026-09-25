@@ -294,7 +294,7 @@ export interface CoverageBaseline {
   commit: string;
 
   /**
-   * When the run that measured it was created, ISO 8601. It decides one
+   * When the run that measured it started, ISO 8601. It decides one
    * thing: a publisher keeps a baseline while it is younger than the
    * window a manifest covers, and drops it once it is older than that.
    * Which baseline a comparison takes is decided by the order of their

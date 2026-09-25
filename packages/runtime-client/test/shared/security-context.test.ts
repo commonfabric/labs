@@ -105,6 +105,104 @@ describe("securityContextDifferences()", () => {
     ).toEqual(["identity"]);
   });
 
+  it("names the trust configuration when it differs", () => {
+    // A runtime evaluates concept guards under one trust configuration, so a
+    // document believing another would read a trusted declassifier as trusted
+    // where the runtime does not, or the reverse.
+    expect(
+      securityContextDifferences(
+        {
+          ...running,
+          cfcTrustConfig: {
+            delegations: [{
+              delegator: "*",
+              verifier: "did:web:review.example",
+              concepts: ["https://commonfabric.org/cfc/concepts/example"],
+            }],
+          },
+        },
+        running,
+      ),
+    ).toEqual(["cfcTrustConfig"]);
+  });
+
+  it("reads one trust configuration spelled two ways as the same posture", () => {
+    // The runtime holds the configuration it normalized, so key order, a key
+    // spelled out as `undefined`, and an empty list written out or left out
+    // are not posture.
+    const delegation = {
+      delegator: "*",
+      verifier: "did:web:review.example",
+      concepts: ["https://commonfabric.org/cfc/concepts/example"],
+    };
+    const statement = {
+      concrete: { type: "Policy", policyDigest: "sha256:example" },
+      implements: "https://commonfabric.org/cfc/concepts/example",
+      verifier: "did:web:review.example",
+    };
+    expect(
+      securityContextDifferences(
+        {
+          ...running,
+          cfcTrustConfig: {
+            delegations: [{
+              concepts: delegation.concepts,
+              verifier: delegation.verifier,
+              delegator: delegation.delegator,
+            }],
+            statements: [{
+              verifier: statement.verifier,
+              implements: statement.implements,
+              concrete: {
+                policyDigest: statement.concrete.policyDigest,
+                type: statement.concrete.type,
+              },
+            }],
+            conceptEdges: undefined,
+          },
+        },
+        {
+          ...running,
+          cfcTrustConfig: {
+            statements: [statement],
+            delegations: [delegation],
+            conceptEdges: [],
+          },
+        },
+      ),
+    ).toEqual([]);
+  });
+
+  it("names the trust configuration when one statement differs", () => {
+    const config = (verifier: string) => ({
+      statements: [{
+        concrete: { type: "Policy", policyDigest: "sha256:example" },
+        implements: "https://commonfabric.org/cfc/concepts/example",
+        verifier,
+      }],
+    });
+    expect(
+      securityContextDifferences(
+        { ...running, cfcTrustConfig: config("did:web:other.example") },
+        { ...running, cfcTrustConfig: config("did:web:review.example") },
+      ),
+    ).toEqual(["cfcTrustConfig"]);
+  });
+
+  it("names a trust configuration the runtime could not have booted with", () => {
+    // A malformed configuration normalizes to nothing, and it is not the
+    // posture of a runtime that booted, whatever that runtime holds.
+    expect(
+      securityContextDifferences(
+        {
+          ...running,
+          cfcTrustConfig: { statements: "all" } as never,
+        },
+        running,
+      ),
+    ).toEqual(["cfcTrustConfig"]);
+  });
+
   it("names the enforcement mode when it differs", () => {
     expect(
       securityContextDifferences(

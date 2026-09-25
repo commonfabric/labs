@@ -87,10 +87,10 @@ OFF, while the default role retains V8 coverage. The default role's test-record
 identity remains unmarked; the opposite role gets the variant for its actual
 posture (`server-execution` for ON or `server-execution-off` for OFF).
 
-The deployed-topology gates follow `default`: the real
-`bg-piece-service` binary and cf-harness fabric-session factory run against the
-default toolshed, the CLI adopts and verifies the server's published posture,
-and `PiecesController` hosts ride the default package/pattern lanes.
+The deployed-topology gates follow `default`: the cf-harness fabric-session
+factory runs against the default toolshed, the CLI adopts and verifies the
+server's published posture, and `PiecesController` hosts ride the default
+package/pattern lanes.
 Single-process suites (the unit suites, `cf test`, and runner integration files
 that serve toolshed's `app.ts` in-process) have no serving host and remain the
 ambient derive-and-commit model (OFF) by construction.*

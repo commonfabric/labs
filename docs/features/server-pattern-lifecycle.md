@@ -260,9 +260,9 @@ outcome beside the receipt — a failed refresh is a non-zero exit over a durabl
 commit. A piece addressed at a scope keeps the client-side path, since the verb
 takes the piece's id alone.
 
-Other clients of the piece controller — the browser shell, the background piece
-service — keep the client-side shape. Moving each is its own change; the served
-operations and the route are what they move onto.
+Another client of the piece controller, the browser shell, keeps the client-side
+shape. Moving it is its own change; the served operations and the route are what
+it moves onto.
 
 ## Tests
 

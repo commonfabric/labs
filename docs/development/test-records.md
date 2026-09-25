@@ -316,7 +316,13 @@ fold and the topology check all do this. Leaving them in does more than
 add an identity to the output. The figures are not all durations: of the
 three a lane writes per batch, one says what the batch was packed to
 spend and one counts the units it opened, so a sum over them is a number
-that means nothing. `tasks/lane-measurement.ts` composes the names this
+that means nothing. The job that scores a run's coverage writes its
+figures as measurements too, named `ci-lane coverage …`, each holding a
+count of uncovered lines, and three things read them back: the
+test-selection publisher's coverage baselines, the dashboard's coverage
+debt tile, and the report a `main` run posts on its pull request.
+["Coverage figures in the record store"](COVERAGE.md#coverage-figures-in-the-record-store)
+says how. `tasks/lane-measurement.ts` composes the lane's names this
 recognizes. The normative account is
 ["Recording" in the specification](../specs/test-records.md#recording).
 

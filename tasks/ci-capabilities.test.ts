@@ -104,7 +104,6 @@ describe("ci capabilities", () => {
     // type and not to the registry, or the other way round, and a suite
     // asking for one that is not there fails the lane before it starts.
     expect([...CAPABILITIES.keys()].toSorted()).toEqual([
-      "bg-piece-service-binary",
       "browser",
       "cf",
       "compile-cache",
@@ -250,9 +249,6 @@ describe("ci capabilities", () => {
     expect(every.API_URL).toBeDefined();
     expect(every.TOOLSHED_PORT).toBeDefined();
     expect(every.CF_LABS_ROOT).toBe(Deno.cwd());
-    expect(every.BG_PIECE_SERVICE_BIN).toBe(
-      `${Deno.cwd()}/${BINARY_CACHE_DIR}/bg-piece-service`,
-    );
     expect(every.PATH?.startsWith(`${Deno.cwd()}/bin`)).toBe(true);
     expect(every.CF_COMPILE_CACHE_FILE).toBe(
       `${Deno.cwd()}/${COMPILE_CACHE_FILE}`,
@@ -812,35 +808,6 @@ describe("opening a capability on a machine that answers", () => {
     expect(await openOpposite(true)).toBe(false);
   });
 
-  it("builds the background service binary only when none was restored", async () => {
-    const openBinary = async (restored: boolean) => {
-      const m = machine();
-      const root = await Deno.makeTempDir({ prefix: "capability-" });
-      await Deno.mkdir(`${root}/dist`, { recursive: true });
-      await Deno.writeTextFile(`${root}/dist/bg-piece-service`, "");
-      if (restored) {
-        await Deno.mkdir(`${root}/${BINARY_CACHE_DIR}`, { recursive: true });
-        await Deno.writeTextFile(
-          `${root}/${BINARY_CACHE_DIR}/bg-piece-service`,
-          "",
-        );
-      }
-      const opened = await openCapabilities(["bg-piece-service-binary"], {
-        root,
-        dryRun: false,
-        workDir: root,
-        exec: m.exec,
-      }, CAPABILITIES);
-      await opened.close();
-      await Deno.remove(root, { recursive: true });
-      return m.asked.some((line) =>
-        line.includes("build-binaries bg-piece-service")
-      );
-    };
-    expect(await openBinary(false)).toBe(true);
-    expect(await openBinary(true)).toBe(false);
-  });
-
   it("reports a cached binary it cannot look for rather than building one", async () => {
     // Only a binary that is not there is a cache miss. A cache directory
     // that is a file is a broken checkout, and building over it would hide
@@ -850,7 +817,7 @@ describe("opening a capability on a machine that answers", () => {
     try {
       await Deno.writeTextFile(`${root}/${CACHE_DIR}`, "");
       await expect(
-        openCapabilities(["bg-piece-service-binary"], {
+        openCapabilities(["toolshed-baked-opposite"], {
           root,
           dryRun: false,
           workDir: root,

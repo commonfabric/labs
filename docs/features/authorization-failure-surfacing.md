@@ -146,9 +146,9 @@ controllers all connect through it.
 ## Scope and trade-offs
 
 The reconnect classification governs reconnection for **every** memory client —
-shell, toolshed, the background piece service, and the CLI — not only the CLI. A
-permanent authorization failure terminates with a typed error, and the holder is
-expected to surface or recover from that error.
+shell, toolshed, and the CLI — not only the CLI. A permanent authorization
+failure terminates with a typed error, and the holder is expected to surface or
+recover from that error.
 
 Two properties follow from terminating rather than looping:
 

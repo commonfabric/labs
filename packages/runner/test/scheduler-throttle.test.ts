@@ -25,6 +25,8 @@ describe("throttle - bounded freshness", () => {
   let tx: IExtendedStorageTransaction;
 
   beforeEach(() => {
+    // Each case starts at logical time zero, whichever of the others ran.
+    clock.reset();
     ({ storageManager, runtime, tx } = createSchedulerTestRuntime(
       import.meta.url,
     ));

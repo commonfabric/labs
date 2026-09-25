@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import "./cf-render/index.ts";
 
 // Host-embedding contract seam 5 (docs/features/host-embedding.md §5): every
 // cf-* component's index.ts guards its customElements.define with
@@ -27,7 +28,9 @@ describe("host embedding contract: guarded-define idiom", () => {
     it(`${tag} is import-safe (re-evaluating its module does not throw)`, async () => {
       const base = new URL(path, import.meta.url).href;
 
-      // First evaluation registers the tag.
+      // First evaluation registers the tag. For cf-render, that evaluation is
+      // the import at the top of the file, and this one is served from the
+      // module cache.
       await import(base);
       expect(customElements.get(tag)).toBeDefined();
 
@@ -41,10 +44,11 @@ describe("host embedding contract: guarded-define idiom", () => {
   it("a redundant customElements.define is what the guard prevents", () => {
     // Documents the failure mode the guard defends against: defining an
     // already-registered tag throws. The guard turns this into a no-op.
-    expect(customElements.get("cf-render")).toBeDefined();
+    const registered = customElements.get("cf-render");
+    expect(registered).toBeDefined();
     expect(() =>
-      customElements.define("cf-render", class extends HTMLElement {})
+      customElements.define("cf-render", class extends registered! {})
     )
-      .toThrow();
+      .toThrow(/"cf-render" has already been used/);
   });
 });

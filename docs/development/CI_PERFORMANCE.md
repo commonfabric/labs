@@ -285,6 +285,20 @@ normally need. An individual wedged step can therefore reach its step bound and
 report a failure before the outer job bound. The outer bound remains the final
 limit when several steps in one job consume unusual amounts of time.
 
+The runner enforces the step bound, so the bound holds only while the runner is
+still responding. A job whose runner stops responding runs to the bound on the
+job, is cancelled, and keeps no log at all. Running out of memory is one way to
+get there. The runner raises the out-of-memory score of every process a step
+starts, so that when memory runs out the kernel kills one of those rather than
+the runner. Swap puts that kill off until the swap file is full as well, and
+while it fills, the machine pages to disk and everything on it slows, the runner
+included. So the `deno-setup` composite action turns swap off in every job that
+uses it on a GitHub-hosted Linux runner. A job that runs out of memory there
+loses a test process and fails in a step that keeps its log. The cost is the
+memory the swap file added: a job that needs more than the machine has fails
+rather than passing slowly. A self-hosted machine is not reconfigured, because
+it outlives the job.
+
 The minutes are written once. The top of the workflow declares them as YAML
 anchors, which GitHub Actions has accepted since September 2025:
 

@@ -920,15 +920,9 @@ was removed reads as a valid baseline unchanged. The file records each metric's
 uncovered-line count under a `durationSeconds` key, for the same reason the
 artifact keeps its name.
 
-That artifact is also where the repository's coverage debt over time is read
-from. The dashboard's coverage debt tile
-(`packages/dashboard/coverage-debt-history.ts`) reads the
-`coverage-debt: workspace uncovered lines` record out of one `main` run a day,
-shows the newest of those figures, and charts the run of them. It skips a run
-any of whose compile cache states is cold, for the reason the ratchet does;
-"Compile cache state and cold runs" below says what records those states. So the
-metric name, the `durationSeconds` key and the `compileCacheStates` tag have a
-reader outside the gate, and a change to any of them is a change to the tile.
+The same figures also go into the run's record artifacts, and from there to
+the record store; every reader outside the ratchet takes them from one of the
+two, as "Coverage figures in the record store" below says.
 
 A later PR run reads its ratchet baseline from the `perf-metrics` artifact of the
 `main` run for the base-branch commit it merged, or of the nearest ancestor of
@@ -991,6 +985,54 @@ in the stash the measurement pushed. `git stash list` and
 without waiting for it to finish. Restore with `git checkout HEAD -- <paths>`
 followed by `git stash pop`.
 
+## Coverage figures in the record store
+
+A run's coverage figures travel to the
+[test-run record store](test-records.md) as records. The job that scores
+them writes each figure into its record spool as a measurement named
+`ci-lane coverage …`, the way a lane records measurements of itself: a count
+of uncovered lines per source group, `workspace` among them, and per
+measured set, and a mark where the compile byte cache was cold.
+[The record spec](../specs/test-records.md#recording) defines the names. Its
+shipping step gathers them, and the relay stores them under the context it
+composes for the job, which names the commit, the run, and whether the run
+was a push to `main`. Every reader that builds anything per test already
+passes over such measurements. `tasks/coverage-records.ts` is the writer both
+jobs share.
+
+The Coverage Check job writes them beside its `perf-metrics` artifact.
+`tasks/coverage-report.ts` writes the same measurements for the full run of
+the CI lanes that
+[the test-selection plan](../plans/pull-request-test-selection.md) moves
+`main` onto, and writes no artifact. Either job ships them only from a push,
+under the artifact name `coverage`, which is `COVERAGE_ARTIFACT` in
+`@commonfabric/test-support/records`. Either runs only once every job whose
+coverage it scores has succeeded, so a run that failed elsewhere, in a
+deployment say, still has its figures read. The relay names the object after
+the artifact, so a reader finds a day's figures with one listing that the
+store filters by name, `COVERAGE_OBJECT_GLOB`, rather than by reading the
+day's tens of thousands of objects.
+
+Three things read them:
+
+- The test-selection publisher collects each measured set's figure as a
+  coverage baseline, against the commit the record's context names, from the
+  objects it folds. It takes them from a push to `main` that the fork flag
+  does not mark, the same rule its fold uses for a run of the default branch,
+  and keeps one per set per commit, the later run's where two measured the
+  same commit. It carries the previous manifest's baselines forward and
+  drops any older than `LOCAL_COVERAGE_BASELINE_DAYS`.
+  `tasks/test-selection/baselines.ts` is where that happens.
+- The dashboard's coverage debt tile
+  (`packages/dashboard/coverage-debt-history.ts`) takes the `workspace`
+  figure of one `main` run a day, the newest of the day's runs that has one
+  and was not measured on a cold compile cache, and charts the run of them.
+- The report a `main` run posts on the pull request behind it
+  (`tasks/post-main-report.ts`) reads the figures out of the newest coverage
+  artifact of the run and of the run before it, and compares the two. A run
+  whose compile cache was cold is compared only with another cold one, since
+  a cold run's group figures sit lower with nothing about the tests changed.
+
 ## Compile cache state and cold runs
 
 The pattern test jobs restore a compile byte cache keyed on a fingerprint hash
@@ -1009,7 +1051,8 @@ bytes; a runtime uses those bytes only when it receives the cache through its
 
 To tell cold from warm, each pattern job uploads a small `cache-state-*`
 artifact recording its cache restore result. The coverage check aggregates those
-into `compileCacheStates` in `perf-metrics.json`. A job family is cold when
+into `compileCacheStates` in `perf-metrics.json`, and marks the run's coverage
+measurements cold when any family is. A job family is cold when
 any of its shards had a full cache miss, detected as the cache file being absent
 after the restore step (the combined `actions/cache` action does not expose the
 matched key). A partial hit through a restore key counts as warm: both key forms
@@ -1044,13 +1087,12 @@ of the directory its coverage artifact holds. A file that exists reads as warm,
 which is sound only while the workflow keys the lanes' cache, and every restore
 key for it, on the compiler fingerprint, as it keys the jobs' caches: a file
 restored from a run of another compiler holds no bytes this one can use, and
-would read as warm all the same. `tasks/coverage-report.ts` reads
-every such record and publishes the run's state under the `compile-cache` key of
-`compileCacheStates`: cold when any record says `cold` or says something it
-does not recognize, warm when every record says `warm`, and absent when no lane
-opened the cache. The dashboard's repository-wide trend leaves a cold run out,
-so a fingerprint change does not show as a drop in debt that the next warm run
-takes back.
+would read as warm all the same. `tasks/coverage-report.ts` reads every such
+record and marks the run's coverage measurements cold when any record says
+`cold` or says something it does not recognize, and not when every record says
+`warm` or no lane opened the cache. The dashboard's repository-wide trend leaves
+a cold run out, so a fingerprint change does not show as a drop in debt that the
+next warm run takes back.
 
 ## Which `main` run the ratchet compares against
 
