@@ -118,12 +118,12 @@ Useful references:
 
 ### Feedback And Overlays
 
-| Element             | Element           | Element       | Element     |
-| ------------------- | ----------------- | ------------- | ----------- |
-| `cf-alert`          | `cf-empty-state`  | `cf-fab`      | `cf-loader` |
-| `cf-modal`          | `cf-progress`     | `cf-skeleton` | `cf-toast`  |
-| `cf-share-snapshot` | `cf-custody-seal` |               |             |
-| `cf-toast-provider` |                   |               |             |
+| Element             | Element           | Element         | Element     |
+| ------------------- | ----------------- | --------------- | ----------- |
+| `cf-alert`          | `cf-empty-state`  | `cf-fab`        | `cf-loader` |
+| `cf-modal`          | `cf-progress`     | `cf-skeleton`   | `cf-toast`  |
+| `cf-share-snapshot` | `cf-custody-seal` | `cf-hover-card` |             |
+| `cf-toast-provider` |                   |                 |             |
 
 ### Charts And Maps
 

@@ -48,6 +48,7 @@ export * from "./components/cf-copy-button/index.ts";
 export * from "./components/cf-draggable/index.ts";
 export * from "./components/cf-drop-zone/index.ts";
 export * from "./components/cf-empty-state/index.ts";
+export * from "./components/cf-hover-card/index.ts";
 export * from "./components/cf-hover-reveal/index.ts";
 export * from "./components/cf-fab/index.ts";
 export * from "./components/cf-field/index.ts";
