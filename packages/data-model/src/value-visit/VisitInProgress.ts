@@ -474,16 +474,19 @@ export class VisitInProgress<
         unknown
       > as NonterminalCodec<ResultType>;
 
+      let canDecode;
       try {
-        if (!codecForResultType.canDecode(mappedTo)) {
-          throw new Error(
-            debugStr`Codec of $quote${instance} refused replacement state $quote${mappedTo}`,
-          );
-        }
+        canDecode = codecForResultType.canDecode(mappedTo);
       } catch (cause) {
         throw new Error(
           debugStr`Codec of $quote${instance} failed while checking replacement state $quote${mappedTo}`,
           { cause },
+        );
+      }
+
+      if (!canDecode) {
+        throw new Error(
+          debugStr`Codec of $quote${instance} refused replacement state $quote${mappedTo}`,
         );
       }
 
