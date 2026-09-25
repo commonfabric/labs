@@ -50,6 +50,8 @@ Independent of each other; each changes one seam.
   input-witness substrate and deleting the `{identity, inputWitness}` form and
   every reader of it. `codeHash` comes from a build-stable artifact identity,
   not a function's source text.
+- [ ] **runner-3b · Builtin `codeHash`** (after runner-3). A builtin's
+  `codeHash` covers the shipped implementation, not only its builtin id.
 - [ ] **runner-7 · Untrusted-label parser** (CT-2314). One runner-owned parse of
   a label from untrusted JSON; unparseable refuses rather than reads as
   unlabeled. No callers in this change.
