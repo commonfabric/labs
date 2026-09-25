@@ -261,13 +261,13 @@ export default pattern(() => {
   });
   const assert_count_described_by_its_card = assert(() => {
     const [cats] = aliceSeesFirst.tallies;
-    return findNodeByProp(
-          aliceSeesFirst[UI],
-          "aria-describedby",
-          cats.cardId,
-        ) !==
-        undefined &&
-      findNodeById(aliceSeesFirst[UI], cats.cardId) !== undefined;
+    const count = findNodeByProp(
+      aliceSeesFirst[UI],
+      "aria-describedby",
+      cats.cardId,
+    );
+    const card = findNodeById(aliceSeesFirst[UI], cats.cardId);
+    return count !== undefined && card !== undefined;
   });
   const assert_unoffered_emoji_refused = assert(() =>
     storedIn(reactions).length === 4
