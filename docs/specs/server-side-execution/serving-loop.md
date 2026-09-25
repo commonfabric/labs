@@ -1562,8 +1562,8 @@ foreignEngineFailures, warmRequests, watermarkLag, demandArrivals,
 undemandedNarrowingRuns, earlyEmitRefusals, demand: {demandedRows,
 demandedInstances, demandedInstancesMax, demandedPairs, demandedWriters,
 demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
-demandPasses, demandPassMs, structureRootsPreloaded, pushGrowthWakes,
-watchWakes, warmWakes}, settle:
+demandPasses, demandPassMs, demandKeysReconciled, structureRootsPreloaded,
+pushGrowthWakes, watchWakes, warmWakes}, settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
 drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
@@ -1680,8 +1680,19 @@ counted, not lost to a pass-start snapshot (W1 review MINOR-2);
 `demandPasses` the pass count and `demandPassMs` the pass's total WALL
 time — which INCLUDES the awaited structure-load segments
 (`ensurePieceRunning`) for first-demand/pending root keys, NOT only the
-O(rows) reconcile (the reconcile does no per-row engine read and runs on
-registry deltas; the label is wall time, review MINOR-3);
+reconcile (the reconcile does no per-row engine read; the label is wall
+time, review MINOR-3);
+`demandKeysReconciled` the instance keys the passes reconciled, accumulated.
+The pass reads the demand set per session (`demandForSpace`): the memory
+server keeps each session's share and hands back the same object until a
+write to that session's watches, views, delivered entities, graph misses, or
+tracked set replaces it, and the SpaceServer keeps the shares it last read.
+A session whose share is the one held costs the pass one comparison, a
+replaced share is compared row by row, and only the keys whose rows changed
+are reconciled against the registry — so a pass over unchanged demand
+reconciles nothing and adds nothing here, and the transitions a pass makes
+are the ones reconciling every key would make. The first pass of a tenure,
+and the pass after one whose reconcile threw partway, reconcile every key;
 `structureRootsPreloaded` counts the root-document addresses the pass requests
 TOGETHER before those segments run — the instance a demand names and, for
 every scoped demand, the space instance as well. A segment syncs that space
