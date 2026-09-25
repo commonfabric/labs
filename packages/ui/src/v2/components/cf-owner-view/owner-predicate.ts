@@ -9,7 +9,8 @@ export function attestedOwnerPrincipal(
   if (!view) return undefined;
   const subjects = new Set<string>();
   for (const entry of view.entries) {
-    if (entry.path.length !== 0) continue;
+    // An entry a link carries describes the document it points to.
+    if (entry.path.length !== 0 || entry.observes === "followRef") continue;
     for (const atom of entry.label.integrity ?? []) {
       if (!isObjectNotArray(atom) || atom.kind !== "represents-principal") {
         continue;

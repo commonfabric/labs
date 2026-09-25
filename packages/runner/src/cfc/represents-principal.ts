@@ -97,15 +97,22 @@ export const representsPrincipalSubject = (
   return isWellFormedDID(subject) ? subject : undefined;
 };
 
-/** Every DID the `represents-principal` atoms of `entries` name, in order. */
+/**
+ * Every DID the `represents-principal` atoms of `entries` name, in order. An
+ * entry a link carries from the document it points to (`observes` of
+ * `followRef`) is skipped: it says whom that document represents, not whom
+ * the one holding the link does.
+ */
 export const representsPrincipalSubjects = (
   entries: CfcLabelView["entries"],
 ): string[] =>
   entries.flatMap((entry) =>
-    (entry.label.integrity ?? []).flatMap((atom) => {
-      const subject = representsPrincipalSubject(atom);
-      return subject === undefined ? [] : [subject];
-    })
+    entry.observes === "followRef"
+      ? []
+      : (entry.label.integrity ?? []).flatMap((atom) => {
+        const subject = representsPrincipalSubject(atom);
+        return subject === undefined ? [] : [subject];
+      })
   );
 
 /**

@@ -7,7 +7,7 @@
  */
 
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
-import { representsPrincipalSubjects } from "@commonfabric/runner/cfc/represents-principal";
+import { authorPrincipalCandidates } from "@commonfabric/runner/cfc/represents-principal";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 export type { CfcLabelView };
@@ -80,12 +80,16 @@ export const readCfcLabelView = async (
 };
 
 /**
- * Extracts the owning principal DID from a `represents-principal` integrity atom
- * anywhere in the label. Owner-protected profile fields (`name`/`avatar`/…)
- * carry this atom at their own paths rather than the root, so every entry is
- * scanned. Returns the first DID found.
+ * The principal a label says its value belongs to: the one DID
+ * `authorPrincipalCandidates` finds in the `represents-principal` atoms at
+ * the root and on the top-level fields, where an owner-protected profile
+ * carries its owner's. `undefined` when those name no principal or more than
+ * one, and atoms deeper down or carried by a link are not counted: they
+ * describe documents this one links to.
  */
 export const ownerPrincipalFromLabel = (
   view: CfcLabelView | undefined,
-): string | undefined =>
-  view === undefined ? undefined : representsPrincipalSubjects(view.entries)[0];
+): string | undefined => {
+  const candidates = authorPrincipalCandidates(view);
+  return candidates.length === 1 ? candidates[0] : undefined;
+};

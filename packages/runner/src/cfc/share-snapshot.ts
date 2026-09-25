@@ -131,7 +131,9 @@ function resolveAudience(
   const metadata = readStoredCfcMetadata(tx, destination);
   const view = cfcLabelViewFromMetadata(metadata, destination.path);
   const subjects = new Set(
-    view?.entries.filter((entry) => entry.path.length === 0)
+    view?.entries.filter((entry) =>
+      entry.path.length === 0 && entry.observes !== "followRef"
+    )
       .flatMap((entry) => entry.label.integrity ?? [])
       .flatMap((atom) => {
         const subject = representsPrincipalSubject(atom);

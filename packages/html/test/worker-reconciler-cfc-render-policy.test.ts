@@ -252,6 +252,47 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
       name: OTHER_PRINCIPAL,
       avatar: signer.did(),
     });
+    // A message whose `authorProfile` links the field-labeled profile: its
+    // stored label holds the profile's owner atoms only as entries the link
+    // carried, which name whom the linked profile represents.
+    const linkingMessage = runtime.getCell<{ authorProfile: unknown }>(
+      signer.did(),
+      "cfc-render-policy-linking-message",
+      undefined,
+      tx,
+    );
+    seedStoredEnvelope(tx, {
+      space: signer.did(),
+      id: linkingMessage.getAsNormalizedFullLink().id!,
+      type: "application/json",
+      path: [],
+    }, {
+      value: {
+        authorProfile: runtime.getCell(
+          signer.did(),
+          "cfc-render-policy-field-labeled-profile",
+          undefined,
+          tx,
+        ).getAsLink(),
+      },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: (["name", "avatar"] as const).map((field) => ({
+            path: ["authorProfile", field],
+            label: {
+              integrity: [{
+                kind: "represents-principal",
+                subject: signer.did(),
+              }],
+            },
+            origin: "link" as const,
+          })),
+        },
+      },
+    });
     const authoredByProfileText = runtime.getCell<string>(
       signer.did(),
       "cfc-render-policy-authored-by-profile-text",
@@ -317,6 +358,12 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
       signer.did(),
       "cfc-render-policy-two-owner-profile",
     );
+    const linkedAuthorProfileCell = runtime.getCell<
+      { authorProfile: unknown }
+    >(
+      signer.did(),
+      "cfc-render-policy-linking-message",
+    ).key("authorProfile");
     const dummyTx = runtime.edit();
     const dummyCell = runtime.getCell(
       signer.did(),
@@ -1370,6 +1417,36 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             renderedText.includes("Content hidden by integrity policy"),
             false,
           );
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "strict text integrity derives authorship from a profile a message links",
+      async () => {
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+        });
+        const root: WorkerVNode = {
+          type: "vnode",
+          name: "cf-cfc-authorship",
+          props: {
+            verifyTextIntegrity: true,
+            author: linkedAuthorProfileCell as never,
+          },
+          children: [authoredByProfileTextCell as never],
+        };
+
+        const cancel = reconciler.mount(root);
+        try {
+          await t.settle();
+
+          const renderedText = collector.getOpsOfType("create-text")
+            .map((op) => op.text);
+          assertEquals(renderedText.includes("Profile-authored note"), true);
         } finally {
           cancel();
         }

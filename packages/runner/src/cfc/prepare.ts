@@ -6083,10 +6083,13 @@ function bindLinkCurrentPrincipalClauses<Clause>(
 /**
  * `label` with every principal claim removed from its integrity. A link write
  * applies this to what the link value itself carries, its schema and its label
- * view, because pattern code chooses both and neither passes the write check
- * `currentPrincipalIntegrityReason` holds a schema to. A link still carries
- * the claims of the document it points to, which come from that document's
- * own label.
+ * view, and to the label it derives from the source's schema (the one this
+ * transaction writes it under, or its setup result schema), because pattern
+ * code chooses all of them and the write check
+ * `currentPrincipalIntegrityReason` sees only the schema entries a write
+ * reaches. A link takes its principal claims only from the source's label as
+ * the runtime stores it, this transaction's writes to the source included,
+ * which that check did see.
  */
 const withoutPrincipalClaims = (label: IFCLabel): IFCLabel => {
   const integrity = label.integrity;
@@ -6269,7 +6272,9 @@ const derivePersistedLinkLabel = (
       sourceMetadata,
       canonicalizeLogicalPath(input.source.path),
     ) ?? {},
-    pendingSourceLabel,
+    pendingSourceLabel === undefined
+      ? undefined
+      : withoutPrincipalClaims(pendingSourceLabel),
     metadataResolver.cover(pendingSourceView, [], undefined),
   ]);
   // The source/link-schema integrity is author-influenceable (a link value can
