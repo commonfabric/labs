@@ -1,20 +1,31 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { type Spy, spy } from "@std/testing/mock";
+import { type Spy, spy, stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import { ExecutorHost } from "../../src/executor/host.ts";
-import { PARKED_RUNTIME_WRITE_REFUSED } from "../../src/executor/parked-runtime.ts";
+import {
+  PARKED_RUNTIME_WRITE_REFUSED,
+  type ParkedRuntimeTaint,
+  ParkedServingRuntime,
+} from "../../src/executor/parked-runtime.ts";
 import {
   SEAL_AFTER_PARK_REFUSED,
   type SpaceServerPolicy,
 } from "../../src/executor/space-server.ts";
 import { Runtime } from "../../src/runtime.ts";
-import type { MemorySpace } from "../../src/storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  IStorageNotification,
+  MemorySpace,
+  StorageNotification,
+  TransactionSealDestination,
+} from "../../src/storage/interface.ts";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
@@ -70,6 +81,9 @@ describe("parked-runtime", () => {
   /** Spies on the serving runtimes' module-graph evaluations. */
   let evaluationSpies: Spy[];
 
+  /** Disposes a serving runtime; what the host's factory hands it. */
+  let disposeServing: (runtime: Runtime) => Promise<void>;
+
   /** Each tenure's park, by space. */
   let parks: ArrivalLog<{ space: string; reason: string }>;
 
@@ -114,7 +128,10 @@ describe("parked-runtime", () => {
         );
         built.push(runtime);
         // The runtime's dispose closes the storage manager it was given.
-        return Promise.resolve({ runtime, dispose: () => runtime.dispose() });
+        return Promise.resolve({
+          runtime,
+          dispose: () => disposeServing(runtime),
+        });
       },
       onSpaceParked: (parked, reason) =>
         parks.record({ space: parked, reason }),
@@ -269,6 +286,7 @@ describe("parked-runtime", () => {
     built = [];
     presyncs = 0;
     evaluationSpies = [];
+    disposeServing = (runtime) => runtime.dispose();
     parks = new ArrivalLog();
     activations = new ArrivalLog();
   });
@@ -366,6 +384,55 @@ describe("parked-runtime", () => {
       expect(built).toHaveLength(2);
       expect(host.stats().parkedRuntimes.reused).toBe(1);
     });
+
+    it("counts a kept runtime whose dispose fails as discarded, and `close()` still returns", async () => {
+      disposeServing = async (runtime) => {
+        await runtime.dispose();
+        throw new Error("dispose failed (test-injected)");
+      };
+      host = newHost({ parkedRuntimeRetentionMs: 60_000 });
+      await serveThenPark();
+
+      await clock.tick(60_000);
+      await host.close();
+
+      expect(host.stats().parkedRuntimes).toMatchObject({
+        held: 0,
+        discarded: 1,
+      });
+      expect(host.stats().parkDisposeTimeouts).toBe(0);
+    });
+
+    for (const late of ["completes", "fails"] as const) {
+      it(`abandons a kept runtime's dispose that overruns \`parkDisposeTimeoutMs\`, so \`close()\` returns before it, when the dispose later ${late}`, async () => {
+        const gate = Promise.withResolvers<void>();
+        let disposal: Promise<void> | undefined;
+        disposeServing = (runtime) => {
+          disposal = gate.promise.then(async () => {
+            await runtime.dispose();
+            if (late === "fails") {
+              throw new Error("dispose failed late (test-injected)");
+            }
+          });
+          return disposal;
+        };
+        host = newHost({
+          parkedRuntimeRetentionMs: 60_000,
+          parkDisposeTimeoutMs: 1_000,
+        });
+        await serveThenPark();
+
+        await clock.tick(60_000);
+        await clock.tick(1_000);
+        await host.close();
+
+        expect(host.stats().parkDisposeTimeouts).toBe(1);
+        expect(host.stats().parkedRuntimes.discarded).toBe(1);
+        gate.resolve();
+        await disposal!.catch(() => {});
+        await clock.settle();
+      });
+    }
   });
 
   describe("a parked runtime", () => {
@@ -550,5 +617,151 @@ describe("parked-runtime", () => {
         held: 0,
       });
     });
+
+    it("refuses a cross-space append its tenure stages after the park, and is not reused", async () => {
+      host = newHost({});
+      await startPieces();
+      const reader = await openReader();
+      await readAll(reader, (index) => (index + 1) * 2);
+      const tenure = host.spaceServer(space)!;
+      await closeClient(reader);
+      await parkedIdle();
+      expect(host.stats().parkedRuntimes.held).toBe(1);
+      const tx = built[0].edit();
+
+      // The refusal comes before the row is read.
+      expect(() => tenure.stageOutboundAppend(tx, {} as OutboxAppendRow))
+        .toThrow("staged after its serving tenure parked");
+      tx.abort();
+      await clock.settle();
+
+      expect(host.stats().parkedRuntimes).toMatchObject({
+        held: 0,
+        discarded: 1,
+      });
+      await revisit();
+      expect(built).toHaveLength(2);
+    });
+
+    it("is disposed when keeping it fails, and the next tenure builds fresh", async () => {
+      host = newHost({});
+      await startPieces();
+      const reader = await openReader();
+      await readAll(reader, (index) => (index + 1) * 2);
+      // Keeping the runtime installs its fence, which this refuses.
+      using _refuse = stub(built[0], "installSealDestination", () => {
+        throw new Error("install refused (test-injected)");
+      });
+      await closeClient(reader);
+      await parkedIdle();
+
+      expect(host.stats().parkedRuntimes).toMatchObject({
+        retained: 0,
+        held: 0,
+      });
+      await revisit();
+      expect(built).toHaveLength(2);
+    });
+  });
+
+  describe("ParkedServingRuntime", () => {
+    /**
+     * A parked instance over a stand-in runtime that records its seal
+     * destination and storage watchers, parked at head 5.
+     */
+    const parkStandIn = () => {
+      let destination: TransactionSealDestination | undefined;
+      const watchers = new Set<IStorageNotification>();
+      const runtime = {
+        installSealDestination: (installed: TransactionSealDestination) => {
+          destination = installed;
+        },
+        clearSealDestination: () => {
+          destination = undefined;
+        },
+        storageManager: {
+          subscribe: (watcher: IStorageNotification) => {
+            watchers.add(watcher);
+          },
+          unsubscribe: (watcher: IStorageNotification) => {
+            watchers.delete(watcher);
+          },
+        },
+      } as unknown as Runtime;
+      let disposals = 0;
+      const parked = new ParkedServingRuntime({
+        runtime,
+        dispose: () => {
+          disposals += 1;
+          return Promise.resolve();
+        },
+        space,
+        head: 5,
+      });
+      const taints: ParkedRuntimeTaint[] = [];
+      parked.onTainted = (taint) => taints.push(taint);
+      return {
+        parked,
+        runtime,
+        watchers,
+        taints,
+        destination: () => destination,
+        disposals: () => disposals,
+      };
+    };
+
+    /** A transaction the fence refuses without reading. */
+    const unread = {} as IExtendedStorageTransaction;
+
+    it("hands the runtime on once, only at the head it parked at, unfenced and unwatched", async () => {
+      const standIn = parkStandIn();
+
+      expect(standIn.parked.take(4)).toBeUndefined();
+      expect(standIn.parked.take(5)?.runtime).toBe(standIn.runtime);
+      expect(standIn.destination()).toBeUndefined();
+      expect(standIn.watchers.size).toBe(0);
+      expect(standIn.parked.take(5)).toBeUndefined();
+      await standIn.parked.dispose();
+      expect(standIn.disposals()).toBe(0);
+    });
+
+    it("refuses every write at its fence, reports the taint once, and is not handed on", async () => {
+      const standIn = parkStandIn();
+      const fence = standIn.destination()!;
+
+      const first = await fence.seal(unread);
+      await fence.seal(unread);
+
+      expect(first.error).toMatchObject({
+        name: "StorageTransactionAborted",
+        reason: { message: PARKED_RUNTIME_WRITE_REFUSED },
+      });
+      expect(fence.deferSealedEffects?.(unread, [])).toBe(true);
+      expect(standIn.taints).toEqual(["write"]);
+      expect(standIn.parked.take(5)).toBeUndefined();
+      await standIn.parked.dispose();
+      expect(standIn.disposals()).toBe(1);
+    });
+
+    for (
+      const [notification, taints] of [
+        [{ type: "load", space, changes: [] }, []],
+        [{ type: "load", space, changes: [{}] }, ["storage"]],
+        [{ type: "reset", space }, ["storage"]],
+      ] as [unknown, ParkedRuntimeTaint[]][]
+    ) {
+      const kind = notification as { type: string; changes?: unknown[] };
+      const carrying = kind.changes === undefined
+        ? ""
+        : ` carrying ${kind.changes.length} changes`;
+      it(`reports ${taints.length} taints for a ${kind.type} notification${carrying}`, () => {
+        const standIn = parkStandIn();
+        const [watcher] = standIn.watchers;
+
+        watcher.next(notification as StorageNotification);
+
+        expect(standIn.taints).toEqual(taints);
+      });
+    }
   });
 });
