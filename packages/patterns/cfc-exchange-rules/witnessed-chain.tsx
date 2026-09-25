@@ -101,7 +101,9 @@ export const appendVote = handler<
 });
 
 /** Not the endorsed step: copies the committed votes into a list of its own. */
-export const relayVotes = lift((committed: Committed | undefined): Committed => ({
+export const relayVotes = lift((
+  committed: Committed | undefined,
+): Committed => ({
   votes: [...(committed?.votes ?? [])],
 }));
 

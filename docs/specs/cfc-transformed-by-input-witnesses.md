@@ -17,7 +17,10 @@ specific code, and says what they do not cover. The mint lives in
 `deriveFlowJoinImpl` and `observationInputWitnesses`
 (`packages/runner/src/cfc/prepare.ts`) over the helpers in
 `packages/runner/src/cfc/input-witness.ts`. The cases are in
-`packages/runner/test/cfc-transformed-by-input-witness.test.ts`.
+`packages/runner/test/cfc-transformed-by-input-witness.test.ts`, and, run as
+compiled patterns, in
+`packages/runner/test/cfc-transformed-by-input-witness-compiled.test.ts` and
+`packages/patterns/cfc-exchange-rules/witnessed-chain.test.tsx`.
 
 ## What the specification asks for
 
@@ -91,6 +94,51 @@ read's confidential locations:
 - A runtime-minted `*` template contributes no integrity. A template labels
   membership and slots rather than a written value; it still takes its place in
   replace-down, so the ancestor it shadows does not show through.
+- A shallow read resolves its location's integrity over the entries a value
+  read of that location consumes, less the runtime's concrete existence stamps.
+  Which locations are confidential still comes from the entries the read itself
+  consumed. A shallow read observes a function of the value stored at its path
+  (presence, type, and for a container its keys or length), and the value stamp
+  records who wrote that value. The shape class a shallow read consumes holds
+  only existence stamps, which never carry integrity. Compiled code reads its
+  arguments through the schema traversal, which makes one shallow read per node,
+  scalar leaves included. Without this rule no such read would carry a witness.
+  A recursive read drops the existence stamps too. An existence stamp is carried through every overwrite of its path, so left in
+  it would shadow the value stamp of a later whole write above it.
+- A reference probe (`followRef`) keeps its own entries. A pointer's label is
+  the link write's, with no `TransformedBy`, so a reference retains no witness
+  however its content is read.
+
+### What the endorsed writer's stamp covers
+
+Pattern code writes through the diff, which writes only the paths whose stored
+value changed, and writes a new container empty before it fills it. Stamped
+path by path, a container a `Default` put in place keeps no writer at all, and a
+container the diff created empty reads as pure link structure, which takes
+membership stamps and `*` templates rather than the value stamp. The witness
+needs the endorsed writer's stamp at every location its output occupies, so the
+destination of a `Cell.set` is stamped as written (`CfcTxState.assertedValueRoots`,
+recorded only under the runtime's authorization). The per-value entries beneath
+it are replaced and any overlapping stamp's attribution is withdrawn, as for
+any write at that path. After the write every position beneath the destination
+holds the value the writer supplied, a container a `Default` put there
+included. A destination qualifies only when all of these hold:
+
+- the `set` wrote, and wrote beneath it, so a set that wrote nothing or threw
+  part way asserts nothing;
+- its join mints `TransformedBy` for the identity that made the `set`;
+- no reference sits anywhere in its final value, because a pointer the diff
+  found in place, such as a write redirect it writes through, is not one the
+  writer supplied;
+- the join fits every ceiling declared at or beneath it.
+
+Other destinations keep the stamps the diff's own writes get. Collection
+operations (`push`, `addUnique`, `removeByValue`, `increment`) record nothing:
+they carry existing members through without the writer's code consuming them.
+
+A value stamp persists at a path whose schema declares a label. The declared
+entry re-minted there on a later write to the document replaces the declared
+component only; the stamp is dropped only by a write at or above it.
 
 The redundant-entry collapse cannot hide an unattributed write from this. The
 collapse removes a derived entry only when the resolution without it gains no
@@ -190,6 +238,12 @@ not rely on the witness without them.
   commit a stance computed from another member's note. The stance is then
   witnessed exactly like an honest one. What separates the two is the event's
   provenance, which is the proof-of-gesture work, not this.
+- **Read-modify-write re-attributes what the writer re-sets.** A writer that
+  reads its own output and sets it again, planted members included, is stamped
+  as their writer, because its `set` supplied them. Its own witnesses still
+  record what it read, so a guard pinning one more level refuses the planted
+  member. A guard pinning one level trusts the step's inputs, as it always
+  does.
 - **Selection among committed values.** A transformation fed a subset of
   honestly committed inputs computes over a choice. References are refused
   above; a selection made by endorsed code is that code's semantics.

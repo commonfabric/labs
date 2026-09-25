@@ -608,6 +608,57 @@ describe("TransformedBy input witnesses", () => {
     });
   });
 
+  describe("a whole-value set over another writer's value", () => {
+    // `Cell.set` stamps its destination as written whole, so the commit step
+    // setting a document another writer filled is its writer everywhere
+    // beneath. That holds only for a set that wrote: one that threw part way
+    // supplied nothing, and the other writer's value must keep its own stamp.
+    const commitOver = async (
+      runtime: Runtime,
+      set: (committed: ReturnType<Runtime["getCell"]>) => void,
+    ): Promise<void> => {
+      const tx = runtime.edit();
+      tx.setCfcImplementationIdentity(COMMIT);
+      runtime.getCell(space, "alice-note", undefined, tx).getRaw();
+      set(runtime.getCell(space, "committed", undefined, tx));
+      tx.prepareCfc();
+      expect((await tx.commit()).error).toBeUndefined();
+    };
+
+    it("releases what the commit step set over a crafted value", async () => {
+      await withRuntime(WITNESSED_GUARD, async ({ runtime }) => {
+        await seedRoom(runtime);
+        await bitOfAlicesNote(runtime, "committed");
+        await commitOver(runtime, (committed) => {
+          committed.set({ votes: ["approve", "reject"] });
+        });
+        await transform(runtime, TALLY, ["committed"], "ballot", tally);
+        expect(publish(runtime, "ballot")).toEqual([]);
+      });
+    });
+
+    it("refuses a crafted value a failed set left beside a write of its own", async () => {
+      await withRuntime(WITNESSED_GUARD, async ({ runtime }) => {
+        await seedRoom(runtime);
+        await bitOfAlicesNote(runtime, "committed");
+        await commitOver(runtime, (committed) => {
+          try {
+            committed.set({
+              get votes(): string[] {
+                throw new Error("the set supplies no value");
+              },
+            });
+          } catch {
+            // The failed set is swallowed; the write below still commits.
+          }
+          committed.key("note").set("committed");
+        });
+        await transform(runtime, TALLY, ["committed"], "ballot", tally);
+        expect(refusedByCeiling(publish(runtime, "ballot"))).toBe(true);
+      });
+    });
+  });
+
   describe("the room's committed document", () => {
     it("is attributed to the commit step", async () => {
       await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {

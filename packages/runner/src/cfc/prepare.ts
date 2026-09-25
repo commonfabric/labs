@@ -696,10 +696,73 @@ const entriesResolvingAtLocation = (
   return found.sort((a, b) => a.ordinal - b.ordinal).map(({ entry }) => entry);
 };
 
+/** `entries` arranged as a {@link WitnessTrieNode} trie. */
+const witnessTrie = (
+  entries: readonly LabelMapEntry[],
+  stripTemplateIntegrity: boolean,
+): WitnessTrieNode => {
+  const root = witnessTrieNode();
+  for (const [ordinal, entry] of entries.entries()) {
+    const kept = stripTemplateIntegrity && isRuntimeMintedTemplate(entry)
+      ? { ...entry, label: { confidentiality: entry.label.confidentiality } }
+      : entry;
+    let node = root;
+    for (const segment of entry.path) {
+      let child = node.children.get(segment);
+      if (child === undefined) {
+        child = witnessTrieNode();
+        node.children.set(segment, child);
+      }
+      node = child;
+    }
+    node.entries.push({ entry: kept, ordinal });
+  }
+  return root;
+};
+
+/**
+ * The entries a shallow read's locations resolve their witnesses over: those
+ * a value read of the location consumes, less the runtime's concrete
+ * existence stamps. An existence stamp is minted once, when its path is first
+ * stamped, and carried through every later overwrite; it never carries
+ * integrity. Left in, one would shadow the value stamp of whatever later
+ * wrote over its path whole, and refuse a location that writer's stamp
+ * covers. Leaving it out cannot expose a stale `TransformedBy`: a stamp
+ * naming a writer keeps it only while nothing else writes at, above, or
+ * below its path (`carriedStampLabel`).
+ */
+const witnessEvidenceEntries = (
+  entries: readonly LabelMapEntry[],
+): LabelMapEntry[] =>
+  entries.filter((entry) =>
+    !(
+      (entry.origin === "derived" || entry.origin === "structure") &&
+      entry.observes === "shape" && !isRuntimeMintedTemplate(entry)
+    )
+  );
+
+/**
+ * The input witnesses one observation holds: the retained atoms common to
+ * every confidential location it consumed (`input-witness.ts`), or
+ * `undefined` when it consumed nothing confidential.
+ *
+ * `entries` are the ones the observation consumed. They decide which
+ * locations are confidential, as they decide the confidentiality the
+ * observation contributes to the join. `evidence`, when given, is what a
+ * location's integrity is resolved over instead. A shallow read of a node
+ * observes a function of the value stored there — its presence and type,
+ * and for a container its keys or length — and the value-class stamp is the
+ * record of who wrote that value, while the shape class a shallow read
+ * consumes holds only existence stamps, which never carry integrity. The
+ * schema traversal through which compiled code reads its arguments makes one
+ * shallow read per node it visits, scalar leaves included, so without this
+ * no location of such a read would carry a witness.
+ */
 const observationInputWitnesses = (
   entries: readonly LabelMapEntry[],
   path: readonly string[],
   nonRecursive: boolean | undefined,
+  evidence?: readonly LabelMapEntry[],
 ): CfcAtom[] | undefined => {
   // A location's confidentiality comes only from these entries, so a read
   // none of them makes confidential has no confidential location.
@@ -718,33 +781,25 @@ const observationInputWitnesses = (
       locations.set(pathKey(entry.path), entry.path);
     }
   }
-  const root = witnessTrieNode();
-  for (const [ordinal, entry] of entries.entries()) {
-    const evidence = isRuntimeMintedTemplate(entry)
-      ? { ...entry, label: { confidentiality: entry.label.confidentiality } }
-      : entry;
-    let node = root;
-    for (const segment of entry.path) {
-      let child = node.children.get(segment);
-      if (child === undefined) {
-        child = witnessTrieNode();
-        node.children.set(segment, child);
-      }
-      node = child;
-    }
-    node.entries.push({ entry: evidence, ordinal });
-  }
+  const consumed = witnessTrie(entries, false);
+  const held = evidence === undefined
+    ? witnessTrie(entries, true)
+    : witnessTrie(evidence, true);
   let witnesses: CfcAtom[] | undefined;
   for (const location of locations.values()) {
-    const label = labelForEntriesAtPath(
-      entriesResolvingAtLocation(root, location),
+    const confidentiality = labelForEntriesAtPath(
+      entriesResolvingAtLocation(consumed, location),
       location,
-    );
-    if ((label?.confidentiality?.length ?? 0) === 0) continue;
-    const held = retainedInputWitnesses(label?.integrity);
+    )?.confidentiality;
+    if ((confidentiality?.length ?? 0) === 0) continue;
+    const integrity = labelForEntriesAtPath(
+      entriesResolvingAtLocation(held, location),
+      location,
+    )?.integrity;
+    const retained = retainedInputWitnesses(integrity);
     witnesses = witnesses === undefined
-      ? held
-      : meetInputWitnesses(witnesses, held);
+      ? retained
+      : meetInputWitnesses(witnesses, retained);
     // Nothing survives a meet with the empty set.
     if (witnesses.length === 0) return witnesses;
   }
@@ -2870,6 +2925,82 @@ const isPureLinkStructure = (value: unknown): boolean => {
   return false;
 };
 
+// Whether a primitive cell link sits anywhere in `value`, `value` included.
+const containsCellLink = (value: unknown): boolean => {
+  if (isPrimitiveCellLink(value)) return true;
+  if (Array.isArray(value)) return value.some(containsCellLink);
+  if (isWalkableObjectOrArray(value)) {
+    return Object.values(value).some(containsCellLink);
+  }
+  return false;
+};
+
+/**
+ * The destinations of this transaction's whole-value writes in one document
+ * that its flow stamp covers as if it had written them whole.
+ *
+ * `Cell.set` hands the diff a whole value, and the diff writes only the paths
+ * whose stored value differs. Where the destination already held a container
+ * — a `Default` the runtime's setup wrote, say — the stamp then lands on the
+ * changed members alone, and the container nodes keep whatever labeled them
+ * before, which records nobody as their writer. An input witness asks who
+ * wrote every confidential location a transformation read, container nodes
+ * included, so the endorsed writer's output would never carry its witness.
+ * After the write every position under the destination holds the value the
+ * writer supplied, so stamping the destination states what a whole write
+ * would.
+ *
+ * That holds only for plain data. A position holding a reference holds the
+ * pointer, and a pointer the diff found in place — a write redirect, which
+ * the diff writes through rather than over — is not one the writer supplied,
+ * so a destination with any reference beneath it is left to the per-path
+ * stamps. A destination is also taken only where
+ * - the transaction wrote beneath it, so a no-op write stamps nothing;
+ * - the join names the writer (`TransformedBy`), which is the one thing the
+ *   stamp adds over the per-path stamps; and
+ * - the join fits every ceiling declared at or beneath it, so the wider stamp
+ *   never measures a misfit the per-path stamps did not.
+ * Recording is the runtime's alone (`recordCfcAssertedValueRoot`).
+ */
+const assertedValueRootPaths = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  writtenPaths: readonly (readonly string[])[],
+  linkWritePaths: ReadonlySet<string>,
+  fitsCeilingsFrom: (root: readonly string[]) => boolean,
+): (readonly string[])[] => {
+  const key = targetKey(target);
+  const roots: (readonly string[])[] = [];
+  const seen = new Set<string>();
+  const { writeIdentity } = tx.getCfcState();
+  for (const { address, identity } of tx.getCfcState().assertedValueRoots) {
+    if (targetKey(address) !== key) continue;
+    // The stamp names the join's identity, so a root another identity wrote
+    // in the same transaction is not this writer's to claim.
+    if (
+      writeIdentity.multiple || identity === undefined ||
+      !deepEqual(identity, writeIdentity.identity)
+    ) continue;
+    const root = canonicalizeLogicalPath(address.path);
+    const rootKey = pathKey(root);
+    if (seen.has(rootKey)) continue;
+    seen.add(rootKey);
+    if (linkWritePaths.has(rootKey)) continue;
+    if (!writtenPaths.some((written) => isPrefix(root, written))) continue;
+    const value = tx.readValueOrThrow({ ...target, path: root }, {
+      meta: INTERNAL_VERIFIER_META,
+    });
+    if (value === undefined || containsCellLink(value)) continue;
+    if (!fitsCeilingsFrom(root)) continue;
+    roots.push(root);
+  }
+  return roots;
+};
+
 // Container nodes (arrays/records — including empty ones) inside a
 // pure-link-structure value. Their SHAPE — membership, key set, order,
 // length — is information the writing transaction computed (a filter's
@@ -3274,22 +3405,30 @@ const deriveFlowJoinImpl = (
         };
         metadataByDoc.set(key, document);
       }
-      let index = document.indexes.get(observation.shape);
-      if (index === undefined && document.metadata !== undefined) {
-        index = new ConsumedLabelIndex(
-          document.metadata.labelMap.entries.filter((entry) =>
-            readConsumesEntry(observation.shape, entry)
-          ),
-          {
-            canonicalPaths: true,
-            onQuery: (wildcard) =>
-              tx.noteCfcPreparationWork?.(
-                wildcard ? "overlapWildcardQueries" : "overlapConcreteQueries",
-              ),
-          },
-        );
-        document.indexes.set(observation.shape, index);
-      }
+      const indexFor = (
+        shape: ReadObservationShape,
+      ): ConsumedLabelIndex | undefined => {
+        let index = document.indexes.get(shape);
+        if (index === undefined && document.metadata !== undefined) {
+          index = new ConsumedLabelIndex(
+            document.metadata.labelMap.entries.filter((entry) =>
+              readConsumesEntry(shape, entry)
+            ),
+            {
+              canonicalPaths: true,
+              onQuery: (wildcard) =>
+                tx.noteCfcPreparationWork?.(
+                  wildcard
+                    ? "overlapWildcardQueries"
+                    : "overlapConcreteQueries",
+                ),
+            },
+          );
+          document.indexes.set(shape, index);
+        }
+        return index;
+      };
+      const index = indexFor(observation.shape);
       const ownedContainers = ownRestamps.get(key);
       // `*`-template consumption keeps the C0 §6.1 row-3/row-4 boundary the
       // probe channel already has, extended to PLAIN reads: resolution
@@ -3323,6 +3462,18 @@ const deriveFlowJoinImpl = (
       ]);
       let label = document.labels.get(labelKey);
       if (!document.labels.has(labelKey)) {
+        const exclusion = excludesTemplates
+          ? {
+            excludeEntry: (entry: LabelMapEntry) =>
+              ((observation.coveredByTrace || observation.machinery) &&
+                isRuntimeMintedTemplate({
+                  origin: entry.origin,
+                  path: canonicalizeLogicalPath(entry.path),
+                })) ||
+              (ownedContainers !== undefined &&
+                isReplacedMembershipEntry(entry, ownedContainers)),
+          }
+          : {};
         const entries = document.metadata === undefined
           ? undefined
           : consumedEntriesForRead(
@@ -3331,18 +3482,7 @@ const deriveFlowJoinImpl = (
             {
               nonRecursive: observation.nonRecursive,
               consumes: observation.shape,
-              ...(excludesTemplates
-                ? {
-                  excludeEntry: (entry: LabelMapEntry) =>
-                    ((observation.coveredByTrace || observation.machinery) &&
-                      isRuntimeMintedTemplate({
-                        origin: entry.origin,
-                        path: canonicalizeLogicalPath(entry.path),
-                      })) ||
-                    (ownedContainers !== undefined &&
-                      isReplacedMembershipEntry(entry, ownedContainers)),
-                }
-                : {}),
+              ...exclusion,
             },
             index,
           );
@@ -3364,6 +3504,24 @@ const deriveFlowJoinImpl = (
               entries,
               logicalPath,
               observation.nonRecursive,
+              // A shallow content read's locations are resolved over what a
+              // value read of them would consume; see
+              // `observationInputWitnesses`. A `followRef` observation keeps
+              // its own entries: the pointer at a slot is labeled by the
+              // link write that put it there, which carries no
+              // `TransformedBy`, so a reference still retains no witness.
+              observation.shape === "followRef"
+                ? undefined
+                : witnessEvidenceEntries(
+                  observation.shape === "value"
+                    ? entries
+                    : consumedEntriesForRead(
+                      document.metadata!,
+                      logicalPath,
+                      { nonRecursive: true, consumes: "value", ...exclusion },
+                      indexFor("value"),
+                    ),
+                ),
             ),
         );
       }
@@ -8644,6 +8802,49 @@ export function* prepareBoundaryCommitSteps(
     const currentLinkWritePaths = new Set(
       linkWriteInputs.map((input) => pathKey(input.target.path)),
     );
+    // Whole-value write destinations stamped as written
+    // (`assertedValueRootPaths`). They join the written prefixes here, so the
+    // per-value entries beneath them are replaced and the attribution of any
+    // stamp overlapping them is withdrawn, as for a write of the whole value.
+    // They are not written paths for the re-creation probe: the diff's own
+    // writes beneath them are, with the before-values that probe needs.
+    const assertedRoots = flowPersist && flowTransformedBy.length > 0 &&
+        flowWrittenPaths.length > 0
+      ? assertedValueRootPaths(
+        tx,
+        { space, id, scope },
+        flowWrittenPaths,
+        currentLinkWritePaths,
+        (root) => {
+          if (flowConfidentiality.length === 0) return true;
+          // The declared entries this write re-mints and those the document
+          // already stores: a ceiling beneath the root need not apply to any
+          // path this transaction wrote.
+          const declared = [
+            ...persistedLabelEntries,
+            ...(existing?.labelMap.entries ?? []),
+          ].filter((entry) =>
+            (entry.origin === undefined || entry.origin === "declared") &&
+            readConsumesEntry("value", entry)
+          );
+          const measured = [
+            root,
+            ...declared.map((entry) => canonicalizeLogicalPath(entry.path))
+              .filter((path) =>
+                path.length > root.length && isPrefix(root, path)
+              ),
+          ];
+          return measured.every((path) =>
+            atomsOutsideCeiling(flowConfidentiality, [
+              ...(labelForEntriesAtPath(declared, path)?.confidentiality ??
+                []) as readonly CfcConfClause[],
+              cfcAtom.space(space),
+            ]).length === 0
+          );
+        },
+      )
+      : [];
+    for (const root of assertedRoots) flowWrittenPrefixes.add(root);
     let flowCleared = false;
     let remintCleared = false;
     let linkCleared = false;
@@ -8832,8 +9033,19 @@ export function* prepareBoundaryCommitSteps(
           continue;
         }
       }
+      // A per-value stamp is not the declared component: a declared entry
+      // re-minted at its path leaves it to the flow-clear below, which drops
+      // it only under a path this transaction wrote. Dropping it here would
+      // take the `TransformedBy` of a value written whole at a member path
+      // whose schema declares a label, the first time any other member of
+      // the same document is written.
+      const perValueStamp =
+        (entry.origin === "derived" || entry.origin === "structure") &&
+        !isRuntimeMintedTemplate({ origin: entry.origin, path: entryPath });
       if (
-        persistedLabelEntryKeys.has(key) || remintedDeclaredPaths.has(key) ||
+        (!perValueStamp &&
+          (persistedLabelEntryKeys.has(key) ||
+            remintedDeclaredPaths.has(key))) ||
         currentLinkWritePaths.has(key)
       ) {
         if (
@@ -9362,6 +9574,17 @@ export function* prepareBoundaryCommitSteps(
             }
           }
         }
+      }
+      // Whole-value destinations stamp after the writer-fit measurement,
+      // which `assertedValueRootPaths` already answered for them.
+      // A destination the diff wrote empty first was classified by that
+      // write as pure link structure; its whole value is not, so it stamps
+      // here all the same, and the membership stamps beneath it give way.
+      const derivedStampKeys = new Set(derivedStampPaths.map(pathKey));
+      for (const root of assertedRoots) {
+        if (derivedStampKeys.has(pathKey(root))) continue;
+        derivedStampKeys.add(pathKey(root));
+        derivedStampPaths.push(root);
       }
       const derivedPrefixes = new PathPrefixIndex();
       for (const path of derivedStampPaths) derivedPrefixes.add(path);

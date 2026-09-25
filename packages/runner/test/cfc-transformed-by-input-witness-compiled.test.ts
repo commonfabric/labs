@@ -101,6 +101,23 @@ const FRESH = (() => {
   );
 })();
 
+// The rule guarded on the tally's identity alone. Every refused case below
+// releases under it, which is what shows that the witness, not some other
+// gate, is what refuses them.
+const WITNESS_GUARD = `
+      inputWitness: {
+        type: "https://commonfabric.org/cfc/atom/TransformedBy",
+        identity: {
+          kind: "verified",
+          moduleIdentity: THIS_POLICY.moduleIdentity,
+          symbol: "commit",
+        },
+      },`;
+const IDENTITY_ONLY = (() => {
+  expect(CHAIN_SOURCE).toContain(WITNESS_GUARD);
+  return program(CHAIN_SOURCE.replace(WITNESS_GUARD, ""));
+})();
+
 type Chain = {
   tally: string;
   roomTally: string;
@@ -172,6 +189,32 @@ describe("input-witnessed TransformedBy through compiled patterns", () => {
         await send("publishTally");
         expect((await read()).roomTally).toBe("1");
       });
+    });
+
+    it(`releases a relay, a planted vote, and a forged list under the identity alone over ${name}`, async () => {
+      const identityOnly = source === DEFAULTED ? IDENTITY_ONLY : program(
+        CHAIN_SOURCE.replace(WITNESS_GUARD, "").replace(
+          DEFAULTED_COMMITTED,
+          "committed: Writable<Sealed<Committed>>;",
+        ),
+      );
+      await runChain(
+        identityOnly,
+        `identity-only ${name}`,
+        async (send, read) => {
+          await send("submit", { vote: "approve" });
+          await send("submit", { vote: "reject" });
+          await send("commit");
+          await send("publishRelay");
+          expect((await read()).roomRelay).toBe("1");
+          await send("append");
+          await send("publishAppended");
+          expect((await read()).roomAppended).toBe("2");
+          await send("forge");
+          await send("publishForged");
+          expect((await read()).roomForged).toBe("2");
+        },
+      );
     });
 
     it(`refuses a relay, a planted vote, and a forged list over ${name}`, async () => {

@@ -31,6 +31,14 @@ writes back. Its rule names the projector by identity alone, so a member's own
 code can feed the projector a crafted box and learn another member's entry from
 the answers; the spec's limits say what closes that.
 
+`witnessed-chain.tsx` narrows the tally rule with an `inputWitness`: it releases
+the tally only when everything the tally read was written by the module's
+`commit` step. A relay between the two, a vote planted beside the committed
+ones, and a vote list written by other code are refused, though the tally's own
+identity would release each of them.
+`docs/specs/cfc-transformed-by-input-witnesses.md` says what the witness covers
+and what it does not.
+
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space
 as the policy subject and requires that exact manifest to be installed in the
@@ -57,4 +65,5 @@ deno task cf test packages/patterns/cfc-exchange-rules/direct-release.test.tsx
 deno task cf test packages/patterns/cfc-exchange-rules/blessed-computation.test.tsx
 deno task cf test packages/patterns/cfc-exchange-rules/blessed-object.test.tsx
 deno task cf test packages/patterns/cfc-exchange-rules/custody-projector.test.tsx
+deno task cf test packages/patterns/cfc-exchange-rules/witnessed-chain.test.tsx
 ```
