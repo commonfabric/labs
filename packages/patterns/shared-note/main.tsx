@@ -72,18 +72,29 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
     const recoveryText = computed(() => recovery.get() ?? "");
 
     const view = (
-      <cf-vstack gap="3" style={{ padding: "1rem", width: "100%" }}>
-        <cf-hstack gap="3" align="center" justify="between">
+      <cf-vstack
+        gap="3"
+        style={{ padding: "1rem", width: "100%", boxSizing: "border-box" }}
+      >
+        <cf-hstack
+          gap="3"
+          align="center"
+          justify="between"
+          wrap
+        >
           <cf-input
             $value={title}
             aria-label="Note title"
             placeholder="Untitled note"
-            style={{ flex: "1", minWidth: "0" }}
+            style={{ flex: "1 1 16rem", minWidth: "0" }}
           />
           {ifElse(
             hasProfile,
             <cf-profile-badge variant="chip" $profile={profile.result} />,
-            <div id="shared-note-profile-setup">
+            <div
+              id="shared-note-profile-setup"
+              style={{ minWidth: "0", maxWidth: "100%" }}
+            >
               <cf-text>Choose a Fabric profile to label your cursor.</cf-text>
               {profile[UI]}
             </div>,

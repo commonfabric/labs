@@ -137,6 +137,46 @@ async function createProfile(page: Page, name: string): Promise<void> {
   await waitForCondition(page, profileResolved, { args: [name] });
 }
 
+async function expectNoteFits(page: Page, width: number): Promise<void> {
+  const layout = await page.evaluate(() => {
+    const collect = (root: Document | ShadowRoot | Element): Element[] => {
+      const found: Element[] = [];
+      for (const element of root.querySelectorAll("*")) {
+        found.push(element);
+        if (element.shadowRoot) found.push(...collect(element.shadowRoot));
+      }
+      return found;
+    };
+    const elements = collect(document);
+    const editor = elements.find((element) =>
+      element.localName === "cf-code-editor"
+    );
+    const note = editor?.parentElement;
+    if (!note) throw new Error("Shared note is not mounted");
+    const bounds = note.getBoundingClientRect();
+    const controls = [
+      editor,
+      ...collect(note).filter((element) =>
+        element.matches("cf-input, cf-submit-input, input, cf-button")
+      ),
+    ];
+    return {
+      width: bounds.width,
+      overflowingControls: controls.flatMap((element) => {
+        if (!element) return [];
+        const rect = element.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return [];
+        return rect.left < bounds.left - 1 || rect.right > bounds.right + 1
+          ? [{ tag: element.localName, left: rect.left, right: rect.right }]
+          : [];
+      }),
+    };
+  });
+  expect(layout.width).toBeLessThanOrEqual(width);
+  expect(layout.width).toBeGreaterThan(0);
+  expect(layout.overflowingControls).toEqual([]);
+}
+
 describe("shared-note", () => {
   const adaShell = new ShellIntegration();
   const graceShell = new ShellIntegration();
@@ -202,10 +242,21 @@ describe("shared-note", () => {
       expect(await editorState(page)).toBe(MARKDOWN);
     }));
 
+    await adaPage.setViewportSize({ width: 360, height: 800 });
+    await waitForCondition(
+      adaPage,
+      (probe) =>
+        probe.collect("#wish-profile-name-input").some((element) =>
+          probe.isRendered(element)
+        ),
+    );
+    await expectNoteFits(adaPage, 360);
+
     await Promise.all([
       createProfile(adaPage, "Ada Lovelace"),
       createProfile(gracePage, "Grace Hopper"),
     ]);
+    await expectNoteFits(adaPage, 360);
     await fillCfInput(adaPage, TITLE_SELECTOR, "Friday team plan");
     await waitForCondition(gracePage, (probe, selector, expected) => {
       const input = probe.collect(selector)[0]?.shadowRoot
