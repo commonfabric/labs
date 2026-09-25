@@ -395,7 +395,10 @@ describe("reference-initialization", () => {
       },
     };
 
-    /** Initializes the owner's message with protected-default authorship. */
+    /**
+     * Initializes the owner's message with protected-default authorship, in
+     * a transaction attributed to the owner as a handler run of theirs is.
+     */
     async function initializeOwnersMessage(schema: JSONSchema = inboxSchema) {
       const seed = runtime.edit();
       runtime.getCell(space, "inbox", undefined, seed).set({ note: "saved" });
@@ -403,6 +406,7 @@ describe("reference-initialization", () => {
       expect((await seed.commit()).error).toBeUndefined();
 
       const first = runtime.edit();
+      first.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
       const inbox = runtime.getCell(space, "inbox", schema, first);
       recordNewProtectedDefaults(
         first,

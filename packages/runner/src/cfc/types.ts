@@ -981,6 +981,19 @@ export type CfcTxState = {
     identity?: ImplementationIdentity;
   };
   trustSnapshot?: TrustSnapshot;
+  // Whether a value the runtime initializes in this transaction — a
+  // constructed cell's seed, the reference exposing it, a new field's
+  // default, a pattern's setup projection — is attributed to the acting
+  // principal: true for the transaction of a handler run they invoked, for
+  // one that brings a piece into being outside any scheduled action on their
+  // behalf, and for a start or result pattern deferred from either; false
+  // otherwise. Preparation mints the integrity a schema adds about the
+  // current principal, and binds an owner, for an initialization only when
+  // this is true. Set only through the privileged
+  // `markCfcAttributedInitialization` (runtime authorization); once set it
+  // holds for the transaction, so a setup that must not be attributed runs
+  // in a transaction of its own.
+  attributedInitialization: boolean;
   // Attesting space -> transitive successor -> predecessor writer-authority
   // aliases, snapshotted from the Runtime when the transaction is created and
   // write-once pinned. Authorization consults only the target document's space.

@@ -1335,6 +1335,118 @@ const pathHoldsStagedReference = (
   );
 };
 
+/**
+ * Whether `path` lies at or under a value the runtime initialized on nobody's
+ * behalf, so that a claim its schema would add about the current principal —
+ * that the value represents or was authored by them — describes nothing the
+ * acting principal did.
+ *
+ * A value initialized in this transaction — a constructed cell's seed, the
+ * reference that exposes it, a new field's default, a cell a pattern's setup
+ * projects a result field to — is the pattern's default; the principal whose
+ * runtime constructed the cell chose nothing of it. The transaction of a
+ * handler run is the exception (`CfcTxState.attributedInitialization`): the
+ * principal invoked the handler, and what it initializes is theirs as any
+ * write of theirs is.
+ *
+ * A preserved runtime output and a replayed argument slot leave their path as
+ * it stands, in any transaction, and are nobody's act: the claim a stored
+ * label makes there is carried forward (`persistedLabelEntries`). A path the
+ * transaction does change at, a handler's write over a replayed slot among
+ * them, is no replay and is attributed as the transaction is.
+ */
+const pathHoldsUnattributedInitialization = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  const logicalPath = canonicalizeLogicalPath(path);
+  const covers = (address: {
+    space: MemorySpace;
+    id: string;
+    scope?: ReturnType<typeof normalizeCellScope>;
+    path: readonly string[];
+  }): boolean =>
+    address.space === target.space && address.id === target.id &&
+    normalizeCellScope(address.scope) === normalizeCellScope(target.scope) &&
+    concretePathHasPrefix(logicalPath, canonicalizeLogicalPath(address.path));
+  const inputs = tx.getCfcState().writePolicyInputs;
+  if (
+    !tx.getCfcState().attributedInitialization &&
+    inputs.some((input) => {
+      if (input.kind === "structural-provenance") {
+        // A setup projection names the result field it projects and the
+        // internal cell holding the field's value; both are the pattern's own
+        // initialization (`writeIsPatternSetupInitialization`).
+        return input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
+          [input.target, ...input.sources].some(covers);
+      }
+      return input.kind === "initialization" &&
+        (input.mode === "seed" || input.mode === "projection" ||
+          input.mode === "default") &&
+        tx.isRuntimeWritePolicyInput(input) && covers(input.target) &&
+        valueEqual(
+          tx.readValueOrThrow({
+            space: target.space,
+            id: target.id as URI,
+            scope: target.scope,
+            path: [...input.target.path],
+          }, { meta: INTERNAL_VERIFIER_META }),
+          input.value,
+        );
+    })
+  ) {
+    return true;
+  }
+  const unchangedTarget = { ...target, id: target.id as URI };
+  return inputs.some((input) =>
+    tx.isRuntimeWritePolicyInput(input) &&
+    ((input.kind === "preserved-output" && covers(input.target) &&
+      writePreservesRuntimeOutput(tx, unchangedTarget)) ||
+      (input.kind === "initialization" && input.mode === "replay" &&
+        covers(input.target) &&
+        writeLeavesPathUnchanged(tx, unchangedTarget, path)))
+  );
+};
+
+/**
+ * What a label derived from a schema mints for the acting principal.
+ * `mintSchemaIntegrity` false leaves out every integrity atom the schema adds;
+ * `attributeCurrentPrincipal` false leaves out only the atoms that name the
+ * current principal — the `represents-principal` and `authored-by` claims —
+ * and keeps the rest.
+ */
+type LabelMintOptions = {
+  mintSchemaIntegrity?: boolean;
+  attributeCurrentPrincipal?: boolean;
+};
+
+/**
+ * The mint options for the label persisted at `path`: no schema integrity
+ * over a reference the runtime staged, and no claim about the current
+ * principal over a value the runtime initialized on nobody's behalf.
+ */
+const labelMintOptionsAt = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): LabelMintOptions => ({
+  mintSchemaIntegrity: !pathHoldsStagedReference(tx, target, path),
+  attributeCurrentPrincipal: !pathHoldsUnattributedInitialization(
+    tx,
+    target,
+    path,
+  ),
+});
+
 /** A single runtime output attempt may preserve an existing root reference. */
 const writePreservesRuntimeOutput = (
   tx: IExtendedStorageTransaction,
@@ -5468,11 +5580,16 @@ const derivePersistedLabel = (
   schemaLabel: IFCLabel,
   sourceEntryLabels?: Map<string, IFCLabel>,
   owningSpace?: MemorySpace,
-  options: { mintSchemaIntegrity?: boolean } = {},
+  options: LabelMintOptions = {},
 ): IFCLabel => {
   const mintSchemaIntegrity = options.mintSchemaIntegrity ?? true;
   const ifc = isObjectOrArray(schema) ? schema.ifc : undefined;
-  const actingPrincipal = tx.getCfcState().trustSnapshot?.actingPrincipal;
+  // A claim the schema makes about the current principal resolves to the
+  // acting principal, or, where the value is one they are not attributed
+  // (`attributeCurrentPrincipal: false`), to nobody and is left out.
+  const actingPrincipal = options.attributeCurrentPrincipal === false
+    ? undefined
+    : tx.getCfcState().trustSnapshot?.actingPrincipal;
   const copiedInputLabel = sourceEntryLabels && exactCopySourcePath(schema)
     ? sourceEntryLabels.get(pathKey(exactCopySourcePath(schema)!))
     : undefined;
@@ -5769,7 +5886,7 @@ const persistedLabelFromSchemaAtPath = (
   schema: JSONSchema,
   path: readonly string[],
   owningSpace: MemorySpace,
-  options: { mintSchemaIntegrity?: boolean } = {},
+  options: LabelMintOptions = {},
 ): IFCLabel | undefined => {
   const logicalPath = canonicalizeLogicalPath(path);
   const entries = cfcSchemaEntries(schema);
@@ -5834,7 +5951,7 @@ const rootLabelFromSchema = (
   tx: IExtendedStorageTransaction,
   schema: JSONSchema | undefined,
   owningSpace: MemorySpace,
-  options: { mintSchemaIntegrity?: boolean } = {},
+  options: LabelMintOptions = {},
 ): IFCLabel => {
   if (schema === undefined) {
     return {};
@@ -5957,21 +6074,20 @@ const derivePersistedLinkLabel = (
       tx.getCfcState().trustSnapshot?.actingPrincipal,
     );
   }
-  // A source that is itself a reference staged in this transaction mints
-  // nothing for the principal staging it, as its own slot does not.
+  // A source that is itself a reference staged in this transaction, or a
+  // value initialized on nobody's behalf, mints nothing for the acting
+  // principal, as its own slot does not.
   let pendingSourceLabel = pendingSourceSchema !== undefined
     ? persistedLabelFromSchemaAtPath(
       tx,
       pendingSourceSchema,
       input.source.path,
       input.source.space,
-      {
-        mintSchemaIntegrity: !pathHoldsStagedReference(
-          tx,
-          input.source,
-          input.source.path,
-        ),
-      },
+      labelMintOptionsAt(
+        tx,
+        input.source,
+        input.source.path,
+      ),
     )
     : undefined;
   if (pendingSourceSchema === undefined && sourceMetadata === undefined) {
@@ -6000,19 +6116,18 @@ const derivePersistedLinkLabel = (
         );
         // A reference the runtime staged at the target is not the inline
         // value this derivation stands for, so it mints nothing for the
-        // principal staging it.
+        // principal staging it; nor does a value the runtime initialized
+        // there on nobody's behalf.
         pendingSourceLabel = persistedLabelFromSchemaAtPath(
           tx,
           pendingSourceSchema,
           input.target.path,
           input.target.space,
-          {
-            mintSchemaIntegrity: !pathHoldsStagedReference(
-              tx,
-              input.target,
-              input.target.path,
-            ),
-          },
+          labelMintOptionsAt(
+            tx,
+            input.target,
+            input.target.path,
+          ),
         );
       }
     }
@@ -6021,13 +6136,11 @@ const derivePersistedLinkLabel = (
     tx,
     input.linkSchema,
     input.source.space,
-    {
-      mintSchemaIntegrity: !pathHoldsStagedReference(
-        tx,
-        input.target,
-        input.target.path,
-      ),
-    },
+    labelMintOptionsAt(
+      tx,
+      input.target,
+      input.target.path,
+    ),
   );
   const hasCarriedLabel =
     input.cfcLabelView?.entries.some((entry) => hasLabelValues(entry.label)) ??
@@ -7542,13 +7655,11 @@ const verifyWriteFloor = (
         entry.label,
         entryLabels,
         target.space,
-        {
-          mintSchemaIntegrity: !pathHoldsStagedReference(
-            tx,
-            target,
-            entry.path,
-          ),
-        },
+        labelMintOptionsAt(
+          tx,
+          target,
+          entry.path,
+        ),
       ),
       ctx.identityForPath(entry.path),
     ).integrity ?? [];
@@ -8210,6 +8321,24 @@ export function* prepareBoundaryCommitSteps(
     // When an ingest target failed verification we keep the runtime's mark
     // (appended below) but drop the payload's declared policy label — a
     // non-rejecting commit must not store claims that didn't verify.
+    // A value initialized on nobody's behalf (`labelMintOptionsAt`) leaves
+    // the claim the stored label makes at its path about a principal: the
+    // claim is carried forward as it stands, so a replayed setup or a
+    // preserved output changes no attribution, and a source update by another
+    // principal strips none.
+    const existingPrincipalClaims = new Map<string, readonly CfcAtom[]>();
+    for (const e of existing?.labelMap.entries ?? []) {
+      if (e.origin !== "declared" && e.origin !== undefined) continue;
+      const claims = (e.label.integrity ?? []).filter((atom) =>
+        isCurrentPrincipalClaimAtom(atom) && typeof atom.subject === "string"
+      );
+      if (claims.length > 0) {
+        existingPrincipalClaims.set(
+          pathKey(canonicalizeLogicalPath(e.path)),
+          claims as readonly CfcAtom[],
+        );
+      }
+    }
     const remintedDeclaredPaths = new Map<string, readonly string[]>();
     const persistedLabelEntries: LabelMapEntry[] = ingestVerificationFailed
       ? []
@@ -8237,6 +8366,7 @@ export function* prepareBoundaryCommitSteps(
           ) {
             remintedDeclaredPaths.set(pathKey(entry.path), entry.path);
           }
+          const mint = labelMintOptionsAt(tx, target, entry.path);
           const derived = gateRuntimeMintedIntegrity(
             derivePersistedLabel(
               tx,
@@ -8244,16 +8374,15 @@ export function* prepareBoundaryCommitSteps(
               entry.label,
               mergedSchemaEntryLabels,
               target.space,
-              {
-                mintSchemaIntegrity: !pathHoldsStagedReference(
-                  tx,
-                  target,
-                  entry.path,
-                ),
-              },
+              mint,
             ),
             identityForSchemaPath(writeAuthorIdentities.get(key), entry.path),
           );
+          const carriedClaims = mint.attributeCurrentPrincipal === false
+            ? existingPrincipalClaims.get(
+              pathKey(canonicalizeLogicalPath(entry.path)),
+            )
+            : undefined;
           // Store confidentiality is grow-only (§8.12.1): a re-write of a path must
           // not drop confidentiality the labelMap already carried beyond the schema
           // (e.g. link-derived or carried-view atoms). Reads use longest-prefix
@@ -8264,12 +8393,22 @@ export function* prepareBoundaryCommitSteps(
           const prior = existingConfidentiality
             .filter((e) => isPrefix(e.path, entry.path))
             .flatMap((e) => e.confidentiality);
-          const label = prior.length > 0
-            ? {
-              ...derived,
-              confidentiality: mergeLabelValues(derived.confidentiality, prior),
-            }
-            : derived;
+          const label = {
+            ...derived,
+            ...(prior.length > 0
+              ? {
+                confidentiality: mergeLabelValues(
+                  derived.confidentiality,
+                  prior,
+                ),
+              }
+              : {}),
+            ...(carriedClaims !== undefined
+              ? {
+                integrity: mergeLabelValues(derived.integrity, carriedClaims),
+              }
+              : {}),
+          };
           // C5: an authored `ifc.observes` classes the declared entry (the
           // sqlite null-origin merge declares `observes:"value"` this way).
           // Anything but the four class values — including the absent
