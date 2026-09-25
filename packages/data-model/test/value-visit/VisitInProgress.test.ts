@@ -266,7 +266,7 @@ describe("VisitInProgress", () => {
       describe("`mainResult` results", () => {
         it("ends the visit from `visitedFabricArrayElement()`, skipping later elements", () => {
           const rec = new Recorder();
-          rec.onVisitedElement = (i) =>
+          rec.onVisitedFabricArrayElement = (i) =>
             (i === 1) ? mainResult("at 1") : undefined;
           const array = [10, 20, 30];
 
@@ -280,7 +280,7 @@ describe("VisitInProgress", () => {
 
         it("ends the visit from `visitedFabricPlainObjectEntry()`, skipping later mappings", () => {
           const rec = new Recorder();
-          rec.onVisitedMapping = () => mainResult("first");
+          rec.visitedFabricPlainObjectEntry = () => mainResult("first");
           const object = { a: 1, b: 2 };
 
           expect(visit(object, rec)).toBe("first");
@@ -314,9 +314,9 @@ describe("VisitInProgress", () => {
           expect(rec.names).not.toContain("visitedElement");
         });
 
-        it("ends the visit from `visitedFabricArrayGap()`, for a gap at the end", () => {
+        it("ends the visit from `visitingFabricArrayGap()`, for a gap at the end", () => {
           const rec = new Recorder();
-          rec.onVisitedGap = () => mainResult("gap");
+          rec.onVisitingFabricArrayGap = () => mainResult("gap");
 
           // deno-lint-ignore no-sparse-arrays
           expect(visit([[1, ,], 2], rec)).toBe("gap");
@@ -546,7 +546,7 @@ describe("VisitInProgress", () => {
 
         it("ends the visit from `visitedFabricInstanceState()`", () => {
           const rec = new Recorder();
-          rec.onVisitedInstance = () => mainResult("after");
+          rec.onVisitedFabricInstanceState = () => mainResult("after");
           const link = new FabricLink({ id: "fid1:abc" });
 
           expect(visit([link, 1], rec)).toBe("after");
