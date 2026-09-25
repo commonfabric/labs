@@ -272,5 +272,62 @@ Deno.test("model spend: no keys at all -> gray, naming the keys to set", async (
   const v = await modelSpend.collect(ctx({}));
   assertEquals(v.status, "unknown");
   assertEquals(v.value, "—");
-  assertEquals(v.sub, "set OPENAI_ADMIN_KEY / ANTHROPIC_ADMIN_KEY / OPENROUTER_KEY");
+  assertEquals(v.sub, "set OPENAI_ADMIN_KEY / ANTHROPIC_FEDERATION_RULE_ID / OPENROUTER_KEY");
+});
+
+// In-cluster, Anthropic is read with a federated token: the metadata server
+// signs an identity token, Anthropic exchanges it, and the cost report is read
+// with the result as a bearer token. A stray Admin key must not be used.
+const FEDERATION = {
+  ANTHROPIC_FEDERATION_RULE_ID: "fdrl_x",
+  ANTHROPIC_ORGANIZATION_ID: "org-uuid",
+  ANTHROPIC_SERVICE_ACCOUNT_ID: "svac_x",
+};
+
+Deno.test("model spend: Anthropic federation exchanges an identity token and reads with the bearer token", async () => {
+  const costHeads: Record<string, string>[] = [];
+  let exchanges = 0;
+  await withFetch(
+    {
+      "metadata.google.internal": () => new Response("google-jwt"),
+      "api.anthropic.com": (url, init) => {
+        if (url.pathname === "/v1/oauth/token") {
+          exchanges++;
+          return json({ access_token: "sk-ant-oat01-fed", token_type: "Bearer", expires_in: 600 });
+        }
+        costHeads.push(authOf(init));
+        return anthropicPaged(url, init);
+      },
+    },
+    async () => {
+      const v = await modelSpend.collect(ctx({ ...FEDERATION, ANTHROPIC_ADMIN_KEY: "stray" }));
+      assertEquals(v.status, "good");
+      assertEquals(v.aside, `<span class="hfacet" title="$${2 * DOM} MTD">$${2 * DOM} MTD</span>`);
+      // One exchange serves every page of the report.
+      assertEquals(exchanges, 1);
+      assertEquals(costHeads.length, 2);
+      for (const h of costHeads) {
+        assertEquals(h.authorization, "Bearer sk-ant-oat01-fed");
+        assertEquals(h["anthropic-version"], "2023-06-01");
+        assertEquals(h["x-api-key"], undefined);
+      }
+    },
+  );
+});
+
+Deno.test("model spend: a denied Anthropic exchange grays the tile instead of reading as $0", async () => {
+  await withFetch(
+    {
+      "metadata.google.internal": () => new Response("google-jwt"),
+      "api.anthropic.com": (url) =>
+        url.pathname === "/v1/oauth/token"
+          ? new Response(JSON.stringify({ type: "error" }), { status: 401 })
+          : json({ data: [] }),
+    },
+    async () => {
+      const v = await modelSpend.collect(ctx(FEDERATION));
+      assertEquals(v.status, "unknown");
+      assertEquals(v.sub, "model spend unavailable");
+    },
+  );
 });

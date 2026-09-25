@@ -368,7 +368,7 @@ to the next; a view supplies everything under it.
 | all benchmarks | a scale-invariant index of benchmark performance on `benchmarks.yml` main runs, trended over ~45 days (each run vs the last, geometric mean of per-benchmark changes, so every benchmark weighs the same, divided by the same run's machine calibration so a busy host does not read as a code change): red when the most recent run failed or produced no valid data (the main signal), with a `failed (was <trend>)` headline when cached measurements are available and `failed` otherwise; orange only on a broad across-the-board rise from a CPU measured in the preceding twelve hours. Adding or removing a benchmark is a non-event. Drills through to the per-benchmark history | `GH_TOKEN` |
 | key benchmarks | the same index and status rules as all benchmarks, restricted to `topic board/journey` and `topic board scale/100`. Machine calibration still uses the run's calibration measurements. Counts and data availability refer to the selected benchmarks. Opens the per-benchmark history with "key only" checked | `GH_TOKEN` |
 | performance history → `/bench?view=runtime` | runtime benchmark trends, labs or loom CI duration history, and a detailed CI run Gantt. Historical views support windows from 1 through 45 days, date axes, and duration sorting. CI includes end-to-end workflow time, every job, and slowest-shard group lines | `GH_TOKEN` |
-| model spend | OpenAI + Anthropic + OpenRouter usage APIs. Headline is the projected full-month spend (extrapolated from the recent daily rate, spilling into last month when this month is under two weeks old), summed across providers. OpenAI and Anthropic (which expose per-day cost) are charted as one line each over ~45 days, with a recent daily-rate slice highlighted and each line's MTD in the right gutter; OpenRouter (monthly total only, abbreviated "OR") is folded into the totals. The subtitle is the bullet-separated key (`OpenAI • Anthropic • OR $0`); the combined MTD sits in the header (the `aside` slot); the span the chart covers is in its bottom-left corner (the `duration` slot). A provider we can't read shows `$???` and drops the tile to gray, but the rest still chart and total; a provider whose cost report stopped being written more than four days ago is one of those | any of `OPENAI_ADMIN_KEY`, `ANTHROPIC_ADMIN_KEY`, `OPENROUTER_KEY`; optional `MODEL_MONTHLY_BUDGET` |
+| model spend | OpenAI + Anthropic + OpenRouter usage APIs. Headline is the projected full-month spend (extrapolated from the recent daily rate, spilling into last month when this month is under two weeks old), summed across providers. OpenAI and Anthropic (which expose per-day cost) are charted as one line each over ~45 days, with a recent daily-rate slice highlighted and each line's MTD in the right gutter; OpenRouter (monthly total only, abbreviated "OR") is folded into the totals. The subtitle is the bullet-separated key (`OpenAI • Anthropic • OR $0`); the combined MTD sits in the header (the `aside` slot); the span the chart covers is in its bottom-left corner (the `duration` slot). A provider we can't read shows `$???` and drops the tile to gray, but the rest still chart and total; a provider whose cost report stopped being written more than four days ago is one of those | any of `OPENAI_ADMIN_KEY`, the `ANTHROPIC_FEDERATION_*` settings (or `ANTHROPIC_ADMIN_KEY` locally), `OPENROUTER_KEY`; optional `MODEL_MONTHLY_BUDGET` |
 | discord online | Discord gateway presence, team vs visitors over time | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` (Server Members + Presence intents) |
 | dau | distinct identities active per UTC day on one named service, counted from the `user.did` attribute on the `memory.transact` and `memory.subscriber.sync` spans in SigNoz. The headline is the last day that ran to the end (today is still filling, and a part-day always reads as a drop); the sparkline is the retained history. Gray while the named service has no such spans — which is the resting state until a deployment's tracing is switched on. It counts keypairs rather than people; see [dau](#dau) below | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `DAU_EXCLUDE_DIDS`, `SIGNOZ_UI_URL` |
 | github users | organization members plus outside collaborators, with each roster's size charted over about two months. The headline counts unique users across both rosters | `GH_TOKEN` (with org Members read) |
@@ -771,76 +771,86 @@ on the costs endpoint.
 3. Copy it (`sk-admin-…`, distinct from `sk-proj-…`, shown once). Treat it like a
    root credential — it grants full org management.
 
-### `ANTHROPIC_ADMIN_KEY`
+### Anthropic: `ANTHROPIC_FEDERATION_*`, or `ANTHROPIC_ADMIN_KEY` locally
 
-Powers the Anthropic share of **model spend**. Needs an **Admin** key
-(`sk-ant-admin01-…`), created by an org admin/owner; a normal API key is rejected
-by the cost-report endpoint. Console admin keys have no selectable scopes — they
-carry full Admin API access, so guard one like a root credential.
+Powers the Anthropic share of **model spend**, which reads the organization
+cost report from the Admin API. In the cluster the dashboard holds no Anthropic
+credential. It uses Workload Identity Federation: the GKE metadata server signs
+a Google identity token for the pod's service account, and Anthropic exchanges
+it for a bearer token that expires in minutes
+([anthropic-auth.ts](./anthropic-auth.ts)). A copy of that token taken out of
+the pod stops working when it expires, and a new one can only be minted as the
+dashboard's Google service account.
 
-1. Open [Claude Console → Settings → Admin keys](https://platform.claude.com/settings/admin-keys).
-   You must be an organization admin.
+The Admin API has no read-only scope. The federated token carries `org:admin`,
+the same reach as an Admin key, for as long as it lives. Federation limits
+where the credential comes from and how long it lasts, not what it can do.
+Anyone who can mint a Google identity token as the dashboard's service account
+can also get one. That covers the pod itself, and any project member who can
+act as the account: owners, and holders of a project-wide Service Account User
+role, who can attach it to a VM and ask that VM's metadata server.
 
-2. Click **Create key**, name it `dashboard-reader`, and choose an expiration.
-   The key must begin with `sk-ant-admin01-`. Copy it immediately; Anthropic
-   shows it only once.
-   [Anthropic instructions](https://platform.claude.com/docs/en/manage-claude/admin-api-keys)
+The pod reads these settings, which are identifiers, not secrets:
 
-   The dashboard does not rotate this key automatically. A longer lifetime
-   reduces how often an operator must replace the secret and restart the
-   dashboard. Record the expiration and replace the key before that date.
+| env var | value |
+|---|---|
+| `ANTHROPIC_FEDERATION_RULE_ID` | the federation rule, `fdrl_…` |
+| `ANTHROPIC_ORGANIZATION_ID` | the organization UUID, from **Settings → Organization** |
+| `ANTHROPIC_SERVICE_ACCOUNT_ID` | the rule's target service account, `svac_…` |
+| `ANTHROPIC_WORKSPACE_ID` | optional; only when the rule is enabled in more than one workspace |
 
-3. Store it without putting it in shell history:
+When all three required settings are present, federation is used even if
+`ANTHROPIC_ADMIN_KEY` is also set, so a leftover key cannot mask a broken
+federation setup. A failed exchange shows `Anthropic $???` and grays the tile.
 
-   ```zsh
-   read -s "new_anthropic_key?Paste the new key: "
-   echo
-   if [[ "$new_anthropic_key" != sk-ant-admin01-* ]]; then
-     echo "The key must begin with sk-ant-admin01-." >&2
-   else
-     printf %s "$new_anthropic_key" |
-       gcloud secrets versions add \
-         k8s-stage-dashboard-anthropic-admin-key \
-         --project=commontools-core \
-         --data-file=-
-   fi
-   unset new_anthropic_key
-   ```
+To set it up, an organization admin creates the rule in the Claude Console.
+Anthropic allows `org:admin` rules to be created only there, not through the
+API. [Anthropic instructions](https://platform.claude.com/docs/en/manage-claude/wif-providers/gcp)
 
-4. Confirm that `kubectl` addresses the stage cluster:
-
-   ```zsh
-   kubectl config current-context
-   ```
-
-   It must print
-   `gke_commontools-core_us-central1_gke-cluster-stage`. Then force the
-   Kubernetes secret to refresh:
+1. Look up the numeric unique ID of the dashboard's Google service account:
 
    ```zsh
-   kubectl annotate externalsecret dev-dashboard-anthropic \
-     -n dev-dashboard \
-     force-sync="$(date +%s)" \
-     --overwrite
+   gcloud iam service-accounts describe \
+     dev-dashboard-stage@commontools-core.iam.gserviceaccount.com \
+     --project=commontools-core \
+     --format='value(uniqueId)'
    ```
 
-5. Watch the ExternalSecret and wait for its `REFRESHED` timestamp to change.
-   Stop the watch with Control-C after it reports `READY` as `True`:
+2. Open [Claude Console → Settings → Workload identity](https://platform.claude.com/settings/workload-identity-federation),
+   select **Connect workload**, and choose **Google Cloud**. Enter:
+   - issuer URL `https://accounts.google.com`, with JWKS discovery
+   - audience `https://api.anthropic.com`
+   - claim `sub` equal to the unique ID from step 1
+   - claim `email` equal to `dev-dashboard-stage@commontools-core.iam.gserviceaccount.com`
+   - names such as `dev-dashboard-stage` for the service account and rule
+   - under **Advanced rule options**, OAuth scope `org:admin`, which makes the
+     new service account an Admin
+   - token lifetime `600` seconds
 
-   ```zsh
-   kubectl get externalsecret dev-dashboard-anthropic \
-     -n dev-dashboard \
-     --watch \
-     -o 'custom-columns=REFRESHED:.status.refreshTime,READY:.status.conditions[0].status'
-   ```
+   Do not use a subject prefix. Google subjects have no stable prefix, so a
+   wildcard would admit service accounts in other projects.
 
-6. Restart the dashboard so its environment reloads, then wait for the rollout
-   to finish:
+3. Copy the rule ID, the service account ID, and the organization ID into the
+   stage overlay's `dev-dashboard-anthropic-wif` ConfigMap in the infra
+   repository, land that change, and deploy it.
 
-   ```zsh
-   kubectl rollout restart deployment/dev-dashboard -n dev-dashboard
-   kubectl rollout status deployment/dev-dashboard -n dev-dashboard
-   ```
+4. The wizard waits 15 minutes for a successful exchange. The tile exchanges on
+   its first collection after the pod starts. If the wizard window has passed,
+   re-run the test from the rule's page, or check the
+   [authentication history](https://platform.claude.com/settings/workload-identity-federation?tab=history)
+   for the denial reason. Every denial is the same opaque 401 from the API.
+
+5. Once the tile reads Anthropic again, delete any old `dashboard-reader`
+   Admin key under **Settings → Admin keys**. The infra repository's
+   dashboard deploy removes the key's in-cluster copy, and dropping its Secret
+   Manager container from OpenTofu removes the stored copy.
+
+To revoke the dashboard's access, archive the rule in the Console.
+
+For local development, set `ANTHROPIC_ADMIN_KEY` to an Admin key
+(`sk-ant-admin01-…`) from **Settings → Admin keys** instead. It is sent as
+`x-api-key`. Give it a short expiration and delete it when you are done,
+because it carries full Admin API access.
 
 ### `OPENROUTER_KEY`
 
