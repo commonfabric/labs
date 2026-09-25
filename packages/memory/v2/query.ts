@@ -1071,6 +1071,18 @@ const schemaRefScanCaches = new WeakMap<
   Map<QueryDocKey, { seq: number; refs: ReadonlySet<string> }>
 >();
 
+/** This engine's cache of schema-ref scans, created on first use. */
+const schemaRefScanCacheFor = (
+  engine: Engine.Engine,
+): Map<QueryDocKey, { seq: number; refs: ReadonlySet<string> }> => {
+  let cache = schemaRefScanCaches.get(engine);
+  if (cache === undefined) {
+    cache = new Map();
+    schemaRefScanCaches.set(engine, cache);
+  }
+  return cache;
+};
+
 // Per-version record of schema documents that verified in this engine's
 // store (`docKey -> seq`), so a document another evaluation already
 // verified costs a read but no re-hash. A version change drops the entry's
@@ -1115,14 +1127,8 @@ const scanSnapshotSchemaRefs = (
   if (own !== undefined && own.seq === snapshot.seq) {
     return own.refs;
   }
-  const cacheable = (snapshot.scope ?? DEFAULT_SCOPE) === DEFAULT_SCOPE;
-  let cache = schemaRefScanCaches.get(engine);
-  if (cache === undefined) {
-    cache = new Map();
-    schemaRefScanCaches.set(engine, cache);
-  }
-  if (cacheable) {
-    const cached = cache.get(key);
+  if ((snapshot.scope ?? DEFAULT_SCOPE) === DEFAULT_SCOPE) {
+    const cached = schemaRefScanCacheFor(engine).get(key);
     if (cached !== undefined && cached.seq === snapshot.seq) {
       recordSchemaRefScan(engine, key, snapshot, cached.refs, scans);
       return cached.refs;
@@ -1187,11 +1193,7 @@ const recordSchemaRefScan = (
   const entry = { seq: snapshot.seq, refs };
   scans.set(key, entry);
   if ((snapshot.scope ?? DEFAULT_SCOPE) !== DEFAULT_SCOPE) return;
-  let cache = schemaRefScanCaches.get(engine);
-  if (cache === undefined) {
-    cache = new Map();
-    schemaRefScanCaches.set(engine, cache);
-  }
+  const cache = schemaRefScanCacheFor(engine);
   if (cache.size >= SCHEMA_REF_SCAN_CACHE_MAX_ENTRIES) cache.clear();
   cache.set(key, entry);
 };

@@ -1,12 +1,15 @@
 /**
- * A push refresh of a tracked graph after a commit to a document that
- * carries no schema reference, for a session already delivered 10, 100, or
- * 1,000 schema documents. The graph tracks a carrier whose links reference
- * every schema document and a tally document; each sample commits a new
- * tally, untimed, and times `refreshTrackedGraph()` over that one dirty
- * document. What the refresh costs beyond the tally's own re-walk is the
- * schema-closure pass, so a pass that re-reads the established closure
- * grows with the schema count and one that stops at it does not.
+ * A push refresh of a tracked graph after a commit to a document whose link
+ * schema references a schema document the session already holds, for a
+ * session already delivered 10, 100, or 1,000 schema documents. The graph
+ * tracks a carrier whose links reference every schema document and a tally
+ * document whose one link references the first of them; each sample commits
+ * a new tally, untimed, and times `refreshTrackedGraph()` over that one
+ * dirty document. The tally's schema reference is a root of the refresh's
+ * schema-closure walk, which stops at the established schema document, so
+ * what the refresh costs beyond the tally's own re-walk is the closure
+ * pass: one that re-reads the established closure grows with the schema
+ * count and one that stops at it does not.
  *
  * Fixture construction, the commit, and the result check are outside the
  * timed interval. The documents one refresh reads are written to stderr
@@ -39,9 +42,30 @@ interface Fixture {
   path: string;
   state: TrackedGraphState;
   localSeq: number;
+
+  /** The hash of the schema document the tally's link references. */
+  tallySchemaHash: string;
 }
 
 const fixtures: Fixture[] = [];
+
+/** A link whose schema references the schema document `hash` names. */
+function linkWithSchemaRef(hash: string): FabricValue {
+  return {
+    "/": {
+      "link@1": {
+        id: "of:refresh-closure-bench-target",
+        path: [],
+        schema: { $ref: `cid:${hash}` },
+      },
+    },
+  };
+}
+
+/** The tally's value at `votes`: a count, and a link carrying a schema ref. */
+function tallyValue(votes: number, schemaHash: string): FabricValue {
+  return { votes, link: linkWithSchemaRef(schemaHash) };
+}
 
 /** Commits the next tally value, so the next refresh has a change to see. */
 function commitTally(fixture: Fixture): void {
@@ -55,7 +79,9 @@ function commitTally(fixture: Fixture): void {
       operations: [{
         op: "set",
         id: TALLY,
-        value: { value: { votes: fixture.localSeq } },
+        value: {
+          value: tallyValue(fixture.localSeq, fixture.tallySchemaHash),
+        },
       }],
     },
   });
@@ -84,26 +110,21 @@ async function createFixture(schemaCount: number): Promise<Fixture> {
   const operations: Parameters<typeof applyCommit>[1]["commit"]["operations"] =
     [];
   const links: Record<string, FabricValue> = {};
+  const hashes: string[] = [];
   for (let index = 0; index < schemaCount; index++) {
     const schema = {
       type: "string",
       title: `refresh-closure-${index}`,
     } as const;
     const hash = internSchemaAsTaggedHashString(schema);
+    hashes.push(hash);
     operations.push({ op: "set", id: `cid:${hash}`, value: { value: schema } });
-    links[`field${index}`] = {
-      "/": {
-        "link@1": {
-          id: "of:refresh-closure-bench-target",
-          path: [],
-          schema: { $ref: `cid:${hash}` },
-        },
-      },
-    };
+    links[`field${index}`] = linkWithSchemaRef(hash);
   }
+  const tallySchemaHash = hashes[0];
   operations.push(
     { op: "set", id: CARRIER, value: { value: links } },
-    { op: "set", id: TALLY, value: { value: { votes: 0 } } },
+    { op: "set", id: TALLY, value: { value: tallyValue(0, tallySchemaHash) } },
   );
   applyCommit(engine, {
     sessionId: IDENTITY.sessionId,
@@ -129,7 +150,14 @@ async function createFixture(schemaCount: number): Promise<Fixture> {
         `${state.entities.size}`,
     );
   }
-  const fixture = { schemaCount, engine, path, state, localSeq: 1 };
+  const fixture = {
+    schemaCount,
+    engine,
+    path,
+    state,
+    localSeq: 1,
+    tallySchemaHash,
+  };
   commitTally(fixture);
   console.error(
     `refresh-schema-closure: ${schemaCount} schema documents, ` +
@@ -158,7 +186,8 @@ globalThis.addEventListener("unload", () => {
 for (const fixture of fixtures) {
   Deno.bench({
     name: `${fixture.schemaCount} schema documents`,
-    group: "refreshTrackedGraph after an unrelated commit",
+    group:
+      "refreshTrackedGraph after a commit referencing an established schema",
     baseline: fixture.schemaCount === 10,
     fn(b) {
       commitTally(fixture);
