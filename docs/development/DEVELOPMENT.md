@@ -675,12 +675,12 @@ using them is not optional in code that can reach a stored value:
   `FabricValue` without being known to be one — a schema `const` against a
   stored value, a schema default against a materialized one, a write against
   the value it replaces, a request against the snapshot a policy was checked
-  over. Its operands are values, never query-result views, at any depth: a
-  caller holding a view compares the stored value the view reads (a cell's
-  `getRaw()`), or a detached copy of it (`snapshotQueryResult()`). The copy
-  keeps everything but a `FabricInstance` read through the view, which it
-  copies as an empty record, so a value that may hold one is compared as
-  stored. It is a
+  over. Its operands are values, never query-result views, at any depth. A
+  caller whose operands may hold views compares them with the runner's
+  `fabricAwareEqualThroughViews()`, which walks the views and hands the value
+  model only the special objects stored where they read, or compares stored
+  values (a cell's `getRaw()`). `snapshotQueryResult()` is no substitute: it
+  copies a `FabricInstance` read through a view as an empty record. It is a
   structural walk that decides every `FabricSpecialObject` it
   reaches by content rather than by properties: two of one class go to
   `valueEqual()`, and a pair whose classes differ, or with a special object on

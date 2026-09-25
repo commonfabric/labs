@@ -30,8 +30,8 @@ import { valueEqual } from "./valueEqual.ts";
  * throws. And a view resolves links as it is read, so a walk over one reads
  * into every document the stored value links to, and walks a document those
  * links share once for each path to it. `data-model` sits below whatever built
- * the view and cannot recognize or unwrap one, so the caller compares the
- * stored value the view reads, or a copy detached from it.
+ * the view and cannot recognize or unwrap one, so the caller hands over the
+ * stored values a view reads instead.
  *
  * So the walk is the frame, and the model decides the values only it can
  * decide. A special object is one of those, whatever it sits inside: two of
