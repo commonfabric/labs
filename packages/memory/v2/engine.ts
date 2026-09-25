@@ -1063,7 +1063,7 @@ export type Engine = {
    * table. A name with no row is never recorded, so the map is bounded by
    * the branches that exist rather than by the names readers ask for.
    */
-  branchStates: Map<BranchName, BranchState>;
+  branchStates: Map<BranchName, Readonly<BranchState>>;
 };
 
 /** The first stale confirmed read of an entity on a branch in a declared scope. */
@@ -7436,9 +7436,12 @@ const readRowForBranch = (
 /**
  * Returns the `branch` row for `branch`, or `null` when there is none, from
  * {@link Engine.branchStates} when it holds the row. The state returned may
- * be the one the engine holds, so a caller does not change it.
+ * be the one the engine holds, which is why it is read-only.
  */
-const getBranch = (engine: Engine, branch: BranchName): BranchState | null => {
+const getBranch = (
+  engine: Engine,
+  branch: BranchName,
+): Readonly<BranchState> | null => {
   const known = engine.branchStates.get(branch);
   if (known !== undefined) {
     return known;
@@ -7459,7 +7462,10 @@ const getBranch = (engine: Engine, branch: BranchName): BranchState | null => {
 };
 
 /** Like {@link getBranch}, except that a branch with no row throws. */
-const requireBranch = (engine: Engine, branch: BranchName): BranchState => {
+const requireBranch = (
+  engine: Engine,
+  branch: BranchName,
+): Readonly<BranchState> => {
   const state = getBranch(engine, branch);
   if (state === null) {
     throw new Error(`unknown branch: ${branch}`);

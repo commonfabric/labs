@@ -162,6 +162,29 @@ describe("engine", () => {
         "unknown branch: fork",
       );
     });
+
+    it("keeps an outer transaction's branch when a savepoint inside it rolls back", () => {
+      setValue("parent");
+
+      engine.database.transaction(() => {
+        createBranch(engine, "kept");
+        expect(() =>
+          engine.database.transaction(() => {
+            createBranch(engine, "dropped");
+            expect(valueAt({ branch: "dropped" })).toBe("parent");
+            throw new Error("abandon the savepoint");
+          })()
+        ).toThrow("abandon the savepoint");
+        expect(() => valueAt({ branch: "dropped" })).toThrow(
+          "unknown branch: dropped",
+        );
+      })();
+
+      expect(valueAt({ branch: "kept" })).toBe("parent");
+      expect(() => valueAt({ branch: "dropped" })).toThrow(
+        "unknown branch: dropped",
+      );
+    });
   });
 
   describe("deleteBranch()", () => {
