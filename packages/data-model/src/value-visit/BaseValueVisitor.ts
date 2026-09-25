@@ -56,7 +56,7 @@ export abstract class BaseValueVisitor<
   /** @inheritDoc */
   abstract visitedFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<PlusType>,
-    key: FabricValuePlus<PlusType>,
+    key: string,
     value: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType>;
 

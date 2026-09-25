@@ -279,7 +279,7 @@ export interface ValueVisitor<
    */
   visitedFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<PlusType>,
-    key: FabricValuePlus<PlusType>,
+    key: string,
     value: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType>;
 }

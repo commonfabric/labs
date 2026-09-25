@@ -461,7 +461,7 @@ export abstract class DefaultValueVisitor<
    */
   override visitedFabricPlainObjectEntry(
     _container: FabricPlainObjectPlus<PlusType>,
-    _key: FabricValuePlus<PlusType>,
+    _key: string,
     _value: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType> {
     return undefined;
