@@ -1955,17 +1955,19 @@ adjustments:
   for its type would, every part a pass keeps is read by its type, and no pass
   builds a node from a piece of a print
   (`test/printed-type-node-schema.test.ts`). A scoped cell
-  (`PerUser<Writable<T>>`), whose scope only its alias names, is rebuilt by the
-  narrowing of cells: its cell, printed afresh, is narrowed inside a rebuilt
-  scope wrapper registered with the scoped cell's type, through which
-  node-driven shrinking and identity-only paths then reach the cell. Schema
-  generation reads the scope from the wrapper's name and the cell from the node
-  inside it. Node-driven shrinking keeps the print of a scoped cell whole. Two
-  rules keep what a print says through the unfolding: a narrowed wrapper around
-  a nullable cell's value alternatives is not registered with the union's type,
-  which schema generation would read in the wrapper's place; and the declared
-  members of a generic declaration, written in terms of parameters an
-  instantiation binds, do not shrink that instantiation
+  (`PerUser<Writable<T>>`), whose scope only its alias names, is rebuilt when
+  the narrowing of cells reaches its scope wrapper directly: its cell, printed
+  afresh, is narrowed inside a rebuilt scope wrapper registered with the scoped
+  cell's type, through which node-driven shrinking and identity-only paths then
+  reach the cell. Schema generation reads the scope from the wrapper's name and
+  the cell from the node inside it. Capability narrowing does not reach a scoped
+  cell through the printed union of an optional member, so that cell keeps its
+  authored capability and value shape. Node-driven shrinking keeps the print of
+  a scoped cell whole. Two rules keep what a print says through the unfolding: a
+  narrowed wrapper around a nullable cell's value alternatives is not registered
+  with the union's type, which schema generation would read in the wrapper's
+  place; and the declared members of a generic declaration, written in terms of
+  parameters an instantiation binds, do not shrink that instantiation
   (`resolveMembersFromDeclaration`)
 - tuple types and numeric-indexed object types are not rewritten to
   array-with-unknown-items during this optimization
