@@ -995,6 +995,30 @@ describe("cfc-custody-seal", () => {
       }
     });
 
+    it("refuses a policy cell or source policy held by another runtime", async () => {
+      // A handle from another runtime would be read under that runtime's
+      // actor and replica, not the one the seal checks and writes as.
+      const fixture = await setup();
+      try {
+        const draft = await fixture.draft(alice, honestStance);
+        const elsewhere = fixture.runtimes.get(bob)!;
+        const foreign = elsewhere.getCell(alice.did(), "foreign-handle");
+        await expect(
+          prepareCustodySeal(draft, fixture.room(alice), {
+            allowedSources: foreign,
+          }),
+        ).rejects.toThrow(/same runtime/);
+        await expect(
+          prepareCustodySeal(draft, {
+            ...fixture.room(alice),
+            policy: foreign,
+          }),
+        ).rejects.toThrow(/same runtime/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
     it("refuses a policy whose subject is not the room space", async () => {
       const fixture = await setup();
       try {
