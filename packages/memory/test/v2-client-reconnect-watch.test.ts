@@ -422,8 +422,8 @@ describe("v2-client-reconnect-watch", () => {
 
           await client.restoreConnection();
           await removal;
-          // The first `watch.set` after the reconnect is the restore's.
-          expect(host.watchSets[0]).toEqual(["kept"]);
+          // The restore's `watch.set`, then the removal's.
+          expect(host.watchSets).toEqual([["kept"], ["kept"]]);
         } finally {
           await client.close();
           await before.close();
@@ -560,6 +560,91 @@ describe("v2-client-reconnect-watch", () => {
         } finally {
           await client.close();
           await server.close();
+        }
+      });
+
+      it("keeps out a watch removed while the restore's watch set is on the wire", async () => {
+        // The removal's turn comes after the restore has sent the watch set it
+        // re-establishes and before that set's response has been applied. A
+        // later removal then sends the session's whole watch set again, which
+        // shows what the session holds.
+
+        const { before, after } = restartedServers("removed-mid-restore");
+        const host = outageTransport(before);
+        const client = await connect({ transport: host.transport });
+        try {
+          const session = await client.mount(
+            SPACE,
+            {},
+            testSessionOpenAuthFactory,
+          );
+          session.setConcurrentWatchRefresh(concurrentWatchRefresh);
+          await session.watchAddSync([
+            graphWatch("removed"),
+            graphWatch("kept"),
+            graphWatch("unrelated"),
+          ]);
+
+          await host.goDown();
+          let removal: Promise<unknown> | undefined;
+          host.onSend = (message) => {
+            if (removal === undefined && message.type === "session.watch.set") {
+              removal = session.watchRemoveSync(["removed"]);
+              // Awaited below; observed here so that a rejection before then
+              // fails the case rather than surfacing as unhandled.
+              removal.catch(() => {});
+            }
+          };
+          host.comeBack(after);
+
+          await client.restoreConnection();
+          expect(removal).toBeDefined();
+          await removal;
+          await session.watchRemoveSync(["unrelated"]);
+          expect(
+            after.demandedInstancesForSpace(SPACE).map((row) => row.id),
+          ).toEqual(["of:kept"]);
+        } finally {
+          await client.close();
+          await before.close();
+          await after.close();
+        }
+      });
+
+      it("completes the reconnect wherever the drop lands as a queued mutation takes its turn", async () => {
+        // The drop is placed each of the first several microtasks after the
+        // mutation is made, so it lands between any two steps of the
+        // mutation's turn: its check that the session may send, and the send.
+
+        for (let delay = 0; delay < 9; delay++) {
+          const { before, after } = restartedServers(`drop-at-${delay}`);
+          const host = outageTransport(before);
+          const client = await connect({ transport: host.transport });
+          try {
+            const session = await client.mount(
+              SPACE,
+              {},
+              testSessionOpenAuthFactory,
+            );
+            session.setConcurrentWatchRefresh(concurrentWatchRefresh);
+            await session.watchAddSync([graphWatch("before")]);
+
+            const mutation = session.watchAddSync([graphWatch("queued")]);
+            // Rejected when the drop catches its request on the wire.
+            mutation.catch(() => {});
+            for (let tick = 0; tick < delay; tick++) await Promise.resolve();
+            await host.goDown();
+            host.comeBack(after);
+            host.sent.length = 0;
+
+            await client.restoreConnection();
+            expect(client.connectionState).toBe("connected");
+            expect(host.sent).toContain("session.watch.set");
+          } finally {
+            await client.close();
+            await before.close();
+            await after.close();
+          }
         }
       });
     });

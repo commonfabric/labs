@@ -59,8 +59,9 @@ import { type ArmedTurn, armTurn } from "./turn.ts";
 
 /**
  * Passed to `SpaceSession.watchSetSync()` by `restore()` alone, marking the
- * watch set a restore re-establishes. It is not exported, so no other caller
- * can send a watch mutation ahead of a pending restore.
+ * watch set a restore re-establishes, which is sent without waiting for its
+ * session to reopen. It is not exported, so no other caller can skip that
+ * wait.
  */
 const RESTORE_WATCH_SET: unique symbol = Symbol("restore watch set");
 
@@ -851,7 +852,9 @@ export class SpaceSession {
   /**
    * Serializes the _application_ of watch responses (the `#watchSpecs` /
    * `#watchView` mutations) in call order, so application stays ordered even
-   * when round trips overlap on the wire.
+   * when round trips overlap on the wire. The watch set `restore()`
+   * re-establishes is issued and applied outside this chain and
+   * `#watchIssue`; see `#sendRestoreWatchMutation()`.
    */
   #watchApply: Promise<void> = Promise.resolve();
 
@@ -1238,7 +1241,11 @@ export class SpaceSession {
       },
       (result) => {
         this.#noteResult(result.serverSeq);
-        this.#replaceWatchSpecs(requestedWatches);
+        // A replay sends `#watchSpecs` as it stands. The restore's replay does
+        // not queue with other mutations, so one of them can change
+        // `#watchSpecs` while its request is on the wire, and writing the sent
+        // set back would undo that change.
+        if (watches !== undefined) this.#replaceWatchSpecs(requestedWatches);
         if (viewIntentVersion === this.#viewIntentVersion) {
           this.#viewsDirty = false;
         }
@@ -1843,7 +1850,10 @@ export class SpaceSession {
       const current: Promise<T> = previous.catch(() => undefined).then(
         async () => {
           onTurn?.();
-          await this.#untilWatchMutationsMaySend();
+          while (this.#watchMutationWaitsForRestore()) {
+            await this.#waitForSessionRestore();
+          }
+          this.#assertOpen();
           this.#lastSentWatchMutation = current;
           return apply(await send());
         },
@@ -1870,7 +1880,10 @@ export class SpaceSession {
     let response!: Promise<R>;
     const issued = readyToIssue.catch(() => undefined).then(async () => {
       onTurn?.();
-      await this.#untilWatchMutationsMaySend();
+      while (this.#watchMutationWaitsForRestore()) {
+        await this.#waitForSessionRestore();
+      }
+      this.#assertOpen();
       this.#lastSentWatchMutation = current;
       response = send();
       // Attach a rejection handler immediately: a later request may reject
@@ -1896,27 +1909,26 @@ export class SpaceSession {
    * restores its client's sessions one after another, so a session can sit
    * connected with its restore not yet begun. `#readyOnConnection` is false
    * only while a reconnect is running, while this session's restore is
-   * pending, or once the session has closed, and `#untilWatchMutationsMaySend()`
-   * waits on the first two and throws on the third, so that wait never spins.
+   * pending, or once the session has closed, and `#waitForSessionRestore()`
+   * waits on the first two and throws on the third, so a turn waiting on this
+   * never spins.
    */
   #watchMutationWaitsForRestore(): boolean {
     return !this.#client.isConnected() || !this.#readyOnConnection;
   }
 
   /**
-   * Waits until this session may put a watch mutation on the wire: through
-   * the reconnect in progress, if any, and then this session's restore, if one
-   * is pending, again whenever the connection drops meanwhile. Throws the
-   * session's close error when the session closes, and the client's error
-   * when it gives up reconnecting.
+   * Helper for `#runWatchMutation()`, which waits for the reconnect in
+   * progress, if any, and then for this session's restore, if one is pending.
+   * The caller checks `#watchMutationWaitsForRestore()` again afterwards, in
+   * the same synchronous step as its send, since the connection can drop in
+   * between. Throws the session's close error when the session closes, and the
+   * client's error when it gives up reconnecting.
    */
-  async #untilWatchMutationsMaySend(): Promise<void> {
-    while (this.#watchMutationWaitsForRestore()) {
-      this.#assertOpen();
-      await this.#client.restoreConnection();
-      await this.#restoreComplete?.promise;
-    }
+  async #waitForSessionRestore(): Promise<void> {
     this.#assertOpen();
+    await this.#client.restoreConnection();
+    await this.#restoreComplete?.promise;
   }
 
   /**
