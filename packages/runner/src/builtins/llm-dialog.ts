@@ -336,12 +336,14 @@ function objectSchemaOfBoolean(schema: boolean): JSONSchema {
 /**
  * Prepare a schema for an LLM request, as a tool's input or as the shape of a
  * generated object, by:
- * 1. Writing a boolean schema in its object form (`objectSchemaOfBoolean`)
+ * 1. Writing a `true` schema in its object form (`objectSchemaOfBoolean`). A
+ *    `false` schema stays as written: its object form would accept `{}`, where
+ *    `false` accepts nothing, so the LLM routes refuse the request instead
  * 2. Stripping internal `asCell` markers and removing cycles
  * 3. Inlining all $ref references
  */
 function prepareSchemaForLLM(schema: JSONSchema): JSONSchema {
-  if (isBoolean(schema)) return objectSchemaOfBoolean(schema);
+  if (schema === true) return objectSchemaOfBoolean(schema);
   if (!isObjectOrArray(schema)) return schema;
   const sanitized = sanitizeSchemaForLinks(schema);
   return resolveRefsForLLM(sanitized);

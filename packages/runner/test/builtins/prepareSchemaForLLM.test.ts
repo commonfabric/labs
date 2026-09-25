@@ -95,17 +95,24 @@ describe("prepareSchemaForLLM()", () => {
     });
   });
 
-  it("returns the object form of a boolean schema", () => {
+  it("returns the object form of a `true` schema", () => {
     expect(prepareSchemaForLLM(true)).toEqual({
       type: "object",
       properties: {},
       additionalProperties: true,
     });
-    expect(prepareSchemaForLLM(false)).toEqual({
-      type: "object",
-      properties: {},
-      additionalProperties: false,
-    });
+  });
+
+  it("returns a `false` schema as written, which the generateObject route refuses", () => {
+    // `false` accepts no value. Its object form would accept `{}`, so the
+    // request is refused rather than asking the model for a value the schema
+    // forbids.
+
+    expect(prepareSchemaForLLM(false)).toBe(false);
+    expect(llmGenerateObjectRequestProblem({
+      messages: [{ role: "user", content: "Return anything" }],
+      schema: prepareSchemaForLLM(false),
+    })).toContain("'schema'");
   });
 
   it("returns a schema the generateObject route accepts for `true`", () => {
