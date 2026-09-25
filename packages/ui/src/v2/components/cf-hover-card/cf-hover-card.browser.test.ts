@@ -103,7 +103,6 @@ Deno.test("cf-hover-card places its card below its content at the top of the win
   const { element } = await mount(0);
   try {
     element.dispatchEvent(new PointerEvent("pointerenter"));
-    // A hidden card has an empty box at the origin, which is above anything.
     expect(element.open).toBe(true);
     expect(cardRect(element).top).toBeGreaterThanOrEqual(
       element.getBoundingClientRect().bottom,
@@ -190,6 +189,58 @@ Deno.test("cf-hover-card keeps its card above its content as the card grows", as
     expect(cardRect(element).bottom).toBeLessThanOrEqual(
       element.getBoundingClientRect().top,
     );
+  } finally {
+    element.remove();
+  }
+});
+
+Deno.test("cf-hover-card shows its card for a pointer that arrives before it renders", async () => {
+  const element = document.createElement("cf-hover-card") as CFHoverCard;
+  element.innerHTML = `
+    <button>😺 2</button>
+    <div slot="card">Alice, Bob</div>
+  `;
+  document.body.append(element);
+  expect(element).toBeInstanceOf(CFHoverCard);
+  try {
+    element.dispatchEvent(new PointerEvent("pointerenter"));
+    await element.updateComplete;
+    expect(element.open).toBe(true);
+  } finally {
+    element.remove();
+  }
+});
+
+Deno.test("cf-hover-card keeps its card in the window when it goes below", async () => {
+  const { element } = await mount(20);
+  const tall = element.querySelector<HTMLElement>('[slot="card"]')!;
+  tall.style.height = `${globalThis.innerHeight - 100}px`;
+  try {
+    element.dispatchEvent(new PointerEvent("pointerenter"));
+    expect(element.open).toBe(true);
+    await twoFrames();
+    expect(cardRect(element).bottom).toBeLessThanOrEqual(
+      globalThis.innerHeight,
+    );
+  } finally {
+    element.remove();
+  }
+});
+
+Deno.test("cf-hover-card follows its content when the window resizes", async () => {
+  const { element } = await mount(300);
+  try {
+    element.dispatchEvent(new PointerEvent("pointerenter"));
+    expect(element.open).toBe(true);
+    await twoFrames();
+
+    // Content that moves as the window changes size, as a centered layout's
+    // does.
+    element.style.top = "200px";
+    globalThis.dispatchEvent(new Event("resize"));
+    const anchorTop = element.getBoundingClientRect().top;
+    expect(cardRect(element).bottom).toBeLessThanOrEqual(anchorTop);
+    expect(cardRect(element).bottom).toBeGreaterThan(anchorTop - 10);
   } finally {
     element.remove();
   }

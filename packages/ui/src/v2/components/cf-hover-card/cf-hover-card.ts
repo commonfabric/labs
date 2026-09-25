@@ -13,8 +13,8 @@ const CARD_GAP_PX = 6;
  * its overflow can cut it off. It sits above the content, or below when there
  * is no room above, and moves inward from the window's edges. It is placed
  * again whenever its size changes, since what it shows can arrive after it
- * opens, and whenever anything scrolls, so that it follows its content. It
- * hides when the pointer and focus have both left.
+ * opens, and whenever anything scrolls or the window resizes, so that it
+ * follows its content. It hides when the pointer and focus have both left.
  *
  * The pointer cannot reach the card, so what it shows is for reading, not for
  * clicking. The card's content is the caller's, as is the content it belongs
@@ -52,6 +52,7 @@ export class CFHoverCard extends BaseElement {
         background: var(--cf-theme-color-surface, #ffffff);
         color: inherit;
         box-shadow: 0 4px 12px rgb(0 0 0 / 0.12);
+        pointer-events: none;
       }
     `,
   ];
@@ -82,7 +83,7 @@ export class CFHoverCard extends BaseElement {
     this.#hideUnlessInside();
   };
 
-  #onScroll = () => {
+  #onLayoutChange = () => {
     const card = this.#card;
     if (card && this.open) this.#place(card);
   };
@@ -132,21 +133,34 @@ export class CFHoverCard extends BaseElement {
 
   #show() {
     const card = this.#card;
-    if (!card || this.open) return;
+    if (!card) {
+      // Not rendered yet: show once it is, if what asked is still inside.
+      void this.updateComplete.then(() => {
+        if (this.isConnected && (this.#pointerInside || this.#focusInside)) {
+          this.#show();
+        }
+      });
+      return;
+    }
+    if (this.open) return;
     card.showPopover();
     this.#place(card);
     this.#resizeObserver = new ResizeObserver(() => this.#place(card));
     this.#resizeObserver.observe(card);
-    globalThis.addEventListener("scroll", this.#onScroll, {
+    globalThis.addEventListener("scroll", this.#onLayoutChange, {
       capture: true,
       passive: true,
     });
+    globalThis.addEventListener("resize", this.#onLayoutChange);
   }
 
   #hide() {
     this.#resizeObserver?.disconnect();
     this.#resizeObserver = undefined;
-    globalThis.removeEventListener("scroll", this.#onScroll, { capture: true });
+    globalThis.removeEventListener("scroll", this.#onLayoutChange, {
+      capture: true,
+    });
+    globalThis.removeEventListener("resize", this.#onLayoutChange);
     const card = this.#card;
     if (card && this.open) card.hidePopover();
   }
@@ -156,7 +170,12 @@ export class CFHoverCard extends BaseElement {
     const width = card.offsetWidth;
     const height = card.offsetHeight;
     const above = anchor.top - CARD_GAP_PX - height;
-    const top = above >= CARD_GAP_PX ? above : anchor.bottom + CARD_GAP_PX;
+    // Below, when there is no room above, but no lower than keeps the card in
+    // the window; a card taller than the window keeps its top in view.
+    const maxTop = globalThis.innerHeight - CARD_GAP_PX - height;
+    const top = above >= CARD_GAP_PX
+      ? above
+      : Math.max(CARD_GAP_PX, Math.min(anchor.bottom + CARD_GAP_PX, maxTop));
     const maxLeft = globalThis.innerWidth - CARD_GAP_PX - width;
     const left = Math.max(CARD_GAP_PX, Math.min(anchor.left, maxLeft));
     card.style.top = `${top}px`;
