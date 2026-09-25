@@ -2,6 +2,7 @@ export {
   buildObjectBody,
   ciObjectName,
   datePartition,
+  isMainPush,
   isSeed,
   localObjectName,
   objectNameSlug,
@@ -20,10 +21,16 @@ export type {
   TestRecord,
 } from "./schema.ts";
 export {
+  COVERAGE_ARTIFACT,
+  COVERAGE_OBJECT_GLOB,
+  coverageArtifactAttempt,
+  coverageFiguresOf,
+  coverageRecords,
   isLaneMeasurement,
   LANE_MEASUREMENT_PREFIX,
   LANE_MEASUREMENT_SURFACE,
 } from "./lane-measurement.ts";
+export type { CoverageFigures } from "./lane-measurement.ts";
 export {
   AGENT_VARIABLE,
   agentLabel,

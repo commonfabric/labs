@@ -226,20 +226,27 @@ Five things are worth knowing before reading a failure.
 Nothing about coverage fails a run on `main`. That run measures every set,
 which is where the baselines come from, and merges every report into the
 repository-wide figure the dashboard tile shows. `tasks/coverage-report.ts`
-is what measures and writes them, over a directory holding the lanes'
-uploaded coverage:
+is what measures them, over a directory holding the lanes' uploaded
+coverage:
 
 ```
-deno run -A tasks/coverage-report.ts --reports <directory> \
-  --run-id 1 --sha $(git rev-parse HEAD) --created-at $(date -u +%FT%TZ)
+CF_TEST_RECORDS_DIR=<spool> deno run -A tasks/coverage-report.ts \
+  --reports <directory>
 ```
 
-The run's identity is required rather than defaulted, because the gate
-looks a baseline up by the commit it was measured at and a figure stamped
-with none matches nothing.
+It writes the figures as measurements into the spool
+`CF_TEST_RECORDS_DIR` names, and with that variable unset it records no
+figure and only reports its summary. The job's shipping step carries them to the
+record store under the context the relay composes for the job, which names
+the commit and the run, so the measurements carry neither. The publisher
+collects the baselines from the objects it folds, each against the commit
+its context names, and keeps them for
+`LOCAL_COVERAGE_BASELINE_DAYS`;
+[Coverage figures in the store](COVERAGE.md#coverage-figures-in-the-record-store)
+says how each reader finds them.
 
-The report also publishes whether the run's compile byte cache was cold,
-read from the record each lane that opened the cache leaves beside its
+The measurements also say whether the run's compile byte cache was cold, read
+from the record each lane that opened the cache leaves beside its
 coverage, so that the dashboard can leave a cold run out of its trend.
 [Compile cache state and cold runs](COVERAGE.md#compile-cache-state-and-cold-runs)
 says why a cold run's figure differs.
@@ -1103,8 +1110,9 @@ itself.
   measures whole however much of the corpus it ran. That is a different
   number from the source group over the same member, which is that
   member measured by every test in the run and which a selected run only
-  samples; `measuredSetCoverageMetric` in `tasks/ci-check-lib.ts` is the
-  one name the producer and the reader share. The full run on the
+  samples; `coverageRecords` and `coverageFiguresOf` in
+  `@commonfabric/test-support/records` are the one naming the producer and
+  the reader share. The full run on the
   default branch is what publishes it, so this note is silent until the
   lanes carry that run.
 - **A new test that turned out to be flaky.** A test this run ran, the
@@ -1191,15 +1199,13 @@ again in place of the merged choice. The merge exists only inside
 anything that matches a record against the manifest or a plan finds the
 test by its own name.
 
-A change to such a member's source makes its unit mandatory only
-through the coverage gate. A member with a measured set is reached by
-changes under its own tree. At present those members are
-`packages/connectors/agents/debug-view` and `packages/dashboard`. The
-others have no measured set, because
-[the coverage gate excludes them](#the-coverage-gate). No diff names a
-directory, so those units reach a lane only on the score of their tests.
-At present those are `packages/identity`, `packages/patterns`, and the
-three browser halves.
+A change to such a member's source could make its unit mandatory only
+through the coverage gate, and none of these units has a measured set
+there: `packages/identity` because
+[the coverage gate excludes it](#the-coverage-gate), and the five
+browser halves because a measured set holds only a member's Deno-only
+half. No diff names a directory, so these units reach a lane only on the
+score of their tests.
 
 A workspace member stops running whole when the task holding its tests
 becomes one the topology can point at files. That task is its
@@ -1208,6 +1214,15 @@ point a single `deno test` at files, and also a dependency list that
 resolves to one, or the shard wrapper around one. It cannot point a task
 that joins commands with a shell operator such as `&&`, a task that
 names its own import map, or a test runner of the package's own.
+
+A lane runs a member that runs whole through the member's own task,
+with no record preload and no report path. A `deno test` that task
+starts records nothing there, unless a runner of the member's own
+writes records. The topology therefore refuses to load when it cannot
+point a member's task at files, unless `RUNS_WHOLE` in
+`tasks/test-topology/unit.ts` lists the member with the reason. It also
+refuses an entry there for a member whose task it can point at files,
+and an entry for a member the workspace does not hold.
 
 The shard wrapper, `tasks/run-sharded-test-files.ts`, is also how a
 member whose files need different flags stays splittable. Its `--serial`
@@ -1219,8 +1234,8 @@ group as a `deno test` of its own and merges their JUnit reports into
 the one path it was handed. A lane groups the files it selects the same
 way, with a report for each group. The topology refuses a `--serial` or
 `--all-access` pattern that names no test file, and so does the wrapper,
-which also refuses such an `--ignore`. `packages/cli` is the member that
-uses both options.
+which also refuses such an `--ignore`. `packages/cli` uses both options,
+and `packages/dashboard` uses `--all-access`.
 
 ## A case that fails only when its siblings do not run
 

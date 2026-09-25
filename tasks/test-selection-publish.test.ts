@@ -17,9 +17,11 @@ import {
 import {
   AliasResolver,
   buildObjectBody,
+  coverageRecords,
   gunzipToText,
   parseManifest,
   type RunContext,
+  serializeRecordLine,
   testIdentityKey,
   type TestRecord,
 } from "@commonfabric/test-support/records";
@@ -59,8 +61,8 @@ const TOPOLOGY: Suite[] = [{
 const suites = () => Promise.resolve(TOPOLOGY);
 
 /**
- * No coverage baselines. Reading real ones asks GitHub what its recent
- * runs published, which is not a question a test of the fold should
+ * No coverage baselines carried from a previous manifest. Reading a real
+ * one reads the store, which is not a question a test of the fold should
  * reach the network to answer.
  */
 const noBaselines = () => Promise.resolve([]);
@@ -1870,17 +1872,75 @@ describe("the baselines a publish carries", () => {
 
   /** A fetch answering a listing with nothing under the prefix. */
   const empty: typeof globalThis.fetch = () =>
-    Promise.resolve(
-      new Response(
-        '<?xml version="1.0"?><ListBucketResult></ListBucketResult>',
-        { status: 200 },
-      ),
-    );
+    Promise.resolve(Response.json({}));
 
   it("carries nothing where there is no manifest to read", async () => {
-    // The walk over recent runs is then the only source, which is what
-    // rebuilds the window over the publishes that follow. A publisher
-    // without a credential reads no runs, so this carries nothing.
+    // The coverage figures a run folds are then the only source, which is
+    // what rebuilds the window over the publishes that follow.
     expect(await liveBaselines(now, empty)).toEqual([]);
+  });
+
+  it("throws where the store could not be asked for the previous manifest", async () => {
+    const refusing: typeof globalThis.fetch = () =>
+      Promise.resolve(new Response("unavailable", { status: 503 }));
+    await expect(liveBaselines(now, refusing)).rejects.toThrow(
+      "reading the previous manifest failed",
+    );
+  });
+
+  it("publishes nothing without the baselines the previous manifest carries", async () => {
+    // Their objects are ones no later run folds again, so a manifest
+    // published without them would lose them for good.
+    const { store, created } = fakeStore(seed());
+    expect(
+      await publish(
+        ["--bootstrap", "--days", "1"],
+        store,
+        new Date("2026-08-20T12:00:00.000Z"),
+        suites,
+        () => Promise.reject(new Error("the store is down")),
+      ),
+    ).toBe(1);
+    expect(created.size).toBe(0);
+  });
+
+  it("adds the measured sets of the pushes to main it folds", async () => {
+    const coverage = (commit: string, branch: string, at: string) =>
+      object(commit, "pass", at, branch) +
+      coverageRecords({
+        groups: new Map([["workspace", 900]]),
+        sets: new Map([["workspace-unit/packages/memory", 40]]),
+        cold: false,
+      }).map(serializeRecordLine).join("");
+    const { store, created } = fakeStore({
+      [CI(DAY, "1")]: coverage("c1", "main", "2026-08-20T01:00:00.000Z"),
+      [CI(DAY, "2")]: coverage("c2", "fix-writes", "2026-08-20T02:00:00.000Z"),
+    });
+    const carried = {
+      suite: "workspace-unit",
+      member: "packages/memory",
+      commit: "c0",
+      createdAt: "2026-08-19T23:00:00.000Z",
+      uncoveredLines: 41,
+    };
+    expect(
+      await publish(
+        ["--bootstrap", "--days", "1"],
+        store,
+        new Date("2026-08-20T12:00:00.000Z"),
+        suites,
+        () => Promise.resolve([carried]),
+      ),
+    ).toBe(0);
+    expect((await publishedManifest(created)).coverageBaselines).toEqual([
+      {
+        suite: "workspace-unit",
+        member: "packages/memory",
+        commit: "c1",
+        createdAt: "2026-08-20T01:00:00.000Z",
+        uncoveredLines: 40,
+      },
+      carried,
+    ]);
   });
 });

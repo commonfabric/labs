@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import {
+  type CoverageFigures,
   type TestIdentity,
   testIdentityKey,
   type TestRecord,
@@ -9,7 +10,6 @@ import {
 import {
   aliasLineFor,
   buildReport,
-  type CoverageFigures,
   coverageRise,
   firstFailures,
   flakyNewTests,
@@ -40,7 +40,7 @@ import {
 //
 // Fixtures
 //
-// Every case is written in test names, coverage metric names and verdicts,
+// Every case is written in test names, coverage figures and verdicts,
 // because those are the three vocabularies the module reads.
 //
 
@@ -71,11 +71,7 @@ function run(
 function figures(
   entries: readonly (readonly [string, number])[],
 ): CoverageFigures {
-  return new Map(
-    entries.map(([group, lines]) =>
-      [`coverage-debt: ${group} uncovered lines`, lines] as const
-    ),
-  );
+  return { groups: new Map(entries), sets: new Map(), cold: false };
 }
 
 /** An own-tests figure set: a package measured by only its own tests. */
@@ -83,19 +79,22 @@ function ownTests(
   entries: readonly (readonly [string, number])[],
   suite = "workspace-unit",
 ): CoverageFigures {
-  return new Map(
-    entries.map(([member, lines]) =>
-      [
-        `coverage-debt: measured set ${suite}/${member} uncovered lines`,
-        lines,
-      ] as const
+  return {
+    groups: new Map(),
+    sets: new Map(
+      entries.map(([member, lines]) => [`${suite}/${member}`, lines] as const),
     ),
-  );
+    cold: false,
+  };
 }
 
-/** Two figure sets as one, which is what a run's metrics really are. */
+/** Two figure sets as one, which is what a run's measurement really is. */
 function both(...sets: readonly CoverageFigures[]): CoverageFigures {
-  return new Map(sets.flatMap((set) => [...set]));
+  return {
+    groups: new Map(sets.flatMap((set) => [...set.groups])),
+    sets: new Map(sets.flatMap((set) => [...set.sets])),
+    cold: sets.some((set) => set.cold),
+  };
 }
 
 /** A pull request whose run ran these names, over a manifest that knows them. */
@@ -137,8 +136,8 @@ function input(partial: Partial<ReportInput> = {}): ReportInput {
     current: new Map(),
     previous: new Map(),
     pullRequest: unknownPullRequest(),
-    coverage: new Map(),
-    coverageBefore: new Map(),
+    coverage: figures([]),
+    coverageBefore: figures([]),
     touched: new Set(),
     coverageGate: { reached: [], ran: true },
     day: "2026-09-07",
@@ -449,6 +448,23 @@ describe("report", () => {
         coverageBefore: figures([["workspace", 1000]]),
         coverage: figures([["workspace", 2000]]),
       }))).toBeUndefined();
+    });
+
+    // A cold compile cache reaches compile branches a warm one does not,
+    // so a warm run after a cold one reads higher with no test changed.
+    it("says nothing when only one of the two runs found the compile cache cold", () => {
+      const rise = {
+        touched,
+        coverageBefore: { ...figures([["workspace", 1000]]), cold: true },
+        coverage: figures([["workspace", 1000 + COVERAGE_COMMENT_LINES]]),
+      };
+      expect(coverageRise(input(rise))).toBeUndefined();
+      expect(
+        coverageRise(input({
+          ...rise,
+          coverage: { ...rise.coverage, cold: true },
+        }))?.to,
+      ).toBe(1000 + COVERAGE_COMMENT_LINES);
     });
   });
 

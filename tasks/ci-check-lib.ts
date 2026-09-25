@@ -194,20 +194,8 @@ export const COMPILE_CACHE_FAMILIES = [
 
 export type CompileCacheFamily = (typeof COMPILE_CACHE_FAMILIES)[number];
 
-/**
- * The key a run's CI lanes publish the state of their pattern compile byte
- * cache under. Every lane restores the same cache, so a run has one state for
- * it, which is cold when any lane found the cache missing. Baseline files
- * carry the key, so it stays the same whatever the lanes' capabilities are
- * named.
- */
-export const LANE_COMPILE_CACHE = "compile-cache";
-
-/**
- * What a run's compile cache states are keyed by: a job family, or the cache
- * the CI lanes restore.
- */
-export type CompileCacheKey = CompileCacheFamily | typeof LANE_COMPILE_CACHE;
+/** What a run's compile cache states are keyed by: a job family. */
+export type CompileCacheKey = CompileCacheFamily;
 
 /**
  * Compile cache state for one job family in one run. Cold means the cache
@@ -217,8 +205,7 @@ export type CompileCacheKey = CompileCacheFamily | typeof LANE_COMPILE_CACHE;
 export type CompileCacheState = "cold" | "warm";
 
 /**
- * Compile cache states for a run, by the job family or lane cache they
- * describe. An absent key is unknown (a run whose cache state was never
+ * Compile cache states for a run, by the job family they describe. An absent key is unknown (a run whose cache state was never
  * recorded or could not be read) and is treated as not-cold: it is not
  * excluded from the coverage ratchet baseline.
  */
@@ -735,10 +722,9 @@ const COMPILE_CACHE_FAMILY_SET: ReadonlySet<string> = new Set(
   COMPILE_CACHE_FAMILIES,
 );
 
-const COMPILE_CACHE_KEY_SET: ReadonlySet<string> = new Set<CompileCacheKey>([
-  ...COMPILE_CACHE_FAMILIES,
-  LANE_COMPILE_CACHE,
-]);
+const COMPILE_CACHE_KEY_SET: ReadonlySet<string> = new Set<CompileCacheKey>(
+  COMPILE_CACHE_FAMILIES,
+);
 
 /**
  * Parse a baseline artifact file into its metrics and its optional compile

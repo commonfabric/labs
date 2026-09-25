@@ -1,20 +1,12 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import {
-  BASELINE_LISTING_MAX_PAGES,
-  type BaselineRun,
-  type BaselineSource,
-  collectCoverageBaselines,
-  liveBaselineSource,
-  publishableBaselines,
-  splitMeasuredSet,
-} from "./baselines.ts";
-import {
-  coverageMetricForGroup,
-  measuredSetCoverageMetric,
-  PERF_METRICS_ARTIFACT_NAME,
-  type WorkflowRun,
-} from "../ci-check-lib.ts";
+  type CoverageBaseline,
+  coverageRecords,
+  type RunContext,
+  type StoredReportGroup,
+} from "@commonfabric/test-support/records";
+import { baselinesOf, mergeBaselines, splitMeasuredSet } from "./baselines.ts";
 import { LOCAL_COVERAGE_BASELINE_DAYS } from "./policy.ts";
 
 const NOW = new Date("2026-09-09T12:00:00.000Z");
@@ -24,19 +16,60 @@ function daysAgo(days: number): string {
   return new Date(NOW.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
 }
 
-/** A source answering with exactly what a case describes. */
-function source(
-  runs: readonly BaselineRun[],
-  metrics: Record<number, Record<string, number>>,
-): BaselineSource {
+/** The context the relay composes for a push to `main`, with overrides. */
+function context(overrides: Partial<RunContext> = {}): RunContext {
   return {
-    runs: () => Promise.resolve(runs),
-    metrics: (id) =>
-      Promise.resolve(
-        metrics[id] === undefined ? undefined : new Map(
-          Object.entries(metrics[id]!),
-        ),
-      ),
+    schema: 1,
+    line: "context",
+    reportId: "01JEXAMPLEULID0000000000",
+    repo: "commonfabric/labs",
+    commit: "c1",
+    dirty: false,
+    branch: "main",
+    env: "ci",
+    ci: {
+      workflowRunId: "7",
+      runAttempt: 1,
+      workflow: "CI",
+      job: "Coverage Check",
+      event: "push",
+      fork: false,
+    },
+    os: "linux",
+    arch: "x86_64",
+    denoVersion: "2.9.4",
+    startedAt: daysAgo(1),
+    ...overrides,
+  };
+}
+
+/** One report holding the coverage measurements of `sets` and `groups`. */
+function report(
+  sets: Record<string, number>,
+  at: RunContext = context(),
+  groups: Record<string, number> = {},
+): StoredReportGroup {
+  const records = coverageRecords({
+    groups: new Map(Object.entries(groups)),
+    sets: new Map(Object.entries(sets)),
+    cold: false,
+  });
+  return { context: at, records };
+}
+
+/** A baseline of one set, `days` old. */
+function baseline(
+  commit: string,
+  days: number,
+  uncoveredLines: number,
+  member = "packages/a",
+): CoverageBaseline {
+  return {
+    suite: "workspace-unit",
+    member,
+    commit,
+    createdAt: daysAgo(days),
+    uncoveredLines,
   };
 }
 
@@ -57,506 +90,156 @@ describe("baselines", () => {
     });
   });
 
-  describe("the baselines a manifest carries", () => {
-    it("takes each run's measured-set figures against its commit", async () => {
-      const baselines = await collectCoverageBaselines(
-        source([{ id: 1, commit: "abc", createdAt: daysAgo(1) }], {
-          1: {
-            [measuredSetCoverageMetric("workspace-unit/packages/memory")]: 12,
-            [measuredSetCoverageMetric("runner-unit/packages/runner")]: 40,
-          },
-        }),
-        NOW,
-      );
-      expect(baselines).toEqual([
-        {
-          suite: "runner-unit",
-          member: "packages/runner",
-          commit: "abc",
-          createdAt: daysAgo(1),
-          uncoveredLines: 40,
-        },
+  describe("baselinesOf()", () => {
+    it("returns each measured set of a push to main against its commit", () => {
+      expect(
+        baselinesOf(
+          report({
+            "workspace-unit/packages/connectors/github": 12,
+            "memory-e2e/packages/memory": 800,
+          }),
+        ),
+      ).toEqual([
         {
           suite: "workspace-unit",
-          member: "packages/memory",
-          commit: "abc",
+          member: "packages/connectors/github",
+          commit: "c1",
           createdAt: daysAgo(1),
           uncoveredLines: 12,
         },
+        {
+          suite: "memory-e2e",
+          member: "packages/memory",
+          commit: "c1",
+          createdAt: daysAgo(1),
+          uncoveredLines: 800,
+        },
       ]);
     });
 
-    it("leaves out a run older than the window", async () => {
-      const baselines = await collectCoverageBaselines(
-        source([
-          { id: 1, commit: "recent", createdAt: daysAgo(1) },
-          {
-            id: 2,
-            commit: "ancient",
-            createdAt: daysAgo(LOCAL_COVERAGE_BASELINE_DAYS + 1),
-          },
-        ], {
-          1: { [measuredSetCoverageMetric("workspace-unit/packages/a")]: 1 },
-          2: { [measuredSetCoverageMetric("workspace-unit/packages/a")]: 2 },
-        }),
-        NOW,
-      );
-      expect(baselines.map((base) => base.commit)).toEqual(["recent"]);
-    });
-
-    it("leaves out a run whose artifact says nothing", async () => {
-      const baselines = await collectCoverageBaselines(
-        source([{ id: 1, commit: "abc", createdAt: daysAgo(1) }], {}),
-        NOW,
-      );
-      expect(baselines).toEqual([]);
-    });
-
-    it("never reads a source group as a measured set", async () => {
-      const baselines = await collectCoverageBaselines(
-        source([{ id: 1, commit: "abc", createdAt: daysAgo(1) }], {
-          1: {
-            [coverageMetricForGroup("packages/memory")]: 900,
-            [coverageMetricForGroup("workspace")]: 90_000,
-          },
-        }),
-        NOW,
-      );
-      expect(baselines).toEqual([]);
-    });
-
-    it("keeps two suites over one member apart", async () => {
-      const baselines = await collectCoverageBaselines(
-        source([{ id: 1, commit: "abc", createdAt: daysAgo(1) }], {
-          1: {
-            [measuredSetCoverageMetric("workspace-unit/packages/memory")]: 12,
-            [measuredSetCoverageMetric("memory-e2e/packages/memory")]: 800,
-          },
-        }),
-        NOW,
-      );
-      expect(baselines.map((base) => [base.suite, base.uncoveredLines]))
-        .toEqual([
-          ["memory-e2e", 800],
-          ["workspace-unit", 12],
-        ]);
-    });
-
-    it("carries forward what the previous manifest held", async () => {
-      const known = [{
-        suite: "workspace-unit",
-        member: "packages/a",
-        commit: "earlier",
-        createdAt: daysAgo(2),
-        uncoveredLines: 7,
-      }];
-      const baselines = await collectCoverageBaselines(
-        source([{ id: 1, commit: "later", createdAt: daysAgo(1) }], {
-          1: { [measuredSetCoverageMetric("workspace-unit/packages/a")]: 5 },
-        }),
-        NOW,
-        known,
-      );
-      expect(baselines.map((base) => [base.commit, base.uncoveredLines]))
-        .toEqual([["later", 5], ["earlier", 7]]);
-    });
-
-    it("drops a carried baseline that has fallen out of the window", async () => {
-      const known = [{
-        suite: "workspace-unit",
-        member: "packages/a",
-        commit: "ancient",
-        createdAt: daysAgo(LOCAL_COVERAGE_BASELINE_DAYS + 1),
-        uncoveredLines: 7,
-      }];
-      expect(await collectCoverageBaselines(source([], {}), NOW, known))
-        .toEqual([]);
-    });
-
-    it("never reads a run a carried baseline already names", async () => {
-      // Reading one costs an artifact listing and a download, and the
-      // figure would be the same.
-      const asked: number[] = [];
-      const watching: BaselineSource = {
-        runs: () =>
-          Promise.resolve([{ id: 1, commit: "known", createdAt: daysAgo(1) }]),
-        metrics: (id) => {
-          asked.push(id);
-          return Promise.resolve(undefined);
-        },
-      };
-      await collectCoverageBaselines(watching, NOW, [{
-        suite: "workspace-unit",
-        member: "packages/a",
-        commit: "known",
-        createdAt: daysAgo(1),
-        uncoveredLines: 7,
-      }]);
-      expect(asked).toEqual([]);
-    });
-
-    it("stops at the first run past the window", async () => {
-      const asked: number[] = [];
-      const watching: BaselineSource = {
-        runs: () =>
-          Promise.resolve([
-            {
-              id: 1,
-              commit: "old",
-              createdAt: daysAgo(LOCAL_COVERAGE_BASELINE_DAYS + 1),
-            },
-            { id: 2, commit: "older", createdAt: daysAgo(1) },
-          ]),
-        metrics: (id) => {
-          asked.push(id);
-          return Promise.resolve(undefined);
-        },
-      };
-      // The listing is newest first, so nothing past the first run outside
-      // the window is worth asking about.
-      await collectCoverageBaselines(watching, NOW);
-      expect(asked).toEqual([]);
-    });
-
-    it("takes one commit's figures from the newest of its runs", async () => {
-      // A commit can carry more than one successful run. Two baselines
-      // at one commit would leave a comparison choosing between them by
-      // whichever was listed first.
-      const baselines = await collectCoverageBaselines(
-        source([
-          { id: 1, commit: "shared", createdAt: daysAgo(0.25) },
-          { id: 2, commit: "shared", createdAt: daysAgo(0.75) },
-        ], {
-          1: { [measuredSetCoverageMetric("workspace-unit/packages/a")]: 5 },
-          2: { [measuredSetCoverageMetric("workspace-unit/packages/a")]: 9 },
-        }),
-        NOW,
-      );
-      expect(baselines).toHaveLength(1);
-      expect(baselines[0]?.uncoveredLines).toBe(5);
-    });
-
-    it("passes over a measured-set metric that names no member", async () => {
-      const baselines = await collectCoverageBaselines(
-        source([{ id: 1, commit: "abc", createdAt: daysAgo(1) }], {
-          1: {
-            [measuredSetCoverageMetric("workspace-unit")]: 5,
-            [measuredSetCoverageMetric("workspace-unit/packages/a")]: 7,
-          },
-        }),
-        NOW,
-      );
-      expect(baselines.map((base) => base.member)).toEqual(["packages/a"]);
-    });
-
-    it("stops at a run whose report names no measured set", async () => {
-      // Such a run measured a tree where nothing publishes one, and
-      // every older run is such a tree too, so reading further costs an
-      // artifact download per run and finds nothing.
-      const asked: number[] = [];
-      const watching: BaselineSource = {
-        runs: () =>
-          Promise.resolve([
-            { id: 1, commit: "newer", createdAt: daysAgo(1) },
-            { id: 2, commit: "older", createdAt: daysAgo(2) },
-          ]),
-        metrics: (id) => {
-          asked.push(id);
-          return Promise.resolve(
-            new Map([[coverageMetricForGroup("workspace"), 90_000]]),
-          );
-        },
-      };
-      expect(await collectCoverageBaselines(watching, NOW)).toEqual([]);
-      expect(asked).toEqual([1]);
-    });
-
-    it("orders two runs of one day by the moment each was created", async () => {
-      const baselines = await collectCoverageBaselines(
-        source([
-          { id: 1, commit: "later", createdAt: daysAgo(0.25) },
-          { id: 2, commit: "earlier", createdAt: daysAgo(0.75) },
-        ], {
-          1: { [measuredSetCoverageMetric("workspace-unit/packages/a")]: 1 },
-          2: { [measuredSetCoverageMetric("workspace-unit/packages/a")]: 2 },
-        }),
-        NOW,
-      );
-      expect(baselines.map((base) => base.commit))
-        .toEqual(["later", "earlier"]);
-    });
-
-    it("passes over a run with an unreadable date", async () => {
-      const baselines = await collectCoverageBaselines(
-        source([{ id: 1, commit: "abc", createdAt: "not a date" }], {
-          1: { [measuredSetCoverageMetric("workspace-unit/packages/a")]: 1 },
-        }),
-        NOW,
-      );
-      expect(baselines).toEqual([]);
-    });
-  });
-
-  describe("reading the repository's own runs and artifacts", () => {
-    /** One artifact, with only the fields the source reads. */
-    const artifact = (
-      over: Partial<{ id: number; name: string; expired: boolean }> = {},
-    ) => ({
-      id: 1,
-      name: PERF_METRICS_ARTIFACT_NAME,
-      expired: false,
-      created_at: "2026-09-09T00:00:00.000Z",
-      ...over,
-      // deno-lint-ignore no-explicit-any
-    } as any);
-
-    /** One run, a successful push to `main` unless told otherwise. */
-    const run = (
-      over: Partial<WorkflowRun> & Pick<WorkflowRun, "id">,
-    ): WorkflowRun => ({
-      head_sha: `sha-${over.id}`,
-      created_at: "2026-09-09T10:00:00Z",
-      head_branch: "main",
-      event: "push",
-      conclusion: "success",
-      html_url: "",
-      ...over,
-    });
-
-    /**
-     * A page of `count` runs, `candidates` of them ones a baseline could come
-     * from. A page of 100 is a full one, which has another behind it.
-     */
-    const page = (
-      count: number,
-      candidates: number,
-      from: number,
-    ): WorkflowRun[] =>
-      Array.from({ length: count }, (_, at) =>
-        run({
-          id: from + at,
-          ...(at < candidates ? {} : { event: "pull_request" }),
-        }));
-
-    it("names each run by its commit and the moment it was created", async () => {
-      const source = liveBaselineSource({
-        list: () => Promise.resolve({ workflow_runs: [run({ id: 7 })] }),
-      });
-      expect(await source.runs()).toEqual([
-        { id: 7, commit: "sha-7", createdAt: "2026-09-09T10:00:00Z" },
-      ]);
-    });
-
-    it("leaves out a run that is not a successful push to main", async () => {
-      const source = liveBaselineSource({
-        list: () =>
-          Promise.resolve({
-            workflow_runs: [
-              run({ id: 1, conclusion: "failure" }),
-              run({ id: 2, event: "pull_request" }),
-              run({ id: 3, head_branch: "topic" }),
-              run({ id: 4 }),
-            ],
-          }),
-      });
-      expect((await source.runs()).map((one) => one.id)).toEqual([4]);
-    });
-
-    it("asks for a listing carrying none of the indexed filters", async () => {
-      const asked: string[] = [];
-      const source = liveBaselineSource({
-        list: (path) => {
-          asked.push(path);
-          return Promise.resolve({ workflow_runs: [run({ id: 9 })] });
-        },
-      });
-      await source.runs();
-
-      expect(asked.length).toBe(1);
-      const query = new URLSearchParams(asked[0].split("?")[1]);
-      expect(query.get("page")).toBe("1");
-      // Any one of these has GitHub answer out of the search index, which
-      // serves a window of runs weeks old with nothing to mark it. Every run
-      // such a window names falls outside the publisher's own window, so the
-      // gathering would stop at the first of them.
-      for (
-        const filter of [
-          "actor",
-          "branch",
-          "check_suite_id",
-          "created",
-          "event",
-          "head_sha",
-          "status",
-        ]
-      ) {
-        expect(query.get(filter)).toBeNull();
-      }
-    });
-
-    it("reads another page while the last one was full", async () => {
-      const asked: string[] = [];
-      const source = liveBaselineSource({
-        list: (path) => {
-          asked.push(path);
-          const at = Number(path.match(/[?&]page=(\d+)/)?.[1]);
-          // Two full pages holding two candidates each, then a short one
-          // ending the listing.
-          return Promise.resolve({
-            workflow_runs: at <= 2 ? page(100, 2, at * 1000) : page(5, 1, 3000),
-          });
-        },
-      });
-      const runs = await source.runs();
-
-      expect(asked.length).toBe(3);
-      expect(runs.map((one) => one.id)).toEqual([1000, 1001, 2000, 2001, 3000]);
-    });
-
-    it("stops once it has gathered the runs one publish reads", async () => {
-      const asked: string[] = [];
-      const source = liveBaselineSource({
-        list: (path) => {
-          asked.push(path);
-          const at = Number(path.match(/[?&]page=(\d+)/)?.[1]);
-          return Promise.resolve({ workflow_runs: page(100, 50, at * 1000) });
-        },
-      });
-      const runs = await source.runs();
-
-      // The cap is reached partway through the second page, and no page is
-      // asked for behind it.
-      expect(runs.length).toBe(100);
-      expect(asked.length).toBe(2);
-    });
-
-    it("stops at the page budget on a listing that keeps going", async () => {
-      const asked: string[] = [];
-      const source = liveBaselineSource({
-        list: (path) => {
-          asked.push(path);
-          const at = Number(path.match(/[?&]page=(\d+)/)?.[1]);
-          // Full pages holding one candidate each, so neither the cap nor
-          // the end of the listing is what stops the reading. The listing
-          // ends well past the budget rather than never, so a reading that
-          // ignored the budget ends this case instead of hanging it.
-          return Promise.resolve({
-            workflow_runs: at <= 40 ? page(100, 1, at * 1000) : [],
-          });
-        },
-      });
-      const runs = await source.runs();
-
-      expect(asked.length).toBe(BASELINE_LISTING_MAX_PAGES);
-      expect(runs.length).toBe(BASELINE_LISTING_MAX_PAGES);
-    });
-
-    it("names a run once that two pages both list", async () => {
-      // A run created between the two reads pushes the ones behind it down a
-      // place, so run 1099, which ended the first page, heads the second.
-      const first = [...page(99, 1, 1000), run({ id: 1099 })];
-      const source = liveBaselineSource({
-        list: (path) => {
-          const at = Number(path.match(/[?&]page=(\d+)/)?.[1]);
-          if (at === 1) return Promise.resolve({ workflow_runs: first });
-          return Promise.resolve({
-            workflow_runs: [run({ id: 1099 }), run({ id: 2000 })],
-          });
-        },
-      });
-      expect((await source.runs()).map((one) => one.id))
-        .toEqual([1000, 1099, 2000]);
-    });
-
-    it("reads the uncovered count out of each metric the artifact holds", async () => {
-      const source = liveBaselineSource({
-        artifacts: () => Promise.resolve([artifact()]),
-        baseline: () =>
-          Promise.resolve({
-            metrics: new Map([["coverage-debt: tasks uncovered lines", {
-              uncoveredLines: 12,
-            }]]),
-          }),
-      });
-      expect([...(await source.metrics(7))!]).toEqual([
-        ["coverage-debt: tasks uncovered lines", 12],
-      ]);
-    });
-
-    it("passes over an artifact that has expired or is named otherwise", async () => {
-      const asked: number[] = [];
-      const source = liveBaselineSource({
-        artifacts: () =>
-          Promise.resolve([
-            artifact({ id: 2, expired: true }),
-            artifact({ id: 3, name: "something-else" }),
-          ]),
-        baseline: (id) => {
-          asked.push(id);
-          return Promise.resolve({ metrics: new Map() });
-        },
-      });
-      expect(await source.metrics(7)).toBeUndefined();
-      expect(asked).toEqual([]);
-    });
-
-    it("answers with nothing where the run's artifacts cannot be listed", async () => {
-      // A publish reads many runs, and one that cannot be read
-      // contributes no baseline rather than ending the publish.
-      const source = liveBaselineSource({
-        artifacts: () => Promise.reject(new Error("the interface said no")),
-      });
-      expect(await source.metrics(7)).toBeUndefined();
-    });
-
-    it("answers with nothing where the artifact cannot be parsed", async () => {
-      const source = liveBaselineSource({
-        artifacts: () => Promise.resolve([artifact()]),
-        baseline: () => Promise.resolve(null),
-      });
-      expect(await source.metrics(7)).toBeUndefined();
-    });
-  });
-
-  describe("what a publish carries", () => {
-    const known = [{
-      suite: "workspace-unit",
-      member: "packages/a",
-      commit: "earlier",
-      createdAt: daysAgo(1),
-      uncoveredLines: 7,
-    }];
-
-    it("carries what the last manifest held when it cannot read more", async () => {
-      // Switching the gate off for one publish would report every set
-      // as having nothing to compare against.
+    it("returns nothing for a pull request's run", () => {
+      const ci = { ...context().ci!, event: "pull_request" };
       expect(
-        await publishableBaselines(NOW, known, source([], {}), undefined),
-      ).toEqual(known);
-      expect(await publishableBaselines(NOW, known, source([], {}), ""))
-        .toEqual(known);
+        baselinesOf(
+          report({ "workspace-unit/packages/a": 5 }, context({ ci })),
+        ),
+      ).toEqual([]);
     });
 
-    it("carries what the last manifest held when the source throws", async () => {
-      const broken: BaselineSource = {
-        runs: () => Promise.reject(new Error("the interface said no")),
-        metrics: () => Promise.resolve(undefined),
-      };
-      expect(await publishableBaselines(NOW, known, broken, "a token"))
-        .toEqual(known);
+    it("returns nothing for a push to another branch", () => {
+      expect(
+        baselinesOf(
+          report({ "workspace-unit/packages/a": 5 }, context({ branch: "x" })),
+        ),
+      ).toEqual([]);
     });
 
-    it("adds what a run published to what it carried", async () => {
-      const baselines = await publishableBaselines(
-        NOW,
-        known,
-        source([{ id: 1, commit: "later", createdAt: daysAgo(0.5) }], {
-          1: { [measuredSetCoverageMetric("workspace-unit/packages/a")]: 5 },
-        }),
-        "a token",
-      );
-      expect(baselines.map((base) => base.commit))
-        .toEqual(["later", "earlier"]);
+    it("returns nothing for a run the fork flag marks", () => {
+      const ci = { ...context().ci!, fork: true };
+      expect(
+        baselinesOf(
+          report({ "workspace-unit/packages/a": 5 }, context({ ci })),
+        ),
+      ).toEqual([]);
+    });
+
+    it("returns nothing for a report with no context", () => {
+      const { records } = report({ "workspace-unit/packages/a": 5 });
+      expect(baselinesOf({ context: undefined, records })).toEqual([]);
+    });
+
+    it("never reads a source group as a measured set", () => {
+      expect(
+        baselinesOf(
+          report({}, context(), { "packages/memory": 40 }),
+        ),
+      ).toEqual([]);
+    });
+
+    it("passes over a set name that names no member", () => {
+      expect(
+        baselinesOf(
+          report({ "workspace-unit": 3, "workspace-unit/packages/a": 5 }),
+        ).map((base) => base.member),
+      ).toEqual(["packages/a"]);
+    });
+  });
+
+  describe("mergeBaselines()", () => {
+    it("carries forward what the previous manifest held", () => {
+      expect(
+        mergeBaselines(
+          [baseline("earlier", 2, 7)],
+          [baseline("later", 1, 5)],
+          NOW,
+        )
+          .map((base) => [base.commit, base.uncoveredLines]),
+      ).toEqual([["later", 5], ["earlier", 7]]);
+    });
+
+    it("drops a baseline that has fallen out of the window", () => {
+      expect(
+        mergeBaselines(
+          [baseline("ancient", LOCAL_COVERAGE_BASELINE_DAYS + 1, 7)],
+          [baseline("stale", LOCAL_COVERAGE_BASELINE_DAYS + 2, 3)],
+          NOW,
+        ),
+      ).toEqual([]);
+    });
+
+    it("drops a baseline whose date will not read", () => {
+      expect(
+        mergeBaselines(
+          [{ ...baseline("c1", 1, 7), createdAt: "soon" }],
+          [],
+          NOW,
+        ),
+      ).toEqual([]);
+    });
+
+    it("keeps one baseline of a set at a commit, from the later run", () => {
+      // Two baselines at one commit would leave a comparison choosing
+      // between them by whichever came first.
+      expect(
+        mergeBaselines(
+          [baseline("shared", 0.75, 9)],
+          [baseline("shared", 0.25, 5)],
+          NOW,
+        ).map((base) => base.uncoveredLines),
+      ).toEqual([5]);
+      expect(
+        mergeBaselines(
+          [baseline("shared", 0.25, 5)],
+          [baseline("shared", 0.75, 9)],
+          NOW,
+        ).map((base) => base.uncoveredLines),
+      ).toEqual([5]);
+    });
+
+    it("keeps the one found later where two runs are stamped with one start", () => {
+      // The relay stamps an earlier attempt's object re-shipped under a
+      // later day with the later attempt's start, and the fold reads the
+      // earlier attempt's object first.
+      expect(
+        mergeBaselines(
+          [],
+          [baseline("shared", 1, 7), baseline("shared", 1, 5)],
+          NOW,
+        ).map((base) => base.uncoveredLines),
+      ).toEqual([5]);
+    });
+
+    it("keeps two members measured at one commit apart", () => {
+      expect(
+        mergeBaselines(
+          [],
+          [
+            baseline("shared", 1, 7, "packages/a"),
+            baseline("shared", 1, 5, "packages/b"),
+          ],
+          NOW,
+        ).map((base) => [base.member, base.uncoveredLines]),
+      ).toEqual([["packages/a", 7], ["packages/b", 5]]);
     });
   });
 });

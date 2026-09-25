@@ -10,7 +10,6 @@ artifact
 coverage
 _deno.lock
 .claude-prompt.tmp
-.bg-piece-service.pid
 .pr-desc.tmp
 dist/
 .claude/settings.local.json

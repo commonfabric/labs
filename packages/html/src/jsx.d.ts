@@ -2954,7 +2954,6 @@ interface CFChatElement extends CFHTMLElement {}
 interface CFMessageBeadsElement extends CFHTMLElement {}
 interface CFAttachmentsBarElement extends CFHTMLElement {}
 interface CFFragmentElement extends CFHTMLElement {}
-interface CFUpdaterElement extends CFHTMLElement {}
 interface CFGoogleOAuthElement extends CFHTMLElement {}
 interface CFOAuthElement extends CFHTMLElement {}
 interface CFCanvasElement extends CFHTMLElement {}
@@ -3006,9 +3005,11 @@ interface CFTextElement extends CFHTMLElement {}
 interface CFAvatarElement extends CFHTMLElement {}
 interface CFProfileBadgeElement extends CFHTMLElement {}
 interface CFShareSnapshotElement extends CFHTMLElement {}
+interface CFCustodySealElement extends CFHTMLElement {}
 interface CFBadgeElement extends CFHTMLElement {}
 interface CFChipElement extends CFHTMLElement {}
 interface CFEmptyStateElement extends CFHTMLElement {}
+interface CFHoverRevealElement extends CFHTMLElement {}
 interface CFProgressElement extends CFHTMLElement {}
 interface CFSkeletonElement extends CFHTMLElement {}
 interface CFSeparatorElement extends CFHTMLElement {}
@@ -3078,11 +3079,6 @@ interface CFSecretViewerAttributes<T> extends CFHTMLAttributes<T> {
   "label"?: string;
   "value"?: string;
   "trailing-chars"?: number;
-}
-
-interface CFUpdaterAttributes<T> extends CFHTMLAttributes<T> {
-  "integration"?: string;
-  "$state"?: CellLike<any>;
 }
 
 interface CFPieceAttributes<T> extends CFHTMLAttributes<T> {
@@ -4337,6 +4333,18 @@ interface CFShareSnapshotAttributes<T> extends CFHTMLAttributes<T> {
   "oncf-shared"?: EventHandler<{}>;
 }
 
+interface CFCustodySealAttributes<T> extends CFHTMLAttributes<T> {
+  /** The actor's draft, whose exact value the trusted host seals. */
+  "$draft"?: CellLike<unknown>;
+  /** The room's terms document; its space is the room the value enters. */
+  "$terms"?: CellLike<unknown>;
+  /** A cell holding the room's custody policy reference. */
+  "$policy"?: CellLike<unknown>;
+  /** The actor's source policy, in the actor's home space. */
+  "$sources"?: CellLike<unknown>;
+  "oncf-sealed"?: EventHandler<{}>;
+}
+
 interface CFOwnerViewAttributes<T> extends CFHTMLAttributes<T> {
   /** Persisted creator identity whose attested owner is checked by the host. */
   "$originator"?: CellLike<unknown>;
@@ -4371,6 +4379,10 @@ interface CFChipAttributes<T> extends CFHTMLAttributes<T> {
 
 interface CFEmptyStateAttributes<T> extends CFHTMLAttributes<T> {
   "message"?: string | CellLike<string>;
+}
+
+interface CFHoverRevealAttributes<T> extends CFHTMLAttributes<T> {
+  "revealed"?: boolean | CellLike<boolean>;
 }
 
 interface CFProgressAttributes<T> extends CFHTMLAttributes<T> {
@@ -5259,10 +5271,6 @@ declare global {
         CFIframeAttributes<CFIFrameElement>,
         CFIFrameElement
       >;
-      "cf-updater": CFDOM.DetailedHTMLProps<
-        CFUpdaterAttributes<CFUpdaterElement>,
-        CFUpdaterElement
-      >;
       "cf-google-oauth": CFDOM.DetailedHTMLProps<
         CFGoogleOAuthAttributes<CFGoogleOAuthElement>,
         CFGoogleOAuthElement
@@ -5391,6 +5399,10 @@ declare global {
         CFShareSnapshotAttributes<CFShareSnapshotElement>,
         CFShareSnapshotElement
       >;
+      "cf-custody-seal": CFDOM.DetailedHTMLProps<
+        CFCustodySealAttributes<CFCustodySealElement>,
+        CFCustodySealElement
+      >;
       "cf-owner-view": CFDOM.DetailedHTMLProps<
         CFOwnerViewAttributes<CFHTMLElement>,
         CFHTMLElement
@@ -5414,6 +5426,10 @@ declare global {
       "cf-empty-state": CFDOM.DetailedHTMLProps<
         CFEmptyStateAttributes<CFEmptyStateElement>,
         CFEmptyStateElement
+      >;
+      "cf-hover-reveal": CFDOM.DetailedHTMLProps<
+        CFHoverRevealAttributes<CFHoverRevealElement>,
+        CFHoverRevealElement
       >;
       "cf-tile": CFDOM.DetailedHTMLProps<
         CFTileAttributes<CFTileElement>,

@@ -82,7 +82,9 @@
  * |                            | coreOptions when a first-party rollout begins    |
  * | cfcPrefixProvenanceStats   | core-default (off) — measurement opt-in, per     |
  * |                            | deployment (value-level provenance Stage 0)      |
- * | cfcTrustConfig             | core-default (none declared) — same              |
+ * | cfcTrustConfig             | core-default (none declared); delta on           |
+ * |                            | browserWorker (the host declares its deployment  |
+ * |                            | trust statements through InitializationData)     |
  * | cfcSinkMaxConfidentiality  | core-default (none declared) — same              |
  * | cfcReadMaxConfidentiality  | core-default (none — the owner view); delta on   |
  * |                            | remoteClient / browserWorker (a per-run or       |
@@ -150,6 +152,7 @@ import {
   type CfcEnforcementMode,
   type CfcFlowLabelsMode,
   type CfcReadOnExceed,
+  type CfcTrustConfigInput,
   type CfcWriteFloorMode,
   sinkCeilingsOf,
   type SinkGovernanceRegistry,
@@ -496,7 +499,9 @@ function coreOptions(params: CoreParams): RuntimeOptions {
     // cfcContentAddressedLabels / cfcPolicyRecords / cfcTrustConfig /
     // cfcSinkMaxConfidentiality / cfcReadMaxConfidentiality /
     // cfcReadOnExceed are not among them: they ride the constructor defaults
-    // (off / none) until a first-party rollout begins. A caller that opts
+    // (off / none) until a first-party rollout begins, except where a preset
+    // adds a delta after these core options (browserWorker passes the host's
+    // cfcTrustConfig and read ceiling). A caller that opts
     // into `cfcPosture` gets the named bundle's values over the pins, for
     // this one runtime.
     ...presetCfcOptions({
@@ -620,6 +625,13 @@ export interface BrowserWorkerPresetParams extends CoreParams {
   /** The read ceiling's fallback `onExceed`, from the same source. */
   cfcReadOnExceed?: CfcReadOnExceed;
 
+  /**
+   * The deployment trust configuration, from `InitializationData`: the host
+   * decides which statements its runtimes evaluate concept guards under,
+   * such as a default profile trusting a reviewed policy digest.
+   */
+  cfcTrustConfig?: CfcTrustConfigInput;
+
   trustSnapshotProvider?: () => TrustSnapshot | undefined;
   telemetry?: RuntimeTelemetry;
   consoleHandler?: ConsoleHandler;
@@ -667,9 +679,8 @@ function readCeilingOptions(
 
 export const runtimePresets = {
   /**
-   * Long-running server process (toolshed, background-piece-service main and
-   * worker). Remote storage, real fetch, patterns fetch against the
-   * deployment's own API base.
+   * Long-running server process (toolshed). Remote storage, real fetch,
+   * patterns fetch against the deployment's own API base.
    */
   productionServer(params: ProductionServerPresetParams): RuntimeOptions {
     return {
@@ -691,8 +702,8 @@ export const runtimePresets = {
   },
 
   /**
-   * Short-lived client runtime operating against a deployed API (cast-admin,
-   * pieces controller, `cf acl` / `cf piece`). Same posture as
+   * Short-lived client runtime operating against a deployed API (pieces
+   * controller, `cf acl` / `cf piece`). Same posture as
    * productionServer; the deltas are collectors and caches.
    */
   remoteClient(params: RemoteClientPresetParams): RuntimeOptions {
@@ -794,6 +805,9 @@ export const runtimePresets = {
         ? { cfcFlowLabels: params.cfcFlowLabels }
         : {}),
       ...readCeilingOptions(params),
+      ...(params.cfcTrustConfig !== undefined
+        ? { cfcTrustConfig: params.cfcTrustConfig }
+        : {}),
       ...(params.trustSnapshotProvider !== undefined
         ? { trustSnapshotProvider: params.trustSnapshotProvider }
         : {}),

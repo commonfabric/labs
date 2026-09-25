@@ -44,11 +44,14 @@ import {
   CFC_LABEL_READ_FAILED_ATOM,
   type CfcLabelView,
   cfcLabelViewForCell,
+  type CfcLabelViewSource,
+  cfcLabelViewSourceForCell,
   clauseAlternatives,
   markRendererTrustedEvent,
+  membershipSpacesInConfidentiality,
+  modulePolicyRefsInConfidentiality,
   type RenderConfidentialityResolver,
   reportCfcDenial,
-  spaceAtomIdsInConfidentiality,
   type SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
 import type { CellRef } from "@commonfabric/runtime-client";
@@ -246,6 +249,15 @@ export class WorkerReconciler {
    * gates soundly.
    */
   readonly #membershipProvider?: SpaceMembershipProvider;
+
+  /**
+   * The module-policy manifest source whose `subscribe()` lets a gated
+   * `PolicyOf` cell re-render when the manifest its label selects syncs into
+   * a space the label was read from.
+   * When `undefined`, there is no reactive upgrade, and the sync snapshot
+   * still gates soundly.
+   */
+  readonly #modulePolicySource?: WorkerReconcilerOptions["modulePolicySource"];
   readonly #spaceAccess?: WorkerReconcilerOptions["spaceAccess"];
 
   constructor(options: WorkerReconcilerOptions) {
@@ -253,6 +265,7 @@ export class WorkerReconciler {
     this.#onError = options.onError;
     this.#resolveRenderConfidentiality = options.resolveRenderConfidentiality;
     this.#membershipProvider = options.membershipProvider;
+    this.#modulePolicySource = options.modulePolicySource;
     this.#spaceAccess = options.spaceAccess;
     // Security knob: a present-but-unknown value fails closed to "deny";
     // only an absent option keeps the documented "allow" default.
@@ -357,14 +370,14 @@ export class WorkerReconciler {
       // value when an ACL changes.
       let lastRootValue: unknown;
       let rootHasRendered = false;
-      const rootWatchedSpaces = new Set<string>();
+      const rootWatchedDocs = new Set<string>();
       const renderRoot = (resolvedVnode: unknown) => {
         logger.debug("root-cell-update", () => ({ resolvedVnode }));
         lastRootValue = resolvedVnode;
         rootHasRendered = true;
         this.#watchCellMembership(
           vnode as Cell<unknown>,
-          rootWatchedSpaces,
+          rootWatchedDocs,
           addCancel,
           () => {
             if (rootHasRendered) renderRoot(lastRootValue);
@@ -1027,8 +1040,19 @@ export class WorkerReconciler {
    * (`watchCellMembership`), so they can never drift out of lockstep.
    */
   #resolveCellLabelView(cell: Cell<unknown>): CfcLabelView | undefined {
-    return cfcLabelViewForCell(cell) ??
-      cfcLabelViewForCell(cell.resolveAsCell());
+    return this.#resolveCellLabelSource(cell).view;
+  }
+
+  /**
+   * {@link #resolveCellLabelView}, with the spaces of the documents the view
+   * was read from, where a module policy the label selects has its manifest
+   * (spec §4.4.1). May throw, like the view read.
+   */
+  #resolveCellLabelSource(cell: Cell<unknown>): CfcLabelViewSource {
+    const own = cfcLabelViewSourceForCell(cell);
+    return own.view !== undefined
+      ? own
+      : cfcLabelViewSourceForCell(cell.resolveAsCell());
   }
 
   /**
@@ -1277,8 +1301,11 @@ export class WorkerReconciler {
     }
 
     let labelView: CfcLabelView | undefined;
+    let labelSpaces: readonly string[];
     try {
-      labelView = this.#resolveCellLabelView(cell);
+      ({ view: labelView, spaces: labelSpaces } = this.#resolveCellLabelSource(
+        cell,
+      ));
     } catch {
       return false;
     }
@@ -1311,6 +1338,7 @@ export class WorkerReconciler {
       return this.#resolvedConfidentialityRenderable(
         confidentiality,
         this.#integrityLabels(labelView),
+        () => labelSpaces,
         policy,
       );
     }
@@ -1336,11 +1364,13 @@ export class WorkerReconciler {
   #resolvedConfidentialityRenderable(
     confidentiality: readonly CfcConfClause[],
     integrity: readonly CfcAtom[],
+    spaces: () => readonly string[],
     policy: RenderPolicy,
   ): boolean {
     const resolved = this.#resolveRenderConfidentiality!({
       confidentiality,
       integrity,
+      spaces,
     });
     const offending = atomsOutsideCeiling(resolved, policy.maxConfidentiality);
     for (const clause of offending) {
@@ -1504,16 +1534,22 @@ export class WorkerReconciler {
   }
 
   /**
-   * §4.9.3 Stage 2: subscribe `reeval` to the ACL docs of the spaces `cell` is
-   * labeled `Space(X)` with, so a fail-closed over-block re-renders when an ACL
-   * later grants (or revokes) READ. Shared by the descendant-cell
+   * §4.9.3 Stage 2 (spec §18.4.5): subscribe `reeval` to the ACL docs of the
+   * spaces the render resolver consults for `cell`'s label
+   * (`membershipSpacesInConfidentiality`, which adds module-policy subjects to
+   * the spec's `Space(X)` candidates per `docs/specs/cfc-spec-changes.md`
+   * SC-44), and to the manifest document of
+   * each module policy the label selects in each space the label was read
+   * from, so a fail-closed over-block re-renders when an ACL later grants (or
+   * revokes) READ or a manifest arrives. Shared by the descendant-cell
    * (`renderCellChild`) and root-mounted (`mount`) egress paths. A no-op
-   * without a membership provider or when the label carries no `Space` atom;
-   * idempotent per space via `watched`; cancels register through `addCancel`
-   * (the cell's cancel group). Reads the same label view the render fit
-   * consumes, so a resolved `Space(X)` and its watched ACL doc stay in
-   * lockstep. Any label-read failure is swallowed (fail closed on watching —
-   * the render fit itself stays fail-closed independently).
+   * without a membership provider or manifest source, or when the label
+   * carries nothing either would watch; idempotent per watched document via
+   * `watched`; cancels register through `addCancel` (the cell's cancel group).
+   * Reads the same label view the render fit consumes, so what the fit
+   * resolves and what is watched stay in lockstep. A label-read failure or a
+   * subscription that throws is swallowed (fail closed on watching — the
+   * render fit itself stays fail-closed independently).
    */
   #watchCellMembership(
     cell: Cell<unknown>,
@@ -1522,31 +1558,59 @@ export class WorkerReconciler {
     reeval: () => void,
   ): void {
     const provider = this.#membershipProvider;
-    if (provider === undefined) {
+    const manifests = this.#modulePolicySource;
+    if (provider === undefined && manifests === undefined) {
       return;
     }
     // Read the label the render gate reads (`resolveCellLabelView`, including
     // the followed-target fallback) so the watcher and the fit stay in
     // lockstep — a followed cell whose `Space(...)` label lives on the target
     // is watched, not silently left un-upgradable.
-    let labelView: CfcLabelView | undefined;
+    let source: CfcLabelViewSource;
     try {
-      labelView = this.#resolveCellLabelView(cell);
+      source = this.#resolveCellLabelSource(cell);
     } catch {
-      labelView = undefined;
+      return;
     }
-    // No stored label (or a read failure) → no `Space` atom to watch. The
-    // render fit still fail-closes independently; we just set up no reactive
-    // upgrade.
-    if (labelView === undefined) return;
-    for (
-      const space of spaceAtomIdsInConfidentiality(
-        this.#confidentialityLabels(labelView),
-      )
-    ) {
-      if (watched.has(space)) continue;
-      watched.add(space);
-      addCancel(provider.subscribe(space, reeval));
+    // No stored label (or a read failure) → nothing to watch. The render fit
+    // still fail-closes independently; we just set up no reactive upgrade.
+    if (source.view === undefined) return;
+    const confidentiality = this.#confidentialityLabels(source.view);
+    // A subscription that throws leaves that document unwatched (fail closed
+    // on watching) and must not escape into the cell's sink.
+    const watch = (key: string, subscribe: () => Cancel) => {
+      if (watched.has(key)) return;
+      try {
+        addCancel(subscribe());
+        watched.add(key);
+      } catch (error) {
+        // Unwatched; the render fit stays fail-closed independently, but a
+        // cell that can no longer upgrade should say why.
+        logger.error(
+          "render policy watch subscription failed",
+          () => ({ key, error }),
+        );
+      }
+    };
+    if (provider !== undefined) {
+      for (const space of membershipSpacesInConfidentiality(confidentiality)) {
+        watch(
+          `membership:${space}`,
+          () => provider.subscribe(space, reeval),
+        );
+      }
+    }
+    if (manifests !== undefined) {
+      for (
+        const reference of modulePolicyRefsInConfidentiality(confidentiality)
+      ) {
+        for (const space of source.spaces) {
+          watch(
+            `manifest:${JSON.stringify([space, reference.policyDigest])}`,
+            () => manifests.subscribe(reference, space, reeval),
+          );
+        }
+      }
     }
   }
 
@@ -3942,7 +4006,7 @@ export class WorkerReconciler {
     // cell is labeled with, so a fail-closed over-block upgrades to an admit
     // when a `Space(X)` ACL syncs in (and a revoke re-blocks) — a re-evaluation
     // with the last resolved value, forced past the value-identity dedupe.
-    const watchedSpaces = new Set<string>();
+    const watchedDocs = new Set<string>();
 
     const renderResolved = (resolvedChild: unknown, forced = false) => {
       const isInitialRender = childState.nodeId === -1;
@@ -3954,7 +4018,7 @@ export class WorkerReconciler {
       childState.currentValue = resolvedChild;
       this.#watchCellMembership(
         cell,
-        watchedSpaces,
+        watchedDocs,
         addCancel,
         () => renderResolved(childState.currentValue, true),
       );

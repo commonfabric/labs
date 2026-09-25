@@ -25,6 +25,7 @@
 
 import { walk } from "@std/fs/walk";
 import * as path from "@std/path";
+import type { Environment } from "@commonfabric/test-support/records";
 
 import {
   acceptsCoverageDebt,
@@ -89,6 +90,7 @@ import {
   fillMissingFamiliesFromFingerprint,
   inferCurrentRunFallbackState,
 } from "./compile-cache-state.ts";
+import { recordCoverage } from "./coverage-records.ts";
 import {
   collectCoverageDebtMetricsFromLcov,
   collectRegressedLines,
@@ -2557,7 +2559,12 @@ async function reportRateLimited(
 // Main
 //
 
-export async function main() {
+/**
+ * Runs the check the way the job runs it. `env` is where the run's record
+ * spool is looked up, and the default is an empty environment, so a caller
+ * that does not hand one over records nothing.
+ */
+export async function main(env: Environment = () => undefined) {
   const runId = Deno.env.get("GITHUB_RUN_ID");
   const rawPrNumber = Deno.env.get("PR_NUMBER");
   const prNumber = (rawPrNumber === "") ? null : rawPrNumber;
@@ -2723,6 +2730,14 @@ export async function main() {
   }
 
   await writePerfMetricsArtifact(perfArtifact);
+  // The same figures go to the record store, where the dashboard's trend
+  // reads them. Only a push to `main` ships them, which the workflow
+  // decides.
+  recordCoverage(
+    [...currentMetrics].map(([name, sample]) => [name, sample.uncoveredLines]),
+    Object.values(currentCacheStates).includes("cold"),
+    env,
+  );
 
   if (coverageDataError && !informationalOnly) {
     console.error(
@@ -3092,5 +3107,5 @@ async function ratchetAgainstBaselines(
 }
 
 if (import.meta.main) {
-  main();
+  main(Deno.env.get);
 }

@@ -272,7 +272,7 @@ describe("createRuntimeTelemetryOtelBridge", () => {
   it("stamps metricAttributes on metrics but never on spans", () => {
     setup({
       attributes: { "user.did": "did:key:alice" },
-      metricAttributes: { "service.name": "bg-piece-service" },
+      metricAttributes: { "service.name": "toolshed" },
     });
     bridge.handleMarker(marker({ type: "cell.update" }));
     bridge.handleMarker(marker({
@@ -282,7 +282,7 @@ describe("createRuntimeTelemetryOtelBridge", () => {
     }));
     expect(meterCalls[0].attributes).toEqual({
       "user.did": "did:key:alice",
-      "service.name": "bg-piece-service",
+      "service.name": "toolshed",
     });
     // span keeps resource-style keys off its attributes (SigNoz treats a key
     // present in both resource and attribute context as ambiguous)

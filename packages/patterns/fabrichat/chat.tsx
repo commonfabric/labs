@@ -8,16 +8,26 @@
  * and `cf-cfc-authorship` marks the message verified when that principal owns
  * the profile the message links.
  *
+ * A reaction is a record of its own, not a field of the message: which message,
+ * which of a few cat faces, and the profile of the person reacting. It is
+ * written only by `commitReact`, reached from a reviewed surface on the
+ * message, and labeled `authored-by` its reactor as a message is by its sender.
+ * Each reaction is kept at an address derived from the reactor, the message,
+ * and the emoji, so adding or removing one never rewrites anyone else's.
+ *
  * The room takes the viewer's profile as an input rather than wishing for it,
  * so that `main.tsx` supplies the real `#profile` and a test can supply a
  * stand-in.
  */
 import {
+  action,
   AuthoredByCurrentUser,
   type Cell,
   computed,
   Default,
+  entityRefToString,
   equals,
+  getEntityId,
   handler,
   NAME,
   pattern,
@@ -33,6 +43,18 @@ export const FABRICHAT_SEND_SURFACE = "FabriChatSendSurface";
 
 /** The reviewed action a send is, on the composer's surface. */
 export const FABRICHAT_SEND_ACTION = "FabriChatSend";
+
+/** The UI integrity a message's reviewed reaction surface gives its events. */
+export const FABRICHAT_REACT_SURFACE = "FabriChatReactSurface";
+
+/** The reviewed action a reaction is, on a message's reaction surface. */
+export const FABRICHAT_REACT_ACTION = "FabriChatReact";
+
+/** The reactions on offer, in the order a message shows them. */
+export const FABRICHAT_REACJI = ["😺", "😻", "🙀", "😿"] as const;
+
+/** How a reaction's emoji is drawn, at twice a small button's text size. */
+const REACJI_STYLE = { fontSize: "22px", lineHeight: "1" };
 
 /** The fields of a profile that the room reads. */
 export interface FabriChatProfile {
@@ -75,6 +97,50 @@ export type SentMessage = AuthoredByCurrentUser<
     typeof FABRICHAT_SEND_SURFACE
   >
 >;
+
+/** A live link to a message. */
+export type MessageCell = Cell<FabriChatMessage>;
+
+/** What a reaction holds. */
+export interface FabriChatReaction {
+  /** The profile the reactor reacted under. */
+  reactorProfile: ProfileCell;
+
+  /** The message reacted to. */
+  message: MessageCell;
+
+  /** One of `FABRICHAT_REACJI`. */
+  emoji: string;
+}
+
+/**
+ * A stored reaction: written only by `commitReact`, labeled with its reactor.
+ */
+export type SentReaction = AuthoredByCurrentUser<
+  TrustedActionWrite<
+    FabriChatReaction,
+    typeof commitReact,
+    typeof FABRICHAT_REACT_ACTION,
+    typeof FABRICHAT_REACT_SURFACE
+  >
+>;
+
+/** A conversation's reactions, in no particular order. */
+export type ReactionsValue = SentReaction[] | Default<[]>;
+
+/** The cell holding a conversation's reactions. */
+export type ReactionsCell = Writable<ReactionsValue>;
+
+/** How one emoji stands on one message. */
+export interface ReactionTally {
+  emoji: string;
+
+  /** How many people reacted with it. */
+  count: number;
+
+  /** Whether the viewer is one of them. */
+  mine: boolean;
+}
 
 /** A conversation's messages, oldest first. */
 export type MessagesValue = SentMessage[] | Default<[]>;
@@ -156,7 +222,246 @@ export const commitSend = handler<
 
 type CommitSendInput = Parameters<typeof commitSend>[0];
 
-/** What a room needs: the viewer, and the conversation. */
+/**
+ * A reaction's address: its reactor's profile entity, its message's entity, and
+ * its emoji. One person's one reaction to one message has a single address in
+ * every session, so a handler reaches it without reading the list, and two
+ * people reacting at once write different records. Both cells must be resolved
+ * to the entities they name: a cell reaching a message through its slot in the
+ * list names the slot. It is `undefined` when either cell names no entity.
+ */
+export const reactionKeyFor = (
+  reactor: ProfileCell,
+  message: MessageCell,
+  emoji: string,
+): string | undefined => {
+  const reactorRef = getEntityId(reactor);
+  const messageRef = getEntityId(message);
+  if (reactorRef === undefined || messageRef === undefined) return undefined;
+  return JSON.stringify([
+    entityRefToString(reactorRef),
+    entityRefToString(messageRef),
+    emoji,
+  ]);
+};
+
+/**
+ * The emoji `reactions` hold for `message`, in the order `FABRICHAT_REACJI`
+ * lists them, leaving out any nobody used. A reaction is the viewer's when its
+ * profile is the viewer's profile cell.
+ */
+export const reactionTallies = (
+  reactions: readonly FabriChatReaction[],
+  message: MessageCell | FabriChatMessage | undefined,
+  viewer: ProfileCell | undefined,
+): ReactionTally[] =>
+  FABRICHAT_REACJI.map((emoji) => {
+    const onThis = reactions.filter((reaction) =>
+      reaction?.emoji === emoji && equals(reaction.message, message)
+    );
+    return {
+      emoji,
+      count: onThis.length,
+      mine: viewer !== undefined &&
+        onThis.some((reaction) => equals(reaction.reactorProfile, viewer)),
+    };
+  }).filter((tally) => tally.count > 0);
+
+/**
+ * Clears the record at `key`. A reaction's record outlives its place in the
+ * list, and it is the record that says whether someone has the reaction, so a
+ * removal clears it too.
+ */
+const clearReaction = (reactions: ReactionsCell, key: string): void => {
+  const reaction: Writable<SentReaction | undefined> = reactions.elementById(
+    key,
+  );
+  reaction.set(undefined);
+};
+
+/**
+ * Adds the viewer's `emoji` reaction to `message`, or removes it when the
+ * viewer already has it there, and closes the picker the reaction was chosen
+ * from, when there is one. It refuses an emoji not on offer, and it refuses to
+ * react before the viewer's profile is known, leaving the picker open. The
+ * profile can reach the handler later than it reaches the viewer's page, as
+ * `commitSend` describes, and a click the handler refuses is spent.
+ */
+export const commitReact = handler<
+  unknown,
+  {
+    emoji: string;
+    message: MessageCell;
+    // Holds no value until the viewer's profile resolves.
+    myProfile: ProfileCell | undefined;
+    reactions: ReactionsCell;
+    pickerOpen?: Writable<boolean>;
+  }
+>((_event, { emoji, message, myProfile, reactions, pickerOpen }) => {
+  if (!(FABRICHAT_REACJI as readonly string[]).includes(emoji)) return;
+  const reactor = myProfile?.resolveAsCell();
+  const target = message.resolveAsCell();
+  if (reactor?.get() === undefined || target.get() === undefined) return;
+  const key = reactionKeyFor(reactor, target, emoji);
+  if (key === undefined) return;
+
+  pickerOpen?.set(false);
+  const mine = reactions.elementById(key);
+  if (mine.get() !== undefined) {
+    reactions.removeByValue(mine);
+    clearReaction(reactions, key);
+    return;
+  }
+  mine.set({ reactorProfile: reactor, message: target, emoji } as SentReaction);
+  reactions.addUnique(mine);
+});
+
+type CommitReactInput = Parameters<typeof commitReact>[0];
+
+/** What a message row needs. */
+export interface FabriChatMessageRowInput {
+  message: FabriChatMessage;
+
+  /** The viewer's profile, which holds no value while it is unknown. */
+  myProfile: ProfileCell | undefined;
+
+  reactions: ReactionsCell;
+}
+
+/** What a message row provides. */
+export interface FabriChatMessageRowOutput {
+  [UI]: VNode;
+  tallies: ReactionTally[];
+}
+
+/**
+ * One message: its sender, its body, and its reactions, with a control that
+ * appears on hover to add one.
+ */
+export const FabriChatMessageRow = pattern<
+  FabriChatMessageRowInput,
+  FabriChatMessageRowOutput
+>(({ message, myProfile, reactions }) => {
+  const pickerOpen = new Writable.perSession(false);
+  const togglePicker = action(() => pickerOpen.set(!pickerOpen.get()));
+  const tallies = computed(() =>
+    reactionTallies(
+      (reactions.get() ?? []) as FabriChatReaction[],
+      message,
+      myProfile?.get() === undefined ? undefined : myProfile,
+    )
+  );
+  const cannotReact = computed(() => myProfile?.get() === undefined);
+
+  return {
+    [UI]: (
+      <div
+        data-ui-pattern={FABRICHAT_REACT_SURFACE}
+        data-ui-event-integrity={FABRICHAT_REACT_SURFACE}
+      >
+        <cf-hover-reveal revealed={pickerOpen}>
+          <div
+            style={{
+              display: "flex",
+              gap: "0.5rem",
+              alignItems: "flex-start",
+            }}
+          >
+            <cf-profile-badge
+              variant="circle"
+              size="sm"
+              $profile={message.authorProfile}
+            />
+            <cf-vstack gap="1" style={{ flex: "1", minWidth: "0" }}>
+              <cf-cfc-authorship
+                $value={message.body}
+                $author={message.authorProfile}
+                authorName={message.authorName || undefined}
+              >
+                <cf-text
+                  variant="body"
+                  block
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {message.body}
+                </cf-text>
+              </cf-cfc-authorship>
+              <div
+                style={{
+                  display: "flex",
+                  gap: "0.25rem",
+                  flexWrap: "wrap",
+                }}
+              >
+                {tallies.map((tally) => (
+                  <cf-button
+                    data-ui-action={FABRICHAT_REACT_ACTION}
+                    size="sm"
+                    color="primary"
+                    variant={tally.mine ? "outline" : "ghost"}
+                    disabled={cannotReact}
+                    onClick={commitReact({
+                      emoji: tally.emoji,
+                      message,
+                      myProfile,
+                      reactions,
+                    } as CommitReactInput)}
+                  >
+                    {
+                      /* One item in the button's row, so the emoji and its
+                      count read as one run of text. */
+                    }
+                    <span>
+                      <span style={REACJI_STYLE}>{tally.emoji}</span>{" "}
+                      {tally.count}
+                    </span>
+                  </cf-button>
+                ))}
+              </div>
+            </cf-vstack>
+          </div>
+          <cf-hstack slot="actions" gap="1" align="center">
+            {pickerOpen
+              ? FABRICHAT_REACJI.map((emoji) => (
+                <cf-button
+                  data-ui-action={FABRICHAT_REACT_ACTION}
+                  size="sm"
+                  variant="ghost"
+                  disabled={cannotReact}
+                  onClick={commitReact({
+                    emoji,
+                    message,
+                    myProfile,
+                    reactions,
+                    pickerOpen,
+                  } as CommitReactInput)}
+                >
+                  <span style={REACJI_STYLE}>{emoji}</span>
+                </cf-button>
+              ))
+              : null}
+            <cf-button
+              size="sm"
+              variant="ghost"
+              aria-label="Add reaction"
+              title="Add reaction"
+              disabled={cannotReact}
+              onClick={togglePicker}
+            >
+              <span style={REACJI_STYLE}>{pickerOpen ? "✕" : "⚇+"}</span>
+            </cf-button>
+          </cf-hstack>
+        </cf-hover-reveal>
+      </div>
+    ),
+    tallies,
+  };
+});
+
+/** What a room needs: the viewer, and the conversation with its reactions. */
 export interface FabriChatRoomInput {
   /** The viewer's profile, which holds no value while it is unknown. */
   myProfile: ProfileCell | undefined;
@@ -171,6 +476,8 @@ export interface FabriChatRoomInput {
   myAvatar: string;
 
   messages: MessagesCell;
+
+  reactions: ReactionsCell;
 }
 
 /** What a room provides. */
@@ -178,6 +485,7 @@ export interface FabriChatRoomOutput {
   [NAME]: string;
   [UI]: VNode;
   messages: MessagesCell;
+  reactions: ReactionsCell;
   participants: Participant[];
   sendMessage: Stream<SubmittedTextEvent>;
 }
@@ -187,7 +495,7 @@ export interface FabriChatRoomOutput {
  * as the viewer.
  */
 export const FabriChatRoom = pattern<FabriChatRoomInput, FabriChatRoomOutput>(
-  ({ myProfile, myName, myAvatar, messages }) => {
+  ({ myProfile, myName, myAvatar, messages, reactions }) => {
     const sendMessage = commitSend({
       myProfile,
       myName,
@@ -235,36 +543,11 @@ export const FabriChatRoom = pattern<FabriChatRoomInput, FabriChatRoomOutput>(
             style={{ minHeight: "160px" }}
           >
             {messages.map((message) => (
-              <div
-                style={{
-                  display: "flex",
-                  gap: "0.5rem",
-                  alignItems: "flex-start",
-                }}
-              >
-                <cf-profile-badge
-                  variant="circle"
-                  size="sm"
-                  $profile={message.authorProfile}
-                />
-                <cf-cfc-authorship
-                  $value={message.body}
-                  $author={message.authorProfile}
-                  authorName={message.authorName || undefined}
-                  style={{ flex: "1", minWidth: "0" }}
-                >
-                  <cf-text
-                    variant="body"
-                    block
-                    style={{
-                      whiteSpace: "pre-wrap",
-                      overflowWrap: "anywhere",
-                    }}
-                  >
-                    {message.body}
-                  </cf-text>
-                </cf-cfc-authorship>
-              </div>
+              <FabriChatMessageRow
+                message={message}
+                myProfile={myProfile}
+                reactions={reactions}
+              />
             ))}
             {isEmpty
               ? <cf-empty-state message="No messages yet. Say hello!" />
@@ -287,6 +570,7 @@ export const FabriChatRoom = pattern<FabriChatRoomInput, FabriChatRoomOutput>(
         </cf-vstack>
       ),
       messages,
+      reactions,
       participants,
       sendMessage,
     };

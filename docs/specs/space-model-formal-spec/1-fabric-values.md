@@ -3481,7 +3481,6 @@ The boundaries where encoding occurs:
 |----------|----------|-----------|
 | **Persistence** | `memory` <-> database | read/write |
 | **Iframe sandbox** | `runner` <-> `iframe-sandbox` | `postMessage` |
-| **Background service** | `shell` <-> `background-piece-service` | worker messages |
 | **HTML reconciler** | `html` reconciler (runs in a web worker) | worker messages |
 | **Network sync** | `toolshed` <-> remote peers | WebSocket/HTTP |
 | **Cross-space** | space A <-> space B | if in separate processes |

@@ -8,24 +8,17 @@
   // Lane 1 — plain Deno unit test. A `*.test.ts` file of pure logic (helpers,
   // parsing, schema/string utilities) that runs under `deno test` with no
   // Common Fabric runtime, shell, toolshed, or browser. Put it anywhere in the
-  // package except an `integration/` directory. The first pass of the `test`
-  // task below picks up every `**/*.test.ts` outside `integration/` and the
-  // explicitly excluded browser file, so adding a unit test is just adding the
-  // file. It is not sharded.
+  // package except an `integration/` directory. The `deno-test` task below
+  // picks up every `**/*.test.ts` outside `integration/` apart from the
+  // browser files, so adding a unit test is just adding the file. It resolves
+  // imports the way the rest of the workspace does, and it is not sharded.
   // Examples: vehicles.test.ts, cfc/prompt-injection/prompt.test.ts.
   //
-  // Lane 1 runs under `test-import-map.json`, which replaces the package's
-  // own map rather than extending it. A lane-1 test reaches only what that
-  // file names, and so does every module it imports -- including one under
-  // `integration/`, which the workspace resolves for every other lane. The
-  // flat map cannot resolve `@commonfabric/data-model`'s internal graph at
-  // all, which is what the source-coverage second pass below exists for.
-  //
   // Focused browser regression — a `*.browser.test.ts` file for DOM behavior
-  // that is too narrow for the running-shell integration lane. Exclude it from
-  // Lane 1 and name it in `test:browser`, which runs it through deno-web-test.
-  // The root `deno task test` and workspace "Test" CI job compose Lane 1, the
-  // source-coverage pass, and this real-browser route for the package.
+  // that is too narrow for the running-shell integration lane. The name is
+  // what routes it: `deno-test` ignores the glob, and `browser-test` hands the
+  // same glob to deno-web-test. The root `deno task test` and workspace "Test"
+  // CI job compose Lane 1 and this real-browser route for the package.
   //
   // Lane 2 — pattern test (the testing and coverage docs call these "pattern
   // unit tests"). A `*.test.tsx` file that `export default`s a pattern (or
@@ -60,19 +53,14 @@
     "integration": "LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) --v8-flags=--max-old-space-size=4096 --trace-leaks -A $INTEGRATION_TEST_FLAGS ./integration/*.test.ts",
     "integration:reload": "LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) --v8-flags=--max-old-space-size=4096 --trace-leaks -A $INTEGRATION_TEST_FLAGS ./integration/reload/*.test.ts",
     "integration:all": "TEST_HTTP=1 TEST_LLM=1 LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) --v8-flags=--max-old-space-size=4096 --trace-leaks -A ./integration/*.test.ts",
-    // `test/source-coverage/` runs in a second pass under workspace resolution,
-    // not `test-import-map.json`: its `commonfabric` shim re-exports real
-    // `data-model` helpers, whose internal `@/` graph the flat test import map
-    // can't resolve. See test/source-coverage/pattern-source-coverage.test.ts.
     // The focused browser pass exercises the React event boundary in a real
     // DOM. The `*.browser.test.ts` name is what routes a file there: the same
     // glob keeps it out of the Deno-only pass, so only executed tests count.
-    "test:browser": "deno run --allow-env --allow-read --allow-write --allow-run --allow-net ../deno-web-test/cli.ts **/*.browser.test.ts",
-    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test source-coverage-test test:browser",
-    "deno-test": "deno test --shuffle=$(deno task -q test-seed) -A --import-map ./test-import-map.json --ignore='**/*.test.tsx' --ignore='integration' --ignore='test/source-coverage' --ignore='**/*.browser.test.ts' .",
-    "source-coverage-test": "deno test --shuffle=$(deno task -q test-seed) -A test/source-coverage/"
+    "browser-test": "deno run --allow-env --allow-read --allow-write --allow-run --allow-net ../deno-web-test/cli.ts **/*.browser.test.ts",
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test browser-test",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) -A --ignore='**/*.test.tsx' --ignore='integration' --ignore='**/*.browser.test.ts' ."
   },
-  // File discovery for the first pass of the `test` task (lane 1). `include` keeps only
+  // File discovery for the `deno-test` task (lane 1). `include` keeps only
   // `.test.ts`, so pattern tests (`.test.tsx`, lane 2) are never collected;
   // `exclude` drops every `integration/` directory (lane 3), which the
   // `integration` task runs instead. These globs apply only to bare `deno test` (the `test` task);
@@ -93,9 +81,7 @@
     "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1",
     "@xyflow/react": "npm:@xyflow/react@^12.11.5",
     // The browser-measurement helper parses authored and compiled Topics
-    // sources with it, so no hand-written scanner decides what is code. Lane 1
-    // resolves it through `test-import-map.json`, which pins it a second time
-    // and, being JSON, carries no note of its own; roll both together.
+    // sources with it, so no hand-written scanner decides what is code.
     "typescript": "npm:typescript@6.0.3"
   }
 }
