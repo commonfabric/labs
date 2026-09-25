@@ -488,6 +488,53 @@ describe("CFCustodySeal confirmation", () => {
     );
   });
 
+  it("links the box it sealed into even when a binding changes while it commits", async () => {
+    const pending = Promise.withResolvers<
+      Awaited<ReturnType<RuntimeClient["commitCustodySeal"]>>
+    >();
+    const element = new OpenDialogSeal();
+    using state = setup({ element, commit: () => pending.promise });
+    const written: unknown[] = [];
+    element.box = {
+      setStrict: (value: unknown) => {
+        written.push(value);
+        return Promise.resolve();
+      },
+    } as unknown as CellHandle;
+    element.willUpdate(new Map([["box", undefined]]));
+    const sealed: Event[] = [];
+    element.addEventListener("cf-sealed", (event) => sealed.push(event));
+    await element.accessForTestingOnly.prepare();
+    const confirming = element.accessForTestingOnly.confirm(
+      trustedClick(element.confirmButton),
+    );
+    element.terms = createMockCellHandle();
+    element.willUpdate(new Map([["terms", state.terms]]));
+    const handle = createMockCellHandle<unknown>({});
+    pending.resolve({ receipt: handle, box: handle, instance: "instance" });
+    await confirming;
+    // The entry is durable, so the room keeps its way to it; the review
+    // that asked for it is gone, so nothing is announced.
+    expect(written).toEqual([handle]);
+    expect(sealed).toEqual([]);
+  });
+
+  it("names a box link write that failed without an error", async () => {
+    const element = new OpenDialogSeal();
+    using _state = setup({ element });
+    element.box = {
+      setStrict: () => Promise.reject("refused"),
+    } as unknown as CellHandle;
+    element.willUpdate(new Map([["box", undefined]]));
+    await element.accessForTestingOnly.prepare();
+    await element.accessForTestingOnly.confirm(
+      trustedClick(element.confirmButton),
+    );
+    expect(element.accessForTestingOnly.error).toBe(
+      "Sealed, but the link to the room's box was not saved: the write failed",
+    );
+  });
+
   it("does not seal on a trusted click on anything but its own button", async () => {
     const element = new OpenDialogSeal();
     using state = setup({ element });

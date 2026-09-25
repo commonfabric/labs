@@ -1183,7 +1183,9 @@ nor the key of the actor's entry in the room. Bind `$box` to a cell that
 declares no label of its own: the box's entries carry the room's policy, and a
 read through the link carries it. A binding that changes while a commit is in flight
 leaves the component without that event even if the seal committed, so a
-pattern that must know should read the room rather than rely on it.
+pattern that must know should read the room rather than rely on it; the
+component still writes the box link to the `$box` bound when the actor
+reviewed.
 
 ## CFC Authorship
 

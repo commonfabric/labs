@@ -574,10 +574,11 @@ export class CFCustodySeal extends BaseElement {
       const sealed = await binding.runtime.commitCustodySeal(preview.id);
       // The preview is consumed; nothing is left to cancel.
       this.#preview = undefined;
-      if (!this.#current(binding)) return;
-      // The value is sealed whatever becomes of the link, so a failed write
-      // is reported as that and the seal is still announced: a second seal
-      // would be refused as a second entry.
+      // The entry is durable, and the link is the room's only way to it, so
+      // it goes to the box binding the actor reviewed with, even when a
+      // binding has changed since. The value is sealed whatever becomes of
+      // the link, so a failed write is reported as that and the seal is still
+      // announced: a second seal would be refused as a second entry.
       let linkError = "";
       if (binding.box) {
         try {
