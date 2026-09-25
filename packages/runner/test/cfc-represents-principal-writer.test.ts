@@ -6,7 +6,12 @@ import { Runtime } from "../src/runtime.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import type { NormalizedFullLink } from "../src/link-utils.ts";
-import { representsPrincipalSubject } from "../src/cfc/represents-principal.ts";
+import {
+  PRINCIPAL_CLAIM_KINDS,
+  principalClaimSubject,
+  representsPrincipalSubject,
+} from "../src/cfc/represents-principal.ts";
+import { LINK_V1_TAG } from "../src/sigil-types.ts";
 
 const alice = await Identity.fromPassphrase(
   "runner-represents-principal-writer-alice",
@@ -289,5 +294,154 @@ describe("represents-principal writer check", () => {
     );
     expect(error).toBeUndefined();
     expect(principals).toEqual([alice.did()]);
+  });
+});
+
+// Every subject a principal claim of either kind names in the label stored on
+// `target`'s document.
+const storedClaimSubjects = (
+  runtime: Runtime,
+  target: NormalizedFullLink,
+): string[] => {
+  const verify = runtime.edit();
+  const stored = verify.readOrThrow({
+    space: target.space,
+    scope: target.scope,
+    id: target.id,
+    path: [],
+  }) as { cfc?: { labelMap?: { entries?: StoredLabelEntry[] } } } | undefined;
+  verify.abort();
+  return (stored?.cfc?.labelMap?.entries ?? []).flatMap((entry) =>
+    (entry.label.integrity ?? []).flatMap((atom) =>
+      [...PRINCIPAL_CLAIM_KINDS].flatMap((kind) => {
+        const subject = principalClaimSubject(atom, kind);
+        return subject === undefined ? [] : [subject];
+      })
+    )
+  );
+};
+
+describe("represents-principal on a link write", () => {
+  // Alice's pattern commits a source document, then, in a second transaction,
+  // writes into a new document the link `linkFor` builds to it. Returns the
+  // principal claim subjects stored on the new document.
+  const linkAsAlice = async (
+    cause: string,
+    sourceSchema: JSONSchema | undefined,
+    linkFor: (source: ReturnType<Runtime["getCell"]>) => unknown,
+  ) => {
+    const { runtime, storageManager } = createRuntime();
+    try {
+      const seed = runtime.edit();
+      actAsPatternFor(seed, alice.did());
+      const source = runtime.getCell(
+        alice.did(),
+        `${cause}-source`,
+        sourceSchema,
+        seed,
+      );
+      source.set({ name: "Ada" });
+      if (sourceSchema !== undefined) {
+        recordTrustedEdit(seed, source.getAsNormalizedFullLink());
+      }
+      seed.prepareCfc();
+      const seeded = await seed.commit();
+      expect(seeded.error).toBeUndefined();
+
+      const tx = runtime.edit();
+      actAsPatternFor(tx, alice.did());
+      const target = runtime.getCell(alice.did(), `${cause}-target`, {}, tx);
+      target.set(linkFor(source) as never);
+      tx.prepareCfc();
+      const result = await tx.commit();
+      return {
+        error: result.error?.message,
+        subjects: storedClaimSubjects(
+          runtime,
+          target.getAsNormalizedFullLink(),
+        ),
+      };
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  };
+
+  const plainSource: JSONSchema = {
+    type: "object",
+    properties: { name: { type: "string" } },
+  };
+
+  const labeledSource: JSONSchema = {
+    ...plainSource,
+    ifc: { integrity: ["source-mark"] },
+  } as JSONSchema;
+
+  it("stores no claim a link's own schema names", async () => {
+    const { error, subjects } = await linkAsAlice(
+      "represents-principal-link-schema",
+      labeledSource,
+      (source) =>
+        source.asSchema({
+          ...plainSource,
+          ifc: {
+            integrity: ["harmless"],
+            addIntegrity: [
+              { kind: "represents-principal", subject: bob.did() },
+              { kind: "authored-by", subject: bob.did() },
+              { kind: "represents-principal", subject: CURRENT_PRINCIPAL },
+            ],
+          },
+        } as JSONSchema),
+    );
+    expect(error).toBeUndefined();
+    expect(subjects).not.toContain(bob.did());
+    // The placeholder in a link schema is not a trusted edit either.
+    expect(subjects).not.toContain(alice.did());
+  });
+
+  it("stores no claim a link's carried label view names", async () => {
+    const { error, subjects } = await linkAsAlice(
+      "represents-principal-link-view",
+      labeledSource,
+      (source) => {
+        const link = source.getAsLink() as {
+          "/": Record<string, Record<string, unknown>>;
+        };
+        link["/"][LINK_V1_TAG].cfcLabelView = {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              integrity: [
+                "harmless",
+                { kind: "represents-principal", subject: bob.did() },
+              ],
+            },
+          }, {
+            path: ["name"],
+            label: {
+              integrity: [{ kind: "authored-by", subject: bob.did() }],
+            },
+          }],
+        };
+        return link;
+      },
+    );
+    expect(error).toBeUndefined();
+    expect(subjects).not.toContain(bob.did());
+  });
+
+  it("carries the claim the source's own stored label holds", async () => {
+    const { error, subjects } = await linkAsAlice(
+      "represents-principal-link-genuine",
+      claimSchema([{
+        kind: "represents-principal",
+        subject: CURRENT_PRINCIPAL,
+      }]),
+      (source) => source.key("name"),
+    );
+    expect(error).toBeUndefined();
+    expect(subjects).toEqual([alice.did()]);
   });
 });
