@@ -87,14 +87,18 @@ function commitTally(fixture: Fixture): void {
   });
 }
 
-/** Runs one refresh over the dirty tally, and checks what it delivered. */
-function refresh(fixture: Fixture): number {
-  const refreshed = refreshTrackedGraph(
-    SPACE,
-    fixture.engine,
-    fixture.state,
-    DIRTY,
-  );
+/** Runs one refresh over the dirty tally. */
+function refresh(fixture: Fixture): ReturnType<typeof refreshTrackedGraph> {
+  return refreshTrackedGraph(SPACE, fixture.engine, fixture.state, DIRTY);
+}
+
+/**
+ * Checks that `refreshed` delivered exactly the tally, and returns the number
+ * of documents the refresh read.
+ */
+function checkRefresh(
+  refreshed: ReturnType<typeof refreshTrackedGraph>,
+): number {
   if (refreshed === null || refreshed.updates.size !== 1) {
     throw new Error("refresh did not deliver exactly the tally");
   }
@@ -161,7 +165,7 @@ async function createFixture(schemaCount: number): Promise<Fixture> {
   commitTally(fixture);
   console.error(
     `refresh-schema-closure: ${schemaCount} schema documents, ` +
-      `${refresh(fixture)} documents read per refresh`,
+      `${checkRefresh(refresh(fixture))} documents read per refresh`,
   );
   return fixture;
 }
@@ -192,8 +196,9 @@ for (const fixture of fixtures) {
     fn(b) {
       commitTally(fixture);
       b.start();
-      refresh(fixture);
+      const refreshed = refresh(fixture);
       b.end();
+      checkRefresh(refreshed);
     },
   });
 }
