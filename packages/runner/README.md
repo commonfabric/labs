@@ -81,6 +81,17 @@ checks may collect on succeeding operations too, so this counter measures work
 rather than rejected commits. Both counters are measurement only and do not
 affect CFC relevance, preparation, or enforcement.
 
+## Parsing untrusted CFC labels
+
+`parseIfcLabel` from `@commonfabric/runner/cfc` is the public boundary for a
+standalone label received as untrusted JSON. It accepts object atoms and
+confidentiality `{ anyOf: [...] }` clauses, preserves extension atom type URIs,
+and returns a deeply detached `IFCLabel`.
+
+Malformed values throw `InvalidIfcLabelError` with a JSON-pointer-like `path`.
+Callers must treat the refusal as an invalid label, never as an unlabeled value.
+The parser checks grammar only; consumers remain responsible for policy meaning.
+
 `overlapWildcardQueries` and `overlapConcreteQueries` count label-index queries
 during preparation, split by whether the query path contains `"*"`.
 `authoritativeCoverCalls` counts carried label entries checked against source
