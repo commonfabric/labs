@@ -6080,6 +6080,24 @@ function bindLinkCurrentPrincipalClauses<Clause>(
   return bound;
 }
 
+/**
+ * `label` with every principal claim removed from its integrity. A link write
+ * applies this to what the link value itself carries, its schema and its label
+ * view, because pattern code chooses both and neither passes the write check
+ * `currentPrincipalIntegrityReason` holds a schema to. A link still carries
+ * the claims of the document it points to, which come from that document's
+ * own label.
+ */
+const withoutPrincipalClaims = (label: IFCLabel): IFCLabel => {
+  const integrity = label.integrity;
+  if (integrity === undefined) return label;
+  const kept = integrity.filter((atom) =>
+    principalClaimSpelling(atom) === undefined
+  );
+  if (kept.length === integrity.length) return label;
+  return { ...label, integrity: kept.length > 0 ? kept : undefined };
+};
+
 /** Derives the link's root label and its authoritative source view. */
 const derivePersistedLinkLabel = (
   tx: IExtendedStorageTransaction,
@@ -6184,7 +6202,7 @@ const derivePersistedLinkLabel = (
       }
     }
   }
-  const linkSchemaLabel = rootLabelFromSchema(
+  const linkSchemaLabel = withoutPrincipalClaims(rootLabelFromSchema(
     tx,
     input.linkSchema,
     input.source.space,
@@ -6193,7 +6211,7 @@ const derivePersistedLinkLabel = (
       input.target,
       input.target.path,
     ),
-  );
+  ));
   const hasCarriedLabel =
     input.cfcLabelView?.entries.some((entry) => hasLabelValues(entry.label)) ??
       false;
@@ -6346,10 +6364,10 @@ const persistedLinkEntries = (
     );
   };
   for (const entry of input.cfcLabelView?.entries ?? []) {
-    const gated = gateRuntimeMintedIntegrity(
+    const gated = withoutPrincipalClaims(gateRuntimeMintedIntegrity(
       cloneLabel(entry.label),
       linkIdentity,
-    );
+    ));
     if (!hasLabelValues(gated)) {
       continue;
     }
