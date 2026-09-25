@@ -9,7 +9,10 @@ import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import type { CfcPolicyRecordInput } from "../src/cfc/policy.ts";
 import { decideSinkRelease } from "../src/cfc/prepare.ts";
 import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
-import { decideSinkFit } from "../src/cfc/sink-decision.ts";
+import {
+  decideSinkFit,
+  noteModulePolicyResolutionFailures,
+} from "../src/cfc/sink-decision.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
 import type { CfcTrustConfigInput } from "../src/cfc/trust.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -305,6 +308,15 @@ describe("decideSinkRelease", () => {
           reference: unresolvedPolicy,
           reason: "missing-manifest",
         }]);
+        noteModulePolicyResolutionFailures(
+          tx,
+          "input requirement /secret",
+          decision.failure?.resolutionFailures ?? [],
+        );
+        expect(tx.getCfcState().diagnostics).toContain(
+          "policy-evaluation(enforce): module policy missing-manifest " +
+            "digest sha256:policy at input requirement /secret",
+        );
         tx.abort();
       } finally {
         await runtime.dispose();

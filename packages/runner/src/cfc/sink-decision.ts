@@ -148,12 +148,13 @@ const sinkCeilingRefusal = (
   };
 };
 
-/** Records module-policy failures for an observe-mode evaluation site. */
+/** Records module-policy failures for a policy-evaluation site. */
 export const noteModulePolicyResolutionFailures = (
   tx: IExtendedStorageTransaction,
   site: string,
   failures: readonly ModulePolicyResolutionFailure[],
 ): void => {
+  const mode = tx.getCfcState().policyEvaluationMode;
   for (const failure of failures) {
     const reference = isObjectOrArray(failure.reference)
       ? failure.reference
@@ -162,7 +163,7 @@ export const noteModulePolicyResolutionFailures = (
       ? ` digest ${reference.policyDigest}`
       : "";
     tx.noteCfcDiagnostic(
-      `policy-evaluation(observe): module policy ${failure.reason}${digest} at ${site}`,
+      `policy-evaluation(${mode}): module policy ${failure.reason}${digest} at ${site}`,
     );
   }
 };
