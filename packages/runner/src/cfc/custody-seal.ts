@@ -1047,15 +1047,13 @@ const attestedPrincipals = (
 
 /**
  * Returns `terms` with each seat named by a reference replaced by the one
- * principal its cell attests: the principal a `represents-principal`
- * integrity atom names at the root of the cell's stored label, or on one of
- * its top-level fields, as a principal's own runtime writes it on a cell that
- * principal creates, a profile among them. A pattern never holds a member's
- * DID, and the runtime never takes one from a pattern for a seat; it takes a
- * reference to what the member's runtime attested. The reads are added to
- * `evidence`, so the transaction that writes the entry verifies them.
+ * principal its cell attests, as {@link attestedPrincipals} reads it. A
+ * pattern holds a member's profile, not the member's DID, so a seat can name
+ * what the member's own runtime attested. The reads are added to `evidence`,
+ * so the transaction that writes the entry verifies them.
  *
- * @throws If a referenced cell attests no principal, or more than one.
+ * @throws If a referenced cell attests no principal or more than one, or
+ *   carries an attestation in any form but the one a runtime mints.
  */
 const resolveSeats = async (
   runtime: Cell<unknown>["runtime"],
