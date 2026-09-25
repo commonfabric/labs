@@ -202,6 +202,10 @@ export interface ValueVisitor<
    * `ResultType` defined by the visitor. This is a type predicate for
    * `ResultType`. The visitor engine consults it only when it cannot otherwise
    * determine membership of a value in `ResultType`.
+   *
+   * **Note:** When `isDomainAssignableToResultType()` returns `true` for a
+   * visitor, the engine will not call this method _except_ to determine if
+   * `undefined` is compatible with `ResultType`.
    */
   isResultType(
     value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
