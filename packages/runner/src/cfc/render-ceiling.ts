@@ -12,11 +12,11 @@ import { clauseAlternatives } from "./clause.ts";
 import {
   type CfcGrantResolver,
   evaluateExchangeRules,
-  isExactModulePolicyRef,
 } from "./exchange-eval.ts";
 import {
   buildCfcPolicySnapshot,
   type ExchangeRule,
+  isExactModulePolicyRef,
   type PolicySnapshot,
 } from "./policy.ts";
 import type { RenderModulePolicyResolver } from "./policy-resolver.ts";
@@ -169,15 +169,16 @@ export type RenderConfidentialityResolverConfig = {
 /**
  * The spaces whose reader membership can decide how a label renders: each
  * `Space(id)` atom, the candidates spec §4.9.3 names, and the plaintext
- * subject space of each module policy the label selects. The spec is silent on
- * the subjects; they are listed because a module rule's
+ * subject space of each module policy the label selects, which
+ * `docs/specs/cfc-spec-changes.md` SC-44 adds. A module rule's
  * `HasRole(reader, THIS_POLICY.subject)` guard is a membership point query on
- * that space and can fire for no other reader without one. A subject held in commitment form names no space and is not
- * listed: the runtime never opens a commitment (§4.3.6), so such a guard can
- * match only a fact the resolver mints anyway. A space a module rule adds from
- * any other binding is not listed, and its `Space` alternative stays sealed.
- * The render resolver consults exactly these, and the reconciler watches
- * exactly these ACLs. Order-preserving and deduped.
+ * that space and can fire for no other reader without one. A subject held in
+ * commitment form names no space and is not listed: the runtime never opens a
+ * commitment (§4.3.6), so such a guard can match only a fact the resolver
+ * mints anyway. A space a module rule adds from any other binding is not
+ * listed, and its `Space` alternative stays sealed. The render resolver
+ * consults exactly these, and the reconciler watches exactly these ACLs.
+ * Order-preserving and deduped.
  */
 export const membershipSpacesInConfidentiality = (
   confidentiality: readonly CfcConfClause[],

@@ -623,8 +623,8 @@ describe("CFC render resolver — the direct-release PolicyOf rule", () => {
 describe("CFC render resolver — spaces a module rule adds", () => {
   // A rule that adds `Space(x)` for a space bound from label-carried evidence
   // rather than from THIS_POLICY.subject. Membership is looked up only for
-  // the label's `Space` atoms (spec §4.9.3) and its module-policy subjects (an
-  // extension the spec is silent on), which is also exactly what the
+  // the label's `Space` atoms (spec §4.9.3) and its module-policy subjects
+  // (docs/specs/cfc-spec-changes.md SC-44), which is also exactly what the
   // reconciler watches, so such a space stays sealed.
   const addsTeam = buildCfcPolicyArtifactManifest({
     formatVersion: 1,
