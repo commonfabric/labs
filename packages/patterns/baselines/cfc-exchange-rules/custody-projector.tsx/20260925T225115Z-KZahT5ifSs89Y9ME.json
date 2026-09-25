@@ -1,0 +1,448 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "BoxEntry": {
+        "properties": {
+          "instance": {
+            "type": "string"
+          },
+          "stance": {
+            "$ref": "#/$defs/Stance"
+          },
+          "terms": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance",
+          "terms",
+          "stance"
+        ],
+        "type": "object"
+      },
+      "CustodyTerms": {
+        "properties": {
+          "answers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "question": {
+            "type": "string"
+          },
+          "seats": {
+            "description": "A cell per seat, whose stored label attests the seat's member.",
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "stanceSchema": {
+            "properties": {
+              "additionalProperties": {
+                "type": "boolean"
+              },
+              "properties": {
+                "properties": {
+                  "ratings": {
+                    "properties": {
+                      "items": {
+                        "properties": {
+                          "enum": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "enum"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": {
+                        "enum": [
+                          3
+                        ],
+                        "type": "number"
+                      },
+                      "minItems": {
+                        "enum": [
+                          3
+                        ],
+                        "type": "number"
+                      },
+                      "type": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "items",
+                      "minItems",
+                      "maxItems"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "ratings"
+                ],
+                "type": "object"
+              },
+              "required": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "properties",
+              "required",
+              "additionalProperties"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "question",
+          "answers",
+          "seats",
+          "stanceSchema"
+        ],
+        "type": "object"
+      },
+      "Rating": {
+        "enum": [
+          "no",
+          "maybe",
+          "yes"
+        ]
+      },
+      "Stance": {
+        "properties": {
+          "ratings": {
+            "items": {
+              "$ref": "#/$defs/Rating"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ratings"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "box": {
+        "additionalProperties": {
+          "$ref": "#/$defs/BoxEntry",
+          "ifc": {
+            "confidentiality": [
+              {
+                "moduleIdentity": "HmmSr83d-IliOdlnsf_sBRoYS6fiCbpZoRsbNWhfw4g",
+                "policyDigest": "Esv27pqVhTCS1gQx0heC8uM54EDrogHL0rV4P49fx18",
+                "policyRefKind": "module",
+                "subject": {
+                  "__ctOwningSpace": true
+                },
+                "symbol": "custodyRules",
+                "type": "https://commonfabric.org/cfc/atom/Policy"
+              }
+            ]
+          }
+        },
+        "asCell": [
+          "cell"
+        ],
+        "default": {},
+        "description": "Receives a link to the instance's box from the host once a seat seals.\nEach entry is declared with the room's policy, as the seal labels it.",
+        "properties": {},
+        "type": "object"
+      },
+      "policy": {
+        "asCell": [
+          "cell"
+        ],
+        "description": "Declared with the room's policy, so that once written its label carries\nthe policy's reference, with this room as its subject, for the host to\nread. It has no default: `propose` writes it.",
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "HmmSr83d-IliOdlnsf_sBRoYS6fiCbpZoRsbNWhfw4g",
+              "policyDigest": "Esv27pqVhTCS1gQx0heC8uM54EDrogHL0rV4P49fx18",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "custodyRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        },
+        "type": "boolean"
+      },
+      "terms": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CustodyTerms"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "asCell": [
+          "cell"
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "terms",
+      "policy",
+      "box"
+    ],
+    "type": "object"
+  },
+  "pattern": "cfc-exchange-rules/custody-projector.tsx",
+  "resultSchema": {
+    "$defs": {
+      "BoxEntry": {
+        "properties": {
+          "instance": {
+            "type": "string"
+          },
+          "stance": {
+            "$ref": "#/$defs/Stance"
+          },
+          "terms": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance",
+          "terms",
+          "stance"
+        ],
+        "type": "object"
+      },
+      "CustodyTerms": {
+        "properties": {
+          "answers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "question": {
+            "type": "string"
+          },
+          "seats": {
+            "description": "A cell per seat, whose stored label attests the seat's member.",
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "stanceSchema": {
+            "properties": {
+              "additionalProperties": {
+                "type": "boolean"
+              },
+              "properties": {
+                "properties": {
+                  "ratings": {
+                    "properties": {
+                      "items": {
+                        "properties": {
+                          "enum": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "enum"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": {
+                        "enum": [
+                          3
+                        ],
+                        "type": "number"
+                      },
+                      "minItems": {
+                        "enum": [
+                          3
+                        ],
+                        "type": "number"
+                      },
+                      "type": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "items",
+                      "minItems",
+                      "maxItems"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "ratings"
+                ],
+                "type": "object"
+              },
+              "required": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "properties",
+              "required",
+              "additionalProperties"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "question",
+          "answers",
+          "seats",
+          "stanceSchema"
+        ],
+        "type": "object"
+      },
+      "Rating": {
+        "enum": [
+          "no",
+          "maybe",
+          "yes"
+        ]
+      },
+      "Stance": {
+        "properties": {
+          "ratings": {
+            "items": {
+              "$ref": "#/$defs/Rating"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ratings"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "box": {
+        "additionalProperties": {
+          "$ref": "#/$defs/BoxEntry",
+          "ifc": {
+            "confidentiality": [
+              {
+                "moduleIdentity": "HmmSr83d-IliOdlnsf_sBRoYS6fiCbpZoRsbNWhfw4g",
+                "policyDigest": "Esv27pqVhTCS1gQx0heC8uM54EDrogHL0rV4P49fx18",
+                "policyRefKind": "module",
+                "subject": {
+                  "__ctOwningSpace": true
+                },
+                "symbol": "custodyRules",
+                "type": "https://commonfabric.org/cfc/atom/Policy"
+              }
+            ]
+          }
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "choice": {
+        "description": "The projected answer: a room reader sees it once the rule releases it.",
+        "type": "string"
+      },
+      "policy": {
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "HmmSr83d-IliOdlnsf_sBRoYS6fiCbpZoRsbNWhfw4g",
+              "policyDigest": "Esv27pqVhTCS1gQx0heC8uM54EDrogHL0rV4P49fx18",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "custodyRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        },
+        "type": "boolean"
+      },
+      "propose": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "seats": {
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "seats"
+        ],
+        "type": "object"
+      },
+      "rating": {
+        "description": "One member's sealed rating, which no rule releases.",
+        "type": "string"
+      },
+      "terms": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CustodyTerms"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "terms",
+      "policy",
+      "box",
+      "choice",
+      "rating",
+      "propose",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}
