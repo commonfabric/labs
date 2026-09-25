@@ -44,7 +44,12 @@ import { unionFoldedFrom } from "./schema-origins.ts";
 import { reportUnreadTypes } from "./unread-type-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
-import { stateReferencedIfcLabels } from "./ifc-labels.ts";
+import {
+  declaredIfcLabels,
+  holdsIfcLabels,
+  stateReferencedIfcLabels,
+  withIfcLabels,
+} from "./ifc-labels.ts";
 
 /**
  * The default library's generic aliases the node-based analyzer applies
@@ -958,8 +963,10 @@ function readsWrittenMembers(
  * Main schema generator that uses a chain of formatters
  */
 export class SchemaGenerator {
+  #commonFabricFormatter = new CommonFabricFormatter(this);
+
   #formatters: TypeFormatter[] = [
-    new CommonFabricFormatter(this),
+    this.#commonFabricFormatter,
     new NativeTypeFormatter(),
     new UnionFormatter(this),
     new IntersectionFormatter(this),
@@ -1227,6 +1234,17 @@ export class SchemaGenerator {
       ? { ...baseContext, typeNode }
       : baseContext;
     const readType = readInPlace ?? type;
+
+    // Read for its labels alone, a type no CFC wrapper holds is a payload, and
+    // is not formatted. A union or an intersection is formatted from its
+    // members, which can attach their labels to it: an expanded `Default`
+    // holds its value as a member.
+    if (
+      context.labelsOnly && !readType.isUnionOrIntersection() &&
+      !this.#commonFabricFormatter.supportsType(readType, childContext)
+    ) {
+      return {};
+    }
 
     // Auto-detect: Should we use node-based or type-based analysis?
     const useNodeBased = !readInPlace &&
@@ -1541,8 +1559,92 @@ export class SchemaGenerator {
     schema: MutableJSONSchema,
     context: GenerationContext,
   ): MutableJSONSchema {
+    // A value keeps its labels however little of it is read, and a schema
+    // that reaches them already, through its own reference, keeps them as is.
+    const labels = this.#narrowedFromLabels(context);
+    const held = labels && declaredIfcLabels(schema, context.definitions);
+    const labeled = labels && !(held && holdsIfcLabels(held, labels))
+      ? withIfcLabels(schema, labels)
+      : schema;
     const hint = getUiContractHint(context);
-    return hint ? attachUiContract(schema, hint) : schema;
+    return hint ? attachUiContract(labeled, hint) : labeled;
+  }
+
+  /**
+   * The CFC labels of the value the node at this position narrows, where a
+   * hint names one (`SchemaHint.narrowedFrom`). A value keeps its labels
+   * however little of it is read, and they are the labels its own type
+   * attaches where it is formatted, read by that same formatting with its
+   * payload left out (`GenerationContext.labelsOnly`).
+   */
+  #narrowedFromLabels(
+    context: GenerationContext,
+  ): Record<string, unknown> | undefined {
+    const node = context.typeNode ?? context.hintsNode;
+    if (!node || !context.schemaHints || context.labelsOnly) return undefined;
+    const narrowedFrom = context.schemaHints.get(node)?.narrowedFrom;
+    if (!narrowedFrom) return undefined;
+    // The value is read apart from this position, into definitions of its
+    // own, and what reading it only for its labels leaves unread is no
+    // problem to report.
+    const {
+      typeNode: _,
+      hintsNode: __,
+      arrayItemsOverride: ___,
+      boundTypeParameters: ____,
+      uninterpretedTypeNodes: _____,
+      ...rest
+    } = context;
+    return this.#labelsOf(narrowedFrom.type, narrowedFrom.typeNode, {
+      ...rest,
+      onDiagnostic: () => {},
+      labelsOnly: true,
+      definitions: {},
+      emittedRefs: new Set(),
+      definitionStack: new Set(),
+      inProgressNames: new Set(),
+    });
+  }
+
+  /**
+   * Helper for {@link #narrowedFromLabels}, which returns the labels `type`,
+   * spelled by `typeNode` where given, attaches at its top in `context`. A
+   * value that may be missing, `T | undefined` or `T | null`, has the labels
+   * of `T`, which formatting attaches to that member. A union whose members
+   * formatting labels each on its own is confidential under every member's
+   * confidentiality: a node narrowed from it stands for any of them.
+   */
+  #labelsOf(
+    type: ts.Type,
+    typeNode: ts.TypeNode | undefined,
+    context: GenerationContext,
+  ): Record<string, unknown> | undefined {
+    const written = typeNode && unwrapTypeParentheses(typeNode);
+    const memberNode = (member: ts.Type) =>
+      written && ts.isUnionTypeNode(written)
+        ? written.types.find((node) =>
+          context.typeChecker.getTypeFromTypeNode(node) === member
+        )
+        : undefined;
+    const nullish = ts.TypeFlags.Undefined | ts.TypeFlags.Null |
+      ts.TypeFlags.Void;
+    const values = type.isUnion()
+      ? type.types.filter((member) => (member.flags & nullish) === 0)
+      : [type];
+    if (values.length === 1 && values[0] !== type) {
+      return this.#labelsOf(values[0]!, memberNode(values[0]!), context);
+    }
+    const whole = this.formatChildType(type, context, typeNode);
+    const labels = declaredIfcLabels(whole, context.definitions);
+    if (labels || values.length < 2) return labels;
+    const confidentiality = values.flatMap((member) => {
+      const atoms = this.#labelsOf(member, memberNode(member), context)
+        ?.confidentiality;
+      return Array.isArray(atoms) ? atoms : [];
+    });
+    return confidentiality.length > 0
+      ? { confidentiality: dedupeByValueEqual(confidentiality) }
+      : undefined;
   }
 
   /**

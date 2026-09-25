@@ -1318,6 +1318,71 @@ function describeCapture(expression: ts.Expression, fallback: string): string {
 }
 
 /**
+ * The property of a destructured aggregate that `identifier`, a binding the
+ * destructuring declares, reads, or `undefined` for any other identifier. A
+ * `{ x }` shorthand resolves to a value symbol, and the binding element keeps
+ * none of the property's own flags, so what the property declares is read
+ * from the aggregate's type. For a renamed binding (`{ source: local }`) the
+ * property is the SOURCE one. The source key may be an identifier, string, or
+ * numeric literal (`{ "k": local }`, `{ 0: local }`); a computed key
+ * (`{ [expr]: local }`) is not statically resolvable and falls back to
+ * `localName`.
+ */
+function destructuredSourceProperty(
+  identifier: ts.Identifier,
+  localName: string,
+  checker: ts.TypeChecker,
+): ts.Symbol | undefined {
+  let symbol = checker.getSymbolAtLocation(identifier);
+  if (
+    symbol?.valueDeclaration &&
+    ts.isShorthandPropertyAssignment(symbol.valueDeclaration)
+  ) {
+    symbol = checker.getShorthandAssignmentValueSymbol(
+      symbol.valueDeclaration,
+    ) ??
+      symbol;
+  }
+  const binding = symbol?.valueDeclaration;
+  if (
+    !binding || !ts.isBindingElement(binding) ||
+    !ts.isObjectBindingPattern(binding.parent)
+  ) {
+    return undefined;
+  }
+  const host = binding.parent.parent;
+  const aggregateType = ts.isParameter(host)
+    ? checker.getTypeAtLocation(host)
+    : ts.isVariableDeclaration(host) && host.initializer
+    ? checker.getTypeAtLocation(host.initializer)
+    : undefined;
+  const sourceName = binding.propertyName &&
+      (ts.isIdentifier(binding.propertyName) ||
+        ts.isStringLiteralLike(binding.propertyName) ||
+        ts.isNumericLiteral(binding.propertyName))
+    ? binding.propertyName.text
+    : localName;
+  return aggregateType?.getProperty(sourceName);
+}
+
+/**
+ * The node `symbol`'s declaration writes its type with, where it writes one:
+ * the node schema generation reads a property through.
+ */
+function declaredTypeNode(
+  symbol: ts.Symbol | undefined,
+): ts.TypeNode | undefined {
+  const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+  return declaration &&
+      (ts.isPropertySignature(declaration) ||
+        ts.isPropertyDeclaration(declaration) ||
+        ts.isParameter(declaration) ||
+        ts.isVariableDeclaration(declaration))
+    ? declaration.type
+    : undefined;
+}
+
+/**
  * Builds TypeScript type elements from a capture tree structure.
  * Works for both nested properties within a tree node and root-level entries.
  * Recursively builds nested type literals for hierarchical captures.
@@ -1394,42 +1459,13 @@ export function buildTypeElementsFromCaptureTree(
         // read the aggregate property's flag. A field declared `x?: T` is
         // optional; `x: T | undefined` (no `?`) stays required (a required key
         // whose value may be undefined), faithful to TS.
-        let symbol = checker.getSymbolAtLocation(childNode.expression);
-        if (
-          symbol?.valueDeclaration &&
-          ts.isShorthandPropertyAssignment(symbol.valueDeclaration)
-        ) {
-          symbol = checker.getShorthandAssignmentValueSymbol(
-            symbol.valueDeclaration,
-          ) ??
-            symbol;
-        }
-        const binding = symbol?.valueDeclaration;
-        if (
-          binding && ts.isBindingElement(binding) &&
-          ts.isObjectBindingPattern(binding.parent)
-        ) {
-          const host = binding.parent.parent;
-          const aggregateType = ts.isParameter(host)
-            ? checker.getTypeAtLocation(host)
-            : ts.isVariableDeclaration(host) && host.initializer
-            ? checker.getTypeAtLocation(host.initializer)
-            : undefined;
-          // For a renamed binding (`{ source: local }`) the optionality lives on
-          // the SOURCE property, not the local capture name. The source key may
-          // be an identifier, string, or numeric literal (`{ "k": local }`,
-          // `{ 0: local }`); computed keys (`{ [expr]: local }`) aren't
-          // statically resolvable and fall back to the local name.
-          const sourceName = binding.propertyName &&
-              (ts.isIdentifier(binding.propertyName) ||
-                ts.isStringLiteralLike(binding.propertyName) ||
-                ts.isNumericLiteral(binding.propertyName))
-            ? binding.propertyName.text
-            : propName;
-          const sourceProp = aggregateType?.getProperty(sourceName);
-          if (sourceProp && isOptionalSymbol(sourceProp)) {
-            questionToken = factory.createToken(ts.SyntaxKind.QuestionToken);
-          }
+        const sourceProp = destructuredSourceProperty(
+          childNode.expression,
+          propName,
+          checker,
+        );
+        if (sourceProp && isOptionalSymbol(sourceProp)) {
+          questionToken = factory.createToken(ts.SyntaxKind.QuestionToken);
         }
       }
     } else {
@@ -1441,9 +1477,13 @@ export function buildTypeElementsFromCaptureTree(
           "Invariant violated: child node has neither expression nor child",
         );
       }
+      // The symbol whose declaration spells the value this level reads part
+      // of.
+      let declaring: ts.Symbol | undefined;
       if (parentType) {
         // We have a parent type - look up this property
         const propSymbol = parentType.getProperty(propName);
+        declaring = propSymbol;
         if (propSymbol) {
           // Get Type for this property to pass to children
           currentType = checker.getTypeOfSymbol(propSymbol);
@@ -1478,6 +1518,9 @@ export function buildTypeElementsFromCaptureTree(
           }
           if (ts.isIdentifier(rootExpr)) {
             currentType = checker.getTypeAtLocation(rootExpr);
+            declaring =
+              destructuredSourceProperty(rootExpr, propName, checker) ??
+                checker.getSymbolAtLocation(rootExpr);
           }
         }
       }
@@ -1497,6 +1540,13 @@ export function buildTypeElementsFromCaptureTree(
           typeRegistry: context.state.typeRegistry,
         },
       );
+      if (currentType) {
+        const declared = declaredTypeNode(declaring);
+        context.state.recordNarrowedFrom(typeNode, {
+          type: currentType,
+          ...(declared && { typeNode: declared }),
+        });
+      }
     }
 
     properties.push(

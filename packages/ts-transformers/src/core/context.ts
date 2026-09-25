@@ -219,10 +219,10 @@ export class TransformationContext {
 
   /**
    * Record a schema-generation hint for a node (and its original node, so the
-   * hint survives visitor node-replacement). Overwrites any existing hint for
-   * the node, matching the prior direct-`.set` behavior. See `SchemaHints`
-   * docs in core/mod.ts: producers are schema-injection + jsx-site-router,
-   * consumers are schema-injection + the schema generator.
+   * hint survives visitor node-replacement). Each kind of hint `hint` gives
+   * replaces the node's hint of that kind, and its other kinds stay. See
+   * `SchemaHints` docs in core/mod.ts: producers are schema-injection +
+   * jsx-site-router, consumers are schema-injection + the schema generator.
    */
   recordSchemaHint(node: ts.Node, hint: SchemaHint): void {
     this.state.recordSchemaHint(node, hint);

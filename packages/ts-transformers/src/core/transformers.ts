@@ -21,6 +21,16 @@ export type SchemaHint = {
     readonly trustedPattern?: string;
     readonly requiredEventIntegrity?: readonly string[];
   };
+
+  /**
+   * The value a node built from part of it narrows: its type, and the node
+   * that declares it where one is at hand. Schema generation keeps the
+   * value's CFC labels on the narrowed node's schema.
+   */
+  readonly narrowedFrom?: {
+    readonly type: ts.Type;
+    readonly typeNode?: ts.TypeNode;
+  };
 };
 
 export type ReactiveCapability =
