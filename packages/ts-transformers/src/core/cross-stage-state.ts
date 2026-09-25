@@ -240,11 +240,35 @@ export class CrossStageState {
   //
 
   recordSchemaHint(node: ts.Node, hint: SchemaHint): void {
-    this.schemaHints.set(node, hint);
+    this.#addSchemaHint(node, hint);
     const original = ts.getOriginalNode(node);
     if (original !== node) {
-      this.schemaHints.set(original, hint);
+      this.#addSchemaHint(original, hint);
     }
+  }
+
+  /**
+   * Records that `node` was built from part of the value `narrowedFrom`
+   * describes. A node built from part of a node that itself narrows a value
+   * narrows that value. Unlike `recordSchemaHint()`, it leaves `node`'s
+   * original alone: that node spells the whole value, which needs no hint to
+   * keep its labels.
+   */
+  recordNarrowedFrom(
+    node: ts.TypeNode,
+    narrowedFrom: NonNullable<SchemaHint["narrowedFrom"]>,
+  ): void {
+    const whole = narrowedFrom.typeNode;
+    this.#addSchemaHint(node, {
+      narrowedFrom: (whole && this.narrowedFrom(whole)) ?? narrowedFrom,
+    });
+  }
+
+  /** The value `node` was recorded as narrowing (`recordNarrowedFrom()`). */
+  narrowedFrom(
+    node: ts.Node,
+  ): NonNullable<SchemaHint["narrowedFrom"]> | undefined {
+    return this.schemaHints.get(node)?.narrowedFrom;
   }
 
   lookupSchemaHint(node: ts.Node): SchemaHint | undefined {
@@ -387,5 +411,13 @@ export class CrossStageState {
     if (set.has(node)) return true;
     const original = ts.getOriginalNode(node);
     return original !== node && set.has(original);
+  }
+
+  //
+  // shared helper: a node's hints, each kind recorded apart from the others
+  //
+
+  #addSchemaHint(node: ts.Node, hint: SchemaHint): void {
+    this.schemaHints.set(node, { ...this.schemaHints.get(node), ...hint });
   }
 }
