@@ -140,6 +140,9 @@ export interface ReactionTally {
 
   /** Whether the viewer is one of them. */
   mine: boolean;
+
+  /** Their profiles, in the order their reactions were added. */
+  reactors: ProfileCell[];
 }
 
 /** A conversation's messages, oldest first. */
@@ -247,8 +250,9 @@ export const reactionKeyFor = (
 
 /**
  * The emoji `reactions` hold for `message`, in the order `FABRICHAT_REACJI`
- * lists them, leaving out any nobody used. A reaction is the viewer's when its
- * profile is the viewer's profile cell.
+ * lists them, leaving out any nobody used, each with the profiles that used
+ * it. A reaction is the viewer's when its profile is the viewer's profile
+ * cell.
  */
 export const reactionTallies = (
   reactions: readonly FabriChatReaction[],
@@ -264,6 +268,7 @@ export const reactionTallies = (
       count: onThis.length,
       mine: viewer !== undefined &&
         onThis.some((reaction) => equals(reaction.reactorProfile, viewer)),
+      reactors: onThis.map((reaction) => reaction.reactorProfile),
     };
   }).filter((tally) => tally.count > 0);
 
@@ -397,28 +402,35 @@ export const FabriChatMessageRow = pattern<
                 }}
               >
                 {tallies.map((tally) => (
-                  <cf-button
-                    data-ui-action={FABRICHAT_REACT_ACTION}
-                    size="sm"
-                    color="primary"
-                    variant={tally.mine ? "outline" : "ghost"}
-                    disabled={cannotReact}
-                    onClick={commitReact({
-                      emoji: tally.emoji,
-                      message,
-                      myProfile,
-                      reactions,
-                    } as CommitReactInput)}
-                  >
-                    {
-                      /* One item in the button's row, so the emoji and its
-                      count read as one run of text. */
-                    }
-                    <span>
-                      <span style={REACJI_STYLE}>{tally.emoji}</span>{" "}
-                      {tally.count}
-                    </span>
-                  </cf-button>
+                  <cf-hover-card>
+                    <cf-button
+                      data-ui-action={FABRICHAT_REACT_ACTION}
+                      size="sm"
+                      color="primary"
+                      variant={tally.mine ? "outline" : "ghost"}
+                      disabled={cannotReact}
+                      onClick={commitReact({
+                        emoji: tally.emoji,
+                        message,
+                        myProfile,
+                        reactions,
+                      } as CommitReactInput)}
+                    >
+                      {
+                        /* One item in the button's row, so the emoji and its
+                        count read as one run of text. */
+                      }
+                      <span>
+                        <span style={REACJI_STYLE}>{tally.emoji}</span>{" "}
+                        {tally.count}
+                      </span>
+                    </cf-button>
+                    <cf-vstack slot="card" gap="1">
+                      {tally.reactors.map((reactor) => (
+                        <cf-profile-badge size="sm" $profile={reactor} />
+                      ))}
+                    </cf-vstack>
+                  </cf-hover-card>
                 ))}
               </div>
             </cf-vstack>

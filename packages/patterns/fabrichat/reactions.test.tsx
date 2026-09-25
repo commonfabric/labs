@@ -14,10 +14,12 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  childNodes,
   findNode,
   findNodeByProp,
   fireClick,
   isButton,
+  readValue,
 } from "../test/vnode-helpers.ts";
 import {
   commitReact,
@@ -85,6 +87,19 @@ const pickerButtonCount = (root: unknown): number =>
   FABRICHAT_REACJI.filter((emoji) =>
     findNode(root, isButton(emoji)) !== undefined
   ).length;
+
+// How many elements named `name` sit under `root`, counting nested ones.
+const countElements = (root: unknown, name: string): number => {
+  const value = readValue(root) as { name?: unknown } | undefined;
+  const self = value !== undefined && value !== null &&
+      typeof value === "object" && readValue(value.name) === name
+    ? 1
+    : 0;
+  return childNodes(value).reduce<number>(
+    (sum, child) => sum + countElements(child, name),
+    self,
+  );
+};
 
 const addReactionButton = (root: unknown): unknown =>
   findNodeByProp(root, "aria-label", "Add reaction");
@@ -218,6 +233,18 @@ export default pattern(() => {
   const assert_tallies_mark_only_viewers_own = assert(() =>
     talliesText(bobSeesFirst.tallies) === "😺 2*, 😿 1"
   );
+  const assert_tally_lists_reactors_in_order = assert(() => {
+    const [cats, cries] = aliceSeesFirst.tallies;
+    return cats.reactors.length === 2 &&
+      equals(cats.reactors[0], aliceProfile) &&
+      equals(cats.reactors[1], bobProfile) &&
+      cries.reactors.length === 1 &&
+      equals(cries.reactors[0], aliceProfile);
+  });
+  const assert_row_shows_a_badge_per_reactor = assert(() =>
+    countElements(aliceSeesFirst[UI], "cf-hover-card") === 2 &&
+    countElements(aliceSeesFirst[UI], "cf-profile-badge") === 1 + 3
+  );
   const assert_linked_viewer_sees_own_marked = assert(() =>
     talliesText(aliceSeesFirstThroughLink.tallies) === "😺 2*, 😿 1*"
   );
@@ -228,7 +255,9 @@ export default pattern(() => {
   );
   const assert_taken_back_reaction_can_return = assert(() =>
     storedIn(reactions).length === 3 &&
-    talliesText(aliceSeesFirst.tallies) === "😺 2*, 😿 1*"
+    talliesText(aliceSeesFirst.tallies) === "😺 2*, 😿 1*" &&
+    equals(aliceSeesFirst.tallies[0].reactors[0], bobProfile) &&
+    equals(aliceSeesFirst.tallies[0].reactors[1], aliceProfile)
   );
   const assert_each_message_tallies_its_own = assert(() =>
     storedIn(reactions).length === 4 &&
@@ -277,6 +306,8 @@ export default pattern(() => {
       { action: bobCatsFirst, trustedUi: reactGesture },
       { assertion: assert_tallies_in_offered_order },
       { assertion: assert_tallies_mark_only_viewers_own },
+      { assertion: assert_tally_lists_reactors_in_order },
+      { assertion: assert_row_shows_a_badge_per_reactor },
       { assertion: assert_linked_viewer_sees_own_marked },
       { action: aliceCatsFirst, trustedUi: reactGesture },
       { assertion: assert_second_use_takes_reaction_back },
