@@ -18,6 +18,7 @@ import {
   cloneSchemaDefinition,
   getNativeTypeSchema,
   getPropertyNameText,
+  instantiatedPropertyType,
   isFunctionLike,
   safeGetPropertyType,
 } from "../type-utils.ts";
@@ -358,6 +359,7 @@ export class ObjectFormatter implements TypeFormatter {
         resolvedPropType,
         context,
         propTypeNode,
+        instantiatedPropertyType(context.instantiatedAs, propName, checker),
       );
       if (isObjectOrArray(generated)) {
         attachDeprecatedStreamMark(

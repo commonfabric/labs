@@ -1738,10 +1738,18 @@ export class CommonFabricFormatter implements TypeFormatter {
     // definition.
     const argNodes = resolved.aliasArgNodes ??
       this.#referenceArgumentNodes(resolved.aliasName, context);
+    const payloadNode = argNodes?.[0];
+    // Read under bindings, the payload is read at the payload of the alias's
+    // instantiation (`GenerationContext.instantiatedAs`).
+    const instantiatedPayload = context.instantiatedAs &&
+        !(payloadNode && this.#refersToCfcAlias(payloadNode, context))
+      ? cfcPayloadOf(definedPart(context.instantiatedAs))
+      : undefined;
     return this.#schemaGenerator.formatChildType(
       baseType,
       context,
-      argNodes?.[0],
+      payloadNode,
+      instantiatedPayload,
     );
   }
 
@@ -1770,13 +1778,14 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (!holdsFreeTypeParameter(payload.node, checker)) {
       return this.#schemaGenerator.formatChildType(type, outer, payload.node);
     }
+    // An optional member's `?` adds `undefined` to the type it instantiates.
+    const instantiatedPayload = resolved.instantiated &&
+        !this.#refersToCfcAlias(payload.node, context)
+      ? cfcPayloadOf(definedPart(resolved.instantiated))
+      : undefined;
     const readsInstantiation = !resolved.argumentsWritten ||
       usesParameterUnreachably(payload.node, checker);
-    // An optional member's `?` adds `undefined` to the type it instantiates.
-    const instantiatedPayload = readsInstantiation && resolved.instantiated &&
-      !this.#refersToCfcAlias(payload.node, context) &&
-      cfcPayloadOf(definedPart(resolved.instantiated));
-    if (instantiatedPayload) {
+    if (readsInstantiation && instantiatedPayload) {
       return this.#schemaGenerator.formatChildType(
         instantiatedPayload,
         context,
@@ -1784,7 +1793,9 @@ export class CommonFabricFormatter implements TypeFormatter {
       );
     }
     // A parameter left unbound, its argument not read, is reported as a
-    // use no binding reaches.
+    // use no binding reaches. The payload the chain instantiates, where it
+    // holds one apart, identifies the reading
+    // (`GenerationContext.instantiatedAs`).
     return this.#schemaGenerator.formatChildType(
       type,
       {
@@ -1793,6 +1804,7 @@ export class CommonFabricFormatter implements TypeFormatter {
           { arguments: new Map(), declaredNode: payload.node },
       },
       payload.node,
+      instantiatedPayload,
     );
   }
 
@@ -1956,9 +1968,13 @@ export class CommonFabricFormatter implements TypeFormatter {
           context.boundTypeParameters?.arguments,
         )
       );
+    // Under bindings, the position's own instantiation is the chain's
+    // (`GenerationContext.instantiatedAs`): `typeWithAlias` is the type the
+    // declaration is written in, its parameters unbound.
+    const instantiated = context.instantiatedAs ?? typeWithAlias;
     return argumentsWritten
-      ? { ...resolved, instantiated: typeWithAlias, argumentsWritten }
-      : { ...resolved, instantiated: typeWithAlias };
+      ? { ...resolved, instantiated, argumentsWritten }
+      : { ...resolved, instantiated };
   }
 
   /**

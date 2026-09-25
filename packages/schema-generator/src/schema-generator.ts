@@ -41,9 +41,12 @@ import {
   detectWrapperViaNode,
   getNamedTypeKey,
   getPropertyNameText,
+  instantiatedElementType,
+  instantiatedPropertyType,
   isFunctionLike,
   safeGetIndexTypeOfType,
   safeGetTypeOfSymbolAtLocation,
+  soleNonNullishMember,
   type TypeWithInternals,
 } from "./type-utils.ts";
 import { attachDocTags, extractDocFromType } from "./doc-utils.ts";
@@ -1270,12 +1273,16 @@ export class SchemaGenerator {
    *
    * AUTO-DETECTS whether to use type-based or node-based analysis. A node the
    * caller printed from a type is never analyzed; the type at that position is
-   * read instead (`typeReadForPrintedNode()`).
+   * read instead (`typeReadForPrintedNode()`). `instantiatedAs` is the type
+   * the checker instantiates at the position, where a reading under bindings
+   * has it (`GenerationContext.instantiatedAs`); the child reads with it, and
+   * with none where it is not given.
    */
   public formatChildType(
     type: ts.Type,
     context: GenerationContext,
     typeNode?: ts.TypeNode,
+    instantiatedAs?: ts.Type,
   ): MutableJSONSchema {
     // A bound type parameter reads as its argument: its node where it has one,
     // under the bindings of the place it is written, and its type where it
@@ -1291,6 +1298,7 @@ export class SchemaGenerator {
           ? { ...outer, boundTypeParameters: argument.bound }
           : outer,
         argument.node,
+        instantiatedAs,
       );
     }
     // A type still depending on a parameter, where no binding reaches it, is
@@ -1321,7 +1329,15 @@ export class SchemaGenerator {
     // If we pass the parent context as-is when typeNode is undefined, the child will
     // inherit the parent's typeNode which leads to mismatched type/node pairs.
     // A printed node is not read as a node, and the hints attached to it apply.
-    const { typeNode: _, hintsNode: __, ...baseContext } = context;
+    const {
+      typeNode: _,
+      hintsNode: __,
+      instantiatedAs: ___,
+      ...unplaced
+    } = context;
+    const baseContext: GenerationContext = instantiatedAs
+      ? { ...unplaced, instantiatedAs }
+      : unplaced;
     const childContext: GenerationContext = readInPlace && typeNode
       ? { ...baseContext, hintsNode: typeNode }
       : typeNode
@@ -1372,7 +1388,17 @@ export class SchemaGenerator {
    */
   #bindingKey(context: GenerationContext): string | undefined {
     const bound = context.boundTypeParameters;
-    return bound && this.#bindingsKey(bound);
+    if (!bound) return undefined;
+    // Where the checker's instantiation at the position is known, it says what
+    // the arguments denote, so a recursion whose arguments settle reads under
+    // the same key however deep their bindings nest; the arguments as written
+    // tell apart only what their syntax adds, such as a `Default`.
+    const instantiatedAs = context.instantiatedAs;
+    return instantiatedAs
+      ? `as:${this.#bindingId(instantiatedAs)}|${
+        this.#bindingsKey(bound, false)
+      }`
+      : this.#bindingsKey(bound);
   }
 
   /**
@@ -1526,9 +1552,10 @@ export class SchemaGenerator {
     // definition's name is (`#bindingKey()`), so the same declared type read
     // under other bindings inside it is no cycle.
     const bound = context.boundTypeParameters;
-    const stackKey = bound === undefined
+    const bindingKey = this.#bindingKey(context);
+    const stackKey = bindingKey === undefined
       ? type
-      : `${this.#bindingId(type)}|${this.#bindingsKey(bound)}`;
+      : `${this.#bindingId(type)}|${bindingKey}`;
     const tracksCycle = !scopesHandle && !isWrapperContext;
     // The same type read inside itself with the same arguments written for
     // it, each read under deeper bindings, is either a nesting its author
@@ -1882,7 +1909,14 @@ export class SchemaGenerator {
     context: GenerationContext,
   ): MutableJSONSchema {
     const printed = context.printedFrom?.(typeNode);
-    if (printed) return this.formatChildType(printed, context, typeNode);
+    if (printed) {
+      return this.formatChildType(
+        printed,
+        context,
+        typeNode,
+        context.instantiatedAs,
+      );
+    }
 
     const typeRegistry = context.typeRegistry;
 
@@ -1936,6 +1970,7 @@ export class SchemaGenerator {
             propType,
             context,
             member.type,
+            instantiatedPropertyType(context.instantiatedAs, propName, checker),
           );
 
           properties[propName] = propSchema;
@@ -2061,6 +2096,7 @@ export class SchemaGenerator {
         elementType,
         context,
         typeNode.elementType,
+        instantiatedElementType(context.instantiatedAs, checker),
       );
       return { type: "array", items };
     }
@@ -2070,8 +2106,26 @@ export class SchemaGenerator {
     // explicitly. Keyword types (string, number, boolean, undefined, null) are
     // resolved directly by the switch below, so they never cause widening.
     if (ts.isUnionTypeNode(typeNode)) {
+      // The one member that is neither `null` nor `undefined` is read at the
+      // union's instantiation less those; any other member has none.
+      const { instantiatedAs, ...unplaced } = context;
+      const valued = typeNode.types.filter((member) => {
+        const kind = unwrapTypeParentheses(member);
+        return kind.kind !== ts.SyntaxKind.UndefinedKeyword &&
+          !(ts.isLiteralTypeNode(kind) &&
+            kind.literal.kind === ts.SyntaxKind.NullKeyword);
+      });
+      const soleInstantiated = valued.length === 1 && instantiatedAs
+        ? soleNonNullishMember(instantiatedAs)
+        : undefined;
       const memberSchemas = typeNode.types.map((member) =>
-        this.#analyzeTypeNodeStructure(member, checker, context)
+        this.#analyzeTypeNodeStructure(
+          member,
+          checker,
+          soleInstantiated && member === valued[0]
+            ? { ...unplaced, instantiatedAs: soleInstantiated }
+            : unplaced,
+        )
       );
       if (memberSchemas.some((schema) => schema === true)) {
         return true;
@@ -2113,7 +2167,12 @@ export class SchemaGenerator {
       if (detectWrapperViaNode(typeNode, checker)) {
         const wrapperType = typeRegistry?.get(typeNode) ??
           checker.getTypeFromTypeNode(typeNode);
-        return this.formatChildType(wrapperType, context, typeNode);
+        return this.formatChildType(
+          wrapperType,
+          context,
+          typeNode,
+          context.instantiatedAs,
+        );
       }
 
       // A scope wrapper naming its payload is read from that argument, which
@@ -2126,6 +2185,7 @@ export class SchemaGenerator {
           checker.getUnknownType(),
           context,
           typeNode,
+          context.instantiatedAs,
         );
       }
 
@@ -2157,7 +2217,12 @@ export class SchemaGenerator {
       // A name declared as `any` reads as `any` does, accepting any value.
       if (resolved === checker.getAnyType()) return true;
       if (resolved) {
-        return this.formatChildType(resolved, context, typeNode);
+        return this.formatChildType(
+          resolved,
+          context,
+          typeNode,
+          context.instantiatedAs,
+        );
       }
 
       if (
@@ -2196,7 +2261,12 @@ export class SchemaGenerator {
     const type = checker.getTypeFromTypeNode(typeNode);
     if (!(type.flags & ts.TypeFlags.Any)) {
       // Successfully resolved - use formatChildType to share context
-      return this.formatChildType(type, context, typeNode);
+      return this.formatChildType(
+        type,
+        context,
+        typeNode,
+        context.instantiatedAs,
+      );
     }
 
     // Fallback: accept any value. This is a guess rather than a reading of the

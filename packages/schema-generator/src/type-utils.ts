@@ -322,6 +322,52 @@ export function safeGetPropertyType(
 }
 
 /**
+ * The one member of `type` that is neither `undefined` nor `null`, or `type`
+ * itself where it is no union; `undefined` where no one member remains.
+ */
+export function soleNonNullishMember(type: ts.Type): ts.Type | undefined {
+  if (!type.isUnion()) return type;
+  const rest = type.types.filter((member) =>
+    (member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)) === 0
+  );
+  return rest.length === 1 ? rest[0] : undefined;
+}
+
+/**
+ * The type of property `name` of `instantiatedAs`, the type the checker
+ * instantiates at a position read under bindings
+ * (`GenerationContext.instantiatedAs`), less the `undefined` an optional
+ * property's `?` adds; `undefined` where it has no such property.
+ */
+export function instantiatedPropertyType(
+  instantiatedAs: ts.Type | undefined,
+  name: string,
+  checker: ts.TypeChecker,
+): ts.Type | undefined {
+  const property = instantiatedAs &&
+    checker.getPropertyOfType(instantiatedAs, name);
+  if (!property) return undefined;
+  const type = checker.getTypeOfSymbol(property);
+  return (property.flags & ts.SymbolFlags.Optional) !== 0
+    ? soleNonNullishMember(type) ?? type
+    : type;
+}
+
+/**
+ * The element type of `instantiatedAs`, the type the checker instantiates at
+ * an array read under bindings (`GenerationContext.instantiatedAs`), where it
+ * is an array.
+ */
+export function instantiatedElementType(
+  instantiatedAs: ts.Type | undefined,
+  checker: ts.TypeChecker,
+): ts.Type | undefined {
+  return instantiatedAs && checker.isArrayType(instantiatedAs)
+    ? checker.getTypeArguments(instantiatedAs as ts.TypeReference)[0]
+    : undefined;
+}
+
+/**
  * TypeScript internal API type extensions for safer casting
  */
 export interface TypeWithInternals extends ts.Type {

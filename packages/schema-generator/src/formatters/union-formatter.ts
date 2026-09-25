@@ -18,6 +18,7 @@ import {
   getPropertyNameText,
   isEmptyObjectDefaultType,
   resolveWrapperNode,
+  soleNonNullishMember,
   TypeWithInternals,
 } from "../type-utils.ts";
 import { hasDefaultMarker } from "../typescript/default-brand.ts";
@@ -148,6 +149,15 @@ export class UnionFormatter implements TypeFormatter {
     // nonNull excludes only null; undefined members are kept because undefined is
     // now represented explicitly as { type: "undefined" } rather than being stripped.
     const nonNull = members.filter((m) => (m.flags & ts.TypeFlags.Null) === 0);
+    // The one member that is neither `null` nor `undefined` is read at the
+    // union's instantiation less those (`GenerationContext.instantiatedAs`);
+    // any other member has none.
+    const valued = nonNull.filter((m) =>
+      (m.flags & ts.TypeFlags.Undefined) === 0
+    );
+    const soleInstantiated = valued.length === 1 && context.instantiatedAs
+      ? soleNonNullishMember(context.instantiatedAs)
+      : undefined;
 
     const generate = (
       t: ts.Type,
@@ -169,6 +179,7 @@ export class UnionFormatter implements TypeFormatter {
         t,
         context,
         memberNode,
+        t === valued[0] ? soleInstantiated : undefined,
       );
     };
 

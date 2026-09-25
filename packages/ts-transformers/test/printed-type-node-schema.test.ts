@@ -948,6 +948,36 @@ export default pattern<{ a: Holder<string> }>(({ a }) => ({ a }));`,
         expect((output.properties as Schema).a).toEqual(expected);
       });
 
+      it("reads a nullable payload of a generic declaration's member as the checker instantiates it", async () => {
+        // `Inner<U>` is written in `Holder`'s parameter, so the member is read
+        // as the type `Holder<string>` instantiates, where intersecting
+        // `null` with the label's carrier has left nothing of it.
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Inner<T> = Confidential<{ v: T } | null, ["secret"]>;
+interface Holder<U> { inner: Inner<U> }
+export default pattern<{ a: Holder<string> }>(({ a }) => ({ a }));`,
+        }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+        const expected = {
+          type: "object",
+          properties: {
+            inner: {
+              ...box({ type: "string" }),
+              properties: { v: { type: "string" } },
+              required: ["v"],
+              ifc: { confidentiality: ["secret"] },
+            },
+          },
+          required: ["inner"],
+        };
+        expect((input.properties as Schema).a).toEqual(expected);
+        expect((output.properties as Schema).a).toEqual(expected);
+      });
+
       it("keeps a policy binding that only an argument's syntax names", async () => {
         const files = await transformFiles({
           "/main.tsx": `/// <cts-enable />

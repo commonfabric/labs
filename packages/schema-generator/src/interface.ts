@@ -197,6 +197,19 @@ export interface GenerationContext {
    * declaration that is written in them (`BoundTypeParameters`).
    */
   boundTypeParameters?: BoundTypeParameters;
+
+  /**
+   * Under type parameter bindings, the type the checker instantiates at the
+   * position being read, where the reading has it: the payload of the type a
+   * CFC alias chain instantiates, and in turn each property of it, its array
+   * element, and the one member of an optional or nullable value that is
+   * neither `undefined` nor `null`. A type read under bindings is identified
+   * together with it, so a recursion whose arguments the checker settles, as
+   * `Sec<T | undefined>` inside `Sec<T>` settles after one step, is found as
+   * one although its written arguments nest without end. It is set only where
+   * a reader passes it for the position it reads.
+   */
+  instantiatedAs?: ts.Type;
 }
 
 /**

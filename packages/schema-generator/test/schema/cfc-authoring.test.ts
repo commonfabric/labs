@@ -2111,6 +2111,63 @@ describe("Schema: CFC authoring aliases", () => {
       expect(diagnostics).toEqual([]);
     });
 
+    for (
+      const [spelling, argument, holder, member] of [
+        [
+          "`undefined` joined to it",
+          "T | undefined",
+          "Sec<string>",
+          "next?: X",
+        ],
+        [
+          "an object intersected with it",
+          "T & { a: string }",
+          "Sec<{ a: string }>",
+          "next?: X",
+        ],
+        ["`Readonly` over it", "Readonly<T>", "Sec<string>", "next?: X"],
+        [
+          "`undefined` joined to it, in a member that is also `null`",
+          "T | undefined",
+          "Sec<string>",
+          "next: X | null",
+        ],
+      ] as const
+    ) {
+      it(`reads a recursion through the alias with ${spelling}, which the checker settles, as a reference to its definition`, async () => {
+        // The written argument nests without end, but the type the checker
+        // instantiates settles after one step, and that identifies the reading.
+        const next = member.replace("X", `Sec<${argument}>`);
+        const { value, schema, diagnostics } = await generate(`
+          type Sec<T> = Confidential<{ value: T; ${next} }, readonly ["a"]>;
+          interface Holder { value: ${holder} }
+        `);
+        type Node = {
+          $ref?: string;
+          type?: string;
+          anyOf?: Node[];
+          properties?: { next?: Node };
+        };
+        // A member that is also `null` reads as a union; its other arm is the
+        // value.
+        const nextOf = (node: Node): Node => {
+          const next = node.properties?.next ?? {};
+          return next.anyOf?.find((arm) => arm.type !== "null") ?? next;
+        };
+        let node = value as Node;
+        while (!nextOf(node).$ref && nextOf(node).properties) {
+          node = nextOf(node);
+        }
+        const reference = nextOf(node).$ref;
+        const definition = reference === undefined
+          ? undefined
+          : schema.$defs?.[reference.split("/").pop()!] as Node | undefined;
+        expect(reference).toBeDefined();
+        expect(definition && nextOf(definition).$ref).toBe(reference);
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
     it("reads a nesting of an alias in its own argument as written", async () => {
       const { value, diagnostics } = await generate(`
         type Wrap<B> = Confidential<{ w: B }, readonly ["w"]>;

@@ -1001,7 +1001,8 @@ Mechanics:
   its syntax where its type is built from the checker's unbound parameter: an
   object, an array, a tuple, a union, an intersection, `readonly`, a
   default-library alias the node-based analyzer applies (`Partial`, `Pick`,
-  …), and a `Default`; any other node is read by its type. A union or an
+  …; a module's own alias of that name is its own), and a `Default`; any
+  other node is read by its type. A union or an
   intersection is thereby read by its written members, since the checker
   folds a member that is itself a union, a CFC alias over one among them,
   into the whole and loses its boundary and labels. A label written as a
@@ -1024,18 +1025,34 @@ Mechanics:
   and the payload is no CFC alias of its own, whose labels the carriers merge
   with the chain's. A payload that is itself an intersection or a union has
   no one other member, and is read from its declaration under the bindings.
+  Such a member's payload is therefore read as the checker instantiates it,
+  so a `null` its declaration writes beside an object-shaped payload
+  (`Confidential<{ v: T } | null, L>` as `Holder<string>`'s member) is not in
+  the schema on either side, the carrier having left nothing of it.
 - A use no binding reaches, such as a type the checker defers over a bound
   parameter (`T["name"]`, a conditional type), a mapped type over one, or a
   parameter left unbound, accepts any value there, and the payload is reported
-  as not fully read. A type read under bindings is identified, as a recursive
-  definition's name and in cycle detection, by its type and its bindings
-  together, so two instantiations of one declaration keep apart, and an alias
-  reached again inside its own payload with its own parameters refers to its
-  definition. The same type read inside itself with the same arguments
-  written for it, each under deeper bindings, is either a nesting its author
-  wrote out (`Pair<Pair<string>>`) or a recursion that instantiates it without
-  end (`Nest<T[]>` inside `Nest<T>`); nested `MAX_BOUND_NESTING` deep, it is
-  taken for the second, and the innermost accepts any value and is reported.
+  as not fully read. A mapped type reached by its type, with no written node,
+  counts as one over a bound parameter when it has no member or index
+  signature and a string is not assignable to it: over an unbound parameter
+  the checker lists none, while a concrete empty one is the empty object
+  type, to which a string is. A reading under bindings carries the type the
+  checker instantiates at the position it reads, where it has one
+  (`GenerationContext.instantiatedAs`): the payload of the type the chain
+  instantiates, and in turn each property, array element, and the one member
+  of a value that is also `undefined` or `null`. A chain entered there takes
+  it as its instantiation. A type read under bindings is identified, as a
+  recursive definition's name and in cycle detection, by its type together
+  with that instantiation and the arguments as written, or with its bindings
+  where no instantiation is carried, so two instantiations of one declaration
+  keep apart, and a recursion whose arguments the checker settles
+  (`Sec<T | undefined>` inside `Sec<T>`) refers to its definition although the
+  written arguments nest without end. The same type read inside itself with
+  the same arguments written for it, each under deeper bindings, is otherwise
+  either a nesting its author wrote out (`Pair<Pair<string>>`) or a recursion
+  that instantiates it without end (`Nest<T[]>` inside `Nest<T>`); nested
+  `MAX_BOUND_NESTING` deep, it is taken for the second, and the innermost
+  accepts any value and is reported.
   A label reads a parameter it holds as its type wherever the label reader
   pairs that position. A `typeof` binding that a chain entered from a type
   receives only as a type argument cannot be read from a type, so a
