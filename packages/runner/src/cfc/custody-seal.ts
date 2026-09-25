@@ -62,7 +62,8 @@ import { readStoredCfcMetadata } from "./metadata.ts";
 import { cfcPolicyManifestDocId } from "./policy.ts";
 import { collectConsumedLabel } from "./prepare.ts";
 import { CfcReadCeilingError } from "./read-ceiling.ts";
-import { authorPrincipalCandidates } from "./represents-principal.ts";
+import type { CfcLabelView } from "./label-view-core.ts";
+import { representsPrincipalSubject } from "./represents-principal.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
 import { isRendererTrustedEvent } from "./ui-contract.ts";
@@ -398,8 +399,10 @@ const UNUSED_PROPERTY: unique symbol = Symbol("unused property");
  * instruction-inert values: booleans, bounded numbers, constants, and
  * enumerated primitives, composed by closed objects and by arrays whose one
  * `items` schema is itself inert and whose length `maxItems` bounds. An array
- * is a list of closed values, as a rating per option is, and never a channel
- * for text: every element meets the same inert schema.
+ * is a list of closed values, as a rating per option is, and never free text:
+ * every element meets the same inert schema, and no element is itself an
+ * array. Like an object of enumerated fields, it carries as many bits as its
+ * elements do, which is what `maxItems` bounds.
  *
  * @throws If the schema admits free text or any other open-ended leaf, or if
  *   the value does not satisfy it.
@@ -533,6 +536,11 @@ const checkInertStance = (
         typeof minItems !== "number" || !Number.isInteger(minItems) ||
         minItems < 0 || minItems > (maxItems as number)
       ) refuse("`minItems` must be an integer no greater than `maxItems`");
+      // One level of list: an array of arrays would multiply the bound by
+      // itself at each level.
+      if (isObjectNotArray(items) && items.type === "array") {
+        refuse("an array's elements may not be arrays");
+      }
       if (!checksValue) {
         checkInertStance(items, UNUSED_PROPERTY, [...path, "items"]);
         return;
@@ -1003,6 +1011,41 @@ const readTerms = (terms: Cell<unknown>): {
 };
 
 /**
+ * The principals a seat cell's label attests: the subject of each
+ * `represents-principal` integrity atom at the cell's root or on one of its
+ * top-level fields, as `authorPrincipalCandidates` reads an author claim.
+ * Each must be exactly the form a runtime mints, an object of `kind` and
+ * `subject` whose subject is a well-formed DID as written. A runtime refuses
+ * a literal subject only in that form, so any other spelling that names a
+ * principal, such as the string form or a padded subject, may have been
+ * written by someone other than that principal.
+ *
+ * @throws If an atom that names a principal is in any other form.
+ */
+const attestedPrincipals = (
+  view: CfcLabelView | undefined,
+  seat: number,
+): string[] => {
+  const principals = new Set<string>();
+  for (const entry of view?.entries ?? []) {
+    if (entry.path.length > 1) continue;
+    for (const atom of entry.label.integrity ?? []) {
+      if (representsPrincipalSubject(atom) === undefined) continue;
+      if (
+        !isObjectNotArray(atom) || !hasExactKeys(atom, ["kind", "subject"]) ||
+        !isWellFormedDID(atom.subject)
+      ) {
+        throw new Error(
+          `Custody terms name seat ${seat} by a cell with an attestation that is not in the form a runtime mints`,
+        );
+      }
+      principals.add(atom.subject);
+    }
+  }
+  return [...principals];
+};
+
+/**
  * Returns `terms` with each seat named by a reference replaced by the one
  * principal its cell attests: the principal a `represents-principal`
  * integrity atom names at the root of the cell's stored label, or on one of
@@ -1029,11 +1072,12 @@ const resolveSeats = async (
     const tx = runtime.edit();
     try {
       const target = seat.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
-      const principals = authorPrincipalCandidates(
+      const principals = attestedPrincipals(
         cfcLabelViewFromMetadata(
           readStoredCfcMetadata(tx, target),
           target.path.map(String),
         ),
+        index,
       );
       if (principals.length === 0) {
         throw new Error(

@@ -285,6 +285,10 @@ const setup = async (
     async attestation(
       subjects: readonly string[],
       cause: string,
+      atoms: readonly unknown[] = subjects.map((subject) => ({
+        kind: "represents-principal",
+        subject,
+      })),
     ): Promise<Cell<unknown>> {
       const runtime = runtimes.get(alice)!;
       const tx = runtime.edit();
@@ -304,12 +308,7 @@ const setup = async (
             version: 1,
             entries: [{
               path: [],
-              label: {
-                integrity: subjects.map((subject) => ({
-                  kind: "represents-principal",
-                  subject,
-                })),
-              },
+              label: { integrity: [...atoms] },
             }],
           },
         },
@@ -410,6 +409,23 @@ const project = async (
   return storedEntries(runtime, output).flatMap((entry) =>
     entry.label.integrity ?? []
   );
+};
+
+/**
+ * Runs `step` once the commit's checks are done and its anchor is written,
+ * just before the transaction that writes the entry: the seal's second
+ * `editWithRetry` call. What `step` changes can then be caught only by the
+ * entry transaction's own verification of the reviewed reads.
+ */
+const beforeEntry = (runtime: Runtime, step: () => Promise<void>) => {
+  const original = runtime.editWithRetry.bind(runtime);
+  let calls = 0;
+  runtime.editWithRetry = (async (
+    ...args: Parameters<Runtime["editWithRetry"]>
+  ) => {
+    if (calls++ === 1) await step();
+    return await original(...args);
+  }) as Runtime["editWithRetry"];
 };
 
 const witnessed = {
@@ -1305,7 +1321,7 @@ describe("cfc-custody-seal", () => {
         const [subjects, refusal] of [
           [[], /attests no principal/],
           [[bob.did(), mallory.did()], /attests more than one principal/],
-          [[`${bob.did()} (you)`], /distinct, well-formed DIDs/],
+          [[`${bob.did()} (you)`], /not in the form a runtime mints/],
         ] as const
       ) {
         const fixture = await setup();
@@ -1318,6 +1334,33 @@ describe("cfc-custody-seal", () => {
           const draft = await fixture.draft(alice, honestStance);
           await expect(prepareCustodySeal(draft, fixture.room(alice)))
             .rejects.toThrow(refusal);
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
+    it("refuses a seat cell whose attestation is not in the exact form a runtime mints", async () => {
+      // A runtime refuses a literal subject in the object form a profile
+      // carries, but these spellings name the principal without being that
+      // form, so a pattern could write them for someone else.
+      for (
+        const atom of [
+          { kind: "represents-principal", subject: ` ${bob.did()}` },
+          `represents-principal:${bob.did()}`,
+          { kind: "represents-principal", subject: bob.did(), extra: true },
+        ]
+      ) {
+        const fixture = await setup();
+        try {
+          const seat = await fixture.attestation([], "seat-b", [atom]);
+          await fixture.setTerms({
+            ...TERMS,
+            seats: [alice.did(), seat, carol.did()],
+          });
+          const draft = await fixture.draft(alice, honestStance);
+          await expect(prepareCustodySeal(draft, fixture.room(alice)))
+            .rejects.toThrow(/attestation that is not in the form/);
         } finally {
           await fixture.dispose();
         }
@@ -1356,6 +1399,60 @@ describe("cfc-custody-seal", () => {
           .rejects.toThrow(/stale/);
       } finally {
         await fixture.dispose();
+      }
+    });
+
+    it("refuses a seal whose seat attests another principal before its entry is written", async () => {
+      const fixture = await setup();
+      try {
+        const seat = await fixture.attestation([bob.did()], "seat-b");
+        await fixture.setTerms({
+          ...TERMS,
+          seats: [alice.did(), seat, carol.did()],
+        });
+        const draft = await fixture.draft(alice, honestStance);
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        // After the commit's own checks, before the entry's transaction.
+        beforeEntry(
+          fixture.runtimes.get(alice)!,
+          () => fixture.attestation([mallory.did()], "seat-b").then(() => {}),
+        );
+        await expect(commitCustodySeal(prepared.consent, trustedClick()))
+          .rejects.toThrow(/changed before commit/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a seal whose policy cell names another policy after review", async () => {
+      for (const stage of ["review", "entry"] as const) {
+        const fixture = await setup();
+        try {
+          const runtime = fixture.runtimes.get(alice)!;
+          runtime.registerCfcPolicyManifests(undefined, [SCRATCH]);
+          const declaring = runtime.getCell(S, "custody-room-state");
+          const draft = await fixture.draft(alice, honestStance);
+          const prepared = await prepareCustodySeal(draft, {
+            ...fixture.room(alice),
+            policy: declaring,
+          });
+          // Another member's code writes another policy's reference into the
+          // cell, which now names that policy by value.
+          const redeclare = async () => {
+            const tx = runtime.edit();
+            runtime.getCell(S, "custody-room-state", undefined, tx)
+              .set(policyOf(SCRATCH) as never);
+            expect((await tx.commit()).error).toBeUndefined();
+          };
+          if (stage === "review") await redeclare();
+          else beforeEntry(runtime, redeclare);
+          await expect(commitCustodySeal(prepared.consent, trustedClick()))
+            .rejects.toThrow(
+              stage === "review" ? /stale/ : /changed before commit/,
+            );
+        } finally {
+          await fixture.dispose();
+        }
       }
     });
 
@@ -1430,6 +1527,15 @@ describe("cfc-custody-seal", () => {
           { type: "array", items: { enum: [1, 2] }, maxItems: 2 },
           [1, 3],
           /not one of the enumerated values at `\/1`/,
+        ],
+        [
+          {
+            type: "array",
+            items: { type: "array", items: { type: "boolean" }, maxItems: 2 },
+            maxItems: 2,
+          },
+          [[true]],
+          /elements may not be arrays/,
         ],
         [
           { type: "boolean", maxItems: 2 },
