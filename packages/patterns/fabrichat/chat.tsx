@@ -53,6 +53,9 @@ export const FABRICHAT_REACT_ACTION = "FabriChatReact";
 /** The reactions on offer, in the order a message shows them. */
 export const FABRICHAT_REACJI = ["😺", "😻", "🙀", "😿"] as const;
 
+/** How a reaction's emoji is drawn, at twice a small button's text size. */
+const REACJI_STYLE = { fontSize: "22px", lineHeight: "1" };
+
 /** The fields of a profile that the room reads. */
 export interface FabriChatProfile {
   name?: string;
@@ -407,7 +410,14 @@ export const FabriChatMessageRow = pattern<
                       reactions,
                     } as CommitReactInput)}
                   >
-                    {tally.emoji} {tally.count}
+                    {
+                      /* One item in the button's row, so the emoji and its
+                      count read as one run of text. */
+                    }
+                    <span>
+                      <span style={REACJI_STYLE}>{tally.emoji}</span>{" "}
+                      {tally.count}
+                    </span>
                   </cf-button>
                 ))}
               </div>
@@ -429,7 +439,7 @@ export const FabriChatMessageRow = pattern<
                     pickerOpen,
                   } as CommitReactInput)}
                 >
-                  {emoji}
+                  <span style={REACJI_STYLE}>{emoji}</span>
                 </cf-button>
               ))
               : null}
@@ -441,7 +451,7 @@ export const FabriChatMessageRow = pattern<
               disabled={cannotReact}
               onClick={togglePicker}
             >
-              {pickerOpen ? "✕" : "😺＋"}
+              <span style={REACJI_STYLE}>{pickerOpen ? "✕" : "⚇+"}</span>
             </cf-button>
           </cf-hstack>
         </cf-hover-reveal>
