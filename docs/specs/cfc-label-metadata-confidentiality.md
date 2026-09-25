@@ -19,6 +19,8 @@ persists into a space-B document:
 |---|---|---|
 | `User{subject}`, `Space{id}`, `PersonalSpace{owner}` clause atoms | **yes — DIDs** | read gating (equality), §4.9.3 ACL point query (`Space.id` dereference) |
 | `Caveat{kind, source, by}` | **yes** — `source` is a full nested atom | evidence binding (inv-10: discharge must bind the same caveat source) |
+| `Origin{uri, ...}` / `NetworkProvenance{host, ...}` | **yes — source address** | source classification and exact-byte transport evidence |
+| `ConnectorObserved{connection, ...}` | **yes — connector account** | exact-byte connector-arrival evidence |
 | `LinkReference{source:{space,id,path}, target:{…}}` | **yes** — space DID + doc id + path | provenance display; S7 exemption keys on atom *type* only |
 | `TransformedBy{identity}` | code identity: `moduleIdentity`, `sourceFile`, `bindingPath`, `codeHash` | trust statements (B3 pattern match) |
 | `HasRole`, `UserSurfaceInput`, vouched-channel `ExternalIngest`, `authored-by`/`represents-principal` | **yes — DIDs** | role guards; authorship UI (product feature); fetch-ingest provenance carries a URL and commit SHA instead |
@@ -26,14 +28,14 @@ persists into a space-B document:
 | `cfc.schemaHash` + replicated schema doc (`ensureSchemaDocument`) | policy structure, field names | schema-driven enforcement |
 | version-2 envelope `label.$ref` + replicated `cid:` label document | same atom set as the inline label, one copy per space | label resolution (`resolveStoredCfcMetadata`) |
 
-Two corrections to the audit item's inherited wording: `Origin` URIs have **no
-mint site** in the runner (nothing persists them), and policy names were never
-persisted **until label-carried `Policy(...)`/`Context(...)` refs shipped**
-(B2b label-carried selection, 2026-07-09): a ref atom persists `name` + `hash`
-(public by design — they identify a deployment policy profile and must stay
-dereferenceable against the destination's snapshot) and a DID `subject`
-(commitment, same posture as `User.subject`). The live leak set is the
-DID-bearing rows above.
+`Origin`, `ConnectorObserved`, and `NetworkProvenance` have canonical public
+record types and mint helpers. Connector and network evidence is reserved for
+trusted source-entry boundaries, so schema-authored instances are stripped by
+the runtime mint gate; `Origin` remains a confidentiality classification.
+Policy references persist `name` + `hash` (public by design — they identify a
+deployment policy profile and must stay dereferenceable against the
+destination's snapshot) and a DID `subject` (commitment, the same posture as
+`User.subject`).
 
 Three structural facts shape everything below:
 
@@ -93,6 +95,8 @@ Default assignments (initial table, revisable per family):
 | Field | Class | Rationale |
 |---|---|---|
 | `Caveat.source`, nested caveat sources | commitment | consumed by equality-shaped evidence binding; the audit's named leak |
+| `Origin.uri` / `NetworkProvenance.host` | commitment | source addresses are equality-consumed and are not dereferenced from the persisted copy |
+| `ConnectorObserved.connection` | commitment | connector account identity is equality-consumed; connector and provider names remain public |
 | `User.subject` / `PersonalSpace.owner` in confidentiality clauses | commitment | gating is pure equality against the acting reader |
 | `Space.id` in clauses | **public** (initially) | §4.9.3 must dereference it for the ACL point query; a commitment breaks membership-based release. Space DIDs identify a *container*, not a person; revisit under `reference` when cross-space resolution ships |
 | `Policy`/`Context` ref `.name`/`.hash` | **public** | B2b label-carried selection must dereference them against the destination's deployment snapshot (the `Space.id` argument); they identify a policy profile, not a person, and `hash` is already a content digest |

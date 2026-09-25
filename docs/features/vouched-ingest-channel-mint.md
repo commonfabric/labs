@@ -111,7 +111,7 @@ breaks if the early-return moves.
 
 ## What the seam shares with the ordinary atoms
 
-Same `ExternalIngest` atom + constructor + `provenance` class + gate
+Same `ExternalIngest` atom + constructor + `value-bound` class + gate
 registration; same split-mint invariant; the payload bytes authored under the
 ordinary member identity; the grant/ACL story unchanged; `prf` stays `[]`, `aud`
 unset.

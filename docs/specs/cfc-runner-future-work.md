@@ -307,11 +307,13 @@ Each is bounded and mostly independent. Several are fail-safe today.
   keys reject list*, so a spec-conformant author is **rejected**, not honored.
   Reconcile the spelling and honor §8.7.3 boundary-verified transformer-minted
   semantics. (audit 3.6.)
-- **`propagationClass` registry drift.** Working hand-maintained 12-atom map with a
-  fail-safe `value-bound` default, but it diverges from §15 (`PromptSlotBound`
-  classed value-bound vs spec provenance; `IntegritySummary` absent). Code-generate
-  the map from a shared registry, or add a parity test that fails when §15 gains a
-  hereditary family absent from `CLASS_BY_TYPE`. (SC-10/15/17.)
+- **Remaining propagation-registry carriers.** The hand-maintained map has a
+  fail-safe `value-bound` default and a parity test for its registered families.
+  The current identity-shaped `TransformedBy` carrier remains provenance until
+  it becomes the exact value-bound §15 record, and positive `LlmDerived`
+  provenance remains until model output is represented as an ordinary observed
+  node transformation. Conditional `IntegritySummary` classes are not
+  represented. (SC-10/15/17.)
 - **`classification: string[]` shorthand not lowered.** No `classificationToAtoms`
   anywhere in the runner — a silent no-op if it reaches the runner. Confirm the
   schema-generator lowers it first, or add the lowering. (§4.2.1, §4.7.1.)
@@ -367,19 +369,12 @@ spec test failing.
 - **Post-commit sink-release re-verification** — the runner re-checks the frozen
   request snapshot after commit; §8.10 defines only pre-commit verification. Define
   the contract (what it re-verifies, whether it re-runs the ceiling). (audit 3.11.)
-- **`ExternalIngest` provenance mark** — split-mint, module-private trigger,
-  and bypasses `gateRuntimeMintedIntegrity`. Its vouched-channel variant
-  records an audience without enforcing it; its weaker fetch variant records
-  only a pinned source and makes no audience claim. Defined only in feature
-  documents.
-- **Atom registry parity (`ExternalIngest` / `UserSurfaceInput`).** Both are
-  *already* registered in the runtime — `CFC_ATOM_TYPE`
-  ([`packages/api/cfc.ts:35`,`:49`](../../packages/api/cfc.ts)) and the propagation
-  map ([`atom-classes.ts:30`,`:34`](../../packages/runner/src/cfc/atom-classes.ts),
-  both `provenance`) — so no runner code is needed. The residual is spec-side:
-  promote them from spec example-only into the §15 atom registry, and reconcile the
-  `structure`/`external-ingest` `LabelComponent` values that extend the spec's
-  3-value enum. (SC-10/20.)
+- **Runner-only `LabelComponent` values.** Reconcile the `structure` and
+  `external-ingest` update-discipline values with the spec's three-value enum.
+  The atom families themselves follow the §15 registry: `ExternalIngest`,
+  `ConnectorObserved`, and `NetworkProvenance` are value-bound integrity, while
+  `UserSurfaceInput` is also value-bound integrity and `Origin` is
+  confidentiality. (SC-20.)
 
 ---
 

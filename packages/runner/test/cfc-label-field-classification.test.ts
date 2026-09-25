@@ -17,6 +17,21 @@ describe("CFC label-field classification (inv-12 / SC-25)", () => {
       classifyLabelField({ type: CFC_ATOM_TYPE.Caveat }, ["source"]),
     ).toBe("commitment");
     expect(
+      classifyLabelField({ type: CFC_ATOM_TYPE.Origin }, ["uri"]),
+    ).toBe("commitment");
+    expect(
+      classifyLabelField(
+        { type: CFC_ATOM_TYPE.ConnectorObserved },
+        ["connection"],
+      ),
+    ).toBe("commitment");
+    expect(
+      classifyLabelField(
+        { type: CFC_ATOM_TYPE.NetworkProvenance },
+        ["host"],
+      ),
+    ).toBe("commitment");
+    expect(
       classifyLabelField({ type: CFC_ATOM_TYPE.User }, ["subject"]),
     ).toBe("commitment");
     expect(
@@ -81,6 +96,18 @@ describe("CFC label-field classification (inv-12 / SC-25)", () => {
     ).toBeUndefined();
     expect(
       classifyLabelField({ type: CFC_ATOM_TYPE.Expires }, ["timestamp"]),
+    ).toBeUndefined();
+    expect(
+      classifyLabelField(
+        { type: CFC_ATOM_TYPE.ConnectorObserved },
+        ["connector"],
+      ),
+    ).toBeUndefined();
+    expect(
+      classifyLabelField(
+        { type: CFC_ATOM_TYPE.NetworkProvenance },
+        ["requestDigest"],
+      ),
     ).toBeUndefined();
     expect(
       classifyLabelField({ type: "https://example.com/unknown" }, ["source"]),

@@ -4759,7 +4759,6 @@ const createPrefixProvenanceSummary = (): CfcPrefixProvenanceSummary => ({
 // endorsement an author can require via requiredIntegrity.
 const STRUCTURAL_LINK_PROVENANCE_ATOM_TYPES = new Set<string>([
   CFC_ATOM_TYPE.LinkReference,
-  CFC_ATOM_TYPE.Origin,
 ]);
 
 const isNonEndorsementProvenanceAtom = (atom: unknown): boolean =>
@@ -4771,8 +4770,8 @@ const isNonEndorsementProvenanceAtom = (atom: unknown): boolean =>
   isCurrentPrincipalClaimAtom(atom);
 
 // A consumed read whose label carries no confidentiality and whose integrity is
-// ENTIRELY non-endorsement provenance (a link reference / origin / a
-// current-principal claim) is structural plumbing, not a data input. It must
+// ENTIRELY non-endorsement provenance (a link reference or a current-principal
+// claim) is structural plumbing, not a data input. It must
 // not gate a requiredIntegrity write: the quantification would otherwise
 // false-reject an unrelated protected write (audit S7 — e.g.
 // cfc-group-chat-demo's admin grant reads adminRegistry.bootstrapAdmin.subject,
@@ -5658,7 +5657,6 @@ const RUNTIME_MINTED_INTEGRITY_ATOM_TYPES = new Set<string>([
   CFC_ATOM_TYPE.InjectionSafe,
   CFC_ATOM_TYPE.Builtin,
   CFC_ATOM_TYPE.LinkReference,
-  CFC_ATOM_TYPE.Origin,
   // Hereditary certification must come from the certification process, not
   // a pattern-authored schema — forging it would survive every combination.
   CFC_ATOM_TYPE.PolicyCertified,
@@ -5667,12 +5665,13 @@ const RUNTIME_MINTED_INTEGRITY_ATOM_TYPES = new Set<string>([
   // Derivation provenance is evidence minted by the flow stage (§8.9.3).
   CFC_ATOM_TYPE.TransformedBy,
   CFC_ATOM_TYPE.UserSurfaceInput,
-  // External-ingest provenance is minted by the runtime-internal ingest seam
-  // from verified channel metadata only (the split-mint). Gating it here is
-  // load-bearing: the payload bytes are authored under the ordinary member
-  // identity, so any ExternalIngest atom an attacker smuggles into the payload
-  // is stripped — the trusted mark can only come from the builtin mint step.
+  // Source-entry evidence is minted from facts observed by trusted connector,
+  // host-admission, or network boundaries. Gating these families here is
+  // load-bearing: payload bytes are authored under an ordinary member
+  // identity, so any such atom smuggled into the payload is stripped.
+  CFC_ATOM_TYPE.ConnectorObserved,
   CFC_ATOM_TYPE.ExternalIngest,
+  CFC_ATOM_TYPE.NetworkProvenance,
   // LLM-derivation provenance is minted by the llm builtins at the point
   // model bytes enter the store (Epic D1). Gating it keeps the stamp honest
   // in BOTH directions: pattern code can neither forge it onto values the

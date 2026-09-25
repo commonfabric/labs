@@ -12,7 +12,10 @@ import {
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
-import { atomPropagationClass } from "../src/cfc/atom-classes.ts";
+import {
+  atomPropagationClass,
+  registeredAtomPropagationClass,
+} from "../src/cfc/atom-classes.ts";
 import type { IFCLabel } from "../src/cfc/mod.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -93,16 +96,41 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       .filter((e) => e.origin === "derived")
       .flatMap((e) => e.label.integrity ?? []);
 
-  it("classifies atoms with a fail-safe default", () => {
-    expect(atomPropagationClass(certified("p"))).toBe("hereditary");
-    expect(atomPropagationClass({ type: CFC_ATOM_TYPE.InjectionSafe }))
-      .toBe("value-bound");
-    expect(atomPropagationClass({ type: CFC_ATOM_TYPE.Builtin, name: "x" }))
-      .toBe("provenance");
-    // External-ingest is origin provenance (like UserSurfaceInput): the
-    // channel is vouched, the contents are not, so it never propagates.
-    expect(atomPropagationClass({ type: CFC_ATOM_TYPE.ExternalIngest }))
-      .toBe("provenance");
+  it("matches the registered integrity families and excludes confidentiality families", () => {
+    const registered = [
+      [CFC_ATOM_TYPE.PolicyCertified, "hereditary"],
+      [CFC_ATOM_TYPE.InjectionSafe, "value-bound"],
+      [CFC_ATOM_TYPE.LinkReference, "value-bound"],
+      [CFC_ATOM_TYPE.Builtin, "value-bound"],
+      [CFC_ATOM_TYPE.ConnectorObserved, "value-bound"],
+      [CFC_ATOM_TYPE.ExternalIngest, "value-bound"],
+      [CFC_ATOM_TYPE.NetworkProvenance, "value-bound"],
+      [CFC_ATOM_TYPE.CaveatScreened, "value-bound"],
+      [CFC_ATOM_TYPE.UserSurfaceInput, "value-bound"],
+      [CFC_ATOM_TYPE.PromptSlotBound, "provenance"],
+      [CFC_ATOM_TYPE.LlmDerived, "provenance"],
+      [CFC_ATOM_TYPE.PromptSlotInfluence, "provenance"],
+      [CFC_ATOM_TYPE.TransformedBy, "provenance"],
+      [CFC_ATOM_TYPE.BoundaryContext, "provenance"],
+      [CFC_ATOM_TYPE.CaveatAssessment, "provenance"],
+      [CFC_ATOM_TYPE.DisclaimerAttached, "provenance"],
+      [CFC_ATOM_TYPE.DisclosureAcknowledged, "provenance"],
+      [CFC_ATOM_TYPE.DisclosureRendered, "provenance"],
+      [CFC_ATOM_TYPE.HasRole, "provenance"],
+    ] as const;
+    for (const [type, propagationClass] of registered) {
+      expect(registeredAtomPropagationClass(type), type).toBe(propagationClass);
+    }
+    for (
+      const type of [
+        CFC_ATOM_TYPE.Caveat,
+        CFC_ATOM_TYPE.Resource,
+        CFC_ATOM_TYPE.Origin,
+      ]
+    ) {
+      expect(registeredAtomPropagationClass(type), type).toBeUndefined();
+    }
+
     // Unknown record types, plain strings, kind-shaped records: value-bound.
     expect(atomPropagationClass({ type: "https://example.com/custom" }))
       .toBe("value-bound");
@@ -114,14 +142,36 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
   it("propagates hereditary atoms only when every observed input carries them", async () => {
     const { storageManager, runtime } = makeRuntime();
     try {
+      const valueBoundEvidence: CfcAtom[] = [
+        cfcAtom.injectionSafe(),
+        {
+          type: CFC_ATOM_TYPE.LinkReference,
+          source: { space, id: "source", path: [] },
+          target: { space, id: "target", path: [] },
+        },
+        cfcAtom.builtin("map"),
+        cfcAtom.connectorObserved("gmail", "connection-1"),
+        cfcAtom.externalIngest("gmail", space, "123", "sha256:value"),
+        cfcAtom.networkProvenance({ host: "mail.example.com", tls: true }),
+        cfcAtom.userSurfaceInput(space, "composer", "sha256:value"),
+        cfcAtom.caveatScreened({
+          kind: "warning",
+          source: { "/": "source" },
+          stage: "value",
+          detector: cfcAtom.builtin("detector"),
+          verdict: "pass",
+          valueRef: { "/": "value" },
+        }),
+      ];
       await seedDoc(runtime, "flow-int-a", [
         certified("p1"),
-        { type: CFC_ATOM_TYPE.InjectionSafe },
+        ...valueBoundEvidence,
         "value-bound-ish",
       ]);
       await seedDoc(runtime, "flow-int-b", [
         certified("p1"),
         certified("p2"),
+        ...valueBoundEvidence,
       ]);
 
       const tx = runtime.edit();
@@ -147,9 +197,9 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       // Value-bound atoms never propagate.
       expect(integrity).toContainEqual(certified("p1"));
       expect(integrity).not.toContainEqual(certified("p2"));
-      expect(integrity).not.toContainEqual({
-        type: CFC_ATOM_TYPE.InjectionSafe,
-      });
+      for (const atom of valueBoundEvidence) {
+        expect(integrity).not.toContainEqual(atom);
+      }
       expect(integrity).not.toContainEqual("value-bound-ish");
     } finally {
       await runtime.dispose();

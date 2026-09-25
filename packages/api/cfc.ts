@@ -45,6 +45,10 @@ export const CFC_ATOM_TYPE = {
   // shape is satisfied via the acting principal's trust closure — never by a
   // literal Concept atom in carried integrity.
   Concept: "https://commonfabric.org/cfc/atom/Concept",
+  // Exact-byte arrival claim minted by the trusted Common Fabric Service
+  // connector boundary. This Loom-owned extension is integrity evidence, not
+  // a claim of provider authorship or network transport.
+  ConnectorObserved: "https://loom.commonfabric.org/cfc/atom/ConnectorObserved",
   // Context principal (confidentiality; spec §4.1.2/§5.1): the CI-context
   // form of a policy reference — same field shape and selection semantics as
   // `Policy` (see there).
@@ -83,6 +87,10 @@ export const CFC_ATOM_TYPE = {
   // docs/history/specs/cfc-trusted-agent-tool-integrity.md piece B). Evidence — not
   // authorable in schemas.
   LlmDerived: "https://commonfabric.org/cfc/atom/LlmDerived",
+  // Exact-byte transport evidence minted by the trusted network boundary.
+  NetworkProvenance: "https://commonfabric.org/cfc/atom/NetworkProvenance",
+  // External-source classification (confidentiality; spec §15.2). Transport
+  // integrity is represented separately by `NetworkProvenance`.
   Origin: "https://commonfabric.org/cfc/atom/Origin",
   // Policy principal (confidentiality; spec §4.1.2 PolicyRefAtom, §4.4.2):
   // references a policy record whose exchange rules may rewrite the clause
@@ -207,6 +215,22 @@ export type CfcBuiltinAtom = CfcAtomObject & {
   readonly name: string;
 };
 
+/** Confidentiality classification for bytes fetched from an external URI. */
+export type CfcOriginAtom = CfcAtomObject & {
+  readonly type: typeof CFC_ATOM_TYPE.Origin;
+  readonly uri: string;
+  readonly fetchedAt: number;
+  readonly tlsCertHash?: string;
+};
+
+/** Exact-byte arrival evidence from a trusted Service connector boundary. */
+export type CfcConnectorObservedAtom = CfcAtomObject & {
+  readonly type: typeof CFC_ATOM_TYPE.ConnectorObserved;
+  readonly connector: string;
+  readonly connection: string;
+  readonly provider?: string;
+};
+
 export type CfcInjectionSafeAtom = CfcAtomObject & {
   readonly type: typeof CFC_ATOM_TYPE.InjectionSafe;
 };
@@ -266,6 +290,16 @@ export type CfcFetchExternalIngestAtom = CfcAtomObject & {
 export type CfcExternalIngestAtom =
   | CfcVouchedChannelExternalIngestAtom
   | CfcFetchExternalIngestAtom;
+
+/** Exact-byte transport evidence observed by a trusted network boundary. */
+export type CfcNetworkProvenanceAtom = CfcAtomObject & {
+  readonly type: typeof CFC_ATOM_TYPE.NetworkProvenance;
+  readonly host: string;
+  readonly tls: boolean;
+  readonly tlsCertHash?: string;
+  readonly requestDigest?: string;
+  readonly codeHash?: string;
+};
 
 export type CfcUserAtom = CfcAtomObject & {
   readonly type: typeof CFC_ATOM_TYPE.User;
@@ -633,6 +667,19 @@ export const cfcAtom = {
     };
   },
 
+  origin(
+    uri: string,
+    fetchedAt: number,
+    tlsCertHash?: string,
+  ): CfcOriginAtom {
+    return {
+      type: CFC_ATOM_TYPE.Origin,
+      uri,
+      fetchedAt,
+      ...(tlsCertHash === undefined ? {} : { tlsCertHash }),
+    };
+  },
+
   builtin(name: string): CfcBuiltinAtom {
     return {
       type: CFC_ATOM_TYPE.Builtin,
@@ -665,6 +712,19 @@ export const cfcAtom = {
     };
   },
 
+  connectorObserved(
+    connector: string,
+    connection: string,
+    provider?: string,
+  ): CfcConnectorObservedAtom {
+    return {
+      type: CFC_ATOM_TYPE.ConnectorObserved,
+      connector,
+      connection,
+      ...(provider === undefined ? {} : { provider }),
+    };
+  },
+
   externalIngest(
     channel: string,
     audience: string,
@@ -691,6 +751,19 @@ export const cfcAtom = {
       pinnedSource,
       receivedAt,
       valueDigest,
+    };
+  },
+
+  networkProvenance(fields: {
+    host: string;
+    tls: boolean;
+    tlsCertHash?: string;
+    requestDigest?: string;
+    codeHash?: string;
+  }): CfcNetworkProvenanceAtom {
+    return {
+      type: CFC_ATOM_TYPE.NetworkProvenance,
+      ...pruneOptional(fields),
     };
   },
 
