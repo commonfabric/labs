@@ -67,8 +67,10 @@ checked in source.
 The 10×10 burst failed because one voter's consequences had not arrived after
 120 s; the serving loop's own settle series put that space's event coverage at
 a median of 172 s and a maximum of 252 s. The first pass's 1184-vote viewer
-never rendered the options; arm D's rendered them and then every timed vote
-waited out 300 s.
+never rendered the options. One of arm D's viewers did, and completed the
+untimed diagnostic vote (`D_on_readscale1184_diagnosticSample`); the run then
+failed on the same render probe as the first pass, a later viewer's options
+never appearing.
 
 Arm B's `comment` segment failed in the full run and again alone: once the
 send button was never found, once the topic page's `#profile` surface never

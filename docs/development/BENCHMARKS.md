@@ -817,9 +817,7 @@ The benchmark process must set `EXPERIMENTAL_SERVER_EXECUTION` to `true` or
 the toolshed's serving loop, and the served shell's build define all name that
 same arm. The workflow pins the shell build, toolshed, and benchmark process to
 `false`, which keeps its client-execution series stable across changes to the
-product default; a local run sets all three to `true` to measure the
-server-execution arm. The contention benchmark
-remains a separate workload.
+product default. The contention benchmark remains a separate workload.
 
 For a local run, start matching client-execution dev servers as described in
 [Local dev servers](LOCAL_DEV_SERVERS.md), then run:
@@ -832,6 +830,12 @@ deno bench --json -A \
   packages/patterns/integration/lunch-poll-read-scale.bench.ts \
   > /tmp/lunch-read-scale.json 2> /tmp/lunch-read-scale.log
 ```
+
+To measure the server-execution arm instead, start the dev servers with
+`EXPERIMENTAL_SERVER_EXECUTION=true` in their environment, for example
+`EXPERIMENTAL_SERVER_EXECUTION=true scripts/start-local-dev.sh`, so that the
+toolshed serves on that arm and the shell bakes it into its build define, and
+run the same command with `EXPERIMENTAL_SERVER_EXECUTION=true`.
 
 Set `CF_READ_SCALE_ARTIFACT_DIR` to a local output directory to save one screenshot
 and the latest diagnostic sample per size, after the timed interval. The fixture
