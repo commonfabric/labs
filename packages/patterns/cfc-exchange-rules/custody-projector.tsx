@@ -186,11 +186,10 @@ interface CustodyProjectorInput {
   policy: Writable<Sealed<boolean>>;
   /**
    * Receives a link to the instance's box from the host once a seat seals.
-   * Each entry is declared with the room's policy, as the seal labels it.
+   * It declares no label of its own: every entry of the box already carries
+   * the room's policy, and a read through the link carries it.
    */
-  box: Writable<
-    Default<Record<string, Sealed<BoxEntry>>, Record<string, never>>
-  >;
+  box: Writable<Default<Box, Record<string, never>>>;
 }
 
 export interface CustodyProjectorOutput {
@@ -198,7 +197,7 @@ export interface CustodyProjectorOutput {
   [UI]: VNode;
   terms: CustodyTerms | null;
   policy: Sealed<boolean>;
-  box: Record<string, Sealed<BoxEntry>>;
+  box: Box;
   /** The projected answer: a room reader sees it once the rule releases it. */
   choice: string;
   /** One member's sealed rating, which no rule releases. */

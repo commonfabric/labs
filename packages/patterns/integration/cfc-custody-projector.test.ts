@@ -24,7 +24,12 @@ import { join } from "@std/path";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import { ACLManager, type Cell, Runtime } from "@commonfabric/runner";
+import {
+  ACLManager,
+  type Cell,
+  parseLink,
+  Runtime,
+} from "@commonfabric/runner";
 import {
   cfcLabelViewForResolvedCell,
   type CfcTrustConfigInput,
@@ -224,13 +229,21 @@ describe("sealed custody through a pattern", () => {
       };
       const sealed = await seal(alice, ["no", "yes", "maybe"]);
       await seal(bob, ["maybe", "yes", "no"]);
-      // The box link `cf-custody-seal` writes into its `$box` binding.
-      const ltx = host.edit();
-      room.key("box").resolveAsCell().withTx(ltx).setRaw(
-        host.getCellFromLink(sealed.box).getAsLink() as never,
+      // The box link, written into the room's `box` the way `cf-custody-seal`
+      // writes its `$box` binding: the component sets the bound cell handle
+      // to the box's handle, and the worker applies that as a blind UI write
+      // of the link.
+      const bound = room.key("box").resolveAsCell();
+      const linked = await host.commitUiCellWrite(
+        bound,
+        host.getCellFromLink(sealed.box).getAsLink(),
+        { blind: true },
       );
-      const linked = await ltx.commit();
       expect(linked.error).toBeUndefined();
+      // The room holds a link to the box, not a copy of its entries.
+      expect(
+        parseLink(bound.getRaw(), bound.getAsNormalizedFullLink())?.id,
+      ).toBe(sealed.box.getAsNormalizedFullLink().id);
 
       // Pizza and tacos each drew a `no`; both members said yes to sushi.
       await waitForCellValue<string>(

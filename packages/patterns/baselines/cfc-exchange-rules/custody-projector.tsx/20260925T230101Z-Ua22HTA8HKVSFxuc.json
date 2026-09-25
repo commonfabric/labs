@@ -1,6 +1,13 @@
 {
   "argumentSchema": {
     "$defs": {
+      "Box": {
+        "additionalProperties": {
+          "$ref": "#/$defs/BoxEntry"
+        },
+        "properties": {},
+        "type": "object"
+      },
       "BoxEntry": {
         "properties": {
           "instance": {
@@ -142,30 +149,12 @@
     },
     "properties": {
       "box": {
-        "additionalProperties": {
-          "$ref": "#/$defs/BoxEntry",
-          "ifc": {
-            "confidentiality": [
-              {
-                "moduleIdentity": "HmmSr83d-IliOdlnsf_sBRoYS6fiCbpZoRsbNWhfw4g",
-                "policyDigest": "Esv27pqVhTCS1gQx0heC8uM54EDrogHL0rV4P49fx18",
-                "policyRefKind": "module",
-                "subject": {
-                  "__ctOwningSpace": true
-                },
-                "symbol": "custodyRules",
-                "type": "https://commonfabric.org/cfc/atom/Policy"
-              }
-            ]
-          }
-        },
+        "$ref": "#/$defs/Box",
         "asCell": [
           "cell"
         ],
         "default": {},
-        "description": "Receives a link to the instance's box from the host once a seat seals.\nEach entry is declared with the room's policy, as the seal labels it.",
-        "properties": {},
-        "type": "object"
+        "description": "Receives a link to the instance's box from the host once a seat seals.\nIt declares no label of its own: every entry of the box already carries\nthe room's policy, and a read through the link carries it."
       },
       "policy": {
         "asCell": [
@@ -175,8 +164,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "HmmSr83d-IliOdlnsf_sBRoYS6fiCbpZoRsbNWhfw4g",
-              "policyDigest": "Esv27pqVhTCS1gQx0heC8uM54EDrogHL0rV4P49fx18",
+              "moduleIdentity": "WdUBoOTt7HvcRh9BdgVGBk7h1QyC82Nyd0ELQ9xfEQw",
+              "policyDigest": "5MZSX3U2jsaJEMF2mX6yd5ZHCn3zHJMPo1c362stosg",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -213,6 +202,13 @@
   "pattern": "cfc-exchange-rules/custody-projector.tsx",
   "resultSchema": {
     "$defs": {
+      "Box": {
+        "additionalProperties": {
+          "$ref": "#/$defs/BoxEntry"
+        },
+        "properties": {},
+        "type": "object"
+      },
       "BoxEntry": {
         "properties": {
           "instance": {
@@ -360,25 +356,7 @@
         "$ref": "https://commonfabric.org/schemas/vnode.json"
       },
       "box": {
-        "additionalProperties": {
-          "$ref": "#/$defs/BoxEntry",
-          "ifc": {
-            "confidentiality": [
-              {
-                "moduleIdentity": "HmmSr83d-IliOdlnsf_sBRoYS6fiCbpZoRsbNWhfw4g",
-                "policyDigest": "Esv27pqVhTCS1gQx0heC8uM54EDrogHL0rV4P49fx18",
-                "policyRefKind": "module",
-                "subject": {
-                  "__ctOwningSpace": true
-                },
-                "symbol": "custodyRules",
-                "type": "https://commonfabric.org/cfc/atom/Policy"
-              }
-            ]
-          }
-        },
-        "properties": {},
-        "type": "object"
+        "$ref": "#/$defs/Box"
       },
       "choice": {
         "description": "The projected answer: a room reader sees it once the rule releases it.",
@@ -388,8 +366,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "HmmSr83d-IliOdlnsf_sBRoYS6fiCbpZoRsbNWhfw4g",
-              "policyDigest": "Esv27pqVhTCS1gQx0heC8uM54EDrogHL0rV4P49fx18",
+              "moduleIdentity": "WdUBoOTt7HvcRh9BdgVGBk7h1QyC82Nyd0ELQ9xfEQw",
+              "policyDigest": "5MZSX3U2jsaJEMF2mX6yd5ZHCn3zHJMPo1c362stosg",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
