@@ -1751,9 +1751,19 @@ describe("Schema: CFC authoring aliases", () => {
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
       type WriteAuthorizedBy<T, B> = Cfc<T, { writeAuthorizedBy: B }>;
-      type Default<T, V extends T = T> = [T] extends [null | undefined]
-        ? { readonly __ct_default__?: V }
-        : T | (T & { readonly __ct_default__?: V });
+      declare const DEFAULT_MARKER: unique symbol;
+      type DefaultMarker<T> = { readonly [DEFAULT_MARKER]: T };
+      type IsEmptyTuple<T> = T extends readonly unknown[]
+        ? number extends T["length"] ? false
+        : T["length"] extends 0 ? true
+        : false
+        : false;
+      type Default<T, V extends T = T> = IsEmptyTuple<T> extends true
+        ? T & DefaultMarker<V>
+        :
+          | ([T] extends [null | undefined] ? DefaultMarker<V>
+            : T & DefaultMarker<V>)
+          | T;
       interface Box<U> { value: U }
     `;
 
@@ -2038,6 +2048,51 @@ describe("Schema: CFC authoring aliases", () => {
           t: { type: "number" },
         },
         required: ["w", "t"],
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    for (
+      const [spelling, member] of [
+        ["a mapped type", "{ [K in keyof U]: U[K] }"],
+        ["`Partial`", "Partial<U>"],
+      ]
+    ) {
+      it(`reads ${spelling} a generic declaration writes over an empty concrete argument`, async () => {
+        // `W<{}>`'s `m` has no members because its argument has none, not
+        // because the checker has yet to instantiate it.
+        const { value, diagnostics } = await generate(`
+          interface W<U> { m: ${member} }
+          type Sec<T> = Confidential<{ w: W<{}>; t: T }, readonly ["a"]>;
+          interface Holder { value: Sec<number> }
+        `);
+        expect((value as { properties: { w: unknown } }).properties.w).toEqual({
+          type: "object",
+          properties: { m: { type: "object", properties: {} } },
+          required: ["m"],
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    it("reads a module's own alias named as a library alias as its own", async () => {
+      const { value, diagnostics } = await generate(`
+        type Partial<X> = { wrapped: X };
+        type Sec<T> = Confidential<{ p: Partial<T> }, readonly ["a"]>;
+        interface Holder { value: Sec<string> }
+        export {};
+      `);
+      expect(value).toEqual({
+        type: "object",
+        properties: {
+          p: {
+            type: "object",
+            properties: { wrapped: { type: "string" } },
+            required: ["wrapped"],
+          },
+        },
+        required: ["p"],
         ifc: { confidentiality: ["a"] },
       });
       expect(diagnostics).toEqual([]);

@@ -969,49 +969,6 @@ function wrapsBoundParameter(
 }
 
 /**
- * Whether `typeNode`, written in a declaration read under type parameter
- * bindings, is read by its syntax: a node whose type is built from the
- * checker's unbound parameters, which only its written parts can pair with
- * their arguments. An object, an array, a tuple, a union, an intersection,
- * `readonly`, or a default-library alias the node-based analyzer applies
- * (`LIBRARY_ALIAS_NAMES`) holding a bound parameter is read part by part, each
- * part in turn by its syntax where it holds one and by its type where it does
- * not. The checker folds a union member that is itself a union into the
- * whole, so read by type, a CFC alias over a union as a member would lose its
- * boundary and its labels; its written reference keeps both. Any other node
- * is read by its type, a bound parameter in it read as its argument wherever
- * the walk reaches it.
- */
-function readsBySyntax(
-  typeNode: ts.TypeNode | undefined,
-  context: GenerationContext,
-): boolean {
-  const bound = context.boundTypeParameters;
-  if (!bound || !typeNode) return false;
-  const written = unwrapTypeParentheses(typeNode);
-  const structural = ts.isUnionTypeNode(written) ||
-    ts.isIntersectionTypeNode(written) || ts.isTypeLiteralNode(written) ||
-    ts.isArrayTypeNode(written) || ts.isTupleTypeNode(written) ||
-    (ts.isTypeOperatorNode(written) &&
-      written.operator === ts.SyntaxKind.ReadonlyKeyword) ||
-    namesLibraryAlias(written);
-  return structural &&
-    holdsTypeParameter(written, context.typeChecker, bound.arguments);
-}
-
-/**
- * Whether `typeNode` is a reference by one of `LIBRARY_ALIAS_NAMES` with
- * arguments, which the node-based analyzer applies structurally where the
- * name is the default library's.
- */
-function namesLibraryAlias(typeNode: ts.TypeNode): boolean {
-  return ts.isTypeReferenceNode(typeNode) &&
-    ts.isIdentifier(typeNode.typeName) &&
-    LIBRARY_ALIAS_NAMES.has(typeNode.typeName.text) &&
-    (typeNode.typeArguments?.length ?? 0) > 0;
-}
-
-/**
  * Whether `type`, read under type parameter bindings at `typeNode`, is a
  * mapped type whose keys come from a bound parameter. The checker has not
  * instantiated it, so it has no members to read until it is, and no
@@ -1049,6 +1006,7 @@ function mapsBoundParameter(
   }
   return checker.getPropertiesOfType(type).length === 0 &&
     checker.getIndexInfosOfType(type).length === 0 &&
+    !checker.isTypeAssignableTo(checker.getStringType(), type) &&
     (written === undefined || holdsFreeTypeParameter(written, checker));
 }
 
@@ -1341,7 +1299,7 @@ export class SchemaGenerator {
     // and so does a mapped type over one, unless a library alias is written
     // for it, which the node-based analyzer applies to the argument.
     const bound = context.boundTypeParameters;
-    const mapsBound = !readsBySyntax(typeNode, context) &&
+    const mapsBound = !this.#readsBySyntax(typeNode, context) &&
       mapsBoundParameter(type, typeNode, context);
     if (
       bound && !wrapsBound &&
@@ -1378,7 +1336,7 @@ export class SchemaGenerator {
         typeNode,
         context.typeChecker,
       ) ||
-        readsBySyntax(typeNode, context));
+        this.#readsBySyntax(typeNode, context));
     if (useNodeBased) {
       // Use node-based analysis (for synthetic nodes or when type is unreliable)
       return this.#applyNodeSchemaHints(
@@ -2181,7 +2139,7 @@ export class SchemaGenerator {
       // checker has not instantiated, so it is not read.
       const bound = context.boundTypeParameters;
       if (
-        bound && namesLibraryAlias(typeNode) &&
+        bound && this.#namesLibraryAlias(typeNode, context) &&
         holdsTypeParameter(typeNode, checker, bound.arguments)
       ) {
         context.uninterpretedTypeNodes?.push(typeNode);
@@ -2639,6 +2597,59 @@ export class SchemaGenerator {
     return symbol?.declarations?.some((declaration) =>
       isDefaultLibrarySourceFile(declaration.getSourceFile(), context)
     ) ?? false;
+  }
+
+  /**
+   * Whether `typeNode`, written in a declaration read under type parameter
+   * bindings, is read by its syntax: a node whose type is built from the
+   * checker's unbound parameters, which only its written parts can pair with
+   * their arguments. An object, an array, a tuple, a union, an intersection,
+   * `readonly`, or a default-library alias the node-based analyzer applies
+   * (`#namesLibraryAlias()`) holding a bound parameter is read part by part,
+   * each part in turn by its syntax where it holds one and by its type where
+   * it does not. The checker folds a union member that is itself a union into
+   * the whole, so read by type, a CFC alias over a union as a member would lose
+   * its boundary and its labels; its written reference keeps both. Any other
+   * node is read by its type, a bound parameter in it read as its argument
+   * wherever the walk reaches it.
+   */
+  #readsBySyntax(
+    typeNode: ts.TypeNode | undefined,
+    context: GenerationContext,
+  ): boolean {
+    const bound = context.boundTypeParameters;
+    if (!bound || !typeNode) return false;
+    const written = unwrapTypeParentheses(typeNode);
+    const structural = ts.isUnionTypeNode(written) ||
+      ts.isIntersectionTypeNode(written) || ts.isTypeLiteralNode(written) ||
+      ts.isArrayTypeNode(written) || ts.isTupleTypeNode(written) ||
+      (ts.isTypeOperatorNode(written) &&
+        written.operator === ts.SyntaxKind.ReadonlyKeyword) ||
+      this.#namesLibraryAlias(written, context);
+    return structural &&
+      holdsTypeParameter(written, context.typeChecker, bound.arguments);
+  }
+
+  /**
+   * Whether `typeNode` is a reference with arguments to one of the default
+   * library's aliases in `LIBRARY_ALIAS_NAMES`, which the node-based analyzer
+   * applies structurally (`#analyzeLibraryAliasReference()`). A name the
+   * module declares for itself is its own alias.
+   */
+  #namesLibraryAlias(
+    typeNode: ts.TypeNode,
+    context: GenerationContext,
+  ): boolean {
+    return ts.isTypeReferenceNode(typeNode) &&
+      ts.isIdentifier(typeNode.typeName) &&
+      LIBRARY_ALIAS_NAMES.has(typeNode.typeName.text) &&
+      (typeNode.typeArguments?.length ?? 0) > 0 &&
+      this.#isLibraryDeclaredName(
+        typeNode,
+        typeNode.typeName,
+        context.typeChecker,
+        context,
+      );
   }
 
   /**

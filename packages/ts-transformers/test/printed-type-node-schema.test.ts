@@ -882,12 +882,18 @@ export default pattern<{ a: Sec<string> }>(({ a }) => ({ a }));`,
         const { input, output } = patternSchemas(
           parseModule(files["/main.tsx"]!),
         );
-        const resolve = (root: Schema, schema: Schema) =>
-          typeof schema.$ref === "string"
+        // An optional member may read as a union with `undefined`; its
+        // definition is the arm holding the reference.
+        const resolve = (root: Schema, schema: Schema): Schema => {
+          const arm = Array.isArray(schema.anyOf)
+            ? (schema.anyOf as Schema[]).find((member) => member.$ref)
+            : schema;
+          return typeof arm?.$ref === "string"
             ? (root.$defs as Record<string, Schema>)[
-              schema.$ref.split("/").pop()!
+              arm.$ref.split("/").pop()!
             ]!
             : schema;
+        };
         for (const root of [input, output]) {
           const sec = resolve(
             root,
