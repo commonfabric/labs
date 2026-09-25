@@ -30,6 +30,19 @@ type SealSummary = {
   leakBits: string | undefined;
 };
 
+/**
+ * What the confirmation says in place of a bound on what an answer reveals
+ * when the room's policy does not require the seal's input witness on its
+ * release. Then a member's own code can run the room's releasing code over
+ * the actor's entry and values it made up, as many times as it likes, so no
+ * per-answer bound holds.
+ *
+ * TODO(L14b): once a pattern's reads carry the input witness, the seal should
+ * refuse such a policy and this warning goes with it.
+ */
+const UNWITNESSED_RELEASE_WARNING =
+  "This room protects your answer's inputs from members' honest code only; a member running their own code can learn your stance one answer at a time.";
+
 /** The longest room-authored string the confirmation shows, in characters. */
 const MAX_TERMS_TEXT = 280;
 
@@ -148,7 +161,10 @@ function describeSource(source: unknown): string {
  * can read it now, the seats, the policy that governs release, and which of
  * the actor's sources go in. Below that, set apart, it shows what the room's
  * terms say: the question, the answers they list, and the bound on what one of
- * those answers reveals. The exact values are under details. Only a trusted
+ * those answers reveals. When the worker found that the room's policy does
+ * not require the seal's input witness on what it releases, no such bound
+ * holds, and a warning saying so replaces it. The exact values are under
+ * details. Only a trusted
  * click on the dialog's own confirmation seals.
  *
  * Once the value is sealed, the component writes a link to the instance's box
@@ -260,6 +276,15 @@ export class CFCustodySeal extends BaseElement {
       }
       [role="alert"] {
         color: #932c22;
+      }
+      .warning {
+        margin: 1rem 0 0;
+        padding: .75rem 1rem;
+        border: 2px solid #932c22;
+        border-radius: .5rem;
+        background: #fbeeec;
+        color: #5c1711;
+        font-weight: 600;
       }
       .principal,
       .digest {
@@ -404,11 +429,17 @@ export class CFCustodySeal extends BaseElement {
             }</ul>`
             : "These terms do not list the answers the room can give."}</dd>
         </dl>
-        <p class="leak">${summary?.leakBits !== undefined
-          ? `If the room releases only these answers, each answer reveals at most ${summary.leakBits} ${
-            summary.leakBits === "1" ? "bit" : "bits"
-          } about your values.`
-          : "These terms state no bound on what an answer reveals."}</p>
+        ${preview && !preview.witnessedRelease
+          ? html`
+            <p class="warning" role="note">${UNWITNESSED_RELEASE_WARNING}</p>
+          `
+          : html`
+            <p class="leak">${summary?.leakBits !== undefined
+              ? `If the room releases only these answers, each answer reveals at most ${summary.leakBits} ${
+                summary.leakBits === "1" ? "bit" : "bits"
+              } about your values.`
+              : "These terms state no bound on what an answer reveals."}</p>
+          `}
         <details>
           <summary>Details</summary>
           <p>Your sealed values:</p>

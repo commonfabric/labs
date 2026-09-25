@@ -1,4 +1,9 @@
 /**
+ * DEMO-GRADE until a pattern's reads carry the seal's input witness (labs
+ * L14b): its release rule cannot require that witness yet, so it protects a
+ * member's stance from honest members' code only, and the host's confirmation
+ * warns the member so.
+ *
  * A room whose members' stances are sealed into its policy's custody, and
  * whose policy releases only what one function of its own module projects
  * from them.

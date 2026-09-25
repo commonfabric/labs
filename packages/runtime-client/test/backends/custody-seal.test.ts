@@ -268,6 +268,7 @@ describe("custody-seal", () => {
         "sources",
         "stance",
         "terms",
+        "witnessedRelease",
       ]);
       expect(preview.actor).toBe(alice.did());
       expect(preview.room).toBe(S);
@@ -284,6 +285,8 @@ describe("custody-seal", () => {
       expect(preview.policy).toEqual(P);
       expect(preview.stance).toEqual({ choice: "sushi" });
       expect(preview.sources).toEqual([]);
+      // The fixture's policy has no rules, so nothing it releases is unwitnessed.
+      expect(preview.witnessedRelease).toBe(true);
 
       const sealed = await processor.handleRequest({
         type: RequestType.CustodySealCommit,

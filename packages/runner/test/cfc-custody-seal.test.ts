@@ -20,6 +20,7 @@ import {
   type CustodySealOptions,
   prepareCustodySeal as prepareWithOptions,
   readCustodySourcePolicy,
+  releaseRequiresSealWitness,
   TRUSTED_DECLASSIFIER_CONCEPT,
 } from "../src/cfc/custody-seal.ts";
 import { ACLManager } from "../src/acl-manager.ts";
@@ -1964,6 +1965,62 @@ describe("cfc-custody-seal", () => {
             /the actor's own `Context` and `Resource` atoms/,
           );
         }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+  });
+
+  describe("the release it previews", () => {
+    const rule = (integrity: readonly unknown[]) => ({
+      name: "release",
+      preCondition: {
+        confidentiality: [{ type: CFC_ATOM_TYPE.Policy }],
+        integrity,
+      },
+      postCondition: { confidentiality: [], integrity: [] },
+    });
+    const byProjector = {
+      type: CFC_ATOM_TYPE.TransformedBy,
+      identity: { kind: "verified", symbol: "projectBallot" },
+    };
+    const template = (rules: readonly unknown[]) => ({
+      templateVersion: 1 as const,
+      exchangeRules: rules as never,
+      dependencies: { authorityOnly: [], dataBearing: [] },
+      integrityRequirements: {},
+    });
+
+    it("counts a release witnessed only when every rule requires the seal's witness", () => {
+      const witnessedRule = rule([{ ...byProjector, inputWitness: sealedBy }]);
+      expect(releaseRequiresSealWitness(template([witnessedRule]))).toBe(true);
+      expect(releaseRequiresSealWitness(template([]))).toBe(true);
+      expect(releaseRequiresSealWitness(template([rule([byProjector])])))
+        .toBe(false);
+      expect(
+        releaseRequiresSealWitness(
+          template([witnessedRule, rule([byProjector])]),
+        ),
+      ).toBe(false);
+      // A witness naming some other writer is not the seal's.
+      expect(
+        releaseRequiresSealWitness(template([rule([{
+          ...byProjector,
+          inputWitness: {
+            type: CFC_ATOM_TYPE.TransformedBy,
+            identity: { kind: "builtin", builtinId: "cfc-share-snapshot" },
+          },
+        }])])),
+      ).toBe(false);
+    });
+
+    it("previews whether the room's policy witnesses its release", async () => {
+      const fixture = await setup();
+      try {
+        // The fixture's policy has no rules, so it releases nothing.
+        const draft = await fixture.draft(alice, honestStance);
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        expect(prepared.witnessedRelease).toBe(true);
       } finally {
         await fixture.dispose();
       }

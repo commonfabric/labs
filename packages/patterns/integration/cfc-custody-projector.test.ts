@@ -225,6 +225,9 @@ describe("sealed custody through a pattern", () => {
           bob.did(),
         ]);
         expect(prepared.policy).toEqual(declared);
+        // The room's rule names its projector by identity alone, so the
+        // confirmation warns instead of bounding what an answer reveals.
+        expect(prepared.witnessedRelease).toBe(false);
         return await commitCustodySeal(prepared.consent, trustedClick());
       };
       const sealed = await seal(alice, ["no", "yes", "maybe"]);

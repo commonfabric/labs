@@ -1267,6 +1267,13 @@ export type CustodySealPreview = {
   /** The actor's `Context` and `Resource` sources the value draws on. */
   sources: CfcAtom[];
 
+  /**
+   * Whether every release rule of the room's policy requires the seal's input
+   * witness. When `false`, a member's own code can learn the actor's entry
+   * one answer at a time, and the confirmation says so.
+   */
+  witnessedRelease: boolean;
+
   /** The exact value that enters custody. */
   stance: JSONValue;
 };

@@ -82,6 +82,7 @@ const preview: Preview = {
     name: "calendar",
     subject: "did:key:actor",
   }],
+  witnessedRelease: true,
   stance: "sushi",
 };
 
@@ -237,6 +238,20 @@ describe("CFCustodySeal workflow", () => {
       "If the room releases only these answers, each answer reveals at most ~1.6 bits about your values.",
     );
     expect(text).toContain("Where should we eat?");
+    expect(text).not.toContain("one answer at a time");
+  });
+
+  it("warns instead of bounding an answer when the room's release is not witnessed", async () => {
+    using state = setup({
+      prepare: () => Promise.resolve({ ...preview, witnessedRelease: false }),
+    });
+    await state.element.accessForTestingOnly.prepare();
+    const text = renderedText(state.element);
+    expect(text).toContain(
+      "This room protects your answer's inputs from members' honest code only; a member running their own code can learn your stance one answer at a time.",
+    );
+    expect(text).not.toContain("reveals at most");
+    expect(text).not.toContain("state no bound");
   });
 
   it("isolates each principal from the dialog's own annotations", async () => {

@@ -59,7 +59,7 @@ import {
 } from "./clause.ts";
 import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
-import { cfcPolicyManifestDocId } from "./policy.ts";
+import { cfcPolicyManifestDocId, type PolicyTemplateV1 } from "./policy.ts";
 import { collectConsumedLabel } from "./prepare.ts";
 import { CfcReadCeilingError } from "./read-ceiling.ts";
 import type { CfcLabelView } from "./label-view-core.ts";
@@ -172,6 +172,17 @@ export interface PreparedCustodySeal {
   /** The actor's `Context` and `Resource` sources the value draws on. */
   readonly sources: readonly CfcAtom[];
 
+  /**
+   * Whether every release rule of the room's policy requires that everything
+   * confidential its releasing code read was written by this seal: an
+   * integrity guard on `TransformedBy` with the seal's builtin identity as its
+   * input witness. When it is `false`, a member's own code can run the
+   * room's releasing code over the actor's entry and values it made up, and
+   * learn the entry one answer at a time; the confirmation must say so rather
+   * than state a bound on what an answer reveals.
+   */
+  readonly witnessedRelease: boolean;
+
   /** One-use authority bound to this preview and authenticated actor. */
   readonly consent: CustodySealConsent;
 }
@@ -225,6 +236,7 @@ interface Inspection {
   readonly policy: CfcModulePolicyRefAtom;
   readonly sources: readonly CfcAtom[];
   readonly entryKey: string;
+  readonly witnessedRelease: boolean;
   readonly evidence: readonly ReadEvidence[];
 }
 
@@ -683,6 +695,29 @@ const readEvidence = (tx: IExtendedStorageTransaction): ReadEvidence[] => {
     };
   });
 };
+
+/**
+ * Whether every exchange rule of `template` requires, among its integrity
+ * guards, a `TransformedBy` whose input witness is the seal's own
+ * `TransformedBy{builtin cfc-custody-seal}`, so that no rule releases what
+ * code computed over anything the seal did not write. A policy with no rules
+ * releases nothing and passes.
+ *
+ * TODO(L14b): until a pattern's reads carry the witness, a rule in this form
+ * releases nothing a pattern computes, so every pattern room reports
+ * `false`. Once they do, a seal into a policy whose rules are not all
+ * witnessed should be refused rather than warned about.
+ */
+export const releaseRequiresSealWitness = (
+  template: PolicyTemplateV1,
+): boolean =>
+  template.exchangeRules.every((rule) =>
+    rule.preCondition.integrity.some((guard) =>
+      isObjectNotArray(guard) &&
+      guard.type === CFC_ATOM_TYPE.TransformedBy &&
+      deepEqual(guard.inputWitness, SEALED_BY)
+    )
+  );
 
 /**
  * Whether the document at `link` is absent, or its root was written by the
@@ -1373,12 +1408,20 @@ const inspect = async (
   );
   await manifest.sync();
   const manifestTx = runtime.edit();
+  let witnessedRelease: boolean;
   try {
-    if (!runtime.resolveCfcPolicyManifest(policy, manifestTx, room, false)) {
+    const artifact = runtime.resolveCfcPolicyManifest(
+      policy,
+      manifestTx,
+      room,
+      false,
+    );
+    if (!artifact) {
       throw new Error(
         debugStr`Custody seal refuses a policy not installed in the room space: $quote${policy.policyDigest}`,
       );
     }
+    witnessedRelease = releaseRequiresSealWitness(artifact.manifest.template);
   } finally {
     manifestTx.abort();
   }
@@ -1440,6 +1483,7 @@ const inspect = async (
     policy,
     sources,
     entryKey,
+    witnessedRelease,
     evidence,
   };
 };
@@ -1490,6 +1534,7 @@ export async function prepareCustodySeal(
     instance: inspected.instance,
     policy: inspected.policy,
     sources: inspected.sources,
+    witnessedRelease: inspected.witnessedRelease,
     consent,
   });
 }

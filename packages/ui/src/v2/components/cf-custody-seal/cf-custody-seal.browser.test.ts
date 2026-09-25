@@ -23,6 +23,7 @@ const preview: Preview = {
   instance: "instance-digest",
   policy: { type: "https://commonfabric.org/cfc/atom/Policy" },
   sources: [],
+  witnessedRelease: true,
   stance: "sushi",
 };
 

@@ -32,6 +32,7 @@ describe("custody-seal", () => {
       instance: "instance",
       policy: { type: "https://commonfabric.org/cfc/atom/Policy" },
       sources: [],
+      witnessedRelease: true,
       stance: { choice: "sushi" },
     };
     const conn = {

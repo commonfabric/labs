@@ -138,7 +138,8 @@ This is the evidence `cf-cfc-authorship` reads an author claim from. A runtime
 binds the subject of an atom in the form `{kind, subject}` to its acting
 principal and refuses a literal DID there, so in that form a cell attests only
 the principal whose runtime wrote it. The seal counts only that form: an atom
-whose subject is exactly a well-formed DID, with no other key. Any other
+whose subject is exactly a well-formed DID, with no other key, on any label
+entry at the cell or one of its top-level fields, whatever that entry's origin. Any other
 spelling that names a principal, the `represents-principal:<did>` string form
 or a subject padded with spaces among them, gets past the runtime's refusal,
 and the seal refuses a seat whose cell carries one. The seal resolves the cell
@@ -295,7 +296,12 @@ of it.
   their own, varied to learn that entry answer by answer, and the rule releases
   each answer. The input witness is what closes this: every entry the seal
   wrote carries `TransformedBy{builtin cfc-custody-seal}`, and a document the
-  member made does not.
+  member made does not. The preview reports whether every rule of `P` requires
+  that witness (`witnessedRelease`), and when one does not, the confirmation
+  shows a warning that a member's own code can learn the actor's stance one
+  answer at a time, in place of a bound on what an answer reveals. Once a
+  pattern's reads carry the witness, the seal is meant to refuse such a policy
+  instead of warning.
 - **An input witness from pattern code.** A projector written as a pattern
   `lift` reads the box through its argument document, and the witness does not
   reach that read today, so a rule requiring

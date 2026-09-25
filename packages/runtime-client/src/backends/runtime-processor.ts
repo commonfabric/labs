@@ -2062,6 +2062,7 @@ export class RuntimeProcessor {
       instance: prepared.instance,
       policy: prepared.policy,
       sources: [...prepared.sources],
+      witnessedRelease: prepared.witnessedRelease,
       stance: prepared.stance,
     };
   }

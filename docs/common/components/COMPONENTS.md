@@ -1162,6 +1162,9 @@ Its second part, set apart, is what the room's terms say: the `question` and the
 `answers` the terms list, and, for `k` distinct answers, the bound of `log₂ k`
 bits on what one of them reveals. Nothing checks that the room's policy releases
 only the listed answers, so the dialog states the bound as conditional on it.
+When the room's policy does not require the seal's input witness on everything
+it releases, a member's own code can learn the actor's stance one answer at a
+time, so the dialog shows a warning saying so in place of the bound.
 Room-authored text is shown with control, format (direction overrides and
 zero-width characters among them) and line-separator characters removed and is
 capped in length. The exact sealed values and the terms are under a collapsed
