@@ -58,12 +58,11 @@ import { expandServerMessageSchemas } from "./sync-schema-table.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
 
 /**
- * The result of one pass through a session's watch-mutation chain that gave
- * its turn back instead of sending (see `SpaceSession`'s `#runWatchMutation()`).
+ * Passed to `SpaceSession.watchSetSync()` by `restore()` alone, marking the
+ * watch set a restore re-establishes. It is not exported, so no other caller
+ * can send a watch mutation ahead of a pending restore.
  */
-const WATCH_MUTATION_RELEASED: unique symbol = Symbol(
-  "watch mutation released",
-);
+const RESTORE_WATCH_SET: unique symbol = Symbol("restore watch set");
 
 const logger = getLogger("memory.v2.client", {
   enabled: true,
@@ -865,6 +864,13 @@ export class SpaceSession {
   #watchIssue: Promise<void> = Promise.resolve();
 
   /**
+   * The most recent watch mutation to put its request on the wire, settling
+   * once its response has been applied. The watch set a restore re-establishes
+   * is sent after it.
+   */
+  #lastSentWatchMutation: Promise<unknown> | undefined;
+
+  /**
    * Whether watch-refresh round trips may overlap (default off). Per-session,
    * _not_ a process global. Set by the runner from the
    * `experimentalConcurrentWatchRefresh` storage setting; see
@@ -1193,14 +1199,14 @@ export class SpaceSession {
 
   /**
    * Replaces watches, or replays the owned set after queued changes apply.
-   * `options.restore` is for `restore()` alone: it marks the re-establishment,
-   * the one watch mutation sent while its session is still restoring.
+   * `restore` is passed by `restore()` alone, for the watch set it
+   * re-establishes.
    */
   async watchSetSync(
     watches: WatchSpec[] | undefined,
     holdings?: SessionHolding[],
     views?: ViewInterest[],
-    options?: { restore?: boolean },
+    restore?: typeof RESTORE_WATCH_SET,
   ): Promise<WatchMutationResult> {
     this.#assertOpen();
     if (
@@ -1250,7 +1256,7 @@ export class SpaceSession {
         };
       },
       watches === undefined ? "apply" : "issue",
-      options?.restore === true,
+      { restoring: restore === RESTORE_WATCH_SET },
     );
   }
 
@@ -1405,22 +1411,16 @@ export class SpaceSession {
     watchIds: readonly string[],
   ): Promise<WatchMutationResult> {
     const removed = new Set(watchIds);
+    let watches: WatchSpec[] = [];
     return await this.#runWatchMutation(
-      () => {
-        // Cancellation is local intent even when the request fails: a later
-        // reconnect must not restore a watch its last subscriber removed.
-        const watches = this.#watchSpecs.filter((watch) =>
-          !removed.has(watch.id)
-        );
-        this.#replaceWatchSpecs(watches);
-        return this.#client.request<WatchSetResult>({
+      () =>
+        this.#client.request<WatchSetResult>({
           type: "session.watch.set",
           requestId: crypto.randomUUID(),
           space: this.space,
           sessionId: this.#sessionId,
           watches,
-        });
-      },
+        }),
       (result) => {
         this.#noteResult(result.serverSeq);
         this.#noteOperationWatchCursors(result.sync);
@@ -1437,6 +1437,16 @@ export class SpaceSession {
         };
       },
       "apply",
+      {
+        // Cancellation is local intent from the moment this removal's turn
+        // comes, while it waits for a restore and even when its request
+        // fails: a reconnect must not restore a watch its last subscriber
+        // removed.
+        onTurn: () => {
+          watches = this.#watchSpecs.filter((watch) => !removed.has(watch.id));
+          this.#replaceWatchSpecs(watches);
+        },
+      },
     );
   }
 
@@ -1595,7 +1605,7 @@ export class SpaceSession {
           this.#viewsDirty || this.#viewInterests.length > 0
             ? this.#viewInterests
             : undefined,
-          { restore: true },
+          RESTORE_WATCH_SET,
         );
         if (!isEmptySync(sync)) {
           view.emit(sync);
@@ -1802,77 +1812,25 @@ export class SpaceSession {
    * derived from session state (`watchRemoveSync`) passes `sendAfter: "apply"`,
    * which also holds `send` until every preceding response has been applied;
    * it still claims its place in issue order, so later mutations wait behind
-   * it. `restoring` marks `restore()`'s own re-establishment, which sends while
-   * its session is still restoring.
+   * it.
+   *
+   * A mutation whose turn comes while its session is disconnected or has not
+   * reopened keeps the turn and waits in it until the restore completes, so
+   * mutations reach the wire in call order across a reconnect. `onTurn` runs
+   * when the turn comes, before that wait. `restoring` marks the watch set
+   * `restore()` re-establishes, which does not queue here at all.
    */
   async #runWatchMutation<R, T>(
     send: () => Promise<R>,
     apply: (result: R) => T,
     sendAfter: "issue" | "apply" = "issue",
-    restoring = false,
+    options: { restoring?: boolean; onTurn?: () => void } = {},
   ): Promise<T> {
     this.#assertOpen();
-    // An ordinary mutation never holds its turn on the chain while it waits
-    // for a restore. `restore()` re-establishes the watch set through this
-    // chain and cannot finish before that request is answered, so a turn held
-    // across the wait is one the restore queues behind, and the reconnect
-    // carrying it never completes. A mutation whose turn comes while a restore
-    // is pending gives the turn back unsent, waits for the restore off the
-    // chain, and queues again. The restore's own `watch.set` is exempt: it is
-    // how the restore finishes.
-    for (;;) {
-      if (!restoring && this.#watchMutationWaitsForRestore()) {
-        await this.#whenWatchMutationsMaySend();
-      }
-      const outcome = await this.#queueWatchMutation(
-        send,
-        apply,
-        sendAfter,
-        () => restoring || !this.#watchMutationWaitsForRestore(),
-      );
-      if (outcome !== WATCH_MUTATION_RELEASED) return outcome;
+    if (options.restoring === true) {
+      return await this.#sendRestoreWatchMutation(send, apply);
     }
-  }
-
-  /**
-   * Whether a watch mutation sent now would have to wait for a restore: the
-   * connection is down, this session has not reopened on the current
-   * connection, or its restore has not completed. The second is separate
-   * because a reconnect restores its client's sessions one after another, so
-   * a session can sit connected with its restore not yet begun. Each is
-   * covered by something `#whenWatchMutationsMaySend()` waits on — the
-   * reconnect, or this session's restore — so a released mutation always
-   * blocks on a real event rather than spinning.
-   */
-  #watchMutationWaitsForRestore(): boolean {
-    return !this.#client.isConnected() || !this.#readyOnConnection ||
-      this.#restoreComplete !== undefined;
-  }
-
-  /**
-   * Helper for `#runWatchMutation()`, which waits out the reconnect in
-   * progress, if any, and then this session's restore, if one is pending.
-   * Throws the session's close error when the session closes meanwhile, and
-   * the client's error when it gives up reconnecting.
-   */
-  async #whenWatchMutationsMaySend(): Promise<void> {
-    this.#assertOpen();
-    await this.#client.restoreConnection();
-    await this.#restoreComplete?.promise;
-    this.#assertOpen();
-  }
-
-  /**
-   * One pass through the watch-mutation chain. `maySend` is asked when this
-   * mutation's turn comes; when it says no, nothing is sent, the turn passes
-   * on, and the pass resolves to `WATCH_MUTATION_RELEASED`.
-   */
-  async #queueWatchMutation<R, T>(
-    send: () => Promise<R>,
-    apply: (result: R) => T,
-    sendAfter: "issue" | "apply",
-    maySend: () => boolean,
-  ): Promise<T | typeof WATCH_MUTATION_RELEASED> {
+    const { onTurn } = options;
     if (!this.#concurrentWatchRefresh) {
       // Single-flight (default): send + apply run together, chained on the
       // prior mutation's completion. Nothing is issued until the previous
@@ -1882,8 +1840,13 @@ export class SpaceSession {
       // until that cascade completes — so no handleEffect can mutate the
       // watch view between the response resolving and `apply` running.
       const previous = this.#watchApply;
-      const current = previous.catch(() => undefined).then(async () =>
-        maySend() ? apply(await send()) : WATCH_MUTATION_RELEASED
+      const current: Promise<T> = previous.catch(() => undefined).then(
+        async () => {
+          onTurn?.();
+          await this.#untilWatchMutationsMaySend();
+          this.#lastSentWatchMutation = current;
+          return apply(await send());
+        },
       );
       this.#watchApply = current.then(() => undefined, () => undefined);
       return await current;
@@ -1904,9 +1867,11 @@ export class SpaceSession {
     const readyToIssue = sendAfter === "apply"
       ? Promise.all([this.#watchIssue, previousApply])
       : this.#watchIssue;
-    let response: Promise<R> | undefined;
-    const issued = readyToIssue.catch(() => undefined).then(() => {
-      if (!maySend()) return;
+    let response!: Promise<R>;
+    const issued = readyToIssue.catch(() => undefined).then(async () => {
+      onTurn?.();
+      await this.#untilWatchMutationsMaySend();
+      this.#lastSentWatchMutation = current;
       response = send();
       // Attach a rejection handler immediately: a later request may reject
       // while an earlier mutation is still pending, which would otherwise
@@ -1916,14 +1881,78 @@ export class SpaceSession {
     });
     this.#watchIssue = issued.then(() => undefined, () => undefined);
 
-    const current = Promise.all([
+    const current: Promise<T> = Promise.all([
       previousApply.catch(() => undefined),
       issued,
-    ]).then(async () =>
-      response === undefined ? WATCH_MUTATION_RELEASED : apply(await response)
-    );
+    ]).then(() => response).then((result) => apply(result));
     this.#watchApply = current.then(() => undefined, () => undefined);
     return await current;
+  }
+
+  /**
+   * Whether a watch mutation sent now would reach a session its server does
+   * not have open: the connection is down, or this session has not reopened
+   * on the current connection. The second is separate because a reconnect
+   * restores its client's sessions one after another, so a session can sit
+   * connected with its restore not yet begun. `#readyOnConnection` is false
+   * only while a reconnect is running, while this session's restore is
+   * pending, or once the session has closed, and `#untilWatchMutationsMaySend()`
+   * waits on the first two and throws on the third, so that wait never spins.
+   */
+  #watchMutationWaitsForRestore(): boolean {
+    return !this.#client.isConnected() || !this.#readyOnConnection;
+  }
+
+  /**
+   * Waits until this session may put a watch mutation on the wire: through
+   * the reconnect in progress, if any, and then this session's restore, if one
+   * is pending, again whenever the connection drops meanwhile. Throws the
+   * session's close error when the session closes, and the client's error
+   * when it gives up reconnecting.
+   */
+  async #untilWatchMutationsMaySend(): Promise<void> {
+    while (this.#watchMutationWaitsForRestore()) {
+      this.#assertOpen();
+      await this.#client.restoreConnection();
+      await this.#restoreComplete?.promise;
+    }
+    this.#assertOpen();
+  }
+
+  /**
+   * Helper for `restore()`, which sends the watch set it re-establishes
+   * without queuing on the watch-mutation chain. Mutations waiting on that
+   * chain hold their turns until the restore completes, so queuing behind
+   * them would wait on the restore itself; they follow it instead, in call
+   * order. The re-establishment is sent after the last mutation already on the
+   * wire has been applied.
+   */
+  async #sendRestoreWatchMutation<R, T>(
+    send: () => Promise<R>,
+    apply: (result: R) => T,
+  ): Promise<T> {
+    for (;;) {
+      const last = this.#lastSentWatchMutation;
+      await last?.then(() => undefined, () => undefined);
+      if (this.#lastSentWatchMutation === last) break;
+    }
+    this.#throwIfDisconnectedDuringRestore();
+    return apply(await send());
+  }
+
+  /**
+   * Helper for `restore()`, which throws a connection error when the client
+   * is no longer connected. A request `restore()` made then would wait for
+   * the reconnect that is running this restore; the error makes the reconnect
+   * retry instead. Called synchronously before each such request, so no drop
+   * can land between the check and the request's own.
+   */
+  #throwIfDisconnectedDuringRestore(): void {
+    if (!this.#client.isConnected()) {
+      throw toConnectionError(
+        new Error("memory connection lost while restoring the session"),
+      );
+    }
   }
 
   #noteResult(serverSeq: number): void {
@@ -2072,7 +2101,10 @@ export class SpaceSession {
     const restored = await runWithAbortSignal(
       this.#routeSignal,
       "memory session route cancelled",
-      () => this.#client.openSession(this.space, session, auth, holdings),
+      () => {
+        this.#throwIfDisconnectedDuringRestore();
+        return this.#client.openSession(this.space, session, auth, holdings);
+      },
     );
     const sessionChanged = restored.sessionId !== oldSessionId;
     const sessionReplaced = sessionChanged || restored.resumed !== true;

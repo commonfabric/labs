@@ -66,13 +66,13 @@ its session error. This boundary does not guarantee completion across a
 subsequent transport failure during request issuance.
 
 Watch mutations (`watchSetSync()`, `watchAddSync()`, `watchRemoveSync()`, and
-`viewSetSync()`) are ordered on a per-session chain, and restoration
-re-establishes the watch set through that same chain. An ordinary mutation whose
-turn comes while the connection is down or its session is not yet restored
-therefore gives the turn back unsent, waits for restoration, and queues again,
-so restoration never waits behind a mutation that is itself waiting for
-restoration. The restoration's own `watch.set` is the one mutation sent before
-its session is restored.
+`viewSetSync()`) reach the server in call order, through a per-session chain. A
+mutation whose turn comes while the connection is down or its session has not
+reopened keeps its turn and waits for restoration before it sends. Restoration
+re-establishes the watch set without queuing behind those waiting mutations,
+after any mutation already sent, and the waiting mutations follow it in call
+order. A removal takes effect in the watch set restoration re-establishes from
+the moment its turn comes.
 
 ## Layout
 
