@@ -277,6 +277,54 @@ const setup = async (
       expect((await tx.commit()).error).toBeUndefined();
       return cell.withTx(undefined);
     },
+    /**
+     * Writes a cell in the room space whose stored label attests each of
+     * `subjects` with a root `represents-principal` atom, the evidence a
+     * principal's own runtime mints on a cell it creates.
+     */
+    async attestation(
+      subjects: readonly string[],
+      cause: string,
+    ): Promise<Cell<unknown>> {
+      const runtime = runtimes.get(alice)!;
+      const tx = runtime.edit();
+      const cell = runtime.getCell(S, cause, undefined, tx);
+      writeSeedEnvelopeDoc(tx, S);
+      seedStoredEnvelope(tx, {
+        space: S,
+        scope: "space",
+        id: cell.getAsNormalizedFullLink().id,
+        path: [],
+      }, {
+        value: {},
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: {
+                integrity: subjects.map((subject) => ({
+                  kind: "represents-principal",
+                  subject,
+                })),
+              },
+            }],
+          },
+        },
+      } as FabricValue);
+      expect((await tx.commit()).error).toBeUndefined();
+      return cell.withTx(undefined);
+    },
+    /** Replaces the room's terms; a seat given as a cell is stored as a link. */
+    async setTerms(value: Record<string, unknown>): Promise<void> {
+      const runtime = runtimes.get(alice)!;
+      const tx = runtime.edit();
+      runtime.getCellFromLink(terms.getAsNormalizedFullLink(), undefined, tx)
+        .set(value as never);
+      expect((await tx.commit()).error).toBeUndefined();
+    },
     /** Prepares and commits one seal with a trusted click. */
     async seal(identity: Identity, value: FabricValue = honestStance) {
       const draft = await fixture.draft(identity, value);
@@ -400,6 +448,45 @@ describe("cfc-custody-seal", () => {
         const { box } = await fixture.seal(alice);
         await fixture.seal(bob);
         await fixture.seal(carol);
+        const integrity = await project(fixture, carol, box);
+        expect(integrity).toContainEqual(witnessed);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("seals a bounded array of closed values, and a projector over it keeps the witness", async () => {
+      const ratings = {
+        type: "object",
+        properties: {
+          ratings: {
+            type: "array",
+            items: { enum: ["no", "maybe", "yes"] },
+            minItems: 3,
+            maxItems: 3,
+          },
+        },
+        required: ["ratings"],
+        additionalProperties: false,
+      };
+      const fixture = await setup({
+        terms: { ...TERMS, stanceSchema: ratings },
+      });
+      try {
+        const { box } = await fixture.seal(alice, {
+          ratings: ["yes", "no", "maybe"],
+        });
+        await fixture.seal(bob, { ratings: ["no", "no", "yes"] });
+        const reader = fixture.runtimes.get(carol)!;
+        const local = reader.getCellFromLink(box.getAsNormalizedFullLink());
+        await local.sync();
+        const valueEntries = storedEntries(reader, local).filter((entry) =>
+          entry.origin === "derived" && entry.observes === "value"
+        );
+        expect(valueEntries.map((entry) => entry.path.at(-1))).toContain("2");
+        for (const entry of valueEntries) {
+          expect(entry.label.integrity).toContainEqual(sealedBy);
+        }
         const integrity = await project(fixture, carol, box);
         expect(integrity).toContainEqual(witnessed);
       } finally {
@@ -1123,6 +1210,97 @@ describe("cfc-custody-seal", () => {
       }
     });
 
+    it("names a seat by a cell whose stored label attests its principal, and seals the DID", async () => {
+      const fixture = await setup();
+      try {
+        const aliceSeat = await fixture.attestation([alice.did()], "seat-a");
+        const bobSeat = await fixture.attestation([bob.did()], "seat-b");
+        // A seat may still be a DID the terms write out.
+        await fixture.setTerms({
+          ...TERMS,
+          seats: [aliceSeat, bobSeat, carol.did()],
+        });
+        const resolved = { ...TERMS, seats: TERMS.seats };
+        const draft = await fixture.draft(bob, honestStance);
+        const prepared = await prepareCustodySeal(draft, fixture.room(bob));
+        expect(prepared.terms).toEqual(resolved);
+        expect(prepared.instance).toBe(hashStringOf(resolved));
+        const { box, entryKey, instance } = await commitCustodySeal(
+          prepared.consent,
+          trustedClick(),
+        );
+        expect(instance).toBe(prepared.instance);
+        const reader = fixture.runtimes.get(carol)!;
+        const local = reader.getCellFromLink(box.getAsNormalizedFullLink());
+        await local.sync();
+        const entry = (local.getRaw() as Record<string, { terms: string }>)[
+          entryKey
+        ];
+        expect(JSON.parse(entry.terms).seats).toEqual(TERMS.seats);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a seat cell that attests no principal, or more than one", async () => {
+      for (
+        const [subjects, refusal] of [
+          [[], /attests no principal/],
+          [[bob.did(), mallory.did()], /attests more than one principal/],
+          [[`${bob.did()} (you)`], /distinct, well-formed DIDs/],
+        ] as const
+      ) {
+        const fixture = await setup();
+        try {
+          const seat = await fixture.attestation(subjects, "seat-b");
+          await fixture.setTerms({
+            ...TERMS,
+            seats: [alice.did(), seat, carol.did()],
+          });
+          const draft = await fixture.draft(alice, honestStance);
+          await expect(prepareCustodySeal(draft, fixture.room(alice)))
+            .rejects.toThrow(refusal);
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
+    it("refuses two seats that resolve to one principal", async () => {
+      const fixture = await setup();
+      try {
+        const first = await fixture.attestation([bob.did()], "seat-b1");
+        const second = await fixture.attestation([bob.did()], "seat-b2");
+        await fixture.setTerms({
+          ...TERMS,
+          seats: [alice.did(), first, second],
+        });
+        const draft = await fixture.draft(alice, honestStance);
+        await expect(prepareCustodySeal(draft, fixture.room(alice)))
+          .rejects.toThrow(/distinct, well-formed DIDs/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a seal whose seat attests another principal after review", async () => {
+      const fixture = await setup();
+      try {
+        const seat = await fixture.attestation([bob.did()], "seat-b");
+        await fixture.setTerms({
+          ...TERMS,
+          seats: [alice.did(), seat, carol.did()],
+        });
+        const draft = await fixture.draft(alice, honestStance);
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        await fixture.attestation([mallory.did()], "seat-b");
+        await expect(commitCustodySeal(prepared.consent, trustedClick()))
+          .rejects.toThrow(/stale/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
     it("refuses a stance its schema does not bound", async () => {
       const cases: [unknown, unknown, RegExp][] = [
         [
@@ -1154,10 +1332,66 @@ describe("cfc-custody-seal", () => {
           honestStance,
           /additionalProperties: false/,
         ],
+        [{ type: "array", items: { type: "boolean" } }, [true], /`maxItems`/],
+        [
+          { type: "array", items: { type: "boolean" }, maxItems: 1000 },
+          [true],
+          /`maxItems`/,
+        ],
+        [
+          { type: "array", items: { type: "string" }, maxItems: 2 },
+          ["free text"],
+          /admits open-ended values at `\/items`/,
+        ],
+        [
+          { type: "array", items: [{ type: "boolean" }], maxItems: 2 },
+          [true],
+          /the schema is not an object at `\/items`/,
+        ],
+        [
+          { type: "array", prefixItems: [{ type: "boolean" }], maxItems: 2 },
+          [true],
+          /keyword `prefixItems`/,
+        ],
         [
           { type: "array", items: { type: "boolean" }, maxItems: 2 },
+          [true, false, true],
+          /the array's length is outside its bounds/,
+        ],
+        [
+          {
+            type: "array",
+            items: { type: "boolean" },
+            minItems: 2,
+            maxItems: 3,
+          },
           [true],
-          /keyword `items`/,
+          /the array's length is outside its bounds/,
+        ],
+        [
+          { type: "array", items: { enum: [1, 2] }, maxItems: 2 },
+          [1, 3],
+          /not one of the enumerated values at `\/1`/,
+        ],
+        [
+          { type: "boolean", maxItems: 2 },
+          true,
+          /`maxItems` applies only to an array/,
+        ],
+        [
+          {
+            ...STANCE_SCHEMA,
+            properties: {
+              ...STANCE_SCHEMA.properties,
+              tags: {
+                type: "array",
+                items: { type: "string" },
+                maxItems: 2,
+              },
+            },
+          },
+          honestStance,
+          /admits open-ended values at `\/tags\/items`/,
         ],
         [{ anyOf: [{ type: "boolean" }] }, true, /keyword `anyOf`/],
         [

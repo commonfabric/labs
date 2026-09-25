@@ -45,7 +45,7 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import { utf8Compare, utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 import { type Cell, isCell } from "../cell.ts";
-import type { NormalizedFullLink } from "../link-utils.ts";
+import { type NormalizedFullLink, parseLink } from "../link-utils.ts";
 import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
@@ -57,10 +57,12 @@ import {
   clauseAlternatives,
   clausesEqual,
 } from "./clause.ts";
+import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import { cfcPolicyManifestDocId } from "./policy.ts";
 import { collectConsumedLabel } from "./prepare.ts";
 import { CfcReadCeilingError } from "./read-ceiling.ts";
+import { authorPrincipalCandidates } from "./represents-principal.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
 import { isRendererTrustedEvent } from "./ui-contract.ts";
@@ -193,6 +195,9 @@ export interface CustodySealResult {
   /** The blinded key of the actor's entry in the box. */
   readonly entryKey: string;
 
+  /** The instance `D` the entry was sealed into: the digest of the terms. */
+  readonly instance: string;
+
   /** The actor-private receipt, in the actor's home space. */
   readonly receipt: Cell<unknown>;
 }
@@ -250,9 +255,21 @@ const STANCE_SCHEMA_KEYS = new Set([
   "additionalProperties",
   "minimum",
   "maximum",
+  "items",
+  "minItems",
+  "maxItems",
   "title",
   "description",
 ]);
+
+/** The keywords that describe an array, and nothing else. */
+const STANCE_ARRAY_KEYS = ["items", "minItems", "maxItems"] as const;
+
+/**
+ * The most elements a stance array may hold. An array is a list of ratings or
+ * choices the confirmation shows one by one, so its bound is small.
+ */
+const MAX_STANCE_ARRAY_ITEMS = 64;
 
 const ENTRY_KEY_DOMAIN = "cfc-custody-seal/entry-key/v1\n";
 
@@ -377,8 +394,10 @@ const UNUSED_PROPERTY: unique symbol = Symbol("unused property");
 /**
  * Checks that `value` satisfies `schema`, and that `schema` admits only
  * instruction-inert values: booleans, bounded numbers, constants, and
- * enumerated primitives, composed by closed objects. Arrays are refused; a
- * multiple choice is an object of booleans.
+ * enumerated primitives, composed by closed objects and by arrays whose one
+ * `items` schema is itself inert and whose length `maxItems` bounds. An array
+ * is a list of closed values, as a rating per option is, and never a channel
+ * for text: every element meets the same inert schema.
  *
  * @throws If the schema admits free text or any other open-ended leaf, or if
  *   the value does not satisfy it.
@@ -403,6 +422,12 @@ const checkInertStance = (
   for (const key of Object.keys(node)) {
     if (!STANCE_SCHEMA_KEYS.has(key)) {
       refuse(`the schema keyword \`${key}\` is not allowed`);
+    }
+  }
+  if (node.type !== "array") {
+    const misplaced = STANCE_ARRAY_KEYS.find((key) => Object.hasOwn(node, key));
+    if (misplaced !== undefined) {
+      refuse(`\`${misplaced}\` applies only to an array`);
     }
   }
   const isPrimitive = (entry: unknown) =>
@@ -489,6 +514,37 @@ const checkInertStance = (
           Object.hasOwn(record, key) ? record[key] : UNUSED_PROPERTY,
           [...path, key],
         );
+      }
+      return;
+    }
+    case "array": {
+      const { items, minItems = 0, maxItems } = node;
+      if (
+        typeof maxItems !== "number" || !Number.isInteger(maxItems) ||
+        maxItems < 0 || maxItems > MAX_STANCE_ARRAY_ITEMS
+      ) {
+        refuse(
+          `an array needs an integer \`maxItems\` of at most ${MAX_STANCE_ARRAY_ITEMS}`,
+        );
+      }
+      if (
+        typeof minItems !== "number" || !Number.isInteger(minItems) ||
+        minItems < 0 || minItems > (maxItems as number)
+      ) refuse("`minItems` must be an integer no greater than `maxItems`");
+      if (!checksValue) {
+        checkInertStance(items, UNUSED_PROPERTY, [...path, "items"]);
+        return;
+      }
+      // The element schema is checked on its own first, so an array the value
+      // leaves empty is held to the same schema as a full one.
+      checkInertStance(items, UNUSED_PROPERTY, [...path, "items"]);
+      if (!Array.isArray(value)) refuse("the value is not an array");
+      const list = value as unknown[];
+      if (
+        list.length < (minItems as number) || list.length > (maxItems as number)
+      ) refuse("the array's length is outside its bounds");
+      for (let index = 0; index < list.length; index++) {
+        checkInertStance(items, list[index], [...path, index]);
       }
       return;
     }
@@ -899,6 +955,103 @@ const sourcePolicyIn = (
   return value as unknown as CfcAtom[];
 };
 
+/**
+ * Reads the terms at `terms`, whose transaction is the caller's: every field
+ * as a JSON value, except `seats`, whose entries may each be a DID or a
+ * reference to a cell attesting a principal. Each reference is
+ * returned by its position, for {@link resolveSeats}; the seat is `null`
+ * until then.
+ *
+ * @throws If the terms are not an object, or a field other than `seats`
+ *   holds a value that is not JSON.
+ */
+const readTerms = (terms: Cell<unknown>): {
+  terms: Record<string, JSONValue>;
+  seatLinks: Map<number, NormalizedFullLink>;
+} => {
+  const raw = terms.getRawUntyped({ frozen: false });
+  if (!isObjectNotArray(raw)) {
+    throw new Error("Custody terms must be an object");
+  }
+  const read: Record<string, JSONValue> = {};
+  const seatLinks = new Map<number, NormalizedFullLink>();
+  for (const key of Object.keys(raw)) {
+    // A field is read through the references it holds: the runtime may store
+    // a nested list or object as a document of its own.
+    if (key !== "seats") {
+      read[key] = snapshotJsonValue(terms.key(key as never).get());
+      continue;
+    }
+    const seatsCell = terms.key("seats" as never).resolveAsCell();
+    const seats = seatsCell.getRawUntyped({ frozen: false });
+    if (!Array.isArray(seats)) {
+      read.seats = snapshotJsonValue(seats);
+      continue;
+    }
+    const base = seatsCell.getAsNormalizedFullLink();
+    read.seats = seats.map((seat, index) => {
+      if (typeof seat === "string") return seat;
+      const link = parseLink(seat, base);
+      if (link === undefined) return snapshotJsonValue(seat);
+      seatLinks.set(index, link);
+      return null;
+    });
+  }
+  return { terms: read, seatLinks };
+};
+
+/**
+ * Returns `terms` with each seat named by a reference replaced by the one
+ * principal its cell attests: the principal a `represents-principal`
+ * integrity atom names at the root of the cell's stored label, or on one of
+ * its top-level fields, as a principal's own runtime writes it on a cell that
+ * principal creates, a profile among them. A pattern never holds a member's
+ * DID, and the runtime never takes one from a pattern for a seat; it takes a
+ * reference to what the member's runtime attested. The reads are added to
+ * `evidence`, so the transaction that writes the entry verifies them.
+ *
+ * @throws If a referenced cell attests no principal, or more than one.
+ */
+const resolveSeats = async (
+  runtime: Cell<unknown>["runtime"],
+  terms: Record<string, JSONValue>,
+  seatLinks: ReadonlyMap<number, NormalizedFullLink>,
+  evidence: ReadEvidence[],
+): Promise<JSONValue> => {
+  if (seatLinks.size === 0) return terms;
+  const seats = [...(terms.seats as JSONValue[])];
+  for (const [index, link] of seatLinks) {
+    const seat = runtime.getCellFromLink(link);
+    await seat.sync();
+    await seat.resolveAsCell().sync();
+    const tx = runtime.edit();
+    try {
+      const target = seat.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
+      const principals = authorPrincipalCandidates(
+        cfcLabelViewFromMetadata(
+          readStoredCfcMetadata(tx, target),
+          target.path.map(String),
+        ),
+      );
+      if (principals.length === 0) {
+        throw new Error(
+          `Custody terms name seat ${index} by a cell that attests no principal`,
+        );
+      }
+      if (principals.length > 1) {
+        throw new Error(
+          `Custody terms name seat ${index} by a cell that attests more than one principal`,
+        );
+      }
+      seats[index] = principals[0];
+      evidence.push(...readEvidence(tx));
+    } finally {
+      tx.abort();
+    }
+  }
+  return { ...terms, seats };
+};
+
 const STALE_REVIEW = "Custody seal review is stale; review the value again";
 
 /**
@@ -1020,7 +1173,8 @@ const inspect = async (
 
   const termsTx = runtime.edit();
   let termsLink: NormalizedFullLink;
-  let terms: JSONValue;
+  let rawTerms: Record<string, JSONValue>;
+  let seatLinks: ReadonlyMap<number, NormalizedFullLink>;
   let policy: CfcModulePolicyRefAtom;
   let room: string;
   try {
@@ -1031,7 +1185,9 @@ const inspect = async (
       throw new Error("Custody terms must live in a space named by a DID");
     }
     policy = checkPolicy(requestedPolicy, room);
-    terms = snapshotJsonValue(requestedRoom.terms.withTx(termsTx).get());
+    ({ terms: rawTerms, seatLinks } = readTerms(
+      runtime.getCellFromLink(termsLink, undefined, termsTx),
+    ));
     // Terms are copied into every entry, so they may carry only what the
     // room's readers already hold: a clause admitting the room space, or the
     // room's own policy.
@@ -1050,6 +1206,7 @@ const inspect = async (
   } finally {
     termsTx.abort();
   }
+  const terms = await resolveSeats(runtime, rawTerms, seatLinks, evidence);
   const manifest = runtime.getCellFromEntityId(
     room,
     cfcPolicyManifestDocId(policy.policyDigest),
@@ -1387,6 +1544,7 @@ export async function commitCustodySeal(
   return {
     box: box!.withTx(undefined) as Cell<unknown>,
     entryKey,
+    instance,
     receipt: receipt.withTx(undefined),
   };
 }
