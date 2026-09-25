@@ -113,3 +113,27 @@ Deno.test("cf-hover-card hides its card when the page scrolls", async () => {
     element.remove();
   }
 });
+
+Deno.test("cf-hover-card keeps its card above its content as the card grows", async () => {
+  const { element } = await mount(300);
+  try {
+    element.dispatchEvent(new PointerEvent("pointerenter"));
+    expect(element.open).toBe(true);
+
+    // What a card shows can arrive after it opens, as a profile badge's
+    // avatar and name do.
+    const extra = document.createElement("div");
+    extra.style.height = "120px";
+    element.querySelector('[slot="card"]')!.after(extra);
+    extra.slot = "card";
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    );
+    expect(cardRect(element).height).toBeGreaterThan(120);
+    expect(cardRect(element).bottom).toBeLessThanOrEqual(
+      element.getBoundingClientRect().top,
+    );
+  } finally {
+    element.remove();
+  }
+});

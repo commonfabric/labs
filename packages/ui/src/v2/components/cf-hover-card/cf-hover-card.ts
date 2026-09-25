@@ -11,9 +11,10 @@ const CARD_GAP_PX = 6;
  *
  * The card is a popover in the browser's top layer, so no ancestor that clips
  * its overflow can cut it off. It sits above the content, or below when there
- * is no room above, and moves inward from the window's edges. It hides when the
- * pointer and focus have both left, and when the page scrolls, since it is
- * placed against where the content was when it appeared.
+ * is no room above, and moves inward from the window's edges, placed again
+ * whenever its size changes, since what it shows can arrive after it opens. It
+ * hides when the pointer and focus have both left, and when the page scrolls,
+ * since it is placed against where the content was when it appeared.
  *
  * @element cf-hover-card
  *
@@ -52,6 +53,7 @@ export class CFHoverCard extends BaseElement {
 
   #pointerInside = false;
   #focusInside = false;
+  #resizeObserver: ResizeObserver | undefined;
 
   #onPointerEnter = () => {
     this.#pointerInside = true;
@@ -123,6 +125,8 @@ export class CFHoverCard extends BaseElement {
     if (!card || this.open) return;
     card.showPopover();
     this.#place(card);
+    this.#resizeObserver = new ResizeObserver(() => this.#place(card));
+    this.#resizeObserver.observe(card);
     globalThis.addEventListener("scroll", this.#onScroll, {
       capture: true,
       passive: true,
@@ -130,6 +134,8 @@ export class CFHoverCard extends BaseElement {
   }
 
   #hide() {
+    this.#resizeObserver?.disconnect();
+    this.#resizeObserver = undefined;
     globalThis.removeEventListener("scroll", this.#onScroll, { capture: true });
     const card = this.#card;
     if (card && this.open) card.hidePopover();
