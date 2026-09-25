@@ -46,6 +46,12 @@ type TestProfile = AddIntegrity<
   readonly ["fabrichat-test-profile"]
 >;
 
+// A document linking a profile, labeled for the same reason.
+type TestProfileHolder = AddIntegrity<
+  { profile?: Writable<TestProfile> },
+  readonly ["fabrichat-test-profile"]
+>;
+
 // Each send and each reaction is a protected write, so its step carries the
 // trusted gesture of the reviewed surface it is made from.
 const sendGesture = {
@@ -116,6 +122,19 @@ export default pattern(() => {
   const aliceSeesSecond = FabriChatMessageRow({
     message: messages.key(1),
     myProfile: aliceProfile,
+    reactions,
+  } as FabriChatMessageRowInputArg);
+  // The first message as Alice sees it through a link to her profile, as a
+  // viewer's room reaches their profile through the `#profile` wish.
+  const aliceProfileHolder = Writable.of<TestProfileHolder>(
+    {} as TestProfileHolder,
+  );
+  const action_link_alice_profile = action(() =>
+    aliceProfileHolder.key("profile").set(aliceProfile)
+  );
+  const aliceSeesFirstThroughLink = FabriChatMessageRow({
+    message: messages.key(0),
+    myProfile: aliceProfileHolder.key("profile"),
     reactions,
   } as FabriChatMessageRowInputArg);
   const bobSeesFirst = FabriChatMessageRow({
@@ -199,6 +218,9 @@ export default pattern(() => {
   const assert_tallies_mark_only_viewers_own = assert(() =>
     talliesText(bobSeesFirst.tallies) === "😺 2*, 😿 1"
   );
+  const assert_linked_viewer_sees_own_marked = assert(() =>
+    talliesText(aliceSeesFirstThroughLink.tallies) === "😺 2*, 😿 1*"
+  );
   const assert_second_use_takes_reaction_back = assert(() =>
     storedIn(reactions).length === 2 &&
     talliesText(aliceSeesFirst.tallies) === "😺 1, 😿 1*" &&
@@ -248,12 +270,14 @@ export default pattern(() => {
         trustedUi: sendGesture,
       },
       { assertion: assert_starts_without_reactions },
+      { action: action_link_alice_profile },
       { action: aliceCriesFirst, trustedUi: reactGesture },
       { assertion: assert_reaction_stored },
       { action: aliceCatsFirst, trustedUi: reactGesture },
       { action: bobCatsFirst, trustedUi: reactGesture },
       { assertion: assert_tallies_in_offered_order },
       { assertion: assert_tallies_mark_only_viewers_own },
+      { assertion: assert_linked_viewer_sees_own_marked },
       { action: aliceCatsFirst, trustedUi: reactGesture },
       { assertion: assert_second_use_takes_reaction_back },
       { action: aliceCatsFirst, trustedUi: reactGesture },

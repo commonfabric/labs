@@ -11,6 +11,9 @@ async function mountWithAction(): Promise<{
   element: CFHoverReveal;
   action: HTMLButtonElement;
 }> {
+  // A device that cannot hover shows the actions always, so the hidden state
+  // exists only on one that can. `deno-web-test.config.ts` says it can.
+  expect(matchMedia("(hover: hover)").matches).toBe(true);
   const element = document.createElement("cf-hover-reveal") as CFHoverReveal;
   element.innerHTML = `
     <span>A message</span>
