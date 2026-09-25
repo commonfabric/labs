@@ -4706,7 +4706,6 @@ export class SpaceServer implements TransactionSealDestination {
     // leaves the registry behind the mirror, and the next pass reconciles
     // every key to bring the two back into agreement.
     this.#demandFullReconcile = true;
-    stats.demand.demandKeysReconciled += changed.size;
     // DEPARTED keys (no live client session tracks the instance any
     // more — coarse, RULED R-D): retire the registry entry, the load
     // state, and RELEASE the writers' root status (1→0, bracketed).
@@ -4796,6 +4795,7 @@ export class SpaceServer implements TransactionSealDestination {
       }
     }
     this.#demandFullReconcile = false;
+    stats.demand.demandKeysReconciled += changed.size;
     // The roots whose structure load is owed, with the address each one's
     // load reads: every root on its first demand, and every root still
     // pending from an earlier attempt.

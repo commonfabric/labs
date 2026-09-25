@@ -751,7 +751,7 @@ export type DemandedInstanceRow = {
   id: string;
   scope: CellScope;
   scopeKey: ScopeKey;
-  identity?: { principal?: string; sessionId?: string };
+  identity?: { readonly principal?: string; readonly sessionId?: string };
 
   /** True when the row is a watch ROOT of its session (the structure
    * load's input, unchanged in scope — design §2.8 flag 4). */

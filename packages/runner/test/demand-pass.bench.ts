@@ -6,18 +6,18 @@
  *
  * `unchanged` is a pass with no demand written since the one before it: the
  * server hands back the share it kept and the mirror finds it is the one it
- * holds. `one watch added` is a pass after the session's demand changed: the
- * server rebuilds the session's share, and the mirror compares it against the
- * one it holds, alternating between the share without and with one more
- * watched document so that each iteration folds in a change of one key.
- * Fixture construction and the watch evaluation that builds the session's
- * tracked set stay outside timing.
+ * holds. `one watch added` is a pass after the session added one watch: the
+ * server rebuilds the session's share, and the mirror, holding the share from
+ * before that watch, folds the rebuilt one in and finds one key changed.
+ * Fixture construction, the watch evaluation that builds the session's
+ * tracked set, and returning the mirror to the earlier share after each
+ * iteration stay outside timing.
  */
 
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/api";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
-import { Server, type SessionDemand } from "@commonfabric/memory/v2/server";
+import { Server } from "@commonfabric/memory/v2/server";
 
 import { DemandMirror } from "../src/executor/demand-mirror.ts";
 
@@ -37,8 +37,8 @@ const follow = (id: string) => ({
 
 /**
  * A memory server with one session watching a root document that links to
- * `size` leaves, and the session's share of the demand set before and after
- * one more watch.
+ * `size` leaves and one more document, the session's state, and its share of
+ * the demand set from before that one more watch.
  */
 async function fixture(size: number) {
   const server = new Server({
@@ -83,11 +83,11 @@ async function fixture(size: number) {
   const [state] = server.accessForTestingOnly.sessionsForSpace(space);
   expect(without[0].rows.size).toBe(size + 1);
   expect(withExtra[0].rows.size).toBe(size + 2);
-  return { server, state, without, withExtra };
+  return { server, state, without };
 }
 
 for (const size of [1_000, 5_000, 20_000]) {
-  const { server, state, without, withExtra } = await fixture(size);
+  const { server, state, without } = await fixture(size);
 
   const unchanged = new DemandMirror();
   unchanged.update(server.demandForSpace(space, { excludePrincipal: service }));
@@ -106,20 +106,19 @@ for (const size of [1_000, 5_000, 20_000]) {
     },
   });
 
-  const alternating = new DemandMirror();
-  alternating.update(without);
-  let next: SessionDemand[] = withExtra;
+  const beforeWatch = new DemandMirror();
+  beforeWatch.update(without);
   Deno.bench({
     name: `${size} instances, one watch added`,
     group: "demand pass read",
     fn(b) {
       b.start();
       const rebuilt = server.accessForTestingOnly.buildSessionDemand(state);
-      const changed = alternating.update(next);
+      const changed = beforeWatch.update([rebuilt]);
       b.end();
       expect(rebuilt.rows.size).toBe(size + 2);
       expect(changed.size).toBe(1);
-      next = next === withExtra ? without : withExtra;
+      expect(beforeWatch.update(without).size).toBe(1);
     },
   });
 }

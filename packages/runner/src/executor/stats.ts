@@ -280,11 +280,12 @@ export type ServingLoopStats = {
     demandPasses: number;
     demandPassMs: number;
 
-    /** Instance keys the passes reconciled against the registry, accumulated.
-     * A pass reconciles the keys whose rows changed since the pass before it
-     * and no others, so a pass over unchanged demand adds nothing; the first
-     * pass of a tenure, and the pass after one that failed partway, reconcile
-     * every key. */
+    /** Instance keys the passes reconciled against the registry, accumulated
+     * over the passes whose reconcile completed; a pass that throws partway
+     * adds nothing. A pass reconciles the keys whose rows changed since the
+     * pass before it, and the warm keys captured since, and no others, so a
+     * pass over unchanged demand adds nothing; the first pass of a tenure,
+     * and the pass after one that threw partway, reconcile every key. */
     demandKeysReconciled: number;
 
     /** Root documents the pass pulled TOGETHER before its sequential

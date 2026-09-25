@@ -113,7 +113,12 @@ describe("SpaceServer", () => {
     const enter = scheduler.enterDemandedEntity.bind(scheduler);
     const leave = scheduler.leaveDemandedEntity.bind(scheduler);
     const rearm = scheduler.rearmNotCurrentForDemander.bind(scheduler);
+    let throwOnEnter: string | undefined;
     scheduler.enterDemandedEntity = (address) => {
+      if (address.id === throwOnEnter) {
+        throwOnEnter = undefined;
+        throw new Error(`entering ${address.id} fails`);
+      }
       entered.push(address.id);
       return enter(address);
     };
@@ -183,6 +188,18 @@ describe("SpaceServer", () => {
         await clock.settle();
         expect(stats.demand.demandPasses).toBeGreaterThan(passes);
       },
+      /**
+       * Replaces the client demand and runs the pass it wakes, which throws
+       * when it enters `id`, along with any pass the loop runs after it.
+       */
+      async passThrowingOn(id: string, next: SessionDemand[]): Promise<void> {
+        demand = next;
+        throwOnEnter = id;
+        tenure.noteDemandChanged();
+        await clock.tick(300);
+        await clock.settle();
+        expect(throwOnEnter).toBeUndefined();
+      },
       /** Forgets the scheduler calls recorded so far. */
       forget(): void {
         entered.length = 0;
@@ -241,6 +258,24 @@ describe("SpaceServer", () => {
         expect(fixture.stats.demand.demandedInstances).toBe(2);
         expect(fixture.stats.demand.demandedRows).toBe(3);
         expect(fixture.stats.demand.demandedPairs).toBe(3);
+      });
+
+      it("counts only the keys of passes that complete when a pass throws partway", async () => {
+        const fixture = await openFixture([
+          share("s1", [row("computed:a", "s1", alice)]),
+        ]);
+        const reconciled = fixture.stats.demand.demandKeysReconciled;
+
+        await fixture.passThrowingOn("computed:c", [
+          share("s1", [
+            row("computed:a", "s1", alice),
+            row("computed:b", "s1", alice),
+            row("computed:c", "s1", alice),
+          ]),
+        ]);
+        await fixture.pass();
+
+        expect(fixture.stats.demand.demandKeysReconciled).toBe(reconciled + 3);
       });
 
       it("enters the keys a session gains and leaves the keys no session keeps", async () => {
