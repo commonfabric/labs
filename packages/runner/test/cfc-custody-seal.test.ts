@@ -542,7 +542,7 @@ describe("cfc-custody-seal", () => {
     it("refuses other code replacing the whole box with a primitive", async () => {
       // A primitive written over the root of a document whose writer claim is
       // on that root changes the claimed value, so the claim refuses it
-      // (#8024). The box keeps what the seal wrote.
+      // (#8024). The box keeps what the seal wrote, and its witness.
       const fixture = await setup();
       try {
         const { box } = await fixture.seal(alice);
@@ -565,6 +565,8 @@ describe("cfc-custody-seal", () => {
           "writeAuthorizedBy requires a trusted builtin identity at /",
         );
         expect(local.getRaw()).toEqual(before);
+        // The projector still reads the box the seal wrote.
+        expect(await project(fixture, carol, box)).toContainEqual(witnessed);
       } finally {
         await fixture.dispose();
       }
