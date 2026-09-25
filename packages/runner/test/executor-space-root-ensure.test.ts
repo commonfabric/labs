@@ -718,12 +718,10 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     let demandReads = 0;
     const facade = new Proxy(server, {
       get(target, property, receiver) {
-        if (property === "demandedInstancesForSpace") {
-          return (
-            ...args: Parameters<typeof server.demandedInstancesForSpace>
-          ) => {
+        if (property === "demandForSpace") {
+          return (...args: Parameters<typeof server.demandForSpace>) => {
             demandReads++;
-            return target.demandedInstancesForSpace(...args);
+            return target.demandForSpace(...args);
           };
         }
         if (property === "idle") {

@@ -256,8 +256,8 @@ export type ServingLoopStats = {
    * documents — `structureRootsPreloaded` below — and the awaited
    * structure-load segments after it — `ensurePieceRunning` /
    * `#confirmNoPatternMeta` — for first-demand and pending ROOT keys, which
-   * dominate the early passes; the reconcile itself is the O(rows) map work
-   * — W1 review MINOR-3);
+   * dominate the early passes; the reconcile itself is map work over the
+   * keys whose rows changed — W1 review MINOR-3);
    * `pushGrowthWakes` / `watchWakes` count NOTIFIES (the push-time
    * `demandChanged` and the `session.watch.set` / `.add` notifies) BEFORE
    * the 300 ms grace coalesces them into a pending callback. A callback
@@ -279,6 +279,14 @@ export type ServingLoopStats = {
     notCurrentRearms: number;
     demandPasses: number;
     demandPassMs: number;
+
+    /** Instance keys the passes reconciled against the registry, accumulated
+     * over the passes whose reconcile completed; a pass that throws partway
+     * adds nothing. A pass reconciles the keys whose rows changed since the
+     * pass before it, and the warm keys captured since, and no others, so a
+     * pass over unchanged demand adds nothing; the first pass of a tenure,
+     * and the pass after one that threw partway, reconcile every key. */
+    demandKeysReconciled: number;
 
     /** Root documents the pass pulled TOGETHER before its sequential
      * structure loads ran (`SpaceServer.#loadStructureRootDocs`): the
@@ -678,6 +686,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     notCurrentRearms: 0,
     demandPasses: 0,
     demandPassMs: 0,
+    demandKeysReconciled: 0,
     structureRootsPreloaded: 0,
     pushGrowthWakes: 0,
     watchWakes: 0,

@@ -226,7 +226,7 @@ export class ExecutorHost {
       // principal) is dropped: its tracked-set growth is the serving
       // graph's own reads (a wave's derivations re-traversed on push),
       // not client demand — counting it in `pushGrowthWakes` and waking
-      // the loop spins an extra cycle + O(closure) pass that finds no
+      // the loop spins an extra cycle and demand pass that finds no
       // client delta (W1 review MINOR-4).
       demandChanged: (space, reason, principal) => {
         if (this.#closed) return;

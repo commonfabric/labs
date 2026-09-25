@@ -131,6 +131,15 @@ unrelated chain. Fixture construction stays outside timing; index construction
 and selection are measured together. The selected action count and exclusion of
 the unrelated chain are checked outside the timed interval.
 
+`packages/runner/test/demand-pass.bench.ts` measures the demand read a serving
+loop's demand pass makes, for one client session whose watch reaches 1,000,
+5,000, and 20,000 documents: the memory server's `demandForSpace()` and the
+fold of its result into the loop's `DemandMirror`. `unchanged` reads demand
+nothing has written since the last read, and stays flat across the sizes;
+`one watch added` rebuilds the session's share and folds in a change of one
+key, and grows with the session's closure. The fixture's watch evaluation stays
+outside timing.
+
 `packages/runner/test/view-producer-proof.bench.ts` measures a client's currency
 proof over 10, 14, 18, and 36 producers, where each producer reads the preceding
 two outputs. This shared ancestry exercises repeated paths to the same upstream
