@@ -10,6 +10,33 @@ const TEXT_LIMIT = 500;
 // How many of the retained console messages a probe carries back.
 const CONSOLE_TAIL_LIMIT = 40;
 
+// How long a probe waits for the worker to report its logged warnings and
+// errors. Reading them is a round trip to the worker, and a worker that has
+// stopped answering is one of the states a report is written for, so this
+// bounds that one read and not the rest of the probe, which needs no worker.
+const WORKER_LOG_READ_LIMIT_MS = 2_000;
+
+// How many kinds of worker warning and error a report lists.
+const WORKER_PROBLEM_LIMIT = 20;
+
+/**
+ * One message a logger in the page's runtime worker has recorded at `warn` or
+ * `error`, with how many times it did at each.
+ */
+export interface WorkerLogProblem {
+  /** The name of the logger that recorded it. */
+  logger: string;
+
+  /** The message key the logger counts it under. */
+  message: string;
+
+  /** How many times it was recorded at `warn`. */
+  warn: number;
+
+  /** How many times it was recorded at `error`. */
+  error: number;
+}
+
 /**
  * What a page held at the moment a wait or a navigation against it failed.
  *
@@ -67,6 +94,21 @@ export interface ShellPageProbe {
   /** Why those could not be read, when reading them threw. */
   pendingRequestsError?: string;
 
+  /**
+   * The messages the runtime's worker has recorded at `warn` or `error`, most
+   * errors first, then most warnings. The worker's own console does not reach
+   * the page, so these counts are what a report can say about the worker's
+   * trouble. Absent where there is no runtime to ask, and where the runtime is
+   * one that does not report them.
+   */
+  workerProblems?: WorkerLogProblem[];
+
+  /**
+   * Why those could not be read, when asking threw or the worker did not
+   * answer in time.
+   */
+  workerProblemsError?: string;
+
   /** The start of the document's rendered text. */
   text: string;
 
@@ -80,11 +122,24 @@ export interface ShellPageProbe {
 
 /** Read {@link ShellPageProbe} from the document currently in `page`. */
 export async function readShellPageProbe(page: Page): Promise<ShellPageProbe> {
-  return await page.evaluate((textLimit: number, tailLimit: number) => {
+  return await page.evaluate(async (
+    textLimit: number,
+    tailLimit: number,
+    workerLogLimitMs: number,
+  ) => {
+    type LogCountsByMessage = Record<
+      string,
+      number | { warn?: number; error?: number }
+    >;
     const scope = globalThis as typeof globalThis & {
       app?: { serialize?: () => { view?: unknown; identityDid?: string } };
       commonfabric?: {
-        rt?: { getPendingRequests?: () => PendingRequestDiagnostic[] };
+        rt?: {
+          getPendingRequests?: () => PendingRequestDiagnostic[];
+          getLoggerCounts?: () => Promise<{
+            counts: Record<string, number | LogCountsByMessage>;
+          }>;
+        };
       };
       __cfConsoleTail?: Array<{ t: number; method: string; text: string }>;
     };
@@ -121,6 +176,49 @@ export async function readShellPageProbe(page: Page): Promise<ShellPageProbe> {
       }
     }
 
+    let workerProblems: WorkerLogProblem[] | undefined;
+    let workerProblemsError: string | undefined;
+    if (rt?.getLoggerCounts) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const unanswered = new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `the worker did not answer within ${workerLogLimitMs}ms`,
+                ),
+              ),
+            workerLogLimitMs,
+          );
+        });
+        const { counts } = await Promise.race([
+          rt.getLoggerCounts(),
+          unanswered,
+        ]);
+        // `total` is reserved at both levels of the counts, as the sum of what
+        // sits beside it.
+        workerProblems = [];
+        for (const [logger, byMessage] of Object.entries(counts)) {
+          if (logger === "total" || typeof byMessage !== "object") continue;
+          for (const [message, levels] of Object.entries(byMessage)) {
+            if (message === "total" || typeof levels !== "object") continue;
+            const warn = levels.warn ?? 0;
+            const error = levels.error ?? 0;
+            if (warn > 0 || error > 0) {
+              workerProblems.push({ logger, message, warn, error });
+            }
+          }
+        }
+        workerProblems.sort((a, b) => b.error - a.error || b.warn - a.warn);
+      } catch (error) {
+        workerProblems = undefined;
+        workerProblemsError = String(error);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    }
+
     const body = document.body;
     const text = (body?.innerText ?? body?.textContent ?? "").trim()
       .slice(0, textLimit);
@@ -142,10 +240,14 @@ export async function readShellPageProbe(page: Page): Promise<ShellPageProbe> {
       runtime: rt !== undefined,
       pendingRequests,
       pendingRequestsError,
+      workerProblems,
+      workerProblemsError,
       text,
       consoleTail,
     };
-  }, { args: [TEXT_LIMIT, CONSOLE_TAIL_LIMIT] });
+  }, {
+    args: [TEXT_LIMIT, CONSOLE_TAIL_LIMIT, WORKER_LOG_READ_LIMIT_MS],
+  });
 }
 
 /**
@@ -181,6 +283,43 @@ function describePendingRequests(probe: ShellPageProbe): string[] {
 }
 
 /**
+ * Helper for {@link describeShellPage}, which renders the warnings and errors
+ * the page's runtime worker has recorded, one line per message, most errors
+ * first.
+ *
+ * As with the pending requests, no runtime, a runtime that does not report, a
+ * report that failed, and a worker with nothing recorded each say which they
+ * are.
+ */
+function describeWorkerProblems(probe: ShellPageProbe): string[] {
+  const heading = "  worker warnings and errors";
+  if (!probe.runtime) {
+    return [`${heading}: none, the page carries no runtime`];
+  }
+  if (probe.workerProblemsError !== undefined) {
+    return [`${heading}: reading them failed: ${probe.workerProblemsError}`];
+  }
+  const problems = probe.workerProblems;
+  if (problems === undefined) {
+    return [`${heading}: this runtime does not report them`];
+  }
+  if (problems.length === 0) return [`${heading}: none`];
+  const shown = problems.slice(0, WORKER_PROBLEM_LIMIT);
+  const lines = [
+    `${heading} (${problems.length} ` +
+    `${problems.length === 1 ? "kind" : "kinds"}, most errors first):`,
+    ...shown.map((problem) =>
+      `    ${problem.logger} ${problem.message}: ` +
+      `${problem.error} error, ${problem.warn} warn`
+    ),
+  ];
+  if (problems.length > shown.length) {
+    lines.push(`    and ${problems.length - shown.length} more`);
+  }
+  return lines;
+}
+
+/**
  * Render `probe` as the indented block of detail lines that follows the first
  * line of a failure message.
  *
@@ -210,6 +349,7 @@ export function describeShellPage(probe: ShellPageProbe): string {
     lines.push("  globalThis.app: absent");
   }
   lines.push(...describePendingRequests(probe));
+  lines.push(...describeWorkerProblems(probe));
   if (!probe.rootView) {
     const text = probe.text.replace(/\s+/g, " ");
     lines.push(`  document text: ${text || "(empty)"}`);

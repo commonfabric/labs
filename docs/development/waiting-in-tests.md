@@ -127,7 +127,8 @@ Waits split into two groups with different primitives.
   being changed silently. A wait that runs out reports the page it ran out
   against: the predicate source and its arguments, the document URL and title,
   `x-root-view`, whether `globalThis.app` is present and the view it holds,
-  outstanding runtime requests, and a console tail. That report is
+  outstanding runtime requests, the runtime worker's logged warnings and
+  errors, and a console tail. That report is
   `waitForCondition`'s own message, so a helper that wraps the failure with a
   message of its own carries the report one level down, in the cause. Read the
   cause before adding a probe of your own; what it prints is usually the thing
@@ -1388,8 +1389,11 @@ the identity it was awaiting where one was given, the last state it managed to
 read, and what the page held at the moment it gave up: the document's URL,
 title, and HTTP status, whether the shell's `x-root-view` element is in it,
 whether `globalThis.app` is there and which view it holds, the requests its
-runtime has sent the worker and has no reply to, and the tail of
-console messages `Page.applyConsoleFormatter` retains in the page. The page half
+runtime has sent the worker and has no reply to, the messages that worker has
+logged at `warn` or `error` with how often, and the tail of console messages
+`Page.applyConsoleFormatter` retains in the page. Reading the worker's logs is
+a round trip the others do not need, so a worker that has stopped answering
+costs the report that one line, which says so, and nothing else. The page half
 of that is `readShellPageProbe` in
 `packages/integration/shell-page-probe.ts`; `describeStateWaitFailure` in
 `shell-utils.ts` assembles the whole block, and a test may call it directly to
