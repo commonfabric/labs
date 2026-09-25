@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 
 import type { CfcConfClause } from "../src/cfc/clause.ts";
@@ -9,6 +9,7 @@ import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import type { CfcPolicyRecordInput } from "../src/cfc/policy.ts";
 import { decideSinkRelease } from "../src/cfc/prepare.ts";
 import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
+import { decideSinkFit } from "../src/cfc/sink-decision.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
 import type { CfcTrustConfigInput } from "../src/cfc/trust.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -272,6 +273,44 @@ describe("decideSinkRelease", () => {
       tx.prepareCfc();
       return tx.commit();
     };
+
+    it("fails closed when a consumed module policy has no recorded origin", async () => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = pairedRuntime(storageManager, "enforce");
+      try {
+        const tx = runtime.edit();
+        const unresolvedPolicy = {
+          type: CFC_ATOM_TYPE.Policy,
+          policyRefKind: "module",
+          moduleIdentity: "sha256:module",
+          symbol: "default",
+          policyDigest: "sha256:policy",
+          subject: space,
+        } as const;
+        const decision = decideSinkFit(
+          tx,
+          {
+            confidentiality: [unresolvedPolicy],
+            integrity: [],
+            modulePolicySpaces: new Map(),
+            sources: [],
+          },
+          [],
+          "answer",
+          [],
+          "observing",
+        );
+        expect(decision.status).toBe("resolution-unavailable");
+        expect(decision.failure?.resolutionFailures).toEqual([{
+          reference: unresolvedPolicy,
+          reason: "missing-manifest",
+        }]);
+        tx.abort();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
 
     for (const mode of ["off", "observe", "enforce"] as const) {
       it(`${mode}: the host and committed paths decide on the same label`, async () => {

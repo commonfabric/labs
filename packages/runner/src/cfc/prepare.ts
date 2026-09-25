@@ -161,6 +161,7 @@ import {
   decideSinkFit,
   evaluateGatedConfidentiality,
   modulePolicyArtifactKey,
+  noteModulePolicyResolutionFailures,
 } from "./sink-decision.ts";
 import {
   type CfcSchemaMergeIssue,
@@ -7076,27 +7077,6 @@ export const decideSinkRelease = (
     ceiling,
     "observing",
   );
-
-const noteModulePolicyResolutionFailures = (
-  tx: IExtendedStorageTransaction,
-  site: string,
-  failures: readonly {
-    readonly reference: unknown;
-    readonly reason: string;
-  }[],
-): void => {
-  for (const failure of failures) {
-    const reference = isObjectOrArray(failure.reference)
-      ? failure.reference
-      : undefined;
-    const digest = typeof reference?.policyDigest === "string"
-      ? ` digest ${reference.policyDigest}`
-      : "";
-    tx.noteCfcDiagnostic(
-      `policy-evaluation(observe): module policy ${failure.reason}${digest} at ${site}`,
-    );
-  }
-};
 
 // §5.2.1 / §7.3-7.5 egress gate: a recorded sink-request input whose sink
 // declares a confidentiality ceiling must not carry confidentiality outside it.

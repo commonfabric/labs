@@ -148,6 +148,25 @@ const sinkCeilingRefusal = (
   };
 };
 
+/** Records module-policy failures for an observe-mode evaluation site. */
+export const noteModulePolicyResolutionFailures = (
+  tx: IExtendedStorageTransaction,
+  site: string,
+  failures: readonly ModulePolicyResolutionFailure[],
+): void => {
+  for (const failure of failures) {
+    const reference = isObjectOrArray(failure.reference)
+      ? failure.reference
+      : undefined;
+    const digest = typeof reference?.policyDigest === "string"
+      ? ` digest ${reference.policyDigest}`
+      : "";
+    tx.noteCfcDiagnostic(
+      `policy-evaluation(observe): module policy ${failure.reason}${digest} at ${site}`,
+    );
+  }
+};
+
 /** Records observe-mode differences without changing the decision label. */
 const noteObserveDiagnostics = (
   tx: IExtendedStorageTransaction,
@@ -156,17 +175,11 @@ const noteObserveDiagnostics = (
   rewrittenOffending: readonly CfcConfClause[] | undefined,
   outcome: ReturnType<typeof evaluateGatedConfidentiality>,
 ): void => {
-  for (const failure of outcome.resolutionFailures) {
-    const reference = isObjectOrArray(failure.reference)
-      ? failure.reference
-      : undefined;
-    const digest = typeof reference?.policyDigest === "string"
-      ? ` digest ${reference.policyDigest}`
-      : "";
-    tx.noteCfcDiagnostic(
-      `policy-evaluation(observe): module policy ${failure.reason}${digest} at sink-request ${sink}`,
-    );
-  }
+  noteModulePolicyResolutionFailures(
+    tx,
+    `sink-request ${sink}`,
+    outcome.resolutionFailures,
+  );
   if (outcome.exhausted) {
     tx.noteCfcDiagnostic(
       `policy-evaluation(observe): fuel exhausted for sink-request ${sink}`,
