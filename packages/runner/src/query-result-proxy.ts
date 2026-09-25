@@ -483,6 +483,9 @@ function createViewProxy<T>(
   // sites and counting, so they are not listed here to go stale;
   // `grep -rn 'instanceof FabricInstance' packages/runner/src` finds them.
   //
+  // `isFabricInstanceOrView()` is the interim test for a client that has an
+  // answer for an instance and must not lose one this way.
+  //
   // `test/llm-dialog-special-objects.test.ts` pins that end to end, so closing
   // this turns that test red rather than letting it pass silently.
   //
@@ -519,7 +522,13 @@ function createViewProxy<T>(
   // built over, and `currentValue()` below refuses once the document holds
   // another. The cache key carries the kind, so a document that changes kind
   // is served a fresh view on its next read.
-  const proxyTarget = Object.isFrozen(value)
+  //
+  // An instance takes the stub whether or not it is frozen. Its view reports
+  // no own keys (the `ownKeys` trap below), and a target carrying the
+  // instance's own non-configurable freeze shield would make that report
+  // break the invariant that a proxy list every non-configurable key of its
+  // target. Storage freezes what it holds, so this does not rest on it.
+  const proxyTarget = Object.isFrozen(value) || value instanceof FabricInstance
     ? (Array.isArray(value) ? new Array(value.length) : {})
     : value;
   const boundKind = viewKindOf(value)!;
@@ -867,6 +876,17 @@ function createViewProxy<T>(
         // array's own order -- indices first, then `length`, then any name --
         // which `isArrayWithOnlyIndexProperties()` reads. A value that is not
         // an array never reaches this line for an array-bound view.
+        //
+        // An instance has no own properties by contract. Its one own key, the
+        // freeze shield, is machinery that stays out of every structural
+        // view, and a view could not report it anyway: it is non-configurable
+        // on the instance and absent from the stub target, so the proxy
+        // invariant would refuse its descriptor, and a spread or a copy of the
+        // view would throw before it began.
+        if (boundKind === "FabricInstance") {
+          currentValue();
+          return [];
+        }
         const keys = Reflect.ownKeys(currentValue() as object);
         if (boundKind === "array") {
           // Enumerating an array's keys (`Object.keys`/`values`/`entries`, a spread,
@@ -899,6 +919,12 @@ function createViewProxy<T>(
             writable: true,
             value: (currentValue(true) as unknown[]).length,
           };
+        }
+
+        // An instance has no own properties to describe; see `ownKeys` below.
+        if (boundKind === "FabricInstance") {
+          verifyKind();
+          return undefined;
         }
 
         // For properties that exist on the original target (e.g. array `length`),
@@ -1105,6 +1131,29 @@ export function instanceReadThroughView(
   return typeof value === "object" && value !== null
     ? instanceReaders.get(value)?.()
     : undefined;
+}
+
+/**
+ * Whether `value` is a `FabricInstance`, held directly or seen through a cell
+ * read.
+ *
+ * A view over an instance has `Object.prototype` for its prototype (the marker
+ * above the proxy construction says why), so `instanceof FabricInstance` is
+ * `false` for it and a plain-object test takes it for a record with no keys. A
+ * walk that has an answer for an instance and would otherwise treat the view
+ * as a record -- copy it, merge into it -- asks this instead. Like
+ * {@link instanceReadThroughView}, it asks the view nothing and reads nothing:
+ * the proxy records which views it built over an instance. A view is bound to
+ * the kind it was built over (`ViewDriftError` otherwise), so the answer is
+ * fixed for the view's life.
+ *
+ * TODO(danfuzz): once a view over a `FabricInstance` is perceived as one (the
+ * marker above the proxy construction), this collapses to `instanceof`.
+ */
+export function isFabricInstanceOrView(value: unknown): boolean {
+  if (value instanceof FabricInstance) return true;
+  return typeof value === "object" && value !== null &&
+    instanceReaders.has(value);
 }
 
 /**
