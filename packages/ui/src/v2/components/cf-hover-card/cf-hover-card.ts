@@ -1,5 +1,7 @@
 import { css, html } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
+import { placeCard } from "./placement.ts";
+import { HoverPresence } from "./presence.ts";
 
 // How far the card sits from its anchor, and from the edge of the window.
 const CARD_GAP_PX = 6;
@@ -57,29 +59,28 @@ export class CFHoverCard extends BaseElement {
     `,
   ];
 
-  #pointerInside = false;
-  #focusInside = false;
+  #presence = new HoverPresence();
   #resizeObserver: ResizeObserver | undefined;
 
   #onPointerEnter = () => {
-    this.#pointerInside = true;
+    this.#presence.enter("pointer");
     this.#show();
   };
 
   #onPointerLeave = () => {
-    this.#pointerInside = false;
+    this.#presence.leave("pointer");
     this.#hideUnlessInside();
   };
 
   #onFocusIn = () => {
-    this.#focusInside = true;
+    this.#presence.enter("focus");
     this.#show();
   };
 
   #onFocusOut = (event: FocusEvent) => {
     const next = event.relatedTarget;
     if (next instanceof Node && this.contains(next)) return;
-    this.#focusInside = false;
+    this.#presence.leave("focus");
     this.#hideUnlessInside();
   };
 
@@ -108,8 +109,7 @@ export class CFHoverCard extends BaseElement {
     this.removeEventListener("focusout", this.#onFocusOut);
     // A focused element that leaves the document gets no `focusout`, so what
     // was inside is forgotten here rather than carried into a reconnection.
-    this.#pointerInside = false;
-    this.#focusInside = false;
+    this.#presence.reset();
     this.#hide();
     super.disconnectedCallback();
   }
@@ -128,7 +128,7 @@ export class CFHoverCard extends BaseElement {
   }
 
   #hideUnlessInside() {
-    if (!this.#pointerInside && !this.#focusInside) this.#hide();
+    if (!this.#presence.inside) this.#hide();
   }
 
   #show() {
@@ -136,7 +136,7 @@ export class CFHoverCard extends BaseElement {
     if (!card) {
       // Not rendered yet: show once it is, if what asked is still inside.
       void this.updateComplete.then(() => {
-        if (this.isConnected && (this.#pointerInside || this.#focusInside)) {
+        if (this.isConnected && this.#presence.inside) {
           this.#show();
         }
       });
@@ -166,18 +166,12 @@ export class CFHoverCard extends BaseElement {
   }
 
   #place(card: HTMLElement) {
-    const anchor = this.getBoundingClientRect();
-    const width = card.offsetWidth;
-    const height = card.offsetHeight;
-    const above = anchor.top - CARD_GAP_PX - height;
-    // Below, when there is no room above, but no lower than keeps the card in
-    // the window; a card taller than the window keeps its top in view.
-    const maxTop = globalThis.innerHeight - CARD_GAP_PX - height;
-    const top = above >= CARD_GAP_PX
-      ? above
-      : Math.max(CARD_GAP_PX, Math.min(anchor.bottom + CARD_GAP_PX, maxTop));
-    const maxLeft = globalThis.innerWidth - CARD_GAP_PX - width;
-    const left = Math.max(CARD_GAP_PX, Math.min(anchor.left, maxLeft));
+    const { top, left } = placeCard(
+      this.getBoundingClientRect(),
+      { width: card.offsetWidth, height: card.offsetHeight },
+      { width: globalThis.innerWidth, height: globalThis.innerHeight },
+      CARD_GAP_PX,
+    );
     card.style.top = `${top}px`;
     card.style.left = `${left}px`;
   }
