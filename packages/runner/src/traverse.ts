@@ -6248,16 +6248,28 @@ function appendPartsToPath(path: ValuePath, parts: string[]): ValuePath {
   return [...path, ...parts] as ValuePath;
 }
 
+/**
+ * How a branch list combines its options: all of them together, as an `allOf`
+ * does, or any one of them, as an `anyOf` or a `oneOf` does.
+ */
+type BranchCombinator = "allOf" | "anyOf";
+
 /** One reading of a schema's validity for a value type by `schemaTypeValidity()`. */
 interface TypeReading {
   /** The value type the reading asks about. */
   readonly valueType: JSONSchemaTypes;
 
   /**
-   * What the reading keeps about branch lists, from the first one it reads.
-   * A schema with no `allOf`, `anyOf` or `oneOf` is read without it.
+   * What the reading keeps about the branch lists it reads as an `allOf`,
+   * from the first it reads. One array of options can be both an `allOf` and
+   * an `anyOf`, and comes to something different as each, so each way keeps
+   * its own. A schema with no `allOf`, `anyOf` or `oneOf` is read without
+   * either.
    */
-  lists?: BranchListReading;
+  allOf?: BranchListReading;
+
+  /** Likewise, for the lists it reads as an `anyOf` or a `oneOf`. */
+  anyOf?: BranchListReading;
 }
 
 /** What a `TypeReading` keeps about the branch lists it reads. */
@@ -6314,22 +6326,37 @@ function schemaTypeValidity(
   const reading: TypeReading = { valueType };
   for (;;) {
     const validity = typeValidityWithin(schema, reading);
-    const lists = reading.lists;
-    if (lists === undefined) return validity;
-    const settled = lists.reachedAgain.every(([options, definitions]) =>
+    if (listsSettled(reading.allOf) && listsSettled(reading.anyOf)) {
+      return validity;
+    }
+    startNextRound(reading.allOf);
+    startNextRound(reading.anyOf);
+  }
+}
+
+/**
+ * Whether every branch list `lists` reached again came to what stood in for
+ * it, as a reading that read no list this way trivially has.
+ */
+function listsSettled(lists: BranchListReading | undefined): boolean {
+  return lists === undefined ||
+    lists.reachedAgain.every(([options, definitions]) =>
       readingEntry(lists.validities, options, definitions) ===
         (readingEntry(lists.standIns, options, definitions) ??
           TypeValidity.False)
     );
-    if (settled) return validity;
-    for (const [options, byDefinitions] of lists.validities) {
-      for (const [definitions, listValidity] of byDefinitions) {
-        setReadingEntry(lists.standIns, options, definitions, listValidity);
-      }
+}
+
+/** Lets what each list in `lists` came to stand in for it in the next round. */
+function startNextRound(lists: BranchListReading | undefined): void {
+  if (lists === undefined) return;
+  for (const [options, byDefinitions] of lists.validities) {
+    for (const [definitions, listValidity] of byDefinitions) {
+      setReadingEntry(lists.standIns, options, definitions, listValidity);
     }
-    lists.validities.clear();
-    lists.reachedAgain.length = 0;
   }
+  lists.validities.clear();
+  lists.reachedAgain.length = 0;
 }
 
 /** What `schema` comes to for the reading's value type, within `reading`. */
@@ -6431,19 +6458,20 @@ function typeValidityWithin(
  */
 function branchListValidity(
   options: readonly JSONSchema[],
-  combinator: "allOf" | "anyOf",
+  combinator: BranchCombinator,
   definitions: JSONSchemaObj["$defs"],
   reading: TypeReading,
 ): TypeValidity {
-  if (reading.lists === undefined) {
-    reading.lists = {
+  let lists = reading[combinator];
+  if (lists === undefined) {
+    lists = {
       open: new Map(),
       validities: new Map(),
       standIns: new Map(),
       reachedAgain: [],
     };
+    reading[combinator] = lists;
   }
-  const lists = reading.lists;
   const known = readingEntry(lists.validities, options, definitions);
   if (known !== undefined) return known;
   if (readingEntry(lists.open, options, definitions)) {

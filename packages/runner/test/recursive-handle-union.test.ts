@@ -601,6 +601,21 @@ describe("recursive handle union", () => {
       expect(schemaAcceptsType(schema, "string")).toBe(false);
     });
 
+    it("returns `true` for a string through an `anyOf` over the options of an `allOf` beside it", () => {
+      // One array serves both combinators. As an `allOf` a string meets
+      // `number` and is ruled out; as an `anyOf` it meets `string` and
+      // matches.
+
+      const options = [{ type: "string" }, { type: "number" }];
+
+      expect(
+        schemaAcceptsType(
+          { anyOf: [{ allOf: options }, { anyOf: options }] } as JSONSchema,
+          "string",
+        ),
+      ).toBe(true);
+    });
+
     it("resolves at most twice the references for twice the definitions, each naming the next two", () => {
       // Every definition but the first two is reached from the two before
       // it, so reading each path to it anew resolves exponentially often; a
