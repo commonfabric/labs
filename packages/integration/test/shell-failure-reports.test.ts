@@ -112,8 +112,9 @@ const REFUSING_RUNTIME_DOCUMENT = `<!DOCTYPE html>
 </script>
 </body></html>`;
 
-// A booted shell whose runtime's worker has logged two kinds of trouble, and a
-// message at `debug` that is not trouble. The counts are shaped as the worker
+// A booted shell whose runtime's worker has logged three kinds of warning or
+// error, two of them with the same number of errors, and one message at `debug`
+// only, which is neither. The counts are shaped as the worker
 // reports them: by logger, then by message, with `total` beside each level.
 const LOGGING_RUNTIME_DOCUMENT = `<!DOCTYPE html>
 <html><head><title>Common Fabric</title></head>
@@ -124,7 +125,7 @@ const LOGGING_RUNTIME_DOCUMENT = `<!DOCTYPE html>
       getPendingRequests: () => [],
       getLoggerCounts: () => Promise.resolve({
         counts: {
-          total: 7,
+          total: 13,
           scheduler: {
             total: 2,
             "schedule-error": { debug: 0, info: 0, warn: 0, error: 2 },
@@ -133,6 +134,10 @@ const LOGGING_RUNTIME_DOCUMENT = `<!DOCTYPE html>
             total: 5,
             "sync-load-failure": { debug: 0, info: 0, warn: 1, error: 3 },
             "quiet": { debug: 1, info: 0, warn: 0, error: 0 },
+          },
+          runner: {
+            total: 6,
+            "action-failed": { debug: 0, info: 0, warn: 4, error: 2 },
           },
         },
       }),
@@ -395,7 +400,7 @@ describe("shell-failure-reports", () => {
       expect(probe.pendingRequestsError).toContain("the connection is gone");
     });
 
-    it("returns the worker's warnings and errors, most errors first", async () => {
+    it("returns the worker's warnings and errors, most errors then most warnings first", async () => {
       await load("/logging-runtime");
 
       const probe = await readShellPageProbe(page);
@@ -406,12 +411,13 @@ describe("shell-failure-reports", () => {
           warn: 1,
           error: 3,
         },
+        { logger: "runner", message: "action-failed", warn: 4, error: 2 },
         { logger: "scheduler", message: "schedule-error", warn: 0, error: 2 },
       ]);
       expect(probe.workerProblemsError).toBeUndefined();
     });
 
-    it("returns an empty list for a worker that has logged no trouble", async () => {
+    it("returns an empty list for a worker that has logged no warning or error", async () => {
       await load("/idle-runtime");
 
       const probe = await readShellPageProbe(page);
@@ -429,10 +435,10 @@ describe("shell-failure-reports", () => {
     it("returns the rest of the probe when the worker never answers", async () => {
       await load("/wedged-worker");
 
-      const probe = await readShellPageProbe(page);
+      const probe = await readShellPageProbe(page, { workerBudgetMs: 100 });
       expect(probe.workerProblems).toBeUndefined();
       expect(probe.workerProblemsError).toContain(
-        "the worker did not answer within 2000ms",
+        "the worker did not answer within 100ms",
       );
       expect(probe.pendingRequests).toEqual([
         { msgId: 3, type: RequestType.GetLoggerCounts, ageMs: 1200 },
@@ -773,9 +779,11 @@ describe("shell-failure-reports", () => {
     });
 
     describe("worker warnings and errors", () => {
-      // Built the same way as the pending-request cases, for the same reason.
+      // These render a probe built here, as the pending-request cases do, and
+      // assert a whole line for the same reason: the lines they choose between
+      // differ by a few words.
 
-      it("names each kind of worker trouble, and its counts", () => {
+      it("names each warning or error the worker logged, and its counts", () => {
         const lines = describedLines({
           workerProblems: [
             {
@@ -803,7 +811,7 @@ describe("shell-failure-reports", () => {
         );
       });
 
-      it("lists twenty kinds of worker trouble and counts the rest", () => {
+      it("lists twenty kinds of warning and error and counts the rest", () => {
         const lines = describedLines({
           workerProblems: Array.from({ length: 23 }, (_, index) => ({
             logger: "runner",
@@ -817,7 +825,19 @@ describe("shell-failure-reports", () => {
         expect(lines).toContain("    and 3 more");
       });
 
-      it("reports that a worker with no trouble logged has none", () => {
+      it("names a single kind of warning or error without a plural", () => {
+        expect(
+          describedLines({
+            workerProblems: [
+              { logger: "runner", message: "action-failed", warn: 1, error: 0 },
+            ],
+          }),
+        ).toContain(
+          "  worker warnings and errors (1 kind, most errors first):",
+        );
+      });
+
+      it("reports that a worker with no warning or error logged has none", () => {
         expect(describedLines({ workerProblems: [] })).toContain(
           "  worker warnings and errors: none",
         );
@@ -839,11 +859,11 @@ describe("shell-failure-reports", () => {
         expect(
           describedLines({
             workerProblemsError:
-              "Error: the worker did not answer within 2000ms",
+              "Error: the worker did not answer within 30000ms",
           }),
         ).toContain(
           "  worker warnings and errors: reading them failed: " +
-            "Error: the worker did not answer within 2000ms",
+            "Error: the worker did not answer within 30000ms",
         );
       });
     });

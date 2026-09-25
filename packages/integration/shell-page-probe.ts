@@ -10,11 +10,21 @@ const TEXT_LIMIT = 500;
 // How many of the retained console messages a probe carries back.
 const CONSOLE_TAIL_LIMIT = 40;
 
-// How long a probe waits for the worker to report its logged warnings and
-// errors. Reading them is a round trip to the worker, and a worker that has
-// stopped answering is one of the states a report is written for, so this
-// bounds that one read and not the rest of the probe, which needs no worker.
-const WORKER_LOG_READ_LIMIT_MS = 2_000;
+/**
+ * How long a probe gives the worker to report its logged warnings and errors,
+ * unless a caller names its own budget.
+ *
+ * Reading them is a round trip to the worker, and a request carries no
+ * deadline of its own, so a worker that has stopped answering would hold the
+ * report open for as long as the page lived. The size is the one the browser
+ * load summary's `WORKER_STATS_BUDGET_MS` takes for the same read, in
+ * `packages/patterns/integration/cfc-browser-helpers.ts`, for the same reason:
+ * the counts cost the worker almost nothing, so a slow answer means a busy
+ * worker, and the runs a report is most needed for are loaded ones. A budget
+ * of seconds would fire on those; this one is reached only by a worker that
+ * has stopped.
+ */
+const WORKER_LOG_BUDGET_MS = 30_000;
 
 // How many kinds of worker warning and error a report lists.
 const WORKER_PROBLEM_LIMIT = 20;
@@ -120,26 +130,42 @@ export interface ShellPageProbe {
   consoleTail: string[];
 }
 
+/** What a caller of {@link readShellPageProbe} may set. */
+export interface ShellPageProbeOptions {
+  /**
+   * How long the worker is given to report its logged warnings and errors.
+   * A case that wants the unanswered worker exercised asks for a short one.
+   */
+  workerBudgetMs?: number;
+}
+
 /** Read {@link ShellPageProbe} from the document currently in `page`. */
-export async function readShellPageProbe(page: Page): Promise<ShellPageProbe> {
-  return await page.evaluate(async (
-    textLimit: number,
-    tailLimit: number,
-    workerLogLimitMs: number,
-  ) => {
-    type LogCountsByMessage = Record<
-      string,
-      number | { warn?: number; error?: number }
-    >;
+export async function readShellPageProbe(
+  page: Page,
+  options: ShellPageProbeOptions = {},
+): Promise<ShellPageProbe> {
+  const probe = await readPageFields(page);
+  if (!probe.runtime) return probe;
+  return {
+    ...probe,
+    ...await readWorkerProblems(
+      page,
+      options.workerBudgetMs ?? WORKER_LOG_BUDGET_MS,
+    ),
+  };
+}
+
+/**
+ * Helper for {@link readShellPageProbe}, which reads everything but the
+ * worker's logs. It needs no worker, so it answers whenever the page's main
+ * thread does.
+ */
+async function readPageFields(page: Page): Promise<ShellPageProbe> {
+  return await page.evaluate((textLimit: number, tailLimit: number) => {
     const scope = globalThis as typeof globalThis & {
       app?: { serialize?: () => { view?: unknown; identityDid?: string } };
       commonfabric?: {
-        rt?: {
-          getPendingRequests?: () => PendingRequestDiagnostic[];
-          getLoggerCounts?: () => Promise<{
-            counts: Record<string, number | LogCountsByMessage>;
-          }>;
-        };
+        rt?: { getPendingRequests?: () => PendingRequestDiagnostic[] };
       };
       __cfConsoleTail?: Array<{ t: number; method: string; text: string }>;
     };
@@ -176,49 +202,6 @@ export async function readShellPageProbe(page: Page): Promise<ShellPageProbe> {
       }
     }
 
-    let workerProblems: WorkerLogProblem[] | undefined;
-    let workerProblemsError: string | undefined;
-    if (rt?.getLoggerCounts) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const unanswered = new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () =>
-              reject(
-                new Error(
-                  `the worker did not answer within ${workerLogLimitMs}ms`,
-                ),
-              ),
-            workerLogLimitMs,
-          );
-        });
-        const { counts } = await Promise.race([
-          rt.getLoggerCounts(),
-          unanswered,
-        ]);
-        // `total` is reserved at both levels of the counts, as the sum of what
-        // sits beside it.
-        workerProblems = [];
-        for (const [logger, byMessage] of Object.entries(counts)) {
-          if (logger === "total" || typeof byMessage !== "object") continue;
-          for (const [message, levels] of Object.entries(byMessage)) {
-            if (message === "total" || typeof levels !== "object") continue;
-            const warn = levels.warn ?? 0;
-            const error = levels.error ?? 0;
-            if (warn > 0 || error > 0) {
-              workerProblems.push({ logger, message, warn, error });
-            }
-          }
-        }
-        workerProblems.sort((a, b) => b.error - a.error || b.warn - a.warn);
-      } catch (error) {
-        workerProblems = undefined;
-        workerProblemsError = String(error);
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
-      }
-    }
-
     const body = document.body;
     const text = (body?.innerText ?? body?.textContent ?? "").trim()
       .slice(0, textLimit);
@@ -240,14 +223,84 @@ export async function readShellPageProbe(page: Page): Promise<ShellPageProbe> {
       runtime: rt !== undefined,
       pendingRequests,
       pendingRequestsError,
-      workerProblems,
-      workerProblemsError,
       text,
       consoleTail,
     };
-  }, {
-    args: [TEXT_LIMIT, CONSOLE_TAIL_LIMIT, WORKER_LOG_READ_LIMIT_MS],
-  });
+  }, { args: [TEXT_LIMIT, CONSOLE_TAIL_LIMIT] });
+}
+
+/**
+ * Helper for {@link readShellPageProbe}, which asks the page's runtime for the
+ * messages its worker has logged at `warn` or `error`. It never rejects: a
+ * worker that does not answer within `budgetMs`, a runtime that refuses, and a
+ * page that cannot be asked all come back as the reason.
+ */
+async function readWorkerProblems(
+  page: Page,
+  budgetMs: number,
+): Promise<Pick<ShellPageProbe, "workerProblems" | "workerProblemsError">> {
+  try {
+    return await page.evaluate(async (budgetMs: number) => {
+      type LogCountsByMessage = Record<
+        string,
+        number | { warn?: number; error?: number }
+      >;
+      const rt = (globalThis as typeof globalThis & {
+        commonfabric?: {
+          rt?: {
+            getLoggerCounts?: () => Promise<{
+              counts: Record<string, number | LogCountsByMessage>;
+            }>;
+          };
+        };
+      }).commonfabric?.rt;
+      let workerProblems: WorkerLogProblem[] | undefined;
+      let workerProblemsError: string | undefined;
+      if (rt?.getLoggerCounts) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const unanswered = new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    `the worker did not answer within ${budgetMs}ms`,
+                  ),
+                ),
+              budgetMs,
+            );
+          });
+          const { counts } = await Promise.race([
+            rt.getLoggerCounts(),
+            unanswered,
+          ]);
+          // `total` is reserved at both levels of the counts, as the sum of
+          // what sits beside it.
+          workerProblems = [];
+          for (const [logger, byMessage] of Object.entries(counts)) {
+            if (logger === "total" || typeof byMessage !== "object") continue;
+            for (const [message, levels] of Object.entries(byMessage)) {
+              if (message === "total" || typeof levels !== "object") continue;
+              const warn = levels.warn ?? 0;
+              const error = levels.error ?? 0;
+              if (warn > 0 || error > 0) {
+                workerProblems.push({ logger, message, warn, error });
+              }
+            }
+          }
+          workerProblems.sort((a, b) => b.error - a.error || b.warn - a.warn);
+        } catch (error) {
+          workerProblems = undefined;
+          workerProblemsError = String(error);
+        } finally {
+          if (timer !== undefined) clearTimeout(timer);
+        }
+      }
+      return { workerProblems, workerProblemsError };
+    }, { args: [budgetMs] });
+  } catch (error) {
+    return { workerProblemsError: describeThrown(error) };
+  }
 }
 
 /**
@@ -393,9 +446,13 @@ export async function readAndDescribeShellPage(page: Page): Promise<string> {
         PROBE_READ_LIMIT_MS,
       );
     });
-    return describeShellPage(
-      await Promise.race([readShellPageProbe(page), unanswered]),
-    );
+    const probe = await Promise.race([readPageFields(page), unanswered]);
+    // The worker read carries its own budget, which is longer than this bound
+    // and which the page's main thread, having just answered, enforces.
+    const worker = probe.runtime
+      ? await readWorkerProblems(page, WORKER_LOG_BUDGET_MS)
+      : {};
+    return describeShellPage({ ...probe, ...worker });
   } catch (error) {
     return `  the page could not be probed: ${describeThrown(error)}`;
   } finally {
@@ -426,8 +483,8 @@ export async function assertShellDocument(
   page: Page,
   requestedUrl: string,
 ): Promise<void> {
+  if (await isShellDocument(page)) return;
   const probe = await readShellPageProbe(page);
-  if (probe.rootView) return;
   throw new Error(
     `Navigated to ${requestedUrl}, but the document that loaded is not the ` +
       `shell: it has no x-root-view element.\n${describeShellPage(probe)}`,

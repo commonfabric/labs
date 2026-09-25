@@ -75,19 +75,20 @@ sized so only a multi-minute jump reaches it — except the stuck detector,
 which a competing ceiling keeps lower; its section explains. When an event
 boundary does exist, use it, and neither kind of exception arises.
 
-One bound sits between the two kinds, and is written down here because its
-cost is easy to understate. The browser load summary in
-`packages/patterns/integration/cfc-browser-helpers.ts` gives the worker a
-budget to answer the request for its statistics. Reading them is itself a
-request, and a request carries no deadline, so a worker that has stopped
-answering would hold the collection open for as long as the page lived. An
-early fire fails no test and corrupts nothing, but it does drop a real
-result: a worker that was slow rather than stopped loses the statistics it
-was about to return, and the summary reports the worker half as missing. That
-is the price of a collection that always returns, paid because the summary
-exists to explain a run already in trouble. The budget is a caller's option,
-so a case that wants the backstop exercised asks for a short one rather than
-waiting out the default.
+One bound sits between the two kinds, and is written down here because its cost
+is easy to understate. The browser load summary in
+`packages/patterns/integration/cfc-browser-helpers.ts` gives the worker a budget
+to answer the request for its statistics, and a failure report's page probe in
+`packages/integration/shell-page-probe.ts` gives the same read the same budget
+for the worker's logged warnings and errors. Reading them is itself a request,
+and a request carries no deadline, so a worker that has stopped answering would
+hold the collection open for as long as the page lived. An early fire fails no
+test and corrupts nothing, but it does drop a real result: a worker that was
+slow rather than stopped loses the statistics it was about to return, and the
+summary reports the worker half as missing. That is the price of a collection
+that always returns, paid because the summary exists to explain a run already in
+trouble. The budget is a caller's option in both, so a case that wants the
+backstop exercised asks for a short one rather than waiting out the default.
 
 One bound a browser test runs under is not the repository's to sort, and
 belongs in an audit of these for that reason: astral puts its own deadline on
