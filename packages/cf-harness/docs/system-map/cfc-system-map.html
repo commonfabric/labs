@@ -918,8 +918,8 @@
         y: 700,
         w: 200,
         h: 80,
-        t: "Workspace mount",
-        s: "read-only or writable",
+        t: "Sandbox mounts",
+        s: "workspace RW · Fabric RO",
       },
       {
         id: "localskills",
@@ -1912,7 +1912,7 @@
         kind: "Sandbox",
         band: "agent",
         body:
-          `<p>Workspace, fabric and explicit host mounts with path containment. Ordinary files do not carry fabric labels because a labeled value was written into them; the write floor and the direct-command authority ladder are what stand between the model and a writable path. The run's own artifact directory is inside the workspace and not reserved (CT-2117).</p>`,
+          `<p>Workspace, read-only Fabric and explicit host mounts with path containment. Workspace and explicitly writable host files do not carry Fabric labels because a labeled value was written into them; the write floor and the direct-command authority ladder are what stand between the model and those writable paths. A harness-provisioned Fabric projection is bound read-only at <code>/fabric</code> for browsing and context, independent of the Fabric-session runtime and FUSE daemon mode. The run's own artifact directory is inside the workspace and not reserved (CT-2117).</p>`,
         threats: ["t5", "t12"],
       },
       localskills: {

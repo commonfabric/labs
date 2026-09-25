@@ -244,7 +244,11 @@ export const harnessSessionAdditionalMounts = (
   config: HarnessSessionConfig,
 ): readonly DockerRunscAdditionalMountConfig[] => [
   ...(config.fabricMount !== undefined
-    ? [{ kind: "fabric-fuse" as const, hostPath: config.fabricMount }]
+    ? [{
+      kind: "fabric-fuse" as const,
+      hostPath: config.fabricMount,
+      readOnly: true as const,
+    }]
     : []),
   ...hostMountsToAdditionalMounts(config.hostMounts),
 ];

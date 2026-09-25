@@ -16,6 +16,7 @@ import type {
   ProcessRunRequest,
   ProcessRunResult,
 } from "../src/sandbox/process-runner.ts";
+import type { DockerRunscAdditionalMountConfig } from "../src/sandbox/types.ts";
 
 class FakeProcessRunner implements ProcessRunner {
   requests: ProcessRunRequest[] = [];
@@ -236,8 +237,26 @@ Deno.test("resolveDockerRunscSandboxConfig normalizes a Fabric FUSE mount", () =
     kind: "fabric-fuse",
     hostPath: "/tmp/cf-fuse",
     sandboxPath: "/fabric",
-    readOnly: false,
+    readOnly: true,
   }]);
+});
+
+Deno.test("resolveDockerRunscSandboxConfig rejects writable Fabric FUSE mounts", () => {
+  const writableFabricMount = {
+    kind: "fabric-fuse",
+    hostPath: "/tmp/cf-fuse",
+    readOnly: false,
+  } as unknown as DockerRunscAdditionalMountConfig;
+
+  assertThrows(
+    () =>
+      resolveDockerRunscSandboxConfig({
+        workspaceHostPath: "/host/project",
+        additionalMounts: [writableFabricMount],
+      }),
+    Error,
+    "fabric-fuse mounts must be read-only",
+  );
 });
 
 Deno.test("resolveDockerRunscSandboxConfig normalizes host bind mounts", () => {
@@ -642,7 +661,6 @@ Deno.test("DockerRunscSandboxRuntime mounts Fabric separately and accepts Fabric
       additionalMounts: [{
         kind: "fabric-fuse",
         hostPath: "/tmp/cf-fuse",
-        readOnly: true,
       }],
     }),
     runner,

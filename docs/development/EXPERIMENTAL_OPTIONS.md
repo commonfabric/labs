@@ -783,6 +783,11 @@ label-metadata protection at `enforce`, trigger-read gating on, the §10.1
 standard prompt-caveat policy as the deployment's `cfcPolicyRecords`, and
 public-only confidentiality ceilings on the network-fetch sinks.
 
+The bundle governs a runtime, not a filesystem bind. In cf-harness it applies
+to the independently configured Fabric-session runtime; it does not make the
+`/fabric` FUSE bind writable. Every harness-provisioned `fabric-fuse` bind is
+read-only regardless of the bundle or the runtime's resolved dials.
+
 The bundle's sink decisions are total over the sink registry
 (`MAX_ENFORCEMENT_SINK_GOVERNANCE`, from which `MAX_ENFORCEMENT_SINK_CEILINGS`
 derives): every sink `KNOWN_SINKS` names carries either a ceiling or an
@@ -873,9 +878,11 @@ the per-epic implementation notes).
 ### `cfcEnforcementMode`
 
 - **Toggle via.** `RuntimeOptions.cfcEnforcementMode`, pinned for first-party
-  processes in `coreOptions` (see the category note). The cf-harness and fuse
-  read `CF_CFC_MODE` as an override, and cf-harness's fabric session names its
-  own runtime's rung through `--fabric-cfc-enforcement-mode` /
+  processes in `coreOptions` (see the category note). The cf-harness process
+  and the FUSE daemon each read their own `CF_CFC_MODE` environment as an
+  override; setting it for one process neither configures the other nor makes
+  the harness's read-only `/fabric` bind writable. Cf-harness's fabric session
+  names its own runtime's rung through `--fabric-cfc-enforcement-mode` /
   `CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE`.
 - **Added by.** Bernhard Seefeld, in "Implement runner commit-boundary" (#3263,
   2026-04-14).
@@ -2079,9 +2086,10 @@ general configuration reference is
 [`docs/development/CONFIGURATION.md`](./CONFIGURATION.md). Recorded so a future
 sweep does not mistake them for missing experimental flags:
 
-- **`CF_CFC_MODE`** — sets `cfcEnforcementMode` in the cf-harness and the fuse
-  mount. It is the way to drive the enforcement dial in those tools, not a
-  separate flag.
+- **`CF_CFC_MODE`** — sets `cfcEnforcementMode` independently in whichever
+  cf-harness or FUSE process reads it. It is the way to drive the enforcement
+  dial in those tools, not a separate flag, and no value makes a
+  cf-harness-provisioned `fabric-fuse` bind writable.
 - **Shell debugging and preference toggles** (localStorage):
   `forwardWorkerConsole` (forward the web worker's console to the main thread),
   `telemetryEnabled` (browser OpenTelemetry), `showDebuggerView`,

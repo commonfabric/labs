@@ -339,6 +339,15 @@ workloads.
 
 ### CFC Annotations
 
+A local FUSE daemon mount can be writable according to its CFC mode and
+writeback configuration. Supplying that mount to `cf-harness --fabric-mount`
+does not expose the writable path: cf-harness binds the projection read-only at
+`/fabric` for browsing and context. The daemon and harness read their mode
+settings independently, and no mode admits writes through the harness bind. The
+protected label transport, syscall-level CFC enforcement, trusted write-label
+propagation, and atomic label-plus-value commit needed for writable harness
+admission are not currently available.
+
 `cf fuse mount --cfc-mode=<mode>` selects the FUSE-side CFC guardrail mode:
 `disabled`, `observe`, `enforce-explicit`, or `enforce-strict`. `CF_CFC_MODE`
 names the mode when the flag does not. A mount that names a mode nowhere runs at

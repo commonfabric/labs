@@ -561,7 +561,7 @@ Options:
   --cfc-invocation-context-dir <path> Host dir where the harness writes the CFC invocation-context sidecar (required for enforce-* modes)
   --sandbox-image <image>       Docker image for the runsc-cfc sandbox (default: ${DEFAULT_DOCKER_RUNSC_IMAGE})
   --sandbox-docker-runtime <n>  Docker runtime for the sandbox (default: runsc-cfc)
-  --fabric-mount <path>         Host path for a Fabric FUSE mount (mounted at /fabric in the sandbox)
+  --fabric-mount <path>         Host path for a Fabric FUSE mount (mounted read-only at /fabric in the sandbox)
   --loom-authoring-config <path> Absolute host-owned JSON file backing the Loom authoring tools
   --loom-retrieval-config <path> Absolute host-owned JSON file backing the read-only Loom tools
   --fabric-api-url <url>        Deployed Fabric API URL for the fabric-session tools (run_pattern, assign_slug, resolve_piece)
@@ -2212,7 +2212,7 @@ const appendHostMountInstructions = (
 ): void => {
   if (config.fabricMountPath !== undefined) {
     lines.push(
-      `- A Common Fabric space is mounted at ${config.fabricMountPath}. You may browse its contents for context.`,
+      `- A Common Fabric space is mounted read-only at ${config.fabricMountPath} for browsing and context.`,
     );
   }
   const hostMounts = config.hostMounts ?? [];

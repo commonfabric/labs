@@ -104,6 +104,12 @@ was read against.
 | `AH-CFC-18` | §18.2.4.2, §18.2.4.3, §8.13   | `faithful` | §18.2.4.2: handle substitution "is itself an information flow and MUST be enforced as a read". §18.2.4.3: substitution "MUST respect ceilings". The converse — that minting or returning a handle is not a release — is §18.2.4.2's transfer rule: "a caller may pass the token as an opaque capability, but doing so does not reveal the payload." |
 | `AH-CFC-19` | §18.2.4.2                     | `faithful` | §18.2.4.2 requires handles to be non-enumerable by sandboxed code and resolvable only by the trusted runtime, and labels their metadata separately.                                                                                     |
 
+### 9. Fabric mount admission
+
+| Clause      | CFC section       | Relation | Notes |
+| ----------- | ----------------- | -------- | ----- |
+| `AH-CFC-20` | §18.2.3.5, §18.2.3.6 | `fused` | §18.2.3.5 makes the protected label transport inaccessible to sandboxed code and requires label metadata to move monotonically with every mutation. §18.2.3.6 makes gVisor mediation the enforcement point and treats FUSE-side restrictions as guardrails. `AH-CFC-20` combines those obligations at harness admission: until a trusted path establishes the protected transport, syscall mediation, trusted write-label propagation, and atomic mutation, the projection is read-only. |
+
 ## Where the derivation carries weight
 
 Two clauses do work that a reader may not expect from their length, because

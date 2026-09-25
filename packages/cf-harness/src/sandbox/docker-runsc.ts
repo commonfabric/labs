@@ -196,6 +196,10 @@ const normalizeAdditionalMount = (
       readOnly: mount.readOnly ?? true,
     };
   }
+  const { readOnly }: { readOnly?: unknown } = mount;
+  if (readOnly === false) {
+    throw new Error("fabric-fuse mounts must be read-only");
+  }
   return {
     kind: "fabric-fuse",
     hostPath: mount.hostPath,
@@ -203,7 +207,7 @@ const normalizeAdditionalMount = (
       mount.sandboxPath ?? DEFAULT_FABRIC_MOUNT_PATH,
       "fabric-fuse sandboxPath",
     ),
-    readOnly: mount.readOnly ?? false,
+    readOnly: true,
   };
 };
 

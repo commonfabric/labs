@@ -23,7 +23,7 @@ export interface DockerRunscFabricAdditionalMountConfig {
   kind: "fabric-fuse";
   hostPath: string;
   sandboxPath?: string;
-  readOnly?: boolean;
+  readOnly?: true;
 }
 
 export interface DockerRunscHostBindAdditionalMountConfig {

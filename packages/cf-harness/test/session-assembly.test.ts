@@ -15,6 +15,7 @@ import { expect } from "@std/expect";
 import { resolveConsoleConfig } from "../console/server.ts";
 import { parseCfHarnessCliArgs } from "../src/cli.ts";
 import {
+  harnessSessionAdditionalMounts,
   harnessSessionChatPolicy,
   type HarnessSessionConfig,
   harnessSessionEngineOptions,
@@ -331,6 +332,22 @@ describe("session-assembly", () => {
       const allowed = await backing([]);
       expect(allowed).toContain("run_pattern");
       expect(allowed).toContain("assign_slug");
+    });
+  });
+
+  describe("harnessSessionAdditionalMounts()", () => {
+    it("returns a read-only Fabric mount", async () => {
+      const session = await cliSession([
+        "--fabric-mount",
+        "/tmp/cf-fuse",
+        "prompt text",
+      ]);
+
+      expect(harnessSessionAdditionalMounts(session)).toEqual([{
+        kind: "fabric-fuse",
+        hostPath: "/tmp/cf-fuse",
+        readOnly: true,
+      }]);
     });
   });
 });
