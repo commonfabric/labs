@@ -62,9 +62,8 @@ export type FabricExecValue = FabricValuePlus<FabricExecPlusType>;
  * What a {@link FabricExecValue} admits beyond a {@link FabricValue}: a
  * callable builder artifact, a {@link Pattern}, or a {@link Module}.
  *
- * A pattern and a module are each a member in their own right rather than a
- * plain object of execution values. Each declares the members it has, and
- * neither is a record that any string key may be added to.
+ * A pattern and a module are each an arm of their own. Each declares the
+ * members it has; neither is a record that any string key may be added to.
  */
 export type FabricExecPlusType = FabricExecFunction | Pattern | Module;
 
