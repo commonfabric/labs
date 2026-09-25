@@ -11,6 +11,7 @@ import type { CfcConfClause } from "../src/cfc/clause.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import {
   createTxCfcModulePolicyResolver,
+  decideSinkRelease,
   evaluateExchangeRules,
 } from "../src/cfc/mod.ts";
 import {
@@ -659,6 +660,21 @@ describe("PolicyOf label-time binding", () => {
       cfcSinkMaxConfidentiality: { fetchJson: [] },
     });
     try {
+      const hostDecision = sinkRuntime.edit();
+      expect(
+        sinkRuntime.getCell(
+          space,
+          "sink-policy-source",
+          schema,
+          hostDecision,
+        ).get(),
+      ).toBe("secret");
+      expect(target.withTx(hostDecision).key("secret").get()).toBe("rosebud");
+      expect(
+        decideSinkRelease(hostDecision, hostDecision, "fetchJson", []).status,
+      ).toBe("resolution-unavailable");
+      hostDecision.abort();
+
       const tx = sinkRuntime.edit();
       // The same policy artifact labels consumed values in both spaces. The
       // valid source-space copy must not mask the destination's missing local
@@ -716,6 +732,28 @@ describe("PolicyOf label-time binding", () => {
       cfcSinkMaxConfidentiality: { fetchJson: [] },
     });
     try {
+      const hostDecision = sinkRuntime.edit();
+      expect(
+        sinkRuntime.getCell(space, "sink-origin-a", schema, hostDecision).get(),
+      ).toBe("secret");
+      expect(
+        sinkRuntime.getCell(
+          destinationSpace,
+          "sink-origin-b",
+          schema,
+          hostDecision,
+        ).get(),
+      ).toBe("secret");
+      const host = decideSinkRelease(
+        hostDecision,
+        hostDecision,
+        "fetchJson",
+        [],
+      );
+      expect(host.status).toBe("refused");
+      expect(host.failure).toBeUndefined();
+      hostDecision.abort();
+
       const decision = sinkRuntime.edit();
       expect(
         sinkRuntime.getCell(space, "sink-origin-a", schema, decision).get(),

@@ -6,6 +6,7 @@ import {
 } from "../../runner/test/cfc-seed-envelope.ts";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
@@ -43,8 +44,10 @@ import {
 } from "../src/tools/run-pattern.ts";
 import type {
   CfcAddress,
+  CfcPolicyRecordInput,
   CfcRefusalDetail,
   CfcRefusalInput,
+  IFCLabel,
 } from "@commonfabric/runner/cfc";
 import type {
   SandboxCommandRequest,
@@ -237,6 +240,10 @@ const EXPENSE_SCHEMA = {
  */
 async function createFabric(
   cfcEnforcementMode: "observe" | "enforce-strict" = "enforce-strict",
+  policy?: {
+    evaluation: "off" | "observe" | "enforce";
+    records: readonly CfcPolicyRecordInput[];
+  },
 ) {
   const storage = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
@@ -244,6 +251,8 @@ async function createFabric(
     storageManager: storage,
     cfcEnforcementMode,
     cfcFlowLabels: "persist",
+    cfcPolicyEvaluation: policy?.evaluation,
+    cfcPolicyRecords: policy?.records,
   });
   const pieces = new PiecesController(
     await createSession({
@@ -300,6 +309,7 @@ async function seedLabelledSecret(
   runtime: Runtime,
   space: ReturnType<PiecesController["getSpace"]>,
   cause: string,
+  label: IFCLabel = { confidentiality: ["secret"] },
 ): Promise<string> {
   const seed = runtime.edit();
   const sourceCell = runtime.getCell(
@@ -317,7 +327,7 @@ async function seedLabelledSecret(
       schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
       labelMap: {
         version: 1,
-        entries: [{ path: ["secret"], label: { confidentiality: ["secret"] } }],
+        entries: [{ path: ["secret"], label }],
       },
     },
   });
@@ -1372,6 +1382,113 @@ describe("run-pattern", () => {
       expect(output.rawCauseMessage).toContain("of:ledger");
       expect(output.releaseDecision?.reasonCode).toBe("cfc_commit_refused");
       expect(output.releaseDecision?.refusal).toEqual(output.policyRefusal);
+    });
+
+    it("releases an answer admitted by exchange at the run_pattern sink", async () => {
+      const source = { type: "https://example.com/cfc/HarnessSource" };
+      const records: readonly CfcPolicyRecordInput[] = [{
+        id: "run-pattern-release-policy",
+        rules: [{
+          id: "admit-run-pattern-answer",
+          appliesTo: source,
+          preCondition: {
+            boundary: [{
+              type: CFC_ATOM_TYPE.BoundaryContext,
+              key: "sink",
+              value: "run_pattern",
+            }],
+          },
+          post: { dropClause: true },
+        }],
+      }];
+      const { runtime, pieces, space, dispose } = await createFabric(
+        "enforce-strict",
+        { evaluation: "enforce", records },
+      );
+      try {
+        const sourceRef = await seedLabelledSecret(
+          runtime,
+          space,
+          "exchange-admitted-release",
+          { confidentiality: [source] },
+        );
+        const result = await createStrictEngine(pieces).invokeBuiltinTool(
+          "run_pattern",
+          {
+            sourceText: OPTIONAL_SECRET_PATTERN_SOURCE,
+            inputs: { amount: 2, source: sourceRef },
+            resultSchema: TOTAL_RESULT_SCHEMA,
+          },
+        );
+        const output = result.output as RunPatternToolSuccessOutput;
+        expect(output.status).toBe("ok");
+        expect(output.valueError).toBeUndefined();
+        expect((output.value as { total: number }).total).toBe(8);
+        expect(output.policyRefusal).toBeUndefined();
+        expect(output.releaseDecision).toEqual({
+          reasonCode: "cfc_release_allowed",
+          boundary: "release",
+          sink: "run_pattern",
+          ceiling: [],
+        });
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("fails closed when exchange cannot reach a release decision", async () => {
+      const source = { type: "https://example.com/cfc/HarnessSource" };
+      const marker = { type: "https://example.com/cfc/HarnessMarker" };
+      const records: readonly CfcPolicyRecordInput[] = [{
+        id: "run-pattern-cycling-policy",
+        rules: [{
+          id: "add-marker",
+          appliesTo: source,
+          post: { addAlternatives: [marker] },
+        }, {
+          id: "drop-marker",
+          appliesTo: marker,
+          post: { dropClause: true },
+        }],
+      }];
+      const { runtime, pieces, space, dispose } = await createFabric(
+        "enforce-strict",
+        { evaluation: "enforce", records },
+      );
+      try {
+        const sourceRef = await seedLabelledSecret(
+          runtime,
+          space,
+          "exchange-exhausted-release",
+          { confidentiality: [source] },
+        );
+        const result = await createStrictEngine(pieces).invokeBuiltinTool(
+          "run_pattern",
+          {
+            sourceText: OPTIONAL_SECRET_PATTERN_SOURCE,
+            inputs: { amount: 2, source: sourceRef },
+            resultSchema: TOTAL_RESULT_SCHEMA,
+          },
+        );
+        const output = result.output as RunPatternToolSuccessOutput;
+        expect(output.status).toBe("ok");
+        expect(output.value).toBeUndefined();
+        expect(output.valueError).toContain(
+          "could not admit its values at the release boundary",
+        );
+        expect(output.policyRefusal).toBeUndefined();
+        expect(output.releaseDecision).toEqual({
+          reasonCode: "cfc_release_withheld",
+          boundary: "release",
+          sink: "run_pattern",
+          ceiling: [],
+        });
+        expect(output.pending).toBeUndefined();
+        expect(output.hasError).toBeUndefined();
+        expect(output.rawCauseMessage).toContain("exhausted fuel");
+      } finally {
+        await dispose();
+      }
     });
 
     it("returns an error naming the policy refusal when the answer carries a label the model may not read", async () => {

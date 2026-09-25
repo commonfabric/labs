@@ -1,14 +1,23 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
+
+import { type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
+
+import type { CfcConfClause } from "../src/cfc/clause.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import type { CfcPolicyRecordInput } from "../src/cfc/policy.ts";
+import { decideSinkRelease } from "../src/cfc/prepare.ts";
+import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
+import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
+import type { CfcTrustConfigInput } from "../src/cfc/trust.ts";
+import { Runtime } from "../src/runtime.ts";
+import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
-import { StorageManager } from "../src/storage/cache.deno.ts";
-import { Runtime } from "../src/runtime.ts";
-import { describeSinkReleaseRefusal } from "../src/cfc/prepare.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-sink-release");
 const space = signer.did();
@@ -23,7 +32,7 @@ const space = signer.did();
 // asks the same question of that transaction's consumed join.
 //
 
-describe("describeSinkReleaseRefusal", () => {
+describe("decideSinkRelease", () => {
   const newRuntime = (
     storageManager: ReturnType<typeof StorageManager.emulate>,
   ) =>
@@ -35,7 +44,12 @@ describe("describeSinkReleaseRefusal", () => {
     });
 
   /** A document carrying `atom` on its `secret` field. */
-  const seedLabeled = async (runtime: Runtime, cause: string, atom: string) => {
+  const seedLabeled = async (
+    runtime: Runtime,
+    cause: string,
+    atom: CfcConfClause,
+    integrity: readonly CfcAtom[] = [],
+  ) => {
     const seed = runtime.edit();
     const cell = runtime.getCell(
       space,
@@ -52,7 +66,10 @@ describe("describeSinkReleaseRefusal", () => {
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: {
           version: 1,
-          entries: [{ path: ["secret"], label: { confidentiality: [atom] } }],
+          entries: [{
+            path: ["secret"],
+            label: { confidentiality: [atom], integrity: [...integrity] },
+          }],
         },
       },
     });
@@ -75,7 +92,7 @@ describe("describeSinkReleaseRefusal", () => {
       ).withTx(tx);
       await cell.pull();
       JSON.stringify(cell.get());
-      expect(describeSinkReleaseRefusal(tx, tx, "answer", [])).toBeUndefined();
+      expect(decideSinkRelease(tx, tx, "answer", []).status).toBe("fit");
       tx.abort();
     } finally {
       await runtime.dispose();
@@ -93,7 +110,7 @@ describe("describeSinkReleaseRefusal", () => {
       await cell.pull();
       JSON.stringify(cell.get());
 
-      const refusal = describeSinkReleaseRefusal(tx, tx, "answer", []);
+      const refusal = decideSinkRelease(tx, tx, "answer", []).refusal;
       expect(refusal?.gate).toBe("sink-ceiling");
       expect(refusal?.sink).toBe("answer");
       expect(refusal?.offendingAtoms).toEqual(['"alice-secret"']);
@@ -119,7 +136,7 @@ describe("describeSinkReleaseRefusal", () => {
       const cell = runtime.getCellFromLink(link).withTx(tx);
       await cell.pull();
       cell.get();
-      expect(describeSinkReleaseRefusal(tx, tx, "answer", [])).toBeUndefined();
+      expect(decideSinkRelease(tx, tx, "answer", []).status).toBe("fit");
       tx.abort();
     } finally {
       await runtime.dispose();
@@ -152,12 +169,12 @@ describe("describeSinkReleaseRefusal", () => {
       await attributedCell.pull();
       JSON.stringify(attributedCell.get());
 
-      const refusal = describeSinkReleaseRefusal(
+      const refusal = decideSinkRelease(
         releasedTx,
         attributedTx,
         "answer",
         [],
-      );
+      ).refusal;
       expect(refusal?.offendingAtoms).toEqual(['"carol-secret"']);
       expect(refusal?.inputs).toEqual([]);
       expect(refusal?.attribution).toBe("none");
@@ -178,12 +195,255 @@ describe("describeSinkReleaseRefusal", () => {
       const cell = runtime.getCellFromLink(link).withTx(tx);
       await cell.pull();
       JSON.stringify(cell.get());
-      expect(describeSinkReleaseRefusal(tx, tx, "answer", ["erin-ok"]))
-        .toBeUndefined();
+      expect(decideSinkRelease(tx, tx, "answer", ["erin-ok"]).status)
+        .toBe("fit");
       tx.abort();
     } finally {
       await runtime.dispose();
       await storageManager.close();
     }
+  });
+
+  describe("exchange-aware sink decision", () => {
+    const source = { type: "https://example.com/cfc/Source" };
+    const admitted = { type: "https://example.com/cfc/Admitted" };
+    const evidence = { type: "https://example.com/cfc/Evidence" };
+    const releasePolicy: CfcPolicyRecordInput[] = [{
+      id: "sink-release-policy",
+      rules: [{
+        id: "admit-source",
+        appliesTo: source,
+        preCondition: { integrity: [evidence] },
+        post: { addAlternatives: [admitted] },
+      }],
+    }];
+
+    const pairedRuntime = (
+      storageManager: ReturnType<typeof StorageManager.emulate>,
+      mode: "off" | "observe" | "enforce",
+      policyRecords = releasePolicy,
+      trustConfig?: CfcTrustConfigInput,
+    ) =>
+      new Runtime({
+        apiUrl: new URL("https://example.com"),
+        storageManager,
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+        cfcPolicyEvaluation: mode,
+        cfcPolicyRecords: policyRecords,
+        cfcTrustConfig: trustConfig,
+        cfcSinkMaxConfidentiality: {
+          answer: [admitted],
+          agent: [admitted],
+        },
+      });
+
+    const readDecision = async (
+      runtime: Runtime,
+      link: Awaited<ReturnType<typeof seedLabeled>>,
+      sink = "answer",
+    ) => {
+      const tx = runtime.edit();
+      const cell = runtime.getCellFromLink(link).withTx(tx);
+      await cell.pull();
+      JSON.stringify(cell.get());
+      const decision = decideSinkRelease(tx, tx, sink, [admitted]);
+      tx.abort();
+      return decision;
+    };
+
+    const commitDecision = async (
+      runtime: Runtime,
+      link: Awaited<ReturnType<typeof seedLabeled>>,
+      sink = "answer",
+    ) => {
+      const tx = runtime.edit();
+      const cell = runtime.getCellFromLink(link).withTx(tx);
+      await cell.pull();
+      JSON.stringify(cell.get());
+      enqueueSinkRequestPostCommitEffect(
+        tx,
+        sink,
+        `${sink}:paired-release`,
+        createFrozenRequestSnapshot({ value: "released" }),
+        "answer-start",
+        () => {},
+      );
+      tx.prepareCfc();
+      return tx.commit();
+    };
+
+    for (const mode of ["off", "observe", "enforce"] as const) {
+      it(`${mode}: the host and committed paths decide on the same label`, async () => {
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = pairedRuntime(storageManager, mode);
+        try {
+          const link = await seedLabeled(
+            runtime,
+            `release-policy-${mode}`,
+            source,
+            [evidence],
+          );
+          const beforeTx = runtime.edit();
+          const before = readStoredCfcMetadata(beforeTx, link);
+          beforeTx.abort();
+
+          const host = await readDecision(runtime, link);
+          expect(host.rawLabel).toEqual({
+            confidentiality: [source],
+            integrity: [evidence],
+          });
+          if (mode === "off") {
+            expect(host.evaluatedLabel).toEqual(host.rawLabel);
+          } else {
+            expect(host.evaluatedLabel).not.toEqual(host.rawLabel);
+            expect(host.evaluatedLabel.integrity).toEqual([evidence]);
+          }
+          expect(host.effectiveLabel).toEqual(
+            mode === "enforce" ? host.evaluatedLabel : host.rawLabel,
+          );
+          expect(host.status).toBe(mode === "enforce" ? "fit" : "refused");
+          expect(host.firings.map(({ ruleId }) => ruleId)).toEqual(
+            mode === "off" ? [] : ["admit-source"],
+          );
+          const committed = await commitDecision(runtime, link);
+          expect(committed.ok !== undefined).toBe(mode === "enforce");
+
+          const afterTx = runtime.edit();
+          const after = readStoredCfcMetadata(afterTx, link);
+          afterTx.abort();
+          expect(after).toEqual(before);
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+    }
+
+    it("uses the same trust closure in the host and committed paths", async () => {
+      const concept = "https://example.com/cfc/concepts/verified-source";
+      const verifier = "did:key:release-verifier";
+      const trustedEvidence = {
+        type: "https://example.com/cfc/TrustedEvidence",
+      };
+      const trustPolicy: CfcPolicyRecordInput[] = [{
+        id: "trust-scoped-policy",
+        rules: [{
+          id: "trust-scoped-release",
+          appliesTo: source,
+          preCondition: { integrity: [cfcAtom.concept(concept)] },
+          post: { addAlternatives: [admitted] },
+        }],
+      }];
+      const trustConfig: CfcTrustConfigInput = {
+        statements: [{
+          concrete: trustedEvidence,
+          implements: concept,
+          verifier,
+        }],
+        delegations: [{
+          delegator: signer.did(),
+          verifier,
+          concepts: "*",
+        }],
+      };
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = pairedRuntime(
+        storageManager,
+        "enforce",
+        trustPolicy,
+        trustConfig,
+      );
+      try {
+        const link = await seedLabeled(
+          runtime,
+          "release-trust-closure",
+          source,
+          [trustedEvidence],
+        );
+        const host = await readDecision(runtime, link);
+        expect(host.status).toBe("fit");
+        expect(host.firings.map(({ ruleId }) => ruleId)).toEqual([
+          "trust-scoped-release",
+        ]);
+        expect((await commitDecision(runtime, link)).ok).toBeDefined();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    for (
+      const testCase of [
+        {
+          name: "sink-name mismatch",
+          boundary: cfcAtom.boundaryContext("sink", "fetchJson"),
+          sink: "answer",
+        },
+        {
+          name: "sink-class mismatch",
+          boundary: cfcAtom.boundaryContext("sinkClass", "network"),
+          sink: "agent",
+        },
+      ] as const
+    ) {
+      it(`refuses a ${testCase.name} in both paths`, async () => {
+        const scoped: CfcPolicyRecordInput[] = [{
+          id: "boundary-scoped-policy",
+          rules: [{
+            id: "boundary-scoped-release",
+            appliesTo: source,
+            preCondition: { boundary: [testCase.boundary] },
+            post: { addAlternatives: [admitted] },
+          }],
+        }];
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = pairedRuntime(storageManager, "enforce", scoped);
+        try {
+          const link = await seedLabeled(
+            runtime,
+            `release-${testCase.name}`,
+            source,
+          );
+          const host = await readDecision(runtime, link, testCase.sink);
+          expect(host.status).toBe("refused");
+          expect(host.firings).toEqual([]);
+          expect((await commitDecision(runtime, link, testCase.sink)).error)
+            .toBeDefined();
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+    }
+
+    it("fails closed on exhaustion in both paths", async () => {
+      const cycling: CfcPolicyRecordInput[] = [{
+        id: "cycling-policy",
+        rules: [{
+          id: "add-marker",
+          appliesTo: source,
+          post: { addAlternatives: [admitted] },
+        }, {
+          id: "drop-marker",
+          appliesTo: admitted,
+          post: { dropClause: true },
+        }],
+      }];
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = pairedRuntime(storageManager, "enforce", cycling);
+      try {
+        const link = await seedLabeled(
+          runtime,
+          "release-policy-exhaustion",
+          source,
+        );
+        expect((await readDecision(runtime, link)).status).toBe("exhausted");
+        expect((await commitDecision(runtime, link)).error).toBeDefined();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
   });
 });

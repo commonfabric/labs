@@ -26,7 +26,11 @@ import {
   prepareCfcGrantWrite,
   verifyCfcGrantDocument,
 } from "../src/cfc/grants.ts";
-import type { CfcEnforcementMode, IFCLabel } from "../src/cfc/mod.ts";
+import {
+  type CfcEnforcementMode,
+  decideSinkRelease,
+  type IFCLabel,
+} from "../src/cfc/mod.ts";
 import {
   buildCfcPolicySnapshot,
   type ExchangeRule,
@@ -821,6 +825,47 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
   //
 
   describe("single-use release at the sink egress gate", () => {
+    it("leaves a single-use grant available after a host-side decision", async () => {
+      await withRuntime({}, async (runtime) => {
+        await writeGrant(runtime);
+        const receiptId = cfcGrantConsumedReceiptId(grantIdFor(runtime));
+        await seedLabeledCell(runtime, "host-observed-single-use", {
+          confidentiality: [cfcAtom.user(signer.did())],
+        });
+
+        const observation = runtime.edit();
+        const cell = runtime.getCell(
+          signer.did(),
+          "host-observed-single-use",
+          SECRET_SCHEMA.schema,
+          observation,
+        );
+        expect(cell.key("secret").get()).toBe("rosebud");
+        const decision = decideSinkRelease(
+          observation,
+          observation,
+          "fetchJson",
+          [userBob],
+        );
+        expect(decision.status).toBe("refused");
+        expect(decision.grantConsumption).toBe("observing");
+        expect(stagedReceiptWrite(observation, receiptId)).toBe(false);
+        observation.abort();
+
+        const release = buildRelease(
+          runtime,
+          "host-observed-single-use",
+          "-release",
+        );
+        expect(release.reasons).toEqual([]);
+        expect(stagedReceiptWrite(release.tx, receiptId)).toBe(true);
+        expect((await release.tx.commit()).ok).toBeDefined();
+        expect(readReceipt(runtime, receiptId)).toMatchObject({
+          grantConsumed: { grantId: grantIdFor(runtime) },
+        });
+      });
+    });
+
     it("releases once, committing the receipt atomically; the second evaluation fails closed", async () => {
       await withRuntime({}, async (runtime) => {
         await writeGrant(runtime);

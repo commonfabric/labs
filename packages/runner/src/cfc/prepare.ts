@@ -106,14 +106,9 @@ import {
 } from "./clause.ts";
 import { ConsumedLabelIndex } from "./consumed-label-index.ts";
 import { collectDeclaredMonotonicityViolations } from "./declared-monotonicity.ts";
-import {
-  type CfcGrantConsumptionContext,
-  evaluateExchangeRules,
-} from "./exchange-eval.ts";
 import { externalIngestStamp } from "./external-ingest.ts";
 import {
   CFC_GRANT_ID_PREFIX,
-  createTxCfcGrantResolver,
   flushCfcGrantConsumptionClaims,
 } from "./grants.ts";
 import {
@@ -134,7 +129,6 @@ import {
 import { isPrefix, PathPrefixIndex } from "./path-prefix-index.ts";
 import { verdictReason } from "./verdict-reason.ts";
 import {
-  type CfcRefusalDetail,
   type ConsumedAtomSource,
   describeRefusalInputs,
   renderCfcAtom,
@@ -161,7 +155,13 @@ import {
 import { CFC_POLICY_MANIFEST_ID_PREFIX } from "./policy.ts";
 import { createTxCfcModulePolicyResolver } from "./policy-resolver.ts";
 import { cfcSchemaEntries } from "./schema-label-view.ts";
-import { sinkClassOf } from "./sink-inventory.ts";
+import {
+  type CfcSinkDecision,
+  type ConsumedSinkLabel,
+  decideSinkFit,
+  evaluateGatedConfidentiality,
+  modulePolicyArtifactKey,
+} from "./sink-decision.ts";
 import {
   type CfcSchemaMergeIssue,
   cfcSchemaMergeIssue,
@@ -5251,7 +5251,7 @@ const verifyInputRequirements = (
               `maxConfidentiality at /${entry.path.join("/")} from ` +
               `${decision ? "fit" : "reject"} to ${
                 rewrittenFits ? "fit" : "reject"
-              } (${outcome.firings} firings)`,
+              } (${outcome.firings.length} firings)`,
           );
         }
         return decision;
@@ -5606,17 +5606,6 @@ const modulePolicyReferencesIn = (value: unknown): unknown[] => {
   };
   visit(value);
   return references;
-};
-
-const modulePolicyArtifactKey = (reference: unknown): string => {
-  // Every caller iterates modulePolicyReferencesIn(), which returns only
-  // records carrying all three string identity fields.
-  const candidate = reference as {
-    moduleIdentity: string;
-    symbol: string;
-    policyDigest: string;
-  };
-  return `${candidate.moduleIdentity}\0${candidate.symbol}\0${candidate.policyDigest}`;
 };
 
 const installCarriedPolicyManifests = (
@@ -6894,21 +6883,7 @@ export const loadStoredCfcEnvelope = (
  */
 const collectConsumedLabelImpl = (
   tx: IExtendedStorageTransaction,
-): {
-  confidentiality: readonly CfcConfClause[];
-  integrity: readonly CfcAtom[];
-  modulePolicySpaces: ReadonlyMap<string, ReadonlySet<MemorySpace>>;
-
-  /**
-   * Every (clause, read) pair this transaction consumed, in first-seen order.
-   * This is the provenance a refusal needs to name an offending INPUT rather
-   * than only an offending atom (`cfc/refusal-detail.ts`). A gate matches into
-   * it by `deepEqual`, the same structural identity the union above dedups by;
-   * the gates' fits-decisions themselves stay transaction-global and read only
-   * that union.
-   */
-  sources: readonly ConsumedAtomSource[];
-} => {
+): ConsumedSinkLabel => {
   tx.noteCfcConsumedLabelWalk?.();
   const atoms: unknown[] = [];
   const modulePolicySpaces = new Map<string, Set<MemorySpace>>();
@@ -7068,42 +7043,11 @@ const collectConsumedLabelImpl = (
 };
 
 /**
- * The refusal a sink's ceiling states about `offending`, with the reads that
- * carried each clause.
+ * Decides what `ceiling` admits from everything `released` has read.
  *
- * The reason text is the pairing key between a recorded detail and the reason
- * that refused, so the two are built together rather than assembled twice.
- */
-const sinkCeilingRefusal = (
-  sink: string,
-  offending: readonly unknown[],
-  sources: readonly ConsumedAtomSource[],
-): CfcRefusalDetail => {
-  // Name the offending atom(s) so an observe-mode diagnostic identifies the
-  // exact (sink, atom) pair that needs a ceiling entry (review on #3993).
-  const offendingAtoms = offending.map(renderCfcAtom);
-  return {
-    gate: "sink-ceiling",
-    sink,
-    offendingAtoms,
-    ...describeRefusalInputs(offending, sources),
-    reason: `sink-request confidentiality exceeds ceiling for ${sink}: ` +
-      offendingAtoms.join(", "),
-  };
-};
-
-/**
- * What `ceiling` refuses about everything `released` has read, as the §8.12.4
- * sink gate would state it, or `undefined` when it refuses nothing.
- *
- * The commit boundary answers this question for the sink requests a
- * transaction records, which covers an egress a pattern performs. An egress
- * the HOST performs — a tool answering a model with what a piece computed —
- * has no request to record and no commit to gate, so it asks here instead:
- * read what it is about to release through a transaction, and measure that
- * transaction's consumed join against the ceiling the destination carries.
- * Both routes measure the same join against the same membership predicate,
- * so a host gate cannot admit a flow the boundary refuses.
+ * This is the host-safe sink surface: it observes single-use grants and never
+ * stages their consumption. The committed sink calls the same decision core
+ * with consuming mode from its prepare transaction.
  *
  * `attributedTo` is the read set the refusal is EXPLAINED in terms of, which
  * a host narrows to the reads its caller can act on. A clause carried by no
@@ -7115,118 +7059,23 @@ const sinkCeilingRefusal = (
  * there counts entries at or above it only. A caller measuring a release
  * therefore walks the value it is about to hand over.
  *
- * The membership predicate is the one `verifySinkRequestCeilings` fits with,
- * so a clause outside a ceiling here is outside it there. The join is what
- * `released` read, with no exchange-rule rewriting applied to it, so a clause
- * a policy evaluation would have discharged is refused here.
- *
- * Neither transaction is committed, written, or recorded against.
+ * Neither transaction is committed, and no value or label write is staged or
+ * persisted.
  */
-export const describeSinkReleaseRefusal = (
+export const decideSinkRelease = (
   released: IExtendedStorageTransaction,
   attributedTo: IExtendedStorageTransaction,
   sink: string,
   ceiling: readonly CfcConfClause[],
-): CfcRefusalDetail | undefined => {
-  const offending = atomsOutsideCeiling(
-    collectConsumedLabel(released).confidentiality,
-    ceiling,
-  );
-  return offending.length === 0 ? undefined : sinkCeilingRefusal(
-    sink,
-    offending,
+): CfcSinkDecision =>
+  decideSinkFit(
+    released,
+    collectConsumedLabel(released),
     collectConsumedLabel(attributedTo).sources,
+    sink,
+    ceiling,
+    "observing",
   );
-};
-
-/**
- * Runs the exchange-rule evaluator over one gated confidentiality set under
- * the transaction's policy snapshot + trust config (Epic B5). Pure wiring:
- * the snapshot/trust/acting-principal come from tx CFC state; `boundary` is
- * the site-specific `BoundaryContext` pool. Exhaustion reports through the
- * `exhausted` flag with the ORIGINAL confidentiality (never a partial
- * rewrite) — the caller decides whether that fails closed (enforce) or is a
- * diagnostic (observe).
- *
- * `consumption` is the single-use-grant seam (design §2.2): the two callers
- * — the sink-request egress ceiling and the input-requirement gate on gated
- * writes — are exactly the sites where an evaluation outcome changes a
- * persisted/egress decision inside a writing transaction's prepare, so they
- * pass `"consuming"` when (and only when) the policy-evaluation dial is
- * `enforce` (the rewritten label IS the decision there; under `observe` the
- * decision is the raw label and the evaluation is diagnostics-only, which
- * must never spend a grant). Every other evaluation site (the render
- * ceiling's display boundary, hand-built contexts) never states a consuming
- * context, so single-use grants are unsatisfiable there — fail closed.
- * Claims registered by a consuming resolution are staged into receipt
- * writes at the end of `prepareBoundaryCommit` (the same pass), so
- * consumption commits atomically with the release.
- */
-const evaluateGatedConfidentiality = (
-  tx: IExtendedStorageTransaction,
-  confidentiality: readonly CfcConfClause[],
-  integrity: readonly CfcAtom[],
-  boundary: readonly CfcAtom[],
-  consumption: CfcGrantConsumptionContext,
-  destinationSpace?:
-    | MemorySpace
-    | ((reference: unknown) => MemorySpace | undefined),
-): {
-  confidentiality: readonly CfcConfClause[];
-  exhausted: boolean;
-  firings: number;
-  resolutionFailures: readonly {
-    readonly reference: unknown;
-    readonly reason: string;
-  }[];
-
-  /** A grant lookup could not be read; see `createTxCfcGrantResolver`. */
-  grantResolutionUnavailable: boolean;
-} => {
-  const state = tx.getCfcState();
-  const grantAvailability = { unavailable: false };
-  const result = evaluateExchangeRules(
-    { confidentiality: [...confidentiality] },
-    state.policySnapshot,
-    {
-      integrity,
-      boundary,
-      trustResolver: createTrustResolver(state.trustConfig),
-      actingPrincipal: state.trustSnapshot?.actingPrincipal,
-      // Grant resolution for policyState guards (§8.12.7 route 2a): the
-      // closure captures the transaction, point-reads grant documents under
-      // internalVerifierRead (lookups never taint), and records each
-      // consulted address+digest into the prepare state for the B5-style
-      // digest binding. Rides the same cfcPolicyEvaluation dial as the rest
-      // of this evaluation — this function only runs when the dial is on.
-      grantResolver: createTxCfcGrantResolver(tx, {
-        availability: grantAvailability,
-      }),
-      grantConsumption: consumption,
-      modulePolicyResolver: createTxCfcModulePolicyResolver(
-        tx,
-        (reference) => {
-          const space = typeof destinationSpace === "function"
-            ? destinationSpace(reference)
-            : destinationSpace;
-          if (typeof destinationSpace === "function" && space === undefined) {
-            return undefined;
-          }
-          return tx.resolveCfcPolicyManifest(reference, space);
-        },
-      ),
-    },
-  );
-  return {
-    confidentiality: result.exhausted
-      ? confidentiality
-      : result.label.confidentiality ?? [],
-    exhausted: result.exhausted,
-    firings: result.firings.length,
-    resolutionFailures: result.resolutionFailures,
-    grantResolutionUnavailable: grantAvailability.unavailable,
-  };
-};
 
 const noteModulePolicyResolutionFailures = (
   tx: IExtendedStorageTransaction,
@@ -7276,111 +7125,21 @@ const verifySinkRequestCeilings = (
   const mode = state.policyEvaluationMode;
   const reasons: string[] = [];
   for (const [sink, ceiling] of gatedSinks) {
-    let effective = consumed.confidentiality;
-    // Whether the fits-decision below is a pure function of this
-    // transaction's data — a VERDICT (see verdict-reason.ts). Two things
-    // make it not, both enforce-mode availability holes in the rewrite: a
-    // module policy manifest that did not resolve, and a grant lookup that
-    // could not be read — either might carry the discharge that admits the
-    // request on an attempt that resolves it. `off` and `observe` decide on
-    // the raw label every time, so their refusal is always a verdict.
-    let verdict = true;
-    if (mode !== "off") {
-      // Boundary context for this release site (spec §8.10.5 / §15.4): the
-      // sink name plus its class, read off the sink inventory so a rule
-      // scoped to one class fires at that class's sinks and no other.
-      const boundary = [
-        cfcAtom.boundaryContext("sink", sink),
-        cfcAtom.boundaryContext("sinkClass", sinkClassOf(sink)),
-      ];
-      // The sink egress gate is a consuming site for single-use grants
-      // (design §2.2) under the enforce dial — the rewritten label decides
-      // whether the request flushes past the ceiling. Observe evaluates for
-      // diagnostics only and must never spend a grant.
-      const outcome = evaluateGatedConfidentiality(
-        tx,
-        consumed.confidentiality,
-        consumed.integrity,
-        boundary,
-        mode === "enforce" ? "consuming" : "observing",
-        (reference) => {
-          const key = modulePolicyArtifactKey(reference);
-          const spaces = [...(consumed.modulePolicySpaces.get(key) ?? [])]
-            .sort();
-          if (spaces.length === 0) return undefined;
-          // Every consumed label origin must carry its own exact local copy.
-          // Bind every origin into the commit, so a concurrent change in any
-          // one of them rejects the release before its post-commit effect can
-          // flush. Precondition-only origin commits are harmless to split; the
-          // effect runs only after the complete transaction succeeds.
-          tx.enableMultiSpaceWrites?.(spaces);
-          for (const space of spaces) {
-            if (tx.resolveCfcPolicyManifest(reference, space) === undefined) {
-              return undefined;
-            }
-          }
-          return spaces[0];
-        },
-      );
-      if (mode === "enforce") {
-        if (outcome.exhausted) {
-          // Fail closed (invariant 6): a rule set that cannot converge
-          // disables exchange, it never silently downgrades to a partial
-          // rewrite or to the raw label.
-          reasons.push(
-            `cfc policy evaluation exhausted fuel for sink-request ${sink}`,
-          );
-          continue;
-        }
-        effective = outcome.confidentiality;
-        verdict = outcome.resolutionFailures.length === 0 &&
-          !outcome.grantResolutionUnavailable;
-      } else {
-        // observe: decide exactly as `off` would; diagnose what enforce
-        // would have done differently.
-        noteModulePolicyResolutionFailures(
-          tx,
-          `sink-request ${sink}`,
-          outcome.resolutionFailures,
-        );
-        const rewrittenOffending = outcome.exhausted
-          ? undefined
-          : atomsOutsideCeiling(outcome.confidentiality, ceiling);
-        const rawOffending = atomsOutsideCeiling(
-          consumed.confidentiality,
-          ceiling,
-        );
-        if (outcome.exhausted) {
-          tx.noteCfcDiagnostic(
-            `policy-evaluation(observe): fuel exhausted for sink-request ` +
-              `${sink}`,
-          );
-        } else if (
-          (rawOffending.length > 0) !== (rewrittenOffending!.length > 0)
-        ) {
-          tx.noteCfcDiagnostic(
-            `policy-evaluation(observe): rewrite would change sink-request ` +
-              `ceiling for ${sink} from ${
-                rawOffending.length > 0 ? "reject" : "fit"
-              } to ${
-                rewrittenOffending!.length > 0 ? "reject" : "fit"
-              } (${outcome.firings} firings)`,
-          );
-        }
-      }
+    const decision = decideSinkFit(
+      tx,
+      consumed,
+      consumed.sources,
+      sink,
+      ceiling,
+      mode === "enforce" ? "consuming" : "observing",
+    );
+    if (decision.failure !== undefined) {
+      reasons.push(decision.failure.reason);
+      continue;
     }
-    // Same membership semantics as cfcObservationFitsCeiling (shared helper),
-    // so the egress gate and the observation fits-test cannot drift.
-    const offending = atomsOutsideCeiling(effective, ceiling);
-    if (offending.length > 0) {
-      const detail = sinkCeilingRefusal(sink, offending, consumed.sources);
-      reasons.push(verdict ? verdictReason(detail.reason) : detail.reason);
-      // The remedy channel (cfc/refusal-detail.ts): which reads carried the
-      // clauses this ceiling refused. Recorded for every mode — an observe-mode
-      // rollout wants the same answer a refusal does, and the commit boundary
-      // keeps only the details whose reason actually refused.
-      tx.recordCfcRefusalDetail?.(detail);
-    }
+    if (decision.refusal === undefined) continue;
+    reasons.push(verdictReason(decision.refusal.reason));
+    tx.recordCfcRefusalDetail?.(decision.refusal);
   }
   return reasons;
 };

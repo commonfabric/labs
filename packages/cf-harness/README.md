@@ -2186,9 +2186,11 @@ the document root. The refusal's reason names labels and documents, so it stays
 in the artifact's `rawCauseMessage` and out of the model-facing text. At
 `disabled` and `observe` nothing withholds: the values go out, and the same
 measurement is recorded on the artifact as `releaseObservation`, so an operator
-staging the ladder can size what raising it would withhold. The measurement
-applies no exchange-rule rewriting, so a clause a policy evaluation would have
-discharged is withheld here.
+staging the ladder can size what raising it would withhold. The measurement uses
+the runner's sink decision, with the same boundary context, trust closure,
+selected policy manifest, evaluation mode, exhaustion behavior, and fit as a
+committed sink request. It is observational, so it never claims a single-use
+grant; a rule depending on one fails closed for this host-only release.
 
 Whichever way it went, the measurement is also a decision in the run's
 `policy-trace.json`, in the same record every tool-policy decision is written
