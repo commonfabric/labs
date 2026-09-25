@@ -303,8 +303,8 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * confirmation, answering with the actor's receipt, the instance's box
    * that the room's projector reads, and the instance sealed into.
    */
-  async commitCustodySeal(id: string): Promise<{
-    receipt: CellHandle<unknown>;
+  async commitCustodySeal<T = unknown>(id: string): Promise<{
+    receipt: CellHandle<T>;
     box: CellHandle<unknown>;
     instance: string;
   }> {
@@ -313,7 +313,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       id,
     });
     return {
-      receipt: new CellHandle(this, response.receipt),
+      receipt: new CellHandle<T>(this, response.receipt),
       box: new CellHandle(this, response.box),
       instance: response.instance,
     };
