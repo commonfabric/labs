@@ -1,5 +1,8 @@
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
-import { authorPrincipalCandidates } from "@commonfabric/runner/cfc/represents-principal";
+import {
+  authorPrincipalCandidates,
+  principalClaimSubject,
+} from "@commonfabric/runner/cfc/represents-principal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { css, html } from "lit";
 
@@ -306,33 +309,21 @@ const principalAuthorClaim = (
   };
 };
 
+/**
+ * Whether `atom` says its value was written by the author `author` claims:
+ * `atom` is a claim of `kind` in the one spelling a reader accepts
+ * (`principalClaimSubject`), and its subject is one of the claim's author ids.
+ * For the principal claim kinds the runtime refuses a pattern-authored claim
+ * in any other spelling, so reading one here would trust what a pattern could
+ * have written.
+ */
 export const integrityAtomMatchesAuthor = (
   atom: unknown,
   author: unknown,
   kind: string = DEFAULT_AUTHORSHIP_KIND,
 ): boolean => {
-  const authorIds = authorIdsForClaim(author);
-  if (authorIds.length === 0) {
-    return false;
-  }
-
-  if (typeof atom === "string") {
-    return authorIds.some((authorId) => atom === `${kind}:${authorId}`);
-  }
-
-  if (!isObjectNotArray(atom)) {
-    return false;
-  }
-
-  const atomRecord = atom as Record<string, unknown>;
-  if (objectField(atomRecord, "kind") !== kind) {
-    return false;
-  }
-
-  return AUTHOR_FIELDS.some((field) => {
-    const atomAuthor = objectField(atomRecord, field);
-    return atomAuthor !== undefined && authorIds.includes(atomAuthor);
-  });
+  const subject = principalClaimSubject(atom, kind);
+  return subject !== undefined && authorIdsForClaim(author).includes(subject);
 };
 
 const rootEntries = (view: CfcLabelView) =>

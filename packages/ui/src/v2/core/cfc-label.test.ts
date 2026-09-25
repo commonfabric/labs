@@ -22,7 +22,7 @@ describe("ownerPrincipalFromLabel", () => {
     expect(ownerPrincipalFromLabel(label)).toBe(DID);
   });
 
-  it("trims object-form subjects to match the string-form normalization", () => {
+  it("names no owner for a subject with surrounding whitespace", () => {
     const label = view([
       {
         path: ["name"],
@@ -31,17 +31,17 @@ describe("ownerPrincipalFromLabel", () => {
         },
       },
     ]);
-    expect(ownerPrincipalFromLabel(label)).toBe(DID);
+    expect(ownerPrincipalFromLabel(label)).toBeUndefined();
   });
 
-  it("extracts the subject from a string-form atom", () => {
+  it("names no owner for a string-form atom", () => {
     const label = view([
       {
         path: ["avatar"],
         label: { integrity: [`represents-principal:${DID}`] },
       },
     ]);
-    expect(ownerPrincipalFromLabel(label)).toBe(DID);
+    expect(ownerPrincipalFromLabel(label)).toBeUndefined();
   });
 
   it("ignores unrelated integrity atoms", () => {

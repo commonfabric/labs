@@ -164,6 +164,25 @@ describe("represents-principal writer check", () => {
       subject: ` ${bob.did()}`,
       note: "decoy",
     }]],
+    ["an author field beside the placeholder subject", () => [{
+      kind: "authored-by",
+      subject: CURRENT_PRINCIPAL,
+      author: bob.did(),
+    }]],
+    ["a subject spelled in capitals", () => [{
+      kind: "represents-principal",
+      subject: bob.did().replace("did:", "DID:"),
+    }]],
+    ["a claim nested in another atom", () => [{
+      type: "https://example.com/wrapper",
+      inner: { kind: "represents-principal", subject: bob.did() },
+    }]],
+    ["the string form in a nested array", () => [[
+      `represents-principal:${bob.did()}`,
+    ]]],
+    ["the string form in capitals", () => [
+      `Represents-Principal:${bob.did()}`,
+    ]],
     ["a forged atom beside a legitimate one", () => [
       { kind: "represents-principal", subject: CURRENT_PRINCIPAL },
       `represents-principal:${bob.did()}`,
@@ -187,7 +206,7 @@ describe("represents-principal writer check", () => {
       "represents-principal-writer-bare-string",
     );
     expect(principals).not.toContain(bob.did());
-    expect(error).toBeDefined();
+    expect(error).toContain("current-principal integrity");
   });
 
   for (const [name, atoms] of forgeries) {
@@ -197,7 +216,7 @@ describe("represents-principal writer check", () => {
         `represents-principal-writer-${name}`,
       );
       expect(principals).not.toContain(bob.did());
-      expect(error).toBeDefined();
+      expect(error).toContain("current-principal integrity");
     });
   }
 
@@ -210,7 +229,43 @@ describe("represents-principal writer check", () => {
       "represents-principal-writer-owner-second",
     );
     expect(principals).not.toContain(bob.did());
-    expect(error).toBeDefined();
+    expect(error).toContain("current-principal integrity");
+  });
+
+  it("refuses a forged claim on the root while the write reaches a field", async () => {
+    const { error, principals } = await writeAsAlice(
+      {
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+        ifc: {
+          addIntegrity: [
+            { kind: "represents-principal", subject: CURRENT_PRINCIPAL },
+            `represents-principal:${bob.did()}`,
+          ],
+          writeAuthorizedBy: {
+            __ctWriterIdentityOf: {
+              file: "/attacker.tsx",
+              path: ["writeName"],
+            },
+          },
+          uiContract,
+        },
+      } as JSONSchema,
+      "represents-principal-writer-root",
+    );
+    expect(principals).not.toContain(bob.did());
+    expect(error).toContain("current-principal integrity");
+  });
+
+  it("commits a literal subject that names no principal", async () => {
+    // A demo can label its own message `authored-by` a made-up author; no
+    // reader resolves that subject to a principal.
+    const { error } = await writeAsAlice(
+      claimSchema([{ kind: "authored-by", subject: "alice" }]),
+      "represents-principal-writer-literal-name",
+    );
+    expect(error).toBeUndefined();
   });
 
   it("commits a self-attestation through the runtime placeholder", async () => {

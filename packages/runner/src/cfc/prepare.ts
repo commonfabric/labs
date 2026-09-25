@@ -94,6 +94,11 @@ import {
 } from "../storage/transaction-inspection.ts";
 import { atomPropagationClass } from "./atom-classes.ts";
 import {
+  PRINCIPAL_CLAIM_KINDS,
+  principalClaimSpelling,
+  subjectResemblesPrincipal,
+} from "./represents-principal.ts";
+import {
   canonicalizeCfcMetadata,
   canonicalizeLogicalPath,
 } from "./canonical.ts";
@@ -810,10 +815,6 @@ const hasLabelValues = (label: IFCLabel): boolean =>
   (label.integrity?.length ?? 0) > 0;
 
 const CURRENT_PRINCIPAL_PLACEHOLDER_KEY = "__ctCurrentPrincipal";
-const CURRENT_PRINCIPAL_CLAIM_KINDS = new Set([
-  "authored-by",
-  "represents-principal",
-]);
 
 const isCurrentPrincipalPlaceholder = (value: unknown): boolean =>
   isObjectOrArray(value) && value[CURRENT_PRINCIPAL_PLACEHOLDER_KEY] === true;
@@ -884,19 +885,59 @@ const isCurrentPrincipalClaimAtom = (value: unknown): value is {
 } =>
   isObjectOrArray(value) &&
   typeof value.kind === "string" &&
-  CURRENT_PRINCIPAL_CLAIM_KINDS.has(value.kind);
+  PRINCIPAL_CLAIM_KINDS.has(value.kind);
 
-const hasLiteralDidCurrentPrincipalClaim = (value: unknown): boolean => {
+/**
+ * Why `value`, a schema's authored integrity, holds a principal claim a pattern
+ * may not write, or `undefined` when it holds none. Every spelling
+ * `principalClaimSpelling` recognizes, at any depth, must be the canonical
+ * object of exactly `kind` and `subject`, and its subject must be the runtime
+ * placeholder, `owner` when the schema declares one, or, without an owner, a
+ * literal that does not resemble a principal. So no reader of the canonical
+ * form, and no reader that normalizes some other spelling into it, resolves a
+ * pattern-written claim to a principal the runtime did not put there.
+ */
+const forgedPrincipalClaimReason = (
+  value: unknown,
+  owner: string | undefined,
+  path: readonly string[],
+): string | undefined => {
   if (Array.isArray(value)) {
-    return value.some(hasLiteralDidCurrentPrincipalClaim);
+    for (const entry of value) {
+      const reason = forgedPrincipalClaimReason(entry, owner, path);
+      if (reason !== undefined) return reason;
+    }
+    return undefined;
   }
-  if (isCurrentPrincipalClaimAtom(value)) {
-    return isDID(value.subject);
+  const spelling = principalClaimSpelling(value);
+  if (spelling === "string") {
+    return `current-principal integrity must be an object of kind and subject at /${
+      path.join("/")
+    }`;
+  }
+  if (spelling === "object") {
+    const claim = value as Record<string, unknown>;
+    if (Object.keys(claim).some((key) => key !== "kind" && key !== "subject")) {
+      return `current-principal integrity must carry only kind and subject at /${
+        path.join("/")
+      }`;
+    }
+    const subject = claim.subject;
+    if (
+      isCurrentPrincipalPlaceholder(subject) ||
+      (owner !== undefined && subject === owner) ||
+      (owner === undefined && !subjectResemblesPrincipal(subject))
+    ) {
+      return undefined;
+    }
+    return `current-principal integrity subject must be runtime resolved at /${
+      path.join("/")
+    }`;
   }
   if (isObjectOrArray(value)) {
-    return Object.values(value).some(hasLiteralDidCurrentPrincipalClaim);
+    return forgedPrincipalClaimReason(Object.values(value), owner, path);
   }
-  return false;
+  return undefined;
 };
 
 const literalDidSubjectsForPrincipalClaim = (
@@ -3899,6 +3940,14 @@ const currentPrincipalIntegrityReason = (
     if (!isDID(ownerPrincipal)) {
       return `ownerPrincipal must be a DID at /${path.join("/")}`;
     }
+    const forgedOwnerClaim = forgedPrincipalClaimReason(
+      currentPrincipalValues,
+      ownerPrincipal,
+      path,
+    );
+    if (forgedOwnerClaim !== undefined) {
+      return forgedOwnerClaim;
+    }
     const resolvedCurrentPrincipalValues = resolveCurrentPrincipalLabelValues(
       currentPrincipalValues,
       trustSnapshot.actingPrincipal,
@@ -3923,10 +3972,13 @@ const currentPrincipalIntegrityReason = (
   if (currentPrincipalValues.length === 0) {
     return undefined;
   }
-  if (hasLiteralDidCurrentPrincipalClaim(currentPrincipalValues)) {
-    return `current-principal integrity subject must be runtime resolved at /${
-      path.join("/")
-    }`;
+  const forgedClaim = forgedPrincipalClaimReason(
+    currentPrincipalValues,
+    undefined,
+    path,
+  );
+  if (forgedClaim !== undefined) {
+    return forgedClaim;
   }
   if (!currentPrincipalValues.some(hasCurrentPrincipalPlaceholder)) {
     return undefined;

@@ -1,5 +1,4 @@
 import { type FabricValue, valueEqual } from "@commonfabric/data-model";
-import { isDID } from "@commonfabric/identity/did";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { JSONSchema } from "../builder/types.ts";
@@ -9,6 +8,7 @@ import type { NormalizedFullLink } from "../link-utils.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import { loadStoredCfcEnvelope } from "./prepare.ts";
+import { representsPrincipalSubject } from "./represents-principal.ts";
 import { cfcSchemaEntries } from "./schema-label-view.ts";
 import { runtimeWritePolicyAuthorization } from "./types.ts";
 
@@ -42,12 +42,10 @@ export function readOwnerFieldPolicy(
         valueEqual(entry.path, source.path)
       )
       .flatMap((entry) => entry.label.integrity ?? [])
-      .flatMap((atom) =>
-        isObjectOrArray(atom) && atom.kind === "represents-principal" &&
-          isDID(atom.subject)
-          ? [atom.subject]
-          : []
-      ),
+      .flatMap((atom) => {
+        const subject = representsPrincipalSubject(atom);
+        return subject === undefined ? [] : [subject];
+      }),
   );
   const owner = [...owners][0];
   const ifc = isObjectOrArray(schema) ? schema.ifc : undefined;

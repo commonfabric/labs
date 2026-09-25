@@ -946,12 +946,24 @@ describe("CFCFCAuthorship integrity matching", () => {
     )).toBe(false);
   });
 
-  it("matches canonical string atoms without treating arbitrary author ids as proof", () => {
+  it("matches no string atom and no author field but the subject", () => {
+    // The runtime refuses a pattern-authored claim spelled any other way, so
+    // these are claims nothing checked.
     expect(integrityAtomMatchesAuthor(
       "authored-by:alice",
       "alice",
       "authored-by",
-    )).toBe(true);
+    )).toBe(false);
+    expect(integrityAtomMatchesAuthor(
+      { kind: "authored-by", subject: "bob", author: "alice" },
+      "alice",
+      "authored-by",
+    )).toBe(false);
+    expect(integrityAtomMatchesAuthor(
+      { kind: "authored-by", subject: " alice" },
+      "alice",
+      "authored-by",
+    )).toBe(false);
     expect(integrityAtomMatchesAuthor(
       "alice",
       "alice",

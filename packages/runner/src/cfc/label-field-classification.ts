@@ -32,7 +32,7 @@ export type LabelFieldRepresentationClass =
  * Atom-family selector. CFC atoms come in two shapes: canonical `type`-URI
  * records ({@link CFC_ATOM_TYPE}) and the kind-shaped current-principal claim
  * family (`{ kind: "authored-by" | "represents-principal", subject }`, see
- * `CURRENT_PRINCIPAL_CLAIM_KINDS` in prepare.ts).
+ * `PRINCIPAL_CLAIM_KINDS` in represents-principal.ts).
  */
 export type LabelAtomFamily =
   | { readonly type: string }
