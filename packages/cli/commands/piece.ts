@@ -2399,7 +2399,11 @@ export const piece = targetOptions(
   .arguments("<main:string>")
   .option(
     "--request-key <key:string>",
-    "Reuse a serving deployment's creation request after an uncertain result.",
+    "Reuse a creation request after an uncertain result without creating another piece.",
+  )
+  .option(
+    "--input-file <path:string>",
+    "Initialize the piece with a JSON object from this file before starting or registering it.",
   )
   .option("--no-start", "Only set up the piece without starting it")
   .option(
@@ -4893,6 +4897,15 @@ export async function newPieceFromCommand(
 ): Promise<void> {
   setQuietMode(!!options.quiet);
   const spaceConfig = parseSpaceOptions(options);
+  const input = options.inputFile === undefined
+    ? undefined
+    : JSON.parse(await Deno.readTextFile(options.inputFile));
+  if (
+    options.inputFile !== undefined &&
+    (input === null || typeof input !== "object" || Array.isArray(input))
+  ) {
+    throw new Error("`--input-file` must contain a JSON object.");
+  }
   const pieceId = await (deps.newPiece ?? newPiece)(
     spaceConfig,
     localPatternEntry(main, options),
@@ -4900,6 +4913,7 @@ export async function newPieceFromCommand(
       start: options.start,
       slug: options.slug,
       force: !!options.force,
+      ...(input === undefined ? {} : { input }),
       ...(options.requestKey === undefined
         ? {}
         : { requestKey: options.requestKey }),
