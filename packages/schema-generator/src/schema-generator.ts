@@ -6,6 +6,8 @@ import type {
   MutableJSONSchemaObj,
 } from "@commonfabric/api";
 import type {
+  BoundTypeArgument,
+  BoundTypeParameters,
   GenerationContext,
   SchemaGenerationOptions,
   SchemaHints,
@@ -30,7 +32,11 @@ import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
 import { getCellWrapperInfo } from "./typescript/cell-brand.ts";
 import { getScopeBrand } from "./typescript/scope-brand.ts";
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
-import { unwrapTypeParentheses } from "./typescript/type-node.ts";
+import {
+  holdsFreeTypeParameter,
+  holdsTypeParameter,
+  unwrapTypeParentheses,
+} from "./typescript/type-node.ts";
 import {
   detectWrapperViaNode,
   getNamedTypeKey,
@@ -38,6 +44,7 @@ import {
   isFunctionLike,
   safeGetIndexTypeOfType,
   safeGetTypeOfSymbolAtLocation,
+  type TypeWithInternals,
 } from "./type-utils.ts";
 import { attachDocTags, extractDocFromType } from "./doc-utils.ts";
 import { unionFoldedFrom } from "./schema-origins.ts";
@@ -62,6 +69,13 @@ const LIBRARY_ALIAS_NAMES = new Set([
   "ReadonlyArray",
   "Record",
 ]);
+
+/**
+ * How many readings of one type under bindings that write the same arguments
+ * for it may nest before the innermost is taken for a recursion without end
+ * (`SchemaGenerator.#formatType`).
+ */
+const MAX_BOUND_NESTING = 3;
 
 /** Whether a schema is an object schema the alias rules can rewrite. */
 function isObjectSchema(
@@ -920,14 +934,14 @@ function typeReadForPrintedNode(
 }
 
 /**
- * The type `type` reads as where it is a type parameter the context binds
- * (`GenerationContext.boundTypeParameters`): its argument's type. `undefined`
- * for any other type.
+ * The argument of `type` where it is a type parameter the context binds
+ * (`GenerationContext.boundTypeParameters`), and `undefined` for any other
+ * type.
  */
-function boundArgumentType(
+function boundArgumentOf(
   type: ts.Type,
   context: GenerationContext,
-): ts.Type | undefined {
+): BoundTypeArgument | undefined {
   const bound = context.boundTypeParameters;
   if (!bound || (type.flags & ts.TypeFlags.TypeParameter) === 0) {
     return undefined;
@@ -935,23 +949,136 @@ function boundArgumentType(
   const declaration = type.symbol?.declarations?.find(
     ts.isTypeParameterDeclaration,
   );
-  return declaration && bound.types.get(declaration);
+  return declaration && bound.arguments.get(declaration);
 }
 
 /**
- * Whether `typeNode`, a union or an intersection written in a declaration read
- * under type parameter bindings, is read by its written members. The checker
- * folds a member that is itself a union into the whole, so a CFC alias over a
- * union, as a member, would lose its boundary and its labels read from the
- * type; its written reference keeps both.
+ * Whether `typeNode` is a `Default` holding a type parameter the context
+ * binds. Its type is the parameter, or a conditional type the checker defers
+ * over it, neither of which carries the default, so it is read as the
+ * wrapper, whose value and default read the parameter's argument in turn.
  */
-function readsWrittenMembers(
+function wrapsBoundParameter(
   typeNode: ts.TypeNode | undefined,
   context: GenerationContext,
 ): boolean {
-  if (!context.boundTypeParameters || !typeNode) return false;
+  const bound = context.boundTypeParameters;
+  return bound !== undefined && typeNode !== undefined &&
+    detectWrapperViaNode(typeNode, context.typeChecker) === "Default" &&
+    holdsTypeParameter(typeNode, context.typeChecker, bound.arguments);
+}
+
+/**
+ * Whether `typeNode`, written in a declaration read under type parameter
+ * bindings, is read by its syntax: a node whose type is built from the
+ * checker's unbound parameters, which only its written parts can pair with
+ * their arguments. An object, an array, a tuple, a union, an intersection,
+ * `readonly`, or a default-library alias the node-based analyzer applies
+ * (`LIBRARY_ALIAS_NAMES`) holding a bound parameter is read part by part, each
+ * part in turn by its syntax where it holds one and by its type where it does
+ * not. The checker folds a union member that is itself a union into the
+ * whole, so read by type, a CFC alias over a union as a member would lose its
+ * boundary and its labels; its written reference keeps both. Any other node
+ * is read by its type, a bound parameter in it read as its argument wherever
+ * the walk reaches it.
+ */
+function readsBySyntax(
+  typeNode: ts.TypeNode | undefined,
+  context: GenerationContext,
+): boolean {
+  const bound = context.boundTypeParameters;
+  if (!bound || !typeNode) return false;
   const written = unwrapTypeParentheses(typeNode);
-  return ts.isUnionTypeNode(written) || ts.isIntersectionTypeNode(written);
+  const structural = ts.isUnionTypeNode(written) ||
+    ts.isIntersectionTypeNode(written) || ts.isTypeLiteralNode(written) ||
+    ts.isArrayTypeNode(written) || ts.isTupleTypeNode(written) ||
+    (ts.isTypeOperatorNode(written) &&
+      written.operator === ts.SyntaxKind.ReadonlyKeyword) ||
+    namesLibraryAlias(written);
+  return structural &&
+    holdsTypeParameter(written, context.typeChecker, bound.arguments);
+}
+
+/**
+ * Whether `typeNode` is a reference by one of `LIBRARY_ALIAS_NAMES` with
+ * arguments, which the node-based analyzer applies structurally where the
+ * name is the default library's.
+ */
+function namesLibraryAlias(typeNode: ts.TypeNode): boolean {
+  return ts.isTypeReferenceNode(typeNode) &&
+    ts.isIdentifier(typeNode.typeName) &&
+    LIBRARY_ALIAS_NAMES.has(typeNode.typeName.text) &&
+    (typeNode.typeArguments?.length ?? 0) > 0;
+}
+
+/**
+ * Whether `type`, read under type parameter bindings at `typeNode`, is a
+ * mapped type whose keys come from a bound parameter. The checker has not
+ * instantiated it, so it has no members to read until it is, and no
+ * binding reaches the argument its keys come from. A generic declaration's
+ * mapped member instantiated over one, reached by its type, has no alias
+ * arguments that show it: over an unconstrained parameter it has no member or
+ * index signature the checker can list, which a mapped type written
+ * generically has only then, and over a constrained one its members' types
+ * are indexed accesses, which are reported where they are read.
+ */
+function mapsBoundParameter(
+  type: ts.Type,
+  typeNode: ts.TypeNode | undefined,
+  context: GenerationContext,
+): boolean {
+  const bound = context.boundTypeParameters;
+  if (!bound) return false;
+  const checker = context.typeChecker;
+  const written = typeNode && unwrapTypeParentheses(typeNode);
+  if (
+    written && ts.isMappedTypeNode(written) &&
+    holdsTypeParameter(written, checker, bound.arguments)
+  ) {
+    return true;
+  }
+  const objectFlags = (type as ts.ObjectType).objectFlags ?? 0;
+  if ((objectFlags & ts.ObjectFlags.Mapped) === 0) return false;
+  const aliasArguments = (type as TypeWithInternals).aliasTypeArguments;
+  if (
+    aliasArguments?.some((argument) =>
+      mentionsBoundParameter(argument, bound, checker, new Set())
+    )
+  ) {
+    return true;
+  }
+  return checker.getPropertiesOfType(type).length === 0 &&
+    checker.getIndexInfosOfType(type).length === 0 &&
+    (written === undefined || holdsFreeTypeParameter(written, checker));
+}
+
+/**
+ * Whether `type` is, or is built from, a type parameter `bound` binds: as a
+ * union or intersection member, or as a type argument of a reference or an
+ * alias.
+ */
+function mentionsBoundParameter(
+  type: ts.Type,
+  bound: BoundTypeParameters,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Type>,
+): boolean {
+  if (seen.has(type)) return false;
+  seen.add(type);
+  if ((type.flags & ts.TypeFlags.TypeParameter) !== 0) {
+    const declaration = type.symbol?.declarations?.find(
+      ts.isTypeParameterDeclaration,
+    );
+    return declaration !== undefined && bound.arguments.has(declaration);
+  }
+  const mentions = (types: readonly ts.Type[] | undefined) =>
+    types?.some((part) => mentionsBoundParameter(part, bound, checker, seen)) ??
+      false;
+  if (type.isUnionOrIntersection()) return mentions(type.types);
+  const objectFlags = (type as ts.ObjectType).objectFlags ?? 0;
+  return mentions((type as TypeWithInternals).aliasTypeArguments) ||
+    ((objectFlags & ts.ObjectFlags.Reference) !== 0 &&
+      mentions(checker.getTypeArguments(type as ts.TypeReference)));
 }
 
 /**
@@ -1192,18 +1319,34 @@ export class SchemaGenerator {
     context: GenerationContext,
     typeNode?: ts.TypeNode,
   ): MutableJSONSchema {
-    // A bound type parameter reads as its argument's type, which is read as
-    // it is, apart from the declaration that binds it.
-    const argument = boundArgumentType(type, context);
+    // A bound type parameter reads as its argument: its node where it has one,
+    // under the bindings of the place it is written, and its type where it
+    // does not. A `Default` around one is read as the wrapper, whose value
+    // reads the parameter in turn.
+    const wrapsBound = wrapsBoundParameter(typeNode, context);
+    const argument = !wrapsBound && boundArgumentOf(type, context);
     if (argument) {
-      const { boundTypeParameters: _, ...unbound } = context;
-      return this.formatChildType(argument, unbound, undefined);
+      const { boundTypeParameters: _, ...outer } = context;
+      return this.formatChildType(
+        argument.type,
+        argument.bound
+          ? { ...outer, boundTypeParameters: argument.bound }
+          : outer,
+        argument.node,
+      );
     }
     // A type still depending on a parameter, where no binding reaches it, is
     // not fully read. One the checker defers, such as `T["name"]`, has no
-    // schema to read, so it accepts any value, as a conditional type does.
+    // schema to read, so it accepts any value, as a conditional type does,
+    // and so does a mapped type over one, unless a library alias is written
+    // for it, which the node-based analyzer applies to the argument.
     const bound = context.boundTypeParameters;
-    if (bound && (type.flags & ts.TypeFlags.Instantiable) !== 0) {
+    const mapsBound = !readsBySyntax(typeNode, context) &&
+      mapsBoundParameter(type, typeNode, context);
+    if (
+      bound && !wrapsBound &&
+      ((type.flags & ts.TypeFlags.Instantiable) !== 0 || mapsBound)
+    ) {
       const unread = context.uninterpretedTypeNodes;
       const node = typeNode ?? bound.declaredNode;
       if (unread && !unread.includes(node)) unread.push(node);
@@ -1235,7 +1378,7 @@ export class SchemaGenerator {
         typeNode,
         context.typeChecker,
       ) ||
-        readsWrittenMembers(typeNode, context));
+        readsBySyntax(typeNode, context));
     if (useNodeBased) {
       // Use node-based analysis (for synthetic nodes or when type is unreliable)
       return this.#applyNodeSchemaHints(
@@ -1271,10 +1414,25 @@ export class SchemaGenerator {
    */
   #bindingKey(context: GenerationContext): string | undefined {
     const bound = context.boundTypeParameters;
-    if (!bound) return undefined;
-    return [...bound.types].map(([parameter, argument]) =>
-      `${this.#bindingId(parameter)}=${this.#bindingId(argument)}`
-    ).sort().join(",");
+    return bound && this.#bindingsKey(bound);
+  }
+
+  /**
+   * Helper for {@link #bindingKey}: each parameter with its argument, which is
+   * its type, its node where it has one, and, unless `deep` is `false`, the
+   * bindings that node is read under, since each can change what the argument
+   * reads as.
+   */
+  #bindingsKey(bound: BoundTypeParameters, deep = true): string {
+    return [...bound.arguments].map(([parameter, argument]) => {
+      const node = argument.node ? `@${this.#bindingId(argument.node)}` : "";
+      const under = deep && argument.bound
+        ? `(${this.#bindingsKey(argument.bound)})`
+        : "";
+      return `${this.#bindingId(parameter)}=${
+        this.#bindingId(argument.type)
+      }${node}${under}`;
+    }).sort().join(",");
   }
 
   #anonymousName(
@@ -1314,10 +1472,14 @@ export class SchemaGenerator {
     isRootType: boolean = false,
   ): MutableJSONSchema {
     // A scope wrapper reads its payload from the reference's argument, even
-    // when its declaration erases to an unbound type parameter.
+    // when its declaration erases to an unbound type parameter, and a
+    // `Default` over a bound one reads its value as the parameter's argument
+    // (`wrapsBoundParameter()`).
+    const wrapsBound = wrapsBoundParameter(context.typeNode, context);
     if (
       (type.flags & ts.TypeFlags.TypeParameter) !== 0 &&
-      !resolveScopeWrapperNode(context.typeNode)?.node.typeArguments?.length
+      !resolveScopeWrapperNode(context.typeNode)?.node.typeArguments?.length &&
+      !wrapsBound
     ) {
       const checker = context.typeChecker;
       const baseConstraint = checker.getBaseConstraintOfType(type);
@@ -1336,7 +1498,7 @@ export class SchemaGenerator {
     // type parameter, TypeScript represents this as a conditional type for
     // deferred evaluation. We treat these as "any" schema since the concrete
     // type isn't known at compile time.
-    if ((type.flags & ts.TypeFlags.Conditional) !== 0) {
+    if ((type.flags & ts.TypeFlags.Conditional) !== 0 && !wrapsBound) {
       return {};
     }
 
@@ -1401,9 +1563,44 @@ export class SchemaGenerator {
     // every occurrence of an instantiation, so a recursive type holding
     // `Writable<TodoItem[]>` meets the same `Cell<TodoItem[]>` again, and in
     // wrapper context the cycle's definition could not be stored. The cycle is
-    // found at the wrapper's value instead, where it can be.
-    const stackKey = type;
+    // found at the wrapper's value instead, where it can be. A type read under
+    // type parameter bindings is that type together with them, as its
+    // definition's name is (`#bindingKey()`), so the same declared type read
+    // under other bindings inside it is no cycle.
+    const bound = context.boundTypeParameters;
+    const stackKey = bound === undefined
+      ? type
+      : `${this.#bindingId(type)}|${this.#bindingsKey(bound)}`;
     const tracksCycle = !scopesHandle && !isWrapperContext;
+    // The same type read inside itself with the same arguments written for
+    // it, each read under deeper bindings, is either a nesting its author
+    // wrote out, `Pair<Pair<string>>`, or a recursion that instantiates it
+    // without end, as `Nest<T[]>` inside `Nest<T>` does. As the checker does
+    // for a type nested this way, the reading takes it for the second once it
+    // is `MAX_BOUND_NESTING` deep; the innermost then accepts any value and is
+    // reported as not fully read.
+    const shape = bound === undefined
+      ? undefined
+      : `shape|${this.#bindingId(type)}|${this.#bindingsKey(bound, false)}`;
+    let shapeKey: string | undefined;
+    for (
+      let depth = 0;
+      shape !== undefined && shapeKey === undefined &&
+      depth < MAX_BOUND_NESTING;
+      depth++
+    ) {
+      const key = `${shape}|${depth}`;
+      if (!context.definitionStack.has(key)) shapeKey = key;
+    }
+    if (
+      tracksCycle && shape !== undefined && shapeKey === undefined &&
+      !context.definitionStack.has(stackKey)
+    ) {
+      const unread = context.uninterpretedTypeNodes;
+      const node = context.typeNode ?? bound?.declaredNode;
+      if (unread && node && !unread.includes(node)) unread.push(node);
+      return {};
+    }
     if (tracksCycle && context.definitionStack.has(stackKey)) {
       if (namedKey) {
         context.emittedRefs.add(namedKey);
@@ -1419,6 +1616,14 @@ export class SchemaGenerator {
 
     // Push current type onto the stack
     if (tracksCycle) context.definitionStack.add(stackKey);
+    const pushedShape = tracksCycle ? shapeKey : undefined;
+    if (pushedShape !== undefined) context.definitionStack.add(pushedShape);
+    const pop = () => {
+      if (tracksCycle) context.definitionStack.delete(stackKey);
+      if (pushedShape !== undefined) {
+        context.definitionStack.delete(pushedShape);
+      }
+    };
 
     // Try to find a formatter that supports this type
     for (const formatter of this.#formatters) {
@@ -1446,7 +1651,7 @@ export class SchemaGenerator {
             context.definitions[keyForDef] = payload as MutableJSONSchema;
           }
           context.inProgressNames.delete(keyForDef);
-          if (tracksCycle) context.definitionStack.delete(stackKey);
+          pop();
           if (!isRootType) {
             context.emittedRefs.add(keyForDef);
             return scopeOnReference === undefined
@@ -1456,14 +1661,14 @@ export class SchemaGenerator {
           // For root, keep inline; buildFinalSchema may promote if we choose
         }
         // Pop after formatting
-        if (tracksCycle) context.definitionStack.delete(stackKey);
+        pop();
         return result;
       }
     }
 
     // If no formatter supports this type, this is an error - we should have
     // complete coverage
-    if (tracksCycle) context.definitionStack.delete(stackKey);
+    pop();
 
     const typeName = context.typeChecker.typeToString(type);
     const typeFlags = type.flags;
@@ -1972,6 +2177,16 @@ export class SchemaGenerator {
         context,
       );
       if (applied !== undefined) return applied;
+      // One whose rules do not apply, over a bound parameter, has a type the
+      // checker has not instantiated, so it is not read.
+      const bound = context.boundTypeParameters;
+      if (
+        bound && namesLibraryAlias(typeNode) &&
+        holdsTypeParameter(typeNode, checker, bound.arguments)
+      ) {
+        context.uninterpretedTypeNodes?.push(typeNode);
+        return true;
+      }
 
       const argument = this.#identityAliasArgument(typeNode, checker, context);
       if (argument) return this.#analyzeChildNode(argument, checker, context);

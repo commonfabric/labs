@@ -32,20 +32,21 @@ async function unreadWarnings(
 
 describe("unread-type-diagnostic", () => {
   it("warns where the value type of a captured cell is left unread", async () => {
-    // A CFC alias whose payload is a generic alias leaves that payload
-    // unread, and the lift's input accepts any value in its place.
+    // The payload, a union, is read from `Labeled`'s declaration, where no
+    // binding of `S` reaches `S["v"]`, and the lift's input accepts any value
+    // in its place.
     const warnings = await unreadWarnings({
       "/test.tsx":
         `import { type Cfc, computed, pattern, Writable } from "commonfabric";
-        type Message<S extends string> = { name: string; sender: S };
-        type Labeled<S extends string> = Cfc<Message<S>, { integrity: ["i"] }>;
-        ${readContact(`Labeled<"b">`)}`,
+        type Labeled<S extends { v: string }> =
+          Cfc<{ name: S["v"] } | { name: number }, { integrity: ["i"] }>;
+        ${readContact(`Labeled<{ v: "b" }>`)}`,
     });
 
     expect(warnings.length).toBe(1);
     expect(warnings[0]!.severity).toBe("warning");
     expect(warnings[0]!.fileName).toBe("/test.tsx");
-    expect(warnings[0]!.message).toContain("`Message<>`");
+    expect(warnings[0]!.message).toContain('`S["v"]`');
   });
 
   describe("a captured type declared as `any`", () => {

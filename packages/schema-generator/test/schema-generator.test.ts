@@ -3151,9 +3151,9 @@ type CalculatorRequest = {
           });
         });
 
-        it("reads a nongeneric alias whose payload substitution does not reach as its labels alone", async () => {
-          // `Contact` itself is read; the lowering leaves the payload, which
-          // still names `T`, as a guess.
+        it("reads a nongeneric alias whose payload holds an indexed access from the type it instantiates", async () => {
+          // No reading of `Secret`'s declaration under bindings reaches
+          // `T["name"]`; the type `Contact` instantiates holds it.
           const schema = await generate(
             {
               "/main.ts": CFC +
@@ -3166,7 +3166,14 @@ type CalculatorRequest = {
 
           expect(schema).toEqual({
             $ref: "#/$defs/Contact",
-            $defs: { Contact: { ifc: { confidentiality: ["owner"] } } },
+            $defs: {
+              Contact: {
+                type: "object",
+                properties: { name: { type: "string", enum: ["Ada"] } },
+                required: ["name"],
+                ifc: { confidentiality: ["owner"] },
+              },
+            },
           });
         });
 
@@ -3188,7 +3195,7 @@ type CalculatorRequest = {
           expect(schema).toBe(true);
         });
 
-        it("leaves a generic the payload names unread, keeping the labels", async () => {
+        it("reads a generic the payload names with the argument", async () => {
           const schema = await generate(
             {
               "/main.ts": CFC +
@@ -3205,7 +3212,21 @@ type CalculatorRequest = {
             ),
           );
 
-          expect(schema).toEqual({ ifc: { confidentiality: ["owner"] } });
+          expect(schema).toEqual({
+            type: "object",
+            properties: {
+              value: {
+                type: "object",
+                properties: {
+                  label: { type: "string" },
+                  extra: { type: "number" },
+                },
+                required: ["label", "extra"],
+              },
+            },
+            required: ["value"],
+            ifc: { confidentiality: ["owner"] },
+          });
         });
 
         it("reads an argument the reference leaves out as its default", async () => {

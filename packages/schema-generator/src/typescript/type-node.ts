@@ -160,7 +160,7 @@ export function readMemberAnnotation(
 }
 
 /** Whether `a` and `b` are unions of the same types once `undefined` is set aside. */
-function sameBesidesUndefined(a: ts.Type, b: ts.Type): boolean {
+export function sameBesidesUndefined(a: ts.Type, b: ts.Type): boolean {
   const parts = (type: ts.Type) =>
     new Set(
       (type.isUnion() ? type.types : [type]).filter((part) =>
@@ -171,4 +171,71 @@ function sameBesidesUndefined(a: ts.Type, b: ts.Type): boolean {
   const bParts = parts(b);
   return aParts.size === bParts.size &&
     [...aParts].every((part) => bParts.has(part));
+}
+
+/**
+ * Returns the type parameter that `node` refers to, through parentheses, when
+ * it is a bare reference to one, and `undefined` for any other node.
+ */
+export function typeParameterOfReference(
+  node: ts.TypeNode,
+  checker: ts.TypeChecker,
+): ts.TypeParameterDeclaration | undefined {
+  const bare = unwrapTypeParentheses(node);
+  if (
+    !ts.isTypeReferenceNode(bare) || !ts.isIdentifier(bare.typeName) ||
+    bare.typeArguments?.length
+  ) {
+    return undefined;
+  }
+  return checker.getSymbolAtLocation(bare.typeName)?.declarations?.find(
+    ts.isTypeParameterDeclaration,
+  );
+}
+
+/**
+ * Whether `node` holds a reference the checker binds to a type parameter, or,
+ * given `parameters`, to one of those.
+ */
+export function holdsTypeParameter(
+  node: ts.Node,
+  checker: ts.TypeChecker,
+  parameters?: { has(parameter: ts.TypeParameterDeclaration): boolean },
+): boolean {
+  if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) {
+    const referenced = checker.getSymbolAtLocation(node.typeName)
+      ?.declarations?.some((declaration) =>
+        ts.isTypeParameterDeclaration(declaration) &&
+        (parameters === undefined || parameters.has(declaration))
+      );
+    if (referenced) return true;
+  }
+  return ts.forEachChild(
+    node,
+    (child) => holdsTypeParameter(child, checker, parameters) || undefined,
+  ) ?? false;
+}
+
+/**
+ * Whether `node` holds a reference to a type parameter declared outside it,
+ * which is to say other than one a mapped type or an `infer` within it
+ * declares, and not one `bound` has, where given.
+ */
+export function holdsFreeTypeParameter(
+  node: ts.Node,
+  checker: ts.TypeChecker,
+  bound?: { has(parameter: ts.TypeParameterDeclaration): boolean },
+): boolean {
+  return holdsTypeParameter(node, checker, {
+    has: (parameter) =>
+      !(bound?.has(parameter) ?? false) && !declaresWithin(node, parameter),
+  });
+}
+
+/** Whether `declaration` is `node` or one of the nodes it holds. */
+function declaresWithin(node: ts.Node, declaration: ts.Node): boolean {
+  for (let at: ts.Node | undefined = declaration; at; at = at.parent) {
+    if (at === node) return true;
+  }
+  return false;
 }

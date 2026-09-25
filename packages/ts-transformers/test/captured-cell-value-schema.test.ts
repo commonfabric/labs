@@ -226,9 +226,10 @@ describe("captured-cell-value-schema", () => {
       });
     });
 
-    it("emits only the labels of a nongeneric alias whose payload substitution does not reach", async () => {
+    it("emits a nongeneric alias whose payload holds an indexed access from the type it instantiates", async () => {
       // `Contact` names no parameter, but the lowering's expansion reaches
-      // `Secret`'s `T` through an indexed access it does not substitute.
+      // `Secret`'s `T` through an indexed access, which the type `Contact`
+      // instantiates holds.
       const output = await transformFiles({
         "/test.tsx":
           `import { computed, Confidential, pattern, Writable } from "commonfabric";
@@ -243,7 +244,12 @@ describe("captured-cell-value-schema", () => {
         stored,
       );
       expect(input.$defs).toEqual({
-        Contact: { ifc: { confidentiality: ["owner"] } },
+        Contact: {
+          type: "object",
+          properties: { name: { type: "string", enum: ["Ada"] } },
+          required: ["name"],
+          ifc: { confidentiality: ["owner"] },
+        },
       });
     });
 

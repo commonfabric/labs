@@ -599,11 +599,13 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
   ({ a, b }) => ({ ${order[0]}, ${order[1]} }),
 );`,
             }, { types: COMMONFABRIC_TYPES, typeCheck: true });
-            const { output } = patternSchemas(parseModule(files["/main.tsx"]!));
-            const defs = output.$defs as Record<string, Schema>;
-            const valueTypes = (field: "a" | "b") => {
+            const { input, output } = patternSchemas(
+              parseModule(files["/main.tsx"]!),
+            );
+            const valueTypes = (schema: Schema, field: "a" | "b") => {
+              const defs = schema.$defs as Record<string, Schema>;
               const link =
-                (output.properties as Record<string, Schema>)[field]!;
+                (schema.properties as Record<string, Schema>)[field]!;
               const properties = link.properties as Record<string, Schema>;
               const next = (properties.next!.anyOf as Schema[]).find((arm) =>
                 arm.$ref
@@ -619,16 +621,18 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
                 self: defNext.$ref === next.$ref,
               };
             };
-            expect(valueTypes("a")).toEqual({
-              value: { type: "string" },
-              recursive: { type: "string" },
-              self: true,
-            });
-            expect(valueTypes("b")).toEqual({
-              value: { type: "number" },
-              recursive: { type: "number" },
-              self: true,
-            });
+            for (const schema of [input, output]) {
+              expect(valueTypes(schema, "a")).toEqual({
+                value: { type: "string" },
+                recursive: { type: "string" },
+                self: true,
+              });
+              expect(valueTypes(schema, "b")).toEqual({
+                value: { type: "number" },
+                recursive: { type: "number" },
+                self: true,
+              });
+            }
           },
         );
       }
@@ -755,6 +759,231 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
           expect((schemas.output.properties as Schema).a).toEqual(output);
         });
       }
+    });
+
+    describe("a generic CFC alias written with its arguments", () => {
+      // Written with its arguments, a chain's payload is read from the last
+      // alias's declaration with each parameter bound to the argument written
+      // for it, so a generic declaration the payload names reads as its
+      // result's does.
+      const BOX = "interface Box<U> { value: U }";
+      const labelled = (
+        payload: Schema,
+        ifc: Schema = { confidentiality: ["secret"], integrity: ["trusted"] },
+      ) => ({ ...payload, ifc });
+      const box = (value: Schema) => ({
+        type: "object",
+        properties: { value },
+        required: ["value"],
+      });
+      const strings = { type: "array", items: { type: "string" } };
+      for (
+        const [spelling, declaration, a, expected] of [
+          [
+            "a generic interface holding it",
+            `${BOX}
+type Sec<T> = Confidential<Box<T> & { tag: string }, ["secret"]>;`,
+            `Integrity<Sec<string>, ["trusted"]>`,
+            labelled({
+              type: "object",
+              properties: {
+                value: { type: "string" },
+                tag: { type: "string" },
+              },
+              required: ["value", "tag"],
+            }),
+          ],
+          [
+            "an array of a generic interface holding it",
+            `${BOX}
+type Sec<T> = Confidential<Box<T>[], ["secret"]>;`,
+            `Integrity<Sec<string>, ["trusted"]>`,
+            labelled({ type: "array", items: box({ type: "string" }) }),
+          ],
+          [
+            "a generic alias holding it",
+            `type Pair<A> = { a: A; b: A };
+type Sec<T> = Confidential<Pair<T>, ["secret"]>;`,
+            `Integrity<Sec<string>, ["trusted"]>`,
+            labelled({
+              type: "object",
+              properties: { a: { type: "string" }, b: { type: "string" } },
+              required: ["a", "b"],
+            }),
+          ],
+          [
+            "another generic alias holding a generic interface",
+            `${BOX}
+type Sec<T> = Confidential<Integrity<Box<T>, ["inner"]>, ["secret"]>;`,
+            `MaxConfidentiality<Sec<string>, ["top"]>`,
+            labelled(box({ type: "string" }), {
+              integrity: ["inner"],
+              confidentiality: ["secret"],
+              maxConfidentiality: ["top"],
+            }),
+          ],
+          [
+            "a union holding another generic alias over a generic interface",
+            `${BOX}
+type Inner<U> = Confidential<Box<U> | number, ["inner"]>;
+type Sec<T> = Confidential<Inner<T> | boolean, ["secret"]>;`,
+            `Integrity<Sec<string>, ["trusted"]>`,
+            labelled({
+              anyOf: [
+                {
+                  anyOf: [box({ type: "string" }), { type: "number" }],
+                  ifc: { confidentiality: ["inner"] },
+                },
+                { type: "boolean" },
+              ],
+            }),
+          ],
+          [
+            "a generic interface reached down a chain of aliases",
+            `${BOX}
+type Sec<T> = Confidential<Box<T>, ["secret"]>;
+type Outer<X> = Sec<X[]>;`,
+            `Integrity<Outer<string>, ["trusted"]>`,
+            labelled(box(strings)),
+          ],
+          [
+            "a generic interface an argument left out defaults to",
+            `${BOX}
+type Sec<T, U = Box<T>> = Confidential<U, ["secret"]>;`,
+            `Integrity<Sec<string>, ["trusted"]>`,
+            labelled(box({ type: "string" })),
+          ],
+        ] as const
+      ) {
+        it(`keeps a payload that is ${spelling}`, async () => {
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, Integrity, MaxConfidentiality, pattern } from "commonfabric";
+${declaration}
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          expect((input.properties as Schema).a).toEqual(expected);
+          expect((output.properties as Schema).a).toEqual(expected);
+        });
+      }
+
+      it("reads a recursion through the alias's optional member as its definition", async () => {
+        // The result's member is `Sec<string> | undefined`, the `?` adding
+        // `undefined` to the type the chain instantiates.
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Sec<T> = Confidential<{ v: T; next?: Sec<T> }, ["secret"]>;
+export default pattern<{ a: Sec<string> }>(({ a }) => ({ a }));`,
+        }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+        const resolve = (root: Schema, schema: Schema) =>
+          typeof schema.$ref === "string"
+            ? (root.$defs as Record<string, Schema>)[
+              schema.$ref.split("/").pop()!
+            ]!
+            : schema;
+        for (const root of [input, output]) {
+          const sec = resolve(
+            root,
+            (root.properties as Record<string, Schema>).a!,
+          );
+          const properties = sec.properties as Record<string, Schema>;
+          const next = resolve(root, properties.next!);
+          expect(properties.v).toEqual({ type: "string" });
+          expect((next.properties as Record<string, Schema>).v).toEqual({
+            type: "string",
+          });
+        }
+      });
+
+      it("keeps a generic interface a generic scope wrapper alias holds", async () => {
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { pattern, PerUser } from "commonfabric";
+${BOX}
+type Rec<T> = PerUser<Box<T>>;
+export default pattern<{ a: Rec<string> }>(({ a }) => ({ a }));`,
+        }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+        const expected = { ...box({ type: "string" }), scope: "user" };
+        expect((input.properties as Schema).a).toEqual(expected);
+        expect((output.properties as Schema).a).toEqual(expected);
+      });
+
+      it("reads a generic declaration's member naming a generic alias as its instantiation", async () => {
+        // `value: Inner<U>` is written in `Holder`'s parameter, whose argument
+        // is in the type `Holder<string>`, not in the member's syntax.
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Inner<X> = Confidential<X[], ["inner"]>;
+interface Holder<U> { value: Inner<U> }
+export default pattern<{ a: Holder<string> }>(({ a }) => ({ a }));`,
+        }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+        const expected = {
+          type: "object",
+          properties: {
+            value: { ...strings, ifc: { confidentiality: ["inner"] } },
+          },
+          required: ["value"],
+        };
+        expect((input.properties as Schema).a).toEqual(expected);
+        expect((output.properties as Schema).a).toEqual(expected);
+      });
+
+      it("keeps a policy binding that only an argument's syntax names", async () => {
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+import type { PolicyOf } from "commonfabric/cfc";
+import {
+  cfcPattern, exchangeRule, exchangeRules, THIS_POLICY, v,
+} from "commonfabric/cfc";
+export const release = exchangeRule({
+  appliesTo: THIS_POLICY,
+  pre: { integrity: [cfcPattern.hasRole(v("user"), THIS_POLICY.subject, "reader")] },
+  post: { addAlternatives: [cfcPattern.user(v("user"))] },
+});
+export const rules = exchangeRules([release]);
+${BOX}
+type Sec<T> = Confidential<Box<T> | null, ["secret"]>;
+export default pattern<{
+  a: Sec<Confidential<string, [PolicyOf<typeof rules>]>>;
+}>(() => ({}));`,
+        }, {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          moduleIdentities: new Map([["/main.tsx", "sha256:module"]]),
+        });
+        const { input } = patternSchemas(parseModule(files["/main.tsx"]!));
+        expect((input.properties as Schema).a).toMatchObject({
+          anyOf: [
+            box({
+              type: "string",
+              ifc: {
+                confidentiality: [{
+                  policyRefKind: "module",
+                  moduleIdentity: "sha256:module",
+                  symbol: "rules",
+                }],
+              },
+            }),
+            { type: "null" },
+          ],
+          ifc: { confidentiality: ["secret"] },
+        });
+      });
     });
 
     describe("an object label with a member the syntax reader cannot name", () => {
