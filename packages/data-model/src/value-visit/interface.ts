@@ -29,7 +29,7 @@ export type MainResultForm<ResultType> = {
 
 /**
  * A `mapTo` form. `value` is a value in the domain of `ResultType` which is to
- * be substituted in place of the visited value in the strutural-map result.
+ * be substituted in place of the visited value in the structural-map result.
  */
 export type MapToForm<ResultType> = {
   readonly type: "mapTo";
