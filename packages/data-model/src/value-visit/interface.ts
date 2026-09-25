@@ -204,8 +204,7 @@ export interface ValueVisitor<
    * determine membership of a value in `ResultType`.
    *
    * **Note:** When `isDomainAssignableToResultType()` returns `true` for a
-   * visitor, the engine will not call this method _except_ to determine if
-   * `undefined` is compatible with `ResultType`.
+   * visitor, the engine will not call this method.
    */
   isResultType(
     value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
