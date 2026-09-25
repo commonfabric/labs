@@ -45,13 +45,19 @@ Independent of each other; each changes one seam.
   `Resource` and `Origin` leave it. Add `ConnectorObserved` and
   `NetworkProvenance` carriers and mint-gate entries. `LlmDerived` is removed
   later, with runner-5.
-- [ ] **runner-3 · Exact `TransformedBy`.** One fresh atom per operation,
+- [ ] **runner-3 · Exact `TransformedBy` shape** (CT-2447). The atom becomes
   `{codeHash, operation?, inputs: [{ref, witnesses?}]}`, keeping the existing
   input-witness substrate and deleting the `{identity, inputWitness}` form and
-  every reader of it. `codeHash` comes from a build-stable artifact identity,
-  not a function's source text.
+  every reader of it. It is minted exactly where the current form is minted.
+  `codeHash` comes from a build-stable artifact identity, not a function's
+  source text.
 - [ ] **runner-3b · Builtin `codeHash`** (after runner-3). A builtin's
   `codeHash` covers the shipped implementation, not only its builtin id.
+- [ ] **runner-3c · A `TransformedBy` per operation** (after runner-3). Every
+  operation that writes a labeled value mints its own atom, not only a
+  single-identity transaction with a confidential observation. The
+  integrity-gated consumers it reaches, such as profile-home's verified
+  identity publish, are checked in the same change.
 - [ ] **runner-7 · Untrusted-label parser** (CT-2314). One runner-owned parse of
   a label from untrusted JSON; unparseable refuses rather than reads as
   unlabeled. No callers in this change.
