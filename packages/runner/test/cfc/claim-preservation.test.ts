@@ -206,6 +206,15 @@ describe("droppedStoredClaim()", () => {
     ).toBeUndefined();
   });
 
+  it("returns a claim on every property that the merged schema drops", () => {
+    expect(
+      droppedStoredClaim(
+        { type: "object", additionalProperties: PIN },
+        { type: "object", additionalProperties: LABELED },
+      ),
+    ).toBe("the merged schema drops the stored uiContract at /*");
+  });
+
   it("returns a writer claim of another form the merged schema changes", () => {
     const at = (writeAuthorizedBy: unknown): JSONSchema => ({
       type: "object",
