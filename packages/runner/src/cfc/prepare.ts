@@ -4238,9 +4238,12 @@ const policySchemaMatchesValue = (
   // unresolvable against its own document fails closed.
   root: JSONSchema = schema,
 ): boolean => {
-  // Keep this narrow matcher aligned with resolveSchemaForValue() in
-  // schema.ts. This copy is intentionally local because CFC policy checks must
-  // fail closed on unresolved refs and partial wildcard writes.
+  // This narrow matcher follows resolveSchemaForValue() in schema.ts except
+  // where applying the policy is the safe answer. It is kept local because
+  // CFC policy checks must fail closed: on unresolved refs, partial wildcard
+  // writes, links below the policy's path (which match any condition), and
+  // `oneOf` (which applies when any branch matches, where value resolution
+  // selects a branch only when exactly one matches).
   if (typeof schema === "boolean") {
     return schema;
   }

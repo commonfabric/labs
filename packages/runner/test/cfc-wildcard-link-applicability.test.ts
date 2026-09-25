@@ -1,4 +1,4 @@
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   FabricBytes,
@@ -87,10 +87,37 @@ describe("CFC wildcard policy applicability on links below the policy's path", (
   // apply to such a value: a link says nothing about what it leads to.
   const space = "did:key:nested-link" as const;
   const target = { space, id: "of:guarded" as const, scope: "space" as const };
+  // Every cell a nested link below leads to resolves, in this transaction, to
+  // a number: a value no condition here accepts. A matcher that followed a
+  // nested link would read it and exclude the entry; the counts show the
+  // matcher consults neither the transaction's writes nor its reads.
+  let lookups = 0;
+  let reads = 0;
   const tx = {
-    getWriteDetails: () => [],
-    readValueOrThrow: () => undefined,
+    getWriteDetails: () => {
+      lookups++;
+      return [
+        "of:name-cell",
+        "of:avatar-cell",
+        "of:kind-cell",
+        "of:mode-cell",
+        "of:field-cell",
+      ].map((id) => ({
+        address: { id, scope: "space", path: ["value"] },
+        value: 42,
+      }));
+    },
+    readValueOrThrow: () => {
+      reads++;
+      return 42;
+    },
   } as unknown as IExtendedStorageTransaction;
+  afterEach(() => {
+    expect(lookups).toBe(0);
+    expect(reads).toBe(0);
+    lookups = 0;
+    reads = 0;
+  });
   const link = (id: string) => ({
     "/": {
       [LINK_V1_TAG]: {
