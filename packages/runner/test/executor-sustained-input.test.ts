@@ -135,9 +135,13 @@ describe("SpaceServer", () => {
       // synchronous stretch as the cycle's own floor read, so that read
       // finds no floor. The novelty that lifts has not been derived yet,
       // so a proof taken while it was shadowed may not claim it; only the
-      // floor read with the proof holds the advance below it. The inputs
-      // are direct writes, so that no terminal root's deferred retry holds
-      // W lower than the floor does and hides which clamp held it.
+      // floor read with the proof holds the advance below it. The lift
+      // waits for a cut settle that took such a proof: the proof reads the
+      // floor while the scheduler is idle, and only a settle the deadline
+      // cuts purges, so a cut with no proof behind it leaves the lift to a
+      // later one. The inputs are direct writes, so that no terminal root's
+      // deferred retry holds W lower than the floor does and hides which
+      // clamp held it.
 
       const opened = await openSustainedInputFixture({
         flushDeadlineMs: 300,
@@ -151,12 +155,22 @@ describe("SpaceServer", () => {
           unappliedForeignSeqFloor?: () => number | undefined;
         };
       let floor: number | undefined;
-      replica.unappliedForeignSeqFloor = () => floor;
+      // The cycle in which the floor was last read over an idle scheduler.
+      // A cycle's advance reads the floor after its cut, and the cycle log
+      // records the cycle after that, so a read logged under the index a
+      // cut sees came from that settle's proof, before the cut.
+      let provedCycle: number | undefined;
+      replica.unappliedForeignSeqFloor = () => {
+        if (floor !== undefined && scheduler.isIdle()) {
+          provedCycle = cycles.entries.length;
+        }
+        return floor;
+      };
       let liftAtCut = false;
       let liftedCycle: number | undefined;
       const purge = scheduler.purgeQueuedEvents.bind(scheduler);
       scheduler.purgeQueuedEvents = (predicate, reason) => {
-        if (liftAtCut) {
+        if (liftAtCut && provedCycle === cycles.entries.length) {
           liftAtCut = false;
           floor = undefined;
           liftedCycle = cycles.entries.length;

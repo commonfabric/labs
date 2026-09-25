@@ -533,10 +533,10 @@ demanded-structure load the settle awaits has completed, and no re-armed
 root is pending proves H covered: everything the scheduler ran after the
 barrier, it ran to completion. The proof is clamped by the shadow floor,
 the event-visibility floor and the re-armed roots' floor read at that
-moment, as the quiescent advance is — a floor that lifts after the proof
-lifts over input the proof never saw applied, so the floors at the cycle's
-end do not replace it — and again by the cycle's own batch head and the
-floors at its end. An exhausted cycle advances W to the highest head
+moment, as the quiescent advance is. A floor read then may lift before
+the cycle ends, over input the proof never saw applied, so the floors
+read at the cycle's end do not replace it. The advance is clamped again
+by the cycle's own batch head and those floors at its end. An exhausted cycle advances W to the highest head
 proved before its wave closed, sealing the advance into that wave as any
 other. A wave commit that aborts discards the carried H
 (the abort withdrew consequences the proof would count), as does the end

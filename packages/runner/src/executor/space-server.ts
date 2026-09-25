@@ -6006,9 +6006,10 @@ export class SpaceServer implements TransactionSealDestination {
    */
   async #serveWave(runtime: Runtime): Promise<void> {
     const { batchHead } = this.#drainFeed(runtime);
-    // A record the drain holds back stops this batch short of it. This
-    // cycle's advance never passes its batch head in any case; lowering the
-    // carried head too keeps it naming only frames that have been applied.
+    // A record the drain holds back stops this batch short of it. An
+    // exhausted cycle's proof is clamped to this batch head in any case;
+    // lowering the carried head too keeps it naming only frames that have
+    // been applied.
     if (this.#barrierHead !== undefined) {
       this.#barrierHead = Math.min(this.#barrierHead, batchHead);
     }
