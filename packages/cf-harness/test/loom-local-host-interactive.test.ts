@@ -1,4 +1,8 @@
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import { fromFileUrl, join } from "@std/path";
 import { readHarnessRunArtifacts } from "../src/artifacts.ts";
 import { InMemoryHarnessCredentialStore } from "../src/auth/credential-store.ts";
@@ -615,4 +619,66 @@ Deno.test("local Loom interactive help does not require provider configuration o
   assertStringIncludes(stderr, "--chat-max-in-memory-events");
   assertEquals(stderr.includes("provider-configuration-required"), false);
   assertEquals(stderr.includes("provider-auth-required"), false);
+});
+
+Deno.test("local Loom interactive host selects the sandbox runtime its environment names", async () => {
+  // The batch entrypoint derived the runsc runtime from
+  // CF_HARNESS_SANDBOX_RUNTIME and its companions; the interactive host read
+  // none of them. Loom's chat lane launched this host with the native
+  // environment set and every turn built a docker engine anyway — the same
+  // "second entrypoint, no provisioning" defect the host-mount work removed,
+  // one layer over. This is the entrypoint Loom runs
+  // (`loom-local-host-main.ts interactive`), so the assertion is on what it
+  // forwards, not on the parser.
+  const home = await Deno.makeTempDir();
+  const runWith = async (
+    env: Record<string, string>,
+  ): Promise<RunHarnessInteractiveChatStdioOptions> => {
+    const seen: RunHarnessInteractiveChatStdioOptions[] = [];
+    const host = await createLoomLocalCfHarnessHost({
+      harnessHome: home,
+      env: {
+        CF_HARNESS_GATEWAY_BASE_URL: "https://gateway.example/",
+        CF_HARNESS_GATEWAY_AUTH_MODE: "none",
+        ...env,
+      },
+      credentialStore: new InMemoryHarnessCredentialStore(),
+      providerSettingsStore: configured("openai-compatible-gateway"),
+      fetchFn: () => Promise.reject(new Error("must not request")),
+      interactiveStdioRunner: (options) => {
+        seen.push(options);
+        return Promise.resolve();
+      },
+    });
+    await host.runInteractive([]);
+    assertEquals(seen.length, 1);
+    return seen[0];
+  };
+
+  const native = (await runWith({
+    CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+    CF_HARNESS_SANDBOX_ROOTFS: "/images/kitchensink",
+    CF_HARNESS_RUNSC_CFC_POLICY: "/policy.json",
+    CF_HARNESS_RUNSC_BINARY: "/opt/runsc",
+    CF_HARNESS_DOCKER_NETWORK_MODE: "bridge",
+  })).basePromptLoopOptions;
+  assertEquals(native?.sandboxRuntimeKind, "runsc");
+  assertEquals(native?.sandboxRootfs, "/images/kitchensink");
+  assertEquals(native?.sandboxCfcPolicy, "/policy.json");
+  assertEquals(native?.sandboxRunscBinary, "/opt/runsc");
+  // docker's network vocabulary maps onto runsc's, as it does for a batch run.
+  assertEquals(native?.sandboxRunscNetworkMode, "sandbox");
+
+  // Nothing named: the docker runtime, exactly as before.
+  const unset = (await runWith({})).basePromptLoopOptions;
+  assertEquals(unset?.sandboxRuntimeKind, undefined);
+  assertEquals(unset?.sandboxRootfs, undefined);
+  assertEquals(unset?.sandboxRunscNetworkMode, undefined);
+
+  // A runtime nobody has is refused up front, not read as docker.
+  await assertRejects(
+    () => runWith({ CF_HARNESS_SANDBOX_RUNTIME: "podman" }),
+    Error,
+    "sandbox runtime must be one of docker, runsc",
+  );
 });

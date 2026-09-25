@@ -12,6 +12,7 @@ import {
   extractFinalWorkingDirectory,
 } from "./shell-cwd.ts";
 import { ProcessTimeoutError } from "../sandbox/process-runner.ts";
+import { SandboxSessionUnavailableError } from "../sandbox/types.ts";
 import { SandboxPathEscapeError } from "../sandbox/errors.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 
@@ -34,11 +35,23 @@ export const BASH_CWD_OUTSIDE_SANDBOX_EXIT_CODE = 1;
 // 124 is the conventional shell exit code for a timed-out command (GNU coreutils
 // `timeout`), which agents already recognize.
 export const BASH_TIMEOUT_EXIT_CODE = 124;
+/**
+ * The command did not run: it named a sandbox session the runtime cannot
+ * honour (no sessions). Recoverable — the model reruns
+ * without the session.
+ */
+export const BASH_SESSION_UNAVAILABLE_EXIT_CODE = 125;
 
 export interface BashToolInput {
   command: string;
   cwd?: string;
   timeoutMs?: number;
+  /**
+   * Optional sandbox session. Commands that name the same session share one
+   * sandbox for the rest of the run; commands that name none each get a
+   * fresh one. Only the runsc runtime honours it today.
+   */
+  session?: string;
   // Trusted harness/test plumbing for invocation input labels. This is omitted
   // from the public tool schema so model-authored tool calls do not mint labels.
   cfcInputLabels?: CfcLabelView;
@@ -74,6 +87,12 @@ export const bashToolDescriptor: HarnessToolDescriptor = {
       command: { type: "string" },
       cwd: { type: "string" },
       timeoutMs: { type: "number", minimum: 0 },
+      session: {
+        type: "string",
+        pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
+        description:
+          "Name a sandbox session to keep state between commands (files outside the mounts, background processes). Only some sandbox runtimes offer sessions: where one is unavailable the call does not run and returns a recoverable error saying so, and you rerun it without a session. Omit for a fresh sandbox per command.",
+      },
     },
     required: ["command"],
     additionalProperties: false,
@@ -159,6 +178,24 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
         ? [["command"], ["cwd"]]
         : [["command"]],
     });
+    if (
+      input.session !== undefined &&
+      context.sandbox.describe().sessions !== true
+    ) {
+      // Said rather than silently dropped: a runtime without sessions would
+      // run the command in a fresh sandbox and the model would go on relying
+      // on state that is not there.
+      // Nothing ran, so the working directory is unchanged — the same
+      // shape as the cwd-outside-sandbox refusal above.
+      return {
+        outputId,
+        stdout: "",
+        stderr:
+          "this sandbox runtime has no sessions; rerun the command without `session`",
+        exitCode: BASH_SESSION_UNAVAILABLE_EXIT_CODE,
+        cwd: context.currentDir,
+      };
+    }
     let result: Awaited<ReturnType<typeof context.sandbox.runShell>>;
     try {
       result = await context.sandbox.runShell({
@@ -166,6 +203,7 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
         cwd: commandCwd,
         timeoutMs: input.timeoutMs,
         cfcInvocationContext,
+        ...(input.session !== undefined ? { session: input.session } : {}),
       });
     } catch (error) {
       if (error instanceof ProcessTimeoutError) {
@@ -179,6 +217,17 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
           stderr: `command timed out after ${error.timeoutMs}ms`,
           exitCode: BASH_TIMEOUT_EXIT_CODE,
           cwd: commandCwd,
+        };
+      }
+      if (error instanceof SandboxSessionUnavailableError) {
+        // The runtime has sessions but not for this call: the model can act
+        // on that by dropping the session.
+        return {
+          outputId,
+          stdout: "",
+          stderr: `${error.message}; rerun the command without \`session\``,
+          exitCode: BASH_SESSION_UNAVAILABLE_EXIT_CODE,
+          cwd: context.currentDir,
         };
       }
       // Anything else from runShell — docker spawn/infra, CFC transport — is not

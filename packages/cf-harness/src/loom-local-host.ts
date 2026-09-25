@@ -572,6 +572,10 @@ export const createLoomLocalCfHarnessHost = async (
         // Same base the batch path resolves relative sources against, so a
         // spec means the same thing on either entrypoint.
         options.cliDependencies?.cwd ?? Deno.cwd(),
+        // The sandbox runtime is read from the same environment the batch
+        // path hands its CLI, so both lanes of one Loom instance execute in
+        // the sandbox the instance selected.
+        processEnv,
       );
       const provider = await configuredProvider();
       const binding: LoomLocalHostBinding = {

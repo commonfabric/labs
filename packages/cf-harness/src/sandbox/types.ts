@@ -146,6 +146,18 @@ export type CfcTransportReadiness = {
   readonly [K in CfcSidecarTransportKind]?: CfcSidecarTransportReading;
 };
 
+/**
+ * A sandbox session name. A call that names one runs inside a sandbox the
+ * runtime keeps alive for the rest of the run, so state a command leaves
+ * behind (files outside the mounts, background processes, installed
+ * packages) is there for the next call that names the same session. A call
+ * that names none gets a fresh sandbox of its own. Sessions are scoped to
+ * the run: two runs naming the same session never share a sandbox.
+ */
+export type SandboxSessionName = string;
+
+export const SANDBOX_SESSION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/;
+
 export interface SandboxCommandRequest {
   argv: string[];
   cwd?: string;
@@ -153,6 +165,7 @@ export interface SandboxCommandRequest {
   stdinText?: string;
   timeoutMs?: number;
   cfcInvocationContext?: HarnessCfcInvocationContext;
+  session?: SandboxSessionName;
 }
 
 export interface SandboxShellRequest {
@@ -163,6 +176,7 @@ export interface SandboxShellRequest {
   stdinText?: string;
   timeoutMs?: number;
   cfcInvocationContext?: HarnessCfcInvocationContext;
+  session?: SandboxSessionName;
 }
 
 export interface SandboxCommandResult {
@@ -172,16 +186,31 @@ export interface SandboxCommandResult {
   cfcResult?: CfcSandboxResult;
 }
 
+/**
+ * A tool call named a sandbox session the runtime cannot honour right now:
+ * the runtime has no sessions, or the run's enforcement mode forbids them.
+ * Recoverable: the bash tool turns it into a result the model can act on
+ * (drop the session), rather than a run-fatal error.
+ */
+export class SandboxSessionUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SandboxSessionUnavailableError";
+  }
+}
+
 export interface SandboxRuntimeDescription {
-  kind: "docker-runsc-cfc";
+  kind: "docker-runsc-cfc" | "runsc-cfc";
   defaultWorkingDirectory: string;
+  /** Whether `session` on a request is honoured rather than ignored. */
+  sessions?: boolean;
   cfc?: {
     runtimeRequested: boolean;
     runtimeName?: string;
     image?: string;
     workspaceMountPath?: string;
     mounts?: readonly SandboxRuntimeMountDescription[];
-    networkMode?: DockerNetworkMode;
+    networkMode?: DockerNetworkMode | "sandbox";
     extraDockerArgsCount?: number;
     invocationContextTransport?: string;
     invocationContextTransportReadiness?: string;
@@ -214,4 +243,11 @@ export interface SandboxRuntime {
   defaultWorkingDirectory(): string;
   run(request: SandboxCommandRequest): Promise<SandboxCommandResult>;
   runShell(request: SandboxShellRequest): Promise<SandboxCommandResult>;
+
+  /**
+   * Release whatever the runtime keeps alive between calls (sessions). The
+   * engine calls it when the run ends; a runtime with nothing to release
+   * need not implement it.
+   */
+  close?(): Promise<void>;
 }

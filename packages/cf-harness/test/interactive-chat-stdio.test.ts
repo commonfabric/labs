@@ -1335,7 +1335,7 @@ Deno.test("no provisioning flags leaves the run options untouched", async () => 
   // The other half of the standalone-entrypoint contract: adding these flags
   // must not change what happens when nobody passes them, or every existing
   // embedder gets a behaviour change for free.
-  assertEquals(await resolveInteractiveProvisioning({}, Deno.cwd()), {});
+  assertEquals(await resolveInteractiveProvisioning({}, Deno.cwd(), {}), {});
 
   const seen: RunHarnessInteractiveChatStdioOptions[] = [];
   await runHarnessInteractiveChatStdioCli(
@@ -1353,7 +1353,7 @@ Deno.test("no provisioning flags leaves the run options untouched", async () => 
 
 Deno.test("resolveInteractiveProvisioning carries a turn budget without mounts", async () => {
   assertEquals(
-    await resolveInteractiveProvisioning({ maxModelTurns: 32 }, Deno.cwd()),
+    await resolveInteractiveProvisioning({ maxModelTurns: 32 }, Deno.cwd(), {}),
     { maxModelTurns: 32 },
   );
 });
@@ -1611,5 +1611,84 @@ Deno.test("interactive stdio writes one refusal line to its error output for a h
   } finally {
     holder.close();
     await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("resolveInteractiveProvisioning selects the sandbox runtime the environment names", async () => {
+  // Same derivation as the batch CLI, so a chat session and a batch run
+  // launched from one environment execute in the same sandbox.
+  assertEquals(
+    await resolveInteractiveProvisioning({}, Deno.cwd(), {
+      CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      CF_HARNESS_SANDBOX_ROOTFS: "/r",
+      CF_HARNESS_RUNSC_CFC_POLICY: "/p",
+      CF_HARNESS_RUNSC_BINARY: "/b",
+      CF_HARNESS_DOCKER_NETWORK_MODE: "host",
+    }),
+    {
+      sandboxRuntimeKind: "runsc",
+      sandboxRootfs: "/r",
+      sandboxCfcPolicy: "/p",
+      sandboxRunscBinary: "/b",
+      sandboxRunscNetworkMode: "host",
+    },
+  );
+  await assertRejects(
+    () =>
+      resolveInteractiveProvisioning({}, Deno.cwd(), {
+        CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+        CF_HARNESS_DOCKER_NETWORK_MODE: "bridgeish",
+      }),
+    Error,
+    "CF_HARNESS_DOCKER_NETWORK_MODE must be one of none, bridge, or host",
+  );
+
+  // The default policy the usage text promises is discovered under HOME for
+  // the runsc runtime, through the real file system.
+  const home = await Deno.makeTempDir();
+  try {
+    const policy = join(home, ".local", "share", "runsc-cfc", "cfc-policy.json");
+    assertEquals(
+      await resolveInteractiveProvisioning({}, Deno.cwd(), {
+        HOME: home,
+        CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      }),
+      { sandboxRuntimeKind: "runsc" },
+    );
+    await Deno.mkdir(join(home, ".local", "share", "runsc-cfc"), {
+      recursive: true,
+    });
+    await Deno.writeTextFile(policy, "{}");
+    assertEquals(
+      await resolveInteractiveProvisioning({}, Deno.cwd(), {
+        HOME: home,
+        CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      }),
+      { sandboxRuntimeKind: "runsc", sandboxCfcPolicy: policy },
+    );
+  } finally {
+    await Deno.remove(home, { recursive: true });
+  }
+});
+
+Deno.test("the standalone stdio entrypoint selects the sandbox runtime from its environment", async () => {
+  // The standalone entrypoint reads the process environment itself; the
+  // Loom-local host is covered in its own suite.
+  const previous = Deno.env.get("CF_HARNESS_SANDBOX_RUNTIME");
+  Deno.env.set("CF_HARNESS_SANDBOX_RUNTIME", "runsc");
+  try {
+    const seen: RunHarnessInteractiveChatStdioOptions[] = [];
+    await runHarnessInteractiveChatStdioCli([], Deno.cwd(), (options) => {
+      seen.push(options);
+      return Promise.resolve();
+    });
+    assertEquals(seen.length, 1);
+    assertEquals(seen[0].basePromptLoopOptions?.sandboxRuntimeKind, "runsc");
+  } finally {
+    if (previous === undefined) {
+      Deno.env.delete("CF_HARNESS_SANDBOX_RUNTIME");
+    } else {
+      Deno.env.set("CF_HARNESS_SANDBOX_RUNTIME", previous);
+    }
   }
 });

@@ -16,6 +16,26 @@ export interface ProcessRunResult {
 
 export interface ProcessRunner {
   run(request: ProcessRunRequest): Promise<ProcessRunResult>;
+  /**
+   * Start a process and hand back its handle instead of waiting for it. A
+   * sandbox session is a long-lived child the runtime keeps alive between
+   * tool calls; this is how it is started and, when the run ends, stopped.
+   */
+  spawn?(request: ProcessSpawnRequest): ProcessHandle;
+}
+
+export interface ProcessSpawnRequest {
+  command: string;
+  args: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+}
+
+export interface ProcessHandle {
+  readonly pid: number;
+  /** Resolves when the process exits. */
+  readonly exited: Promise<{ exitCode: number }>;
+  kill(signal?: "SIGTERM" | "SIGKILL"): void;
 }
 
 export class ProcessTimeoutError extends Error {
@@ -42,6 +62,34 @@ const readStreamText = async (
 };
 
 export class DenoProcessRunner implements ProcessRunner {
+  spawn(request: ProcessSpawnRequest): ProcessHandle {
+    const child = new Deno.Command(request.command, {
+      args: request.args,
+      cwd: request.cwd,
+      env: request.env,
+      stdin: "null",
+      stdout: "null",
+      stderr: "null",
+    }).spawn();
+    let done = false;
+    const exited = child.status.then((status) => {
+      done = true;
+      return { exitCode: status.code };
+    });
+    return {
+      pid: child.pid,
+      exited,
+      kill: (signal = "SIGTERM") => {
+        if (done) return;
+        try {
+          child.kill(signal);
+        } catch {
+          // Already gone.
+        }
+      },
+    };
+  }
+
   async run(request: ProcessRunRequest): Promise<ProcessRunResult> {
     const controller = new AbortController();
     let timeoutTriggered = false;

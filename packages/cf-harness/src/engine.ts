@@ -214,6 +214,13 @@ import {
   resolveDockerRunscSandboxConfig,
 } from "./sandbox/docker-runsc.ts";
 import {
+  assertRunscCfcPolicyForMode,
+  resolveRunscSandboxConfig,
+  type RunscNetworkMode,
+  type RunscSandboxConfig,
+  RunscSandboxRuntime,
+} from "./sandbox/runsc.ts";
+import {
   DenoProcessRunner,
   type ProcessRunner,
 } from "./sandbox/process-runner.ts";
@@ -402,10 +409,30 @@ export interface CreateHarnessEngineOptions
   workspaceHostPath?: string;
   sandboxImage?: string;
   sandboxDockerRuntime?: string;
+  /**
+   * Which sandbox the engine builds when none is injected: `docker` (the
+   * default) drives Docker with the runsc-cfc runtime; `runsc` runs runsc
+   * directly, with no Docker, and honours tool-call sessions.
+   */
+  sandboxRuntimeKind?: "docker" | "runsc";
+  /** runsc runtime: the rootfs a bundle names. */
+  sandboxRootfs?: string;
+  /** runsc runtime: CFC policy file; `--cfc` is passed exactly when set. */
+  sandboxCfcPolicy?: string;
+  /** runsc runtime: the binary, default `runsc` on PATH. */
+  sandboxRunscBinary?: string;
+  sandboxRunscNetworkMode?: RunscNetworkMode;
   additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
   cfcResultDir?: string;
   cfcInvocationContextDir?: string;
   sandboxRuntime?: SandboxRuntime;
+  /**
+   * Whether an injected `sandboxRuntime` is this engine's to close when the
+   * run ends. Off by default: an injected runtime is usually shared (a child
+   * handed its parent's), and closing it under the other holder ends their
+   * sessions too. A runtime the engine builds itself is always its own.
+   */
+  ownsSandboxRuntime?: boolean;
   artifactStore?: HarnessArtifactStore;
   processRunner?: ProcessRunner;
 
@@ -672,6 +699,10 @@ export class CfHarnessEngine {
   readonly #spaceDbPath?: string;
   readonly #hostMounts: readonly HostSandboxMount[];
   readonly #ownedRunscConfig?: DockerRunscSandboxConfig;
+  /** The runsc configuration this engine built, when it built one. */
+  readonly #ownedNativeConfig?: RunscSandboxConfig;
+  #sandboxClosed = false;
+  readonly #ownsSandbox: boolean;
   readonly #resumedRun: boolean;
   #runModelBound: boolean;
   #cfcTransportChecked = false;
@@ -896,7 +927,15 @@ export class CfHarnessEngine {
     this.#connectorGrants = options.connectorGrants ?? [];
     this.#patternRefs = options.patternRefs ?? [];
     this.#spaceDbPath = options.spaceDbPath;
-    const sandboxConfig = options.sandboxRuntime === undefined
+    const useRunsc = options.sandboxRuntime === undefined &&
+      options.sandboxRuntimeKind === "runsc";
+    // Under the runsc runtime no docker configuration describes this run,
+    // whatever `config.sandbox` holds: the mounts below come from the runsc
+    // configuration, so host-backed tools resolve against the sandbox that
+    // actually executes.
+    const sandboxConfig = useRunsc
+      ? undefined
+      : options.sandboxRuntime === undefined
       ? resolveSandboxConfig(this.config, {
         workspaceHostPath: options.workspaceHostPath,
         sandboxImage: options.sandboxImage,
@@ -910,31 +949,56 @@ export class CfHarnessEngine {
     // enforce-mode sandbox work — capability probes or tools — whose sandbox
     // lacks the CFC sidecar transports (the check fires at run start, not
     // construction — see #assertCfcTransportReady).
-    // Only when the engine constructs the runtime itself: an injected
+    // Only when the engine constructs the docker runtime itself: an injected
     // sandboxRuntime is the thing that actually executes and carries its own
     // enforcement guarantees, while `sandboxConfig` in that branch is the
     // unused resolved config and may describe a different sandbox entirely.
-    this.#ownedRunscConfig = options.sandboxRuntime === undefined
+    // The runsc runtime carries the CFC transport on descriptors it opens
+    // itself, so it has no registration to check.
+    this.#ownedRunscConfig = options.sandboxRuntime === undefined && !useRunsc
       ? sandboxConfig
       : undefined;
     this.hostProcessRunner = options.processRunner ?? new DenoProcessRunner();
+    const runscConfig = useRunsc
+      ? resolveRunscSandboxConfig({
+        workspaceHostPath: options.workspaceHostPath ??
+          this.config.sandbox?.workspaceHostPath ??
+          (() => {
+            throw new Error("runsc sandbox needs a workspaceHostPath");
+          })(),
+        rootfs: options.sandboxRootfs,
+        runscBinary: options.sandboxRunscBinary,
+        cfcPolicyPath: options.sandboxCfcPolicy,
+        networkMode: options.sandboxRunscNetworkMode,
+        additionalMounts: options.additionalMounts,
+        runId,
+        homeDir: Deno.env.get("HOME"),
+      })
+      : undefined;
+    this.#ownedNativeConfig = runscConfig;
+    this.#ownsSandbox = options.sandboxRuntime === undefined ||
+      options.ownsSandboxRuntime === true;
     this.sandbox = options.sandboxRuntime ??
-      new DockerRunscSandboxRuntime(sandboxConfig!, options.processRunner);
+      (runscConfig !== undefined
+        ? new RunscSandboxRuntime(runscConfig, options.processRunner)
+        : new DockerRunscSandboxRuntime(sandboxConfig!, options.processRunner));
     this.workspaceHostPath = sandboxConfig?.workspaceHostPath ??
+      runscConfig?.workspaceHostPath ??
       options.workspaceHostPath;
     this.workspaceMountPath = normalizeSandboxRoot(
       sandboxConfig?.workspaceMountPath ??
         this.sandbox.defaultWorkingDirectory(),
     );
-    this.#hostMounts = sandboxConfig !== undefined
+    const mountSource = sandboxConfig ?? runscConfig;
+    this.#hostMounts = mountSource !== undefined
       ? [
         {
           kind: "workspace",
-          hostPath: sandboxConfig.workspaceHostPath,
-          sandboxPath: sandboxConfig.workspaceMountPath,
+          hostPath: mountSource.workspaceHostPath,
+          sandboxPath: mountSource.workspaceMountPath,
           readOnly: false,
         },
-        ...sandboxConfig.additionalMounts.map((mount) => ({
+        ...mountSource.additionalMounts.map((mount) => ({
           kind: mount.kind,
           ...(mount.kind === "host-bind" ? { name: mount.name } : {}),
           hostPath: mount.hostPath,
@@ -1210,6 +1274,16 @@ export class CfHarnessEngine {
   }
 
   /**
+   * The runsc counterpart of {@link ownedSandboxConfig}: the configuration
+   * the engine built its direct runsc runtime from, or `undefined` when the
+   * runtime is docker or was handed in. A child that needs a mount its parent
+   * lacks builds its own runtime from this.
+   */
+  get ownedRunscSandboxConfig(): RunscSandboxConfig | undefined {
+    return this.#ownedNativeConfig;
+  }
+
+  /**
    * The connector handles this run's console was launched against. A
    * delegating parent hands them to the child engine, so a child's grants
    * resolve from the configuration the parent's resolved from rather than
@@ -1457,9 +1531,31 @@ export class CfHarnessEngine {
    *
    * @throws Error when the run already has its outcome.
    */
+  /**
+   * Release what the sandbox keeps alive between calls (runsc sessions).
+   * Every terminal transition calls it; a runtime without sessions has
+   * nothing to do, and a second call is harmless.
+   */
+  async #closeSandbox(): Promise<void> {
+    if (this.#sandboxClosed || !this.#ownsSandbox) {
+      return;
+    }
+    this.#sandboxClosed = true;
+    try {
+      await this.sandbox.close?.();
+    } catch (error) {
+      console.error(
+        `cf-harness: sandbox close failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
   async completeRun(
     terminalReason: HarnessRunTerminalReason,
   ): Promise<HarnessRunState> {
+    await this.#closeSandbox();
     const now = this.#now();
     this.#runState = await this.#withCellLabels(
       setHarnessRunStatus(this.#runState, "completed", now, terminalReason),
@@ -1482,6 +1578,7 @@ export class CfHarnessEngine {
     error?: unknown,
     options: Omit<ClassifyHarnessRunErrorOptions, "at"> = {},
   ): Promise<HarnessRunState> {
+    await this.#closeSandbox();
     const now = this.#now();
     if (error !== undefined) {
       this.#runState = appendHarnessFailureRecord(
@@ -1505,6 +1602,7 @@ export class CfHarnessEngine {
    * @throws Error when the run already has its outcome.
    */
   async cancelRun(reason: string): Promise<HarnessRunState> {
+    await this.#closeSandbox();
     const now = this.#now();
     this.#runState = await this.#withCellLabels(
       patchHarnessRunState(
@@ -2096,6 +2194,7 @@ export class CfHarnessEngine {
     if (isTerminalHarnessRunStatus(this.#runState.status)) {
       return this.getRunState();
     }
+    await this.#closeSandbox();
     const now = this.#now();
     this.#runState = appendHarnessFailureRecord(
       this.#runState,
@@ -2273,13 +2372,24 @@ export class CfHarnessEngine {
    * wiring. Idempotent so the cost is paid once per run.
    */
   #assertCfcTransportReady(): void {
-    if (this.#cfcTransportChecked || this.#ownedRunscConfig === undefined) {
+    if (this.#cfcTransportChecked) {
       return;
     }
-    assertDockerRunscCfcTransportForMode(
-      this.#runState.cfcEnforcementMode,
-      this.#ownedRunscConfig,
-    );
+    if (this.#ownedRunscConfig !== undefined) {
+      assertDockerRunscCfcTransportForMode(
+        this.#runState.cfcEnforcementMode,
+        this.#ownedRunscConfig,
+      );
+    } else if (this.#ownedNativeConfig !== undefined) {
+      // The same floor for the direct runtime: no policy means no `--cfc`,
+      // so an enforcing run would execute unmediated and deny afterwards.
+      assertRunscCfcPolicyForMode(
+        this.#runState.cfcEnforcementMode,
+        this.#ownedNativeConfig,
+      );
+    } else {
+      return;
+    }
     this.#cfcTransportChecked = true;
   }
 

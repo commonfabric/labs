@@ -10,10 +10,12 @@
  */
 
 import type {
+  DockerRunscAdditionalMountConfig,
   DockerRunscSandboxConfig,
   SandboxRuntime,
   SandboxRuntimeMountDescription,
 } from "../sandbox/types.ts";
+import type { RunscNetworkMode, RunscSandboxConfig } from "../sandbox/runsc.ts";
 import type {
   HarnessAcquiredSkill,
   HarnessAllowedSkillScript,
@@ -95,13 +97,52 @@ export const childSandboxOptions = (
   parent: {
     sandbox: SandboxRuntime;
     ownedSandboxConfig?: DockerRunscSandboxConfig;
+    /** The parent's direct-runsc configuration, when that is what it runs. */
+    ownedRunscSandboxConfig?: RunscSandboxConfig;
     configuredSandbox?: DockerRunscSandboxConfig;
   },
   acquired: HarnessAcquiredSkill | undefined,
 ): {
   sandboxRuntime?: SandboxRuntime;
   sandbox?: DockerRunscSandboxConfig;
+  sandboxRuntimeKind?: "runsc";
+  sandboxRootfs?: string;
+  sandboxCfcPolicy?: string;
+  sandboxRunscBinary?: string;
+  sandboxRunscNetworkMode?: RunscNetworkMode;
+  additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
 } => {
+  if (parent.ownedRunscSandboxConfig !== undefined) {
+    // The direct runtime: EVERY child gets a runtime of its own, built by the
+    // engine from the same configuration in its own option vocabulary (plus
+    // the skill mount when there is one). Sharing the parent's runtime would
+    // share its named sessions and let the child's terminal transition close
+    // the parent's sandbox — both seen live under review.
+    const runsc = parent.ownedRunscSandboxConfig;
+    const mounts = acquired === undefined ||
+        acquiredSkillMountBacks(runsc.additionalMounts, acquired)
+      ? runsc.additionalMounts
+      : [
+        ...runsc.additionalMounts,
+        {
+          kind: "host-bind" as const,
+          name: ACQUIRED_SKILL_MOUNT_NAME,
+          hostPath: acquired.hostRoot,
+          sandboxPath: acquired.sandboxRoot,
+          readOnly: true,
+        },
+      ];
+    return {
+      sandboxRuntimeKind: "runsc",
+      sandboxRootfs: runsc.rootfs,
+      ...(runsc.cfcPolicyPath !== undefined
+        ? { sandboxCfcPolicy: runsc.cfcPolicyPath }
+        : {}),
+      sandboxRunscBinary: runsc.runscBinary,
+      sandboxRunscNetworkMode: runsc.networkMode,
+      additionalMounts: mounts,
+    };
+  }
   if (acquired === undefined || parent.ownedSandboxConfig === undefined) {
     return {
       sandboxRuntime: parent.sandbox,
@@ -200,7 +241,9 @@ export const acquiredSkillScriptSurface = (
  * neither receives no tool.
  */
 export const acquiredSkillScriptBacking = (
-  ownedSandboxConfig: DockerRunscSandboxConfig | undefined,
+  ownedSandboxConfig:
+    | Pick<DockerRunscSandboxConfig, "additionalMounts">
+    | undefined,
   acquiredSkills: readonly HarnessAcquiredSkill[] | undefined,
 ): boolean =>
   (acquiredSkills ?? []).some((skill) =>

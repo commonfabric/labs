@@ -22,6 +22,7 @@ import { discoverHarnessSkills } from "../src/skills/registry.ts";
 import {
   BASH_CWD_OUTSIDE_SANDBOX_EXIT_CODE,
   BASH_CWD_OUTSIDE_SANDBOX_PREFIX,
+  BASH_SESSION_UNAVAILABLE_EXIT_CODE,
   BASH_TIMEOUT_EXIT_CODE,
   bashTool,
 } from "../src/tools/bash.ts";
@@ -52,6 +53,7 @@ import type {
   SandboxRuntimeDescription,
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
+import { SandboxSessionUnavailableError } from "../src/sandbox/types.ts";
 
 const ONE_PIXEL_PNG = decodeBase64(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p94AAAAASUVORK5CYII=",
@@ -3577,4 +3579,48 @@ Deno.test("view_image tool denies reserved artifact paths", async () => {
     },
   });
   assertEquals(sandbox.calls, []);
+});
+
+Deno.test("bash tool refuses a session on a runtime without sessions, recoverably", async () => {
+  const sandbox = new FakeSandboxRuntime([{
+    stdout: "x\n",
+    stderr: "",
+    exitCode: 0,
+  }]);
+  const context = createContext(sandbox);
+  const output = await bashTool.invoke(context, {
+    command: "echo hi",
+    cwd: "repo",
+    session: "build",
+  });
+  assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE);
+  assertStringIncludes(String(output.stderr), "session");
+  // Nothing ran: the model is told rather than silently given a fresh sandbox,
+  // and the working directory is the one it had, not the one it asked for.
+  assertEquals(sandbox.calls, []);
+  assertEquals(output.cwd, "/workspace");
+  assertEquals(context.currentDir, "/workspace");
+});
+
+Deno.test("bash tool turns the runtime's session refusal into a recoverable result", async () => {
+  class RefusingSessions extends FakeSandboxRuntime {
+    override describe(): SandboxRuntimeDescription {
+      return { ...super.describe(), sessions: true };
+    }
+    override runShell(): Promise<SandboxCommandResult> {
+      return Promise.reject(
+        new SandboxSessionUnavailableError("sessions need observe mode here"),
+      );
+    }
+  }
+  const context = createContext(new RefusingSessions());
+  const output = await bashTool.invoke(context, {
+    command: "echo hi",
+    session: "build",
+  });
+  assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE);
+  assertStringIncludes(
+    String(output.stderr),
+    "sessions need observe mode here",
+  );
 });

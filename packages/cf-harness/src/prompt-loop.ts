@@ -3142,7 +3142,7 @@ export class CfHarnessPromptLoop {
       // it — the acquiring parent, or a child sharing a handed-in runtime —
       // has nothing to run and is not backed.
       acquiredSkillsAvailable: acquiredSkillScriptBacking(
-        this.engine.ownedSandboxConfig,
+        this.engine.ownedSandboxConfig ?? this.engine.ownedRunscSandboxConfig,
         this.engine.getRunState().acquiredSkills?.skills,
       ),
       docsCorpusAvailable: this.engine.docsCorpusAvailable,
@@ -5669,6 +5669,7 @@ export class CfHarnessPromptLoop {
       ...childSandboxOptions({
         sandbox: this.engine.sandbox,
         ownedSandboxConfig: this.engine.ownedSandboxConfig,
+        ownedRunscSandboxConfig: this.engine.ownedRunscSandboxConfig,
         configuredSandbox: this.engine.config.sandbox,
       }, childAcquiredSkill),
       // The parent's own record, narrowed to the one skill. Narrowed rather

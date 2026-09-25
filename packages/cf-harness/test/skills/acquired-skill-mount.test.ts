@@ -6,6 +6,7 @@ import type {
   HarnessSkillAcquisition,
 } from "../../src/contracts/skill.ts";
 import type { DockerRunscSandboxConfig } from "../../src/sandbox/types.ts";
+import { resolveRunscSandboxConfig } from "../../src/sandbox/runsc.ts";
 import {
   acquiredSkillForHandle,
   acquiredSkillScriptSurface,
@@ -247,5 +248,98 @@ describe("the acquired-skill mount a delegation gives its child", () => {
       expect(options.sandboxRuntime).toBe(fakeRuntime);
       expect(options.sandbox).toBe(parentSandbox);
     });
+  });
+});
+
+describe("childSandboxOptions() on the runsc runtime", () => {
+  const sandbox = {
+    describe: () => ({
+      kind: "runsc-cfc",
+      defaultWorkingDirectory: "/workspace",
+    }),
+  } as unknown as Parameters<typeof childSandboxOptions>[0]["sandbox"];
+  const parentRunsc = resolveRunscSandboxConfig({
+    workspaceHostPath: "/tmp/workspace",
+    rootfs: "/images/kitchensink",
+    cfcPolicyPath: "/policy.json",
+    runscBinary: "/opt/runsc",
+    networkMode: "sandbox",
+    scratchDir: "/tmp/scratch",
+    runId: "run-1",
+    platform: "linux",
+    additionalMounts: [{
+      kind: "host-bind",
+      name: "cabinet",
+      hostPath: "/tmp/cabinet",
+      sandboxPath: "/file-cabinet",
+      readOnly: true,
+    }],
+  });
+
+  it("gives a child that mounts an acquired skill a runsc sandbox of its own", () => {
+    const options = childSandboxOptions(
+      { sandbox, ownedRunscSandboxConfig: parentRunsc },
+      acquiredAt(COMMIT_SHA),
+    );
+    expect(options.sandboxRuntime).toBeUndefined();
+    expect(options.sandbox).toBeUndefined();
+    expect(options.sandboxRuntimeKind).toBe("runsc");
+    expect(options.sandboxRootfs).toBe("/images/kitchensink");
+    expect(options.sandboxCfcPolicy).toBe("/policy.json");
+    expect(options.sandboxRunscBinary).toBe("/opt/runsc");
+    expect(options.sandboxRunscNetworkMode).toBe("sandbox");
+    expect(options.additionalMounts?.map((m) => m.sandboxPath)).toEqual([
+      "/file-cabinet",
+      "/acquired-skill",
+    ]);
+    const skillMount = options.additionalMounts?.[1];
+    expect(skillMount?.kind).toBe("host-bind");
+    expect(skillMount?.readOnly).toBe(true);
+    expect(skillMount?.hostPath).toBe(acquiredAt(COMMIT_SHA).hostRoot);
+  });
+
+  it("adds no second mount where the parent's runsc configuration already backs the skill", () => {
+    const acquired = acquiredAt(COMMIT_SHA);
+    const alreadyMounted = resolveRunscSandboxConfig({
+      workspaceHostPath: "/tmp/workspace",
+      rootfs: "/images/kitchensink",
+      scratchDir: "/tmp/scratch",
+      runId: "run-1",
+      platform: "linux",
+      additionalMounts: [
+        ...parentRunsc.additionalMounts,
+        {
+          kind: "host-bind",
+          name: "acquired-skill",
+          hostPath: acquired.hostRoot,
+          sandboxPath: "/acquired-skill",
+          readOnly: true,
+        },
+      ],
+    });
+    const options = childSandboxOptions(
+      { sandbox, ownedRunscSandboxConfig: alreadyMounted },
+      acquired,
+    );
+    expect(options.sandboxRuntimeKind).toBe("runsc");
+    expect(options.additionalMounts).toBe(alreadyMounted.additionalMounts);
+    expect(options.additionalMounts?.map((m) => m.sandboxPath)).toEqual([
+      "/file-cabinet",
+      "/acquired-skill",
+    ]);
+  });
+
+  it("gives every runsc child a runtime of its own, mount or no mount", () => {
+    // A shared runtime would share the parent's named sessions and let the
+    // child's terminal transition close the parent's sandbox (review,
+    // verified live). Each run owns its sessions and its lifecycle.
+    const options = childSandboxOptions(
+      { sandbox, ownedRunscSandboxConfig: parentRunsc },
+      undefined,
+    );
+    expect(options.sandboxRuntime).toBeUndefined();
+    expect(options.sandboxRuntimeKind).toBe("runsc");
+    expect(options.sandboxRootfs).toBe("/images/kitchensink");
+    expect(options.additionalMounts).toBe(parentRunsc.additionalMounts);
   });
 });
