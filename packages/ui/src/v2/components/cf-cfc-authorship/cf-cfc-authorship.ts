@@ -84,15 +84,9 @@ const labelHasRootIntegrityKind = (
 ): boolean =>
   view.entries.some((entry) =>
     entry.path.length === 0 &&
-    (entry.label.integrity ?? []).some((atom) => {
-      if (typeof atom === "string") {
-        return atom.startsWith(`${kind}:`);
-      }
-      if (!isObjectNotArray(atom)) {
-        return false;
-      }
-      return (atom as Record<string, unknown>).kind === kind;
-    })
+    (entry.label.integrity ?? []).some((atom) =>
+      principalClaimSubject(atom, kind) !== undefined
+    )
   );
 
 const mergeLabelViews = (
@@ -337,10 +331,7 @@ const hasAuthorshipIntegrity = (
 ): boolean =>
   entries.some((entry) =>
     (entry.label.integrity ?? []).some((atom) =>
-      typeof atom === "string"
-        ? atom.startsWith(`${kind}:`)
-        : isObjectNotArray(atom) &&
-          objectField(atom as Record<string, unknown>, "kind") === kind
+      principalClaimSubject(atom, kind) !== undefined
     )
   );
 

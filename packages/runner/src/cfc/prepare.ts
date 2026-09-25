@@ -13,7 +13,7 @@ import {
 } from "@commonfabric/data-model-schema";
 import { walkSchemaDocumentClosure } from "@commonfabric/data-model-schema/schema-closure";
 import { anySchema } from "@commonfabric/data-model-schema/schema-walk";
-import { isDID, isWellFormedDID } from "@commonfabric/identity/did";
+import { isWellFormedDID } from "@commonfabric/identity/did";
 import {
   containsExternalSchemaRef,
   formatExternalSchemaRef,
@@ -96,6 +96,7 @@ import { atomPropagationClass } from "./atom-classes.ts";
 import {
   PRINCIPAL_CLAIM_KINDS,
   principalClaimSpelling,
+  representsPrincipalSubject,
   subjectResemblesPrincipal,
 } from "./represents-principal.ts";
 import {
@@ -938,31 +939,6 @@ const forgedPrincipalClaimReason = (
     return forgedPrincipalClaimReason(Object.values(value), owner, path);
   }
   return undefined;
-};
-
-const literalDidSubjectsForPrincipalClaim = (
-  value: unknown,
-  kind: string,
-  subjects: string[] = [],
-): string[] => {
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      literalDidSubjectsForPrincipalClaim(entry, kind, subjects);
-    }
-    return subjects;
-  }
-  if (isCurrentPrincipalClaimAtom(value) && value.kind === kind) {
-    if (isDID(value.subject)) {
-      subjects.push(value.subject);
-    }
-    return subjects;
-  }
-  if (isObjectOrArray(value)) {
-    for (const entry of Object.values(value)) {
-      literalDidSubjectsForPrincipalClaim(entry, kind, subjects);
-    }
-  }
-  return subjects;
 };
 
 const metadataAppliesToAnyPath = (
@@ -3952,11 +3928,12 @@ const currentPrincipalIntegrityReason = (
       currentPrincipalValues,
       trustSnapshot.actingPrincipal,
     ) ?? currentPrincipalValues;
-    const representedOwners = literalDidSubjectsForPrincipalClaim(
-      resolvedCurrentPrincipalValues,
-      "represents-principal",
+    // Only an atom the label holds directly counts, since that is all a
+    // reader reads.
+    const representsOwner = resolvedCurrentPrincipalValues.some((atom) =>
+      representsPrincipalSubject(atom) === ownerPrincipal
     );
-    if (!representedOwners.some((subject) => subject === ownerPrincipal)) {
+    if (!representsOwner) {
       return `ownerPrincipal requires matching represents-principal integrity at /${
         path.join("/")
       }`;
