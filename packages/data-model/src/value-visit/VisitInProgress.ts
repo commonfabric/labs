@@ -27,7 +27,6 @@ import {
 import { debugStr } from "@/value-debug";
 
 import {
-  type BaselineVisitorMethodResult,
   type MapToForm,
   type RecurseForm,
   type ReplaceForm,
