@@ -73,8 +73,9 @@ export interface InputStream {
   /** Every input committed so far, in order. */
   readonly inputs: readonly StreamedInput[];
 
-  /** Stops the stream; a barrier crossed afterwards commits nothing. */
-  stop(): void;
+  /** Stops the stream; a barrier crossed afterwards commits nothing. Resolves
+   * once a write already under way has landed, so `inputs` is final. */
+  stop(): Promise<void>;
 }
 
 /** A serving space and the client writing to it. */
@@ -222,16 +223,21 @@ export const openSustainedInputFixture = async (
     stream: () => {
       const inputs: StreamedInput[] = [];
       let streaming = true;
-      let writing = false;
+      let writing: Promise<void> | undefined;
       const next = async () => {
         // A settle the deadline cut keeps crossing barriers detached, so
         // two can be in flight; one input at a time keeps `inputs` in seq
         // order.
-        if (!streaming || writing) return;
-        writing = true;
+        if (!streaming || writing !== undefined) return;
         const n = inputs.length + 1;
-        inputs.push({ seq: await write(n), n });
-        writing = false;
+        writing = write(n).then((seq) => {
+          inputs.push({ seq, n });
+        });
+        try {
+          await writing;
+        } finally {
+          writing = undefined;
+        }
         await server.idle();
       };
       onBarrier = next;
@@ -240,8 +246,9 @@ export const openSustainedInputFixture = async (
       void next();
       return {
         inputs,
-        stop: () => {
+        stop: async () => {
           streaming = false;
+          await writing;
         },
       };
     },

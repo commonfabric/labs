@@ -730,19 +730,22 @@ export class SpaceServer implements TransactionSealDestination {
 
   /** Documents changed by admissions over a whole demand pass — from the
    * pull that opens it through its last root's traversal, not one root's
-   * attempt. The pull is what registers each root's watch, and a registered
+   * attempt — each mapped to the lowest seq that changed it over that span.
+   * The pull is what registers each root's watch, and a registered
    * watch is what lets a traversal read from the replica rather than fetch,
    * so a root's reading is taken over that whole span and an admission
    * anywhere in it is one the reading may not carry. Narrowing this back to
    * a per-root lifetime would let a commit landing after the pull terminalize
    * a root on a verdict that predates it. */
-  #structureLoadChangedDocs: Set<string> | undefined;
+  #structureLoadChangedDocs: Map<string, number> | undefined;
 
   /**
-   * Re-armed roots whose retry follows frame application. The settle loop
-   * retries them before declaring their demanded derivations current.
+   * Re-armed roots whose retry follows frame application, each mapped to
+   * the lowest seq of an input that may have re-armed it. The settle loop
+   * retries them before declaring their demanded derivations current, and
+   * until it does, W stays below that seq.
    */
-  readonly #rearmedAwaitingSettle = new Set<string>();
+  readonly #rearmedAwaitingSettle = new Map<string, number>();
 
   /** A structure retry that must wake a cycle after an asynchronous load. */
   #pendingStructureRetryWake = false;
@@ -1655,7 +1658,10 @@ export class SpaceServer implements TransactionSealDestination {
   enqueueCommit(record: AdmittedCommitNotice): void {
     if (this.#structureLoadChangedDocs !== undefined) {
       for (const write of record.writes) {
-        this.#structureLoadChangedDocs.add(write.id);
+        const seen = this.#structureLoadChangedDocs.get(write.id);
+        if (seen === undefined || record.seq < seen) {
+          this.#structureLoadChangedDocs.set(write.id, record.seq);
+        }
       }
     }
     // The no-owner skip's re-arm (see #rootEnsureAwaitingOwner): the
@@ -3648,7 +3654,7 @@ export class SpaceServer implements TransactionSealDestination {
           // The settle loop applies the re-arming commit's frames before
           // retrying, so a covered watch's stale value cannot terminalize
           // the root again.
-          this.#rearmedAwaitingSettle.add(key);
+          this.#noteRearmed(key, record.seq);
           this.#options.stats.structureLoadRearmed += 1;
           logger.info?.("structure-load-rearmed", () => [
             `terminal demanded root re-armed by commit seq ${record.seq}; ` +
@@ -4786,7 +4792,7 @@ export class SpaceServer implements TransactionSealDestination {
     // reading is only as current as frame delivery has made it. The terminal
     // arm's invalidation check has to test the span the reading was taken
     // over, and that span starts here.
-    const changedDocs = new Set<string>();
+    const changedDocs = new Map<string, number>();
     this.#structureLoadChangedDocs = changedDocs;
     try {
       // Ahead of the loop, and so ahead of the demand-root bookkeeping it
@@ -4874,17 +4880,18 @@ export class SpaceServer implements TransactionSealDestination {
                 this.#pendingStructureLoads.delete(key);
                 this.#structureLoadDeferralStreaks.delete(key);
               } else if (confirmed.reason === "no-pattern-meta") {
-                const changed = [
-                  ...verdict.observedDocIds,
-                  ...confirmed.observedDocIds,
-                ]
-                  .some((id) => changedDocs.has(id));
-                const shadowed =
+                // The lowest input the verdict may have missed: a change
+                // admitted during the pass, or foreign novelty the replica
+                // still shadows, which lies at or above its floor.
+                const invalidatedAt = Math.min(
+                  ...[...verdict.observedDocIds, ...confirmed.observedDocIds]
+                    .map((id) => changedDocs.get(id) ?? Infinity),
                   runtime.storageManager.open(this.#options.space)
-                    .replica.unappliedForeignSeqFloor?.() !== undefined;
-                if (changed || shadowed) {
+                    .replica.unappliedForeignSeqFloor?.() ?? Infinity,
+                );
+                if (invalidatedAt !== Infinity) {
                   this.#pendingStructureLoads.delete(key);
-                  this.#rearmedAwaitingSettle.add(key);
+                  this.#noteRearmed(key, invalidatedAt);
                   this.#pendingStructureRetryWake = true;
                   stats.structureLoadDeferred += 1;
                   this.#noteStructureLoadDeferral(
@@ -5329,9 +5336,10 @@ export class SpaceServer implements TransactionSealDestination {
    * Helper for `#serveWave()`, which clamps `head` below every input the
    * serving scheduler cannot have run yet however quiet it is: foreign
    * novelty the replica still shadows behind one of this loop's own parked
-   * commits, and an event entry the drain could not queue. Returns the floor
-   * and the head after the shadow clamp alone as well, which
-   * `watermarkClamped` reads.
+   * commits, an event entry the drain could not queue, and an input that
+   * re-armed a terminal root whose retry has not run. Returns the floor and
+   * the head after the shadow clamp alone as well, which `watermarkClamped`
+   * reads.
    */
   #visibleInputHead(
     runtime: Runtime,
@@ -5348,24 +5356,41 @@ export class SpaceServer implements TransactionSealDestination {
       : Math.min(head, shadowFloor - 1);
     // A settled scheduler has not processed an entry the drain could not
     // queue. Its later frame application alone cannot establish coverage.
-    const visible = this.#eventVisibilityFloor === undefined
+    const eventVisible = this.#eventVisibilityFloor === undefined
       ? shadowVisible
       : Math.min(shadowVisible, this.#eventVisibilityFloor - 1);
+    // A root the shadow floor defers keeps its re-arming input uncovered
+    // even when that input sits below the floor.
+    const visible = Math.min(
+      eventVisible,
+      ...[...this.#rearmedAwaitingSettle.values()].map((seq) => seq - 1),
+    );
     return { shadowFloor, shadowVisible, visible };
   }
 
   /**
    * Helper for `#serveWave()`, which reports whether a terminal root that a
    * commit re-armed still owes this settle its structure load: a settle
-   * does not end, and proves no coverage, while one does. Frame application
-   * makes the re-arming metadata readable, so a root re-armed under foreign
-   * novelty the replica still shadows waits for a later cycle, and the
-   * shadow floor keeps W below that novelty meanwhile.
+   * does not end while one does. Frame application makes the re-arming
+   * metadata readable, so a root re-armed while the replica shadows foreign
+   * novelty waits for a later cycle, and `#visibleInputHead()` keeps W below
+   * the input that re-armed it meanwhile.
    */
   #rearmPending(runtime: Runtime): boolean {
     return this.#rearmedAwaitingSettle.size > 0 &&
       runtime.storageManager.open(this.#options.space).replica
           .unappliedForeignSeqFloor?.() === undefined;
+  }
+
+  /**
+   * Re-arms the terminal root `key` for a retry after frame application,
+   * keeping the lowest seq of an input that may have re-armed it.
+   */
+  #noteRearmed(key: string, seq: number): void {
+    const known = this.#rearmedAwaitingSettle.get(key);
+    if (known === undefined || seq < known) {
+      this.#rearmedAwaitingSettle.set(key, seq);
+    }
   }
 
   /**
@@ -5902,7 +5927,7 @@ export class SpaceServer implements TransactionSealDestination {
           }
           // Frame application makes the re-arming metadata readable. Its
           // structure load and derivations still belong to this settle.
-          for (const key of this.#rearmedAwaitingSettle) {
+          for (const key of this.#rearmedAwaitingSettle.keys()) {
             this.#pendingStructureLoads.add(key);
           }
           this.#rearmedAwaitingSettle.clear();

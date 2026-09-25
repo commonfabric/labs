@@ -10,8 +10,8 @@
  * stream's whole length here; one that covers each input as its consequences
  * complete reports a cycle or two.
  *
- * Each iteration also writes one diagnostic line to stderr: the
- * admission-to-coverage time and the cycles-to-coverage of every input the
+ * Each iteration also writes one diagnostic line to stderr: quantiles of the
+ * admission-to-coverage time and the cycles-to-coverage over every input the
  * stream committed, from the serving loop's own `settle.series`, and the
  * loop's exhaustion counters.
  */

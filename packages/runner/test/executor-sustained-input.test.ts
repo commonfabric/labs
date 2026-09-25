@@ -18,12 +18,17 @@ describe("SpaceServer", () => {
 
   describe("watermark under sustained input", () => {
     it("covers each input within three cycles of its admission while input keeps arriving", async () => {
-      const opened = await openSustainedInputFixture({ flushDeadlineMs: 100 });
+      // The deadline leaves room for the cascade's two stages several times
+      // over, so a settle can reach an idle probe between barriers even on a
+      // loaded machine; what keeps it from quiescing is that each stage
+      // outlasts the scheduler's yield slice.
+
+      const opened = await openSustainedInputFixture({ flushDeadlineMs: 300 });
       fixture = opened;
       const { cycles, engine, host, server } = opened;
       const stream = opened.stream();
       await cycles.reached(cycles.entries.length + 8);
-      stream.stop();
+      await stream.stop();
       const last = stream.inputs[stream.inputs.length - 1].seq;
       await awaitAdmitted(server, () => readWatermarkSeq(engine) >= last);
 
@@ -69,9 +74,13 @@ describe("SpaceServer", () => {
       // `executor-space-server.test.ts` stubs it: what the replica shadows
       // is pinned there, and this case pins what an exhausted cycle's
       // advance does with a floor. It is set one above the highest input
-      // so far, so every input admitted after it is shadowed.
+      // so far, so every input admitted after it is shadowed. An input below
+      // the floor can re-arm a terminal root whose retry the floor defers,
+      // which holds the advance lower still, so the held cycles pin only the
+      // floor as a ceiling. The stream outlives the floor, and the cycles
+      // after it lifts show the exhausted advance resuming.
 
-      const opened = await openSustainedInputFixture({ flushDeadlineMs: 100 });
+      const opened = await openSustainedInputFixture({ flushDeadlineMs: 300 });
       fixture = opened;
       const { cycles, engine, host, server } = opened;
       const replica = opened.servingRuntime.storageManager
@@ -85,17 +94,17 @@ describe("SpaceServer", () => {
       const shadowed = highestAuthoredSeq(engine) + 1;
       floor = shadowed;
       const start = cycles.entries.length;
-      const exhaustedAdvances = host.stats().exhaustedAdvances;
       await cycles.reached(start + 6);
       const held = cycles.entries.slice(start);
       floor = undefined;
-      stream.stop();
+      const exhaustedAdvances = host.stats().exhaustedAdvances;
+      await cycles.reached(cycles.entries.length + 4);
+      await stream.stop();
       const last = stream.inputs[stream.inputs.length - 1].seq;
       await awaitAdmitted(server, () => readWatermarkSeq(engine) >= last);
 
       expect(stream.inputs.some((input) => input.seq > shadowed)).toBe(true);
       expect(held.filter((end) => end.watermark >= shadowed)).toEqual([]);
-      expect(held.some((end) => end.watermark === shadowed - 1)).toBe(true);
       expect(host.stats().exhaustedAdvances).toBeGreaterThan(
         exhaustedAdvances,
       );

@@ -352,6 +352,13 @@ it. This composes with the foreign-write shadow floor and does not wait for
 sealed-write durability. [Event visibility](events.md#2-lifecycle-end-to-end)
 defines the ordered publication/response barrier before deferral.
 
+A terminal demanded root that a commit re-arms owes a structure-load retry
+once frame application makes the re-arming metadata readable, and a settle
+does not end while such a retry is owed. While the foreign-write shadow floor
+defers the retry to a later cycle, the loop retains the lowest seq of an input
+that may have re-armed the root and clamps every advance of W below it, since
+that input can sit below the shadow floor. The retry clears it.
+
 ```
 on activate(space):
   acquire lease (else park)
@@ -430,8 +437,9 @@ back. Any
 later moment at which the scheduler is idle, the demanded-structure load
 the settle awaits has completed, and no re-armed root is pending proves H
 covered: everything the scheduler ran after the barrier, it ran to
-completion. The proof is clamped by the shadow floor and the
-event-visibility floor read at that moment, as the quiescent advance is,
+completion. The proof is clamped by the shadow floor, the event-visibility
+floor and the re-armed roots' floor read at that moment, as the quiescent
+advance is,
 and again by the floors at the cycle's end; an exhausted cycle advances W
 to the highest head proved before its wave closed, sealing the advance into
 that wave as any other. A wave commit that aborts discards the carried H
