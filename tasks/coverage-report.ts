@@ -10,6 +10,11 @@
  * suite's units over one workspace member's lines, and it is the baseline
  * the coverage gate compares a pull request against.
  *
+ * Both go into the record store as measurements in the run's spool, which
+ * the job's shipping step gathers and the relay stores under the job's
+ * context; `tasks/coverage-records.ts` is how. That context names the
+ * commit and the run, so the measurements carry neither.
+ *
  * Nothing here fails a run. A rise in the repository-wide figure reaches
  * the change that caused it through the run report on its pull request,
  * and a rise in a measured set reaches it through the gate before it
@@ -20,12 +25,12 @@
 
 import * as path from "@std/path";
 import { walk } from "@std/fs/walk";
+import type { Environment } from "@commonfabric/test-support/records";
 import {
   coverageMetricForGroup,
   measuredSetCoverageMetric,
-  PERF_METRICS_FILE,
-  writeCoverageBaselineFile,
 } from "./ci-check-lib.ts";
+import { recordCoverage } from "./coverage-records.ts";
 import {
   collectCoverageDebtMetricsFromLcov,
   collectMeasuredSetDebt,
@@ -45,78 +50,38 @@ import {
   measuredSetName,
   measuredSets,
 } from "./test-selection/coverage.ts";
-import { COVERAGE_FAILURE_MARKER, measuredSetOfReport } from "./ci-lane.ts";
+import {
+  COMPILE_CACHE_STATE_FILE,
+  COVERAGE_FAILURE_MARKER,
+  measuredSetOfReport,
+} from "./ci-lane.ts";
 
 /** What the command line asked for. */
 export interface ReportOptions {
   /** Where the lanes' coverage reports were downloaded to. */
   reports: string;
 
-  /** Where the metrics go. */
-  out: string;
-
-  /** The run these metrics are stamped with. */
-  runId: number;
-  sha: string;
-  createdAt: string;
-
+  /** The tree the reports are scored against. */
   root: string;
 }
 
 /**
  * Reads the command line, or returns undefined for one this cannot act
  * on.
- *
- * The run's identity is required rather than defaulted. The gate looks a
- * baseline up by the commit it was measured at, and the manifest keeps
- * only the baselines inside its window, so a figure stamped with no
- * commit matches nothing and one dated at the epoch falls out of every
- * window. Defaulting either would publish a file that looks complete and
- * answers nobody, where refusing the command line says which flag the
- * job lost.
  */
 export function parseReportArgs(
   args: readonly string[],
   root: string = Deno.cwd(),
 ): ReportOptions | undefined {
   let reports = "coverage-artifacts";
-  let out = PERF_METRICS_FILE;
-  let runId: number | undefined;
-  let sha: string | undefined;
-  let createdAt: string | undefined;
   const rest = [...args];
   while (rest.length > 0) {
     const flag = rest.shift()!;
     const value = rest.shift();
-    if (value === undefined) return undefined;
-    switch (flag) {
-      case "--reports":
-        reports = value;
-        break;
-      case "--out":
-        out = value;
-        break;
-      case "--run-id":
-        runId = Number(value);
-        break;
-      case "--sha":
-        sha = value;
-        break;
-      case "--created-at":
-        createdAt = value;
-        break;
-      default:
-        return undefined;
-    }
+    if (value === undefined || flag !== "--reports") return undefined;
+    reports = value;
   }
-  if (runId === undefined || !Number.isInteger(runId) || runId <= 0) {
-    return undefined;
-  }
-  if (sha === undefined || sha.length === 0) return undefined;
-  if (createdAt === undefined || Number.isNaN(Date.parse(createdAt))) {
-    return undefined;
-  }
-  return { reports, out, runId, sha, createdAt, root };
+  return { reports, root };
 }
 
 /**
@@ -135,11 +100,18 @@ export interface LaneReports {
 
   /** Workspace members some lane selected and never launched. */
   unlaunchedMembers: string[];
+
+  /**
+   * Whether a lane that opened the pattern compile byte cache found it not
+   * restored. False where no lane opened it.
+   */
+  cold: boolean;
 }
 
 /**
- * Every LCOV report under a directory, and the record each lane left of
- * what it selected and never launched.
+ * Every LCOV report under a directory, the record each lane left of what
+ * it selected and never launched, and the record each lane that opened
+ * the compile byte cache left of whether it found the cache restored.
  *
  * The record travels with the report it qualifies, and
  * `tasks/unlaunched-members.ts` puts the obligation to read it back on
@@ -150,10 +122,13 @@ export interface LaneReports {
 export async function collectReports(at: string): Promise<LaneReports> {
   const lcov: string[] = [];
   const unlaunchedMembers = new Set<string>();
+  const cacheStates = new Set<string>();
   try {
     for await (const entry of walk(at, { includeDirs: false })) {
       if (path.extname(entry.path) === ".lcov") {
         lcov.push(await Deno.readTextFile(entry.path));
+      } else if (path.basename(entry.path) === COMPILE_CACHE_STATE_FILE) {
+        cacheStates.add((await Deno.readTextFile(entry.path)).trim());
       } else if (path.basename(entry.path) === UNLAUNCHED_MEMBERS_FILE) {
         for (
           const member of parseUnlaunchedMembers(
@@ -169,7 +144,14 @@ export async function collectReports(at: string): Promise<LaneReports> {
     // reported nothing rather than as a run that covered nothing.
     if (!(error instanceof Deno.errors.NotFound)) throw error;
   }
-  return { lcov, unlaunchedMembers: [...unlaunchedMembers].sort() };
+  // A state this reader does not know is read as cold, so that a record
+  // it cannot read withholds the figure from a trend rather than letting a
+  // cold run's figure through.
+  return {
+    lcov,
+    unlaunchedMembers: [...unlaunchedMembers].sort(),
+    cold: [...cacheStates].some((state) => state !== "warm"),
+  };
 }
 
 /**
@@ -344,21 +326,23 @@ export function summarize(
   return `${lines.join("\n")}\n`;
 }
 
-/** Writes what this run measured, and says what it published. */
-export async function report(options: ReportOptions): Promise<string> {
+/**
+ * Records what this run measured in the spool `env` names, and says what it
+ * published.
+ */
+export async function report(
+  options: ReportOptions,
+  env: Environment,
+): Promise<string> {
   const reports = await collectReports(reportsDirectory(options));
   const figures = [
     ...await repositoryFigures(options, reports),
     ...await measuredSetFigures(options, reports),
   ];
-  await writeCoverageBaselineFile(
-    options.out,
-    new Map(figures.map((figure) => [figure.name, {
-      runId: options.runId,
-      sha: options.sha,
-      createdAt: options.createdAt,
-      uncoveredLines: figure.uncoveredLines,
-    }])),
+  recordCoverage(
+    figures.map((figure) => [figure.name, figure.uncoveredLines]),
+    reports.cold,
+    env,
   );
   return summarize(figures, reports.unlaunchedMembers);
 }
@@ -371,23 +355,26 @@ export async function report(options: ReportOptions): Promise<string> {
  * Zero whatever the figures came to. Coverage is a trend on the default
  * branch, and a landed change that added an uncovered line must not turn
  * anything red for it.
+ *
+ * `env` is where the run's spool is looked up, and the default is an empty
+ * environment, so a caller that does not hand one over records nothing.
  */
 export async function main(
   args: readonly string[] = Deno.args,
   root: string = Deno.cwd(),
+  env: Environment = () => undefined,
 ): Promise<number> {
   const options = parseReportArgs(args, root);
   if (options === undefined) {
-    console.error(
-      "usage: coverage-report.ts --run-id <n> --sha <commit> " +
-        "--created-at <iso> [--reports <dir>] [--out <file>]",
-    );
+    console.error("usage: coverage-report.ts [--reports <dir>]");
     return 2;
   }
-  const summary = await report(options);
+  const summary = await report(options, env);
   console.log(summary);
   appendSummary(summary);
   return 0;
 }
 
-if (import.meta.main) Deno.exitCode = await main();
+if (import.meta.main) {
+  Deno.exitCode = await main(Deno.args, Deno.cwd(), Deno.env.get);
+}

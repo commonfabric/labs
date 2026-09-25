@@ -61,9 +61,8 @@ describe("message-quoting", () => {
         } catch (e) {
           message = (e as Error).message;
         }
-        expect(message).toContain(
-          `unsupported object type ${backtickQuote(name)}`,
-        );
+        expect(message).toContain("Cannot hash value");
+        expect(message).toContain(JSON.stringify(name));
       }
     });
   });

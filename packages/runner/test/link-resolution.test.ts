@@ -26,6 +26,8 @@ import { isLinkResolutionProbe } from "../src/storage/reactivity-log.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
+const otherSpace = (await Identity.fromPassphrase("link-resolution other"))
+  .did();
 
 describe("link-resolution", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -1530,6 +1532,76 @@ describe("link-resolution", () => {
         path: ["items", "0", ...linkProbeSubPath()],
       });
       expect(journaledAt(probe, true)).toBe(2);
+    });
+  });
+
+  describe("cross-space sync kicks", () => {
+    // A resolution that crosses into another space kicks a sync of each hop
+    // target so the value arrives. A caller resolving a link that another read
+    // in the same pass already resolved turns the kick off, so the target is
+    // not pulled twice.
+
+    async function crossSpaceValueLink() {
+      const targetTx = runtime.edit();
+      const target = runtime.getCell<{ value: string }>(
+        otherSpace,
+        "cross-space kick target",
+        undefined,
+        targetTx,
+      );
+      target.set({ value: "ada@example.com" });
+      await targetTx.commit();
+      const homeTx = runtime.edit();
+      const home = runtime.getCell<unknown[]>(
+        space,
+        "cross-space kick home",
+        undefined,
+        homeTx,
+      );
+      home.setRawUntyped([target.getAsLink()]);
+      await homeTx.commit();
+      return {
+        targetId: target.getAsNormalizedFullLink().id,
+        valueLink: home.key(0).key("value").getAsNormalizedFullLink(),
+      };
+    }
+
+    function recordSyncedIds(): string[] {
+      const synced: string[] = [];
+      const syncCell = runtime.storageManager.syncCell.bind(
+        runtime.storageManager,
+      );
+      runtime.storageManager.syncCell = ((cell, options) => {
+        synced.push(cell.getAsNormalizedFullLink().id);
+        return syncCell(cell, options);
+      }) as typeof runtime.storageManager.syncCell;
+      return synced;
+    }
+
+    it("kicks a sync of the target in another space by default", async () => {
+      const { targetId, valueLink } = await crossSpaceValueLink();
+      const synced = recordSyncedIds();
+
+      resolveLink(runtime, runtime.edit(), valueLink);
+
+      expect(synced).toContain(targetId);
+    });
+
+    it("kicks no sync of the target when kickCrossSpaceTargets is off, fresh or memoized", async () => {
+      const { targetId, valueLink } = await crossSpaceValueLink();
+      const synced = recordSyncedIds();
+      const readTx = runtime.edit();
+
+      const fresh = resolveLink(runtime, readTx, valueLink, "value", {
+        kickCrossSpaceTargets: false,
+      });
+      const memoized = resolveLink(runtime, readTx, valueLink, "value", {
+        kickCrossSpaceTargets: false,
+      });
+
+      expect(fresh.id).toBe(targetId);
+      expect(memoized.id).toBe(targetId);
+      expect(synced).not.toContain(targetId);
     });
   });
 });

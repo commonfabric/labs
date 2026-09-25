@@ -39,10 +39,18 @@ export interface SchemaHint {
 
 export type SchemaHints = WeakMap<ts.Node, SchemaHint>;
 
-/** A recoverable schema-generation problem at its authored node, if known. */
+/**
+ * A schema-generation problem at its authored node, if known. Generation goes
+ * on past either severity; an error says the schema it produced is not one to
+ * accept, as a write restriction it could not read is not.
+ */
 export interface SchemaGenerationDiagnostic {
-  readonly severity: "warning";
-  readonly type: "schema-default:unresolved" | "schema-type:unread";
+  readonly severity: "warning" | "error";
+  readonly type:
+    | "schema-default:unresolved"
+    | "schema-type:unread"
+    | "cfc-write-authorized-by:unread"
+    | "cfc-label:unread";
   readonly message: string;
   readonly node?: ts.Node;
 }
@@ -51,7 +59,10 @@ export interface SchemaGenerationDiagnostic {
 export interface SchemaGenerationOptions {
   readonly widenLiterals?: boolean;
 
-  /** Receives warnings; without a callback the generator logs them. */
+  /**
+   * Receives each diagnostic, a warning or an error; without a callback the
+   * generator logs it. An error says the schema generated is not one to accept.
+   */
   readonly onDiagnostic?: (diagnostic: SchemaGenerationDiagnostic) => void;
 
   /**
@@ -71,6 +82,15 @@ export interface SchemaGenerationOptions {
    * (`typescript/default-library.ts`).
    */
   readonly isDefaultLibrarySourceFile?: (sourceFile: ts.SourceFile) => boolean;
+
+  /**
+   * The type a type node was printed from, for a node the caller printed from
+   * a type, and `undefined` for any other node. A printed node stands for its
+   * type and says nothing more, so the generator reads that type in place of
+   * the node wherever the node appears: as the whole node, or inside a node
+   * the caller built.
+   */
+  readonly printedFrom?: (node: ts.TypeNode) => ts.Type | undefined;
 }
 
 /**
@@ -124,6 +144,13 @@ export interface GenerationContext {
   /** Type node for additional context */
   typeNode?: ts.TypeNode;
 
+  /**
+   * The node whose schema hints apply at this position when it is not the node
+   * read: a printed node, read by its type, keeps the hints a caller attached
+   * to it.
+   */
+  hintsNode?: ts.TypeNode;
+
   /** Source file name for authoring metadata that needs stable file identity */
   sourceFileName?: string;
 
@@ -147,6 +174,9 @@ export interface GenerationContext {
   /** The program's word on default-library membership, when supplied. */
   isDefaultLibrarySourceFile?: (sourceFile: ts.SourceFile) => boolean;
 
+  /** The type a printed node stands for (`SchemaGenerationOptions`). */
+  printedFrom?: (node: ts.TypeNode) => ts.Type | undefined;
+
   /** Schema hints for overriding default behavior (keyed by TypeNode) */
   schemaHints?: SchemaHints;
 
@@ -161,6 +191,20 @@ export interface GenerationContext {
    * every child context.
    */
   uninterpretedTypeNodes?: ts.TypeNode[];
+
+  /**
+   * Type parameters read as their arguments' types, for a payload read from
+   * the declaration that is written in them: a CFC alias chain entered from
+   * its type has no argument nodes to substitute. Wherever a bound parameter
+   * appears, its argument's type is read. A type that still depends on one
+   * where the binding cannot reach, such as `T["name"]` or a conditional
+   * type, is reported through `uninterpretedTypeNodes` as not fully read.
+   */
+  boundTypeParameters?: {
+    readonly types: ReadonlyMap<ts.TypeParameterDeclaration, ts.Type>;
+    /** The declared payload, reported where no nearer node is at hand. */
+    readonly declaredNode: ts.TypeNode;
+  };
 }
 
 /**

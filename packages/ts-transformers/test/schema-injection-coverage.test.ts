@@ -721,6 +721,38 @@ Deno.test("cell(value) assigned to a PerSpace<T> variable reads the space scope 
   assertEquals(schema.scope, "space");
 });
 
+Deno.test("cell(value) assigned to a variable typed by an alias of PerSession<T> reads the session scope from the annotation", async () => {
+  const source = [
+    "/// <cts-enable />",
+    'import { cell, PerSession } from "commonfabric";',
+    "type Count = PerSession<number>;",
+    "const c: Count = cell(0);",
+  ].join("\n");
+  const output = await t(source);
+  const [schema] = emittedSchemas(parseModule(output));
+  // The checker reports the alias `Count`, so the scope is read from the
+  // brand `PerSession` leaves on the resolved type.
+  assertEquals(schema.scope, "session");
+});
+
+Deno.test("pattern result field typed by an alias of PerUser<T> keeps the user scope", async () => {
+  const source = [
+    "/// <cts-enable />",
+    'import { computed, pattern, PerUser } from "commonfabric";',
+    "type Rec = PerUser<{ a: number }>;",
+    "export default pattern<{ x: number }>(({ x }) => {",
+    "  const v: Rec = computed(() => ({ a: x }));",
+    "  return { v };",
+    "});",
+  ].join("\n");
+  const output = await t(source);
+  const { output: result } = patternSchemas(parseModule(output));
+  assertEquals(
+    (result.properties as Record<string, { scope?: string }>).v.scope,
+    "user",
+  );
+});
+
 //
 // pattern result: inferred unknown output field reports pattern-result:unknown-type
 //

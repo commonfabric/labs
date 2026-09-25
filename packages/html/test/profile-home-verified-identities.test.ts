@@ -1,13 +1,14 @@
 /**
  * Renders the system profile pattern through the worker reconciler after Loom
- * assertions are published to it, and checks what reaches the document: the
- * human-facing assertion is shown with a badge bound to the assertion's own
- * integrity-bearing `value`, while a stable machine identifier and an
- * assertion outside the 48-hour freshness window are not shown.
+ * assertions are published to it, and checks what reaches the document: each
+ * fresh assertion is shown with a badge bound to that assertion's own
+ * integrity-bearing `value`, and an assertion outside the 48-hour freshness
+ * window is not shown at all.
  */
 
 import { expect } from "@std/expect";
 
+import { CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { type JSONSchema, Runtime, UI } from "@commonfabric/runner";
 import { cfcLabelViewForCell } from "@commonfabric/runner/cfc";
@@ -17,7 +18,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { VDomOp } from "../src/vdom-ops.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
 
-const INTEGRITY = "loom-verified-external-identity";
+const INTEGRITY = CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM;
 const signer = await Identity.fromPassphrase(
   "profile-home verified identity render",
 );
@@ -45,7 +46,7 @@ const labeledAssertionSchema: JSONSchema = {
 
 // Plain `Deno.test`, as the other reconciler tests here are written, because
 // the package's clock preload attaches `t.settle()` to its context.
-Deno.test("profile-home shows a human-facing verified identity with a badge bound to its labeled value", async (t) => {
+Deno.test("profile-home shows every fresh verified identity with a badge bound to its labeled value", async (t) => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -68,7 +69,13 @@ Deno.test("profile-home shows a human-facing verified identity with a badge boun
     expect((await tx.commit()).error).toBeUndefined();
 
     const freshVerifiedAt = new Date().toISOString();
+    // Loom's verifier writes the assertions as a builtin, the only author the
+    // runtime lets mint the verified-identity atom.
     const assertionTx = runtime.edit();
+    assertionTx.setCfcImplementationIdentity({
+      kind: "builtin",
+      builtinId: "loom-verified-identity-publisher",
+    });
     const login = runtime.getCell(
       space,
       "loom github login",
@@ -91,6 +98,17 @@ Deno.test("profile-home shows a human-facing verified identity with a badge boun
       value: "MDQ6VXNlcjE=",
       verifiedAt: freshVerifiedAt,
     });
+    const email = runtime.getCell(
+      space,
+      "loom email",
+      labeledAssertionSchema,
+      assertionTx,
+    );
+    email.set({
+      type: "email",
+      value: "ada@example.com",
+      verifiedAt: freshVerifiedAt,
+    });
     const staleLogin = runtime.getCell(
       space,
       "loom stale github login",
@@ -110,6 +128,7 @@ Deno.test("profile-home shows a human-facing verified identity with a badge boun
       identities: [
         login.withTx(publishTx),
         nodeId.withTx(publishTx),
+        email.withTx(publishTx),
         staleLogin.withTx(publishTx),
       ],
     });
@@ -133,11 +152,14 @@ Deno.test("profile-home shows a human-facing verified identity with a badge boun
       );
       expect(texts).toContain("GitHub");
       expect(texts).toContain("ada");
-      expect(texts).not.toContain("MDQ6VXNlcjE=");
+      expect(texts).toContain("MDQ6VXNlcjE=");
+      expect(texts).toContain("ada@example.com");
       expect(texts).not.toContain("stale-ada");
 
-      // The presentation renders more than once while the profile settles,
-      // so each render's badge is checked rather than a count of them.
+      // The presentation renders more than once while the profile settles, so
+      // each render's badges are checked rather than a count of them, and the
+      // values they bind are collected across renders.
+      const boundValues = new Set<unknown>();
       const labelIds = ops.flatMap((op) =>
         op.op === "create-element" && op.tagName === "cf-cfc-label"
           ? [op.nodeId]
@@ -159,12 +181,17 @@ Deno.test("profile-home shows a human-facing verified identity with a badge boun
         );
         expect(bindings.map((op) => op.propName)).toEqual(["value"]);
         const bound = runtime.getCellFromLink(bindings[0].cellRef);
-        expect(bound.get()).toBe("ada");
+        boundValues.add(bound.get());
         const atoms = (cfcLabelViewForCell(bound)?.entries ?? []).flatMap(
           (entry) => entry.label.integrity ?? [],
         );
         expect(atoms).toContain(INTEGRITY);
       }
+      // Every fresh assertion's own value carries a badge; the stale one has
+      // no row, so no badge binds it.
+      expect(boundValues).toEqual(
+        new Set(["ada", "MDQ6VXNlcjE=", "ada@example.com"]),
+      );
     } finally {
       cancel();
     }

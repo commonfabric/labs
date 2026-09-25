@@ -57,6 +57,27 @@ AMENDED 2026-09-11: a verb's transaction stamped `directCommit` commits
 to the store on its own instead of sealing, ahead of the wave; the source
 update's setup transaction is one, per §3e.)*
 
+A park can leave a space that still meets the ACTIVE criteria: a serving
+loop that throws, an initialization that fails, and a lease lapse that
+aborts a wave (§2) each park the space whatever its demand. So when any
+park completes, the host re-evaluates the criteria — live client
+sessions, undelivered events, and warm requests not yet consumed — and
+re-activates a space that meets them without waiting for another
+trigger. The exception is a park caused by another process's live lease
+refusing an acquire or a re-acquire (§2): that process serves the space,
+and an activation here would be refused again. A park during which a
+rival took the lease for some other reason, such as a lapse that
+aborted a wave, is re-evaluated like any other, and its one activation
+attempt is refused. Every park other than an idle one or one on a
+rival's lease extends the space's failure-park backoff, which delays its
+next activation by base·2^(n−1) for the nth consecutive such park, up
+to a cap. An idle park or a committed wave clears the backoff. A space
+whose serving fails every time is therefore rebuilt at a widening
+interval rather than in a tight loop. Impl: `host.ts`'s park handler
+and `#reactivateAfterPark`; pinned in
+`packages/runner/test/executor-serving-loop.test.ts` and
+`packages/runner/test/executor/activation-lease.test.ts`.
+
 What activation LOADS (RULED 2026-08-02): there is NO piece-start
 policy in v2. The space is ONE lazy reactive graph, and activation
 loads graph structure sufficient to resolve the demanded values and
@@ -307,19 +328,24 @@ processes* (deploy overlap, partition) it holds via the lease:
   its renewal timer is cleared, and its lease is released. Observer cleanup
   failures cannot skip the factory disposer; observer cleanup and disposer
   failures cannot skip lease release. Host shutdown waits
-  for this lifecycle before returning. After initialization loses its lease,
-  the host clears that activation's in-flight record and re-evaluates live
-  sessions, undelivered events, and retained warm requests. Matching demand
-  starts a fresh tenure after the failure-park backoff; repeated initialization
-  losses extend that backoff, and a committed wave clears the streak. Warm
-  notices arriving during initialization or its cleanup remain obligations of
-  the successor. Initial acquisition refusal on a rival's lease does not
-  schedule another attempt, and host shutdown cancels a pending backoff. A
-  lifecycle-verb request whose activation fails receives the not-served error;
-  the request alone is not a persistent reactivation criterion. These
-  boundaries are covered by `test/executor/activation-lease.test.ts`.
+  for this lifecycle before returning. Initialization that loses its lease
+  parks, and §1's re-evaluation after a park follows once that activation
+  has finished: matching demand starts a fresh tenure after the
+  failure-park backoff. Warm notices arriving during initialization or its
+  cleanup remain obligations of the successor. Initial acquisition refusal
+  on a rival's lease does not schedule another attempt, and host shutdown
+  cancels a pending backoff. A lifecycle-verb request whose activation fails
+  receives the not-served error; the request alone is not a persistent
+  reactivation criterion. These boundaries are covered by
+  `test/executor/activation-lease.test.ts`.
 - On renewal failure or expiry: the SpaceServer MUST stop committing
   immediately (in-flight transaction aborts), then re-acquire or park.
+  A wave aborted this way parks the tenure even when the re-acquire
+  succeeds. §1's re-evaluation after a park then starts a new tenure for
+  a space that still has demand, and that tenure's fresh runtime
+  recomputes the withdrawn derivations (§6 step 2). A failed re-acquire
+  parks on the rival's lease, and the host leaves the space to the
+  rival.
 - The memory server rejects a derived-class commit whose `holder` does not
   match the live lease. This is one equality check, not admission
   machinery. It binds fresh commits: an exact replay of an already-accepted
@@ -332,6 +358,16 @@ processes* (deploy overlap, partition) it holds via the lease:
   `expiresAt` against its own clock, and an expired row matches NOBODY —
   a derived commit under an expired lease is rejected even before any
   successor acquires. Holder clocks never arbitrate liveness.
+- A refused derived commit can be the holder's first sign of a lapse:
+  neither renewal driver may come due until well after the TTL has run
+  out, for example when the host process was suspended. When the memory
+  server refuses a derived commit and the lease row no longer names the
+  holder live, the SpaceServer runs the renew arm at once, as the store
+  read-through does (§1 plane (a)). The tenure therefore ends at the
+  first refused commit. A wave refused this way aborts as a lease loss
+  and parks, as above. Impl: `space-server.ts` `#confirmLease`, called
+  from the wave sink's refusal hook; pinned in
+  `executor-serving-loop.test.ts`.
 
 FORBIDDEN: per-action leases, lease fencing tokens per commit, lease
 renewal via the commit stream, more than one lease shape.
@@ -1562,7 +1598,8 @@ foreignEngineFailures, warmRequests, watermarkLag, demandArrivals,
 undemandedNarrowingRuns, earlyEmitRefusals, demand: {demandedRows,
 demandedInstances, demandedInstancesMax, demandedPairs, demandedWriters,
 demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
-demandPasses, demandPassMs, pushGrowthWakes, watchWakes, warmWakes}, settle:
+demandPasses, demandPassMs, demandKeysReconciled, structureRootsPreloaded,
+pushGrowthWakes, watchWakes, warmWakes}, settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
 drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
@@ -1679,8 +1716,36 @@ counted, not lost to a pass-start snapshot (W1 review MINOR-2);
 `demandPasses` the pass count and `demandPassMs` the pass's total WALL
 time — which INCLUDES the awaited structure-load segments
 (`ensurePieceRunning`) for first-demand/pending root keys, NOT only the
-O(rows) reconcile (the reconcile does no per-row engine read and runs on
-registry deltas; the label is wall time, review MINOR-3);
+reconcile (the reconcile does no per-row engine read; the label is wall
+time, review MINOR-3);
+`demandKeysReconciled` the instance keys the passes reconciled, accumulated
+over the passes whose reconcile completed, so a pass that throws partway adds
+nothing.
+The pass reads the demand set per session (`demandForSpace`): the memory
+server keeps each session's share and hands back the same object until a
+write to that session's watches, views, delivered entities, graph misses, or
+tracked set replaces it, and the SpaceServer keeps the shares it last read.
+A session whose share is the one held costs the pass one comparison, a
+replaced share is compared row by row, and only the keys whose rows changed,
+with the warm keys captured since the last pass, are reconciled against the
+registry — so a pass over unchanged demand with no new warm key reconciles
+nothing and adds nothing here, and the transitions a pass makes are the ones
+reconciling every key would make. The first pass of a tenure, and the pass
+after one whose reconcile threw partway, reconcile every key;
+`structureRootsPreloaded` counts the root-document addresses the pass requests
+TOGETHER before those segments run — the instance a demand names and, for
+every scoped demand, the space instance as well. A segment syncs that space
+instance only when the scoped read finds no pattern pointer and starts
+nothing, which the pull cannot know in advance, so a scoped root whose own
+instance resolves has one address requested that its segment never syncs.
+Issuing them in one pull is what lets the replica's refresh queue coalesce
+them into a single `session.watch.add` rather than one per address inside the
+settle. It is counted per address requested per pass, and most requested
+addresses are already watched and cost no round trip, so it runs well above
+the adds the pull saves. The pull is also where the pass opens the
+changed-document collection its terminal arm invalidates against, because a
+root's reading is taken over the span from that pull to the root's own
+segment;
 `pushGrowthWakes`/`watchWakes`/`warmWakes` count NOTIFIES (the push-time
 `demandChanged`, the `session.watch.set`/`.add` notifies, and the warm
 request's staged-instance captures — the third kept apart so

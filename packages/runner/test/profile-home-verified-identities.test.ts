@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import { CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -22,7 +23,7 @@ const PROGRAM: RuntimeProgram = {
     contents: Deno.readTextFileSync(sysDir + "profile-home.tsx"),
   }],
 };
-const INTEGRITY = "loom-verified-external-identity";
+const INTEGRITY = CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM;
 
 const assertionSchema = (addIntegrity: boolean): JSONSchema => ({
   type: "object",
@@ -85,7 +86,13 @@ describe("profile-home verified external identities", () => {
       expect((await tx.commit()).error).toBeUndefined();
       await result.pull();
 
+      // Loom's verifier writes the assertion as a builtin, the only author
+      // the runtime lets mint the verified-identity atom.
       const assertionTx = runtime.edit();
+      assertionTx.setCfcImplementationIdentity({
+        kind: "builtin",
+        builtinId: "loom-verified-identity-publisher",
+      });
       const assertion = runtime.getCell(
         space,
         "loom verified github login",
@@ -137,6 +144,69 @@ describe("profile-home verified external identities", () => {
       // prepared before commit — same as the publish above.
       runtime.prepareTxForCommit(revokeTx);
       expect((await revokeTx.commit()).error).toBeUndefined();
+      await runtime.idle();
+      await result.pull();
+      expect(result.key("verifiedIdentities").get()).toEqual([]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("refuses an assertion that a writer other than the verifier labeled", async () => {
+    // The self-assertion case: any writer in the principal's home space can
+    // name the verified-identity atom in its write schema. Only a write the
+    // runtime attributes to a builtin may mint it, so this label is dropped
+    // at persist time and the assertion fails the profile's integrity floor.
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: manager,
+    });
+    try {
+      const setupTx = runtime.edit();
+      const pattern = await runtime.patternManager.compilePattern(PROGRAM, {
+        space,
+        tx: setupTx,
+      });
+      const result = runtime.run(
+        setupTx,
+        // deno-lint-ignore no-explicit-any
+        pattern as any,
+        { initialName: "Ada Lovelace" },
+        runtime.getCell(
+          space,
+          "profile-home refuses self-asserted identity",
+          undefined,
+          setupTx,
+        ),
+      );
+      runtime.prepareTxForCommit(setupTx);
+      expect((await setupTx.commit()).error).toBeUndefined();
+      await result.pull();
+
+      const assertionTx = runtime.edit();
+      const assertion = runtime.getCell(
+        space,
+        "self-asserted github login",
+        assertionSchema(true),
+        assertionTx,
+      );
+      assertion.set({
+        type: "github.login",
+        value: "mallory",
+        verifiedAt: "2026-07-15T20:00:00.000Z",
+      });
+      runtime.prepareTxForCommit(assertionTx);
+      expect((await assertionTx.commit()).error).toBeUndefined();
+      for (const field of ["type", "value", "verifiedAt"]) {
+        expect(integrityAtoms(assertion.key(field))).not.toContain(INTEGRITY);
+      }
+
+      const publishTx = runtime.edit();
+      result.withTx(publishTx).key("publishVerifiedIdentities").send({
+        identities: [assertion.withTx(publishTx)],
+      });
+      runtime.prepareTxForCommit(publishTx);
+      expect((await publishTx.commit()).error).toBeUndefined();
       await runtime.idle();
       await result.pull();
       expect(result.key("verifiedIdentities").get()).toEqual([]);

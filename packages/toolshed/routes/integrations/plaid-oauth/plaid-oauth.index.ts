@@ -9,8 +9,7 @@ const router = createRouter()
   .openapi(routes.exchangeToken, handlers.exchangeToken)
   .openapi(routes.refreshAccounts, handlers.refreshAccounts)
   .openapi(routes.syncTransactions, handlers.syncTransactions)
-  .openapi(routes.removeItem, handlers.removeItem)
-  .openapi(routes.backgroundIntegration, handlers.backgroundIntegration);
+  .openapi(routes.removeItem, handlers.removeItem);
 
 router.use(
   "/api/integrations/plaid-oauth/*",

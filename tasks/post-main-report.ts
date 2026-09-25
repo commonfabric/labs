@@ -45,6 +45,9 @@
 
 import { join } from "@std/path";
 import {
+  coverageArtifactAttempt,
+  type CoverageFigures,
+  coverageFiguresOf,
   datePartition,
   type FlakeEvidence,
   listObjects,
@@ -59,7 +62,6 @@ import {
   type Artifact,
   coverageGroupsForChangedFiles,
   downloadAndExtractArtifact,
-  downloadAndParseCoverageBaseline,
   fetchArtifactsForRun,
   fetchIssueComments,
   githubGet,
@@ -67,8 +69,6 @@ import {
   githubPost,
   isNotFound,
   type IssueComment,
-  newestArtifactsByName,
-  PERF_METRICS_ARTIFACT_NAME,
   REPO,
   TOKEN,
   WORKFLOW_FILE,
@@ -87,7 +87,6 @@ import { fetchManifest, type ManifestFetch } from "./test-selection/store.ts";
 import type { Manifest, WithheldReason } from "./test-selection/manifest.ts";
 import {
   buildReport,
-  type CoverageFigures,
   MAIN_REPORT_MARKER,
   outcomesOf,
   type PullRequestView,
@@ -247,7 +246,8 @@ export async function outcomesFromStore(
  * Every `test-records-*` artifact counts, including a re-run attempt's,
  * so an identity that passed in one attempt and failed in another folds
  * into the test disagreeing with itself rather than into whichever
- * attempt was uploaded last. Undefined where one of them could not be
+ * attempt was uploaded last. The coverage artifact holds no test's record
+ * and is left to `coverageOfRun`. Undefined where one of them could not be
  * read, because a run read in part reads as a run that ran less.
  */
 export async function outcomesFromArtifacts(
@@ -256,7 +256,8 @@ export async function outcomesFromArtifacts(
 ): Promise<RunOutcomes | undefined> {
   const artifacts = (listed ?? await fetchArtifactsForRun(runId))
     .filter((artifact) =>
-      artifact.name.startsWith("test-records-") && !artifact.expired
+      artifact.name.startsWith("test-records-") &&
+      coverageArtifactAttempt(artifact.name) === undefined && !artifact.expired
     );
   const records: TestRecord[] = [];
   for (let at = 0; at < artifacts.length; at += ARTIFACTS_AT_ONCE) {
@@ -302,23 +303,23 @@ async function readArtifact(
   }
 }
 
-/** Every coverage figure one run measured, from its metrics artifact. */
+/**
+ * Every coverage figure one run measured, from the newest of its coverage
+ * artifacts, since a re-run attempt measures the run again. Artifact ids
+ * grow with upload.
+ */
 export async function coverageOfRun(
   runId: number,
   listed?: readonly Artifact[],
 ): Promise<CoverageFigures> {
-  const artifact = newestArtifactsByName([
-    ...listed ?? await fetchArtifactsForRun(runId),
-  ])
-    .find((candidate) =>
-      candidate.name === PERF_METRICS_ARTIFACT_NAME && !candidate.expired
-    );
-  if (artifact === undefined) return new Map();
-  const parsed = await downloadAndParseCoverageBaseline(artifact.id);
-  if (parsed === null) return new Map();
-  return new Map(
-    [...parsed.metrics].map(([name, sample]) => [name, sample.uncoveredLines]),
-  );
+  const artifact = (listed ?? await fetchArtifactsForRun(runId))
+    .filter((candidate) =>
+      coverageArtifactAttempt(candidate.name) !== undefined &&
+      !candidate.expired
+    )
+    .sort((a, b) => b.id - a.id)[0];
+  const records = artifact === undefined ? [] : await readArtifact(artifact);
+  return coverageFiguresOf(records ?? []);
 }
 
 /**

@@ -169,7 +169,7 @@ dial is not yet producing. The states a deployment is expected to pass through:
 | **Explicit + flow** | `enforce-explicit` | `persist` | `off` | `false` | Flow labels persisted (H2, inv-9 active); floor not yet dialed. |
 | **Explicit + floor observe** | `enforce-explicit` | `persist` | `observe` | `false` | Add the write floor as diagnostics (D3 dial-up step). |
 | **Explicit + floor enforce** | `enforce-explicit` | `persist` | `enforce` | `false` | Floor rejects; complete on flow-endorsed writes (flow persists). |
-| **Strict — the shipped default** | `enforce-strict` | `persist` | `enforce` | `true` | Writer-fit fail-closed (H4); render ceiling consumes derived labels (H3b); trigger reads gated, multi-hop complete since flow persists. Where the core pins in `presetCfcOptions` hold every preset — the server hosts ([toolshed/index.ts](../../packages/toolshed/index.ts), [background-piece-service main.ts](../../packages/background-piece-service/src/main.ts)) and the shell among them — and where an unconfigured `Runtime` resolves too, so the two agree without the hosts depending on the default. |
+| **Strict — the shipped default** | `enforce-strict` | `persist` | `enforce` | `true` | Writer-fit fail-closed (H4); render ceiling consumes derived labels (H3b); trigger reads gated, multi-hop complete since flow persists. Where the core pins in `presetCfcOptions` hold every preset — the server host ([toolshed/index.ts](../../packages/toolshed/index.ts)) and the shell among them — and where an unconfigured `Runtime` resolves too, so the two agree without the hosts depending on the default. |
 
 Trigger gating may flip to `true` at any of these states (ordering constraint
 #4: it is sound anywhere) — the table shows it flipping at the end state
@@ -261,7 +261,13 @@ The strict-only delta is:
   artifacts", and a transaction MUST NOT persist a module-policy reference
   unless that same transaction create-only installs the byte-verified manifest
   (spec §4.4.2) — which the writer-fit reject would otherwise make impossible
-  at this level. Implementation in
+  at this level. Create-only means an install never overwrites: it writes the
+  manifest only where the transaction read the document as absent, and that
+  confirmed read turns a manifest another writer created meanwhile into a
+  retryable conflict, whose retry accepts the same bytes and refuses different
+  ones. It carries no `receipt-exists` pin, because every participant of a
+  shared space installs the same content-addressed document, and a permanent
+  rejection there would drop the participant's labeled write. Implementation in
   [prepare.ts](../../packages/runner/src/cfc/prepare.ts) (`prepareBoundaryCommit`
   flow-persist stamping), asserted both ways in
   [cfc-writer-fit.test.ts](../../packages/runner/test/cfc-writer-fit.test.ts).
@@ -892,6 +898,5 @@ Grounded in the four implemented dials — `cfcEnforcementMode`
 SC-13 rollout constraint in `cfc-spec-changes.md` and the current host
 postures: shell
 ([lib-shell/src/runtime.ts](../../packages/lib-shell/src/runtime.ts):
-`enforce-strict` + flow `persist`); toolshed and background-piece-service
-(no CFC options passed, so the `Runtime` defaults, `enforce-strict` + flow
-`persist`).
+`enforce-strict` + flow `persist`); toolshed (the `productionServer` preset's
+pins, `enforce-strict` + flow `persist`).

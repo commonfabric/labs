@@ -96,6 +96,28 @@ async function inviteCli(passphrase: string) {
 }
 
 describe("space invite", () => {
+  it("creates an OWNER invitation whose link carries no access", async () => {
+    await using cli = await inviteCli("owner invite CLI");
+    const created = await cli.run(
+      "create",
+      "--access",
+      "OWNER",
+      "--ttl",
+      "60",
+      "--shell",
+      "https://shell.example",
+    );
+    expect(cli.requests).toMatchObject([
+      { operation: "create", body: { access: "OWNER", ttlSeconds: 60 } },
+    ]);
+    expect(created).toMatchObject({ access: "OWNER" });
+    const link = new URL(created.link);
+    expect(link.searchParams.has("access")).toBe(false);
+    expect(parseInviteLink(link)).toMatchObject({
+      inviteId: created.inviteId,
+      code: created.code,
+    });
+  });
   it("persists private creation credentials before HTTP and reuses them after a lost response", async () => {
     const signer = await Identity.fromPassphrase("durable invite CLI", {
       implementation: "noble",
@@ -843,8 +865,12 @@ describe("space invite", () => {
     for (
       const [args, error] of [
         [
-          ["create", "--access", "OWNER", "--ttl", "60"],
-          "--access must be READ or WRITE",
+          ["create", "--access", "ADMIN", "--ttl", "60"],
+          "--access must be READ, WRITE, or OWNER",
+        ],
+        [
+          ["create", "--access", "owner", "--ttl", "60"],
+          "--access must be READ, WRITE, or OWNER",
         ],
         [["create", "--access", "READ"], "--ttl is required"],
         [["create", "--access", "READ", "--ttl", "0"], "--ttl must be between"],

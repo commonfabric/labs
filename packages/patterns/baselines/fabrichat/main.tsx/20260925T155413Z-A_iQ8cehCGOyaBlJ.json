@@ -1,0 +1,360 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "FabriChatMessage": {
+        "properties": {
+          "authorAvatar": {
+            "description": "The sender's profile avatar (a URL or a glyph) when the message was sent.",
+            "type": "string"
+          },
+          "authorName": {
+            "description": "The sender's profile name when the message was sent, or `\"\"` when the\nprofile has no name or the name had not yet reached the handler.",
+            "type": "string"
+          },
+          "authorProfile": {
+            "$ref": "#/$defs/FabriChatProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The profile the sender sent under."
+          },
+          "body": {
+            "type": "string"
+          },
+          "sentAt": {
+            "description": "When the message was sent, in milliseconds since the epoch, at the\none-second resolution a handler's clock has.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "authorProfile",
+          "authorName",
+          "authorAvatar",
+          "body",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "FabriChatProfile": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "FabriChatReaction": {
+        "properties": {
+          "emoji": {
+            "description": "One of `FABRICHAT_REACJI`.",
+            "type": "string"
+          },
+          "message": {
+            "$ref": "#/$defs/FabriChatMessage",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The message reacted to."
+          },
+          "reactorProfile": {
+            "$ref": "#/$defs/FabriChatProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The profile the reactor reacted under."
+          }
+        },
+        "required": [
+          "reactorProfile",
+          "message",
+          "emoji"
+        ],
+        "type": "object"
+      },
+      "MessagesValue": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SentMessage"
+        },
+        "type": "array"
+      },
+      "ReactionsValue": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SentReaction"
+        },
+        "type": "array"
+      },
+      "SentMessage": {
+        "$ref": "#/$defs/FabriChatMessage",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "uiContract": {
+            "action": "FabriChatSend",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "FabriChatSendSurface"
+            ],
+            "trustedPattern": "FabriChatSendSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/fabrichat/chat.tsx",
+              "moduleIdentity": "dB0lWswKxph6R0Co7uMtwZG75O2fI7UzwlpX2u8ygPU",
+              "path": [
+                "commitSend"
+              ]
+            }
+          }
+        }
+      },
+      "SentReaction": {
+        "$ref": "#/$defs/FabriChatReaction",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "uiContract": {
+            "action": "FabriChatReact",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "FabriChatReactSurface"
+            ],
+            "trustedPattern": "FabriChatReactSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/fabrichat/chat.tsx",
+              "moduleIdentity": "dB0lWswKxph6R0Co7uMtwZG75O2fI7UzwlpX2u8ygPU",
+              "path": [
+                "commitReact"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "description": "What FabriChat stores: the conversation, shared by the space.",
+    "properties": {
+      "messages": {
+        "$ref": "#/$defs/MessagesValue",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ]
+      },
+      "reactions": {
+        "$ref": "#/$defs/ReactionsValue",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ]
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "fabrichat/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "FabriChatMessage": {
+        "properties": {
+          "authorAvatar": {
+            "description": "The sender's profile avatar (a URL or a glyph) when the message was sent.",
+            "type": "string"
+          },
+          "authorName": {
+            "description": "The sender's profile name when the message was sent, or `\"\"` when the\nprofile has no name or the name had not yet reached the handler.",
+            "type": "string"
+          },
+          "authorProfile": {
+            "$ref": "#/$defs/FabriChatProfile",
+            "description": "The profile the sender sent under."
+          },
+          "body": {
+            "type": "string"
+          },
+          "sentAt": {
+            "description": "When the message was sent, in milliseconds since the epoch, at the\none-second resolution a handler's clock has.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "authorProfile",
+          "authorName",
+          "authorAvatar",
+          "body",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "FabriChatProfile": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "FabriChatReaction": {
+        "properties": {
+          "emoji": {
+            "description": "One of `FABRICHAT_REACJI`.",
+            "type": "string"
+          },
+          "message": {
+            "$ref": "#/$defs/FabriChatMessage",
+            "description": "The message reacted to."
+          },
+          "reactorProfile": {
+            "$ref": "#/$defs/FabriChatProfile",
+            "description": "The profile the reactor reacted under."
+          }
+        },
+        "required": [
+          "reactorProfile",
+          "message",
+          "emoji"
+        ],
+        "type": "object"
+      },
+      "MessagesValue": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SentMessage"
+        },
+        "type": "array"
+      },
+      "ReactionsValue": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SentReaction"
+        },
+        "type": "array"
+      },
+      "SentMessage": {
+        "$ref": "#/$defs/FabriChatMessage",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "uiContract": {
+            "action": "FabriChatSend",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "FabriChatSendSurface"
+            ],
+            "trustedPattern": "FabriChatSendSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/fabrichat/chat.tsx",
+              "moduleIdentity": "dB0lWswKxph6R0Co7uMtwZG75O2fI7UzwlpX2u8ygPU",
+              "path": [
+                "commitSend"
+              ]
+            }
+          }
+        }
+      },
+      "SentReaction": {
+        "$ref": "#/$defs/FabriChatReaction",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "uiContract": {
+            "action": "FabriChatReact",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "FabriChatReactSurface"
+            ],
+            "trustedPattern": "FabriChatReactSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/fabrichat/chat.tsx",
+              "moduleIdentity": "dB0lWswKxph6R0Co7uMtwZG75O2fI7UzwlpX2u8ygPU",
+              "path": [
+                "commitReact"
+              ]
+            }
+          }
+        }
+      },
+      "SubmittedTextEvent": {
+        "properties": {
+          "target": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "description": "What FabriChat provides.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "messages": {
+        "$ref": "#/$defs/MessagesValue"
+      },
+      "reactions": {
+        "$ref": "#/$defs/ReactionsValue"
+      },
+      "sendMessage": {
+        "$ref": "#/$defs/SubmittedTextEvent",
+        "asCell": [
+          "stream"
+        ]
+      }
+    },
+    "required": [
+      "messages",
+      "reactions",
+      "sendMessage",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

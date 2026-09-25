@@ -516,6 +516,14 @@ describe("JsonCodecEngine", () => {
       expect(roundTrip('with"quotes')).toBe('with"quotes');
     });
 
+    it("passes through lone surrogates in strings and property names", () => {
+      expect(roundTrip("\ud800")).toBe("\ud800");
+      expect(roundTrip("a\udc00b")).toBe("a\udc00b");
+      expect(roundTrip({ "\udbff": ["\udfff"] })).toEqual({
+        "\udbff": ["\udfff"],
+      });
+    });
+
     it("passes through `Number.MAX_SAFE_INTEGER`", () => {
       expect(roundTrip(Number.MAX_SAFE_INTEGER)).toBe(
         Number.MAX_SAFE_INTEGER,
@@ -621,6 +629,13 @@ describe("JsonCodecEngine", () => {
       expect(objResult.flag).toBe(Symbol.for("ready"));
     });
 
+    it("round-trips an interned symbol whose key has a lone surrogate", () => {
+      expect(roundTrip(Symbol.for("\ud800"))).toBe(Symbol.for("\ud800"));
+      expect(roundTrip({ kind: Symbol.for("a\udc00") })).toEqual({
+        kind: Symbol.for("a\udc00"),
+      });
+    });
+
     it("loudly fails to encode an unencodable value (unique / uninterned `Symbol`)", () => {
       // `SymbolCodec.canEncode()` returns false for unique symbols (no
       // registry key), so no codec claims them. A default-configured
@@ -724,6 +739,14 @@ describe("JsonCodecEngine", () => {
       const { jsonCodecEngine } = makeTestCodec();
       expect(() => jsonCodecEngine.encode(new Map() as unknown as FabricValue))
         .toThrow("no applicable codec");
+    });
+
+    it("throws on a null-prototype object, rather than writing it as a record", () => {
+      const { jsonCodecEngine } = makeTestCodec();
+      const nullProto = Object.assign(Object.create(null), { a: 1 });
+
+      expect(() => jsonCodecEngine.encode({ nested: nullProto }))
+        .toThrow("Cannot encode null-prototype object");
     });
   });
 
@@ -1027,9 +1050,9 @@ describe("JsonCodecEngine", () => {
         expect(Object.keys(encoded)).toEqual(["", "\u{10000}"]);
       });
 
-      it("matches the key order used by `value-hash.ts`", () => {
+      it("matches the key order used by `ValueHasher`", () => {
         // Both subsystems must agree on the canonical sort order. Cross-check
-        // via `utf8SortedKeysOf`, which is the function value-hash.ts uses.
+        // via `utf8SortedKeysOf`, which is the function `ValueHasher` uses.
 
         const obj = {
           ["\u{1F600}"]: 1,

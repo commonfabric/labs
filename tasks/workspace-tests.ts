@@ -228,8 +228,8 @@ const INTERNALLY_SHARDED_PACKAGES: Record<
 // with the flags it is handed. `tasks/run-sharded-test-files.ts` is the
 // script known to forward them: it hands them to its `deno test` runs and
 // leaves one report where the flag names. A leaf running any other script
-// is kept out: `dashboard` and `identity` drive browser harnesses that
-// record through the deno-web-test reporter instead.
+// is kept out: `identity` drives a browser harness that records through
+// the deno-web-test reporter instead.
 const FLAG_FORWARDING_RUNNER = "run-sharded-test-files.ts";
 
 /** Whether a leaf task runs the script that forwards its flags. */

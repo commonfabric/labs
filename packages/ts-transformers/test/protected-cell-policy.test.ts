@@ -111,6 +111,30 @@ const setName = handler<{ name: string }, { name: Writable<string> }>((event, { 
         "",
         "ProtectedName",
       ],
+      [
+        "a pattern-local generic alias with a fixed writer",
+        "",
+        "type ProtectedName<T> = Owned<T, typeof setName>;",
+        "ProtectedName<string>",
+      ],
+      [
+        "a pattern-local generic alias with a writer argument",
+        "",
+        "type ProtectedName<T, Writer> = Owned<T, Writer>;",
+        "ProtectedName<string, typeof setName>",
+      ],
+      [
+        "a chain of pattern-local generic aliases",
+        "",
+        "type Inner<T> = Owned<T, typeof setName>;\ntype ProtectedName<T> = Inner<T>;",
+        "ProtectedName<string>",
+      ],
+      [
+        "a pattern-local generic alias with a default value type",
+        "",
+        "type ProtectedName<T = string> = Owned<T, typeof setName>;",
+        "ProtectedName",
+      ],
     ] as const
   ) {
     it(`keeps a constructed cell's writer through ${spelling}`, async () => {
@@ -134,11 +158,70 @@ export default pattern<{ initialName: string }>(({ initialName }) => {
       // schema alone does not show the spelling is usable.
       expect(diagnostics.filter(isError)).toEqual([]);
       const lift = callSchemas(root, "lift")[1];
-      expect(resolved(lift)?.ifc).toMatchObject(policy);
+      expect(resolved(lift)).toMatchObject({ type: "string", ifc: policy });
       const output = patternSchemas(root).output;
       // deno-lint-ignore no-explicit-any
-      expect(resolved((output as any).properties.name, output)?.ifc)
-        .toMatchObject(policy);
+      expect(resolved((output as any).properties.name, output))
+        .toMatchObject({ type: "string", ifc: policy });
+    });
+  }
+
+  for (
+    const [spelling, aliases, local, expectedPolicy] of [
+      [
+        "a module-level generic alias",
+        "type ProtectedName<T> = cf.WriteAuthorizedBy<T, typeof setName>;",
+        "",
+        { writeAuthorizedBy: policy.writeAuthorizedBy },
+      ],
+      [
+        "a pattern-local generic alias",
+        "",
+        "type ProtectedName<T> = cf.WriteAuthorizedBy<T, typeof setName>;",
+        { writeAuthorizedBy: policy.writeAuthorizedBy },
+      ],
+      [
+        "a generic alias chain",
+        "type Inner<T, Writer> = cf.WriteAuthorizedBy<T, Writer>;",
+        "type ProtectedName<T> = Inner<T, typeof setName>;",
+        { writeAuthorizedBy: policy.writeAuthorizedBy },
+      ],
+      [
+        "nested policy aliases",
+        "",
+        "type ProtectedName<T> = cf.Cfc<cf.WriteAuthorizedBy<T, typeof setName>, { ownerPrincipal: cf.CurrentPrincipal }>;",
+        policy,
+      ],
+    ] as const
+  ) {
+    it(`keeps a namespace-qualified writer policy through ${spelling}`, async () => {
+      const diagnostics: TransformationDiagnostic[] = [];
+      const root = parseModule(
+        await transformSource(
+          `${prelude}import * as cf from "commonfabric";
+${aliases}
+export default pattern<{ initialName: string }>(({ initialName }) => {
+  ${local}
+  const name = new Writable<ProtectedName<string>>(initialName ?? "").for("name");
+  return { name, setName: setName({ name }) };
+});`,
+          {
+            types: COMMONFABRIC_TYPES,
+            typeCheck: true,
+            pipelineDiagnostics: diagnostics,
+          },
+        ),
+      );
+      expect(diagnostics.filter(isError)).toEqual([]);
+      const expected = {
+        type: "string",
+        ifc: expectedPolicy,
+      };
+      expect(resolved(callSchemas(root, "lift")[1])).toMatchObject(expected);
+      const output = patternSchemas(root).output;
+      // deno-lint-ignore no-explicit-any
+      expect(resolved((output as any).properties.name, output))
+        .toMatchObject(expected);
     });
   }
 
@@ -263,6 +346,94 @@ export const setName = ${writer};`,
     expect(resolved((output as any).properties.name, output)?.ifc)
       .toMatchObject({ writeAuthorizedBy: writer });
   });
+
+  it("keeps an imported writer through a pattern-local generic alias", async () => {
+    const diagnostics: TransformationDiagnostic[] = [];
+    const files = await transformFiles({
+      ...importedWriterFiles(
+        `handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); })`,
+      ),
+      "/main.tsx": `import { pattern, Writable } from "commonfabric";
+import { type Owned, setName as save } from "./writers/mod.ts";
+export default pattern<{ initialName: string }>(({ initialName }) => {
+  type ProtectedName<T> = Owned<T, typeof save>;
+  const name = new Writable<ProtectedName<string>>(initialName ?? "").for("name");
+  return { name };
+});`,
+    }, {
+      types: COMMONFABRIC_TYPES,
+      typeCheck: true,
+      pipelineDiagnostics: diagnostics,
+    });
+    expect(diagnostics.filter(isError)).toEqual([]);
+    const root = parseModule(files["/main.tsx"]);
+    const expected = {
+      type: "string",
+      ifc: {
+        ...policy,
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: {
+            file: "/writers/set-name.ts",
+            path: ["setName"],
+          },
+        },
+      },
+    };
+    expect(resolved(callSchemas(root, "lift")[1])).toMatchObject(expected);
+    const output = patternSchemas(root).output;
+    // deno-lint-ignore no-explicit-any
+    expect(resolved((output as any).properties.name, output))
+      .toMatchObject(expected);
+    expect(bindingIdentities(parseModule(files["/writers/set-name.ts"])))
+      .toEqual([{
+        sourceFile: "/writers/set-name.ts",
+        bindingPath: ["setName"],
+      }]);
+  });
+
+  for (const scope of ["module", "pattern"] as const) {
+    it(`keeps a writer through same-named aliases at ${scope} scope`, async () => {
+      const alias = "type Owned<T> = ns.Owned<T, typeof save>;";
+      const diagnostics: TransformationDiagnostic[] = [];
+      const files = await transformFiles({
+        ...importedWriterFiles(
+          `handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); })`,
+        ),
+        "/main.tsx": `import { pattern, Writable } from "commonfabric";
+import * as ns from "./writers/mod.ts";
+import { setName as save } from "./writers/mod.ts";
+${scope === "module" ? alias : ""}
+export default pattern<{ initialName: string }>(({ initialName }) => {
+  ${scope === "pattern" ? alias : ""}
+  const name = new Writable<Owned<string>>(initialName ?? "").for("name");
+  return { name };
+});`,
+      }, {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      });
+      expect(diagnostics.filter(isError)).toEqual([]);
+      const root = parseModule(files["/main.tsx"]);
+      const expected = {
+        type: "string",
+        ifc: {
+          ...policy,
+          writeAuthorizedBy: {
+            __ctWriterIdentityOf: {
+              file: "/writers/set-name.ts",
+              path: ["setName"],
+            },
+          },
+        },
+      };
+      expect(resolved(callSchemas(root, "lift")[1])).toMatchObject(expected);
+      const output = patternSchemas(root).output;
+      // deno-lint-ignore no-explicit-any
+      expect(resolved((output as any).properties.name, output))
+        .toMatchObject(expected);
+    });
+  }
 
   // The claim is the importer's; the binding identity the runtime verifies it
   // against is minted where the writer is DECLARED. The hardening stage once
@@ -433,5 +604,199 @@ export default pattern<{ name: string }, { name: Guarded<string, Binding> }>(({ 
       type: "cfc-write-authorized-by",
       message: expect.stringContaining("direct typeof binding"),
     }]);
+  });
+
+  // An alias body in parentheses names the policy it holds. `deno fmt`
+  // removes such parentheses in this repository, but pattern source the
+  // runtime compiles need not have been formatted, and the schema generator
+  // once read the body raw: the field lost its policy AND its type, emitted
+  // as an open object with no diagnostic.
+  for (
+    const [spelling, aliases] of [
+      [
+        "a parenthesized alias body",
+        "type ProtectedName = (Owned<string, typeof setName>);",
+      ],
+      [
+        "a parenthesized generic alias body",
+        "type OwnedBySetName<T> = (Owned<T, typeof setName>);\ntype ProtectedName = OwnedBySetName<string>;",
+      ],
+      [
+        "parenthesized bodies on an alias of an alias",
+        "type Inner = (Owned<string, typeof setName>);\ntype ProtectedName = (Inner);",
+      ],
+    ] as const
+  ) {
+    for (
+      const [position, body] of [
+        [
+          "a constructed cell",
+          `export default pattern<{ initialName: string }>(({ initialName }) => {
+  const name = new Writable<ProtectedName>(initialName ?? "").for("name");
+  return { name, setName: setName({ name }) };
+});`,
+        ],
+        [
+          "a declared field",
+          `export default pattern<{ name: string }, { name: ProtectedName }>(({ name }) => ({ name }));`,
+        ],
+      ] as const
+    ) {
+      it(`keeps the policy of ${position} through ${spelling}`, async () => {
+        const diagnostics: TransformationDiagnostic[] = [];
+        const root = parseModule(
+          await transformSource(
+            `${prelude}// deno-fmt-ignore\n${aliases}\n${body}`,
+            {
+              types: COMMONFABRIC_TYPES,
+              typeCheck: true,
+              pipelineDiagnostics: diagnostics,
+            },
+          ),
+        );
+        expect(diagnostics.filter(isError)).toEqual([]);
+        const output = patternSchemas(root).output;
+        // deno-lint-ignore no-explicit-any
+        const name = resolved((output as any).properties.name, output);
+        expect(name).toMatchObject({ type: "string", ifc: policy });
+      });
+    }
+  }
+
+  // An alias chain may pass through two different aliases of one name; the
+  // second is part of the chain, not a cycle, and the policy it holds
+  // reaches the schema.
+  it("follows a policy alias chain through two aliases of the same name", async () => {
+    const diagnostics: TransformationDiagnostic[] = [];
+    const files = await transformFiles(
+      {
+        "/main.tsx": `import { pattern, Writable } from "commonfabric";
+import { type Wrapped, setName } from "./shared.ts";
+type Owned<T> = Wrapped<T>;
+export default pattern<{ initialName: string }>(({ initialName }) => {
+  const name = new Writable<Owned<string>>(initialName ?? "").for("name");
+  return { name, setName: setName({ name }) };
+});`,
+        "/shared.ts":
+          `import { Cfc, CurrentPrincipal, handler, RepresentsCurrentUser, Writable, WriteAuthorizedBy } from "commonfabric";
+type Owned<T, Binding> = RepresentsCurrentUser<Cfc<WriteAuthorizedBy<T, Binding>, { ownerPrincipal: CurrentPrincipal }>>;
+export const setName = handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); });
+export type Wrapped<T> = Owned<T, typeof setName>;`,
+      },
+      {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      },
+    );
+    expect(diagnostics.filter(isError)).toEqual([]);
+    const expected = {
+      type: "string",
+      ifc: {
+        ownerPrincipal: { __ctCurrentPrincipal: true },
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: { file: "/shared.ts", path: ["setName"] },
+        },
+      },
+    };
+    const root = parseModule(files["/main.tsx"]);
+    expect(resolved(callSchemas(root, "lift")[1])).toMatchObject(expected);
+  });
+
+  // A conditional alias the checker resolves to the policy holds the writer in
+  // its own arguments, in whatever order its parameters take.
+  const conditionalPrelude =
+    `import { handler, pattern, Writable, WriteAuthorizedBy } from "commonfabric";
+const setName = handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); });
+const other = handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); });
+type Guarded<X, B> = X extends string ? WriteAuthorizedBy<X, B> : never;
+type Crossed<A, B> = B extends unknown ? WriteAuthorizedBy<string, A> : never;
+type Checked<B> = B extends unknown ? WriteAuthorizedBy<string, B> : never;
+`;
+
+  it("keeps the writer a conditional alias passes to the policy", async () => {
+    const diagnostics: TransformationDiagnostic[] = [];
+    const root = parseModule(
+      await transformSource(
+        `${conditionalPrelude}export default pattern<{ name: string }, { guarded: Guarded<string, typeof setName>; crossed: Crossed<typeof setName, typeof other> }>(
+  ({ name }) => ({ guarded: name, crossed: name }),
+);`,
+        {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        },
+      ),
+    );
+
+    expect(diagnostics.filter(isError)).toEqual([]);
+    const writer = {
+      writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["setName"] } },
+    };
+    expect(patternSchemas(root).output).toMatchObject({
+      properties: { guarded: { ifc: writer }, crossed: { ifc: writer } },
+    });
+  });
+
+  it("reports nothing for a policy written directly, whose claim the transformer mints", async () => {
+    // The direct `WriteAuthorizedBy` path hands the schema generator the
+    // payload's node and mints the claim itself, so the generator has no
+    // binding to read there, and no alias it was written through.
+    const diagnostics: TransformationDiagnostic[] = [];
+    const root = parseModule(
+      await transformSource(
+        `${conditionalPrelude}interface Named { name: string }
+export default pattern(() => {
+  const plain = new Writable<WriteAuthorizedBy<string, typeof setName>>("").for("plain");
+  const named = new Writable<WriteAuthorizedBy<Named, typeof setName>>({ name: "" }).for("named");
+  return { plain, named, setName: setName({ name: plain }) };
+});`,
+        {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        },
+      ),
+    );
+
+    expect(diagnostics.filter(isError)).toEqual([]);
+    expect(
+      diagnostics.filter((diagnostic) =>
+        diagnostic.type === "cfc-write-authorized-by:unread"
+      ),
+    ).toEqual([]);
+    const writer = {
+      writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["setName"] } },
+    };
+    expect(patternSchemas(root).output).toMatchObject({
+      properties: { plain: { ifc: writer }, named: { ifc: writer } },
+    });
+  });
+
+  it("refuses a writer it cannot read, stored source included", async () => {
+    // A reload of stored source is refused too: the error guards a write
+    // restriction, which a pattern does not run without.
+    const severities = async (storedSource: boolean) => {
+      const diagnostics: TransformationDiagnostic[] = [];
+      await transformSource(
+        `${conditionalPrelude}export default pattern<{ name: string }, { name: Checked<typeof setName> }>(
+  ({ name }) => ({ name }),
+);`,
+        {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+          storedSource,
+        },
+      );
+      return diagnostics
+        .filter((diagnostic) =>
+          diagnostic.type === "cfc-write-authorized-by:unread"
+        )
+        .map((diagnostic) => diagnostic.severity);
+    };
+
+    expect(await severities(false)).toEqual(["error"]);
+    expect(await severities(true)).toEqual(["error"]);
   });
 });

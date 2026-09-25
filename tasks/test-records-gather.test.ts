@@ -59,6 +59,16 @@ describe("test-records-gather", () => {
     it("returns undefined for a push payload", () => {
       expect(headCommitOfEvent({ pusher: {} })).toBeUndefined();
     });
+
+    it("returns undefined for a payload that is not an object", () => {
+      expect(headCommitOfEvent(null)).toBeUndefined();
+      expect(headCommitOfEvent("pull_request")).toBeUndefined();
+    });
+
+    it("returns undefined for a pull request that names no head", () => {
+      expect(headCommitOfEvent({ pull_request: { number: 1 } }))
+        .toBeUndefined();
+    });
   });
 
   describe("gather()", () => {
@@ -187,6 +197,73 @@ describe("test-records-gather", () => {
       // The seed a job's runners shuffled by, which an override the job
       // set decides.
       expect(facts.shuffleSeed).toBe(7);
+    });
+
+    it("records no head commit where the event payload is not JSON", async () => {
+      // The payload is context the job may lack, so a payload this cannot
+      // read costs the one fact it would have given and nothing else.
+
+      const out = join(dir, "out");
+      const eventPath = join(dir, "event.json");
+      await Deno.writeTextFile(eventPath, "{not json");
+      await gather({
+        out,
+        job: "Check",
+        junit: [],
+        env: (name) => {
+          if (name === "GITHUB_SHA") return "a".repeat(40);
+          if (name === "GITHUB_EVENT_PATH") return eventPath;
+          return undefined;
+        },
+      });
+      const facts = JSON.parse(
+        await Deno.readTextFile(join(out, "job.json")),
+      );
+      expect(facts.commit).toBe("a".repeat(40));
+      expect(facts.headCommit).toBeUndefined();
+    });
+
+    it("ingests the files a JUnit glob matches and skips its directories", async () => {
+      await Deno.writeTextFile(join(dir, "a-good.xml"), JUNIT);
+      await Deno.mkdir(join(dir, "b-directory.xml"));
+      const warned: string[] = [];
+      const warn = console.warn;
+      console.warn = (line: string) => warned.push(line);
+      const out = join(dir, "out");
+      try {
+        await gather({
+          out,
+          job: "Check",
+          junit: [{ kind: "unit", scope: "cli", glob: join(dir, "*.xml") }],
+        });
+      } finally {
+        console.warn = warn;
+      }
+      expect(warned).toEqual([]);
+      const lines = (await Deno.readTextFile(join(out, "records.ndjson")))
+        .trimEnd().split("\n");
+      expect(lines.length).toBe(1);
+    });
+
+    it("warns about a JUnit glob that matched nothing, and still writes", async () => {
+      const glob = join(dir, "reports", "*.xml");
+      const warned: string[] = [];
+      const warn = console.warn;
+      console.warn = (line: string) => warned.push(line);
+      const out = join(dir, "out");
+      try {
+        await gather({
+          out,
+          job: "Check",
+          junit: [{ kind: "unit", scope: "cli", glob }],
+        });
+      } finally {
+        console.warn = warn;
+      }
+      expect(warned).toEqual([
+        `test records: no JUnit files matched ${glob}`,
+      ]);
+      expect(await Deno.readTextFile(join(out, "records.ndjson"))).toBe("");
     });
 
     it("keeps ingesting after one unreadable JUnit file", async () => {

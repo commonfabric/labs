@@ -269,7 +269,7 @@ export interface IngestJUnitOptions {
   filePrefix?: string;
 
   /**
-   * The file each `Deno.test` was registered from, as the registration
+   * The test file each `Deno.test` belongs to, as the registration
    * preload captured it. It is repository-relative already, so it needs
    * no prefix, and it overrides what the report's own classnames say —
    * which is what the wrapper the preload installs costs them.

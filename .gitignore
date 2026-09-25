@@ -10,7 +10,6 @@ artifact
 coverage
 _deno.lock
 .claude-prompt.tmp
-.bg-piece-service.pid
 .pr-desc.tmp
 dist/
 .claude/settings.local.json
@@ -37,6 +36,7 @@ cf.key.*
 local-dev-toolshed.log
 local-dev-shell.log
 local-dev-console.log
+local-dev-console.log.previous
 .playwright-mcp/
 .worktrees
 tmp/

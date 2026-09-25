@@ -120,8 +120,12 @@ export function compileAndRun(
     tx.resetNarrowestReadScope();
     // TODO(seefeld): Ideally, this cell already has this schema, because we set
     // it on the node itself.
-    const program = inputsCell.asSchema<RuntimeProgram>(programSchema)
-      .withTx(tx).get();
+    // Detached from the input view once, here: the program is hashed, handed
+    // to the compiler, and queued as an outbox request, and each of those would
+    // otherwise read the whole program through the view again.
+    const program = snapshotQueryResult(
+      inputsCell.asSchema<RuntimeProgram>(programSchema).withTx(tx).get(),
+    );
     const input = inputsCell.withTx(tx).key("input");
     const outputScope = narrowestScope([
       tx.getNarrowestReadScope(),
@@ -488,8 +492,9 @@ function compileAndRunServed(
   errors.withTx(tx).set(undefined);
   pending.withTx(tx).set(true);
   internal.withTx(tx).set({ requestHash: hash, phase: "pending" });
-  // The outbox owns an immutable request, detached from the issuing transaction.
-  const request = snapshotQueryResult(program);
+  // The outbox owns the request, and `program` is already detached from the
+  // issuing transaction.
+  const request = program;
   enqueueSinkRequestPostCommitEffect(
     tx,
     "compileAndRun",
@@ -538,8 +543,10 @@ function compileAndRunServed(
             effectKey,
             (settleTx) => {
               settleTx.tx.scopeKeyIdentity = identity;
-              const current = inputs.asSchema<RuntimeProgram>(programSchema)
-                .withTx(settleTx).get();
+              const current = snapshotQueryResult(
+                inputs.asSchema<RuntimeProgram>(programSchema).withTx(settleTx)
+                  .get(),
+              );
               if (
                 hashOf(current ?? { files: [], main: "" }).toString() !== hash
               ) {

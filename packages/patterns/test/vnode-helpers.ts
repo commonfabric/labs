@@ -75,6 +75,16 @@ export const findNode = (
     .find((child) => child !== undefined);
 };
 
+/** How many elements named `name` sit under `root`, counting nested ones. */
+export const countElements = (root: unknown, name: string): number => {
+  const value = readValue(root);
+  const self = isRecord(value) && readValue(value.name) === name ? 1 : 0;
+  return childNodes(value).reduce<number>(
+    (sum, child) => sum + countElements(child, name),
+    self,
+  );
+};
+
 export const findNodeByProp = (
   root: unknown,
   prop: string,
@@ -142,18 +152,28 @@ export const innermostNode = (
   return accept(node) ? node : undefined;
 };
 
-/** Fires a node's `onClick` the way a click does, with an empty event. A
- * handler bound only in JSX is reached through the rendered tree. Throws
- * when there is no node or it has no `onClick`, so a mistyped label fails
- * the test rather than passing as a control that did nothing. */
-export const fireClick = (node: unknown, what = "the node"): void => {
-  if (node === undefined) throw new Error(`fireClick: ${what} was not found`);
-  const onClick = propsOf(node)?.onClick;
-  if (!isRecord(onClick) || typeof onClick.send !== "function") {
-    throw new Error(`fireClick: ${what} has no onClick to fire`);
+/** Fires the event handler a node binds under `prop` (`onClick`,
+ * `oncf-submit`, …), sending it `event`. A handler bound only in JSX is
+ * reached through the rendered tree. Throws when there is no node or it binds
+ * nothing under `prop`, so a mistyped label fails the test rather than
+ * passing as a control that did nothing. */
+export const fireEvent = (
+  node: unknown,
+  prop: string,
+  event: unknown,
+  what = "the node",
+): void => {
+  if (node === undefined) throw new Error(`fireEvent: ${what} was not found`);
+  const handler = propsOf(node)?.[prop];
+  if (!isRecord(handler) || typeof handler.send !== "function") {
+    throw new Error(`fireEvent: ${what} has no ${prop} to fire`);
   }
-  (onClick.send as (event: Record<string, never>) => void)({});
+  (handler.send as (event: unknown) => void)(event);
 };
+
+/** Fires a node's `onClick` the way a click does, with an empty event. */
+export const fireClick = (node: unknown, what = "the node"): void =>
+  fireEvent(node, "onClick", {}, what);
 
 /** Clicks the one button labelled `label` under `root`. */
 export const clickButton = (root: unknown, label: string): void =>

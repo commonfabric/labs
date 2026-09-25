@@ -685,9 +685,9 @@ using them is not optional in code that can reach a stored value:
   call — it decides a container by a content hash cached on identity, where the
   walk pays for every level each time — but it is not a drop-in even there. It
   decides a container by hashing it whole, so it throws on a value holding a
-  cycle and on one holding a class whose codec is a stub, both of which this
-  walk returns for. `valueEqual({ v: aFabricMap }, { v: 5 })` throws where
-  `fabricAwareEqual()` returns `false`.
+  class whose codec is a stub, which this walk returns for.
+  `valueEqual({ v: aFabricMap }, { v: 5 })` throws where `fabricAwareEqual()`
+  returns `false`.
 
 Around a dozen walks in `runner` and `piece` take one of the two
 non-refusing answers, and what each says is decided by what it owes its
@@ -1054,8 +1054,8 @@ deno task integration patterns counter
 - Runs integration tests with `API_URL` pointing to the local server
 - **Automatically stops servers after tests complete**
 
-**Available packages:** `runner`, `runtime-client`, `shell`,
-`background-piece-service`, `patterns`, `cli`, `generated-patterns`
+**Available packages:** `runner`, `runtime-client`, `shell`, `patterns`, `cli`,
+`generated-patterns`
 
 **Log files:** After servers start, check these if something goes wrong:
 

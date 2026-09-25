@@ -2,14 +2,12 @@ import { type Default, pattern, type Writable } from "commonfabric";
 
 // FIXTURE: cell-get-unknown-member-result
 // Verifies: a pattern-scope `.get()` of a cell whose type CONTAINS `unknown`
-// lowers to a lift whose RESULT schema keeps the read's declared shape. Such a
-// node takes the node-based analyzer — the transformer routes any node that
-// contains `unknown` there, so a generic-default `unknown` stays open rather
-// than turning reference-only — and the read prints its type as
-// `Readonly<{…}>`, or as a tuple. The analyzer applies the library alias to
-// its argument, rather than resolving the alias to its UNINSTANTIATED
-// declared type (an empty object, every member dropped), and lowers the
-// tuple to an array of its element union rather than to the accept-anything
+// lowers to a lift whose RESULT schema keeps the read's declared shape. The
+// read prints its type as `Readonly<{…}>`, or as a tuple, and schema
+// generation reads the printed node by the type it was printed from: the
+// object keeps every member, rather than the empty object of the library
+// alias's UNINSTANTIATED declared type, and the tuple becomes an array of its
+// element union, which `unknown` absorbs, rather than the accept-anything
 // fallback (`true`).
 
 export default pattern<

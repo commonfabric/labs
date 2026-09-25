@@ -203,7 +203,7 @@ What works today:
   opt-in ChatGPT/Codex subscription transports
 - interactive chat NDJSON stdio transport with opt-in SQLite session, turn, and
   event persistence
-- single-child subagent delegation with fresh child prompt context, explicit
+- subagent delegation with fresh child prompt context, explicit
   default/browser/web_fetch/web_search/pattern-author child profiles, retained
   child run references, and a sanitized summary/state return channel, plus a
   bounded private research loop that is not a delegable profile
@@ -288,7 +288,10 @@ What is not done yet:
 - first-class browser operation policy on top of the provisional browser
   subagent profile
 - dynamic/model-driven Agent Skills activation
-- parallel child orchestration
+- parallel child orchestration beyond one model turn: a turn's delegations run
+  together, apart from a `browser` delegation, which holds the calls after it,
+  while its other calls run in order; nothing schedules, budgets, or cancels
+  across turns
 - app UI event provenance
 - streaming model responses
 - richer mid-turn resumability
@@ -791,8 +794,7 @@ inside a Claude Code session reports both.
 A service reaches this through `OTEL_SERVICE_NAME`, which it already sets to
 name itself for tracing. Every process it spawns inherits the variable, so a
 harness a service launches reports `invoker=service` and carries the service's
-own name in `service`. The local dev launcher sets the name for both toolshed
-and the background piece service.
+own name in `service`.
 
 No filesystem path and no git metadata contributes to any field. An absent field
 means the value was not there to read.
@@ -1527,10 +1529,9 @@ not existing compositions or the index's stored event history.
 ### Researching Common Fabric
 
 `research` takes a `task`, a `purpose`, and an optional `followUpTo` naming a
-research handle this run holds or a research run it retains. A successful result
-names the handle minted for its findings under `researchHandle`. Both purposes
-have the same tools and limits; the question determines how much research is
-useful:
+research handle this run holds. A successful result names the handle minted for
+its findings under `researchHandle`. Both purposes have the same tools and
+limits; the question determines how much research is useful:
 
 | Purpose            | Result                                                                                                                                    | Model turns / tool calls / read characters |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
@@ -1583,13 +1584,17 @@ agent follows the not-checked verification rule and never asks for a nonexistent
 permission to release it.
 
 The parent uses findings that settle a decision directly. It requests `answer`
-for a specific remaining uncertainty, with `followUpTo` selecting the relevant
-prior result. Code is optional in either purpose and may demonstrate a small
-idiom or a composable piece without expanding into a complete application. The
-private follow-up receives selected findings and reopenable source locations,
-with old examples and handle bindings omitted. Citations still require exact
-reads in the current call; a prior citation is a lead to reopen, not fresh
-proof. Attached pattern references are also leads until inspected.
+for a specific remaining uncertainty, with `followUpTo` naming the research
+handle to build on. Code is optional in either purpose and may demonstrate a
+small idiom or a composable piece without expanding into a complete application.
+The private follow-up receives that handle's findings with its recipe omitted,
+and the host carries its evidence forward on proof: a binding it described
+counts as described where this run still holds the token, and is reported as
+unavailable otherwise; each of its sources is read again through the path that
+first read it, and counts as cited by its old id only where the bytes still
+match the digest — a source that changed is reported stale, its old id refused,
+and the fresh read left in the catalog under a new id. Attached pattern
+references are leads until inspected.
 
 Opening research has a durable `openingResearch` checkpoint in `run-state.json`.
 The driver records pending intent before invocation, then records whether a kit
@@ -1647,7 +1652,9 @@ light identity path is recorded as deferred rather than misreported as verified.
 An identity mismatch is always refused.
 
 Each exact documentation, source-file, or metadata read is limited to 32,000
-characters. Metadata uses the rendered argument and result types; redundant raw
+characters. Metadata uses the rendered argument and result types, each followed
+by a `type Name = …` line for every definition it refers to by name, so a row
+type such as `LedgerTransaction[]` arrives with its fields; redundant raw
 schemas remain in the retained pattern record. Metadata larger than the limit is
 refused before its pattern is admitted; documentation and source-file reads
 support continuation windows.
@@ -1659,7 +1666,11 @@ exact source ids read in the current call. If a draft claiming completeness
 still cites an unread id and one of the scope's model turns remains, the loop
 allows one tool-free citation-only repair against that same catalog. It never
 fuzzily accepts, completes, or reopens an invented id, and the repair adds no
-private tool calls or extends the scope's budget.
+private tool calls or extends the scope's budget. A final answer that is not
+JSON gets the same kind of turn one step earlier: one tool-free re-ask, quoting
+only the parser's message, while a model turn remains. The reply is parsed as
+strictly as the first answer, nothing is patched into it, and a reply that still
+does not parse fails the call as malformed synthesis.
 
 The `kit` result envelope carries the scoped findings and distinguishes
 `complete` from `incomplete`. Selected patterns require verified published
@@ -2331,6 +2342,12 @@ identity paths resolve against the host process's working directory. All three
 values form one binding, and partial or invalid configuration fails before the
 service starts. Without that binding the service has no Fabric session.
 
+The interactive service owns the Fabric runtimes created for its chat sessions.
+Completed turns keep their runtimes until the session closes. Closing an active
+session aborts its turn and releases its runtimes after the turn unwinds;
+`waitForIdle()` includes that cleanup. Persisted pieces can reopen in a later
+session. Library callers supplying an existing engine retain ownership of it.
+
 These entrypoints share the batch CLI's CFC session options:
 `--fabric-cfc-enforcement-mode`, `--fabric-cfc-flow-labels`,
 `--fabric-cfc-posture`, and `--max-confidentiality`, including their validation
@@ -2588,14 +2605,18 @@ skill registry, the child preloads the `pattern-dev`, `pattern-schema`, and
 root does not carry them, or that resolved no skills root at all, still gets the
 same child with the same tools, just without the preloaded guidance.
 
-The author and private researcher share compact compiler guidance: supported
-`cf-alert` props, serializable input/output shapes, straight-line pattern-owned
-callbacks, and scalar formatting inside a reactive computation. Their reader
-composition template is compiled against the mailbox primitive in tests; it
-requires the actual inspected pattern id and matching argument/result contracts,
-and preserves pending/error status beside its sample count. The child's
-composition template follows the composition-guidance switch. These instructions
-reduce avoidable compiler errors; they do not establish UI behavior or live-data
+The author carries compact compiler guidance: supported `cf-alert` props,
+serializable input/output shapes, straight-line pattern-owned callbacks, and
+scalar formatting inside a reactive computation. The private researcher does not
+carry it: research chooses published parts, which are imported rather than
+rewritten, so it judges a part on what it does and on its argument and result
+contract, never on its source's style; the author that writes new source is the
+one the rules are for. The author and researcher share a reader composition
+template, which is compiled against the mailbox primitive in tests and requires
+the actual inspected pattern id and matching argument/result contracts, and
+preserves pending/error status beside its sample count. The child's composition
+template follows the composition-guidance switch. These instructions reduce
+avoidable compiler errors; they do not establish UI behavior or live-data
 correctness. An implementation kit without its required example is incomplete;
 factual orientation and answers may be complete without code.
 

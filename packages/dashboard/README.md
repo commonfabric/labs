@@ -196,7 +196,7 @@ content-based cache version from the dashboard package directory:
 ```bash
 cd packages/dashboard
 deno task regenerate-favicons
-deno task test-favicon-raster
+deno test --allow-all favicon-raster.test.ts regenerate-favicons.test.ts
 ```
 
 ## Add a tile
@@ -347,8 +347,8 @@ to the next; a view supplies everything under it.
 
 | tile | source | needs |
 |---|---|---|
-| ci | every job the organization runs outside pull requests, in every repository the token can see that is not archived: for each active workflow, the newest completed run on that repository's own default branch. The headline is `passing` when every one of them passes, the repository's name when a single job is failing, as in `loom failing`, and a count when more than one is, as in `3 failing`. The header carries how many jobs the headline speaks for and how many repositories they came from. The body lists every failing job with its conclusion and how long ago it ran; while the tile is not red it also lists the labs and loom main builds, so the two builds the team watches stay visible, and a red tile lists only its failing jobs. A failure older than `CI_FAILURE_FRESH_HOURS` is orange rather than red: it is still failing and still counted, and it is no longer the thing that just broke. A failure made before the workflow's file last changed does not count at all, since that is what a job someone stopped rather than fixed looks like. A repository whose workflow listing cannot be read is listed too, and turns the tile orange rather than being passed over. The rows carry no links of their own, because the tile itself opens the page below | `GH_TOKEN` (or `GITHUB_TOKEN`) with Actions read across the organization |
-| CI jobs → `/ci` | every job the ci tile read, at full width: the repository and workflow, what started the deciding run (`push`, `schedule`, `workflow_dispatch`, and the rest, as GitHub names them), what that run concluded, how long it took, when it started, and how long ago that was. Every column sorts, once up and once down, on the value behind the cell rather than on what the cell says, so durations and times order as the measurements they are; the page opens worst first and a column of equal values keeps that order beneath it. Workflows with no verdict are listed under the table rather than through it, each with why: no completed run on the default branch, which is what a workflow only a pull request triggers looks like; recent runs that all judged nothing; or a workflow changed since it failed. So are repositories whose workflow listing could not be read. It renders the tile's own last collection rather than asking GitHub again, so opening it costs no requests and shows exactly what the tile shows | none |
+| ci | every job the organization runs outside pull requests, in every repository the token can see that is not archived: for each active workflow, the newest run on that repository's own default branch that passed or failed, however many runs that judged nothing came after it. The headline is `passing` when every one of them passes, the repository's name when a single job is failing, as in `loom failing`, and a count when more than one is, as in `3 failing`. The header carries how many jobs the headline speaks for and how many repositories they came from. The body lists every failing job with its conclusion and how long ago it ran; while the tile is not red it also lists the labs and loom main builds, so the two builds the team watches stay visible, and a red tile lists only its failing jobs. A failure older than `CI_FAILURE_FRESH_HOURS` is orange rather than red: it is still failing and still counted, and it is no longer the thing that just broke. A failure made before the workflow's file last changed does not count at all, since that is what a job someone stopped rather than fixed looks like. A repository whose workflow listing cannot be read is listed too, and turns the tile orange rather than being passed over. The rows carry no links of their own, because the tile itself opens the page below | `GH_TOKEN` (or `GITHUB_TOKEN`) with Actions read across the organization |
+| CI jobs → `/ci` | every job the ci tile read, at full width: the repository and workflow, what started the deciding run (`push`, `schedule`, `workflow_dispatch`, and the rest, as GitHub names them), what that run concluded, how long it took, when it started, and how long ago that was. Every column sorts, once up and once down, on the value behind the cell rather than on what the cell says, so durations and times order as the measurements they are; the page opens worst first and a column of equal values keeps that order beneath it. Workflows with no verdict are listed under the table rather than through it, each with why: no completed run on the default branch, which is what a workflow only a pull request triggers looks like; runs that all judged nothing; or a workflow changed since it failed. So are repositories whose workflow listing could not be read. It renders the tile's own last collection rather than asking GitHub again, so opening it costs no requests and shows exactly what the tile shows | none |
 | labs ci trust, labs ci duration | GitHub Actions (`deno.yml` on main in `commonfabric/labs`), via the REST API | `GH_TOKEN` (or `GITHUB_TOKEN`) |
 | loom ci trust, loom ci duration | the same two tiles for `commonfabric/loom` (`test-fast.yml` on main) | `GH_TOKEN` (read access to loom); optional `DASHBOARD_LOOM_REPO` |
 | your metric here | a place in the grid for a metric nobody has chosen yet. It reads nothing, so it carries no figure, and it is green because there is nothing wrong with an empty slot | none |
@@ -359,7 +359,7 @@ to the next; a view supplies everything under it.
 | flaky tests | how many tests the test-selection publisher measured disagreeing with themselves often enough to keep off pull requests, read from the newest selection manifest. The headline names what it counts, so it reads `25 flaky tests`, or `no flaky tests` when there are none. The line under it says what the count was drawn from: the span of history a flake share is measured over, which the manifest's `FLAKE_WINDOW_DAYS` dial names, and how long ago the publisher measured. The sparkline plots the count across every available manifest. Which tests they are is on the page behind it. Amber from one, red from ten. Gray with a dash when no manifest is available, the newest readable manifest has an empty corpus, or none of the manifests it looked at can be read, naming the shape it found in that last case. Readable history remains visible when the newest object cannot be read | optional `GH_TOKEN` for publisher activity |
 | test selection | what share of the corpus the newest selection manifest would have a pull request run, read from the same manifest. The manifest's packing is built with nothing mandatory, so the share is the one a pull request touching no test would get; a real one re-packs against its own diff and spends part of the same budget on what that diff makes mandatory. Amber once that manifest is over eight hours old, because selection quality decays with it, and amber too while the corpus holds a test costing more on its own than a whole lane's budget, since no packing can place one and a pull request then runs it only where its own diff makes it mandatory. Red when a lane's projected work is past the budget the manifest was packed to. Both of the last two take the sub line off the corpus count, the red one first. The sparkline plots the selected percentage across every available manifest, using each manifest's own corpus size. Gray on the same conditions as the flaky tests tile, including an empty latest corpus | optional `GH_TOKEN` for publisher activity |
 | test selection detail → `/test-selection` | the manifest behind both test tiles, at full width: every lane against its budget and how many tests it holds, every test held back as flaky with the rate it was measured at, and every test no lane can hold. Both tiles link here, the flaky tests tile straight to its flaky section | none |
-| coverage debt | the repository's whole uncovered-line count and what a median day does to it, read from the `perf-metrics` artifact of each day's newest successful `main` run (`docs/development/COVERAGE.md`). The headline is the count; under it a signed rate gives the median day's move over the last three weeks, and the chart spans eight weeks with those days highlighted. Its vertical scale uses the highlighted days, so older extremes can extend outside the chart. Amber means that median is a rise, which takes more than half the days in the window, so a day that added debt says nothing on its own. It never turns red, and it goes gray rather than stand on a stale number: when five days have passed with nothing measured, and until the window holds a week of days to take a median over. A run whose pattern compile cache missed is passed over, because a cold run reaches branches a warm one does not and reads about a tenth of a percent low. It looks for a landing every five minutes, which costs one request when none has happened; the figure itself cannot exist until a run's Coverage Check uploads it, about twelve minutes after the commit lands | `GH_TOKEN` |
+| coverage debt | the repository's whole uncovered-line count and what a median day does to it, read from the coverage measurements each `main` run writes into the test-run record store, the newest of a day's that measured it (`docs/development/COVERAGE.md`). The headline is the count; under it a signed rate gives the median day's move over the last three weeks, and the chart spans eight weeks with those days highlighted. Its vertical scale uses the highlighted days, so older extremes can extend outside the chart. Amber means that median is a rise, which takes more than half the days in the window, so a day that added debt says nothing on its own. It never turns red, and it goes gray rather than stand on a stale number: when five days have passed with nothing measured, and until the window holds a week of days to take a median over. A run whose pattern compile cache missed is passed over, because a cold run reaches branches a warm one does not and reads about a tenth of a percent low. It looks for a landing every five minutes, which costs a listing of the store for each of today and yesterday when none has happened; the figure itself cannot exist until the `main` run for a landed commit has finished and the relay has stored its coverage measurements | none |
 | production | a direct synthetic HTTP check of the public commonfabric.com site, synthetic HTTP checks of `/_health` on estuary and rapids, plus a name or reachability check for all three and for the bastion, the production and staging shells, the LLM gateway, and the sandbox service. When every host is well the headline counts them up. When a host has nothing behind it at all, the headline names that host, as in `bastion down`, and counts them when there is more than one, as in `2 hosts down`. Otherwise it names the worst condition seen, such as a response time or an HTTP status. Estuary and rapids keep their response times in the body while the tile is green or orange. Commonfabric.com stays out of the body while it is good. Hosts without a health request stay out for as long as they answer, and a red tile drops all the green hosts. Red means the tile found nothing at the other end — a name with no A or AAAA record, a tailnet host the proxy cannot reach, or an HTTP request that never connected — and it also means a server health response other than 200, a health response over 1000 ms, or a commonfabric.com 5xx response. Orange means a health response over 500 ms, a commonfabric.com 4xx response or response over 2500 ms, or a resolver that failed, which leaves the tile unable to say either way. Hosts outside the tailnet are looked up by the dashboard itself. Tailnet hosts go through `PROD_PROXY`, because a dashboard that needs that proxy has no view of Tailscale's MagicDNS. Estuary and rapids are covered there by their health requests. The bastion has no health endpoint, so it gets a SOCKS5 connect that leaves the name for the proxy to resolve. The bastion records that connect in its own logs, so a bastion that answers is left alone for an hour and counts as reachable in between. One that does not answer is asked again on the next refresh, since a connect that reaches nothing leaves nothing behind. With no `PROD_PROXY` set, every host is looked up locally | optional `COMMON_FABRIC_URL`, `ESTUARY_URL`, `RAPIDS_URL`, `BASTION_HOST`, `PROD_PROXY`; `PROD_URL` remains an alias for `ESTUARY_URL` |
 | prod errors | SigNoz trace error rate for one service (errored spans / all spans): last-12h headline, with a per-hour sparkline over the retained trace history (~2 weeks) and the last-12h slice that feeds the headline highlighted. Scoped to `PROD_SERVICE` — the same SigNoz holds staging and one-off perf runs, whose rates are not production's. Gray (not red) when SigNoz is unreachable. Pops out to the SigNoz logs explorer | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `SIGNOZ_UI_URL` for the pop-out |
 | cloud spend | BigQuery billing export, after credits, projected to month-end from the available part of a 14-day daily-cost window early in the month. The header shows actual MTD spend. The highlighted part of the 45-day chart shows the days used for the estimate | `GCP_BILLING_TABLE` (+ Workload Identity, or `GCP_SA_KEY` locally), optional `GCP_DAILY_BUDGET` |
@@ -396,9 +396,10 @@ does not carry a job count, so each tile requests the count of every cancelled
 attempt it reaches, once, and holds it while the run stays in the tile's window.
 No other conclusion takes that request.
 
-The **ci** tile reads each workflow's five newest runs on the default branch,
-of any status, and decides the job from the newest completed one carrying a
-verdict. A run still going carries none. A run concluded `success` passes; a run
+The **ci** tile reads each workflow's runs on the default branch, of any
+status, newest first, and decides the job from the newest completed one
+carrying a verdict, however many runs after it carry none. A run still going
+carries none. A run concluded `success` passes; a run
 concluded `failure`, `timed_out`, or `startup_failure` fails. A `cancelled` run
 judges nothing when a newer run of the same workflow was created while it was
 still going: a concurrency group that cancels in progress stops the older run
@@ -409,9 +410,25 @@ through the same job count the ci trust tiles use, so a run replaced while it
 was still queued passes no judgment while one killed by its own
 `timeout-minutes`, or stopped by a person, counts as a failure. The remaining
 conclusions — `skipped`, `neutral`, `stale`, `action_required` — pass no
-judgment either, so the run before them decides the job instead.
+judgment either, so the run before them decides the job instead. A pass
+therefore stays a pass until a run gives the job another verdict: a job gated
+off with an `if:` that is never true on the default branch goes on reading
+green behind every skipped run, and so does a job whose runs are all still
+going.
 
-A job with no such run among the runs the tile reads is one the
+The runs are read a page of twenty at a time, until a page reaches a run that
+concluded `success` or failed outright. The tile keeps, for each workflow, how
+far down it has already settled the verdict, so the next collection stops as
+soon as it reaches those runs. A run started again keeps its place among the
+runs, so the tile checks whether the run that decided the job has been run again
+since, asking GitHub for it when the pages read did not reach it. One that has
+been run again sends the pages on as though nothing had been settled. A verdict far back therefore costs its pages
+once, when the tile first reads the workflow, and after that one page and one
+run on each collection. GitHub lists at most a thousand runs of a workflow
+filtered by branch, so that first read is at most fifty pages, and a workflow
+with no verdict in them has none.
+
+A job with no run carrying a verdict is one the
 tile cannot speak for, so it is left out of both the headline and the job count
 in the header. A workflow that only ever runs on pull requests has no run on the
 default branch at all, and is one of these.
@@ -425,8 +442,8 @@ runs by their event as well.
 The set of repositories and the workflows in them is read once an hour and the
 results behind it every five minutes, because the inventory changes far more
 slowly than a job's result does. Reading it costs one request for the
-organization's repository listing, one per repository for its workflows, and one
-per active workflow for that workflow's newest completed runs.
+organization's repository listing, one per repository for its workflows, and
+usually one per active workflow for that workflow's newest runs.
 
 The tile keeps that collection, and the **CI jobs** page renders it rather than
 collecting again, so the page costs no requests however often it is opened and
@@ -454,11 +471,12 @@ branch that touched the workflow's file. If that commit
 landed after the failing run, the failure was made by a definition that no
 longer exists, and the job has no verdict: it leaves the headline and the count,
 and the page lists it among the workflows with no verdict, as "changed since it
-failed", linked at the failure. Once five runs that judged nothing have pushed the
-failure out of the runs the tile reads, the page says "recent runs judged
-nothing" instead. A job that still runs gets a verdict again from its next run, so this hides a still-broken job only until that run finishes,
+failed", linked at the failure. A job that still runs gets a verdict again from its next run, so this hides a still-broken job only until that run finishes,
 which for one triggered by a push is the run the edit itself starts. A read of
-the file's history that fails leaves the failure standing. The check costs one
+the file's history that fails leaves the failure standing. Only a failure is
+cleared this way. A job whose deciding run passed stays green whatever has
+changed in its file since, because stopping a passing job leaves nothing wrong
+to report. The check costs one
 request per failing job per collection, and none for a job that passes.
 
 Two cheaper signals do not work. GitHub gives each workflow an `updated_at`, but
@@ -596,7 +614,7 @@ if you lose it you have to regenerate.
 ### `GH_TOKEN` (or `GITHUB_TOKEN`)
 
 Powers **ci**, **labs ci trust**, **labs ci duration**, the **loom**
-counterparts, **recent main runs**, **coverage debt**, **github spend**, and
+counterparts, **recent main runs**, **github spend**, and
 **github users**. It also powers the optional publisher-activity indicators on
 **flaky tests** and **test selection**; their public measurements need no token.
 Needs

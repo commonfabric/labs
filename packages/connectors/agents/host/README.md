@@ -251,15 +251,17 @@ keeps one pending request while a collection is active. Calls that reach
 complete index, then asks every running driver for its complete inventory. A
 listed session is read only when its inventory summary differs from its
 published copy: a session with the same driver, update time, archived state, and
-active state as a complete published row is retained, once the running driver
-has read it: a driver learns a session's controls (its mode and configuration
-options) when it reads the session, so the first collection after a start reads
-every listed session. A retained session's graph and previews stay, and its row
-takes the checkout's current Git context. When the index cannot be read, every
-listed session is read. The host allocates a target observation sequence before
-those reads. It publishes all successful and partial source results together
-through `AgentFabricTarget.publish()`. The sequence prevents that collection
-from overwriting a newer session refresh if the refresh finishes first.
+active state as a complete published row is retained once the running driver has
+read it. A newly discovered desktop start pairing also requires a read when the
+published row does not yet carry it. A driver learns a session's controls (its
+mode and configuration options) when it reads the session, so the first
+collection after a start reads every listed session. A retained session's graph
+and previews stay, and its row takes the checkout's current Git context. When
+the index cannot be read, every listed session is read. The host allocates a
+target observation sequence before those reads. It publishes all successful and
+partial source results together through `AgentFabricTarget.publish()`. The
+sequence prevents that collection from overwriting a newer session refresh if
+the refresh finishes first.
 
 Provider read failures do not discard sessions read successfully from the same
 source. They make that source and the overall host degraded. A Fabric
@@ -284,20 +286,27 @@ in the host's process. `desktop` opens the Claude Code desktop app on the host's
 Mac (`claude://code/new`, the link the app's own Finder action uses) in the
 start's directory with the prompt ready to send; the app mints the session's id
 when the person sends, so the id the command named never exists, the receipt's
-`result.surface` says `desktop`, and no session refresh follows the command. On
-its next listing the Claude driver pairs the session the app made (that
-directory, made after the start, opening with the start's text) and publishes
-its index row with `startedAs`, the id the command named, and the start's title
-unless the person has titled it since, so the workbench that sent the start
-confirms it. The driver pairs them in its memory, and once the row is published
-with `startedAs` later publications keep it; a host restarted before the person
-sends no longer pairs them, and the session then shows as one started by hand.
-The session the app makes is one the driver had not listed before the start was
-sent; two pending starts that sent different texts sharing the prefix the SDK
-lists leave a session unpaired rather than guess. A desktop start takes no
-`mode`; the app's own permission setting applies, and the app asks the person to
-trust the folder each time. The Claude driver offers the surface on macOS only,
-in `capabilities.surfaces`.
+`result.surface` says `desktop`, and no session refresh follows the command. The
+host runs no prompt in its process and does not report cancellation readiness. A
+cancellation admitted while the app link is opening waits for the start to
+finish and cannot interrupt the opener. On its next listing the Claude driver
+pairs the session the app made (that directory, made after the start, opening
+with the start's text) and publishes its index row with `startedAs`, the id the
+command named, and the start's title unless the person has titled it since, so
+the workbench that sent the start confirms it. The driver pairs them in its
+memory, and once the row is published with `startedAs` later publications keep
+it; a host restarted before the person sends no longer pairs them, and the
+session then shows as one started by hand. Before opening the app, the driver
+reads a fresh, complete inventory and records the launch time. A candidate
+session must be absent from that inventory and carry a creation timestamp at or
+after the launch time; sessions with no creation timestamp stay unpaired.
+Inventory failure returns a retryable command failure without opening the app.
+The inventory and launch time stay fixed while the opener is pending. Two
+pending starts that sent different texts sharing the prefix the SDK lists leave
+a session unpaired rather than guess. A desktop start takes no `mode`; the app's
+own permission setting applies, and the app asks the person to trust the folder
+each time. The Claude driver offers the surface on macOS only, in
+`capabilities.surfaces`.
 
 The command cell is a shallow action array. A valid element is either a command
 object or a JSON string containing that object. The debug pattern writes JSON

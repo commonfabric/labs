@@ -77,9 +77,65 @@ If `includeSource` is set, traversal also loads linked `source` and linked patte
 
 ### Logical schema operators
 
-- `anyOf`: all matching branches are evaluated; matches are merged via `objectCreator.mergeMatches`
+Every branch is evaluated against the whole value, and the branches that
+succeed are merged into one result (`objectCreator.mergeMatches`). How many
+must succeed is what separates the three:
+
+- `anyOf`: at least one branch must match; every branch that does contributes to the merged result
 - `oneOf`: exactly one branch must validate; zero or multiple matches reject
-- `allOf`: every branch must validate; successful branch results are merged via `objectCreator.mergeMatches`
+- `allOf`: every branch must validate, and one that fails fails the node. An `allOf` holding no branches is passed over, leaving the keywords beside it to decide the node
+
+#### Sibling keywords
+
+The keywords beside a combinator are merged into each branch before that
+branch is evaluated (`mergeSchemaOption`), and the branch's own keywords win.
+The merge is shallow, so a branch declaring `properties` replaces the sibling
+`properties` map rather than adding to it.
+
+What a branch inherits by not restating decides what it admits. A sibling
+`additionalProperties: false` rides into every branch, so under one a branch
+admits a key only by naming it in `properties` or by restating
+`additionalProperties` itself — a branch of `true` restates nothing and so
+admits nothing — and a key no branch admits is absent from the merged result.
+
+This is a different composition from the one the entry points in `schema.ts`
+use to narrow a compound schema against a concrete value
+(`resolveSchemaForValue`, and the `asCell` candidates behind
+`asCellCompoundSchemaForValue`). Those combine base and branch through the
+strict pseudo-intersection `combineSchema`, where properties and `required`
+from either side survive; see
+[Combining Schemas](../json_schema.md#combining-schemas).
+
+#### Merging branch results
+
+`mergeAnyOfMatches` is a union rather than an intersection: a property any
+surviving branch produced is in the result. A branch naming `name` while
+ignoring `address`, beside one naming `address` while ignoring `name`, gives a
+result carrying both — which is what keeps one branch's silence from hiding
+another branch's data.
+
+- Two or more matches merge only when each is a non-array record a walk may read by name. Otherwise the first match is the result and the rest are dropped, which is what keeps a special value — one carrying no properties for the merge to copy — from being lost
+- Keys are copied in branch order, so the last branch to produce a key decides its value. `anyOf` evaluates the branches carrying no `asCell` ahead of those that do, so a cell-bearing branch's value wins such a collision
+- A value projected from an opaque position carries nothing of what it names, so it never displaces a key another branch materialized, whichever order the two came in
+- The merged value is a fresh object, and the matches' symbol-keyed annotations are carried onto it, the first match to define one winning. Every match describes the same position, so the merged value still names the position it was read from — without them it would compare unequal to that position and write back as an inline copy. The opaque marker is not carried: it describes the match it came from rather than the merge
+
+The two object creators part over cells. A runtime transform whose matches
+include a `Cell` returns that cell rather than a merged object, since merging
+would produce a plain object and lose the cell. It re-points the cell at the
+whole compound schema with the branches' own `asCell` markers removed, so the
+union survives on the cell's schema and governs what a read through it
+returns — with one exception. A branch that declares `asCell` and constrains
+nothing is a true reader, and a true reader adopts the schema of the link it
+crosses, so a handle minted from such a branch already carries the link's own
+schema. The merge cannot see which branch minted the handle it holds, so the
+handle keeps that schema rather than the union only where every branch that
+can mint one — through nested combinators and resolved references, each read
+with the keywords beside its combinator merged in as traversal merges them —
+is such a bare branch, an `allOf` counting where its other parts are true; the
+union says only what the reader admits. One shaped `asCell` branch anywhere in
+the compound, a bare arm under an enclosing `type` and `properties` included,
+keeps the union on the handle. Query traversal produces no cells, and merges
+by the rules above.
 
 ### `$ref`
 
@@ -213,7 +269,10 @@ For `CompoundCycleTracker`, disposal removes empty per-key entries.
 
 Traversal is intentionally not a full JSON-Schema validator. Notable differences:
 
-- Branch result merging (`anyOf`/`allOf`) is runtime-specific
+- Branch result merging (`anyOf`/`allOf`) is a union of what the surviving
+  branches produced, and the keywords beside a combinator are merged into
+  each branch shallowly rather than intersected; both are described under
+  [Logical schema operators](#logical-schema-operators) above
 - Parent/link schema composition on reference hops (`combineSchemaForLink`) is
   precedence, not intersection: the reader's schema is used as it stands, and
   the link's schema is adopted only when the reader's is true or empty (a
@@ -232,11 +291,14 @@ Behavior in this spec is verified by:
 
 - `packages/runner/test/traverse.test.ts`
 - `packages/runner/test/query.test.ts`
+- `packages/runner/test/schema-view.test.ts`
 
 These include regression tests for:
 
 - oneOf exact-match semantics
 - allOf branch-result merging
+- the sibling-keyword merge into combinator branches, under a schema that
+  refuses the properties it does not name
 - defaults via resolved `$ref`
 - cycle-tracker cleanup
 

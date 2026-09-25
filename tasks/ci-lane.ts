@@ -30,6 +30,7 @@
  *   deno run -A tasks/ci-lane.ts --lane 1 --of 5 --dry-run
  */
 
+import { exists } from "@std/fs";
 import * as path from "@std/path";
 import {
   FragmentWriter,
@@ -43,10 +44,12 @@ import {
 } from "@commonfabric/test-support/shuffle";
 import {
   type CapabilityId,
+  COMPILE_CACHE_FILE,
   logTail,
   openCapabilities,
   takeGithubToken,
 } from "./ci-capabilities.ts";
+import type { CompileCacheState } from "./ci-check-lib.ts";
 import {
   capabilitiesBySuite,
   loadTopology,
@@ -67,6 +70,7 @@ import {
   type CrowdingSuite,
   fullLaneCount,
   ownLoad,
+  type Plan,
   plan,
   type Selection,
   type SelectionReason,
@@ -85,7 +89,7 @@ import type {
   UnschedulableEntry,
   WithheldReason,
 } from "./test-selection/manifest.ts";
-import { LANES } from "./test-selection/policy.ts";
+import { FULL_LANES_MAX, LANES } from "./test-selection/policy.ts";
 import { say } from "./step-summary.ts";
 import { writeLcovReport } from "./write-coverage-lcov.ts";
 import {
@@ -270,22 +274,26 @@ export function parseLaneArgs(
  *
  * The seed test order is shuffled by is taken from the same moment, for
  * the same reasons.
+ *
+ * Throws where the commit's date cannot be read. Reading it can fail in
+ * one lane and not in its siblings, and no other moment is one they are
+ * sure to share.
  */
 export function manifestMoment(
-  options: LaneOptions,
-): { at: string; note?: string } {
-  if (options.at !== undefined) return { at: options.at };
-  // Git writes the committer's own offset, and manifest names carry UTC,
-  // so the two are only comparable once this one is normalized.
+  options: Pick<LaneOptions, "at" | "root">,
+): string {
+  if (options.at !== undefined) return options.at;
   const moment = commitMoment(options.root);
   if (moment === undefined) {
-    return {
-      at: new Date().toISOString(),
-      note: "cannot read the commit's date, so the manifest is the newest " +
-        "there is rather than the one this tree was made against",
-    };
+    throw new Error(
+      `ci-lane: cannot read the date of the commit checked out at ` +
+        `\`${options.root}\`, which is the moment every lane testing it ` +
+        "resolves its manifest at; `--at` names another moment",
+    );
   }
-  return { at: moment.toISOString() };
+  // Git writes the committer's own offset, and manifest names carry UTC,
+  // so the two are only comparable once this one is normalized.
+  return moment.toISOString();
 }
 
 /** The files this change touched, as the repository names them. */
@@ -357,7 +365,7 @@ export function unitsForRun(batch: Batch, run: number): UnitRequest[] {
  */
 export function batchesOf(
   suites: readonly Suite[],
-  manifest: Manifest | undefined,
+  manifest: Manifest,
   selections: readonly Selection[],
 ): Batch[] {
   const bySuite = new Map<string, Suite>(
@@ -367,7 +375,7 @@ export function batchesOf(
     suites.map((suite) => [suite, new Set(suite.whole)]),
   );
   const inUnit = new Map<string, string[]>();
-  for (const entry of manifest?.entries ?? []) {
+  for (const entry of manifest.entries) {
     const key = `${entry.suite}\t${entry.unit}`;
     inUnit.set(key, [...inUnit.get(key) ?? [], entry.test.n]);
   }
@@ -429,9 +437,42 @@ export function batchesOf(
       (a.unit < b.unit ? -1 : a.unit > b.unit ? 1 : 0)
     );
   }
-  return [...batches.values()].sort((a, b) =>
-    a.suite.id < b.suite.id ? -1 : a.suite.id > b.suite.id ? 1 : 0
-  );
+  // What a lane costs beyond its tests is fitted from what its batches
+  // were seen to take, and a lane that runs out of time is killed with
+  // its later batches unrun and unmeasured. So the order a lane takes
+  // its batches in decides which suites the cost model can ever learn,
+  // and a suite the model cannot price is one that makes lanes run out
+  // of time. Two keys answer that, in this order.
+  //
+  // A suite nothing has measured goes ahead of one something has,
+  // because it is the one worth measuring. And within each group the
+  // largest share of the lane goes first, because a lane that runs out
+  // of time should have spent it on the batch most worth knowing about
+  // and dropped the cheap ones. A share is read through `ownLoad`, which
+  // is what the packer charged the lane for the suite's tests, so a suite
+  // whose tests run slower than they were measured at, or run several
+  // times, is as large here as it was when the lane was filled.
+  //
+  // Both keys are a function of the plan, and the identifier settles a
+  // tie, so every attempt at a lane runs its batches in the same order
+  // whatever order the plan listed its selections in. A share is added
+  // up smallest load first, so that it comes to one number however its
+  // loads were listed, since floating-point addition rounds differently
+  // in a different order.
+  const keyed = [...batches.values()].map((batch) => ({
+    batch,
+    id: batch.suite.id,
+    measured: manifest.calibration.suites[batch.suite.id] === undefined ? 0 : 1,
+    seconds: selections
+      .filter(({ entry }) => entry.suite === batch.suite.id)
+      .map(({ entry, repeats }) => ownLoad(manifest, entry, repeats))
+      .toSorted((a, b) => a - b)
+      .reduce((sum, load) => sum + load, 0),
+  }));
+  return keyed.sort((a, b) =>
+    a.measured - b.measured || b.seconds - a.seconds ||
+    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  ).map(({ batch }) => batch);
 }
 
 /** What running one invocation came to. */
@@ -553,6 +594,18 @@ export function batchCoverage(
 export const COVERAGE_FAILURE_MARKER = "measured-through-a-failure.txt";
 
 /**
+ * The record a lane that opened the pattern compile byte cache leaves of
+ * whether it found one restored: `cold` or `warm`, the whole of the file.
+ *
+ * A cold cache compiles every pattern from scratch, which runs compile
+ * branches a warm run never reaches, so it moves the repository-wide
+ * figure that the pattern suites contribute to. The record goes beside the
+ * lane's reports, in the directory its coverage artifact holds, so that
+ * whatever reads the figure can tell a cold run's from a warm one's.
+ */
+export const COMPILE_CACHE_STATE_FILE = "compile-cache-state.txt";
+
+/**
  * Marks each measured set whose units a lane saw fail, beside the report
  * it wrote for that set.
  */
@@ -580,6 +633,23 @@ export async function markMeasuredFailures(
     marked.push(measuredSetName(ref));
   }
   return marked.sort();
+}
+
+/**
+ * Writes the record of whether the compile byte cache was restored, at the
+ * top of the directory the lane's coverage artifact carries.
+ */
+export async function writeCompileCacheState(
+  options: LaneOptions,
+  state: CompileCacheState,
+): Promise<void> {
+  const at = path.join(
+    coverageRoot(options),
+    path.dirname(COVERAGE_REPORT_DIR),
+    COMPILE_CACHE_STATE_FILE,
+  );
+  await Deno.mkdir(path.dirname(at), { recursive: true });
+  await Deno.writeTextFile(at, `${state}\n`);
 }
 
 /**
@@ -1172,6 +1242,22 @@ export interface LaneDeps {
   spool?: () => string | undefined;
 }
 
+/**
+ * The manifest the lanes testing this checkout's commit resolve, as the
+ * store gave it, or why there is none.
+ *
+ * Anything that reads a manifest for a checkout resolves it here. One
+ * that resolved it some other way could be describing a different
+ * manifest from the one those lanes read, and nothing it printed would
+ * say so.
+ */
+export async function resolveManifest(
+  options: Pick<LaneOptions, "at" | "root">,
+  deps: Pick<LaneDeps, "manifest">,
+): Promise<ManifestFetch> {
+  return await deps.manifest({ at: manifestMoment(options) });
+}
+
 /** What reading this tree against its manifest came to. */
 interface Reading {
   seen: Census;
@@ -1191,12 +1277,23 @@ interface Reading {
 async function read(
   options: LaneOptions,
   suites: readonly Suite[],
-  deps: LaneDeps,
-  say: (line: string) => void,
+  deps: Pick<LaneDeps, "manifest">,
 ): Promise<Reading> {
-  const moment = manifestMoment(options);
-  if (moment.note !== undefined) say(`ci-lane: ${moment.note}`);
-  const manifest = await deps.manifest({ at: moment.at });
+  const manifest = await resolveManifest(options, deps);
+  // Every lane of a run packs its share of one plan, and the plan is only
+  // one plan if every lane read the same manifest. A manifest never
+  // changes once created, so lanes asking about one moment get one answer
+  // from the store, but a store one lane could not reach may be one the
+  // next lane read. Packing without a manifest then would lay out a plan
+  // its siblings are not following, and a test the two plans put in each
+  // other's lanes would run in neither while the run reports a pass.
+  if (manifest.unreachable) {
+    throw new Error(
+      `ci-lane: the manifest store could not be read (${manifest.absent}), ` +
+        "and a lane that packed without it might not follow the plan the " +
+        "other lanes of this run packed from",
+    );
+  }
   // A full run reads the manifest for what things cost and nothing else,
   // and a run with no diff has touched nothing.
   const changed = options.full
@@ -1225,7 +1322,7 @@ function packing(
   options: LaneOptions,
   suites: readonly Suite[],
   seen: Census,
-): ReturnType<typeof plan> {
+): Plan {
   return plan({
     manifest: seen.manifest,
     mandatory: seen.mandatory,
@@ -1236,8 +1333,33 @@ function packing(
   });
 }
 
+/** What every lane of a run works out before taking its own share. */
+export interface LanePlan extends Reading {
+  /** What the tree holds, packed into the run's lanes. */
+  laid: Plan;
+}
+
 /**
- * How many lanes the full run on `main` needs.
+ * The plan every lane of a run computes over this tree: the manifest
+ * this commit belongs to, the tree read against it, and what the tree
+ * holds packed into `options.of` lanes.
+ *
+ * A lane runs its own share of this. Anything that describes what a lane
+ * would do computes it here rather than packing the tree again, so the
+ * description and the lanes cannot disagree about what would run.
+ */
+export async function lanePlan(
+  options: LaneOptions,
+  suites: readonly Suite[],
+  deps: Pick<LaneDeps, "manifest">,
+): Promise<LanePlan> {
+  const reading = await read(options, suites, deps);
+  return { ...reading, laid: packing(options, suites, reading.seen) };
+}
+
+/**
+ * How many lanes the full run on `main` takes: as many as it needs, up to
+ * `FULL_LANES_MAX`.
  *
  * This is the whole of what the job ahead of the full run decides, and an
  * integer is the whole of what it emits. The lanes then read the same
@@ -1245,7 +1367,7 @@ function packing(
  * pull-request lanes do, so nothing about what runs passes through a job
  * output and there is no second packing to disagree with theirs.
  *
- * Notes about resolving the manifest go to the error stream, because
+ * Notes about what the count rests on go to the error stream, because
  * this answers on the standard one and a job reads the answer from
  * there.
  */
@@ -1253,8 +1375,23 @@ export async function fullLanes(
   options: LaneOptions,
   deps: LaneDeps,
 ): Promise<number> {
+  const needed = await fullLanesNeeded(options, deps);
+  if (needed <= FULL_LANES_MAX) return needed;
+  console.error(
+    `ci-lane: the full run needs ${needed} lanes and takes ` +
+      `${FULL_LANES_MAX}, the most FULL_LANES_MAX allows, so a lane may run ` +
+      `past its budget`,
+  );
+  return FULL_LANES_MAX;
+}
+
+/** How many lanes the full run would take with no cap on them. */
+async function fullLanesNeeded(
+  options: LaneOptions,
+  deps: LaneDeps,
+): Promise<number> {
   const suites = await (deps.topology ?? loadTopology)(options.root);
-  const { seen } = await read(options, suites, deps, console.error);
+  const { seen } = await read(options, suites, deps);
   if (seen.unmeasured === seen.manifest.entries.length) {
     // Nothing at all has a measured cost, so a cost model here would be
     // arithmetic over a figure this invented, and the answer would be
@@ -1302,6 +1439,15 @@ export async function fullLanes(
   });
 }
 
+/**
+ * The directory the continuous-integration job keeps its own temporary
+ * files in, where the lane is running inside one.
+ */
+function runnerTemp(): string | undefined {
+  const at = Deno.env.get("RUNNER_TEMP");
+  return at === undefined || at.length === 0 ? undefined : at;
+}
+
 /** Runs one lane, and says whether everything in it passed. */
 export async function runLane(
   options: LaneOptions,
@@ -1311,8 +1457,7 @@ export async function runLane(
   // no child of it inherits the token except through the capability.
   const githubToken = takeGithubToken();
   const suites = await (deps.topology ?? loadTopology)(options.root);
-  const { seen, fetched } = await read(options, suites, deps, console.log);
-  const laid = packing(options, suites, seen);
+  const { seen, fetched, laid } = await lanePlan(options, suites, deps);
   const mine = laid.lanes.find((lane) => lane.lane === options.lane);
   if (mine === undefined) {
     // A lane outside the run it belongs to. Taking an empty share
@@ -1355,7 +1500,32 @@ export async function runLane(
   describeWithheld(laid.withheld, seen.mandatory);
   if (options.dryRun) return true;
 
-  const workDir = await Deno.makeTempDir({ prefix: "ci-lane-" });
+  // Asked before any batch runs, because the first pattern a batch
+  // compiles writes the file whatever the cache held.
+  const compileCacheState = needs.has("compile-cache")
+    ? await exists(path.join(options.root, COMPILE_CACHE_FILE))
+      ? "warm"
+      : "cold"
+    : undefined;
+  const temp = runnerTemp();
+  const workDir = await Deno.makeTempDir({
+    prefix: "ci-lane-",
+    // Under the job's own temporary directory where there is one, which
+    // is where a workflow step can upload what a failing lane left
+    // behind.
+    ...(temp === undefined ? {} : { dir: temp }),
+  });
+  // A lane that passed leaves nothing behind. A lane that failed in a job
+  // keeps what its capabilities wrote, because a server's log is what
+  // says why a suite could not reach it, and a workflow step can upload
+  // the directory from the job's temporary directory. Anywhere else
+  // nothing would collect it, and one directory would accumulate per
+  // failed run.
+  const leaveWorkDir = async (passed: boolean) => {
+    if (passed || temp === undefined) {
+      await Deno.remove(workDir, { recursive: true }).catch(() => {});
+    }
+  };
   const spool = (deps.spool ?? recordsDir)();
   // The directory belongs to the lane from the moment it exists, and a
   // capability that refuses to open is one of the ways the lane ends.
@@ -1368,7 +1538,7 @@ export async function runLane(
       ...(githubToken === undefined ? {} : { githubToken }),
     });
   } catch (error) {
-    await Deno.remove(workDir, { recursive: true }).catch(() => {});
+    await leaveWorkDir(false);
     throw error;
   }
   if (spool !== undefined) {
@@ -1455,9 +1625,7 @@ export async function runLane(
     // and the logs are large.
     if (!ok) await describeCapabilityLogs(opened.logs);
     await opened.close();
-    // The lane owns this directory and nothing outside the lane reads
-    // it, so it goes whether the batches passed, failed, or never ran.
-    await Deno.remove(workDir, { recursive: true }).catch(() => {});
+    await leaveWorkDir(ok);
   }
   describeConflicts(conflicts);
   // After the capabilities are closed, because a conversion is the lane's
@@ -1468,6 +1636,9 @@ export async function runLane(
   const converted = await convertCoverage(options);
   if (!converted.ok) ok = false;
   const marked = await markMeasuredFailures(options, suites, failedUnits);
+  if (compileCacheState !== undefined) {
+    await writeCompileCacheState(options, compileCacheState);
+  }
   describeCoverage(seen.coverage, converted.reports, marked);
   return ok;
 }

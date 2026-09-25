@@ -43,11 +43,6 @@ export {
   toStructuredDebugValue,
 } from "@/value-debug/index.ts";
 
-export {
-  getFrozenObjectHashCacheHits,
-  hashOf,
-  hashStringOf,
-  taggedHashStringOf,
-} from "./value-hash.ts";
+export * from "@/value-hash";
 
 export * from "@/types";

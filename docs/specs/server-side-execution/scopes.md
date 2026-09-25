@@ -351,9 +351,10 @@ scope, the child's `space→…` redirect is materialized even if the
 value omits the key, so a later schema-less write (a handler's
 `draft.set(…)`) follows the redirect into the narrower instance. The
 invariant that makes this safe was never written down and is added
-here: **a declared scope must be VISIBLE TO THE WRITE PATH at the top
-level of the slot's own schema.** `ContextualFlowControl.getSchemaScope
-Cap` reads only the top level, so a scope declared inside an
+here: **a declared scope must be VISIBLE TO THE WRITE PATH on the slot's
+own schema** — its top level, or the definition a `$ref` there names.
+`ContextualFlowControl.getSchemaScope
+Cap` reads those and no compound branch, so a scope declared inside an
 `anyOf`/`oneOf` branch (`PerUser<T> | undefined` spelled with the union
 OUTSIDE the wrapper) is invisible to the write side — `declaredCellScope`
 and `foldDeclaredScopeIntoLinkSchema` miss it while the READ side folds

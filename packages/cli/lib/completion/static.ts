@@ -35,7 +35,7 @@ export interface Candidate {
  */
 const ENUMERATED_OPTION_VALUES: Readonly<Record<string, readonly string[]>> = {
   "state": [...AGENT_RUN_STATES],
-  "access": ["READ", "WRITE"],
+  "access": ["READ", "WRITE", "OWNER"],
   "log-level": ["debug", "info", "warn", "error", "silent"],
   "color": ["auto", "always", "never"],
   "language": languageNames(),

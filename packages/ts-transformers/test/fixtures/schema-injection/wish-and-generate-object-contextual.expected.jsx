@@ -21,7 +21,7 @@ const existingLabelSchema = __cfHelpers.__cf_data({
 // FIXTURE: wish-and-generate-object-contextual
 // Verifies: wish() injects schemas from explicit and contextual result types, and generateObject() injects explicit schemas
 //   wish<string>({ query }) → wish<string>({ query }, { type: "string" })
-//   const state: WishState<{ title: string }> = wish({ query }) → object schema from contextual result type
+//   const state: WishState<{ title: string }> = wish({ query }) → { title: string }'s schema, the T inferred from the contextual WishState<T>
 //   generateObject<T>({ ... }) injects params.schema, but preserves authored schema when already present
 export default function TestWishAndGenerateObjectContextual() {
     const explicitWish = wish<string>({ query: "#greeting" }, {
@@ -34,37 +34,11 @@ export default function TestWishAndGenerateObjectContextual() {
     }, {
         type: "object",
         properties: {
-            result: {
-                anyOf: [{
-                        type: "undefined"
-                    }, {
-                        type: "object",
-                        properties: {
-                            title: {
-                                type: "string"
-                            }
-                        },
-                        required: ["title"]
-                    }]
-            },
-            candidates: {
-                type: "array",
-                items: {
-                    type: "object",
-                    properties: {
-                        title: {
-                            type: "string"
-                        }
-                    },
-                    required: ["title"]
-                }
-            },
-            error: true,
-            $UI: {
-                $ref: "https://commonfabric.org/schemas/vnode.json"
+            title: {
+                type: "string"
             }
         },
-        required: ["result", "candidates"]
+        required: ["title"]
     } as const satisfies __cfHelpers.JSONSchema).for("contextualWish", true);
     const explicitObject = generateObject<{
         title: string;

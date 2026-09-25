@@ -178,7 +178,6 @@ const _combineSchemaCache = new Map<string, JSONSchema>();
 // schema); its pass-through arms return existing references uncached.
 const _combineLinkSchemaCache = new Map<string, JSONSchema>();
 const _mergeSchemaFlagsCache = new Map<string, JSONSchema>();
-const _mergeAnyOfBranchCache = new Map<string, JSONSchema | null>();
 
 function internSet(
   cache: Map<string, JSONSchema>,
@@ -1420,6 +1419,29 @@ export type TraversalContext = {
   ) => void;
 
   /**
+   * How many missing link targets this traversal has reported. A site that
+   * stands a substitute in for a rejected subtree compares it around the
+   * rejection to learn whether the subtree crossed one. A memo hit reports
+   * nothing, so a subtree counts on its first visit only.
+   */
+  missingLinkTargets: number;
+
+  /**
+   * The documents those reports named, keyed by `missingTargetKey`. A site
+   * that fills an absent value with a default asks whether the value's
+   * document is one of them.
+   */
+  missingLinkTargetDocs: Set<string>;
+
+  /**
+   * Set once a substitute — an array item's `null` or `undefined`, a default
+   * — stood in for what a missing link target hides. Nothing about that value
+   * is known, so a reader that may not publish a stand-in for the unknown
+   * refuses the traversal on seeing this, however the traversal ended.
+   */
+  substituteCoveredMissingTarget: boolean;
+
+  /**
    * Schema-document tracker keys this traversal has already attempted to
    * load, so one traversal reads each referenced document at most once. A
    * failed attempt is not retried within the traversal; the next traversal
@@ -1460,6 +1482,9 @@ export function createTraversalContext(
     scopeKeyIdentity,
     traverseCells,
     onMissingLinkTarget,
+    missingLinkTargets: 0,
+    missingLinkTargetDocs: new Set<string>(),
+    substituteCoveredMissingTarget: false,
     schemaDocsLoaded,
     schemaDocsAvailable,
   };
@@ -2376,6 +2401,26 @@ const schemaFollowScopeCap = (schema: unknown): SchemaScope | undefined =>
   ContextualFlowControl.getSchemaScopeCap(schema as JSONSchema | undefined);
 
 /**
+ * The key `TraversalContext.missingLinkTargetDocs` holds a document under: its
+ * space, its scope and its id, since one id names a different document in
+ * each scope.
+ */
+function missingTargetKey(
+  doc: { space: MemorySpace; id: string; scope?: CellScope },
+): string {
+  return `${doc.space}/${doc.scope ?? "space"}/${doc.id}`;
+}
+
+/** Records a missing link target on the context ahead of reporting it. */
+function noteMissingLinkTarget(
+  context: TraversalContext,
+  doc: { space: MemorySpace; id: string; scope?: CellScope },
+): void {
+  context.missingLinkTargets++;
+  context.missingLinkTargetDocs.add(missingTargetKey(doc));
+}
+
+/**
  * Report a linked document that is absent from the local replica so the
  * runtime can kick its asynchronous load. The read still resolves to
  * undefined and remains a dependency; this only schedules convergence.
@@ -2387,6 +2432,7 @@ function reportMissingLinkTarget(
   sourceSpace: MemorySpace,
   source?: { id: string; scope?: CellScope },
 ): void {
+  noteMissingLinkTarget(context, link);
   context.onMissingLinkTarget?.(
     {
       space: link.space,
@@ -2822,6 +2868,7 @@ function loadSchemaDocClosure(
         // for (the followPointer pattern): a permission or transport error
         // is not a doc to fetch, and reporting it would kick spurious loads.
         if (result.error.name === "NotFoundError") {
+          noteMissingLinkTarget(context, address);
           context.onMissingLinkTarget?.(
             {
               space: address.space,
@@ -4007,6 +4054,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
         doc.value === undefined && resolved.default !== undefined &&
         (resolved.anyOf || resolved.oneOf || resolved.allOf)
       ) {
+        this.#noteDefaultOnAbsentValue(doc);
         return { ok: this.#applyDefault(doc, resolved) };
       }
       // There are a lot of valid logical schema flags, and we only handle
@@ -4308,6 +4356,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // If we have a default, annotate it and return it
       // Otherwise, return undefined
       const defaultValue = this.#applyDefault(doc, resolved);
+      if (defaultValue !== undefined) this.#noteDefaultOnAbsentValue(doc);
       return (defaultValue !== undefined)
         ? { ok: defaultValue }
         : this.#isValidType(schemaObj, "undefined")
@@ -4818,9 +4867,13 @@ export class SchemaObjectTraverser<V extends FabricValue>
     // keeps the selector walk covering (and thus delivering + watching) the
     // remaining element docs. `forEach` skips sparse holes like `every` did.
     let valid = true;
+    const settledSchema = ContextualFlowControl.settledForContainer(
+      schema,
+      "array",
+    );
     docArray.forEach((item, index) => {
       const itemSchema = directItems ??
-        schemaAtPathCanonical(schema, [index.toString()]);
+        schemaAtPathCanonical(settledSchema, [index.toString()]);
       const batchIndex = preparedPlainLinkIndex++;
       const preparedSourceAddress = preparedPlainLinks
         ?.sourceAddresses[batchIndex];
@@ -4835,6 +4888,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
         path: curDoc.address.path,
         schema: itemSchema,
       };
+      const missesBefore = this.context.missingLinkTargets;
       if (preparedPlainLinks === undefined) {
         this.tx.read(curDoc.address, READ_NON_RECURSIVE_FOR_SCHEDULING);
       }
@@ -4988,8 +5042,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
           );
         }
       } else if (
-        isObjectOrArray(item) &&
-        !SchemaObjectTraverser.hasAsCell(curSelector.schema)
+        arrayItemUsesValueIdentity(item, curSelector.schema)
       ) {
         // We create an element link, but this is just to establish the id if we encounter
         // other links in our data value and we need to construct a relative link.
@@ -5054,10 +5107,14 @@ export class SchemaObjectTraverser<V extends FabricValue>
         if (error !== undefined) {
           // If our item doesn't match our schema, we may be able to use
           // undefined or null if those are valid according to our schema.
-          if (this.#isValidType(curSelector.schema!, "undefined")) {
-            arrayObj[index] = undefined;
-          } else if (this.#isValidType(curSelector.schema!, "null")) {
-            arrayObj[index] = null;
+          const fallbackType = arrayItemFallbackType(curSelector.schema!);
+          if (fallbackType !== undefined) {
+            arrayObj[index] = fallbackType === "null" ? null : undefined;
+            // The substitute answers for an item known to be invalid, not
+            // for one whose rejection crossed a link target the replica lacks.
+            if (this.context.missingLinkTargets > missesBefore) {
+              this.context.substituteCoveredMissingTarget = true;
+            }
           } else {
             // This array is invalid; one or more items do not match the
             // schema — the ENTIRE array reads as invalid for this caller.
@@ -5107,12 +5164,19 @@ export class SchemaObjectTraverser<V extends FabricValue>
   ): Record<string, FabricValue> | undefined {
     this.traverseObjectCalls++;
     const filteredObj: Record<string, FabricValue> = {};
+    // Properties rejected by a traversal that crossed a link target the
+    // replica lacks: a default filled in below would stand in for the unknown.
+    const rejectedOverMissingTarget = new Set<string>();
     const directProperties = plainObjectProperties(schema);
+    const settledSchema = ContextualFlowControl.settledForContainer(
+      schema,
+      "object",
+    );
     for (const [propKey, propValue] of Object.entries(doc.value!)) {
       // We'll use marker schemas to detect some places where we want special
       // schema behavior
       const propSchema = directProperties?.[propKey] ??
-        schemaAtPathCanonical(schema, [propKey], true);
+        schemaAtPathCanonical(settledSchema, [propKey], true);
       // Normally, if additionalProperties is not specified, it would
       // default to true. However, if we provided the `properties` field, we
       // treat this specially, and don't invalidate the object, but also don't
@@ -5164,11 +5228,14 @@ export class SchemaObjectTraverser<V extends FabricValue>
           this.tx.read(propDoc.address, READ_NON_RECURSIVE_FOR_SCHEDULING);
           return this.traverseWithSchema(propDoc, propSchema);
         };
+        const missesBefore = this.context.missingLinkTargets;
         const { ok: val, error } = SchemaObjectTraverser.hasAsCell(propSchema)
           ? this.tx.runWithAmbientReadMeta(excludeReadFromConflict, descend)
           : descend();
         if (error === undefined) {
           filteredObj[propKey] = val;
+        } else if (this.context.missingLinkTargets > missesBefore) {
+          rejectedOverMissingTarget.add(propKey);
         }
       }
     }
@@ -5214,6 +5281,9 @@ export class SchemaObjectTraverser<V extends FabricValue>
         }
         if (propSchema.default == undefined) {
           continue;
+        }
+        if (rejectedOverMissingTarget.has(propKey)) {
+          this.context.substituteCoveredMissingTarget = true;
         }
         if (SchemaObjectTraverser.hasAsCell(propSchema)) {
           const { ok: val, error } = this.traverseWithSchema({
@@ -5476,6 +5546,17 @@ export class SchemaObjectTraverser<V extends FabricValue>
     return undefined;
   }
 
+  /**
+   * A default about to fill an absent value covers a missing link target when
+   * the value's document is one this traversal reported: the value is not
+   * absent, only unserved.
+   */
+  #noteDefaultOnAbsentValue(doc: IMemorySpaceValueAttestation): void {
+    if (this.context.missingLinkTargetDocs.has(missingTargetKey(doc.address))) {
+      this.context.substituteCoveredMissingTarget = true;
+    }
+  }
+
   #getDebugValue(doc: IMemorySpaceValueAttestation) {
     if (doc.value === undefined) {
       return "undefined";
@@ -5651,151 +5732,11 @@ function getPlainJsonType(
   return null;
 }
 
-/** Refine the broad JSON Schema type so integer values can be distinguished. */
-function getJsonType(value: unknown): JSONSchemaTypes | null {
+/** Returns a value's schema type, distinguishing integers from other numbers. */
+export function getJsonType(value: unknown): JSONSchemaTypes | null {
   return (typeof value === "number")
     ? getJsonNumberType(value)
     : getPlainJsonType(value);
-}
-
-/**
- * Merge multiple anyOf object branches into a single object schema.
- * Instead of traversing each branch independently, this produces ONE merged
- * schema where:
- * - Properties that appear in all branches with identical schemas → used directly
- * - Properties that differ across branches → wrapped in { anyOf: [s1, s2, ...] }
- * - `required`: intersection (only required if ALL branches require it)
- * - `additionalProperties`: union (allow if ANY branch allows)
- * - `$defs`: merged from all branches
- *
- * Returns null when merging isn't applicable (non-object branches, boolean schemas,
- * or fewer than 2 branches).
- */
-export function mergeAnyOfBranchSchemas(
-  branches: JSONSchema[],
-  outerSchema: JSONSchemaObj,
-): JSONSchema | null {
-  if (branches.length < 2) return null;
-
-  // Inline 1+N intern-based key: outer schema, then each branch.
-  // Interning each input stabilizes its identity so downstream callers
-  // hit the hash-cache fast path; `||` separates outer from branches,
-  // `|` separates branches.
-  const key = `${internSchemaAsTaggedHashString(outerSchema)}||` +
-    branches.map(internSchemaAsTaggedHashString).join("|");
-  const cached = _mergeAnyOfBranchCache.get(key);
-  if (cached !== undefined) return cached;
-
-  const result = _mergeAnyOfBranchSchemasUncached(branches, outerSchema);
-  const interned = result !== null ? internSchema(result) : null;
-  if (_mergeAnyOfBranchCache.size >= INTERN_CACHE_MAX) {
-    _mergeAnyOfBranchCache.clear();
-  }
-  _mergeAnyOfBranchCache.set(key, interned);
-  return interned;
-}
-
-function _mergeAnyOfBranchSchemasUncached(
-  branches: JSONSchema[],
-  outerSchema: JSONSchemaObj,
-): JSONSchema | null {
-  // Resolve and merge each branch with the outer schema, then check they're all objects
-  const resolvedBranches: JSONSchemaObj[] = [];
-  for (const branch of branches) {
-    const merged = mergeSchemaOption(outerSchema, branch);
-    if (!isObjectOrArray(merged)) return null;
-    // Must be object type or unspecified (compatible with object)
-    // type can be a string or an array of strings
-    if (merged.type !== undefined) {
-      const types = Array.isArray(merged.type) ? merged.type : [merged.type];
-      if (!types.includes("object")) return null;
-    }
-    resolvedBranches.push(merged);
-  }
-
-  // Collect all property schemas from all branches, keyed by property name
-  const allProps = new Map<string, JSONSchema[]>();
-  const allRequiredSets: Set<string>[] = [];
-  let mergedDefs: Record<string, JSONSchema> | undefined;
-  let anyAllowsAdditional = false;
-
-  for (const branch of resolvedBranches) {
-    // Collect properties
-    if (isObjectOrArray(branch.properties)) {
-      for (const [k, v] of Object.entries(branch.properties)) {
-        let arr = allProps.get(k);
-        if (!arr) {
-          arr = [];
-          allProps.set(k, arr);
-        }
-        arr.push(v as JSONSchema);
-      }
-    }
-
-    // Collect required sets
-    if (Array.isArray(branch.required)) {
-      allRequiredSets.push(new Set(branch.required as string[]));
-    } else {
-      allRequiredSets.push(new Set());
-    }
-
-    // Merge $defs
-    if (isObjectOrArray(branch.$defs)) {
-      mergedDefs ??= {};
-      Object.assign(mergedDefs, branch.$defs);
-    }
-
-    // additionalProperties: union
-    if (
-      branch.additionalProperties === undefined ||
-      branch.additionalProperties === true ||
-      (isObjectOrArray(branch.additionalProperties))
-    ) {
-      anyAllowsAdditional = true;
-    }
-  }
-
-  // If no branches have properties, merging isn't useful
-  if (allProps.size === 0) return null;
-
-  // Build merged properties
-  const mergedProperties: Record<string, JSONSchema> = {};
-  for (const [propKey, schemas] of allProps) {
-    // Deduplicate structurally-equal property schemas across branches by
-    // keying on the interned hash; interning also stabilizes these schema
-    // identities for any downstream caller that re-hashes them.
-    const uniqueHashes = new Map<string, JSONSchema>();
-    for (const s of schemas) {
-      uniqueHashes.set(internSchemaAsTaggedHashString(s), s);
-    }
-    if (uniqueHashes.size === 1) {
-      // All branches agree on this property's schema
-      mergedProperties[propKey] = schemas[0];
-    } else {
-      // Different schemas across branches — wrap in anyOf
-      mergedProperties[propKey] = { anyOf: [...uniqueHashes.values()] };
-    }
-  }
-
-  // Required: intersection — only required if ALL branches require it
-  const requiredSet = new Set<string>();
-  if (allRequiredSets.length > 0) {
-    for (const r of allRequiredSets[0]) {
-      if (allRequiredSets.every((s) => s.has(r))) {
-        requiredSet.add(r);
-      }
-    }
-  }
-
-  return {
-    type: "object",
-    properties: mergedProperties,
-    ...(requiredSet.size > 0 && { required: [...requiredSet] }),
-    ...(!anyAllowsAdditional && { additionalProperties: false }),
-    ...(mergedDefs && { $defs: mergedDefs }),
-    ...((outerSchema.asCell) &&
-      { asCell: outerSchema.asCell }),
-  } as JSONSchemaObj;
 }
 
 /** Returns whether a schema requests a cell handle with no declared value shape. */
@@ -6091,4 +6032,52 @@ export function schemaAcceptsType(
   valueType: JSONSchemaTypes,
 ): boolean {
   return schemaTypeValidity(schema, valueType) !== TypeValidity.False;
+}
+
+/**
+ * Returns the schema supplying an object property's fallback after projection.
+ * Only declared properties participate; a null default does not fill a missing
+ * or rejected property. Top-level absent-value defaults are a separate rule.
+ *
+ * The default is the property schema's own, read after its root `$ref` is
+ * resolved. One declared inside a combinator branch of that schema is not a
+ * property fallback: it is applied, on both read paths, only by traversing
+ * that branch against a value, and an absent or rejected property has no
+ * branch traversed.
+ */
+export function getPropertyDefaultSchema(
+  schema: JSONSchema | undefined,
+  key: string,
+): JSONSchemaObj | undefined {
+  if (
+    !isObjectOrArray(schema) || !schema.properties ||
+    !Object.hasOwn(schema.properties, key)
+  ) return undefined;
+  const child = ContextualFlowControl.getSchemaAtPath(schema, [key]);
+  if (!isObjectOrArray(child)) return undefined;
+  const resolved = ContextualFlowControl.resolveSchemaRefs(child);
+  return isObjectOrArray(resolved) && resolved.default != undefined
+    ? resolved
+    : undefined;
+}
+
+/** Returns the permitted substitute for an array item whose traversal fails. */
+export function arrayItemFallbackType(
+  schema: JSONSchema,
+): "undefined" | "null" | undefined {
+  if (schemaAcceptsType(schema, "undefined")) return "undefined";
+  if (schemaAcceptsType(schema, "null")) return "null";
+  return undefined;
+}
+
+/**
+ * Returns whether an inline array element takes its identity from its value.
+ * Links keep their referent's identity and cell handles keep the selected slot.
+ */
+export function arrayItemUsesValueIdentity(
+  value: FabricValue,
+  schema: JSONSchema | undefined,
+): boolean {
+  return isObjectOrArray(value) && !isSigilLink(value) &&
+    !SchemaObjectTraverser.hasAsCell(schema);
 }

@@ -19,6 +19,7 @@
 
 import { dirname, fromFileUrl, join } from "@std/path";
 import { createSession, Identity } from "@commonfabric/identity";
+import { COVERAGE_ARTIFACT } from "@commonfabric/test-support/records";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
@@ -47,7 +48,8 @@ export interface Tripwire {
  * Every job in `deno.yml` that ships the test records it produced, by its
  * identifier. More than one of them is what makes a check over the whole
  * run's records a job of its own: it has to wait for each and gather what
- * each shipped.
+ * each shipped. A job shipping the run's coverage measurements alone ships
+ * no test's record, and is not one of them.
  */
 export async function shippingJobs(
   repoRoot: string = REPO_ROOT,
@@ -57,12 +59,11 @@ export async function shippingJobs(
   );
   const jobs = workflow.slice(workflow.indexOf("jobs:\n"));
   const starts = [...jobs.matchAll(/^ {2}([A-Za-z_][A-Za-z0-9_-]*):\n/gm)];
-  return starts.filter((start, at) =>
-    jobs.slice(
-      start.index,
-      starts[at + 1]?.index ?? jobs.length,
-    ).includes("uses: ./.github/actions/test-records-ship")
-  ).map((start) => start[1]!);
+  return starts.filter((start, at) => {
+    const job = jobs.slice(start.index, starts[at + 1]?.index ?? jobs.length);
+    return job.includes("uses: ./.github/actions/test-records-ship") &&
+      !job.includes(`artifact: ${COVERAGE_ARTIFACT}\n`);
+  }).map((start) => start[1]!);
 }
 
 export const TRIPWIRES: Tripwire[] = [

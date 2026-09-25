@@ -22,6 +22,14 @@ function isSurrogateCharCode(c: number) {
 }
 
 /**
+ * Helper for `utf8Compare()`: Is the given character code a high (leading)
+ * surrogate?
+ */
+function isHighSurrogateCharCode(c: number) {
+  return (c >= 0xd800) && (c <= 0xdbff);
+}
+
+/**
  * Helper for `utf8Compare()`: Does the given string contain any surrogate code
  * points?
  */
@@ -29,7 +37,20 @@ function hasSurrogateCharCode(value: string) {
   return /[\ud800-\udfff]/.test(value);
 }
 
-/** Compares strings by UTF-8 sort order. */
+/**
+ * Compares strings by UTF-8 sort order, which is also Unicode code point
+ * order. A lone surrogate sorts as the code point of the same value, which
+ * makes this the byte order of the strings' WTF-8 encodings (see
+ * `encodeWtf8()`).
+ *
+ * The order is by code point even where two strings share a high surrogate
+ * that only one of them pairs. For example, `"\ud800\udc00"` is the single
+ * character U+10000, encoded as `F0 90 80 80`, and `"\ud800\ue000"` is a lone
+ * high surrogate followed by U+E000, encoded as `ED A0 80 EE 80 80`. The
+ * second sorts first, because its first code point (`0xD800`) is less than
+ * the first's (`0x10000`), even though at the first differing code unit the
+ * first string's `0xDC00` is less than the second's `0xE000`.
+ */
 export function utf8Compare(a: string, b: string): number {
   // Credit where due: Though this started out as an independent implementation
   // of the key insight for fast sorting, this incorporates ideas from
@@ -72,6 +93,16 @@ export function utf8Compare(a: string, b: string): number {
       // also returns a reasonable value given an invalid surrogate-pair
       // sequence. Importantly, Unicode code-point order corresponds to UTF-8
       // byte order.
+      if (i > 0 && isHighSurrogateCharCode(a.charCodeAt(i - 1))) {
+        // The strings share a high surrogate just before `i`, which each one
+        // either pairs with what is at `i` or leaves alone. Where they differ
+        // on that, the code points starting there are the ones that differ.
+        const aPrevPoint = a.codePointAt(i - 1)!;
+        const bPrevPoint = b.codePointAt(i - 1)!;
+        if (aPrevPoint !== bPrevPoint) {
+          return aPrevPoint - bPrevPoint;
+        }
+      }
       const aPoint = a.codePointAt(i)!;
       const bPoint = b.codePointAt(i)!;
       return aPoint - bPoint;

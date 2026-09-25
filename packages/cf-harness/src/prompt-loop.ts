@@ -276,6 +276,14 @@ export interface CreateHarnessPromptLoopOptions
 
   promptCacheMode?: "implicit" | "explicit";
   reasoningEffort?: string;
+
+  /**
+   * Reasoning effort for the `research` tool's private model turns. Research
+   * runs on its own model rather than the run's, so this is set apart from
+   * `reasoningEffort`; unset, the provider's default applies.
+   */
+  researchReasoningEffort?: string;
+
   compactThreshold?: number;
 
   /**
@@ -381,6 +389,25 @@ const isBuiltinToolId = (input: string): input is BuiltinToolId =>
 type ParsedToolArguments =
   | { input: Record<string, unknown> }
   | { invalid: CreateHarnessInvalidToolCallOptions };
+
+/**
+ * Whether the loop may start the calls after `toolCall` while it runs. True
+ * of a delegation, whose child works in an engine of its own, except one on
+ * the `browser` profile: two browser children share one persistent profile
+ * and so one page, and would drive it at once. A call whose arguments do not
+ * decode is held like any other, since the complaint it gets is written
+ * before it would have started anything.
+ */
+const delegationHoldsNothingAfterIt = (toolCall: HarnessToolCall): boolean => {
+  if (
+    getBuiltinTool(toolCall.function.name)?.descriptor.toolId !==
+      "delegate_task"
+  ) {
+    return false;
+  }
+  const parsed = parseToolArguments(toolCall);
+  return "input" in parsed && parsed.input.profile !== "browser";
+};
 
 const parseToolArguments = (
   toolCall: HarnessToolCall,
@@ -1283,10 +1310,11 @@ export const scrubHandleSkillTextDeep = (
  * run that delegated once and succeeded is never gated.
  *
  * `running` counts as not completed, which costs nothing while a run is
- * healthy — tool calls are dispatched one at a time, so a delegation's
- * terminal ref always supersedes its running ref before the next delegation is
- * judged — and is the whole answer after a crash, where the running ref is the
- * only trace the lost delegation left.
+ * healthy — a delegation is judged against the runs recorded before its turn
+ * began, so a sibling started in the same turn is not yet there and a
+ * delegation from an earlier turn has its terminal ref by then — and is the
+ * whole answer after a crash, where the running ref is the only trace the
+ * lost delegation left.
  *
  * A delegation that declared `withoutSkillHandle` discharges everything
  * outstanding when it is reached. The refusal exists to make the parent answer
@@ -2943,6 +2971,7 @@ export class CfHarnessPromptLoop {
   readonly #cacheAffinityKey?: string;
   readonly #promptCacheMode?: "implicit" | "explicit";
   readonly #reasoningEffort?: string;
+  readonly #researchReasoningEffort?: string;
   readonly #compactThreshold?: number;
   readonly #subagentCompositionGuidance: boolean;
   readonly #trustedPatternRecords = new Map<string, TrustedPatternRecord>();
@@ -2953,6 +2982,27 @@ export class CfHarnessPromptLoop {
    * with no artifact store keeps every draft it was given.
    */
   readonly #persistedRunPatternSources = new Set<string>();
+
+  /**
+   * The highest child run sequence this loop has handed out. Two delegations
+   * started in one turn both read the run state before either is recorded
+   * there, so the state alone would number them the same; the sequence is
+   * the greater of what the state implies and the next one after this. A
+   * child is numbered when its delegation is admitted, so two admitted from
+   * one turn are numbered in that order rather than the order the model wrote
+   * them; the run's subagent refs pair each child with its parent tool call.
+   */
+  #lastReservedSubagentSequence = 0;
+
+  /**
+   * The parent's subagent runs as they stood when the current turn's tool
+   * calls were dispatched, and `undefined` outside a turn. Skill custody is
+   * judged against this rather than the live state, so a delegation is not
+   * refused on account of a sibling the same turn started a moment earlier.
+   * The siblings of one turn are unordered for custody: each is recorded
+   * when it is admitted, and a later turn reads them in that order.
+   */
+  #subagentRunsAtTurnStart?: readonly HarnessSubagentRunRef[];
 
   constructor(options: CreateHarnessPromptLoopOptions = {}) {
     this.engine = options.engine ?? new CfHarnessEngine(options);
@@ -3057,6 +3107,7 @@ export class CfHarnessPromptLoop {
     this.#cacheAffinityKey = options.cacheAffinityKey;
     this.#promptCacheMode = options.promptCacheMode;
     this.#reasoningEffort = options.reasoningEffort;
+    this.#researchReasoningEffort = options.researchReasoningEffort;
     this.#compactThreshold = options.compactThreshold;
     this.#subagentCompositionGuidance = options.subagentCompositionGuidance ??
       true;
@@ -3684,6 +3735,9 @@ export class CfHarnessPromptLoop {
           ...(this.#reasoningEffort !== undefined
             ? { reasoningEffort: this.#reasoningEffort }
             : {}),
+          ...(this.#researchReasoningEffort !== undefined
+            ? { researchReasoningEffort: this.#researchReasoningEffort }
+            : {}),
           ...(this.#promptCacheMode !== undefined
             ? { promptCacheMode: this.#promptCacheMode }
             : {}),
@@ -3724,6 +3778,9 @@ export class CfHarnessPromptLoop {
     // and tokens beside a delegation's.
     const runResearch = createResearchRunner({
       modelClient: this.modelClient,
+      ...(this.#researchReasoningEffort !== undefined
+        ? { reasoningEffort: this.#researchReasoningEffort }
+        : {}),
       onAttempt: recordModelAttempt,
       onUsage: recordModelUsage,
     });
@@ -3945,20 +4002,61 @@ export class CfHarnessPromptLoop {
         const followupMessages: HarnessTranscriptMessage[] = [];
         const pendingCfcModelContextObservations:
           HarnessCfcModelContextObservationInput[] = [];
-        for (const toolCall of toolCalls) {
-          options.signal?.throwIfAborted();
-          const invokedToolCall = await this.#invokeToolCall(
+        options.signal?.throwIfAborted();
+        // The calls run in the order the model wrote them, and a delegation
+        // does not hold the calls after it. A child runs in its own engine
+        // and shares nothing of this run's session state but the sandbox,
+        // so two children a turn starts can run together, while every other
+        // call runs in turn against the working directory and browser page
+        // the session holds once. Everything that orders the record is fixed
+        // before any call starts: the activity sequence each records under,
+        // the run state a delegation's skill custody is judged against, and
+        // the position its result takes in the transcript, which is the
+        // order written whichever finished first. One call's failure ends the
+        // turn: whatever is still running is aborted, and that failure is
+        // the one the run ends on.
+        const firstToolActivitySequence = toolActivity.length + 1;
+        const turnActivities: HarnessToolActivity[][] = toolCalls.map(
+          () => [],
+        );
+        this.#subagentRunsAtTurnStart =
+          this.engine.getRunState().subagentRuns ?? [];
+        const turn = new AbortController();
+        const abortTurn = () => turn.abort(options.signal?.reason);
+        options.signal?.addEventListener("abort", abortTurn, { once: true });
+        let turnFailure: { error: unknown } | undefined;
+        const invocations: Promise<InvokedToolCallMessages>[] = [];
+        for (const [index, toolCall] of toolCalls.entries()) {
+          if (turnFailure !== undefined || turn.signal.aborted) break;
+          const invocation = this.#invokeToolCall(
             toolCall,
             model,
             promptSlotBinding,
-            options.signal,
-            toolActivity.length + 1,
-            (activity) => toolActivity.push(activity),
+            turn.signal,
+            firstToolActivitySequence + index,
+            (activity) => turnActivities[index].push(activity),
             recordModelUsage,
             options.onTranscriptEvent,
             undefined,
             toolCalls.length,
           );
+          invocations.push(invocation);
+          const settled = invocation.then(() => {}, (error) => {
+            turnFailure ??= { error };
+            turn.abort(error);
+          });
+          if (!delegationHoldsNothingAfterIt(toolCall)) await settled;
+        }
+        await Promise.allSettled(invocations);
+        options.signal?.removeEventListener("abort", abortTurn);
+        this.#subagentRunsAtTurnStart = undefined;
+        toolActivity.push(...turnActivities.flat());
+        options.signal?.throwIfAborted();
+        if (turnFailure !== undefined) throw turnFailure.error;
+        // Every invocation has settled, and none rejected: a rejection is
+        // the turn's failure and was thrown above.
+        const invokedToolCalls = await Promise.all(invocations);
+        for (const invokedToolCall of invokedToolCalls) {
           const toolMessage = invokedToolCall.toolMessage;
           const outcome = invokedToolCall.taskOutcome;
           if (outcome !== undefined && outcome.outcome !== "completed") {
@@ -4753,7 +4851,8 @@ export class CfHarnessPromptLoop {
         // decision going unmade — a delegation that neither carries the
         // outstanding handle nor says it is running without one.
         const outstanding = outstandingSkillCustody(
-          this.engine.getRunState().subagentRuns ?? [],
+          this.#subagentRunsAtTurnStart ??
+            this.engine.getRunState().subagentRuns ?? [],
         );
         if (outstanding.length > 0) {
           return await this.#rejectInvalidToolCall({
@@ -5523,7 +5622,11 @@ export class CfHarnessPromptLoop {
     const parentRunState = this.engine.getRunState();
     const modelProvider = parentRunState.modelProvider ??
       this.engine.config.modelProvider;
-    const subagentSequence = nextSubagentSequence(parentRunState);
+    const subagentSequence = Math.max(
+      nextSubagentSequence(parentRunState),
+      this.#lastReservedSubagentSequence + 1,
+    );
+    this.#lastReservedSubagentSequence = subagentSequence;
     const childRunId = `${parentRunState.runId}.subagent.${subagentSequence}`;
     const childLineage = {
       role: "subagent" as const,
@@ -5801,6 +5904,11 @@ export class CfHarnessPromptLoop {
         : {}),
       ...(this.#reasoningEffort !== undefined && inheritsParentModel
         ? { reasoningEffort: this.#reasoningEffort }
+        : {}),
+      // Research runs on its own model whatever the child's is, so its effort
+      // reaches every child.
+      ...(this.#researchReasoningEffort !== undefined
+        ? { researchReasoningEffort: this.#researchReasoningEffort }
         : {}),
       maxModelTurns,
       allowedToolIds: childAllowedToolIds,

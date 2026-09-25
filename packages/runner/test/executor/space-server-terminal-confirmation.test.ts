@@ -14,6 +14,7 @@ import { emptyServingLoopStats } from "../../src/executor/stats.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
+import { sessionDemandOf } from "../support/session-demand.ts";
 
 const owner = await Identity.fromPassphrase("terminal confirmation owner");
 const service = await Identity.fromPassphrase("terminal confirmation service");
@@ -113,9 +114,11 @@ describe("SpaceServer", () => {
     };
     const facade = new Proxy(server, {
       get(target, key, receiver) {
-        if (key === "demandedInstancesForSpace") {
+        if (key === "demandForSpace") {
           return () =>
-            demanded ? [{ id: ids[0], scope, scopeKey, root: true }] : [];
+            sessionDemandOf(
+              demanded ? [{ id: ids[0], scope, scopeKey, root: true }] : [],
+            );
         }
         const value = Reflect.get(target, key, receiver);
         return typeof value === "function" ? value.bind(target) : value;
@@ -224,6 +227,15 @@ describe("SpaceServer", () => {
 
   describe("instance members", () => {
     describe("activate()", () => {
+      // A sync count here counts CALLS, and the demand pass calls `syncCell`
+      // for each address it is about to load before it loads any of them —
+      // the instance a demand names, and the space instance a scoped demand
+      // falls back to. The call a traversal then makes for one of those
+      // documents is answered from the watch the pull registered, so a count
+      // below carries one call more per address than the documents read. What
+      // the documents-read claim rests on is the session's tracked and watch
+      // sizes, asserted beside the first of them.
+
       it("leaves a successor tenure independent of a parked load", async () => {
         const releases = [
           Promise.withResolvers<void>(),
@@ -363,7 +375,6 @@ describe("SpaceServer", () => {
           expect(await settle(fixture.serving.activate())).toBe(true);
           expect(fixture.stats.structureLoadTerminal).toBe(1);
           expect(fixture.stats.structureLoadConfirmationsSkipped).toBe(1);
-          expect(fixture.syncCount()).toBe(scope === "space" ? 3 : 4);
           expect(server.demandSetSizesForSpace(space).perSession).toMatchObject(
             [
               {
@@ -372,6 +383,7 @@ describe("SpaceServer", () => {
               },
             ],
           );
+          expect(fixture.syncCount()).toBe(scope === "space" ? 4 : 6);
 
           const syncs = fixture.syncCount();
           await settle(
@@ -397,7 +409,7 @@ describe("SpaceServer", () => {
         expect(await settle(fixture.serving.activate())).toBe(true);
         expect(fixture.stats.structureLoadTerminal).toBe(1);
         expect(fixture.stats.structureLoadConfirmationsSkipped).toBe(0);
-        expect(fixture.syncCount()).toBe(8);
+        expect(fixture.syncCount()).toBe(9);
       });
 
       it("re-asks the chain once the engine's database has closed", async () => {
@@ -430,7 +442,7 @@ describe("SpaceServer", () => {
           expect(await settle(fixture.serving.activate())).toBe(true);
           expect(fixture.stats.structureLoadTerminal).toBe(1);
           expect(fixture.stats.structureLoadConfirmationsSkipped).toBe(0);
-          expect(fixture.syncCount()).toBe(6);
+          expect(fixture.syncCount()).toBe(7);
         } finally {
           const parked = fixture.serving.park("confirmation-test");
           release.resolve();
@@ -507,7 +519,7 @@ describe("SpaceServer", () => {
         await clock.settle();
         expect(fixture.stats.structureLoadTerminal).toBe(2);
         expect(fixture.stats.structureLoadConfirmationsSkipped).toBe(2);
-        expect(fixture.syncCount()).toBe(6);
+        expect(fixture.syncCount()).toBe(8);
       });
 
       it("retires a decision when demand leaves during a structure load", async () => {
@@ -539,7 +551,7 @@ describe("SpaceServer", () => {
           await clock.tick(300);
           await clock.settle();
           expect(fixture.stats.structureLoadTerminal).toBe(decisions + 1);
-          expect(fixture.syncCount()).toBe(6);
+          expect(fixture.syncCount()).toBe(8);
         } finally {
           release.resolve();
         }

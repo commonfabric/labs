@@ -41,6 +41,18 @@ import { scopesOfRows } from "./scopes.ts";
 const ENUMERATION_CAP = 1_000_000;
 
 /**
+ * Which way of fingerprinting a space this module implements.
+ *
+ * A clone records the scheme its baseline was computed under, and a verify
+ * refuses to compare that baseline with a working copy fingerprinted under
+ * another: the two hashes would differ for reasons that have nothing to do with
+ * the content, or agree when the content did not. Raise it whenever a change
+ * would give the same stored content a different fingerprint — what is hashed,
+ * how a value hashes, or which entities are excluded.
+ */
+export const FINGERPRINT_SCHEME = 1;
+
+/**
  * Hash one entity's durable value, reporting a rejection instead of throwing.
  *
  * `hashOf` refuses some values it is given, a value nested past the call stack

@@ -1,4 +1,5 @@
 import type { Cell } from "../cell.ts";
+import { waveSettlementOf } from "../executor/wave.ts";
 import type { Runtime } from "../runtime.ts";
 import {
   isConflictRejection,
@@ -72,6 +73,12 @@ export interface ListSetupRollback {
  * a container nothing points at — and they are marked and re-issued the same
  * way.
  *
+ * On a serving runtime a transaction commits when it is sealed into a wave, and
+ * the wave can still withdraw it afterwards — when it read a pending write the
+ * wave drops, say. A withdrawal loses the setup writes too, so it marks them as
+ * owed, and that is all it undoes: the entries stay, and whichever reconcile
+ * runs next sets them up again, as it does after a stale basis.
+ *
  * Each undo checks that the state it is about to revert is still the state this
  * reconcile installed. An overlapping reconcile that has already moved the same
  * entry owns it, and its bookkeeping matches durable writes of its own.
@@ -103,15 +110,25 @@ export function trackListSetupRollback(
     record.needsSetup = false;
   };
 
+  const markSetupOwed = (): void => {
+    for (const record of setUp) {
+      if (record.setupIssuance !== issuance) continue;
+      record.needsSetup = true;
+    }
+  };
+
   const registerRollback = (): void => {
     if (registered) return;
     registered = true;
-    tx.addCommitCallback((_settledTx, result) => {
-      if (!result.error) return;
-      for (const record of setUp) {
-        if (record.setupIssuance !== issuance) continue;
-        record.needsSetup = true;
+    tx.addCommitCallback((committed, result) => {
+      if (!result.error) {
+        const settlement = waveSettlementOf(committed) ?? waveSettlementOf(tx);
+        void settlement?.then(({ error }) => {
+          if (error) markSetupOwed();
+        });
+        return;
       }
+      markSetupOwed();
       if (
         isConflictRejection(result.error) ||
         isStorageTransactionInconsistent(result.error)

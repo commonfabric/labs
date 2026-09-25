@@ -88,8 +88,10 @@ import {
   SpaceHostValidationError,
 } from "@commonfabric/runner";
 import {
-  cfcLabelViewForCell,
+  cfcLabelViewForResolvedCell,
+  type CfcModulePolicySource,
   createRenderConfidentialityResolver,
+  createRuntimeCfcModulePolicySource,
   createRuntimeSpaceMembershipProvider,
   markRendererTrustedEvent,
   redactCaveatSourcesForDisplay,
@@ -102,6 +104,12 @@ import {
   prepareSnapshotShare,
   type SnapshotShareConsent,
 } from "@commonfabric/runner/cfc/share-snapshot";
+import {
+  commitCustodySeal,
+  CUSTODY_SEAL_GESTURE,
+  type CustodySealConsent,
+  prepareCustodySeal,
+} from "@commonfabric/runner/cfc/custody-seal";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
 import {
   NameSchema,
@@ -164,6 +172,9 @@ import {
   type CellUnsubscribeRequest,
   type CfcLabelViewResponse,
   ClientNotificationType,
+  type CustodySealCommitRequest,
+  type CustodySealPrepareRequest,
+  type CustodySealPreview,
   type DetectNonIdempotentRequest,
   type DetectNonIdempotentResponse,
   type EnsureHomePatternRunningRequest,
@@ -511,6 +522,9 @@ export function browserWorkerParamsFromInitializationData(
     ...(data.cfcReadOnExceed !== undefined
       ? { cfcReadOnExceed: data.cfcReadOnExceed }
       : {}),
+    ...(data.cfcTrustConfig !== undefined
+      ? { cfcTrustConfig: data.cfcTrustConfig }
+      : {}),
     ...(data.trustSnapshot
       ? { trustSnapshotProvider: () => data.trustSnapshot }
       : {}),
@@ -543,17 +557,25 @@ export function browserWorkerParamsFromInitializationData(
  * runtime-backed `SpaceMembershipProvider` reads each other space's declared
  * ACL doc and mints a reader fact only when it grants the acting user READ+
  * (never from residency). Its cross-space guarantee is exactly as strong as
- * the deployment `MEMORY_ACL_MODE`. Service DIDs are NOT threaded to the
- * worker today (design §9), so `serviceDids` is `[]` and service principals —
- * which rarely render — fail closed. Returns undefined when no ceiling is
- * configured (no render gating — today's behavior).
+ * the deployment `MEMORY_ACL_MODE`. A label that selects a module policy
+ * (`PolicyOf<...>`) runs that module's exchange rules too, with its manifest
+ * read and verified through `modulePolicySource` from the space the label is
+ * stored in, and the policy's subject space's membership looked up like a
+ * `Space(...)` atom's. The source is required so the caller shares one with
+ * the reconciler, which re-renders through its subscriptions; `undefined`
+ * resolves no manifest, and every `PolicyOf` label stays sealed. Service DIDs
+ * are NOT threaded to the worker today (design §9), so `serviceDids` is `[]`
+ * and service principals — which rarely render — fail closed. Returns
+ * undefined when no ceiling is configured (no render gating — today's
+ * behavior).
  */
 export function renderConfidentialityResolverFor(
   runtime: Runtime,
   identity: Identity,
   ceiling: RenderConfidentialityCeiling | undefined,
-  sessionSpace?: string,
-  membershipProvider?: SpaceMembershipProvider,
+  sessionSpace: string | undefined,
+  membershipProvider: SpaceMembershipProvider | undefined,
+  modulePolicySource: CfcModulePolicySource | undefined,
 ): RenderConfidentialityResolver | undefined {
   if (ceiling === undefined) {
     return undefined;
@@ -577,6 +599,12 @@ export function renderConfidentialityResolverFor(
     // build a private one — both read the same underlying runtime documents.
     membershipProvider: membershipProvider ??
       createRuntimeSpaceMembershipProvider(runtime, actingPrincipal),
+    // A `PolicyOf` label's module rules run at the display boundary too,
+    // resolved through the runtime's verified manifest read; a manifest that
+    // is missing or fails verification leaves the label sealed. The source is
+    // the reconciler's, so the manifests it watches and the ones this
+    // resolves are one cache.
+    modulePolicyResolver: modulePolicySource?.resolve,
   });
 }
 
@@ -600,6 +628,23 @@ export function renderMembershipProviderFor(
   const actingPrincipal = runtime.trustSnapshotProvider()?.actingPrincipal ??
     identity.did();
   return createRuntimeSpaceMembershipProvider(runtime, actingPrincipal);
+}
+
+/**
+ * The module-policy manifest source for a worker's renders, shared like
+ * {@link renderMembershipProviderFor}'s provider: the resolver reads verified
+ * manifests through it, and the reconciler subscribes to a manifest a sealed
+ * `PolicyOf` cell is still waiting on. Undefined when no ceiling is
+ * configured.
+ */
+export function renderModulePolicySourceFor(
+  runtime: Runtime,
+  ceiling: RenderConfidentialityCeiling | undefined,
+): CfcModulePolicySource | undefined {
+  if (ceiling === undefined) {
+    return undefined;
+  }
+  return createRuntimeCfcModulePolicySource(runtime);
 }
 
 /**
@@ -754,11 +799,21 @@ export function securityContextFrom(
     cfcFlowLabels: data.cfcFlowLabels,
     cfcReadMaxConfidentiality: data.cfcReadMaxConfidentiality,
     cfcReadOnExceed: data.cfcReadOnExceed,
+    cfcTrustConfig: data.cfcTrustConfig,
     renderDeclassificationPolicy: data.renderDeclassificationPolicy,
     renderConfidentialityCeiling: data.renderConfidentialityCeiling,
     trustSnapshot: data.trustSnapshot,
   } satisfies EveryFieldOf<RuntimeSecurityContext>;
 }
+
+/** Builds the refusal for a detached client's or a disposed runtime's seal. */
+const custodySealingUnavailable = () =>
+  new Error("Custody sealing is unavailable");
+
+/** A prepared custody seal, held in the backend until its host confirms. */
+type PendingCustodySeal = {
+  consent: CustodySealConsent;
+};
 
 type RuntimeOperationTarget = {
   capability: IOperationStorageCapability;
@@ -822,7 +877,10 @@ export class RuntimeProcessor {
     { token: string; prepared: PreparedPieceSourceChange }
   >();
   #snapshotShares = new Map<string, SnapshotShareConsent>();
-  #snapshotShareDetachedClients = new WeakSet<WorkerClient>();
+  #custodySeals = new Map<string, PendingCustodySeal>();
+  /** One abort per commit in flight, aborted when its client detaches. */
+  #custodySealCommits = new Map<string, AbortController>();
+  #detachedClients = new WeakSet<WorkerClient>();
   #telemetry: RuntimeTelemetry;
 
   /**
@@ -875,6 +933,14 @@ export class RuntimeProcessor {
    * ceiling is in force.
    */
   #renderMembershipProvider?: SpaceMembershipProvider;
+
+  /**
+   * The module-policy manifest source shared with the resolver above and
+   * handed to every mount's reconciler, so a `PolicyOf` cell blocked before
+   * its manifest synced re-renders once it arrives. `undefined` when no
+   * ceiling is in force.
+   */
+  #renderModulePolicySource?: CfcModulePolicySource;
   #cancelSpaceAccessLoss?: Cancel;
 
   private constructor(
@@ -1166,6 +1232,10 @@ export class RuntimeProcessor {
         this.#operationSessions.clear();
         this.#pieceSourceConfirmations.clear();
         this.#snapshotShares.clear();
+        this.#custodySeals.clear();
+        for (const commit of this.#custodySealCommits.values()) {
+          commit.abort(custodySealingUnavailable());
+        }
 
         // Clean up VDOM mounts
         for (const { reconciler, cancel } of this.#vdomMounts.values()) {
@@ -1235,9 +1305,15 @@ export class RuntimeProcessor {
    */
   disposeClient(client: WorkerClient): void {
     const prefix = clientKeyPrefix(client);
-    this.#snapshotShareDetachedClients.add(client);
+    this.#detachedClients.add(client);
     for (const key of this.#snapshotShares.keys()) {
       if (key.startsWith(prefix)) this.#snapshotShares.delete(key);
+    }
+    for (const key of this.#custodySeals.keys()) {
+      if (key.startsWith(prefix)) this.#custodySeals.delete(key);
+    }
+    for (const [key, commit] of this.#custodySealCommits) {
+      if (key.startsWith(prefix)) commit.abort(custodySealingUnavailable());
     }
 
     for (const [key, cancel] of [...this.#subscriptions]) {
@@ -1271,7 +1347,7 @@ export class RuntimeProcessor {
     }
   }
 
-  #snapshotShareCell(ref: CellRef): Cell<unknown> {
+  #hostSelectedCell(ref: CellRef): Cell<unknown> {
     // The host selects an address; stored policy owns its schema and label.
     return getCell(this.#runtime, {
       space: ref.space,
@@ -1381,10 +1457,14 @@ export class RuntimeProcessor {
     if (!request.includeCfcLabel) {
       return { value: converted, ...refField };
     }
-    // This reads the display label with `cfcLabelViewForCell()` and redacts
-    // `Caveat.source` from it, as `handleCellGetCfcLabel()` does. Returning
-    // the label with the value saves the caller a second round trip.
-    const cfcLabel = cfcLabelViewForCell(cell);
+    // This reads the display label with `cfcLabelViewForResolvedCell()` and
+    // redacts `Caveat.source` from it, as `handleCellGetCfcLabel()` does.
+    // Returning the label with the value saves the caller a second round trip.
+    // The value read above resolved the same links and kicked any cross-space
+    // targets already, so the label read kicks none of its own.
+    const cfcLabel = cfcLabelViewForResolvedCell(cell, {
+      kickCrossSpaceTargets: false,
+    });
     return {
       value: converted,
       ...refField,
@@ -1884,23 +1964,23 @@ export class RuntimeProcessor {
     request: SnapshotSharePrepareRequest,
     client: WorkerClient = ownerClient,
   ): Promise<SnapshotSharePreview> {
-    if (this.#isDisposed || this.#snapshotShareDetachedClients.has(client)) {
+    if (this.#isDisposed || this.#detachedClients.has(client)) {
       throw new Error("Snapshot sharing is unavailable");
     }
-    const source = this.#snapshotShareCell(request.source);
+    const source = this.#hostSelectedCell(request.source);
     const audience = request.audience;
     if (
       !isObjectNotArray(audience) ||
       ("user" in audience) === ("space" in audience)
     ) throw new Error("Snapshot sharing requires one audience");
-    const audienceCell = this.#snapshotShareCell(
+    const audienceCell = this.#hostSelectedCell(
       "user" in audience ? audience.user : audience.space,
     );
     const appendBooksTo = request.appendBooksTo && {
-      recommended: this.#snapshotShareCell(
+      recommended: this.#hostSelectedCell(
         request.appendBooksTo.recommended,
       ),
-      received: this.#snapshotShareCell(request.appendBooksTo.received),
+      received: this.#hostSelectedCell(request.appendBooksTo.received),
     };
     await Promise.all([
       source.sync(),
@@ -1908,7 +1988,7 @@ export class RuntimeProcessor {
       appendBooksTo?.recommended.sync(),
       appendBooksTo?.received.sync(),
     ]);
-    if (this.#isDisposed || this.#snapshotShareDetachedClients.has(client)) {
+    if (this.#isDisposed || this.#detachedClients.has(client)) {
       throw new Error("Snapshot sharing is unavailable");
     }
     const prepared = prepareSnapshotShare(
@@ -1945,6 +2025,90 @@ export class RuntimeProcessor {
     return { cell: createCellRef(shared) };
   }
 
+  /**
+   * Prepares a custody seal and keeps its consent in this backend while the
+   * host shows the preview. The seal reads the policy reference from the cell
+   * the host names, and the allowed sources from the settings cell the host
+   * names, only in the actor's home space. It reads both again inside the
+   * commit, so a value either cell holds that differs from the reviewed one
+   * refuses the seal as stale rather than sealing what was reviewed.
+   */
+  async handleCustodySealPrepare(
+    request: CustodySealPrepareRequest,
+    client: WorkerClient = ownerClient,
+  ): Promise<CustodySealPreview> {
+    const unavailable = () =>
+      this.#isDisposed || this.#detachedClients.has(client);
+    if (unavailable()) throw new Error("Custody sealing is unavailable");
+    const draft = this.#hostSelectedCell(request.draft);
+    const terms = this.#hostSelectedCell(request.terms);
+    const policy = this.#hostSelectedCell(request.policy);
+    const settings = this.#hostSelectedCell(request.allowedSources);
+    const prepared = await prepareCustodySeal(draft, { terms, policy }, {
+      allowedSources: settings,
+    });
+    if (unavailable()) throw new Error("Custody sealing is unavailable");
+    const id = crypto.randomUUID();
+    this.#custodySeals.set(clientScopedKey(client, id), {
+      consent: prepared.consent,
+    });
+    return {
+      id,
+      actor: prepared.actor as DID,
+      room: prepared.room as DID,
+      readers: prepared.readers.map((reader) => ({ ...reader })),
+      terms: prepared.terms,
+      instance: prepared.instance,
+      policy: prepared.policy,
+      sources: [...prepared.sources],
+      stance: prepared.stance,
+    };
+  }
+
+  /**
+   * Consumes one custody seal preview through the dedicated trusted host
+   * transport. The trusted gesture is built here, never taken from the
+   * request. The seal reads the actor's source policy again, and the
+   * transaction that writes the entry verifies that read, so a policy
+   * narrowed at any point before the entry commits refuses the seal. The
+   * commit is aborted if its client detaches before the entry's transaction
+   * is sent.
+   */
+  async handleCustodySealCommit(
+    request: CustodySealCommitRequest,
+    client: WorkerClient = ownerClient,
+  ): Promise<CellResponse> {
+    const key = clientScopedKey(client, request.id);
+    const pending = this.#custodySeals.get(key);
+    this.#custodySeals.delete(key);
+    // Detaching a client and disposing the processor both discard pending
+    // previews, so a preview found here belongs to a live client.
+    if (pending === undefined) {
+      throw new Error("Custody seal confirmation is unavailable");
+    }
+    const event = {
+      type: "click",
+      provenance: {
+        origin: "dom",
+        trusted: true,
+        ui: { pattern: CUSTODY_SEAL_GESTURE },
+      },
+    };
+    markRendererTrustedEvent(event);
+    // A client that detaches at any point before the entry's transaction is
+    // sent aborts the commit, so nothing is sealed for a client that is gone.
+    const commit = new AbortController();
+    this.#custodySealCommits.set(key, commit);
+    try {
+      const sealed = await commitCustodySeal(pending.consent, event, {
+        signal: commit.signal,
+      });
+      return { cell: createCellRef(sealed.receipt) };
+    } finally {
+      this.#custodySealCommits.delete(key);
+    }
+  }
+
   handleCellGetCfcLabel(
     request: CellGetCfcLabelRequest,
   ): CfcLabelViewResponse {
@@ -1952,8 +2116,10 @@ export class RuntimeProcessor {
     // schema is client-supplied view context, not trusted label provenance.
     const { schema: _schema, ...cellRef } = request.cell;
     const cell = getCell(this.#runtime, cellRef);
-    // This reads the label with `cfcLabelViewForCell()`, which reads what the
-    // store holds now and does not sync the cell. When the store holds no
+    // This reads the label with `cfcLabelViewForResolvedCell()`, which reads
+    // what the store holds now, following a link the path crosses part way
+    // through to the document that holds the value, and does not sync the
+    // cell or any document along its path. When the store holds no
     // label metadata for the cell, `cfcLabel` in the response is `undefined`.
     // That covers a document the store has not loaded as well as a cell with
     // no label. Keeping the cell current is the caller's job. A caller that
@@ -1961,7 +2127,9 @@ export class RuntimeProcessor {
     // each update then carries the label as read for that update. We redact
     // `Caveat.source` from the label for display.
     const totalStart = performance.now();
-    const cfcLabel = cfcLabelViewForCell(cell);
+    const cfcLabel = cfcLabelViewForResolvedCell(cell, {
+      kickCrossSpaceTargets: false,
+    });
     const response = {
       cfcLabel: cfcLabel === undefined
         ? undefined
@@ -3060,6 +3228,13 @@ export class RuntimeProcessor {
       case RequestType.SnapshotShareCancel:
         this.#snapshotShares.delete(clientScopedKey(client, request.id));
         return;
+      case RequestType.CustodySealPrepare:
+        return await this.handleCustodySealPrepare(request, client);
+      case RequestType.CustodySealCommit:
+        return await this.handleCustodySealCommit(request, client);
+      case RequestType.CustodySealCancel:
+        this.#custodySeals.delete(clientScopedKey(client, request.id));
+        return;
       case RequestType.OperationQuery:
         return await this.handleOperationQuery(request, client);
       case RequestType.OperationCapabilities:
@@ -3281,6 +3456,7 @@ export class RuntimeProcessor {
       renderConfidentialityCeiling: this.#renderConfidentialityCeiling,
       resolveRenderConfidentiality: this.#renderConfidentialityResolver,
       membershipProvider: this.#renderMembershipProvider,
+      modulePolicySource: this.#renderModulePolicySource,
       spaceAccess: renderSpaceAccessProviderFor(this.#runtime),
       onOps: (ops: VDomOp[]) => {
         const batchId = this.#vdomBatchIdCounter++;
@@ -3550,12 +3726,17 @@ export class RuntimeProcessor {
       identity,
       processor.#renderConfidentialityCeiling,
     );
+    processor.#renderModulePolicySource = renderModulePolicySourceFor(
+      runtime,
+      processor.#renderConfidentialityCeiling,
+    );
     processor.#renderConfidentialityResolver = renderConfidentialityResolverFor(
       runtime,
       identity,
       processor.#renderConfidentialityCeiling,
       space,
       processor.#renderMembershipProvider,
+      processor.#renderModulePolicySource,
     );
     processor.#intentOutcomeCancel = subscribeEventAttentionNotifications(
       runtime,

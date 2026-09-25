@@ -62,9 +62,9 @@ The package's `test` task in its `deno.jsonc` names what it runs, and
 prints each command line as it runs it, which shows where the flag was
 appended.
 
-A handful of packages run a test runner of their own — `packages/dashboard`
-and `packages/identity` among them — and appended arguments reach whatever that
-runner does with them, which its own source says.
+A package can run a test runner of its own, as `packages/identity` does, and
+appended arguments reach whatever that runner does with them, which its own
+source says.
 
 A test's name is also its identity in the run-record store, so a renamed test
 must be listed in `tasks/test-identity-aliases/` to keep its recorded
@@ -365,11 +365,12 @@ of plain `deno test` discovery, and once as the argument list handed to
 `deno-web-test`. Adding a browser test means naming the file and nothing
 further.
 
-The two matches need not sit on one task line. `packages/dashboard` spreads
-them across the runner script its test task starts and the `test-browser` task
-that runner then calls. What matters is that both are the same glob, so neither
-can fall behind the other. The package-level task remains the one command
-authors and the root workspace runner invoke, and it owns every step.
+The two matches sit on two task lines, `deno-test` and `browser-test`, which
+the package's `test` task runs in turn. What matters is that both are the same
+glob, so neither can fall behind the other. The test topology reads the second
+one to find the files the browser half runs. The package-level task remains the
+one command authors and the root workspace runner invoke, and it owns every
+step.
 
 The glob hands its files to `deno-web-test` in the order the shell expands
 them, which is alphabetical rather than the order anyone chose. Tests in one
@@ -523,6 +524,74 @@ overriding a true global default, or a true web override with the global default
 false. Restart the servers through the integration runner for each combination
 so the browser bundle is rebuilt with that environment.
 
+### The ON topology in one process
+
+A runtime on the ON arm commits the event a handler is fired with and nothing
+else; the handler runs on a serving loop beside the memory server. A test that
+hosts its own memory server and runs a client ON therefore needs that loop
+too. Without it the server admits the event and nothing ever delivers it, so
+a wait on the consequence never resolves and the test hangs rather than
+failing.
+
+`@commonfabric/runner/executor/serving-memory-server.deno` supplies the pair:
+a memory server over a fresh non-persistent store, with an `ExecutorHost`
+attached whose serving runtimes are built by the same factory toolshed uses.
+It comes in two shapes, by how the test's clients reach it:
+
+- `startServingMemoryServer({ apiUrl })` is reached in-process. Clients connect
+  with `EmulatedStorageManager.connectTo(serving.server, ...)`, and session
+  opens are authorized by the principal they name, as with
+  `newLoopbackServer()`.
+- `listenServingMemoryServer()` also listens on a localhost websocket at
+  `serving.url`, for a runtime built with the `remoteClient` preset — in the
+  test's realm, in a Deno Worker, or in a subprocess. It wraps
+  `StandaloneMemoryServer`, verifies signed session opens as toolshed does, and
+  takes the same `serve` option for the plain HTTP requests that address
+  receives. Its serving runtimes compile against `serving.url` unless given an
+  `apiUrl`.
+
+Both return a handle that `await using` closes, serving loop first. The host
+keeps the process's ambient server-execution flag on while it lives, so a
+runtime in the same realm that asks for the OFF arm runs ON beside it. The
+serving loop's own options pass through: `policy`, the `on*` diagnostic hooks,
+and `ensureSpaceRoots`, which defaults to `false` here, the switch the serving
+loop keeps for tests. `prepareStorageManager` hands the test each serving
+runtime's storage manager before the runtime is built, which is where a stub on
+one of its providers goes.
+
+```ts
+// Shown at module scope.
+import { Identity } from "@commonfabric/identity";
+import { Runtime } from "@commonfabric/runner";
+import { startServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
+import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+
+const alice = await Identity.fromPassphrase("alice");
+await using serving = await startServingMemoryServer({
+  apiUrl: new URL(import.meta.url),
+});
+const storageManager = EmulatedStorageManager.connectTo(serving.server, {
+  as: alice,
+});
+const runtime = new Runtime({
+  apiUrl: new URL(import.meta.url),
+  storageManager,
+  experimental: { serverExecution: true },
+});
+```
+
+`serving.idle()` covers the memory server and not the loop: it says the server
+has applied what it received, while a served consequence may still be in a
+wave. Wait for the consequence itself, the way any other test waits for a
+value.
+
+A test that should follow whichever posture a run resolves, rather than fixing
+one, resolves it as a deployed entry point does — the explicit
+`EXPERIMENTAL_SERVER_EXECUTION`, else `SERVER_EXECUTION_DEFAULT_ENABLED` — and
+starts a serving server for ON and a plain one for OFF. The pattern
+`MultiRuntimeHarness` and `packages/cli/test/agent-connections.serial.test.ts`
+do this, so each runs on whichever arm the CI role selects.
+
 ### Tests that start Deno
 
 For deliberate import-map and lockfile changes, follow the
@@ -564,7 +633,7 @@ a path holding a space one argument:
 ```
 
 A test launched from a script can read `Deno.execPath()` directly, as
-`packages/dashboard/test/runner.ts` does with `--allow-run=${Deno.execPath()},git`.
+`tasks/run-member-tests.test.ts` does with `--allow-run=${deno}`.
 
 That a task's `deno` is the running one rather than one found on `PATH` is what
 makes the computed form name the right binary, so
@@ -577,6 +646,19 @@ carries the recording variables, `CF_TEST_SKIP_LIST` among them. A test that
 starts a child naming its own tests names those variables too, and
 [test-records.md](test-records.md#covering-a-new-test-surface) says which and
 what to set them to.
+
+The inherited environment includes `DENO_COVERAGE_DIR`, so under coverage a
+child Deno writes coverage profiles of its own as it exits. A signal that
+reaches a child while it is exiting either loses its profiles or leaves one
+truncated, and one truncated profile makes `deno coverage` refuse every profile
+in the job, which then reports no coverage at all. So a test whose child is
+done, or is waiting only on input the test controls, ends it by closing that
+input and then awaits its `status` rather than sending it a signal. A test
+whose subject is a child killed while it runs is not in that position: the
+kill loses that child's coverage, but it cannot truncate a profile. `packages/memory/test/inbox-store.test.ts`
+ends its writer processes by closing their input, and
+`packages/memory/test/inbox-store-child-coverage.test.ts` fails when any of them
+loses its profile.
 
 ### Test Structure
 

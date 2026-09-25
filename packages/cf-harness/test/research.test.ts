@@ -12,7 +12,10 @@ import {
   type HarnessDocsCorpusSection,
   operatorProvisionedReferenceAtom,
 } from "../src/contracts/docs-corpus.ts";
-import type { HarnessResearchRunSummary } from "../src/contracts/research.ts";
+import {
+  HARNESS_RESEARCH_HANDLE_TYPE,
+  type HarnessResearchHandleValue,
+} from "../src/contracts/research.ts";
 import type {
   HarnessModelClient,
   HarnessModelTurnRequest,
@@ -895,6 +898,61 @@ describe("research", () => {
       expect(reply.kit.summary).toBe("Original malformed-repair candidate");
       expect(reply.kit.sources).toEqual([]);
       expect(reply.kit.missing.some((item) => item.includes("was not read")))
+        .toBe(true);
+    });
+  });
+
+  describe("reasoning effort", () => {
+    /** A read, a final answer citing a source it did not read, then a repair. */
+    const readThenRepair = () =>
+      new ScriptedModelClient([
+        () =>
+          assistant("", [{
+            id: "read",
+            name: "open_doc_section",
+            input: { sectionId: "section-0" },
+          }]),
+        (request) => {
+          const sourceId = String(
+            toolOutputs(request, "open_doc_section")[0].sourceId,
+          );
+          return finalResult({
+            status: "complete",
+            rules: [{
+              rule: "Use the documented pattern contract.",
+              sourceIds: [`${sourceId}-wrong`],
+            }],
+            sourceIds: [`${sourceId}-wrong`],
+            missing: [],
+          });
+        },
+        () => assistant("not repair JSON"),
+      ]);
+    const corpus = corpusWith([{
+      path: "docs/api.md",
+      heading: "Pattern contract",
+      text: "Use the exact documented pattern contract.",
+    }]);
+
+    it("sends the configured effort on every research call, the citation repair included", async () => {
+      const model = readThenRepair();
+      await createResearchRunner({
+        modelClient: model,
+        reasoningEffort: "high",
+      })(
+        requestFor({ corpus }),
+      );
+      expect(model.requests.map((request) => request.reasoningEffort))
+        .toEqual(["high", "high", "high"]);
+    });
+
+    it("names no effort when none is configured", async () => {
+      const model = readThenRepair();
+      await createResearchRunner({ modelClient: model })(
+        requestFor({ corpus }),
+      );
+      expect(model.requests).toHaveLength(3);
+      expect(model.requests.every((request) => !("reasoningEffort" in request)))
         .toBe(true);
     });
   });
@@ -1975,7 +2033,7 @@ describe("research", () => {
       });
     });
 
-    it("carries exact reads when final JSON is malformed", async () => {
+    it("carries exact reads when final JSON stays malformed after its re-ask", async () => {
       const corpus = corpusWith([{
         path: "docs/api.md",
         heading: "Contract",
@@ -1989,6 +2047,7 @@ describe("research", () => {
             input: { sectionId: "section-0" },
           }]),
         () => assistant("not json"),
+        () => assistant("still not json"),
       ]);
 
       let failure: HarnessResearchError | undefined;
@@ -2007,6 +2066,11 @@ describe("research", () => {
       expect(failure.name).toBe("HarnessResearchError");
       expect(Object.keys(failure)).toEqual([]);
       expect(failure?.message).toContain("not valid JSON");
+      expect(model.requests).toHaveLength(3);
+      expect(model.requests[2].tools).toEqual([]);
+      expect(model.requests[2].transcript.at(-1)?.content).toContain(
+        "JSON repair turn",
+      );
       expect(failure?.record.sourceReads).toHaveLength(1);
       expect(
         failure?.record.messages.filter((message) => message.role === "tool"),
@@ -2380,18 +2444,17 @@ describe("research", () => {
       });
     });
 
-    it("includes prior kits in a focused follow-up prompt", async () => {
+    it("folds a prior research handle's findings and label into a follow-up", async () => {
       const priorSecret = cfcAtom.resource("PriorResearchSecret", "prior");
-      const prior = {
-        type: "cf-harness.research-run" as const,
+      const prior: HarnessResearchHandleValue = {
+        type: HARNESS_RESEARCH_HANDLE_TYPE,
         researchRunId: "prior-research",
-        outputId: "prior-output",
         kit: {
-          status: "incomplete" as const,
+          status: "incomplete",
           task: "Initial task",
           summary: "Need the mail grant.",
           recommendation: {
-            kind: "author" as const,
+            kind: "author",
             rationale: "No reusable pattern was found.",
           },
           inputs: [],
@@ -2405,98 +2468,35 @@ describe("research", () => {
         confirmedPatterns: [],
         describedHandles: [],
         cfc: {
-          version: 1 as const,
+          version: 1,
           sourceLabel: { confidentiality: [priorSecret] },
           outputLabel: { confidentiality: [priorSecret] },
-          coverage: "incomplete" as const,
+          coverage: "incomplete",
           missingLabels: [{
-            source: "pattern-index-source" as const,
+            source: "pattern-index-source",
             detail: "pattern prior source returned by inspect_pattern",
           }],
         },
-        completedAt: "2026-09-14T00:00:00.000Z",
-      } satisfies HarnessResearchRunSummary;
+      };
       const model = new ScriptedModelClient([() => finalResult()]);
 
       const reply = await createResearchRunner({ modelClient: model })(
         requestFor({
           task: "Follow up after receiving mail.",
-          priorResearchRuns: [prior],
+          followUpTo: "cfh:v:prior",
+          priorResearch: prior,
         }),
       );
 
       const user = model.requests[0].transcript.find((message) =>
         message.role === "user"
       );
-      const system = model.requests[0].transcript.find((message) =>
-        message.role === "system"
-      );
+      expect(user?.content).toContain("Prior research carried in by handle");
       expect(user?.content).toContain("prior-research");
       expect(user?.content).toContain("mail grant");
-      expect(user?.content).toContain("not citations for this fresh research");
-      expect(user?.content).toContain("section-N");
-      expect(system?.content).toContain(
-        "outputId returned by describe_handle records binding provenance only",
-      );
-      expect(system?.content).toContain(
-        "Only an exact value returned in a field named sourceId",
-      );
+      expect(user?.content).not.toContain("reopen every source");
+      expect(reply.record.followUpTo).toBe("cfh:v:prior");
       expect(reply.record.cfc).toEqual(prior.cfc);
-    });
-
-    it("records missing CFC coverage for a legacy prior kit", async () => {
-      const legacyPrior = {
-        type: "cf-harness.research-run" as const,
-        researchRunId: "legacy-prior-research",
-        outputId: "legacy-prior-output",
-        kit: {
-          status: "incomplete" as const,
-          task: "Initial task",
-          summary: "Use the previously researched checklist rules.",
-          recommendation: {
-            kind: "author" as const,
-            rationale: "A small authored composition remains appropriate.",
-          },
-          inputs: [],
-          patterns: [],
-          steps: [],
-          rules: [{
-            rule: "Preserve the researched checklist behavior.",
-            sourceIds: [],
-          }],
-          verification: [],
-          sources: [],
-          missing: ["exact composition"],
-        },
-        confirmedPatterns: [],
-        describedHandles: [],
-        completedAt: "2026-09-13T00:00:00.000Z",
-      } satisfies HarnessResearchRunSummary;
-      const model = new ScriptedModelClient([() => finalResult()]);
-
-      const reply = await createResearchRunner({ modelClient: model })(
-        requestFor({ priorResearchRuns: [legacyPrior] }),
-      );
-
-      const user = model.requests[0].transcript.find((message) =>
-        message.role === "user"
-      );
-      expect(user?.content).toContain("legacy-prior-research");
-      expect(user?.content).toContain(
-        "Preserve the researched checklist behavior.",
-      );
-      expect(reply.kit.status).toBe("incomplete");
-      expect(reply.record.cfc).toEqual({
-        version: 1,
-        sourceLabel: {},
-        outputLabel: {},
-        coverage: "incomplete",
-        missingLabels: [{
-          source: "prior-research",
-          detail:
-            "prior research run legacy-prior-research summary did not retain CFC metadata",
-        }],
-      });
     });
   });
 });

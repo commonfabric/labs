@@ -90,6 +90,25 @@ function trackForCircularity(
  * Cyclic values are not supported: a deep clone (the default) throws on a
  * detected cycle.
  *
+ * **Type Validation Note:** The argument must honor the whole `FabricValue`
+ * contract, which says more than its type does, and what this does with a
+ * value that does not is best-effort. The one refusal made comes free with
+ * the dispatch on each value's tag: a value the dispatch does not recognize as
+ * a kind of `FabricValue`, such as a class instance or a null-prototype
+ * object, throws. The rest are not made, because each would cost a probe or a
+ * look at every property of every value copied:
+ *
+ * * An own `__proto__` property, a name this runtime reserves (see
+ *   `unsafeObjectKeyIn()`). The copy is built by assignment, which reaches the
+ *   prototype's accessor rather than making a property, so a browser drops the
+ *   property and, when its value is an object, repoints the copy's prototype.
+ * * A record's accessor, whose getter the copy runs, keeping the value it
+ *   returns; and its non-enumerable keys, which the copy drops. A deep copy
+ *   drops its symbol keys too, where a shallow one keeps them.
+ * * An array's prototype and non-index properties: the copy is a direct
+ *   `Array` of the indices alone.
+ * * A `FabricInstance`, which is trusted to clone itself.
+ *
  * @param value - An already-valid `FabricValue`.
  * @param options - See `CloneOptions`. Defaults to
  *   `{ frozen: true, deep: true }`.
@@ -151,6 +170,9 @@ export function cloneIfNecessary<T extends FabricValue>(
  * persistent-structure spine thaw used in patch application) should reach for
  * `cloneForMutation()` instead.
  *
+ * **Type Validation Note:** This is built on `cloneIfNecessary()`, so the same
+ * contract holds and the same checks are not made; see that function's note.
+ *
  * @param value - An already-valid `FabricValue`.
  */
 export function shallowMutableClone<T extends FabricValue>(
@@ -186,6 +208,10 @@ export function shallowMutableClone<T extends FabricValue>(
  * -- and deliberately not re-exported from `index.ts`. Its five positional
  * parameters are the internal shape the named clone functions above are the
  * public spelling of; an outside caller wants one of those.
+ *
+ * **Type Validation Note:** This is the machinery behind `cloneIfNecessary()`,
+ * so the same contract holds and the same checks are not made; see that
+ * function's note.
  */
 export function cloneHelper(
   value: FabricValue,
@@ -259,11 +285,6 @@ export function cloneHelper(
       if (canReturnAsIs(value)) return value;
       const obj = value as object;
       if (deep) seen = trackForCircularity(obj, seen);
-      // A clone is built in the shape a `FabricPlainObject` has, the same way
-      // the array case above builds a fresh `Array`. Valid input is already
-      // `Object.prototype`-rooted, so this changes nothing for it; input that
-      // reached here carrying some other prototype leaves canonical rather than
-      // propagating a shape no `FabricValue` has.
       const copy = {} as Record<string, FabricValue>;
       if (deep) {
         for (const [key, val] of Object.entries(obj)) {
@@ -506,6 +527,16 @@ export interface CloneForMutationResult<T extends FabricValue> {
  * the spine surfaced by the underlying `cloneIfNecessary` machinery)
  * propagate as plain `Error`s.
  *
+ * **Type Validation Note:** `value` must honor the whole `FabricValue`
+ * contract, which says more than its type does, and what this does with one
+ * that does not is best-effort. The containers along the path are copied by
+ * `cloneIfNecessary()`, so the checks that function does not make are not
+ * made here either; see its note. Nor is `path` checked for a name this
+ * runtime reserves, a check left, like the one on records, to the boundaries
+ * where values enter or leave storage. With `createMissing`, a segment naming
+ * `__proto__` is written through the prototype's accessor rather than as a
+ * key, and what that does depends on the host.
+ *
  * @param value - The input value tree.
  * @param path - Path to the container to expose as mutable.
  * @param options - See `CloneForMutationOptions`.
@@ -715,6 +746,16 @@ const hasChildAt = (
  * `FabricInstance` there is a container but not one a key addresses, so it is
  * refused rather than given an own property. Cyclic values are not yet
  * supported (see `cloneIfNecessary`).
+ *
+ * **Type Validation Note:** `root` and `value` must honor the whole
+ * `FabricValue` contract, which says more than their types do, and what this
+ * does with either when it does not is best-effort. The containers along the
+ * path, and `value` itself, are copied by `cloneIfNecessary()`, so the checks
+ * that function does not make are not made here either; see its note. Nor is
+ * `path` checked for a name this runtime reserves, a check left, like the one
+ * on records, to the boundaries where values enter or leave storage. A
+ * segment naming `__proto__` is written through the prototype's accessor
+ * rather than as a key, and what that does depends on the host.
  */
 export function cloneWithValueAtPath(
   root: FabricValue,
@@ -764,6 +805,17 @@ export function cloneWithValueAtPath(
  * deep-frozen). A `root` of `undefined` or empty `path` returns `undefined`
  * (whole-value removal). Cyclic values are not yet supported (see
  * `cloneIfNecessary`).
+ *
+ * **Type Validation Note:** `root` must honor the whole `FabricValue`
+ * contract, which says more than its type does, and what this does with one
+ * that does not is best-effort. The containers along the path are copied by
+ * `cloneIfNecessary()`, so the checks that function does not make are not
+ * made here either; see its note. Nor is `path` checked for a name this
+ * runtime reserves, a check left, like the one on records, to the boundaries
+ * where values enter or leave storage. A segment naming `__proto__` short of
+ * the last is read through the prototype's accessor rather than as a key, and
+ * what that does depends on the host: a browser's accessor hands back the
+ * prototype, and the walk goes on into it.
  */
 export function cloneWithoutValueAtPath(
   root: FabricValue,

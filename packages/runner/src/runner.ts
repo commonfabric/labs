@@ -37,6 +37,7 @@ import {
 } from "@commonfabric/utils/types";
 
 import { isAliasBinding } from "./alias-binding.ts";
+import { runInFrameContext } from "./builder/frame-context.ts";
 import {
   patternFromFrame,
   popFrame,
@@ -64,12 +65,23 @@ import {
   useCancelGroup,
   useDeferredCancelOwnership,
 } from "./cancel.ts";
-import { type Cell, createCell, isCell, syncCellForIdentity } from "./cell.ts";
+import {
+  type Cell,
+  createCell,
+  isCell,
+  schemaCellScope,
+  syncCellForIdentity,
+} from "./cell.ts";
 import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
 import { recordNewProtectedDefaults } from "./cfc/default-initialization.ts";
+import { CFC_POLICY_MANIFEST_ID_PREFIX } from "./cfc/policy.ts";
+import {
+  recordReferencedArgumentFields,
+  recordReplayedArgumentSlots,
+} from "./cfc/reference-initialization.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
 import type { EntityKind } from "./entity-kind.ts";
@@ -228,7 +240,7 @@ import {
   setRunnableName,
 } from "./runner-utils.ts";
 import { normalizeSandboxResult } from "./sandbox/result-normalization.ts";
-import { isCellScope, narrowestScope } from "./scope.ts";
+import { narrowestScope } from "./scope.ts";
 import { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 import {
@@ -275,6 +287,37 @@ const RESULT_SHORTCUT_LIMIT = 4096;
  * held for it is diagnosable.
  */
 const NAMING_PROBE_BUDGET = 256;
+
+/**
+ * How many times a named piece's run starts again after its start transaction
+ * is refused retryably, matching the bound `Runtime.editWithRetry()` puts on
+ * any other retrying writer. Each attempt waits for the refusal's catch-up
+ * first, so the bound caps a basis that keeps moving rather than a spin.
+ */
+const PIECE_RUN_START_MAX_RETRIES = 5;
+
+/**
+ * Whether a commit refusal names a module-policy manifest document among the
+ * documents whose basis moved: a stale-read conflict listing one, or a local
+ * inconsistency at one. A manifest is content-addressed and never rewritten,
+ * so such a refusal is the transaction's own install meeting a manifest
+ * another participant installed first, and once the replica has caught up
+ * the install reads it as present and writes nothing.
+ */
+const refusalNamesPolicyManifest = (error: CommitError): boolean => {
+  const named = (id: unknown) =>
+    typeof id === "string" && id.startsWith(CFC_POLICY_MANIFEST_ID_PREFIX);
+  if (isStorageTransactionInconsistent(error)) {
+    return named((error as { address?: { id?: unknown } }).address?.id);
+  }
+  if (!isStaleReadConflict(error)) return false;
+  const { conflict, conflicts } = error as {
+    conflict?: { of?: unknown };
+    conflicts?: readonly { of?: unknown }[];
+  };
+  return named(conflict?.of) ||
+    (conflicts ?? []).some((entry) => named(entry?.of));
+};
 
 type InternalCellDescriptor = {
   partialCause: JSONValue;
@@ -399,14 +442,6 @@ function schedulerActionInstanceKey(parts: {
     reads: (parts.reads ?? []).map(schedulerActionLinkIdentity),
     writes: (parts.writes ?? []).map(schedulerActionLinkIdentity),
   }).hashString.slice(0, 12);
-}
-
-function schemaCellScope(
-  schema: JSONSchema | undefined,
-): CellScope | undefined {
-  if (!isObjectNotArray(schema)) return undefined;
-  schema = resolveExternalRootRefForStructure(schema);
-  return isCellScope(schema.scope) ? schema.scope : undefined;
 }
 
 function patternDefaultScope(pattern: Pattern): CellScope | undefined {
@@ -1178,6 +1213,9 @@ type SetupValidationOptions = {
   /** Proposed module authority owned by this source transition. */
   sourceUpdate?: PreparedSourceUpdate;
 
+  /** See `RunnerRunOptions.referencedArgumentFields`. */
+  referencedArgumentFields?: readonly string[];
+
   /** Optional invariant over the argument stored before setup changes it. */
   validateCurrentArgument?: (argumentCell: Cell<unknown>) => void;
 
@@ -1516,6 +1554,12 @@ type RunnerRunOptions = {
   // instance) run supply resolves a nested piece's demanded instances
   // through the OUTER piece a client watches.
   parentPieceRootId?: string;
+  // Argument fields a collection builtin fills with a link to a cell that
+  // exists already: a list's entry, the list itself. Each one whose staged
+  // value is such a link is recorded as a protected initialization
+  // (docs/specs/cfc-protected-initialization.md), so handing a new piece a
+  // reference to an owner-protected cell does not pass for modifying it.
+  referencedArgumentFields?: readonly string[];
   // The source origin a piece brought into being by this run records with its
   // creation revision. A run that finds the piece already there leaves both
   // alone: what a piece records after it exists is decided by a source
@@ -2874,6 +2918,7 @@ export class Runner {
     pattern: Pattern,
     patternRef: { identity: string; symbol: string },
     setupState: SetupStateReuse,
+    referencedArgumentFields: readonly string[] = [],
   ): SetupResult<R> | undefined {
     const key = this.#getDocKey(resultCell);
     if (!this.#cancels.has(key)) return undefined;
@@ -2931,6 +2976,11 @@ export class Runner {
         nextArgument,
         pattern.argumentSchema,
         supplied,
+      );
+      recordReferencedArgumentFields(
+        tx,
+        argumentLink,
+        referencedArgumentFields,
       );
       return { resultCell, patternRef, needsStart: false };
     }
@@ -3124,6 +3174,7 @@ export class Runner {
     const stored = this.#runtime
       .getCellFromLink(argumentLink, undefined, tx)
       .getRaw({ meta: ignoreReadForScheduling });
+    recordReplayedArgumentSlots(tx, argumentLink, argument, stored);
     return foldStoredArgumentSlots(argument, stored);
   }
 
@@ -3138,6 +3189,7 @@ export class Runner {
     setupState: SetupStateReuse,
     argument: T,
     resultCell: Cell<R>,
+    referencedArgumentFields: readonly string[] = [],
   ): void {
     // Every write below fills a store this piece owns — the argument
     // document, each internal document the result projects to, and the result
@@ -3301,6 +3353,13 @@ export class Runner {
         nextArgument,
         pattern.argumentSchema,
         suppliedProjection ?? nextArgument,
+      );
+    }
+    if (nextArgument !== undefined) {
+      recordReferencedArgumentFields(
+        tx,
+        argumentLink,
+        referencedArgumentFields,
       );
     }
 
@@ -3642,6 +3701,7 @@ export class Runner {
       pattern,
       entryRef,
       setupState,
+      validationOptions.referencedArgumentFields,
     );
     if (runningSetup) {
       return runningSetup;
@@ -3663,6 +3723,7 @@ export class Runner {
       setupState,
       argument,
       resultCell,
+      validationOptions.referencedArgumentFields,
     );
 
     if (validationOptions.validateArgumentLinks !== undefined) {
@@ -6318,6 +6379,7 @@ export class Runner {
     );
     const work = (async () => {
       let toName = named;
+      let retriesLeft = PIECE_RUN_START_MAX_RETRIES;
       for (;;) {
         await this.#nameFamilyBeforeRun(resultCell, toName, argument);
         if (ownership.isCancelled()) return;
@@ -6393,6 +6455,20 @@ export class Runner {
         ) {
           return;
         }
+        const retry = retriesLeft > 0
+          ? await this.#retryPieceRunStart(
+            error,
+            resultCell,
+            startLifecycleEpoch,
+            ownership,
+            started.installedCancel,
+          )
+          : "terminal";
+        if (retry === "retry") {
+          retriesLeft--;
+          continue;
+        }
+        if (retry === "settled") return;
         ownership.cancel();
         this.#reportPieceStartCommitFailure(actionId, error);
         return;
@@ -6400,6 +6476,75 @@ export class Runner {
     })();
     this.#runtime.scheduler.trackBackgroundTask(work);
     return ownership.cancel;
+  }
+
+  /**
+   * Prepares a named piece's run for another attempt after its start
+   * transaction was refused over a policy manifest another participant
+   * installed first. Resolves `"retry"` when the caller should run it again,
+   * `"terminal"` when the caller's failure arm should run as it does for any
+   * other refusal, and `"settled"` when the start was stopped or the runtime
+   * torn down during the wait, so there is nothing left to report.
+   *
+   * The run is this participant's own setup of a piece set up elsewhere, and
+   * when its argument carries a PolicyOf label that setup installs the policy
+   * manifest, which a replica that never loaded it reads as absent. In a
+   * shared space that absence is ordinarily stale, and the refusal names the
+   * manifest ({@link refusalNamesPolicyManifest}). Only a fresh transaction
+   * lands the setup, so this is the retry `Runtime.editWithRetry()` gives any
+   * other retrying writer: wait for the refusal's catch-up, then prepare the
+   * run from the start, where the install reads the manifest as present.
+   * Every other refusal stays terminal, a stale read over the piece's own
+   * documents included: whether a re-commit converges against a serving
+   * side's derived writes is a different question, which
+   * `#catchUpAndStartOnStaleRead()` answers by committing nothing.
+   *
+   * The refused install is torn down only while it is still the key's current
+   * registration, and the ownership token goes back to pending for the wait,
+   * so a stop or a release during it cancels the retry the way it cancels a
+   * pending first attempt. An attempt that installed nothing is terminal, as
+   * is one whose key another start took during the wait: in both the key's
+   * registration is not this attempt's to replace.
+   */
+  async #retryPieceRunStart<T>(
+    error: CommitError,
+    resultCell: Cell<T>,
+    scheduledLifecycleEpoch: number,
+    ownership: DeferredCancelOwnership,
+    installedRegistration: Cancel | undefined,
+  ): Promise<"retry" | "terminal" | "settled"> {
+    // A stop, a release, or `stopAll()` since the install removed it from
+    // the registry, so the registration check also covers a canceled token
+    // and a newer lifecycle epoch.
+    const key = this.#getDocKey(resultCell);
+    if (
+      !refusalNamesPolicyManifest(error) ||
+      installedRegistration === undefined ||
+      this.#cancels.get(key) !== installedRegistration
+    ) {
+      return "terminal";
+    }
+    this.stop(resultCell);
+    ownership.markInstalled(undefined);
+    this.#registerPendingDeferredStart(key, ownership);
+    logger.info(
+      "piece-start-commit-retrying",
+      "piece-run start lost a policy manifest install to another " +
+        "participant; running it again once storage has caught up",
+      resultCell.getAsNormalizedFullLink().id,
+      error,
+    );
+    const teardown = this.#runtime.writeTeardownSignal;
+    await this.#runtime.awaitCommitRetryReadiness(error, teardown);
+    if (
+      ownership.isCancelled() || teardown.aborted ||
+      scheduledLifecycleEpoch !== this.#lifecycleEpoch
+    ) {
+      ownership.cancel();
+      return "settled";
+    }
+    if (this.#cancels.has(key)) return "terminal";
+    return "retry";
   }
 
   /**
@@ -6439,7 +6584,10 @@ export class Runner {
    *
    * ON-ONLY: under OFF a stale confirmed read on a deferred start means another
    * CLIENT raced, and the cross-tab mutex semantics own that story — the OFF
-   * arm stays terminal.
+   * arm of a commit-gated start stays terminal. A named piece's run refused
+   * over a policy manifest another participant installed first is not that
+   * story either: `#retryPieceRunStart()` runs it again in a fresh
+   * transaction, under either arm, when this recovery declines.
    *
    * WHAT stays terminal. Only the engine's stale-read family recovers —
    * `stale confirmed read` and its `stale pending read` sibling
@@ -6958,12 +7106,15 @@ export class Runner {
       patternOrModule,
       argument,
       resultCell,
-      creatingPiece
-        ? {
-          initializePieceSourceHistory: true,
-          initialPieceSourceOrigin: options.sourceOrigin,
-        }
-        : {},
+      {
+        referencedArgumentFields: options.referencedArgumentFields,
+        ...(creatingPiece
+          ? {
+            initializePieceSourceHistory: true,
+            initialPieceSourceOrigin: options.sourceOrigin,
+          }
+          : {}),
+      },
     );
 
     let installedCancel: Cancel | undefined;
@@ -10283,8 +10434,14 @@ export class Runner {
     // line of defense rather than the first: `normalizeSandboxResult` runs on
     // every route here and already rejects a bare function at any depth, with
     // a better message than a hash could give.
+    //
+    // The walk types its result as a `FabricExecValue`, which admits a
+    // function; the cast says there is none left. The only functions in a
+    // pattern graph are builder artifacts, since `normalizeSandboxResult`
+    // refuses any other, and the walk replaces every artifact with its
+    // encodable form. The leaves were converted on the way out of the sandbox.
     const resultPatternKey = hashStringOf(
-      flattenBuilderArtifacts(resultPattern),
+      flattenBuilderArtifacts(resultPattern) as FabricValue,
     );
     // Keyed doc-then-INSTANCE, the instance being the SAME per-run resolved key
     // that selected the byScope cell above: a doc-level or
@@ -10383,7 +10540,12 @@ export class Runner {
     const handlerResultCell = schedulerRehydration.viewLocalOnly
       ? resultCell.withTx()
       : resultCell;
-    const handler = (tx: IExtendedStorageTransaction, event: any) => {
+    // Each run gets a frame context of its own, so its frame, which stays
+    // pushed until an async result settles, is invisible to anything that runs
+    // while it awaits.
+    const handler = (tx: IExtendedStorageTransaction, event: any) =>
+      runInFrameContext(() => runHandler(tx, event));
+    const runHandler = (tx: IExtendedStorageTransaction, event: any) => {
       const resultCell = schedulerRehydration.viewLocalOnly
         ? handlerResultCell.withTx(tx)
         : handlerResultCell;
@@ -10723,7 +10885,10 @@ export class Runner {
       : resultCell;
     const action: Action & {
       ignoredSchedulingWrites?: NormalizedFullLink[];
-    } = (tx: IExtendedStorageTransaction) => {
+    } = (tx: IExtendedStorageTransaction) =>
+      // A frame context of its own, as for a handler.
+      runInFrameContext(() => runAction(tx));
+    const runAction = (tx: IExtendedStorageTransaction) => {
       const resultCell = schedulerRehydration.viewLocalOnly
         ? actionResultCell.withTx(tx)
         : actionResultCell;
@@ -11197,9 +11362,9 @@ export class Runner {
     // — no serializable body, so nothing could ever rehydrate them. The
     // transformer hoists every authored builder call to module scope; the
     // window makes a mint that slipped through fail loudly at creation time
-    // (see builder/action-context.ts) instead of producing an unrehydratable
-    // value. The window rides AsyncLocalStorage, so an async action's
-    // continuations stay covered past its awaits.
+    // (see builder/frame-context.ts) instead of producing an unrehydratable
+    // value. The window is kept on the action's frame context, so an async
+    // action's continuations stay covered past its awaits.
     return runInActionExecution(invoke);
   }
 

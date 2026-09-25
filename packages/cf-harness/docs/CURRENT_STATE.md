@@ -78,9 +78,10 @@ The current package provides:
 - workspace, Fabric, and explicit host mounts with path containment;
 - sandboxed shell, file, image, web-fetch, skills, edit/write, and delegation
   tools;
-- one child at a time through `default`, `browser`, `web_fetch`, `web_search`,
-  and `pattern-author` profiles, beside a bounded private `research` loop that
-  no delegation may name;
+- children through `default`, `browser`, `web_fetch`, `web_search`, and
+  `pattern-author` profiles, of which the ones a turn starts together run
+  together, beside a bounded private `research` loop that no delegation may
+  name;
 - Common Fabric implementation research over the operator-provisioned docs and
   skills corpus, published pattern metadata and complete multi-file source,
   dependencies, and safe handle shapes. Fresh CLI root tasks and interactive
@@ -131,18 +132,21 @@ The current package provides:
   transcript remain in the tool artifact; the caller receives the derived kit
   plus explicit incomplete-kit guidance. Partial evidence survives malformed
   output, provider failure, budget exhaustion, and cancellation, with private
-  usage and failure counts included in the parent record. Context selection
-  retains the latest orientation and two answers. Private follow-ups receive
-  selected findings and source locations without copying prior examples or
-  bindings. Interactive sessions persist that context, the original user goal,
-  and full CFC influence with completed history. Follow-ups retain that goal
-  alongside the current request; old bindings remain historical. An admitted kit
-  is minted as a research handle; a child receives findings only through a
-  research handle its brief names, with the entries that kit binds, and its
-  inherited CFC context retains the full parent influence either way. Local
-  authored-source artifacts record the research ids that shaped them.
-  `query_docs` is accepted only as a legacy CLI or persisted-policy alias and is
-  normalized without rewriting old transcript or run-state evidence;
+  usage and failure counts included in the parent record. A private follow-up
+  names one research handle and receives its findings without the recipe; the
+  handle's still-held bindings count as described and its sources as cited where
+  they read back with the same digest, a changed source being reported stale and
+  reopened under a new id. Interactive sessions persist that context, the
+  original user goal, and full CFC influence with completed history. Follow-ups
+  retain that goal alongside the current request; bindings from earlier tasks
+  remain historical, except those a follow-up's named handle carries in and this
+  run still holds. An admitted kit is minted as a research handle; a child
+  receives findings only through a research handle its brief names, with the
+  entries that kit binds, and its inherited CFC context retains the full parent
+  influence either way. Local authored-source artifacts record the research ids
+  that shaped them. `query_docs` is accepted only as a legacy CLI or
+  persisted-policy alias and is normalized without rewriting old transcript or
+  run-state evidence;
 - shared parent and opening-research guidance that distinguishes given inputs,
   discovery within the granted scope, and unavailable actions before asking or
   giving up. Private research identifies applicable space-search patterns for
@@ -608,7 +612,12 @@ mode.
   preflight for workflows that require them.
 - Package-default sandbox networking is a provisional bridge-oriented posture,
   not the final destination policy model. Product adapters may narrow it.
-- Delegation is serial: only one child runs at a time.
+- A turn's tool calls run in the order written, and a delegation does not hold
+  the calls after it, so the children one turn starts run together while its
+  other calls run in turn against the session's one working directory; a
+  `browser` delegation holds the calls after it, since browser children share
+  one page. Across turns nothing schedules, budgets, or cancels children, and a
+  child cannot delegate.
 - The retained-pattern preflight returns before Fabric access or compilation
   when it refuses a `run_pattern` request, so it persists nothing. A created
   piece persists in the configured space and joins its registered piece list

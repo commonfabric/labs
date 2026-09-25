@@ -172,6 +172,17 @@ If you break it, you are responsible for fixing it.
 admission lifetime. `maxUses` defaults to 1. Unsupported hosts return 404;
 clients must report that state without falling back to wildcard grants.
 
+It also lists `access`, the grants this host can issue: `READ`, `WRITE`, and
+`OWNER`. A response without `access` comes from a host that predates OWNER
+invitations; such a host refuses an OWNER `create` with `invalid-request`, so a
+client that wants OWNER reads the field before offering it and never falls back
+to a lesser grant. An OWNER invitation makes every identity that redeems it a
+full owner of the space, able to change the ACL and to issue, list, and revoke
+invitations. The access is fixed by the issuer's signed `create` body and held
+by the service; neither the join link nor the redemption request carries it.
+Redemption only raises access: an identity that already holds the invited access
+or more keeps what it has.
+
 All invitation operations are signed JSON POSTs under
 `/api/spaces/:space/invites/`: `create`, `redeem`, `list`, `revoke`, and
 `receipts`. They use the existing CF1 proof, binding method, authority, path,
@@ -188,6 +199,13 @@ service, including behind a reverse proxy. Forwarded headers cannot override it.
 Signed POST CORS permits the CF1 headers without cookies; deploy the service at
 a host reachable by the intended shell. Request logging records no bodies. Codes
 belong only in POST bodies and browser fragments, never URL queries.
+
+The server prints that origin as its configured first-party authority at
+startup, and a refused proof is logged at `warn` with the request path, its
+method, that authority, and the verification failure — enough to tell a
+misconfigured origin from a bad signature without recording the proof, the
+signature, or any code. The signed inbox routes under `/api/inbox/` take the
+same origin and log the same way.
 
 The reusable client is `SpaceInviteClient` from
 `@commonfabric/runner/space-invites`. The same export provides

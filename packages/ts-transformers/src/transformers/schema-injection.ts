@@ -35,9 +35,11 @@ import {
   namesValueBinding,
   type PreservedBindingType,
   reportUnknownReactiveType,
+  typeToTypeNodeWithRegistry,
 } from "../ast/type-building.ts";
 import {
   type CapabilityParamSummary,
+  type CrossStageState,
   type FunctionCapabilitySummary,
   HelpersOnlyTransformer,
   type SchemaHint,
@@ -63,6 +65,15 @@ import {
 type UiContractHint = NonNullable<SchemaHint["cfcUiContract"]>;
 type CellScope = "space" | "user" | "session";
 
+/**
+ * The scope each `commonfabric` scope wrapper declares, keyed by the wrapper's
+ * name. `cellScopeFromType()` reads it from a type's alias and falls back to
+ * the scope brand, which also covers a wrapper reached through an alias of the
+ * author's own. `typeNodeContainsScopeWrapper()` reads it from authored
+ * syntax, where only the spelling is available; a wrapper that spelling hides
+ * behind an alias is still carried by the inferred type, whose alias and brand
+ * schema generation reads.
+ */
 const SCOPE_ALIAS_TO_CELL_SCOPE: ReadonlyMap<string, CellScope | "any"> =
   new Map([
     ["PerSpace", "space"],
@@ -324,6 +335,7 @@ function applyCapabilitySummaryToArgument(
       factory,
       sourceFile,
       context?.state.typeRegistry,
+      context?.state,
     );
     if (context) {
       validateShrinkCoverage(
@@ -351,7 +363,12 @@ function applyCapabilitySummaryToArgument(
     // a name the emitting module does not import, the brand arm of an expanded
     // `Default` — so the node is registered with its type.
     const valueType = unwrapCellLikeType(argumentType, checker);
-    innerTypeNode = typeToSchemaTypeNode(valueType, checker, sourceFile);
+    innerTypeNode = typeToSchemaTypeNode(
+      valueType,
+      checker,
+      sourceFile,
+      context?.state,
+    );
     if (innerTypeNode && valueType) {
       context?.state.typeRegistry.set(innerTypeNode, valueType);
     }
@@ -425,6 +442,7 @@ function applyCapabilitySummaryToParameter(
       factory,
       sourceFile,
       context?.state.typeRegistry,
+      context?.state,
     );
     if (context) {
       validateShrinkCoverage(
@@ -527,7 +545,12 @@ function collectFunctionSchemaTypeNodes(
     );
     if (paramType && !isAnyOrUnknownType(paramType)) {
       argumentType = paramType; // Store for registry
-      argumentNode = typeToSchemaTypeNode(paramType, checker, sourceFile);
+      argumentNode = typeToSchemaTypeNode(
+        paramType,
+        checker,
+        sourceFile,
+        context?.state,
+      );
     }
     // If inference failed, leave argumentNode undefined - we'll use unknown below
   }
@@ -608,7 +631,12 @@ function collectFunctionSchemaTypeNodes(
     const returnType = inferReturnType(fn, signature, checker);
     if (returnType && !isUnresolvedSchemaType(returnType)) {
       resultType = returnType; // Store for registry
-      resultNode = typeToSchemaTypeNode(returnType, checker, sourceFile);
+      resultNode = typeToSchemaTypeNode(
+        returnType,
+        checker,
+        sourceFile,
+        context?.state,
+      );
     }
     // If inference failed, leave resultNode undefined - we'll use unknown below
   }
@@ -668,7 +696,11 @@ function collectFunctionSchemaTypeNodes(
     context &&
     unwrappedReturnExpr &&
     ts.isObjectLiteralExpression(unwrappedReturnExpr) &&
-    objectLiteralHasPreservedValueTypeNodes(unwrappedReturnExpr, checker)
+    objectLiteralHasPreservedValueTypeNodes(
+      unwrappedReturnExpr,
+      checker,
+      context.state,
+    )
   ) {
     const scopedResult = buildObjectLiteralReturnTypeNode(
       unwrappedReturnExpr,
@@ -731,6 +763,7 @@ function collectFunctionSchemaTypeNodes(
         argumentNode,
         argumentType ?? fallbackArgType,
         typeRegistry,
+        context?.state,
       );
       if (projectedResult?.result) {
         if (context) {
@@ -844,12 +877,20 @@ function typeToInjectableSchemaTypeNode(
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
+  typeRegistry: TypeRegistry | undefined,
+  state: CrossStageState | undefined,
 ): ts.TypeNode | undefined {
   if (!type) return undefined;
   if (isUnresolvedSchemaType(type)) {
     return createUnknownSchemaTypeNode(factory);
   }
-  return typeToSchemaTypeNode(type, checker, sourceFile);
+  // `printedFrom` retains the type behind the placeholder when the checker
+  // cannot print its expanded brands, so schema generation reads that type.
+  return typeToTypeNodeWithRegistry(
+    type,
+    { checker, factory, sourceFile, state },
+    typeRegistry,
+  );
 }
 
 function normalizeSchemaInjectionTypeNode(
@@ -894,6 +935,27 @@ function inferSchemaContextualType(
   checker: ts.TypeChecker,
 ): ts.Type | undefined {
   return checker.getContextualType(node) ?? inferContextualType(node, checker);
+}
+
+/**
+ * The `T` TypeScript inferred for a `wish()` call written without a type
+ * argument, when the call has a contextual type to infer it from.
+ *
+ * The schema `wish()` takes describes `T`, the resource the wish asks for; the
+ * runtime wraps it in the `WishState<T>` the call returns. The contextual type
+ * is that result, so it is not the schema's type: the inference that takes
+ * `T` out of it is the call's own, whatever wrapper or alias the result sits
+ * behind. A call with no contextual type gets no schema.
+ */
+function inferWishTypeArgument(
+  node: ts.CallExpression,
+  checker: ts.TypeChecker,
+): ts.Type | undefined {
+  if (!inferSchemaContextualType(node, checker)) return undefined;
+  const signature = checker.getResolvedSignature(node);
+  return signature
+    ? checker.getTypeArgumentsForResolvedSignature(signature)?.[0]
+    : undefined;
 }
 
 function scopedFactoryContextualScope(
@@ -1089,6 +1151,7 @@ function resolveInjectableSchemaType(
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
   typeRegistry: TypeRegistry | undefined,
+  state: CrossStageState | undefined,
   inferType: () => ts.Type | undefined,
 ): ResolvedInjectableSchemaType {
   if (explicitTypeNode) {
@@ -1110,6 +1173,8 @@ function resolveInjectableSchemaType(
       checker,
       sourceFile,
       factory,
+      typeRegistry,
+      state,
     ),
     type: inferredType,
     inferred: true,
@@ -1409,6 +1474,7 @@ function resolveDualSchemaBuilderTypes(
       options.fallbackArgumentType,
       checker,
       sourceFile,
+      context.state,
     );
     if (fallbackArgumentNode) {
       ({
@@ -1439,6 +1505,7 @@ function resolveDualSchemaBuilderTypes(
       options.fallbackArgumentType,
       checker,
       sourceFile,
+      context.state,
     );
     if (fallbackArgumentNode) {
       ({
@@ -1521,7 +1588,10 @@ function visitInjectedDualSchemaBuilderCall(
 
 function createRegisteredWidenedSchemaCall(
   type: ts.Type,
-  context: Pick<TransformationContext, "factory" | "cfHelpers" | "sourceFile">,
+  context: Pick<
+    TransformationContext,
+    "factory" | "cfHelpers" | "sourceFile" | "state"
+  >,
   checker: ts.TypeChecker,
   typeRegistry?: TypeRegistry,
 ): ts.CallExpression {
@@ -1529,6 +1599,7 @@ function createRegisteredWidenedSchemaCall(
     widenLiteralType(type, checker),
     checker,
     context.sourceFile,
+    context.state,
   ) ?? context.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
 
   const schemaCall = createSchemaCallWithRegistryTransfer(
@@ -1780,7 +1851,8 @@ function recoverProjectedResultSchema(
   sourceFile: ts.SourceFile,
   argumentNode: ts.TypeNode | undefined,
   argumentType: ts.Type | undefined,
-  typeRegistry?: TypeRegistry,
+  typeRegistry: TypeRegistry | undefined,
+  state: CrossStageState | undefined,
 ): { result?: ts.TypeNode; resultType?: ts.Type } | undefined {
   const propertyName = getDirectProjectionPropertyName(fn);
   if (!propertyName) {
@@ -1796,6 +1868,7 @@ function recoverProjectedResultSchema(
           propertyType,
           checker,
           sourceFile,
+          state,
         );
         if (propertyTypeNode) {
           typeRegistry?.set(propertyTypeNode, propertyType);
@@ -1963,9 +2036,14 @@ function buildObjectLiteralReturnTypeNode(
       return undefined;
     }
 
-    const explicit = getExplicitValueTypeNode(valueExpr, checker, typeRegistry);
+    const explicit = getExplicitValueTypeNode(
+      valueExpr,
+      checker,
+      typeRegistry,
+      context?.state,
+    );
     const valueTypeNode = explicit?.typeNode ??
-      typeToSchemaTypeNode(valueType, checker, sourceFile);
+      typeToSchemaTypeNode(valueType, checker, sourceFile, context?.state);
     if (!valueTypeNode) {
       return undefined;
     }
@@ -2001,6 +2079,7 @@ function getExplicitValueTypeNode(
   valueExpr: ts.Expression,
   checker: ts.TypeChecker,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  state?: CrossStageState,
 ): PreservedBindingType | undefined {
   const cellType = getConstructedCellTypeNode(valueExpr, checker, typeRegistry);
   if (cellType) return { typeNode: cellType };
@@ -2024,6 +2103,7 @@ function getExplicitValueTypeNode(
       declaration,
       checker,
       typeRegistry,
+      state,
     );
   }
   return undefined;
@@ -2032,6 +2112,7 @@ function getExplicitValueTypeNode(
 function objectLiteralHasPreservedValueTypeNodes(
   expr: ts.ObjectLiteralExpression,
   checker: ts.TypeChecker,
+  state: CrossStageState,
 ): boolean {
   for (const property of expr.properties) {
     if (
@@ -2044,7 +2125,12 @@ function objectLiteralHasPreservedValueTypeNodes(
     const valueExpr = ts.isPropertyAssignment(property)
       ? unwrapExpression(property.initializer)
       : property.name;
-    const explicit = getExplicitValueTypeNode(valueExpr, checker);
+    const explicit = getExplicitValueTypeNode(
+      valueExpr,
+      checker,
+      undefined,
+      state,
+    );
     // Inference can erase a scope wrapper or print a writer binding as a
     // structural function type. Authored syntax retains both declarations.
     if (
@@ -2328,6 +2414,7 @@ function inferParameterSchemaType(
   paramIndex: number,
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
+  state: CrossStageState | undefined,
 ): ts.TypeNode {
   const param = fn.parameters[paramIndex];
 
@@ -2349,7 +2436,12 @@ function inferParameterSchemaType(
       if (paramSymbol) {
         const paramType = checker.getTypeOfSymbol(paramSymbol);
         if (paramType && !isAnyOrUnknownType(paramType)) {
-          const typeNode = typeToSchemaTypeNode(paramType, checker, sourceFile);
+          const typeNode = typeToSchemaTypeNode(
+            paramType,
+            checker,
+            sourceFile,
+            state,
+          );
           if (typeNode) {
             return typeNode;
           }
@@ -3232,6 +3324,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
             sourceFile,
             factory,
             typeRegistry,
+            context.state,
             () => {
               const valueArg = args[0];
               if (valueArg) {
@@ -3505,6 +3598,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
               1, // second parameter
               checker,
               sourceFile,
+              context.state,
             );
             const stateParam = handlerFn.parameters[1];
             const stateTypeValue = stateParam
@@ -3956,6 +4050,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           sourceFile,
           factory,
           typeRegistry,
+          context.state,
           () => {
             const valueArg = args[0];
             if (valueArg) {
@@ -4031,6 +4126,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           sourceFile,
           factory,
           typeRegistry,
+          context.state,
           () => {
             const contextualType = inferSchemaContextualType(node, checker);
             return contextualType
@@ -4085,7 +4181,8 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           sourceFile,
           factory,
           typeRegistry,
-          () => inferSchemaContextualType(node, checker),
+          context.state,
+          () => inferWishTypeArgument(node, checker),
         );
 
         const schemaCall = createRegisteredSchemaCallFromResolvedType(
@@ -4133,6 +4230,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           sourceFile,
           factory,
           typeRegistry,
+          context.state,
           () => {
             const contextualType = inferSchemaContextualType(node, checker);
             const objectProp = contextualType?.getProperty("object");
@@ -4237,6 +4335,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           sourceFile,
           factory,
           typeRegistry,
+          context.state,
           () => undefined,
         );
         const schemaCall = createRegisteredSchemaCallFromResolvedType(
@@ -4332,6 +4431,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
               sourceFile,
               factory,
               typeRegistry,
+              context.state,
               () => undefined,
             );
             const schemaCall = createRegisteredSchemaCallFromResolvedType(

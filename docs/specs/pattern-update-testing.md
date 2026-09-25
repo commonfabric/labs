@@ -83,7 +83,9 @@ decides to ship is declared instead, in `tasks/pattern-compat-accepted-breaks.ts
   forgiving, so the list can only shrink. That audit is asked per pattern rather
   than of the whole list, because the CI job always sets `PATTERN_COMPAT_SHARD`
   — the shard that examined a pattern is the one that can judge its entries,
-  and the shards between them cover all of them.
+  and the shards between them cover all of them. An entry whose pattern file
+  no longer exists keeps that pattern among the ones the gate divides between
+  its runs, and the run given the pattern fails on the entry.
 
   Reaching for any of this is a decision to strand data on running pieces; a
   break that also strands state needs the Tier 2 entry below.
@@ -93,7 +95,9 @@ decides to ship is declared instead, in `tasks/pattern-compat-accepted-breaks.ts
   a pattern no longer exports one. Every piece tracking that path is pinned to
   its current pattern **forever**: the updater's identity probe fails and
   nothing surfaces on the piece. Restore the pattern, or delete its baseline
-  directory to record the retirement deliberately.
+  directory to record the retirement deliberately. A pattern whose file is
+  gone is still one of the patterns the gate divides between its runs, for as
+  long as its baselines remain, so `--only` names it as it would any other.
 - **`newly fails to evaluate`** — a pattern that cannot evaluate gets no
   contract, so no baseline, so no check, forever. Fix it, or add it to
   `tasks/pattern-compat-unevaluable.ts` with a reason. That allowlist can only

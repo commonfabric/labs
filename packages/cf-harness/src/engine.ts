@@ -136,11 +136,13 @@ import {
 import {
   cacheHarnessFabricSessionFactory,
   createHarnessFabricSessionFactory,
+  type HarnessFabricSession,
   type HarnessFabricSessionFactory,
 } from "./fabric-session.ts";
 import {
   assertValidHarnessHandleTable,
   createHarnessHandleTable,
+  mergeHarnessHandleTables,
   mintAddressHandle,
   mintReferentHandle,
 } from "./handle-table.ts";
@@ -416,6 +418,9 @@ export interface CreateHarnessEngineOptions
    */
   fabricSessionFactory?: HarnessFabricSessionFactory;
 
+  /** Receives the lazy session so its host can own the runtime's lifetime. */
+  onFabricSessionCreated?: (session: HarnessFabricSession) => void;
+
   /**
    * The posture record of the run whose fabric session `fabricSessionFactory`
    * hands this one — a delegating parent's, for the child that shares it.
@@ -637,6 +642,17 @@ export class CfHarnessEngine {
 
   #runState: HarnessRunState;
   #outputSequence: number;
+
+  /**
+   * The highest CFC invocation-context sequence handed out. Read beside the
+   * recorded contexts when the next is numbered, so two contexts prepared at
+   * once are numbered apart even though neither is recorded yet.
+   */
+  #lastCfcInvocationSequence = 0;
+
+  /** The last run-state write asked for, which the next one waits behind. */
+  #runStatePersistence: Promise<unknown> = Promise.resolve();
+
   readonly #now: () => string;
   readonly #fabricSessionFactory?: HarnessFabricSessionFactory;
   readonly #openProbeRuntime?: HarnessToolContext["openProbeRuntime"];
@@ -818,9 +834,14 @@ export class CfHarnessEngine {
       (this.config.fabricSession !== undefined
         ? createHarnessFabricSessionFactory(this.config.fabricSession)
         : undefined);
+    const onFabricSessionCreated = options.onFabricSessionCreated;
     this.#fabricSessionFactory = fabricSessionFactory === undefined
       ? undefined
-      : cacheHarnessFabricSessionFactory(fabricSessionFactory);
+      : cacheHarnessFabricSessionFactory(async () => {
+        const session = await fabricSessionFactory();
+        onFabricSessionCreated?.(session);
+        return session;
+      });
     // The index client loads the fabric identity from disk to sign with, so
     // it is built lazily and cached for the run on the same terms.
     const patternIndexClientFactory = options.patternIndexClientFactory ??
@@ -1588,15 +1609,27 @@ export class CfHarnessEngine {
   }
 
   /**
-   * Records `table` as the run's handle table and persists the run state.
+   * Records the entries and referents of `table` into the run's handle table
+   * and persists the run state. A caller mints on the table it read and
+   * records what it got back, and two callers whose calls overlap both read
+   * the table before either recorded; folding each result in, rather than
+   * replacing the table with it, keeps both their additions.
    *
-   * @throws Error when `table` is not a well-formed version-1 handle table.
+   * @throws Error when `table`, or the merged table, is not a well-formed
+   * version-1 handle table — which is how two overlapping mints that drew the
+   * same token for different addresses surface — or when the two tables
+   * cannot merge.
    */
   async recordHandleTable(table: HarnessHandleTable): Promise<void> {
     assertValidHarnessHandleTable(table);
+    const current = this.handleTable;
+    const merged = current === undefined
+      ? table
+      : mergeHarnessHandleTables(current, table);
+    assertValidHarnessHandleTable(merged);
     this.#runState = patchHarnessRunState(
       this.#runState,
-      { handleTable: structuredClone(table) },
+      { handleTable: structuredClone(merged) },
       this.#now(),
     );
     await this.persistRunState();
@@ -1693,7 +1726,15 @@ export class CfHarnessEngine {
   }
 
   async persistRunState(): Promise<string | undefined> {
-    return await this.artifactStore?.persistRunState(this.#runState);
+    // Writes go out in the order they were asked for, each carrying the run
+    // state as it stands when its turn comes. Two overlapping delegations
+    // persist the same run, and a write that finished first would otherwise
+    // be renamed over by an older snapshot finishing second.
+    const write = this.#runStatePersistence.then(() =>
+      this.artifactStore?.persistRunState(this.#runState)
+    );
+    this.#runStatePersistence = write.catch(() => {});
+    return await write;
   }
 
   /**
@@ -2639,8 +2680,22 @@ export class CfHarnessEngine {
       readonly HarnessCfcInvocationInputLabelPath[];
   }): Promise<HarnessCfcInvocationContext> {
     const now = this.#now();
+    // Taken before the await: two invocations prepared at once would
+    // otherwise both count the contexts recorded so far and share a number,
+    // and the audit keys contexts by sequence. The recorded side is the
+    // highest number recorded, not the count: a number reserved for a context
+    // that was never recorded leaves a gap, and a resumed run counting from
+    // the length would hand out a number already in use.
+    const sequence = Math.max(
+      0,
+      ...(this.#runState.cfcInvocationContexts ?? []).map((context) =>
+        context.sequence
+      ),
+      this.#lastCfcInvocationSequence,
+    ) + 1;
+    this.#lastCfcInvocationSequence = sequence;
     const invocation = await createHarnessCfcInvocationContext({
-      sequence: (this.#runState.cfcInvocationContexts ?? []).length + 1,
+      sequence,
       runId: this.#runState.runId,
       createdAt: now,
       toolId: options.toolId,

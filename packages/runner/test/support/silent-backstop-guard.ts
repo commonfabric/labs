@@ -8,12 +8,6 @@
 // records every firing of a listed backstop and fails a test body across which
 // one fired, naming the backstop.
 
-import { registerFrameworkModule } from "@commonfabric/test-support/records";
-
-// A test registered through this guard is attributed to the file that called
-// `Deno.test`, not to the frame this guard adds between them.
-registerFrameworkModule(import.meta.url);
-
 /** One backstop the guard watches, identified by the log line it counts. */
 export interface SilentBackstop {
   /** The logger's module name, as passed to `getLogger`. */

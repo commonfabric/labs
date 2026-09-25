@@ -1391,7 +1391,9 @@ export class Scheduler {
   /** ENTER: a demanded instance key `(space, id, scope)` entered the
    * SpaceServer's registry (design §2.2 step 2). Refcounted per entity;
    * the 0→1 transition marks every current writer of the entity a demand
-   * root (bracketed). Returns the writers (for the currency check). */
+   * root (bracketed). Returns the writers (for the currency check). The
+   * entity is counted before any writer is marked, so a throw leaves it
+   * counted, and `leaveDemandedEntity()` takes the count back. */
   enterDemandedEntity(
     address: { space: MemorySpace; id: string; scope: CellScope },
   ): Action[] {

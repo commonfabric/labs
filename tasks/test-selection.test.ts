@@ -1,4 +1,4 @@
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -8,6 +8,7 @@ import {
   explainLines,
   gatedMembers,
   laneArgument,
+  momentArgument,
   parseIdentityArgument,
   planLines,
   type Sources,
@@ -15,12 +16,14 @@ import {
   verdictFor,
 } from "./test-selection.ts";
 import type { TestIdentity } from "@commonfabric/test-support/records";
+import { type LanePlan, lanePlan, manifestMoment } from "./ci-lane.ts";
 import {
   freeCalibration,
+  repositoryCommittedAt,
   sampleEntry,
   sampleManifest,
 } from "./test-selection/testing.ts";
-import type { ManifestEntry } from "./test-selection/manifest.ts";
+import type { Manifest, ManifestEntry } from "./test-selection/manifest.ts";
 import type { Suite } from "./test-topology/suite.ts";
 import {
   DIALS,
@@ -59,6 +62,29 @@ const TOPOLOGY: Suite[] = [
     }],
   },
 ];
+
+/**
+ * What the lanes plan over `suites` when `manifest` is the manifest they
+ * resolve. The moment is named, so no checkout is read for one.
+ */
+function planned(
+  manifest: Manifest,
+  suites: readonly Suite[] = TOPOLOGY,
+): Promise<LanePlan> {
+  return lanePlan(
+    {
+      lane: 1,
+      of: LANES,
+      full: false,
+      dryRun: true,
+      laneCount: false,
+      root: Deno.cwd(),
+      at: "2026-09-01T00:00:00.000Z",
+    },
+    suites,
+    { manifest: () => Promise.resolve({ manifest }) },
+  );
+}
 
 describe("test-selection", () => {
   describe("parseIdentityArgument()", () => {
@@ -177,7 +203,7 @@ describe("test-selection", () => {
         .join("\n");
       expect(text).toContain("withheld");
       expect(text).toContain("run 3 times");
-      expect(text).toContain("the current manifest selects it");
+      expect(text).toContain("this commit's manifest selects it");
       // And nothing that contradicts the line above it: a change that
       // reaches a withheld test runs it here.
       expect(text).not.toContain("not here");
@@ -225,20 +251,20 @@ describe("test-selection", () => {
   });
 
   describe("planLines()", () => {
-    it("summarizes what each lane would run", () => {
+    it("summarizes what each lane would run", async () => {
       const manifest = sampleManifest({
         entries: [
           sampleEntry({ k: "unit", s: "memory", n: "one" }, { cost: 1 }),
           sampleEntry({ k: "unit", s: "memory", n: "two" }, { cost: 1 }),
         ],
       });
-      const text = planLines(manifest, TOPOLOGY, undefined).join("\n");
+      const text = planLines(await planned(manifest), undefined).join("\n");
       expect(text).toContain("2 identities in this tree");
       expect(text).toContain(`${LANES} lanes`);
       expect(text).toContain("lane 1:");
     });
 
-    it("counts the corpus the lanes were packed from", () => {
+    it("counts the corpus the lanes were packed from", async () => {
       // The manifest's own entries are not that corpus: one of these
       // names a unit this tree does not have, and no lane can run it.
       const manifest = sampleManifest({
@@ -251,20 +277,20 @@ describe("test-selection", () => {
           }),
         ],
       });
-      const text = planLines(manifest, TOPOLOGY, undefined).join("\n");
+      const text = planLines(await planned(manifest), undefined).join("\n");
       expect(text).toContain("1 identities in this tree");
     });
 
-    it("prints one lane when asked for one", () => {
+    it("prints one lane when asked for one", async () => {
       const manifest = sampleManifest({
         entries: [sampleEntry({ k: "unit", s: "memory", n: "one" })],
       });
-      const text = planLines(manifest, TOPOLOGY, 3).join("\n");
+      const text = planLines(await planned(manifest), 3).join("\n");
       expect(text).toContain("lane 3:");
       expect(text).not.toContain("lane 1:");
     });
 
-    it("names a suite no lane can hold, and not the tests inside it", () => {
+    it("names a suite no lane can hold, and not the tests inside it", async () => {
       // Every identity of such a suite is past the bound by the suite's
       // charge, so the report names the suite and drops the identities
       // that would otherwise repeat it once each.
@@ -283,7 +309,7 @@ describe("test-selection", () => {
           prologue: 0,
         },
       });
-      const text = planLines(manifest, TOPOLOGY, undefined).join("\n");
+      const text = planLines(await planned(manifest), undefined).join("\n");
       expect(text).toContain(
         "workspace-unit costs 400.0s before it runs anything",
       );
@@ -291,15 +317,43 @@ describe("test-selection", () => {
       expect(text).not.toContain("unschedulable");
     });
 
-    it("names an identity no lane can hold", () => {
+    it("says how far the mandatory set alone puts a lane past its budget", async () => {
+      // A unit no manifest has seen is mandatory, and is charged what its
+      // suite's measured units cost. Ten of them at 150 seconds each are
+      // more than the lanes together can hold; one is not.
+      const tree = (added: number) =>
+        suiteHolding([
+          "packages/memory/test/memory.test.ts",
+          ...Array.from(
+            { length: added },
+            (_, n) => `packages/memory/test/new-${n}.test.ts`,
+          ),
+        ]);
+      const manifest = sampleManifest({
+        entries: [sampleEntry({ k: "unit", s: "memory", n: "measured" }, {
+          cost: 150,
+          unit: "packages/memory/test/memory.test.ts",
+        })],
+      });
+      expect(
+        planLines(await planned(manifest, [tree(10)]), undefined).join("\n"),
+      ).toMatch(
+        /the mandatory set alone puts a lane \d+\.\ds past its budget/,
+      );
+      expect(
+        planLines(await planned(manifest, [tree(1)]), undefined).join("\n"),
+      ).not
+        .toContain("the mandatory set alone");
+    });
+
+    it("names an identity no lane can hold", async () => {
       const manifest = sampleManifest({
         entries: [sampleEntry({ k: "unit", s: "memory", n: "huge" }, {
           cost: 10_000,
         })],
       });
-      expect(planLines(manifest, TOPOLOGY, undefined).join("\n")).toContain(
-        "unschedulable",
-      );
+      const text = planLines(await planned(manifest), undefined).join("\n");
+      expect(text).toContain("unschedulable");
     });
   });
 });
@@ -408,6 +462,22 @@ describe("coverageLines()", () => {
   });
 });
 
+describe("momentArgument()", () => {
+  it("is nothing at all when the flag is absent", () => {
+    expect(momentArgument(["plan", "--dry-run"])).toBeUndefined();
+  });
+
+  it("returns the moment in UTC, whatever offset it was written with", () => {
+    expect(momentArgument(["coverage", "--at", "2026-09-01T10:41:59-07:00"]))
+      .toBe("2026-09-01T17:41:59.000Z");
+  });
+
+  it("rejects what is not a moment, including a missing value", () => {
+    expect(momentArgument(["coverage", "--at", "soon"])).toBe("invalid");
+    expect(momentArgument(["coverage", "--at"])).toBe("invalid");
+  });
+});
+
 describe("laneArgument()", () => {
   it("is nothing at all when the flag is absent", () => {
     expect(laneArgument(["plan", "--dry-run"])).toBeUndefined();
@@ -437,9 +507,9 @@ describe("verdictFor()", () => {
   const manifestOf = (...entries: ManifestEntry[]) =>
     sampleManifest({ entries, calibration: freeCalibration() });
 
-  it("reports a test the packer takes, and how often it takes it", () => {
+  it("reports a test the packer takes, and how often it takes it", async () => {
     const manifest = sampleManifest({ entries: [entry("cheap", 0.1)] });
-    const verdict = verdictFor(manifest, TOPOLOGY, {
+    const verdict = verdictFor(await planned(manifest), {
       k: "unit",
       s: "memory",
       n: "cheap",
@@ -449,7 +519,7 @@ describe("verdictFor()", () => {
     expect(verdict.unschedulable).toBeUndefined();
   });
 
-  it("carries the cost the bound was compared against", () => {
+  it("carries the cost the bound was compared against", async () => {
     const manifest = sampleManifest({
       entries: [sampleEntry({ k: "unit", s: "memory", n: "heavy" }, {
         cost: 200,
@@ -464,7 +534,7 @@ describe("verdictFor()", () => {
       },
     });
     const test = { k: "unit", s: "memory", n: "heavy" };
-    const verdict = verdictFor(manifest, TOPOLOGY, test);
+    const verdict = verdictFor(await planned(manifest), test);
     expect(verdict.unschedulable).toBe(true);
     expect(verdict.loneSeconds).toBeCloseTo(600, 5);
     // What `explain` prints is that figure, not the entry's own 200: a
@@ -475,10 +545,9 @@ describe("verdictFor()", () => {
     expect(said).not.toContain("200.0s is past the bound");
   });
 
-  it("reports a test no lane could hold as unschedulable, not selected", () => {
+  it("reports a test no lane could hold as unschedulable, not selected", async () => {
     const verdict = verdictFor(
-      manifestOf(entry("enormous", 100_000)),
-      TOPOLOGY,
+      await planned(manifestOf(entry("enormous", 100_000))),
       {
         k: "unit",
         s: "memory",
@@ -489,9 +558,9 @@ describe("verdictFor()", () => {
     expect(verdict.unschedulable).toBe(true);
   });
 
-  it("reports a test the manifest has never heard of as unselected", () => {
+  it("reports a test the manifest has never heard of as unselected", async () => {
     const manifest = manifestOf(entry("cheap", 0.1));
-    const verdict = verdictFor(manifest, TOPOLOGY, {
+    const verdict = verdictFor(await planned(manifest), {
       k: "unit",
       s: "memory",
       n: "absent",
@@ -501,7 +570,7 @@ describe("verdictFor()", () => {
     expect(verdict.unschedulable).toBeUndefined();
   });
 
-  it("hands back the corpus its verdict was reached over", () => {
+  it("hands back the corpus its verdict was reached over", async () => {
     // Whatever explains an identity has to explain it against the set
     // the verdict came from. The published manifest is a different set:
     // it names units this tree has dropped and misses units it has
@@ -512,7 +581,7 @@ describe("verdictFor()", () => {
         unit: "packages/memory/test/deleted.test.ts",
       }),
     );
-    const verdict = verdictFor(manifest, TOPOLOGY, {
+    const verdict = verdictFor(await planned(manifest), {
       k: "unit",
       s: "memory",
       n: "gone",
@@ -522,14 +591,14 @@ describe("verdictFor()", () => {
     expect(units).toContain("packages/memory/test/memory.test.ts");
   });
 
-  it("tells two configurations of one name apart", () => {
+  it("tells two configurations of one name apart", async () => {
     const manifest = manifestOf(
       sampleEntry({ k: "unit", s: "memory", n: "both", v: "on" }, {
         cost: 0.1,
       }),
     );
     expect(
-      verdictFor(manifest, TOPOLOGY, {
+      verdictFor(await planned(manifest), {
         k: "unit",
         s: "memory",
         n: "both",
@@ -538,7 +607,7 @@ describe("verdictFor()", () => {
         .selected,
     ).toBe(true);
     expect(
-      verdictFor(manifest, TOPOLOGY, { k: "unit", s: "memory", n: "both" })
+      verdictFor(await planned(manifest), { k: "unit", s: "memory", n: "both" })
         .selected,
     ).toBe(false);
   });
@@ -573,6 +642,7 @@ describe("dispatch()", () => {
   async function ran(
     args: readonly string[],
     sources: Partial<Sources> = {},
+    root?: string,
   ): Promise<{ code: number; out: string; err: string; stop?: Stop }> {
     const out: string[] = [];
     const err: string[] = [];
@@ -582,13 +652,13 @@ describe("dispatch()", () => {
     console.error = (...parts: unknown[]) => err.push(parts.join(" "));
     try {
       const code = await dispatch(args, {
-        manifest: () => Promise.resolve(sampleManifest()),
+        manifest: () => Promise.resolve({ manifest: sampleManifest() }),
         members: () => Promise.resolve(["packages/memory"]),
         aliases: () =>
           Promise.resolve({ resolve: (test: TestIdentity) => test }),
         topology: () => Promise.resolve(TOPOLOGY),
         ...sources,
-      } as Sources);
+      } as Sources, root);
       return { code, out: out.join("\n"), err: err.join("\n") };
     } catch (error) {
       if (!(error instanceof Stop)) throw error;
@@ -598,6 +668,156 @@ describe("dispatch()", () => {
       console.error = warn;
     }
   }
+
+  describe("the manifest it reads", () => {
+    // What every mode reads is the manifest the lanes testing this
+    // checkout's commit read: the newest the store holds at or before
+    // the commit was made, not the newest there is.
+
+    const roots: string[] = [];
+
+    afterEach(async () => {
+      for (const root of roots.splice(0)) {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    /** A repository whose one commit was made at `committed`. */
+    async function committedAt(committed: string): Promise<string> {
+      const root = await repositoryCommittedAt(committed);
+      roots.push(root);
+      return root;
+    }
+
+    /**
+     * A store holding a manifest generated on each of `days`, which
+     * resolves a moment the way the real one does, and records every
+     * moment it was asked about.
+     */
+    function storeOf(days: readonly string[]) {
+      const asked: string[] = [];
+      const manifest: Sources["manifest"] = ({ at }) => {
+        asked.push(at);
+        const newest = days.filter((day) => day <= at).sort().at(-1);
+        return Promise.resolve(
+          newest === undefined ? { absent: `nothing at or before ${at}` } : {
+            manifest: sampleManifest({ generatedAt: newest }),
+            objectName: newest,
+          },
+        );
+      };
+      return { asked, manifest };
+    }
+
+    it("reads the one the commit was made against, not the newest", async () => {
+      const store = storeOf([
+        "2026-08-31T00:00:00.000Z",
+        "2026-09-02T00:00:00.000Z",
+      ]);
+      const root = await committedAt("2026-09-01T10:41:59-07:00");
+      const result = await ran(["plan", "--dry-run"], store, root);
+      expect(result.code).toBe(0);
+      expect(result.out).toContain("manifest of 2026-08-31T00:00:00.000Z");
+      expect(result.out).not.toContain("2026-09-02");
+
+      const later = await committedAt("2026-09-03T00:00:00Z");
+      const newer = await ran(["plan", "--dry-run"], store, later);
+      expect(newer.out).toContain("manifest of 2026-09-02T00:00:00.000Z");
+    });
+
+    it("asks for the moment a lane of the commit asks for, in every mode", async () => {
+      const root = await committedAt("2026-09-01T10:41:59-07:00");
+      const lane = manifestMoment({ root });
+      expect(lane).toBe("2026-09-01T17:41:59.000Z");
+      for (
+        const args of [
+          ["coverage"],
+          ["explain", '["unit","memory","one"]'],
+          ["plan", "--dry-run"],
+          ["plan", "--verify"],
+        ]
+      ) {
+        const store = storeOf(["2026-08-31T00:00:00.000Z"]);
+        await ran(args, store, root);
+        expect({ args, asked: store.asked }).toEqual({ args, asked: [lane] });
+      }
+    });
+
+    it("reads the one current at a moment `--at` names, in every mode", async () => {
+      const root = await committedAt("2026-09-01T10:41:59-07:00");
+      for (
+        const args of [
+          ["coverage"],
+          ["explain", '["unit","memory","one"]'],
+          ["plan", "--dry-run"],
+          ["plan", "--verify"],
+        ]
+      ) {
+        const store = storeOf(["2026-08-31T00:00:00.000Z"]);
+        await ran([...args, "--at", "2026-09-03T00:00:00+02:00"], store, root);
+        expect({ args, asked: store.asked }).toEqual({
+          args,
+          asked: ["2026-09-02T22:00:00.000Z"],
+        });
+      }
+
+      const store = storeOf([
+        "2026-08-31T00:00:00.000Z",
+        "2026-09-02T00:00:00.000Z",
+      ]);
+      const result = await ran(
+        ["plan", "--dry-run", "--at", "2026-09-03T00:00:00Z"],
+        store,
+        root,
+      );
+      expect(result.out).toContain("manifest of 2026-09-02T00:00:00.000Z");
+    });
+
+    it("stops on an `--at` it cannot read, without reading anything", async () => {
+      const store = storeOf(["2026-08-31T00:00:00.000Z"]);
+      const result = await ran(["plan", "--dry-run", "--at", "soon"], store);
+      expect(result.code).toBe(2);
+      expect(result.stop?.message).toContain("--at takes a moment");
+      expect(store.asked).toEqual([]);
+    });
+
+    it("stops outside a repository without asking the store, in every mode", async () => {
+      // With no commit to read a date from, the manifest its lanes would
+      // read is unknown, and any other answer would describe a plan
+      // those lanes are not following.
+
+      const root = await Deno.makeTempDir({ prefix: "test-selection-" });
+      roots.push(root);
+      for (
+        const args of [
+          ["coverage"],
+          ["explain", '["unit","memory","one"]'],
+          ["plan", "--dry-run"],
+          ["plan", "--verify"],
+        ]
+      ) {
+        const store = storeOf(["2026-08-31T00:00:00.000Z"]);
+        await expect(ran(args, store, root)).rejects.toThrow(
+          `cannot read the date of the commit checked out at \`${root}\``,
+        );
+        expect({ args, asked: store.asked }).toEqual({ args, asked: [] });
+      }
+    });
+
+    it("reads the one current at a moment `--at` names outside a repository", async () => {
+      const root = await Deno.makeTempDir({ prefix: "test-selection-" });
+      roots.push(root);
+      const store = storeOf(["2026-08-31T00:00:00.000Z"]);
+      const result = await ran(
+        ["plan", "--dry-run", "--at", "2026-09-01T00:00:00Z"],
+        store,
+        root,
+      );
+      expect(result.code).toBe(0);
+      expect(result.out).toContain("manifest of 2026-08-31T00:00:00.000Z");
+      expect(store.asked).toEqual(["2026-09-01T00:00:00.000Z"]);
+    });
+  });
 
   it("prints the usage for no mode, and for either help flag", async () => {
     for (const args of [[], ["--help"], ["-h"]]) {
@@ -625,7 +845,7 @@ describe("dispatch()", () => {
 
   it("names the measured sets, and carries on with no manifest", async () => {
     const result = await ran(["coverage"], {
-      manifest: () => Promise.resolve(undefined),
+      manifest: () => Promise.resolve({ absent: "the store holds none" }),
     });
     expect(result.code).toBe(0);
     expect(result.out).toContain("workspace-unit/packages/memory");
@@ -651,9 +871,11 @@ describe("dispatch()", () => {
     const asked: TestIdentity[] = [];
     const result = await ran(["explain", '["unit","memory","old name"]'], {
       manifest: () =>
-        Promise.resolve(sampleManifest({
-          entries: [sampleEntry({ k: "unit", s: "memory", n: "new name" })],
-        })),
+        Promise.resolve({
+          manifest: sampleManifest({
+            entries: [sampleEntry({ k: "unit", s: "memory", n: "new name" })],
+          }),
+        }),
       aliases: () =>
         Promise.resolve({
           resolve: (test: TestIdentity) => {
@@ -665,7 +887,7 @@ describe("dispatch()", () => {
     expect(result.code).toBe(0);
     expect(asked[0]?.n).toBe("old name");
     expect(result.out).toContain("new name");
-    expect(result.out).toContain("the current manifest selects it");
+    expect(result.out).toContain("this commit's manifest selects it");
   });
 
   it(
@@ -674,7 +896,7 @@ describe("dispatch()", () => {
       // Printing nothing and exiting zero reads as "no test would run".
       for (const args of [["explain", '["unit","memory","a"]'], ["plan"]]) {
         const result = await ran(args, {
-          manifest: () => Promise.resolve(undefined),
+          manifest: () => Promise.resolve({ absent: "the store holds none" }),
         });
         expect(result.code).toBe(1);
       }
@@ -692,13 +914,13 @@ describe("dispatch()", () => {
       ),
     });
     const all = await ran(["plan", "--dry-run"], {
-      manifest: () => Promise.resolve(manifest),
+      manifest: () => Promise.resolve({ manifest }),
     });
     expect(all.code).toBe(0);
     expect(all.out.match(/^ {2}lane \d+:/gm)?.length).toBe(LANES);
 
     const one = await ran(["plan", "--dry-run", "--lane", "2"], {
-      manifest: () => Promise.resolve(manifest),
+      manifest: () => Promise.resolve({ manifest }),
     });
     expect(one.out.match(/^ {2}lane \d+:/gm)?.length).toBe(1);
     expect(one.out).toContain("  lane 2:");

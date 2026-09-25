@@ -264,6 +264,15 @@ describe("RealmCodecEngine", () => {
         .toThrow(/no applicable codec/);
     });
 
+    it("throws when given a null-prototype object, rather than passing it along as a record", () => {
+      const nullProto = Object.assign(Object.create(null), { a: 1 });
+
+      expect(() => realmFromFabricValue(nullProto))
+        .toThrow("Cannot encode null-prototype object");
+      expect(() => realmFromFabricValue({ nested: nullProto }))
+        .toThrow("Cannot encode null-prototype object");
+    });
+
     it("does not hand out the bytes an encoded `FabricBytes` holds", () => {
       const bytes = new FabricBytes(new Uint8Array([1, 2, 3]));
       const state = new Uint8Array(
@@ -1206,6 +1215,19 @@ describe("RealmCodecEngine", () => {
       expect(report.facts?.lookalikeIsArray).toBe(true);
       expect(report.facts?.lookalikeTag).toBe("EpochDay@1");
       expect(report.classes?.lookalike).toBe("Array");
+    });
+
+    it("carries lone surrogates in strings, property names, and symbol keys", async () => {
+      const report = await crossRealm({
+        loneString: "a\ud800b",
+        loneKey: { "\udc00": 1 },
+        loneSym: Symbol.for("\udbff"),
+      });
+
+      expect(report.ok).toBe(true);
+      expect(report.facts?.loneString).toBe("a\ud800b");
+      expect(report.facts?.loneKeys).toEqual(["\udc00"]);
+      expect(report.facts?.loneSymKey).toBe("\udbff");
     });
 
     it("carries a `FabricKeyPair`'s handles across as live `CryptoKey`s", async () => {

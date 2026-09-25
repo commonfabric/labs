@@ -194,6 +194,9 @@ export const COMPILE_CACHE_FAMILIES = [
 
 export type CompileCacheFamily = (typeof COMPILE_CACHE_FAMILIES)[number];
 
+/** What a run's compile cache states are keyed by: a job family. */
+export type CompileCacheKey = CompileCacheFamily;
+
 /**
  * Compile cache state for one job family in one run. Cold means the cache
  * missed entirely (full recompile); warm covers both exact and restore-key
@@ -202,12 +205,12 @@ export type CompileCacheFamily = (typeof COMPILE_CACHE_FAMILIES)[number];
 export type CompileCacheState = "cold" | "warm";
 
 /**
- * Per-family compile cache states for a run. An absent family is unknown (a
- * run whose cache-state artifact never recorded or could not be read) and is
- * treated as not-cold: it is not excluded from the coverage ratchet baseline.
+ * Compile cache states for a run, by the job family they describe. An absent key is unknown (a run whose cache state was never
+ * recorded or could not be read) and is treated as not-cold: it is not
+ * excluded from the coverage ratchet baseline.
  */
 export type CompileCacheStates = Partial<
-  Record<CompileCacheFamily, CompileCacheState>
+  Record<CompileCacheKey, CompileCacheState>
 >;
 
 /**
@@ -232,8 +235,8 @@ export interface CoverageBaselineFile {
   metrics: MetricRecord[];
 
   /**
-   * Per-family compile cache states for the run this file describes. Absent
-   * when no cache-state artifact recorded for the run.
+   * Compile cache states for the run this file describes. Absent when
+   * nothing in the run recorded one.
    */
   compileCacheStates?: CompileCacheStates;
 }
@@ -719,12 +722,16 @@ const COMPILE_CACHE_FAMILY_SET: ReadonlySet<string> = new Set(
   COMPILE_CACHE_FAMILIES,
 );
 
+const COMPILE_CACHE_KEY_SET: ReadonlySet<string> = new Set<CompileCacheKey>(
+  COMPILE_CACHE_FAMILIES,
+);
+
 /**
  * Parse a baseline artifact file into its metrics and its optional compile
  * cache states. A metric record missing a field the ratchet reads fails the
  * whole file, because a baseline that silently lost a metric would read as a
- * group with no debt to beat. Unknown cache families and invalid state values
- * are dropped instead, so a malformed tag degrades to "unknown" rather than
+ * group with no debt to beat. Unknown cache keys and invalid state values are
+ * dropped instead, so a malformed tag degrades to "unknown" rather than
  * losing the run's metrics.
  */
 export function parseCoverageBaselineDetailed(
@@ -762,10 +769,10 @@ export function parseCoverageBaselineDetailed(
 
   const compileCacheStates: CompileCacheStates = {};
   if (typeof rawStates === "object") {
-    for (const [family, state] of Object.entries(rawStates)) {
-      if (!COMPILE_CACHE_FAMILY_SET.has(family)) continue;
+    for (const [key, state] of Object.entries(rawStates)) {
+      if (!COMPILE_CACHE_KEY_SET.has(key)) continue;
       if (state !== "cold" && state !== "warm") continue;
-      compileCacheStates[family as CompileCacheFamily] = state;
+      compileCacheStates[key as CompileCacheKey] = state;
     }
   }
   return { metrics, compileCacheStates };

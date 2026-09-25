@@ -6,6 +6,7 @@ import { Identity } from "@commonfabric/identity";
 import { type ACL, aclDocId } from "../acl.ts";
 import {
   createInviteCredentials,
+  type InviteAccess,
   inviteCodeVerifier,
   SpaceInviteError,
 } from "../space-invites.ts";
@@ -42,7 +43,7 @@ async function fixture() {
   const create = (
     options: {
       maxUses?: number;
-      access?: "READ" | "WRITE";
+      access?: InviteAccess;
       ttlSeconds?: number;
     } = {},
   ) => {
@@ -286,6 +287,138 @@ describe("invites", () => {
       });
       expect(Engine.read(f.engine, { id: aclDocId(space) })?.value).toEqual({
         [f.owner]: "OWNER",
+      });
+    } finally {
+      await f.close();
+    }
+  });
+  it("lets an explicit owner issue an OWNER invitation that grants OWNER", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create({ access: "OWNER", maxUses: 2 });
+      expect(invite.result).toMatchObject({
+        access: "OWNER",
+        issuedBy: f.owner,
+        maxUses: 2,
+      });
+      expect(f.run({ operation: "list", body: {} })).toMatchObject([
+        { inviteId: invite.inviteId, access: "OWNER" },
+      ]);
+      expect(f.run({ operation: "redeem", body: invite }, f.guest)).toEqual({
+        outcome: "redeemed",
+        redemption: { inviteId: invite.inviteId, did: f.guest },
+        currentAccess: "OWNER",
+      });
+      expect(Engine.read(f.engine, { id: aclDocId(space) })?.value).toEqual({
+        [f.owner]: "OWNER",
+        [f.guest]: "OWNER",
+      });
+      // The grant is a real OWNER: the new owner may administer invitations.
+      expect(f.run({ operation: "list", body: {} }, f.guest)).toMatchObject([
+        { inviteId: invite.inviteId, usedCount: 1, remainingUses: 1 },
+      ]);
+      // An exact retry of the OWNER issuance is idempotent; a retry that
+      // changes the access is refused.
+      expect(f.run({ operation: "create", body: invite.request }))
+        .toMatchObject({ access: "OWNER", usedCount: 1 });
+      expect(() =>
+        f.run({
+          operation: "create",
+          body: { ...invite.request, access: "WRITE" },
+        })
+      ).toThrow("invite-id-unavailable");
+    } finally {
+      await f.close();
+    }
+  });
+  it("refuses OWNER invitations from READ and WRITE holders and unknown access", async () => {
+    const f = await fixture();
+    try {
+      f.acl({ [f.owner]: "OWNER", [f.guest]: "WRITE", [f.second]: "READ" });
+      for (const principal of [f.guest, f.second]) {
+        for (const access of ["OWNER", "WRITE", "READ"] as const) {
+          const credentials = createInviteCredentials();
+          expect(() =>
+            f.run({
+              operation: "create",
+              body: {
+                inviteId: credentials.inviteId,
+                codeVerifier: inviteCodeVerifier({
+                  host,
+                  space,
+                  ...credentials,
+                }),
+                access,
+                ttlSeconds: 60,
+              },
+            }, principal)
+          ).toThrow("not-owner");
+        }
+      }
+      for (const access of ["ADMIN", "owner", ""]) {
+        expect(() => f.create({ access: access as InviteAccess })).toThrow(
+          "invalid-request",
+        );
+      }
+      expect(f.run({ operation: "list", body: {} })).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("never lowers access on redemption and raises a lesser grant to OWNER", async () => {
+    const f = await fixture();
+    try {
+      const third = (await Identity.generate()).did();
+      f.acl({ [f.owner]: "OWNER", [f.guest]: "OWNER", [f.second]: "WRITE" });
+      const write = f.create({ access: "WRITE" });
+      expect(f.run({ operation: "redeem", body: write }, f.guest))
+        .toMatchObject({ outcome: "redeemed", currentAccess: "OWNER" });
+      const read = f.create({ access: "READ" });
+      expect(f.run({ operation: "redeem", body: read }, f.second))
+        .toMatchObject({ outcome: "redeemed", currentAccess: "WRITE" });
+      const owner = f.create({ access: "OWNER", maxUses: 2 });
+      expect(f.run({ operation: "redeem", body: owner }, f.second))
+        .toMatchObject({ outcome: "redeemed", currentAccess: "OWNER" });
+      expect(f.run({ operation: "redeem", body: owner }, third))
+        .toMatchObject({ outcome: "redeemed", currentAccess: "OWNER" });
+      expect(Engine.read(f.engine, { id: aclDocId(space) })?.value).toEqual({
+        [f.owner]: "OWNER",
+        [f.guest]: "OWNER",
+        [f.second]: "OWNER",
+        [third]: "OWNER",
+      });
+    } finally {
+      await f.close();
+    }
+  });
+  it("refuses expired, revoked, exhausted, wrong-code, and orphaned OWNER invitations", async () => {
+    const f = await fixture();
+    try {
+      const third = (await Identity.generate()).did();
+      const expired = f.create({ access: "OWNER", ttlSeconds: 1 });
+      const revoked = f.create({ access: "OWNER" });
+      const exhausted = f.create({ access: "OWNER" });
+      const wrong = f.create({ access: "OWNER" });
+      f.run({ operation: "revoke", body: revoked });
+      f.run({ operation: "redeem", body: exhausted }, f.second);
+      unavailable(() =>
+        f.run({ operation: "redeem", body: exhausted }, f.guest)
+      );
+      unavailable(() => f.run({ operation: "redeem", body: revoked }, f.guest));
+      unavailable(() =>
+        f.run({
+          operation: "redeem",
+          body: { ...wrong, code: createInviteCredentials().code },
+        }, f.guest)
+      );
+      f.advance(1000);
+      unavailable(() => f.run({ operation: "redeem", body: expired }, f.guest));
+      // An issuer who no longer owns the space cannot admit anyone.
+      const orphaned = f.create({ access: "OWNER" });
+      f.acl({ [f.second]: "OWNER" });
+      unavailable(() => f.run({ operation: "redeem", body: orphaned }, third));
+      expect(Engine.read(f.engine, { id: aclDocId(space) })?.value).toEqual({
+        [f.second]: "OWNER",
       });
     } finally {
       await f.close();

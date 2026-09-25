@@ -19,6 +19,7 @@ import {
   cfcLabelViewForCellFailClosed,
   cfcLabelViewForCellFailClosedWithStatus,
   cfcLabelViewFromMetadata,
+  cfcLabelViewSourceForCell,
   cfcLabelViewSymbol,
 } from "../src/cfc/mod.ts";
 import { stripSigilCfcLabelViews } from "../src/cfc/link-label-view.ts";
@@ -381,6 +382,69 @@ describe("CFC label view helpers", () => {
           },
         }],
       });
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("names the spaces of the documents a view was read from", async () => {
+    // A module policy's manifest is installed beside the label that selects
+    // it, so the display boundary reads it from these spaces. The labeled
+    // value lives in another space and is reached through a link, so the
+    // cell's own space alone would be the wrong answer.
+    const signer = await Identity.fromPassphrase("cfc label view spaces");
+    const elsewhere = (await Identity.fromPassphrase(
+      "cfc label view spaces elsewhere",
+    )).did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    try {
+      const seedIn = async (
+        space: typeof elsewhere,
+        id: string,
+        value: unknown,
+        entries: unknown[],
+      ) => {
+        const tx = runtime.edit();
+        const cell = runtime.getCell(space, id, undefined, tx);
+        writeSeedEnvelopeDoc(tx, space);
+        seedStoredEnvelope(tx, {
+          space,
+          id: parseLink(cell.getAsLink()).id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value,
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: { version: 1, entries },
+          },
+        } as never);
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit()).ok).toBeDefined();
+        return runtime.getCell(space, id);
+      };
+      const source = await seedIn(elsewhere, "spaces-source", "sealed", [{
+        path: [],
+        label: { confidentiality: ["source-label"] },
+      }]);
+      const unlabeledHolder = await seedIn(signer.did(), "spaces-holder", {
+        detail: source.getAsLink(),
+      }, []);
+      const labeledHolder = await seedIn(signer.did(), "spaces-labeled", {
+        detail: source.getAsLink(),
+      }, [{ path: ["detail"], label: { integrity: ["holder-label"] } }]);
+
+      expect(cfcLabelViewSourceForCell(unlabeledHolder.key("detail")).spaces)
+        .toEqual([elsewhere]);
+      expect(cfcLabelViewSourceForCell(labeledHolder.key("detail")).spaces)
+        .toEqual([signer.did(), elsewhere]);
+      expect(cfcLabelViewSourceForCell(source).spaces).toEqual([elsewhere]);
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -1681,6 +1745,109 @@ describe("CFC label view helpers", () => {
       // The first delivered label carried alice, the last carries bob.
       expect(JSON.stringify(fires[0].label)).toContain("authored-by-alice");
       expect(JSON.stringify(fires.at(-1)!.label)).toContain("authored-by-bob");
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("delivers to an includeCfcLabel sink the label of the doc a mid-path link resolves to", async () => {
+    // A value bound to a UI badge is often reached through a list whose
+    // element links to another document, as a profile's `verifiedIdentities`
+    // links each assertion. The label that vouches for the value lives on the
+    // linked document, so the sink has to report it, still report the list
+    // document's own label, and re-fire when the linked document's label
+    // changes.
+    const signer = await Identity.fromPassphrase(
+      "cfc label view sink mid-path link",
+    );
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    try {
+      const tx = runtime.edit();
+      const assertion = runtime.getCell(
+        signer.did(),
+        "cfc-label-sink-mid-path-assertion",
+        undefined,
+        tx,
+      );
+      const assertionAddress = {
+        space: signer.did(),
+        id: parseLink(assertion.getAsLink()).id!,
+        type: "application/json",
+        path: [],
+      } as const;
+      const assertionEnvelope = (integrityAtom: string) => ({
+        value: { type: "email", value: "ada@example.com" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{ path: [], label: { integrity: [integrityAtom] } }],
+          },
+        },
+      });
+      const list = runtime.getCell(
+        signer.did(),
+        "cfc-label-sink-mid-path-list",
+        undefined,
+        tx,
+      );
+      writeSeedEnvelopeDoc(tx, signer.did());
+      seedStoredEnvelope(
+        tx,
+        assertionAddress,
+        assertionEnvelope("verified-source"),
+      );
+      seedStoredEnvelope(tx, {
+        space: signer.did(),
+        id: parseLink(list.getAsLink()).id!,
+        type: "application/json",
+        path: [],
+      }, {
+        value: [assertion.getAsLink()],
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{ path: [], label: { integrity: ["list-owner"] } }],
+          },
+        },
+      });
+      runtime.prepareTxForCommit(tx);
+      await tx.commit();
+      await runtime.idle();
+
+      const labels: unknown[] = [];
+      const cancel = list.key(0).key("value").sink((_value, cfcLabel) => {
+        labels.push(cfcLabel);
+      }, { includeCfcLabel: true });
+      await runtime.idle();
+
+      expect(labels.length).toBeGreaterThan(0);
+      const delivered = JSON.stringify(labels.at(-1));
+      expect(delivered).toContain("verified-source");
+      expect(delivered).toContain("list-owner");
+
+      // A label-only write to the linked document: same value, new atom.
+      const relabelTx = runtime.edit();
+      writeSeedEnvelopeDoc(relabelTx, signer.did());
+      seedStoredEnvelope(
+        relabelTx,
+        assertionAddress,
+        assertionEnvelope("reverified-source"),
+      );
+      runtime.prepareTxForCommit(relabelTx);
+      await relabelTx.commit();
+      await runtime.idle();
+      cancel();
+
+      expect(JSON.stringify(labels.at(-1))).toContain("reverified-source");
     } finally {
       await runtime.dispose();
       await storageManager.close();

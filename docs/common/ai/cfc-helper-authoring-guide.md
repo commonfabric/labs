@@ -125,8 +125,15 @@ export type ProtectedText = Confidential<
 
 `cfcPattern` builds match patterns and accepts `v(...)` /
 `THIS_POLICY.subject`; `cfcAtom` builds concrete runtime atoms. Do not mix the
-two. The compiler rejects dynamic content, unbound variables, unguarded rules,
-non-exported declarations, and reused rules. At label creation the runtime
+two. To release what one function of the policy's own module computed, match
+the runtime-minted `TransformedBy` atom and name the module with
+`THIS_POLICY.moduleIdentity` rather than a pasted hash; see
+`packages/patterns/cfc-exchange-rules/blessed-computation.tsx`. The runtime
+mints that atom only when every write of a transaction comes from one verified
+function, and the pattern's `symbol` must be that function's export name — the
+function exported under that one name — or the rule never fires. The compiler
+rejects dynamic content, unbound variables, unguarded rules, non-exported
+declarations, and reused rules. At label creation the runtime
 binds the owning space and durably installs the exact digest-addressed manifest
 in the destination; an unresolved or mismatched artifact fails closed.
 

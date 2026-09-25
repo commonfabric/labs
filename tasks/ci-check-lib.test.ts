@@ -26,6 +26,7 @@ import {
   coverageMetricMeasuredSet,
   coverageNotGatedNotice,
   downloadAndExtractArtifact,
+  downloadAndParseCoverageBaseline,
   fetchArtifactsForRun,
   fetchCurrentPRBody,
   fetchIssueComments,
@@ -45,6 +46,7 @@ import {
   parseBaselineOverrides,
   parseCacheStateFiles,
   parseCoverageBaselineDetailed,
+  PERF_METRICS_FILE,
   REPO,
   serializeCoverageBaseline,
   shouldGateCoverageDebtMetric,
@@ -52,6 +54,7 @@ import {
   WORKFLOW_RUNS_PAGE_SIZE,
   workflowRunsPagePath,
 } from "./ci-check-lib.ts";
+import { buildZip } from "./zip-testing.ts";
 
 Deno.test("coverage baseline files round-trip stable metric samples", () => {
   const metrics = new Map<string, BaselineSample>([
@@ -186,6 +189,61 @@ Deno.test("parseCoverageBaselineDetailed drops invalid compile cache states", ()
   assertEquals(parseCoverageBaselineDetailed(file).compileCacheStates, {
     "pattern-unit": "warm",
   });
+});
+
+/** A coverage baseline metric record carrying every field the file needs. */
+const BASELINE_RECORD = {
+  name: "coverage-debt: packages/runner uncovered lines",
+  runId: 7,
+  sha: "abc123",
+  createdAt: "2026-01-01T00:00:00Z",
+  durationSeconds: 42,
+};
+
+/** A coverage baseline file holding `metrics`, with `fields` over the rest. */
+function baselineFile(
+  metrics: unknown,
+  fields: Record<string, unknown> = {},
+): string {
+  return JSON.stringify({
+    version: 1,
+    generatedAt: "2026-01-01T00:00:00Z",
+    metrics,
+    ...fields,
+  });
+}
+
+Deno.test("parseCoverageBaselineDetailed refuses a file in a format it does not know", () => {
+  assertEquals(
+    parseCoverageBaselineDetailed(baselineFile([BASELINE_RECORD])).metrics
+      .get(BASELINE_RECORD.name)?.uncoveredLines,
+    42,
+  );
+  for (
+    const file of [
+      baselineFile([BASELINE_RECORD], { version: 2 }),
+      baselineFile({ [BASELINE_RECORD.name]: BASELINE_RECORD }),
+    ]
+  ) {
+    assertThrows(
+      () => parseCoverageBaselineDetailed(file),
+      Error,
+      "Unsupported coverage baseline file format.",
+    );
+  }
+});
+
+Deno.test("parseCoverageBaselineDetailed refuses a metric record missing a field", () => {
+  for (const field of Object.keys(BASELINE_RECORD)) {
+    const partial = Object.fromEntries(
+      Object.entries(BASELINE_RECORD).filter(([name]) => name !== field),
+    );
+    assertThrows(
+      () => parseCoverageBaselineDetailed(baselineFile([partial])),
+      Error,
+      "Invalid coverage baseline metric record.",
+    );
+  }
 });
 
 Deno.test("cache state aggregation treats any restore hit as warm", () => {
@@ -1739,6 +1797,61 @@ Deno.test("downloadAndExtractArtifact retries transient artifact downloads", asy
     globalThis.fetch = originalFetch;
     console.warn = originalWarn;
   }
+});
+
+/** Runs `read` with every artifact download answering with `zip`. */
+async function withArtifactZip<T>(
+  zip: Uint8Array,
+  read: () => Promise<T>,
+): Promise<T> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      new Response(zip as BodyInit, { status: 200 }),
+    )) as typeof fetch;
+  try {
+    return await read();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+Deno.test("downloadAndParseCoverageBaseline reads the baseline file an artifact holds", async () => {
+  const metrics = new Map<string, BaselineSample>([
+    [coverageMetricForGroup("tasks"), {
+      runId: 5,
+      sha: "abc",
+      createdAt: "2026-01-01T00:00:00Z",
+      uncoveredLines: 42,
+    }],
+  ]);
+  const zip = await buildZip(
+    PERF_METRICS_FILE,
+    new TextEncoder().encode(
+      JSON.stringify(
+        serializeCoverageBaseline(metrics, { "pattern-unit": "cold" }),
+      ),
+    ),
+    0,
+  );
+  const parsed = await withArtifactZip(
+    zip,
+    () => downloadAndParseCoverageBaseline(7),
+  );
+  assertEquals(parsed?.metrics, metrics);
+  assertEquals(parsed?.compileCacheStates, { "pattern-unit": "cold" });
+});
+
+Deno.test("downloadAndParseCoverageBaseline returns null for an artifact holding no baseline file", async () => {
+  const zip = await buildZip(
+    "something-else.json",
+    new TextEncoder().encode("{}"),
+    0,
+  );
+  assertEquals(
+    await withArtifactZip(zip, () => downloadAndParseCoverageBaseline(7)),
+    null,
+  );
 });
 
 Deno.test("newestArtifactsByName keeps the latest re-run upload per name", () => {

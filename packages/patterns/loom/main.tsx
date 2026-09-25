@@ -4,15 +4,20 @@ import {
   handler,
   NAME,
   pattern,
+  type Stream,
   UI,
   type VNode,
+  wish,
   Writable,
 } from "commonfabric";
+import { admitPanel, externalUrl, insertionIndex } from "./admission.tsx";
 import type {
   LoomInput,
   LoomOutput,
   Panel,
+  PanelAdmission,
   PanelPosition,
+  ParticipantProfile,
   Presentation,
   ViewerState,
 } from "./schemas.tsx";
@@ -22,61 +27,6 @@ type State = {
   panels: Writable<Writable<Panel>[]>;
   presentation: Writable<Presentation>;
 };
-
-/** Locate an insertion anchor in the transaction's current collection. */
-function insertionIndex(
-  list: readonly Writable<Panel>[],
-  before?: Writable<Panel>,
-): number {
-  if (before === undefined) return list.length;
-  const index = list.findIndex((panel) => panel.equals(before));
-  if (index < 0) {
-    throw new Error("The insertion anchor is no longer in this Loom");
-  }
-  return index;
-}
-
-/** Return an absolute HTTP(S) URL that contains no embedded credentials. */
-function externalUrl(raw: string): string | undefined {
-  try {
-    const url = new URL(raw);
-    if (
-      (url.protocol !== "http:" && url.protocol !== "https:") ||
-      url.username !== "" || url.password !== ""
-    ) return undefined;
-    return url.href;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Validate a URL before admitting its occurrence to the shared composition. */
-function validatePanel(panel: Panel): void {
-  if (panel.kind === "url" && externalUrl(panel.url) === undefined) {
-    throw new Error("A URL panel requires an HTTP(S) URL without credentials");
-  }
-}
-
-/** Compare piece membership by complete link identity, including scope and space. */
-function containsPiece(
-  list: readonly Writable<Panel>[],
-  piece: Writable<unknown>,
-): boolean {
-  return list.some((panel) => {
-    const value = panel.get();
-    return value.kind === "piece" && value.piece.equalLinks(piece);
-  });
-}
-
-const addPiece = handler<{ piece: Writable<unknown> }, State>(
-  ({ piece }, { panels }) => {
-    const list = panels.get();
-    if (containsPiece(list, piece)) return;
-    const panel = new Writable<Panel>();
-    panel.set({ kind: "piece", piece });
-    panels.set([...list, panel]);
-  },
-);
 
 /** Return occurrences whose target differs from the complete piece link. */
 function withoutPiece(
@@ -106,18 +56,6 @@ const removePiece = handler<{ piece: Writable<unknown> }, State>(
   },
 );
 
-const addPanel = handler<PanelPosition, State>(
-  ({ panel, before }, { panels }) => {
-    const list = panels.get();
-    const index = insertionIndex(list, before);
-    if (list.some((existing) => existing.equals(panel))) return;
-    validatePanel(panel.get());
-    const next = [...list];
-    next.splice(index, 0, panel);
-    panels.set(next);
-  },
-);
-
 const removePanel = handler<{ panel: Writable<Panel> }, State>(
   ({ panel }, { panels, presentation }) => {
     const list = panels.get();
@@ -144,31 +82,6 @@ const movePanel = handler<PanelPosition, State>(
     if (before?.equals(panel)) return;
     const next = list.filter((existing) => !existing.equals(panel));
     next.splice(insertionIndex(next, before), 0, panel);
-    panels.set(next);
-  },
-);
-
-const duplicatePanel = handler<PanelPosition, State>(
-  ({ panel, before }, { panels }) => {
-    const list = panels.get();
-    if (!list.some((existing) => existing.equals(panel))) {
-      throw new Error("The panel is no longer in this Loom");
-    }
-    const index = insertionIndex(list, before);
-    const source = panel.get();
-    validatePanel(source);
-    // The handler invocation supplies the cause, so replay addresses this same occurrence.
-    const occurrence = new Writable<Panel>();
-    const title = source.titleOverride === undefined
-      ? {}
-      : { titleOverride: source.titleOverride };
-    if (source.kind === "piece") {
-      occurrence.set({ kind: "piece", piece: source.piece, ...title });
-    } else if (source.kind === "document") {
-      occurrence.set({ kind: "document", content: source.content, ...title });
-    } else occurrence.set({ kind: "url", url: source.url, ...title });
-    const next = [...list];
-    next.splice(index, 0, occurrence);
     panels.set(next);
   },
 );
@@ -272,11 +185,43 @@ export const PanelView = pattern<{ panel: Writable<Panel> }, { [UI]: VNode }>((
   [UI]: computed(() => renderPanel(panel)),
 }));
 
+/**
+ * The profile `cell` resolves to, or `undefined` when it holds none. A bound
+ * profile that has not resolved is an empty cell rather than `undefined`, and
+ * linking it would record no profile at all.
+ */
+function resolvedProfile(
+  cell: ParticipantProfile | undefined,
+): ParticipantProfile | undefined {
+  const target = cell?.resolveAsCell();
+  return target === undefined || target.get() === undefined
+    ? undefined
+    : target;
+}
+
+/**
+ * Duplicates `panel` under the profile this session acts as: the one it
+ * claimed in `viewerState`, or else the viewer's `#profile`. With neither, the
+ * copy is attributed to the Loom's owner.
+ */
+const duplicateAsViewer = handler<
+  void,
+  {
+    panel: Writable<Panel>;
+    duplicate: Stream<PanelAdmission>;
+    claimed: ParticipantProfile | undefined;
+    wished: ParticipantProfile | undefined;
+  }
+>((_, { panel, duplicate, claimed, wished }) => {
+  const profile = resolvedProfile(claimed) ?? resolvedProfile(wished);
+  duplicate.send({ panel, ...(profile === undefined ? {} : { as: profile }) });
+});
+
 const selectPanel = handler<
   void,
   { panel: Writable<Panel>; viewerState: Writable<ViewerState> }
 >((_, { panel, viewerState }) => {
-  viewerState.set({ selectedPanel: panel });
+  viewerState.key("selectedPanel").set(panel);
 });
 
 export default pattern<LoomInput, LoomOutput>(
@@ -292,7 +237,8 @@ export default pattern<LoomInput, LoomOutput>(
     const viewerState = new Writable.perSession<ViewerState>({});
     const remove = removePanel(state);
     const move = movePanel(state);
-    const duplicate = duplicatePanel(state);
+    const duplicate = admitPanel({ panels, mode: "duplicate" });
+    const viewerProfile = wish<ParticipantProfile>({ query: "#profile" });
     const present = setPresentation(state);
     return {
       [NAME]: title,
@@ -331,7 +277,14 @@ export default pattern<LoomInput, LoomOutput>(
                           ? "Selected in this session"
                           : "Select"}
                       </cf-button>
-                      <cf-button onClick={() => duplicate.send({ panel })}>
+                      <cf-button
+                        onClick={duplicateAsViewer({
+                          panel,
+                          duplicate,
+                          claimed: viewerState.key("actingProfile"),
+                          wished: viewerProfile.result,
+                        })}
+                      >
                         Duplicate
                       </cf-button>
                       <cf-button onClick={() => remove.send({ panel })}>
@@ -382,9 +335,9 @@ export default pattern<LoomInput, LoomOutput>(
       presentation,
       pieceRegistry,
       viewerState,
-      addPiece: addPiece(state),
+      addPiece: admitPanel({ panels, mode: "piece" }),
       removePiece: removePiece(state),
-      addPanel: addPanel(state),
+      addPanel: admitPanel({ panels, mode: "panel" }),
       removePanel: remove,
       movePanel: move,
       duplicatePanel: duplicate,

@@ -537,6 +537,7 @@ export function transformLiftAppliedCall(
           checker,
           factory,
           sourceFile: context.sourceFile,
+          state,
         },
         state.typeRegistry,
       );

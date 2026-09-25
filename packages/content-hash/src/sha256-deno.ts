@@ -3,7 +3,9 @@
 import { backtickQuote } from "@commonfabric/utils/markdown";
 import { isDeno } from "@commonfabric/utils/env";
 import type { IncrementalHasher } from "@/interface.ts";
-import { BaseIncrementalHasher } from "@/BaseIncrementalHasher.ts";
+import {
+  BaseSmallChunkUpdatingHasher,
+} from "@/BaseSmallChunkUpdatingHasher.ts";
 
 // Can't `import` at the top, because then `import`ing this module would fail
 // in a non-Deno environment.
@@ -28,8 +30,12 @@ function assertUsable() {
   }
 }
 
-/** Deno-specific incremental hasher. */
-class DenoHasher extends BaseIncrementalHasher {
+/**
+ * Deno-specific incremental hasher. Small updates are collected before they
+ * reach `node:crypto`, where each `update()` call costs enough to dominate a
+ * hash fed as many short chunks.
+ */
+class DenoHasher extends BaseSmallChunkUpdatingHasher {
   #hasher = crypto!.createHash("sha256");
 
   /** @inheritDoc */

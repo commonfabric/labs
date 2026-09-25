@@ -114,8 +114,18 @@ gone.
 - Lower the base schema exactly as if `T` had been authored directly.
 - Evaluate `Meta` as a type-level object/tuple/literal payload.
 - Merge the evaluated metadata into `schema.ifc`.
-- If the base schema already contains `ifc`, the merge is additive/overwriting
-  by key, not replacement of the entire schema object.
+- If the base schema already contains `ifc`, the metadata combines with it key
+  by key rather than replacing the schema object. `confidentiality` lists join,
+  the base schema's atoms first and each atom once. Any other key both declare
+  must be declared alike, or lowering fails.
+- Where the base schema is a `$ref` to a definition carrying `ifc`, the `ifc`
+  written beside the `$ref` also carries the labels of every definition its
+  reference chain reaches, because resolving the reference replaces the
+  definition's `ifc` with it. They combine by the same rule with the
+  definitions as the inner declarations: the farthest definition's
+  `confidentiality` atoms first and the reference's own last. The mapping
+  spec's §11 (`docs/specs/schema-generator/ts_to_json_schema_mapping.md`) has
+  the details.
 
 ### Simple Wrapper Aliases
 
@@ -182,6 +192,10 @@ Normative behavior:
    - a variable initialized from `handler(...)`
    - a variable initialized from `module(...)`
    - a variable initialized from `requireEventIntegrity(...)`
+   - any of the three called on a Common Fabric module's namespace
+     (`cf.handler(...)` after `import * as cf`, or a namespace an authored
+     module re-exports); a member of any other object, including a named
+     export of a Common Fabric module, is not a builder
    - a function declaration
 4. The transformer must report `cfc-write-authorized-by` if any of the above
    conditions fail.
@@ -197,6 +211,18 @@ Normative behavior:
    verified against the writer's own module, never the importer's. The
    direct-root `toSchema<WriteAuthorizedBy<…>>()` path and nested claims
    resolve the binding to its declaration the same way.
+8. A policy written through a user alias has its binding read where the alias
+   writes it, with the alias's parameters replaced by the reference's
+   arguments: through a chain of plain aliases, or through the one branch of a
+   conditional alias that is not `never`. A binding that cannot be read that
+   way, such as one passed through a parameter the conditional checks, or one
+   in a conditional with more than one such branch, must fail compilation with
+   `cfc-write-authorized-by:unread` rather than yield a schema with no write
+   restriction. A reload of stored source fails the same way: the error guards
+   a write restriction, not an authoring shape, and a pattern does not run
+   without the restriction its author wrote. A schema
+   generated from a type alone, such as a computed's capture, has no reference
+   to read a binding from: it carries no write claim, and nothing reports that.
 
 One valid marker shape is:
 

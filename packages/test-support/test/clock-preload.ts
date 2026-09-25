@@ -42,12 +42,6 @@
 // the auto-advance pump is paused while it runs, so a test can observe a state
 // partway through a window.
 
-import { registerFrameworkModule } from "../src/records/registration.ts";
-
-// A test registered through this harness is attributed to the file that
-// called `Deno.test`, not to the frame this harness adds between them.
-registerFrameworkModule(import.meta.url);
-
 const realSetTimeout = globalThis.setTimeout;
 const realClearTimeout = globalThis.clearTimeout;
 const realSetInterval = globalThis.setInterval;
@@ -68,7 +62,10 @@ const realPerformanceNow = performance.now.bind(performance);
 const HARNESS_FILE = new URL(import.meta.url).pathname.split("/").pop() ??
   "clock-preload.ts";
 
+// What `Date.now` and `performance.now` read at logical time zero. Neither is
+// zero, because a real clock never reads zero by the time a test runs.
 const DATE_ORIGIN = 1_700_000_000_000;
+const PERFORMANCE_ORIGIN = 1_000;
 
 type Kind = "zero" | "prod" | "test";
 interface Timer {
@@ -367,6 +364,7 @@ function freezeAround(
         elapsed = 0;
         seq = 1;
         autoCount = 0;
+        autoBySite.clear();
         yields = 0;
         ticking = false;
         kickScheduled = false;
@@ -465,7 +463,7 @@ function freezeAround(
     }
     if (config.fakeTimeSource) {
       Reflect.set(Date, "now", () => DATE_ORIGIN + elapsed);
-      Reflect.set(performance, "now", () => elapsed);
+      Reflect.set(performance, "now", () => PERFORMANCE_ORIGIN + elapsed);
     }
     if (config.exposeGlobalClock) {
       Reflect.set(globalThis, "clock", settleObj);

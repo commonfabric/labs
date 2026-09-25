@@ -3,6 +3,7 @@ import { bodyLimit } from "@hono/hono/body-limit";
 import { cors } from "@hono/hono/cors";
 import { z } from "@hono/zod-openapi";
 import {
+  INVITE_ACCESS,
   normalizeInviteHost,
   SPACE_INVITE_CAPABILITY,
   SpaceInviteError,
@@ -20,7 +21,7 @@ const schemas = {
   create: z.object({
     inviteId,
     codeVerifier: secret,
-    access: z.enum(["READ", "WRITE"]),
+    access: z.enum(INVITE_ACCESS),
     ttlSeconds: z.number().int().min(1).max(
       SPACE_INVITE_CAPABILITY.maxTtlSeconds,
     ),
@@ -119,7 +120,22 @@ export function createSpaceInviteRouter(
           maxProofAgeSeconds: 300,
           futureSkewSeconds: 60,
         })).userDid;
-      } catch {
+      } catch (error) {
+        // The audience is the configured public origin rather than the dialed
+        // host, so a deployment carrying the wrong `API_URL` refuses every
+        // correctly signed client. Name the authority the proof was checked
+        // against; the proof, its signature, and the body stay out of the log.
+        c.get("logger")?.warn(
+          {
+            path: c.req.path,
+            method: c.req.method,
+            // Production always passes the configured `API_URL` as the host; the
+            // dialed origin is only for fixtures that build the router without one.
+            authority: configuredHost ?? new URL(c.req.url).origin,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "Rejected unauthenticated first-party HTTP request",
+        );
         return c.json({ code: "invalid-proof" }, 401);
       }
       const space = c.req.param("space");

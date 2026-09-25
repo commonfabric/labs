@@ -44,6 +44,7 @@ import {
   ArrivalLog,
   awaitAdmitted,
   awaitEach,
+  awaitEdges,
   awaitReplica,
 } from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
@@ -135,6 +136,11 @@ describe("stage F serving loop", () => {
     | ((input: RequestInfo | URL, init?: RequestInit) => Promise<Response>)
     | undefined;
 
+  /** Wraps each tenure's wave commit sink, when set. */
+  let decorateWaveCommitSink:
+    | ConstructorParameters<typeof ExecutorHost>[0]["decorateWaveCommitSink"]
+    | undefined;
+
   // serving-loop.md §3e: the pattern-update posture flips server-side.
   const newHost = (
     policy?: ConstructorParameters<typeof ExecutorHost>[0]["policy"],
@@ -143,6 +149,10 @@ describe("stage F serving loop", () => {
       server,
       serviceIdentity: serviceSigner.did(),
       createRuntime: async () => {
+        if (factoryFailures > 0) {
+          factoryFailures -= 1;
+          throw new Error("induced runtime factory failure");
+        }
         const manager = SharedServerStorageManager.connectTo(server, {
           as: serviceSigner,
         });
@@ -166,6 +176,9 @@ describe("stage F serving loop", () => {
         };
       },
       policy,
+      ...(decorateWaveCommitSink === undefined
+        ? {}
+        : { decorateWaveCommitSink }),
       onWaveCycle: cycles.record,
       onActivationSettled: (activatedSpace, outcome) =>
         activations.record({ space: activatedSpace, outcome }),
@@ -185,6 +198,8 @@ describe("stage F serving loop", () => {
   let parks: ArrivalLog<{ space: string; reason: string }>;
   /** When set, the park report throws. */
   let parkObserverThrows = false;
+  /** How many of the next runtime builds reject before building anything. */
+  let factoryFailures = 0;
   /** Each survived renewal blip the loop reports to the memory server.
    * The renew arm is timer-driven, so this is the only edge it has. */
   let reacquires: ArrivalLog<void>;
@@ -205,7 +220,9 @@ describe("stage F serving loop", () => {
     servingRuntime = undefined;
     onServingRuntime = undefined;
     servingFetch = undefined;
+    decorateWaveCommitSink = undefined;
     parkObserverThrows = false;
+    factoryFailures = 0;
     cycles = new ArrivalLog();
     activations = new ArrivalLog();
     parks = new ArrivalLog();
@@ -224,6 +241,53 @@ describe("stage F serving loop", () => {
     await clientManager?.close();
     await server.close();
   });
+
+  /**
+   * Runs the pattern `total = n + 1`, reading `serving-arg` and writing
+   * `serving-result`, on the serving runtime at activation.
+   */
+  const runIncrementPattern = async (runtime: Runtime): Promise<void> => {
+    const compiled = await runtime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: [
+          "import { computed, pattern } from 'commonfabric';",
+          "export default pattern<{ n: number }, { total: number }>(",
+          "  ({ n }) => ({ total: computed(() => n + 1) }),",
+          ");",
+        ].join("\n"),
+      }],
+    }, { space });
+    const argument = runtime.getCell<{ n: number }>(
+      space,
+      "serving-arg",
+      undefined,
+    );
+    const result = runtime.getCell<{ total: number }>(
+      space,
+      "serving-result",
+      compiled.resultSchema,
+    );
+    // Presync before running, and retry a stale-read conflict: the
+    // run races the client's in-flight authored writes, and the real
+    // loader machinery owns exactly this presync + bounded-retry duty
+    // (runtime-mapping N24/N15).
+    await argument.sync();
+    await result.sync();
+    // Flushed before the run commits, so the replica the commit reads
+    // against is current and the commit has nothing to conflict with.
+    await runtime.storageManager.synced();
+    const tx = runtime.edit();
+    runtime.run(tx, compiled, argument, result);
+    const committed = await tx.commit();
+    if (committed.error !== undefined) {
+      throw new Error(
+        `serving pattern run failed: ${committed.error.message}`,
+      );
+    }
+    await runtime.idle();
+  };
 
   const openClient = () => {
     clientManager = SharedServerStorageManager.connectTo(server, {
@@ -354,48 +418,7 @@ describe("stage F serving loop", () => {
     // loader (`ensurePieceRunning`); the run here IS the loaded
     // structure. The client's subscription to the result doc is the
     // DEMAND the loop maps to a live server-side reader.
-    onServingRuntime = async (runtime) => {
-      const compiled = await runtime.patternManager.compilePattern({
-        main: "/main.tsx",
-        files: [{
-          name: "/main.tsx",
-          contents: [
-            "import { computed, pattern } from 'commonfabric';",
-            "export default pattern<{ n: number }, { total: number }>(",
-            "  ({ n }) => ({ total: computed(() => n + 1) }),",
-            ");",
-          ].join("\n"),
-        }],
-      }, { space });
-      const argument = runtime.getCell<{ n: number }>(
-        space,
-        "serving-arg",
-        undefined,
-      );
-      const result = runtime.getCell<{ total: number }>(
-        space,
-        "serving-result",
-        compiled.resultSchema,
-      );
-      // Presync before running, and retry a stale-read conflict: the
-      // run races the client's in-flight authored writes, and the real
-      // loader machinery owns exactly this presync + bounded-retry duty
-      // (runtime-mapping N24/N15).
-      await argument.sync();
-      await result.sync();
-      // Flushed before the run commits, so the replica the commit reads
-      // against is current and the commit has nothing to conflict with.
-      await runtime.storageManager.synced();
-      const tx = runtime.edit();
-      runtime.run(tx, compiled, argument, result);
-      const committed = await tx.commit();
-      if (committed.error !== undefined) {
-        throw new Error(
-          `serving pattern run failed: ${committed.error.message}`,
-        );
-      }
-      await runtime.idle();
-    };
+    onServingRuntime = runIncrementPattern;
 
     openClient();
     const engine = await server.engineForSpace(space);
@@ -1325,7 +1348,7 @@ describe("stage F serving loop", () => {
     expect(built).toBe(1);
   });
 
-  it("parks on a renew-blip mid-wave abort: reacquire succeeds, the aborted wave's space still parks and W does not move (serving-loop.md §2)", async () => {
+  it("parks on a renew-blip mid-wave abort, then re-activates for the live client: reacquire succeeds, the aborted tenure still parks, W does not move, and a fresh tenure serves (serving-loop.md §1, §2)", async () => {
     // The renew-blip interleave, end to end: (1) a wave opens (a seal
     // captures the CURRENT lease tenure); (2) the lease row vanishes
     // (expiry analogue) with NO rival, so the next renew tick FAILS and
@@ -1411,8 +1434,124 @@ describe("stage F serving loop", () => {
     // Soundness: no watermark movement rode the aborted wave, and no
     // continued loop minted a watermark-only advance after it.
     expect(readWatermarkSeq(engine)).toBe(watermarkBefore);
-    expect(host.stats().activeSpaces).toBe(0);
+    expect(spaceServer.active).toBe(false);
     expect(host.stats().lease.lost).toBeGreaterThanOrEqual(1);
+
+    // The client's session outlives the abort, so the space still meets
+    // the ACTIVE criteria (serving-loop.md §1). Nothing else arrives to
+    // wake it: the host re-activates it on its own, and the fresh
+    // tenure's runtime recomputes what the aborted wave withdrew.
+    await awaitEach(
+      activations,
+      () =>
+        activations.count((entry) =>
+          entry.space === space && entry.outcome === "active"
+        ) === 2,
+    );
+    const successor = host.spaceServer(space)!;
+    expect(successor).not.toBe(spaceServer);
+    expect(successor.active).toBe(true);
+    expect(liveExecutionLeaseHolder(engine, space)).toBe(successor.holder);
+  });
+
+  it("parks at the first derived commit the memory server refuses for a lapsed lease, before any renewal notices the lapse (serving-loop.md §2)", async () => {
+    // Neither renewal driver comes due during this test: the interval
+    // timer is set past its end, and the mid-wave check waits for a
+    // third of the TTL. The refusal is the only sign of the lapse.
+    const refusals = new ArrivalLog<string>();
+    let cyclesAtRefusal: number | undefined;
+    decorateWaveCommitSink = (sink) => {
+      const intrusionSince = sink.intrusionSince?.bind(sink);
+      return {
+        currentHeads: (s, docs) => sink.currentHeads(s, docs),
+        concurrentWritePaths: (s, doc, sinceSeq) =>
+          sink.concurrentWritePaths(s, doc, sinceSeq),
+        ...(intrusionSince === undefined ? {} : { intrusionSince }),
+        commitWave: async (batch) => {
+          const result = await sink.commitWave(batch);
+          if (batch.home && result.error !== undefined) {
+            cyclesAtRefusal ??= cycles.entries.length;
+            refusals.record(result.error.message);
+          }
+          return result;
+        },
+      };
+    };
+    host = newHost({
+      flushDeadlineMs: 5_000,
+      idleParkMs: 600_000,
+      renewIntervalMs: 600_000,
+      leaseTtlMs: 600_000,
+    });
+    onServingRuntime = runIncrementPattern;
+    openClient();
+    const engine = await server.engineForSpace(space);
+    const clientResult = clientRuntime.getCell<{ total: number }>(
+      space,
+      "serving-result",
+      undefined,
+    );
+    await clientResult.sync();
+    const clientArg = clientRuntime.getCell<{ n: number }>(
+      space,
+      "serving-arg",
+      undefined,
+    );
+    await clientArg.sync();
+    const tx = clientRuntime.edit();
+    clientArg.withTx(tx).set({ n: 41 });
+    expect((await tx.commit()).error).toBeUndefined();
+    // Under the live lease the store accepts the loop's commits.
+    await waitForCellValue(
+      clientRuntime,
+      clientResult.key("total"),
+      (total: number | undefined) => total === 42,
+      { stuckLabel: "the client's total to reach 42" },
+    );
+    const spaceServer = host.spaceServer(space)!;
+    await awaitEach(cycles, () => spaceServer.suspendedOnInput);
+    expect(refusals.entries).toEqual([]);
+
+    // The lapse: the row still names this holder, but it has expired,
+    // and no rival takes it.
+    expect(
+      acquireExecutionLease(engine, {
+        space,
+        holder: spaceServer.holder,
+        now: 0,
+        ttlMs: 1,
+      }),
+    ).toBe(true);
+    expect(liveExecutionLeaseHolder(engine, space)).toBeUndefined();
+    const watermarkBefore = readWatermarkSeq(engine);
+    const countDerived = () =>
+      (engine.database.prepare(
+        `SELECT COUNT(*) AS n FROM "commit" WHERE class = 'derived'`,
+      ).get() as { n: number }).n;
+    const derivedBefore = countDerived();
+
+    // The next input drives a wave whose commit the store refuses. The
+    // wait also ends on a second refusal, or on the end of the cycle that
+    // was refused, so that a loop still serving fails the assertions
+    // below rather than leaving the wait stuck.
+    const tx2 = clientRuntime.edit();
+    clientArg.withTx(tx2).set({ n: 99 });
+    expect((await tx2.commit()).error).toBeUndefined();
+    await awaitEdges(
+      [parks.edge, refusals.edge, cycles.edge],
+      () =>
+        parks.entries.length > 0 || refusals.entries.length > 1 ||
+        (cyclesAtRefusal !== undefined &&
+          cycles.entries.length > cyclesAtRefusal),
+    );
+    expect(refusals.entries).toHaveLength(1);
+    expect(refusals.entries[0]).toContain("execution_lease");
+    expect(spaceServer.active).toBe(false);
+    await parked();
+    expect(parks.entries).toEqual([{ space, reason: "lease-lost-abort" }]);
+    expect(host.stats().lease.lost).toBe(1);
+    expect(countDerived()).toBe(derivedBefore);
+    expect(readWatermarkSeq(engine)).toBe(watermarkBefore);
   });
 
   it("parks on a serving-loop failure instead of leaving a zombie holding the lease (thread r3731191431)", async () => {
@@ -1482,6 +1621,123 @@ describe("stage F serving loop", () => {
       () => acquireExecutionLease(engine, { space, holder: rival }),
     );
     releaseExecutionLease(engine, { space, holder: rival });
+  });
+
+  it("re-activates a space whose serving loop failed while its client's session is still live, with no further trigger (serving-loop.md §1)", async () => {
+    // The client opens its session with a read and writes nothing, so no
+    // admission races the park: the only thing that can bring the space
+    // back is the host re-evaluating the ACTIVE criteria after the park.
+    let failNextCycle = true;
+    host = newHost({
+      idleParkMs: 600_000,
+      get flushDeadlineMs(): number {
+        if (failNextCycle) {
+          failNextCycle = false;
+          throw new Error("induced transient loop failure");
+        }
+        return 1_000;
+      },
+    });
+    onServingRuntime = () => Promise.resolve();
+    openClient();
+    const input = clientRuntime.getCell<{ value: number }>(
+      space,
+      "loop-failure-recovery-input",
+      undefined,
+    );
+    await input.sync();
+
+    await parked();
+    expect(activations.entries).toEqual([{ space, outcome: "active" }]);
+    expect(parks.entries).toEqual([{ space, reason: "loop-failed" }]);
+
+    await awaitEach(
+      activations,
+      () =>
+        activations.count((entry) =>
+          entry.space === space && entry.outcome === "active"
+        ) === 2,
+    );
+    expect(host.spaceServer(space)?.active).toBe(true);
+    expect(host.stats().reactivationBackoffs).toBe(1);
+
+    // The successor serves: the client's first write is covered.
+    const engine = await server.engineForSpace(space);
+    const tx = clientRuntime.edit();
+    input.withTx(tx).set({ value: 1 });
+    expect((await tx.commit()).error).toBeUndefined();
+    const authoredSeq = Engine.serverSeq(engine);
+    await awaitAdmitted(server, () => readWatermarkSeq(engine) >= authoredSeq);
+  });
+
+  it("re-activates a space whose activation failed while its client's session is still live, after the failure-park backoff (serving-loop.md §1)", async () => {
+    // As above, the session opens with a read, so the session-open
+    // activation that fails is the only trigger there is.
+    factoryFailures = 1;
+    host = newHost({ idleParkMs: 600_000 });
+    onServingRuntime = () => Promise.resolve();
+    openClient();
+    const input = clientRuntime.getCell<{ value: number }>(
+      space,
+      "activation-failure-recovery-input",
+      undefined,
+    );
+    await input.sync();
+
+    await activated();
+    expect(activations.entries).toEqual([
+      { space, outcome: "failed" },
+      { space, outcome: "active" },
+    ]);
+    expect(parks.entries).toEqual([{ space, reason: "activation-failed" }]);
+    expect(host.stats().reactivationBackoffs).toBe(1);
+
+    // The successor serves: the client's first write is covered.
+    const engine = await server.engineForSpace(space);
+    const tx = clientRuntime.edit();
+    input.withTx(tx).set({ value: 1 });
+    expect((await tx.commit()).error).toBeUndefined();
+    const authoredSeq = Engine.serverSeq(engine);
+    await awaitAdmitted(server, () => readWatermarkSeq(engine) >= authoredSeq);
+  });
+
+  it("leaves a space parked on a rival's lease to the rival: no activation attempt of its own and no backoff, though the client's session is still live (serving-loop.md §1, §2)", async () => {
+    host = newHost({ idleParkMs: 600_000, renewIntervalMs: 25 });
+    onServingRuntime = () => Promise.resolve();
+    openClient();
+    const input = clientRuntime.getCell<{ value: number }>(
+      space,
+      "rival-park-input",
+      undefined,
+    );
+    await input.sync();
+    await activated();
+    const first = host.spaceServer(space)!;
+    const engine = await server.engineForSpace(space);
+
+    // A rival takes the row, so the next renewal fails and so does the
+    // re-acquire.
+    releaseExecutionLease(engine, { space, holder: first.holder });
+    const rival = executionLeaseHolder("did:key:rival-park-process");
+    expect(acquireExecutionLease(engine, { space, holder: rival })).toBe(true);
+    await withStuckNet(first.whenParked, "the rival-lease park");
+    expect(parks.entries).toEqual([{ space, reason: "lease-lost" }]);
+
+    // With the rival gone, the client's next write is what activates the
+    // space. Had the park chained an activation of its own, that
+    // activation would already be sleeping out a backoff, and this one
+    // would join it.
+    releaseExecutionLease(engine, { space, holder: rival });
+    const tx = clientRuntime.edit();
+    input.withTx(tx).set({ value: 1 });
+    expect((await tx.commit()).error).toBeUndefined();
+    const authoredSeq = Engine.serverSeq(engine);
+    await awaitAdmitted(server, () => readWatermarkSeq(engine) >= authoredSeq);
+    expect(activations.entries).toEqual([
+      { space, outcome: "active" },
+      { space, outcome: "active" },
+    ]);
+    expect(host.stats().reactivationBackoffs).toBe(0);
   });
 
   it("completes the park when the factory dispose never resolves: whenParked resolves, the lease frees, and a re-activation drains new input (lunch-wall containment)", async () => {
@@ -1571,10 +1827,10 @@ describe("stage F serving loop", () => {
     expect(acquireExecutionLease(engine, { space, holder: rival })).toBe(true);
     releaseExecutionLease(engine, { space, holder: rival });
 
-    // Recovery: the failure was transient; the next authored admission
-    // re-activates the space (the host's designed recovery arm) and the
-    // fresh tenure DRAINS the new input — the exact liveness the zombie
-    // never had.
+    // Recovery: the failure was transient; the host re-activates the
+    // space for the client's live session (the host's designed recovery
+    // arm) and a fresh tenure DRAINS the new input — the exact liveness
+    // the zombie never had.
     blowUp = false;
     const tx2 = clientRuntime.edit();
     input.withTx(tx2).set({ value: 2 });

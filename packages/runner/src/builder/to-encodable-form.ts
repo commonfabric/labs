@@ -493,6 +493,10 @@ export function patternToEncodableForm(
   // `moduleToEncodableForm` reads `getTopFrame()` to decide `$implRef`. A
   // frame inherits its parent's runtime (`builder/pattern.ts`), so
   // `frame.runtime` is the same at every point along one stack.
+  //
+  // The walk types its result as a `FabricExecValue`. `graph` is a plain
+  // object carrying no encodable form of its own, so what the walk hands back
+  // for it is a plain object too, which the types cannot show.
   const entryRef = getArtifactEntryRef(pattern);
   return entryRef && !isKeylessPatternIdentity(entryRef.identity)
     ? {
@@ -500,5 +504,5 @@ export function patternToEncodableForm(
       argumentSchema: pattern.argumentSchema,
       resultSchema: pattern.resultSchema,
     }
-    : replaceArtifacts(graph, noteDerivedCopy);
+    : replaceArtifacts(graph, noteDerivedCopy) as FabricExecPlainObject;
 }

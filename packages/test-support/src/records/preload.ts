@@ -1,6 +1,6 @@
 /**
  * The module every `deno test` invocation loads through `--preload`. It
- * captures the file each test is registered from and applies this
+ * captures the test file each test belongs to and applies this
  * invocation's skip list; `./registration.ts` holds both.
  *
  * Deno resolves `--preload` as a path rather than through the import map,

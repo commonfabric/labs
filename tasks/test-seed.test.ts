@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { requestedSeed } from "./test-seed.ts";
+import { main, requestedSeed } from "./test-seed.ts";
 
 /** Runs `body` with the seed variable as `value`, restoring it after. */
 function withSeedVariable(value: string, body: () => void): void {
@@ -35,5 +35,41 @@ describe("test-seed", () => {
       expect(() => requestedSeed(args, new Date("2026-09-23T11:00:00Z")))
         .toThrow("test-seed takes no argument, or --tomorrow");
     }
+  });
+
+  describe("main()", () => {
+    // A task hands the seed on through a command substitution, which
+    // reads standard output whole, so the seed has to be alone there.
+
+    it("prints the seed alone, names it separately, and returns 0", () => {
+      const printed: string[] = [];
+      const announced: string[] = [];
+      expect(main(
+        ["--tomorrow"],
+        new Date("2026-09-23T11:00:00Z"),
+        (line) => printed.push(line),
+        (line) => announced.push(line),
+      )).toBe(0);
+      expect(printed).toEqual(["20260924"]);
+      expect(announced).toEqual([
+        "Test order shuffled with seed 20260924. " +
+        "Set CF_TEST_SHUFFLE_SEED=20260924 to run this order again.",
+      ]);
+    });
+
+    it("prints nothing, says why, and returns 2 for an argument it does not know", () => {
+      const printed: string[] = [];
+      const announced: string[] = [];
+      expect(main(
+        ["--today"],
+        new Date("2026-09-23T11:00:00Z"),
+        (line) => printed.push(line),
+        (line) => announced.push(line),
+      )).toBe(2);
+      expect(printed).toEqual([]);
+      expect(announced).toEqual([
+        "test-seed takes no argument, or --tomorrow; it was given: --today",
+      ]);
+    });
   });
 });

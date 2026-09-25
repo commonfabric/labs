@@ -6,21 +6,24 @@ import {
   type Baseline,
   baselineFileName,
   checkPattern,
-  collectBaselineKeys,
   contractHash,
   decodeBaseline,
   encodeBaseline,
   type Finding,
-  findRetired,
   incompatibilityPaths,
   parseArgs,
   parseShard,
   partitionAcceptedBreaks,
   type PatternContract,
   readBaselines,
+  selectItems,
   shouldRecord,
   writeBaseline,
 } from "./pattern-compat-lib.ts";
+import {
+  collectBaselineKeys,
+  collectCompatibilityPaths,
+} from "./pattern-files.ts";
 
 const contract = (
   argumentSchema: JSONSchema,
@@ -338,7 +341,7 @@ describe("baseline store", () => {
     });
   });
 
-  it("reports a baseline whose pattern file is gone, and only that one", async () => {
+  it("lists a pattern whose file is gone, and only that one, beside the files", async () => {
     await withTree(async ({ baselines }) => {
       await writeBaseline(
         baselines,
@@ -352,15 +355,33 @@ describe("baseline store", () => {
         contractOf(),
         new Date(),
       );
-      const findings = await findRetired(
+      const files = ["packages/patterns/system/home.tsx"];
+      expect(await collectCompatibilityPaths(files, baselines, [])).toEqual([
+        "packages/patterns/system/home.tsx",
+        "packages/patterns/system/gone.tsx",
+      ]);
+    });
+  });
+
+  it("lists each gone pattern an accepted break names, once, including one with no baselines", async () => {
+    await withTree(async ({ baselines }) => {
+      await writeBaseline(
         baselines,
-        new Set(["system/home.tsx"]),
+        "system/gone.tsx",
+        contractOf(),
+        new Date(),
       );
-      expect(findings.length).toBe(1);
-      expect(findings[0]).toMatchObject({
-        kind: "retired",
-        pattern: "system/gone.tsx",
-      });
+      const files = ["packages/patterns/system/home.tsx"];
+      const paths = await collectCompatibilityPaths(files, baselines, [
+        "system/home.tsx",
+        "system/gone.tsx",
+        "system/removed.tsx",
+      ]);
+      expect(paths).toEqual([
+        "packages/patterns/system/home.tsx",
+        "packages/patterns/system/gone.tsx",
+        "packages/patterns/system/removed.tsx",
+      ]);
     });
   });
 
@@ -383,6 +404,42 @@ describe("baseline store", () => {
       );
       expect(labels[0].startsWith("20260101")).toBe(true);
     });
+  });
+});
+
+describe("selectItems", () => {
+  const ITEMS = [
+    "packages/patterns/notes/extra.tsx",
+    "packages/patterns/notes/gone.tsx",
+    "packages/patterns/notes/note.tsx",
+    "packages/patterns/notes/other.tsx",
+  ];
+  const WHOLE = { index: 0, count: 1 };
+
+  it("selects every item when unsharded and unfiltered", () => {
+    expect(selectItems(ITEMS, [], WHOLE)).toEqual(ITEMS);
+  });
+
+  it("selects the items --only names", () => {
+    expect(
+      selectItems(ITEMS, ["notes/gone.tsx", "notes/other.tsx"], WHOLE),
+    ).toEqual([
+      "packages/patterns/notes/gone.tsx",
+      "packages/patterns/notes/other.tsx",
+    ]);
+    expect(selectItems(ITEMS, ["notes/note.tsx"], WHOLE)).toEqual([
+      "packages/patterns/notes/note.tsx",
+    ]);
+  });
+
+  it("gives each item to exactly one shard", () => {
+    for (const count of [2, 3, 4, 5]) {
+      const shards = Array.from(
+        { length: count },
+        (_, index) => selectItems(ITEMS, [], { index, count }),
+      );
+      expect(shards.flat().sort()).toEqual(ITEMS);
+    }
   });
 });
 

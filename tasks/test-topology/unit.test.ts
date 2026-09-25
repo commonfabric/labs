@@ -59,7 +59,7 @@ async function workspace(
       2,
     ),
   );
-  // The preload names a registering file relative to the directory holding
+  // The preload names a test file relative to the directory holding
   // `.git`. Without one, no registration is attributed to a file.
   await Deno.mkdir(`${root}/.git`, { recursive: true });
   for (const [member, contents] of Object.entries(members)) {
@@ -80,6 +80,11 @@ async function workspace(
   }
   return root;
 }
+
+/** The list allowing the fixture member to run whole. */
+const BAKERY_RUNS_WHOLE = new Map([
+  ["./packages/bakery", "its tests run through a runner of its own"],
+]);
 
 /** The workspace suite of a loaded pair. */
 function workspaceUnit(suites: readonly Suite[]): Suite {
@@ -108,7 +113,7 @@ describe("the workspace unit suites", () => {
         files: ["test/glaze.test.ts"],
       },
     });
-    const suite = workspaceUnit(await loadUnitSuites(root));
+    const suite = workspaceUnit(await loadUnitSuites(root, BAKERY_RUNS_WHOLE));
     expect(suite.units).toEqual(["packages/bakery"]);
   });
 
@@ -333,7 +338,7 @@ describe("running a member that cannot be handed a subset", () => {
         files: ["test/glaze.test.ts"],
       },
     });
-    const suite = workspaceUnit(await loadUnitSuites(root));
+    const suite = workspaceUnit(await loadUnitSuites(root, BAKERY_RUNS_WHOLE));
     const outputDir = await Deno.makeTempDir({ prefix: "unit-out-" });
     const [invocation] = await suite.command(
       [{ unit: "packages/bakery", skip: ["glaze > sets overnight"] }],
@@ -478,7 +483,7 @@ describe("running a member that cannot be handed a subset", () => {
     expect(suite.whole).toEqual(["packages/bakery#browser-test"]);
   });
 
-  it("accounts for the files the Deno-only half declines", async () => {
+  it("accounts for the files the browser half's task names", async () => {
     // A member that splits its halves by a name keeps the browser files
     // out of the `deno test` run, and the browser half is one unit
     // whatever it holds. Without saying so, those files would be test
@@ -489,7 +494,8 @@ describe("running a member that cannot be handed a subset", () => {
         tasks: {
           test: { dependencies: ["deno-test", "browser-test"] },
           "deno-test": "deno test --allow-read --ignore='**/*.browser.test.ts'",
-          "browser-test": "deno run -A ../deno-web-test/cli.ts oven.test.ts",
+          "browser-test":
+            "deno run -A ../deno-web-test/cli.ts **/*.browser.test.ts",
         },
         files: ["test/glaze.test.ts", "test/oven.browser.test.ts"],
       },
@@ -506,9 +512,8 @@ describe("running a member that cannot be handed a subset", () => {
 
   it("leaves out a file neither half of a split member runs", async () => {
     // A task naming its own paths passes over everything outside them,
-    // and what it passes over is not what the browser half runs. Only
-    // the files an ignore took out belong to the browser half, so a file
-    // outside the task's paths is claimed by neither.
+    // and what it passes over is not what the browser half runs, so a
+    // file outside both halves' paths is claimed by neither.
 
     const root = await workspace({
       "./packages/bakery": {
@@ -516,7 +521,8 @@ describe("running a member that cannot be handed a subset", () => {
           test: { dependencies: ["deno-test", "browser-test"] },
           "deno-test":
             "deno test --allow-read --ignore='**/*.browser.test.ts' test",
-          "browser-test": "deno run -A ../deno-web-test/cli.ts oven.test.ts",
+          "browser-test":
+            "deno run -A ../deno-web-test/cli.ts **/*.browser.test.ts",
         },
         files: [
           "test/glaze.test.ts",
@@ -526,6 +532,56 @@ describe("running a member that cannot be handed a subset", () => {
       },
     });
     const suite = workspaceUnit(await loadUnitSuites(root));
+    expect(suite.units).not.toContain(
+      "packages/bakery/integration/proof.test.ts",
+    );
+    expect(suite.sources).toEqual([
+      "packages/bakery/test/oven.browser.test.ts",
+    ]);
+  });
+
+  it("throws for a browser half whose task names no files it can read", async () => {
+    const root = await workspace({
+      "./packages/bakery": {
+        tasks: {
+          test: { dependencies: ["deno-test", "browser-test"] },
+          "deno-test": "deno test --allow-read --ignore='**/*.browser.test.ts'",
+          "browser-test": "deno run -A ../deno-web-test/cli.ts",
+        },
+        files: ["test/glaze.test.ts", "test/oven.browser.test.ts"],
+      },
+    });
+    await expect(loadUnitSuites(root)).rejects.toThrow(
+      "`./packages/bakery`'s `browser-test` task names no files the " +
+        "topology can read.",
+    );
+  });
+
+  it("leaves out a file the Deno-only half ignores for another suite", async () => {
+    // Another suite runs `integration/`, so the ignore that keeps it out
+    // of the `deno test` run does not make it the browser half's.
+
+    const root = await workspace({
+      "./packages/bakery": {
+        tasks: {
+          test: { dependencies: ["deno-test", "browser-test"] },
+          "deno-test": "deno test --allow-read --ignore='integration' " +
+            "--ignore='**/*.browser.test.ts' .",
+          "browser-test":
+            "deno run -A ../deno-web-test/cli.ts **/*.browser.test.ts",
+        },
+        files: [
+          "test/glaze.test.ts",
+          "test/oven.browser.test.ts",
+          "integration/proof.test.ts",
+        ],
+      },
+    });
+    const suite = workspaceUnit(await loadUnitSuites(root));
+    expect(suite.units).toEqual([
+      "packages/bakery/test/glaze.test.ts",
+      "packages/bakery#browser-test",
+    ]);
     expect(suite.sources).toEqual([
       "packages/bakery/test/oven.browser.test.ts",
     ]);
@@ -667,7 +723,7 @@ describe("the measured sets a unit suite declares", () => {
         files: ["test/glaze.test.ts"],
       },
     });
-    const suite = workspaceUnit(await loadUnitSuites(root));
+    const suite = workspaceUnit(await loadUnitSuites(root, BAKERY_RUNS_WHOLE));
     expect(suite.measured?.[0]?.units).toEqual(["packages/bakery"]);
   });
 
@@ -857,5 +913,101 @@ describe("where a unit suite writes its coverage profiles", () => {
       { root, outputDir: "/out", spoolDir: "/spool" },
     );
     expect(invocation?.env?.DENO_COVERAGE_DIR).toBeUndefined();
+  });
+});
+
+describe("a member whose tests a lane cannot hand a file list", () => {
+  /** A member whose Deno-only half is the task given. */
+  function bakery(denoTest: string) {
+    return {
+      "./packages/bakery": {
+        tasks: {
+          test: "deno run -A ../../tasks/run-member-tests.ts deno-test",
+          "deno-test": denoTest,
+        },
+        files: ["test/glaze.test.ts", "test/proof.test.ts"],
+      },
+    };
+  }
+
+  /** What loading throws for the fixture member when it is not listed. */
+  const UNLISTED = "A lane cannot hand `./packages/bakery`'s tests a file " +
+    "list, so it would run the member whole";
+
+  it("throws for one naming its own import map, where nothing records it", async () => {
+    // Run whole, the member's tests would run in a lane with no preload and
+    // no report path, so they would pass there and record nothing.
+
+    const root = await workspace(
+      bakery("deno test -A --import-map ./test-map.json ."),
+    );
+    await expect(loadUnitSuites(root)).rejects.toThrow(UNLISTED);
+  });
+
+  it("throws for one joining commands, where nothing records it", async () => {
+    const root = await workspace(bakery("(deno test -A .) && deno check ."));
+    await expect(loadUnitSuites(root)).rejects.toThrow(UNLISTED);
+  });
+
+  it("throws for a runner of the member's own, where nothing records it", async () => {
+    // What the runner starts is out of the lane's sight, so whether it
+    // records anything is for the entry's reason to answer.
+
+    const root = await workspace(bakery("deno run -A test/run-tests.ts"));
+    await expect(loadUnitSuites(root)).rejects.toThrow(UNLISTED);
+  });
+
+  it("reads the same tests a file at a time without the import map", async () => {
+    const root = await workspace(bakery("deno test -A ."));
+    const suite = workspaceUnit(await loadUnitSuites(root));
+    expect(suite.units).toEqual([
+      "packages/bakery/test/glaze.test.ts",
+      "packages/bakery/test/proof.test.ts",
+    ]);
+    expect(suite.whole).toEqual([]);
+  });
+
+  it("gives no unit to one whose task reaches no test file", async () => {
+    // Its task is one a lane can hand a file list, so nothing about it runs
+    // whole. A unit for it would run the task with no preload and no report
+    // path.
+
+    const root = await workspace(bakery("deno test -A test/missing.test.ts"));
+    const suite = workspaceUnit(await loadUnitSuites(root));
+    expect(suite.units).toEqual([]);
+    expect(suite.whole).toEqual([]);
+    expect(suite.measured).toBeUndefined();
+  });
+
+  it("runs one whole where the list allows it", async () => {
+    const root = await workspace(
+      bakery("deno test -A --import-map ./test-map.json ."),
+    );
+    const suite = workspaceUnit(
+      await loadUnitSuites(root, BAKERY_RUNS_WHOLE),
+    );
+    expect(suite.units).toEqual(["packages/bakery"]);
+    expect(suite.whole).toEqual(["packages/bakery"]);
+  });
+
+  it("throws for a listed member whose tests a lane can read", async () => {
+    const root = await workspace(bakery("deno test -A ."));
+    await expect(loadUnitSuites(root, BAKERY_RUNS_WHOLE)).rejects.toThrow(
+      "`./packages/bakery` is listed in `RUNS_WHOLE`, and a lane can hand " +
+        "its tests a file list.",
+    );
+  });
+
+  it("throws for a listed member the workspace does not hold", async () => {
+    const root = await workspace(bakery("deno test -A ."));
+    await expect(
+      loadUnitSuites(
+        root,
+        new Map([["./packages/pantry", "its tests need the map"]]),
+      ),
+    ).rejects.toThrow(
+      "`RUNS_WHOLE` lists members the workspace does not hold: " +
+        "`./packages/pantry`.",
+    );
   });
 });

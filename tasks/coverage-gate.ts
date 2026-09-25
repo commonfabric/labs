@@ -64,7 +64,8 @@ export interface GateOptions {
   /**
    * Whether anything else in the run failed. Coverage measured through a
    * failing run says nothing about whether the change was tested, and the
-   * run is already red, so the gate reports rather than adding a failure.
+   * run is already red, so the gate reports what the lanes measured rather
+   * than adding a failure.
    */
   testsFailed: boolean;
 
@@ -140,9 +141,9 @@ export async function collectSetReports(
       found.set(name, [...found.get(name) ?? [], entry.path]);
     }
   } catch (error) {
-    // Nothing was downloaded, which is a lane that did not get as far as
-    // uploading. The gate reports that rather than treating an absent
-    // directory as a set with no coverage.
+    // Nothing was downloaded. Every set then has no report, which fails
+    // each forced set, rather than an absent directory reading as a set
+    // with no coverage.
     if (!(error instanceof Deno.errors.NotFound)) throw error;
   }
   return found;
@@ -156,7 +157,7 @@ export interface SetVerdict {
   /** The workspace member whose lines were counted. */
   member: string;
 
-  /** What this run measured, absent where no lane reported one. */
+  /** What this run measured, absent where no report measured the set. */
   uncoveredLines?: number;
 
   /** The `main` run this is compared against. */
@@ -272,21 +273,23 @@ export async function nearestBaseline(
  * has produced a comparison that is exactly as sound as a forced one, and
  * discarding it would leave the gate silent over work already paid for.
  *
- * Five states report rather than fail, and each is a case where the
+ * Three states report rather than fail, and each is a case where the
  * comparison would be against something other than the change. A set with
  * no baseline is one nothing has measured on `main` yet, and the first
  * pull request to reach a new package should not inherit the whole of
  * that package's debt. A set the cap left unforced that no run measured
- * has no number at all. A set with no report is a lane that did not get
- * as far as writing one, which is a failure the run is already carrying.
- * A set whose reports name no line of its member measured nothing, rather
- * than covering nothing. And a run with a failing test measures coverage
+ * has no number at all. And a run with a failing test measures coverage
  * through that failure, which says nothing about whether the change was
  * tested.
  *
- * One state fails whatever else happened: an acceptance naming something
- * no gate in this repository measures was written to have an effect and
- * has none.
+ * Three states fail whatever else happened. A forced set with no report,
+ * and a forced set whose reports name no line of its member, are sets the
+ * change was made to measure and that nothing measured. A lane that
+ * stopped before writing its report, an upload that carried nothing, a
+ * download that found nothing, and a lane that wrote an empty report all
+ * look the same from here, and passing would pass a rise that nothing
+ * measured. And an acceptance naming something no gate in this repository
+ * measures was written to have an effect and has none.
  */
 export async function runGate(input: GateInput): Promise<GateReport> {
   const unknown = unknownAcceptances(input.accepted, input.members);
@@ -298,30 +301,30 @@ export async function runGate(input: GateInput): Promise<GateReport> {
     const member = ref.set.member;
     const accepted = input.accepted.get(member);
     const paths = input.reports.get(measuredSetDirectory(ref)) ?? [];
-    if (paths.length === 0) {
-      verdicts.push({
-        set,
+    const measured = paths.length === 0
+      ? undefined
+      : await collectMeasuredSetDebt({
+        rootDir: input.root,
+        lcov: (await Promise.all(
+          paths.map((at) => Deno.readTextFile(at)),
+        )).join("\n"),
         member,
-        outcome: forced.has(set) ? "no-report" : "not-forced",
+        members: input.members,
       });
-      continue;
-    }
-    const lcov = (await Promise.all(
-      paths.map((at) => Deno.readTextFile(at)),
-    )).join("\n");
-    const measured = await collectMeasuredSetDebt({
-      rootDir: input.root,
-      lcov,
-      member,
-      members: input.members,
-    });
-    // A report naming no file of this member is a conversion that
-    // produced nothing rather than a set that covered nothing. Charging
-    // it every tracked line would fail the change for a measurement that
-    // never happened, and a set's tests always load some of their own
-    // member's source.
-    if (measured.files === 0) {
-      verdicts.push({ set, member, outcome: "nothing-measured" });
+    // A set's tests always load some of their own member's source, so a
+    // report naming no file of this member measured nothing, rather than
+    // covering nothing. Like a missing report, it has no count to score.
+    if (measured === undefined || measured.files === 0) {
+      if (forced.has(set)) {
+        ok = false;
+        verdicts.push({
+          set,
+          member,
+          outcome: measured === undefined ? "no-report" : "nothing-measured",
+        });
+      } else {
+        verdicts.push({ set, member, outcome: "not-forced" });
+      }
       continue;
     }
     const uncoveredLines = measured.uncoveredLines;
@@ -392,10 +395,10 @@ const OUTCOME_PROSE: Record<SetVerdict["outcome"], string> = {
   rose: "rose",
   accepted: "rose, accepted",
   "no-baseline": "no baseline on `main` yet, so nothing to compare",
-  "no-report": "no lane reported one, so there is nothing to score",
+  "no-report": "no lane reported one, so a rise cannot be ruled out",
   "not-forced": "the cap left this set unforced, and no run measured it",
-  "nothing-measured": "the reports name no line of this member, so " +
-    "nothing measured it",
+  "nothing-measured": "the reports name no line of this member, so a " +
+    "rise cannot be ruled out",
   "not-scored": "the run has a failing test, so this is not scored",
 };
 
@@ -447,6 +450,18 @@ export function formatGateReport(report: GateReport): string[] {
     rose.set(
       verdict.member,
       Math.max(rose.get(verdict.member) ?? 0, verdict.rise),
+    );
+  }
+  if (
+    report.verdicts.some((verdict) =>
+      verdict.outcome === "no-report" || verdict.outcome === "nothing-measured"
+    )
+  ) {
+    lines.push("");
+    lines.push(
+      "This change forced a set that no lane's report measured, so the " +
+        "gate fails without having measured it. An acceptance does not " +
+        "clear this: a report that measures the set has to reach the gate.",
     );
   }
   if (rose.size > 0) {
@@ -550,15 +565,9 @@ export async function main(
   const suites = await (deps.topology ?? loadTopology)(options.root);
   const changed = await changedFiles(options.root, options.base);
   const gate = coverageGateFor(suites, changed);
-  const moment = manifestMoment({
-    lane: 1,
-    of: 1,
-    full: false,
-    dryRun: false,
-    laneCount: false,
-    root: options.root,
-  });
-  const baselines = await (deps.baselines ?? publishedBaselines)(moment.at);
+  const baselines = await (deps.baselines ?? publishedBaselines)(
+    manifestMoment({ root: options.root }),
+  );
   let accepted: ReadonlyMap<string, number>;
   try {
     accepted = acceptedCoverageDebt(options.body);

@@ -8,6 +8,15 @@ export type ListOpArgumentUsage = {
   usesParams: boolean;
 };
 
+/**
+ * The run-input fields a list operation fills with a link to a cell that exists
+ * already: the entry, and the list it belongs to.
+ */
+export const LIST_OP_REFERENCED_ARGUMENT_FIELDS: readonly string[] = [
+  "element",
+  "array",
+];
+
 const usageCache = new WeakMap<object, ListOpArgumentUsage>();
 
 function hasArgumentSchema(

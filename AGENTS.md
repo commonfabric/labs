@@ -16,8 +16,7 @@ Common Fabric product.
 1. Foundation: api, data-model, data-model-schema, runner, identity, memory
 2. System: schema-generator, iframe-sandbox, ts-transformers, js-compiler
 3. Capabilities: piece, html, llm, navigation
-4. Operation: background-piece-service, cf-harness, cli, connectors, fuse,
-   state-inspector
+4. Operation: cf-harness, cli, connectors, fuse, state-inspector
 5. Deployed Product: toolshed, shell, lib-shell, runtime-client
 6. User Interface: ui
 7. End-User Programs: home-schemas, patterns

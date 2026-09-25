@@ -1,5 +1,6 @@
 /**
- * The set of authored pattern entry files in the repository.
+ * The set of authored pattern entry files in the repository, and the baselines
+ * recorded for them.
  *
  * Shared by `cfcheck.ts` (type-checks them) and `pattern-compat.ts` (proves
  * each one can still be applied over its deployed predecessors). The two must
@@ -10,6 +11,9 @@
 import { CONNECTOR_PATTERN_SOURCES } from "../packages/connectors/pattern-sources.ts";
 
 export const PATTERNS_DIR = "packages/patterns";
+
+/** The recorded contracts of every pattern, one directory per pattern key. */
+export const BASELINES_DIR = `${PATTERNS_DIR}/baselines`;
 
 /** A source tree whose authored modules are checked as patterns. */
 export interface PatternTree {
@@ -159,4 +163,63 @@ export async function collectAllPatternFiles(): Promise<string[]> {
     PATTERN_TREES.map((tree) => collectPatternFiles(tree.directory)),
   );
   return files.flat().sort();
+}
+
+/**
+ * Every pattern key that has a baseline directory, including retired ones.
+ *
+ * A pattern's own directory is named for its file (`home.tsx`), so a name
+ * ending in `.ts`/`.tsx` terminates the walk and anything else is an
+ * intermediate path segment (`system/`). That is the only thing distinguishing
+ * the two — baselines live at `<dir>/<pattern path>/<file>.json`, and a pattern
+ * path is exactly the route suffix the updater keys on.
+ */
+export async function collectBaselineKeys(
+  baselinesDir: string,
+): Promise<string[]> {
+  const keys: string[] = [];
+  async function walk(current: string, prefix: string) {
+    let entries: Deno.DirEntry[];
+    try {
+      entries = [...Deno.readDirSync(current)];
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory) continue;
+      const key = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
+        keys.push(key);
+      } else {
+        await walk(`${current}/${entry.name}`, key);
+      }
+    }
+  }
+  await walk(baselinesDir, "");
+  return keys.sort();
+}
+
+/**
+ * Every pattern the update compatibility gate judges, as repository-relative
+ * paths: each of `files`, then the path of each pattern whose file is gone but
+ * which still has baselines under `baselinesDir` or is one of the
+ * `acceptedBreakPatterns`, the keys the accepted contract breaks name.
+ *
+ * A gone pattern is judged like any other, by whichever run is given its path,
+ * so no run has to ask about the tree as a whole. The gate and the lanes that
+ * divide it both build their lists here, so the two agree.
+ */
+export async function collectCompatibilityPaths(
+  files: readonly string[],
+  baselinesDir: string,
+  acceptedBreakPatterns: readonly string[],
+): Promise<string[]> {
+  const present = new Set(files.map((file) => patternKey(file)));
+  const recorded = new Set([
+    ...await collectBaselineKeys(baselinesDir),
+    ...acceptedBreakPatterns,
+  ]);
+  const gone = [...recorded].filter((key) => !present.has(key));
+  return [...files, ...gone.map((key) => patternPath(key))];
 }
