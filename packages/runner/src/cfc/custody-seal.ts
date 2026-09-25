@@ -1019,6 +1019,22 @@ const readTerms = (terms: Cell<unknown>): {
 };
 
 /**
+ * The first of `clauses` that neither the room space nor the room's policy
+ * satisfies, or `undefined`: what the terms carry is copied into every entry
+ * and shown to every reader of the room, so it may carry only what they hold.
+ */
+const clauseWithheldFromRoom = (
+  clauses: readonly CfcConfClause[],
+  room: string,
+  policy: CfcModulePolicyRefAtom,
+): CfcConfClause | undefined =>
+  clauses.find((clause) =>
+    !clauseAlternatives(clause).some((atom) =>
+      deepEqual(atom, cfcAtom.space(room)) || deepEqual(atom, policy)
+    )
+  );
+
+/**
  * The principals a seat cell's label attests: the subject of each
  * `represents-principal` integrity atom at the cell's root or on one of its
  * top-level fields, as `authorPrincipalCandidates` reads an author claim.
@@ -1067,6 +1083,7 @@ const resolveSeats = async (
   runtime: Cell<unknown>["runtime"],
   terms: Record<string, JSONValue>,
   seatLinks: ReadonlyMap<number, NormalizedFullLink>,
+  { room, policy }: { room: string; policy: CfcModulePolicyRefAtom },
   evidence: ReadEvidence[],
 ): Promise<JSONValue> => {
   if (seatLinks.size === 0) return terms;
@@ -1078,13 +1095,31 @@ const resolveSeats = async (
     const tx = runtime.edit();
     try {
       const target = seat.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
-      const principals = attestedPrincipals(
-        cfcLabelViewFromMetadata(
-          readStoredCfcMetadata(tx, target),
-          target.path.map(String),
-        ),
-        index,
+      const view = cfcLabelViewFromMetadata(
+        readStoredCfcMetadata(tx, target),
+        target.path.map(String),
       );
+      // The seal writes the DID into terms every reader of the room sees, so
+      // the cell must already be one they hold, whether or not its label
+      // traveled into the terms with the reference.
+      const withheld = clauseWithheldFromRoom(
+        (view?.entries ?? [])
+          .filter((entry) =>
+            entry.path.length === 0 &&
+            (entry.observes === undefined || entry.observes === "value")
+          )
+          .flatMap((entry) =>
+            (entry.label.confidentiality ?? []) as CfcConfClause[]
+          ),
+        room,
+        policy,
+      );
+      if (withheld !== undefined) {
+        throw new Error(
+          debugStr`Custody terms name seat ${index} by a cell with a clause the room's readers do not hold: $quote,long${withheld}`,
+        );
+      }
+      const principals = attestedPrincipals(view, index);
       if (principals.length === 0) {
         throw new Error(
           `Custody terms name seat ${index} by a cell that attests no principal`,
@@ -1307,22 +1342,27 @@ const inspect = async (
     // Terms are copied into every entry, so they may carry only what the
     // room's readers already hold: a clause admitting the room space, or the
     // room's own policy.
-    for (const clause of collectConsumedLabel(termsTx).confidentiality) {
-      if (
-        !clauseAlternatives(clause).some((atom) =>
-          deepEqual(atom, cfcAtom.space(room)) || deepEqual(atom, policy)
-        )
-      ) {
-        throw new Error(
-          debugStr`Custody terms carry a clause the room's readers do not hold: $quote,long${clause}`,
-        );
-      }
+    const withheld = clauseWithheldFromRoom(
+      collectConsumedLabel(termsTx).confidentiality,
+      room,
+      policy,
+    );
+    if (withheld !== undefined) {
+      throw new Error(
+        debugStr`Custody terms carry a clause the room's readers do not hold: $quote,long${withheld}`,
+      );
     }
     evidence.push(...readEvidence(termsTx));
   } finally {
     termsTx.abort();
   }
-  const terms = await resolveSeats(runtime, rawTerms, seatLinks, evidence);
+  const terms = await resolveSeats(
+    runtime,
+    rawTerms,
+    seatLinks,
+    { room, policy },
+    evidence,
+  );
   // Read through a schema that admits the whole manifest, so the sync loads
   // the documents its rules are stored in as well as the manifest's own.
   const manifest = runtime.getCellFromEntityId(

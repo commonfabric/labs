@@ -143,7 +143,9 @@ spelling that names a principal, the `represents-principal:<did>` string form
 or a subject padded with spaces among them, gets past the runtime's refusal,
 and the seal refuses a seat whose cell carries one. The seal resolves the cell
 the reference names, reads its label, and refuses a cell that attests no
-principal or more than one; the read is evidence the entry's transaction
+principal or more than one, and a cell whose own label carries a clause
+neither `Space(S)` nor `P` satisfies, since the DID it attests is shown to every
+reader of the room; the read is evidence the entry's transaction
 verifies, so a seat that attests another principal before the entry is written
 refuses the seal. Only `seats` may hold references; the other fields are read
 as values.

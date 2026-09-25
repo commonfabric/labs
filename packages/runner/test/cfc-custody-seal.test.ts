@@ -289,6 +289,7 @@ const setup = async (
         kind: "represents-principal",
         subject,
       })),
+      confidentiality?: readonly unknown[],
     ): Promise<Cell<unknown>> {
       const runtime = runtimes.get(alice)!;
       const tx = runtime.edit();
@@ -308,7 +309,10 @@ const setup = async (
             version: 1,
             entries: [{
               path: [],
-              label: { integrity: [...atoms] },
+              label: {
+                integrity: [...atoms],
+                ...(confidentiality === undefined ? {} : { confidentiality }),
+              },
             }],
           },
         },
@@ -1364,6 +1368,34 @@ describe("cfc-custody-seal", () => {
         } finally {
           await fixture.dispose();
         }
+      }
+    });
+
+    it("refuses a seat cell whose label the room's readers do not hold", async () => {
+      // The seal writes the DID a seat cell attests into terms every reader
+      // of the room sees, so the cell must be one they could read.
+      const fixture = await setup();
+      try {
+        const seat = await fixture.attestation(
+          [carol.did()],
+          "seat-c",
+          undefined,
+          [cfcAtom.user(bob.did())],
+        );
+        // Written as a bare link, the seat's label does not travel into the
+        // terms document, so the terms' own label check cannot see it.
+        const runtime = fixture.runtimes.get(alice)!;
+        const tx = runtime.edit();
+        runtime.getCellFromLink(fixture.terms, undefined, tx).setRaw({
+          ...TERMS,
+          seats: [alice.did(), bob.did(), seat.getAsLink()],
+        } as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        const draft = await fixture.draft(alice, honestStance);
+        await expect(prepareCustodySeal(draft, fixture.room(alice)))
+          .rejects.toThrow(/seat 2 .*the room's readers do not hold/);
+      } finally {
+        await fixture.dispose();
       }
     });
 
