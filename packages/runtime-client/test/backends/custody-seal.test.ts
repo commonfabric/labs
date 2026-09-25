@@ -4,14 +4,16 @@ import { describe, it } from "@std/testing/bdd";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { ACLManager, type Cell, Runtime } from "@commonfabric/runner";
-import type { CfcTrustConfigInput } from "@commonfabric/runner/cfc";
+import {
+  buildCfcPolicyArtifactManifest,
+  type CfcTrustConfigInput,
+} from "@commonfabric/runner/cfc";
 import { TRUSTED_DECLASSIFIER_CONCEPT } from "@commonfabric/runner/cfc/custody-seal";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 
-import { buildCfcPolicyArtifactManifest } from "../../../runner/src/cfc/policy.ts";
 import type { RuntimeProcessor } from "@/backends/runtime-processor.ts";
 import { createCellRef } from "@/backends/utils.ts";
 import type { WorkerClient } from "@/backends/worker-client.ts";

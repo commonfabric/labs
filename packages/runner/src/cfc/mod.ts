@@ -166,7 +166,10 @@ export type {
   PolicyRecord,
   PolicySnapshot,
 } from "./policy.ts";
-export { buildCfcPolicySnapshot } from "./policy.ts";
+export {
+  buildCfcPolicyArtifactManifest,
+  buildCfcPolicySnapshot,
+} from "./policy.ts";
 export {
   MATERIAL_RISK_DISCHARGE_KINDS,
   MATERIAL_RISK_DISCHARGE_POLICY,
