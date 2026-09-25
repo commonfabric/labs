@@ -139,6 +139,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-grid` | CSS Grid layout | |
 | `cf-heading` | Theme-compliant heading replacing `h1`–`h6` | |
 | `cf-hgroup` | Horizontal group with automatic gap management | |
+| `cf-hover-reveal` | Content whose `actions` slot appears on hover or focus (see [cf-hover-reveal](#cf-hover-reveal)) | |
 | `cf-hscroll` | Horizontal scroll container | |
 | `cf-hstack` | Horizontal stack layout (flexbox) (see [stacks](#cf-vstack--cf-hstack)) | |
 | `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, or service capabilities | |
@@ -650,6 +651,33 @@ slot. Optional `icon` and `action` slots render above and below the message.
     Add first item
   </cf-button>
 </cf-empty-state>
+```
+
+---
+
+## cf-hover-reveal
+
+Content with controls that appear while the pointer rests on it or focus is
+inside it, as a chat message shows its reaction button. The controls go in the
+`actions` slot and stay laid out while hidden, so revealing them never moves
+the content. Set `revealed` to keep them shown, for instance while a picker
+they opened is still open. On a device that cannot hover, they are always
+shown.
+
+The reveal is the component's own CSS, so hovering runs no handler and writes
+no state.
+
+```tsx
+// Shown inside a pattern body.
+const pickerOpen = new Writable.perSession(false);
+const openPicker = action(() => pickerOpen.set(!pickerOpen.get()));
+
+<cf-hover-reveal revealed={pickerOpen}>
+  <cf-text>Lunch at noon?</cf-text>
+  <cf-button slot="actions" size="sm" onClick={openPicker}>
+    React
+  </cf-button>
+</cf-hover-reveal>
 ```
 
 ---

@@ -99,14 +99,14 @@ Useful references:
 
 ### Layout And Structure
 
-| Element               | Element              | Element                    | Element         |
-| --------------------- | -------------------- | -------------------------- | --------------- |
-| `cf-accordion`        | `cf-accordion-item`  | `cf-aspect-ratio`          | `cf-autolayout` |
-| `cf-card`             | `cf-collapsible`     | `cf-fragment`              | `cf-grid`       |
-| `cf-hgroup`           | `cf-hscroll`         | `cf-hstack`                | `cf-list-item`  |
-| `cf-resizable-handle` | `cf-resizable-panel` | `cf-resizable-panel-group` | `cf-screen`     |
-| `cf-scroll-area`      | `cf-separator`       | `cf-table`                 | `cf-tile`       |
-| `cf-vgroup`           | `cf-vscroll`         | `cf-vstack`                |                 |
+| Element        | Element               | Element              | Element                    |
+| -------------- | --------------------- | -------------------- | -------------------------- |
+| `cf-accordion` | `cf-accordion-item`   | `cf-aspect-ratio`    | `cf-autolayout`            |
+| `cf-card`      | `cf-collapsible`      | `cf-fragment`        | `cf-grid`                  |
+| `cf-hgroup`    | `cf-hover-reveal`     | `cf-hscroll`         | `cf-hstack`                |
+| `cf-list-item` | `cf-resizable-handle` | `cf-resizable-panel` | `cf-resizable-panel-group` |
+| `cf-screen`    | `cf-scroll-area`      | `cf-separator`       | `cf-table`                 |
+| `cf-tile`      | `cf-vgroup`           | `cf-vscroll`         | `cf-vstack`                |
 
 ### Display And Text
 
