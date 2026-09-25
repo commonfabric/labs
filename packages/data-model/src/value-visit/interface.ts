@@ -148,8 +148,9 @@ export type VisitedResult<ResultType> = BaselineVisitorMethodResult<ResultType>;
  * Possible results from `visiting*()` calls (container iteration pre-visit
  * methods).
  */
-export type VisitingResult<ResultType> = BaselineVisitorMethodResult<ResultType>;
-
+export type VisitingResult<ResultType> = BaselineVisitorMethodResult<
+  ResultType
+>;
 
 //
 // Visitor interface
@@ -239,9 +240,10 @@ export interface ValueVisitor<
   ): VisitResult<PlusType, ResultType>;
 
   /**
-   * Indicates that an array element was just visited. This method is called as
-   * a result of the visitor returning a `recurse` result for a visited array
-   * and is called _after_ the element itself was directly visited.
+   * Indicates that an array element was just mapped. This method is called as a
+   * result of the visitor returning a `recurse` result for a visited array
+   * while doing a structural-map operation, and it is called _after_ the
+   * element itself was directly visited.
    */
   visitedFabricArrayElement(
     array: FabricArrayPlus<PlusType>,
@@ -250,10 +252,11 @@ export interface ValueVisitor<
   ): VisitedResult<ResultType>;
 
   /**
-   * Indicates that the instance state of a `FabricInstance` was just visited.
+   * Indicates that the instance state of a `FabricInstance` was just mapped.
    * This method is called as a result of the visitor returning a `recurse`
-   * result for a visited `FabricInstance` and is called _after_ the instance's
-   * state was directly visited.
+   * result for a visited `FabricInstance` while doing a structural-map
+   * operation, and it is called _after_ the instance's state was directly
+   * visited.
    */
   visitedFabricInstanceState(
     instance: FabricInstancePlus<PlusType>,
@@ -261,10 +264,10 @@ export interface ValueVisitor<
   ): VisitedResult<ResultType>;
 
   /**
-   * Indicates that `FabricPlainObject` entry was just visited. This method is
+   * Indicates that `FabricPlainObject` entry was just mapped. This method is
    * called as a result of the visitor returning a `recurse` result for a
-   * visited `FabricPlainObject` and is called _after_ the entry's key and/or
-   * value were directly visited.
+   * visited `FabricPlainObject` while doing a structural-map operation, and it
+   * is called _after_ the entry's key and/or value were directly visited.
    */
   visitedFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<PlusType>,
