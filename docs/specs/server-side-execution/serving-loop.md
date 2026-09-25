@@ -63,8 +63,8 @@ A park can leave a space that still meets the ACTIVE criteria: a serving
 loop that throws, an initialization that fails, and a lease lapse that
 aborts a wave (§2) each park the space whatever its demand. So when any
 park completes, the host re-evaluates the criteria — live client
-sessions, undelivered events, and warm requests not yet consumed — and
-re-activates a space that meets them without waiting for another
+sessions, undelivered events, and outstanding warm requests (below) —
+and re-activates a space that meets them without waiting for another
 trigger. The exception is a park caused by another process's live lease
 refusing an acquire or a re-acquire (§2): that process serves the space,
 and an activation here would be refused again. A park during which a
@@ -73,11 +73,18 @@ aborted a wave, is re-evaluated like any other, and its one activation
 attempt is refused. Every park other than an idle one or one on a
 rival's lease extends the space's failure-park backoff, which delays its
 next activation by base·2^(n−1) for the nth consecutive such park, up
-to a cap. An idle park or a committed wave clears the backoff. A space
-whose serving fails every time is therefore rebuilt at a widening
-interval rather than in a tight loop. Impl: `host.ts`'s park handler
-and `#reactivateAfterPark`; pinned in
-`packages/runner/test/executor-serving-loop.test.ts` and
+to a cap. An idle park or a committed wave clears the backoff. An
+activation that fails before anything parks, such as one whose store
+fails to open, counts as a failure park: it extends the backoff, and the
+host re-evaluates the criteria once that activation has finished. When
+the store cannot be read to look for undelivered events, the host
+activates the space anyway: the activation opens the store itself, and
+if that fails too, it counts as a failure park like any other. A
+space whose serving fails every time is therefore rebuilt at a widening
+interval rather than in a tight loop. Impl: `host.ts`'s park handler,
+the failure arm of `#activateInner`, and `#reactivateAfterPark`; pinned
+in `packages/runner/test/executor-serving-loop.test.ts`,
+`packages/runner/test/executor-events-down.test.ts`, and
 `packages/runner/test/executor/activation-lease.test.ts`.
 
 What activation LOADS (RULED 2026-08-02): there is NO piece-start
@@ -171,20 +178,27 @@ scoped signal, never a blanket write-trigger — so T11.Q7 stays as
 designed (the admission hook alone still notifies without activating;
 a provisioning write ALONE still parks). Lifecycle: idempotent
 against an active target (the union is a no-op under standing client
-demand); a request racing a park re-carries itself into the successor
-activation; the captured warm demand is TENURE-scoped (it dies with
-the tenure — recompute-on-demand, §6 step 2, is the recovery posture
-for anything a dying tenure drops), and the request itself is a
-one-shot in-process signal, not a durable row — loss across a process
-crash in the staged-but-underived window is the OW46 silent-park
-observability family. One deliberate side effect, stated: the
-warm notice rides `noteExecutorCommit`, whose dirtiness marking means a
-foreign provisioning batch's staged writes now also PUSH to any client
-session subscribed to those docs in the target space — previously those
-engine-direct commits produced no notice at all, so a subscribed client
-saw them only on its next own sync. Beneficial (staleness removed),
-never load-bearing: no client in the ruled flows subscribes to setup
-docs before activation.
+demand); a request stays outstanding until a tenure that received it
+parks idle, which is the tenure's own verdict that nothing is left to
+serve. A request racing a park is carried into the successor
+activation. Any other end of a tenure that received one — a refused or
+failed activation, a loop failure, a lease loss — hands the request
+back to the host. Where the re-evaluation after a park (above) follows,
+it counts the request, and the successor captures it again. A park on
+a rival's lease has no re-evaluation, so there the request waits for
+this process's next activation of the space. The captured warm demand
+is TENURE-scoped, and the request itself is a one-shot in-process
+signal, not a durable row — loss across a process crash in the
+staged-but-underived window is the OW46 silent-park observability
+family. Impl: `host.ts`'s `#endTenure`; pinned in
+`packages/runner/test/executor-warm-request.test.ts`. One deliberate
+side effect, stated: the warm notice rides `noteExecutorCommit`, whose
+dirtiness marking means a foreign provisioning batch's staged writes
+now also PUSH to any client session subscribed to those docs in the
+target space — previously those engine-direct commits produced no
+notice at all, so a subscribed client saw them only on its next own
+sync. Beneficial (staleness removed), never load-bearing: no client in
+the ruled flows subscribes to setup docs before activation.
 
 **Parking.** A park releases the lease and stops the loop. A park for a
 lost lease, a failed loop, a failed initialization or a closing host
@@ -447,6 +461,13 @@ it. This composes with the foreign-write shadow floor and does not wait for
 sealed-write durability. [Event visibility](events.md#2-lifecycle-end-to-end)
 defines the ordered publication/response barrier before deferral.
 
+A terminal demanded root that a commit re-arms owes a structure-load retry
+once frame application makes the re-arming metadata readable, and a settle
+does not end while such a retry is owed. While the foreign-write shadow floor
+defers the retry to a later cycle, the loop retains the lowest seq of an input
+that may have re-armed the root and clamps every advance of W below it, since
+that input can sit below the shadow floor. The retry clears it.
+
 ```
 on activate(space):
   acquire lease (else park)
@@ -500,16 +521,41 @@ on wave budget exhaustion — EITHER trigger (deadline RULED, owner
 2026-08-04): (a) a cascade that will not quiesce within the
 scheduler's pass budget, or (b) the CONSEQUENCE-FLUSH DEADLINE — a
 wave still running at T_flush commits what is sealed so far. ONE
-mechanism for both: close a wave when it has sealed contributions or pending
-effects, count `wavesBudgetExhausted`, and keep W unchanged. A zero-delta
-cycle with no pending effects closes no wave and makes no durable commit,
-but still increments the exhaustion counter. A committed exhausted wave
-contains a consistent sealed snapshot; its `derivedThrough` stays at the
-current W. Continuation waves carry the
-cascade as dirtiness; W jumps to the top of the pending input batch only
-at true quiescence. Crash recovery stays sound because the basis index
-re-marks the truncated dirty frontier (§3b, §6) and memo hits suppress
-effect re-fires.
+mechanism for both: close a wave when it has sealed contributions, pending
+effects, or a PREFIX-COVERAGE advance (below), count `wavesBudgetExhausted`,
+and otherwise keep W unchanged. A zero-delta cycle with no pending effects
+and no such advance closes no wave and makes no durable commit, but still
+increments the exhaustion counter. A committed exhausted wave contains a
+consistent sealed snapshot; its `derivedThrough` is the prefix-coverage
+head it proved, or the current W when it proved none. Continuation waves
+carry the cascade as dirtiness; W jumps to the top of the pending input
+batch at true quiescence. Crash recovery stays sound because the basis
+index re-marks the truncated dirty frontier (§3b, §6) and memo hits
+suppress effect re-fires.
+
+PREFIX COVERAGE — how an exhausted cycle still moves W: input arriving
+while a settle runs lands through the settle's own frame barrier, so under
+sustained input every exit probe can find the scheduler busy with the
+NEWER input and the settle reaches T_flush without observing quiescence,
+although the batch it drained was long done. The loop therefore records a
+batch head H once a settle's frame barrier has completed with every frame
+at or below H applied — the moment at which an idle scheduler would have
+ended the settle — and carries H across cycles until W covers it,
+lowering it to a later cycle's batch head when that drain holds a record
+back. Any later moment at which the scheduler is idle, the
+demanded-structure load the settle awaits has completed, and no re-armed
+root is pending proves H covered: everything the scheduler ran after the
+barrier, it ran to completion. The proof is clamped by the shadow floor,
+the event-visibility floor and the re-armed roots' floor read at that
+moment, as the quiescent advance is. A floor read then may lift before
+the cycle ends, over input the proof never saw applied, so the floors
+read at the cycle's end do not replace it. The advance is clamped again
+by the cycle's own batch head and those floors at its end. An exhausted cycle advances W to the highest head
+proved before its wave closed, sealing the advance into that wave as any
+other. A wave commit that aborts discards the carried H
+(the abort withdrew consequences the proof would count), as does the end
+of the tenure. A cycle whose settle proved nothing keeps W unchanged.
+Counted: exhaustedAdvances.
 
 on drain-settle (TRUE quiescence: a settled non-exhausted cycle, no
 contributions, no pending events, the drain empty — S1, RULED
@@ -575,7 +621,10 @@ is not a committed-wave exhaustion fraction. The amplification budget's
 inspection rule treats deadline flushes under load as a reason to inspect
 and, with the required evidence, re-baseline (testing.md §4). The deadline
 allows sealed consequences to become visible under sustained multi-user
-input while full input coverage remains gated on quiescence.
+input, and prefix coverage lets input coverage follow them without waiting
+for the input to pause; coverage of the batch a cut settle drained still
+waits for an idle scheduler after its barrier. Pinned:
+`executor-sustained-input.test.ts`.
 
 **Sealing order makes the first flush worth flushing**: events and
 their handler consequences MUST seal ahead of deep demanded
@@ -584,7 +633,7 @@ derivations are demanded pulls — this sentence pins it so an
 implementation does not reorder. Per-stream `eventWatermark` still
 advances for events fully processed in an exhausted wave, and
 `consequenceOf` carries them, so overlay echoes retire on the FIRST
-flush (speculation.md §4) even when W lags to quiescence.
+flush (speculation.md §4) even when W lags behind them.
 
 **Considered and RECORDED as the fallback, not built** (owner,
 2026-08-04): the two-tier WRITE-CLASS split — every wave committing
@@ -1648,8 +1697,8 @@ the drain first; these counters do not equate each deferral with an elapsed
 timer interval or each cycle with a durable commit.
 
 Exposed via the existing `/api/health/stats` shape, replacing v1's pool block:
-`servingLoop: { activeSpaces, waves, wavesBudgetExhausted, supersededWrites,
-authoredSeen, effectAcks, derivedCommits, structureLoadFailures,
+`servingLoop: { activeSpaces, waves, wavesBudgetExhausted, exhaustedAdvances,
+supersededWrites, authoredSeen, effectAcks, derivedCommits, structureLoadFailures,
 structureLoadDeferred, structureLoadStuck, structureLoadTerminal,
 structureLoadConfirmationsSkipped, structureLoadRearmed, watermarkClamped,
 storeReads, storeRefreshes, unstampedSealRefusals, foreignWriteRefusals,
@@ -1718,7 +1767,10 @@ tenure. Demand departure drops terminal decisions; a new tenure starts its own
 pass. Park cancels structure loading at its next asynchronous boundary, before
 any subsequent piece start. Completion from a parked tenure cannot publish a
 terminal decision; park does not wait for unresolved pattern loading.
-`watermarkClamped` counts
+`exhaustedAdvances` counts exhausted cycles whose committed wave still
+advanced W by §3's prefix coverage, a subset of `wavesBudgetExhausted`: an
+exhausted cycle outside it carried no watermark movement. `watermarkClamped`
+counts
 non-exhausted cycles whose foreign-write shadow floor is below an input batch
 head above W. An event-visibility floor can constrain the same cycle, so the
 counter does not isolate the marginal effect of the shadow floor. The shadow

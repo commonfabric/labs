@@ -1,8 +1,16 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import ts from "typescript";
+
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
-import { callSchemas, parseModule, patternSchemas } from "./transformed-ast.ts";
+import {
+  callSchemas,
+  callsNamed,
+  collect,
+  parseModule,
+  patternSchemas,
+} from "./transformed-ast.ts";
 import { transformFiles, transformSource } from "./utils.ts";
 
 const IMPORTS =
@@ -372,17 +380,19 @@ export default pattern<Input<Box<number>>>(({ c }) => ({
         }],
       ] as const
     ) {
-      it(`retains the scope and default of a returned generic array of \`${argument}\``, async () => {
-        const output = await transformSource(
-          `${IMPORTS}
+      const source = `${IMPORTS}
 interface Box<T> { value: T; }
 interface Input<T> { c: PerUser<T[] | Default<[]>>; }
 export default pattern<Input<${argument}>>(({ c }) => ({
   c,
   s: computed(() => JSON.stringify(c)),
-}));`,
-          { types: COMMONFABRIC_TYPES, typeCheck: true },
-        );
+}));`;
+
+      it(`retains the scope and default of a returned generic array of \`${argument}\``, async () => {
+        const output = await transformSource(source, {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+        });
         const root = parseModule(output);
         const scoped = { type: "array", items, default: [], scope: "user" };
 
@@ -390,6 +400,24 @@ export default pattern<Input<${argument}>>(({ c }) => ({
         expect((capture!.properties as Schema).c).toEqual(scoped);
         expect((patternSchemas(root).output.properties as Schema).c)
           .toEqual(scoped);
+      });
+
+      it(`annotates a captured generic array of \`${argument}\` with its scope wrapper`, async () => {
+        const root = parseModule(
+          await transformSource(source, {
+            types: COMMONFABRIC_TYPES,
+            typeCheck: true,
+          }),
+        );
+        const [captures] = callsNamed(root, "lift")[0]!.typeArguments!;
+        const annotation = collect(captures!, ts.isPropertySignature)
+          .find((member) => member.name.getText(root) === "c")!.type!;
+
+        expect(
+          ts.isTypeReferenceNode(annotation)
+            ? annotation.typeName.getText(root)
+            : annotation.getText(root),
+        ).toBe("__cfHelpers.PerUser");
       });
     }
 

@@ -24,6 +24,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -31,12 +32,11 @@ import type { Options } from "../src/storage/v2.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
-import type { SpaceServerPolicy } from "../src/executor/space-server.ts";
+import { SpaceServer } from "../src/executor/space-server.ts";
 import {
   ArrivalLog,
   awaitAdmitted,
   awaitEach,
-  settleServing,
 } from "./support/serving-waits.ts";
 import {
   stampWaveRunContext,
@@ -82,10 +82,12 @@ describe("executor-warm-request", () => {
   /** Every activation attempt's space and outcome — activation finishes
    * on no admission or session edge of its own. */
   let activations: ArrivalLog<{ space: MemorySpace; outcome: string }>;
+  /** Every park's space and reason. */
+  let parks: ArrivalLog<{ space: MemorySpace; reason: string }>;
   /** Each firing of the one-shot activation-failure stub below. */
   let stubFirings: ArrivalLog<void>;
-  let clientManager: SharedServerStorageManager;
-  let clientRuntime: Runtime;
+  let clientManager: SharedServerStorageManager | undefined;
+  let clientRuntime: Runtime | undefined;
   let servingRuntime: Runtime | undefined;
 
   /** One-shot activation-failure stub (the post-drain failure pin): the
@@ -95,7 +97,12 @@ describe("executor-warm-request", () => {
    * refusal for the state under test. Cleared when consumed. */
   let failNextRuntimeFor: MemorySpace | undefined;
 
-  const newHost = (policy: SpaceServerPolicy = {}): ExecutorHost =>
+  /** One-shot loop-failure stub: the next wave cycle to read the flush
+   * deadline throws, and its tenure parks `loop-failed`. Cleared when
+   * consumed. */
+  let failNextCycle = false;
+
+  const newHost = (): ExecutorHost =>
     new ExecutorHost({
       server,
       serviceIdentity: serviceSigner.did(),
@@ -126,9 +133,19 @@ describe("executor-warm-request", () => {
           },
         });
       },
-      policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000, ...policy },
+      policy: {
+        get flushDeadlineMs(): number {
+          if (failNextCycle) {
+            failNextCycle = false;
+            throw new Error("stubbed one-shot loop failure (test)");
+          }
+          return 5_000;
+        },
+        idleParkMs: 600_000,
+      },
       onActivationSettled: (space, outcome) =>
         activations.record({ space, outcome }),
+      onSpaceParked: (space, reason) => parks.record({ space, reason }),
     });
 
   /** Resolves once `space` has an ACTIVE tenure, counting the ones that
@@ -150,42 +167,54 @@ describe("executor-warm-request", () => {
         ),
     );
 
-  /** Commit an authored poke into `space` and wait for the loop to cover
-   * it. The demand pass runs at the top of a wave cycle, so W reaching
-   * the poke's own authored seq is ordered after one. The poke is never
-   * demanded, so it adds no root of its own to that pass. */
-  let pokes = 0;
-  const settleACycle = async (
-    engine: Engine,
-    space: MemorySpace,
-  ): Promise<void> => {
-    pokes += 1;
-    const poke = clientRuntime.getCell<{ n: number }>(
-      space,
-      `warm-cycle-poke-${pokes}`,
-      undefined,
-    );
-    await poke.sync();
-    const tx = clientRuntime.edit();
-    poke.withTx(tx).set({ n: pokes });
-    expect((await tx.commit()).error).toBeUndefined();
-    await settleServing(engine, clientRuntime, space);
+  /** The count of warm-demand captures across every tenure: each tenure
+   * counts a warm notice once, when the notice reaches its feed. */
+  const warmCaptures = (): number => host!.stats().demand.warmWakes;
+
+  /** A fresh space to serve, and its engine. */
+  const newTarget = async (
+    passphrase: string,
+  ): Promise<{ space: MemorySpace; engine: Engine }> => {
+    const space = (await Identity.fromPassphrase(passphrase))
+      .did() as MemorySpace;
+    return { space, engine: await server.engineForSpace(space) };
   };
+
+  /** Issue a warm request for `id` in `space`, as the serving-side
+   * provisioning path does once it has staged setup there. */
+  const requestWarm = (engine: Engine, space: MemorySpace, id: string) =>
+    server.noteExecutorCommit({
+      space,
+      seq: serverSeq(engine),
+      class: "authored",
+      sessionId: "warm-issuer",
+      writes: [{ id, scopeKey: "space" }],
+      warm: true,
+    });
+
+  /** Whether `space` has a live session other than the service's own. */
+  const hasClientSession = (space: MemorySpace): boolean =>
+    server.hasLiveSessionsForSpace(space, {
+      excludePrincipal: serviceSigner.did(),
+    });
 
   beforeEach(() => {
     server = newSharedServer();
     servingRuntime = undefined;
     failNextRuntimeFor = undefined;
+    failNextCycle = false;
     activations = new ArrivalLog();
+    parks = new ArrivalLog();
     stubFirings = new ArrivalLog();
-    pokes = 0;
   });
 
   afterEach(async () => {
     await host?.close();
     host = undefined;
     await clientRuntime?.dispose();
+    clientRuntime = undefined;
     await clientManager?.close();
+    clientManager = undefined;
     await server.close();
   });
 
@@ -384,145 +413,176 @@ describe("executor-warm-request", () => {
       const firstTenure = activations.entries.length;
       const target = host!.spaceServer(pSpace)!;
       const pEngine = await server.engineForSpace(pSpace);
-      const terminals = () => host!.stats().structureLoadTerminal;
-      // Let the FIRST tenure's demand pass settle: the client's watch
-      // root is an absent doc with no pattern meta, so it terminalizes
-      // exactly once — the baseline the successor's arithmetic builds
-      // on (the session's registry rows survive the park, so the
-      // SUCCESSOR terminalizes the same root once again).
-      const t0 = terminals();
-      await settleACycle(pEngine, pSpace);
-      expect(terminals()).toBeGreaterThanOrEqual(t0 + 1);
-      const t1 = terminals();
 
-      // The park-window race: park() flips the tenure inactive
-      // SYNCHRONOUSLY and tears down asynchronously, so two warm
-      // notices fired here land while the server is REGISTERED,
-      // INACTIVE, and NOT yet re-activating — each chains the
-      // park-reactivation continuation, and only ONE #activate call
-      // wins. The fix buffers both notices for the successor; before
-      // it, the second notice's warm demand died with the old tenure.
+      // park() makes the tenure inactive synchronously and tears it down
+      // asynchronously, so both warm notices land while the server is
+      // registered, inactive, and not yet re-activating. Each chains the
+      // host's re-activation after the park, and one activation serves
+      // them both.
       const parked = target.park("idle");
-      const seq = serverSeq(pEngine);
-      server.noteExecutorCommit({
-        space: pSpace,
-        seq,
-        class: "authored",
-        sessionId: "warm-race-issuer",
-        writes: [{ id: "of:warm-race-c1", scopeKey: "space" }],
-        warm: true,
-      });
-      server.noteExecutorCommit({
-        space: pSpace,
-        seq,
-        class: "authored",
-        sessionId: "warm-race-issuer",
-        writes: [{ id: "of:warm-race-c2", scopeKey: "space" }],
-        warm: true,
-      });
+      requestWarm(pEngine, pSpace, "of:warm-race-c1");
+      requestWarm(pEngine, pSpace, "of:warm-race-c2");
+      const captured = warmCaptures();
       await parked;
 
-      // The successor tenure must hold BOTH staged instances as warm
-      // demand: each is an absent doc with no pattern meta, so each
-      // captured root TERMINALIZES exactly once (stage P2-F's
-      // confirmed-synced-no-meta state) — the per-root, once-per-
-      // episode counter that distinguishes one captured root from
-      // two. The successor's expected delta is exactly THREE: the
-      // client session's surviving watch root re-terminalizes, plus
-      // c1, plus c2. Before the fix the count stopped at +2 — the
-      // first notice reactivated the space, the second was dropped
-      // with the dying tenure.
+      // The successor captures both notices as warm demand.
       await activatedSince(pSpace, firstTenure);
-      await settleACycle(pEngine, pSpace);
-      expect(terminals()).toBeGreaterThanOrEqual(t1 + 3);
+      expect(warmCaptures() - captured).toBe(2);
     } finally {
       cancel();
     }
   });
 
   it("re-buffers drained warm notices when the activation they were drained into FAILS — the warm demand reaches the eventual successor (OW46-family, no crash required)", async () => {
-    // The failure is stubbed into runtime construction, so the successor
-    // must construct one: a runtime kept from the idle park below would
-    // serve it without.
-    host = newHost({ parkedRuntimeRetentionMs: 0 });
-
-    // A live target, activated the ordinary way (as in the park-race
-    // pin); the failure under test is downstream of ordinary activation.
-    clientManager = SharedServerStorageManager.connectTo(server, {
-      as: aliceSigner,
-    });
-    clientRuntime = new Runtime({
-      apiUrl: new URL(import.meta.url),
-      storageManager: clientManager,
-    });
-    const pSigner = await Identity.fromPassphrase("warm fail space");
-    const pSpace = pSigner.did() as MemorySpace;
-    const demandCell = clientRuntime.getCell<{ ping: number }>(
-      pSpace,
-      "warm-fail-demand",
-      undefined,
+    // The target has no client session and no events, so once the
+    // activation fails, the warm notice it drained is the only thing that
+    // can bring the space back.
+    host = newHost();
+    const { space: pSpace, engine: pEngine } = await newTarget(
+      "warm fail space",
     );
-    const cancel = demandCell.sink(() => {});
-    try {
-      await activated(pSpace);
-      const firstTenure = activations.entries.length;
-      const target = host!.spaceServer(pSpace)!;
-      const pEngine = await server.engineForSpace(pSpace);
-      const terminals = () => host!.stats().structureLoadTerminal;
-      const t0 = terminals();
-      await settleACycle(pEngine, pSpace);
-      expect(terminals()).toBeGreaterThanOrEqual(t0 + 1);
-      const t1 = terminals();
+    failNextRuntimeFor = pSpace;
+    requestWarm(pEngine, pSpace, "of:warm-fail-c1");
+    await stubFirings.reached(1);
+    await activations.matching((entry) =>
+      entry.space === pSpace && entry.outcome === "failed"
+    );
 
-      // Arm the one-shot failure, then fire ONE warm notice in the park
-      // window: the host buffers it and chains the reactivation, whose
-      // activation DRAINS the buffer into the successor and then dies
-      // on the stubbed runtime construction — the post-drain failure
-      // (the lease-unavailable refusal lands in the same arm). Before
-      // the fix, the drained notice died with that server and nothing
-      // re-issued it.
-      failNextRuntimeFor = pSpace;
-      const parked = target.park("idle");
-      const seq = serverSeq(pEngine);
-      server.noteExecutorCommit({
-        space: pSpace,
-        seq,
-        class: "authored",
-        sessionId: "warm-fail-issuer",
-        writes: [{ id: "of:warm-fail-c1", scopeKey: "space" }],
-        warm: true,
-      });
-      await parked;
-      // The stubbed failure has consumed the reactivation (the stub
-      // clears itself when it fires) and the space has no server.
-      await stubFirings.reached(1);
-      await activations.matching((entry) =>
-        entry.space === pSpace && entry.outcome === "failed"
-      );
-      expect(host!.spaceServer(pSpace)).toBeUndefined();
+    await activated(pSpace);
+    expect(hasClientSession(pSpace)).toBe(false);
+    // The failed tenure and its successor each captured the notice.
+    expect(warmCaptures()).toBe(2);
+  });
 
-      // The recovery: the failed activation's park re-activates the
-      // space after the failure-park backoff (the session is live and c1
-      // is re-buffered), and a SECOND warm notice (a later provisioning
-      // batch) arriving meanwhile joins that activation. The re-buffered
-      // first notice must ride along — the successor's demand pass must
-      // hold BOTH staged roots (+ the session's re-terminalizing watch
-      // root): delta +3. Before the fix the count stopped at +2 — c1's
-      // warm demand died with the failed activation.
-      server.noteExecutorCommit({
-        space: pSpace,
-        seq: serverSeq(pEngine),
-        class: "authored",
-        sessionId: "warm-fail-issuer",
-        writes: [{ id: "of:warm-fail-c2", scopeKey: "space" }],
-        warm: true,
-      });
-      await activatedSince(pSpace, firstTenure);
-      await settleACycle(pEngine, pSpace);
-      expect(terminals()).toBeGreaterThanOrEqual(t1 + 3);
-    } finally {
-      cancel();
-    }
+  it("re-activates a sessionless space for the warm notices of an activation that threw before its server parked", async () => {
+    // The first activation throws out of `activate()` without parking. The
+    // target has no client session and no events, so the warm notice its
+    // server drained is the only thing that can bring the space back.
+    host = newHost();
+    const { space: pSpace, engine: pEngine } = await newTarget(
+      "warm throw space",
+    );
+    const activate = SpaceServer.prototype.activate;
+    let throwNext = true;
+    using _activate = stub(
+      SpaceServer.prototype,
+      "activate",
+      function (this: SpaceServer) {
+        if (!throwNext) return activate.call(this);
+        throwNext = false;
+        return Promise.reject(new Error("stubbed activation throw (test)"));
+      },
+    );
+    requestWarm(pEngine, pSpace, "of:warm-throw-c1");
+    await activations.matching((entry) =>
+      entry.space === pSpace && entry.outcome === "failed"
+    );
+
+    await activated(pSpace);
+    expect(hasClientSession(pSpace)).toBe(false);
+    // The server that threw and its successor each captured the notice.
+    expect(warmCaptures()).toBe(2);
+  });
+
+  it("re-activates a sessionless space for the warm request its tenure took and then parked `loop-failed` on (serving-loop.md §1)", async () => {
+    // The warm notice activates the target and reaches the tenure's feed,
+    // and the tenure's first wave cycle throws. The target has no client
+    // session and no events, so the warm request is the only thing that
+    // can bring it back.
+    host = newHost();
+    const { space: pSpace, engine: pEngine } = await newTarget(
+      "warm loop failure space",
+    );
+    failNextCycle = true;
+    requestWarm(pEngine, pSpace, "of:warm-loop-failure-c1");
+    await activated(pSpace);
+    const firstTenure = activations.entries.length;
+    await parks.matching((entry) =>
+      entry.space === pSpace && entry.reason === "loop-failed"
+    );
+
+    await activatedSince(pSpace, firstTenure);
+    expect(hasClientSession(pSpace)).toBe(false);
+    expect(warmCaptures()).toBe(2);
+  });
+
+  it("re-activates a sessionless space for a warm request that reached its serving tenure before the tenure parked `loop-failed`", async () => {
+    // The second warm notice reaches the tenure's feed while it serves, and
+    // the tenure's next wave cycle throws.
+    host = newHost();
+    const { space: pSpace, engine: pEngine } = await newTarget(
+      "warm mid-tenure space",
+    );
+    requestWarm(pEngine, pSpace, "of:warm-mid-tenure-c1");
+    await activated(pSpace);
+    const firstTenure = activations.entries.length;
+    expect(host.spaceServer(pSpace)?.active).toBe(true);
+    failNextCycle = true;
+    requestWarm(pEngine, pSpace, "of:warm-mid-tenure-c2");
+    await parks.matching((entry) =>
+      entry.space === pSpace && entry.reason === "loop-failed"
+    );
+
+    await activatedSince(pSpace, firstTenure);
+    // The first tenure captured c1 and then c2, and its successor both.
+    expect(warmCaptures()).toBe(4);
+  });
+
+  it("re-activates a sessionless space for the documents a lifecycle verb staged, when its tenure parks `loop-failed` after the verb", async () => {
+    // The tenure takes the verb's staged documents as warm demand while
+    // the verb runs, before the verb's warm notice names them again. The
+    // verb's confirm step arms a failure for the cycle after its own.
+    host = newHost();
+    const { space: pSpace } = await newTarget("warm verb space");
+    await host.runLifecycleVerb(pSpace, {
+      name: "stage",
+      run: async (runtime) => {
+        const staged = runtime.getCell<{ staged: boolean }>(
+          pSpace,
+          "warm-verb-staged",
+          undefined,
+        );
+        const outcome = await runtime.editWithRetry((tx) => {
+          runtime.stampServerRun(tx, {
+            actionId: "test-verb/stage",
+            kind: "bookkeeping",
+          });
+          staged.withTx(tx).set({ staged: true });
+        });
+        expect(outcome.error).toBeUndefined();
+        return staged.getAsNormalizedFullLink().id;
+      },
+      demandRoots: (id) => [id],
+      confirm: () => {
+        failNextCycle = true;
+        return Promise.resolve();
+      },
+    });
+    const firstTenure = activations.entries.length;
+    await parks.matching((entry) =>
+      entry.space === pSpace && entry.reason === "loop-failed"
+    );
+
+    await activatedSince(pSpace, firstTenure);
+    expect(hasClientSession(pSpace)).toBe(false);
+  });
+
+  it("does not carry a warm request past a tenure that took it and parked idle", async () => {
+    // A later warm request activates the space again, and its tenure
+    // captures that request alone.
+    host = newHost();
+    const { space: pSpace, engine: pEngine } = await newTarget(
+      "warm idle space",
+    );
+    requestWarm(pEngine, pSpace, "of:warm-idle-c1");
+    await activated(pSpace);
+    await host.spaceServer(pSpace)!.park("idle");
+    expect(warmCaptures()).toBe(1);
+
+    const firstTenure = activations.entries.length;
+    requestWarm(pEngine, pSpace, "of:warm-idle-c2");
+    await activatedSince(pSpace, firstTenure);
+    expect(warmCaptures()).toBe(2);
   });
 });
 

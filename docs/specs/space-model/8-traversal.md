@@ -279,6 +279,49 @@ Traversal uses cycle trackers to avoid infinite recursion across:
 
 For `CompoundCycleTracker`, disposal removes empty per-key entries.
 
+A combinator branch (`anyOf`, `oneOf`, `allOf`) evaluates the same value at the
+same address as the schema it belongs to, so no tracker keyed on values sees it
+come back. A union whose handle branch names the union itself, as
+`type Recursive = Cell<Recursive> | null` generates, returns to its own
+traversal that way. A branch that reaches a traversal still in progress at its
+own position, under the same schema, stands for that traversal's own result,
+which the traversal that began the position reaches as a fixed point in rounds:
+
+- The first round takes every such branch as no match.
+- Each later round takes, in a branch's place, the result the traversal it comes
+  back to had in the latest round that reached it. A traversal reached again
+  within a round takes its result from earlier in the round, so a round
+  traverses each schema at the position once.
+- Whether a branch matches turns on the value and on whether what it stands for
+  matched, never on what that holds. Under `anyOf` and `allOf` each round
+  matches everything the round before did. Once a round leaves no traversal a
+  branch came back to matching where what stood in for it did not, the next
+  round would take the same branches. That round matches as the schema
+  unrolled does, and selects every property the unrolled schema selects:
+  `R = anyOf(A, allOf(R, B))` selects what `A` and `B` both select. Every round
+  before it matches a traversal the rounds before it did not, so the rounds
+  number at most one more than the schemas at the position.
+- Where two matching branches project one property differently, the merge
+  keeps the later branch's projection, and the round's own merges decide which
+  that is, which need not be the one an unrolling keeps. An unrolling need not
+  settle on one: `R = anyOf(A, S)` with `S = anyOf(B, R)`, where `A` and `B`
+  select different parts of one property, keeps `A`'s projection unrolled to
+  an odd depth and `B`'s to an even one.
+- A `oneOf` can reject in one round what it accepted in the round before, and so
+  has no fixed point. There the round before the first such rejection stands.
+
+A result that took something standing in for a traversal, itself or through a
+branch below it, holds only for its round, so it is returned but not memoized.
+The traversal that began the position is memoized once its rounds settle.
+
+The schema-only walks that evaluate a union branch by branch without a value —
+the type pruning behind `schemaAcceptsType()` and `isOpaquePosition()`, and the
+`asCell` follow cap (`ContextualFlowControl.getAsCellFollowScopeCap()`) — come
+back to such a union through its reference in the same way. Each walks a branch
+list once along its path: walking it again decides nothing new, so it adds no
+match to an `anyOf` or `oneOf`, no constraint to an `allOf`, and no narrower
+follow cap.
+
 ---
 
 ## Known Non-Standard JSON Schema Behavior
@@ -309,6 +352,7 @@ Behavior in this spec is verified by:
 - `packages/runner/test/handle-declared-by-definition.test.ts`
 - `packages/runner/test/query.test.ts`
 - `packages/runner/test/schema-view.test.ts`
+- `packages/runner/test/recursive-handle-union.test.ts`
 
 These include regression tests for:
 
@@ -319,6 +363,8 @@ These include regression tests for:
 - defaults via resolved `$ref`
 - a handle declared by the definition a position names by `$ref`
 - cycle-tracker cleanup
+- a union whose branch returns to its own position, in traversal and in the
+  schema-only walks
 
 ---
 

@@ -2847,6 +2847,40 @@ describe("Phase 3 events-down (serving side)", () => {
     await awaitActive();
   });
 
+  it("reactivates a space with undelivered events and no session after its activation and the events check both fail to open the engine", async () => {
+    // With no session to see, the gate after a failed activation looks
+    // for undelivered events, and that look needs the engine the
+    // activation just failed to open. Failing it too must not end the
+    // recovery: the host activates to look again.
+    const engine = await server.engineForSpace(space);
+    const engineForSpace = server.engineForSpace.bind(server);
+    let engineOpenFailures = 2;
+    server.engineForSpace = (openedSpace) => {
+      if (engineOpenFailures === 0) return engineForSpace(openedSpace);
+      engineOpenFailures -= 1;
+      return Promise.reject(new Error("induced engine open failure"));
+    };
+    host = newHost();
+    const stream = { id: "of:engine-open-failure-piece", path: ["stream"] };
+    const appended = await server.commitDelegatedAppend({
+      targetSpace: space,
+      targetStream: streamEntriesDocId(stream),
+      targetStreamLink: stream,
+      eventId: "evt-engine-open-failure",
+      payload: {},
+      actingPrincipal: aliceSigner.did(),
+      actingSession: "engine-open-failure-session",
+      capabilityRef: "cap-engine-open-failure",
+      sessionId: `service:${space}`,
+      localSeq: 990_400,
+    });
+    expect(appended.deduped).toBe(false);
+    expect(Engine.selectPendingStreamEventDocs(engine).length)
+      .toBeGreaterThanOrEqual(1);
+    await awaitActive();
+    expect(engineOpenFailures).toBe(0);
+  });
+
   it("same-space cascade (LT1): the served handler's send commits a durable wave-carried entry with the INHERITED actor — processed exactly once", async () => {
     ({ manager: clientManager, runtime: clientRuntime } = openClient());
     const engine = await server.engineForSpace(space);

@@ -250,7 +250,12 @@ Delta 2026-08-05 — stage F lands (the serving loop; this PR):
   tests pin the same re-activation after a serving-loop failure and
   after a failed activation; each opens the client's session with a
   read, so that no write races the park and re-activates the space by
-  the admission path instead.
+  the admission path instead. A space with no client session comes
+  back the same way for a warm request its tenure received and did not
+  serve: `packages/runner/test/executor-warm-request.test.ts` pins that
+  after a loop failure, after a failed activation, and after an
+  activation that threw before parking. It also pins that an idle park
+  ends the request.
 - serving-loop §6 step 2's re-mark: PARTIAL by design in Phase 1 —
   activation runs `selectStaleBasisInstances` and surfaces the stale
   set (counted, logged), and recovery CORRECTNESS rides

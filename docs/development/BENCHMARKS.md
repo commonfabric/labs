@@ -146,6 +146,16 @@ two outputs. This shared ancestry exercises repeated paths to the same upstream
 value. Replica setup and plan indexing stay outside timing; the timed interval
 covers one proof against unchanged values.
 
+`packages/runner/test/executor-sustained-input.bench.ts` measures how long the
+serving watermark takes to cover an input while input keeps arriving. Each
+iteration opens a fresh served space outside the timed interval, then starts a
+stream that commits one input at every settle barrier and stops after eight wave
+cycles. The timed interval runs from the stream's start, which commits its first
+input, to the watermark document covering that input. Each iteration writes the
+per-input admission-to-coverage times and cycle counts, summarized as P50, P90
+and maximum over every streamed input, and the loop's exhaustion counters, to
+stderr.
+
 `packages/runner/test/materializer-writers.bench.ts` measures
 `collectMaterializerWritersForLog()` over logs of 100, 1,000, and 3,500 deep
 reads of one document, the entity eight materializers write, each materializer

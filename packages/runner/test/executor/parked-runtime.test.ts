@@ -30,7 +30,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "../../src/storage/v2-emulate.ts";
-import { ArrivalLog } from "../support/serving-waits.ts";
+import { ArrivalLog, awaitEach } from "../support/serving-waits.ts";
 
 const spaceSigner = await Identity.fromPassphrase("parked runtime space");
 const space = spaceSigner.did() as MemorySpace;
@@ -112,6 +112,9 @@ describe("parked-runtime", () => {
   /** Each activation's outcome, by space. */
   let activations: ArrivalLog<{ space: string; outcome: string }>;
 
+  /** Each wave cycle a tenure completes, by space. */
+  let cycles: ArrivalLog<MemorySpace>;
+
   /** Module-graph evaluations the serving runtimes have run. */
   const evaluations = (): number =>
     evaluationSpies.reduce((total, each) => total + each.calls.length, 0);
@@ -159,6 +162,7 @@ describe("parked-runtime", () => {
         parks.record({ space: parked, reason }),
       onActivationSettled: (activated, outcome) =>
         activations.record({ space: activated, outcome }),
+      onWaveCycle: (cycled) => cycles.record(cycled),
     });
 
   /** A client runtime in the ON posture, as `alice`. */
@@ -311,6 +315,7 @@ describe("parked-runtime", () => {
     disposeServing = (runtime) => runtime.dispose();
     parks = new ArrivalLog();
     activations = new ArrivalLog();
+    cycles = new ArrivalLog();
   });
 
   afterEach(async () => {
@@ -621,7 +626,9 @@ describe("parked-runtime", () => {
       serving.getCell<{ value: number }>(space, "argument-2").withTx(tx)
         .set({ value: 100 });
       const tenure = host.spaceServer(space)!;
-      expect(tenure.suspendedOnInput).toBe(true);
+      // The reader can see a wave's values while the loop still runs the
+      // cycle after it.
+      await awaitEach(cycles, () => tenure.suspendedOnInput);
 
       // The park refuses writes from its first step, and offers the runtime
       // only at its last.

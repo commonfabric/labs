@@ -83,6 +83,29 @@ imported, so wiring one up as above satisfies the check. A dependency that is
 declared without a local import on purpose goes in the allowlist in
 `tasks/check-unused-deps.ts` with a one-line reason.
 
+### npm packages in the compiled binaries
+
+`deno task build-binaries` embeds in the `toolshed` and `cf` binaries only the
+npm packages that each binary's module graph reaches. The graph starts at the
+binary's entry point and at every module in a path the build embeds with
+`--include`. It follows static imports and dynamic imports whose specifier is a
+string literal. Each reached package is embedded whole, with its dependencies.
+Deno selects a package's platform-specific dependencies by operating system and
+processor but not by C library, so a Linux binary embeds both the glibc and the
+musl variant of each. An npm package that a binary loads only through a
+specifier computed at run time has to be named in `tasks/build-binaries.ts` with
+`--include npm:<package>`. Without that, the import fails when the binary runs,
+though it succeeds from source.
+
+The toolshed embeds the pattern trees so that it can serve them, which puts
+every module in them into its graph. It leaves out the files there that it never
+serves: the `integration/` and `baselines/` directories of `packages/patterns`,
+every test file (`*.test.ts` and `*.test.tsx`), and every iframe guest source,
+which the iframe wrapper generator has already bundled into each generated
+`main.tsx`. An npm import in a pattern tree belongs in one of those files.
+`tasks/build-binaries.test.ts` fails when any other module in a pattern tree
+reaches an npm package that the rest of the toolshed does not.
+
 ## Packages that must resolve to a single copy
 
 Most packages can be resolved twice without anyone noticing. A few cannot,

@@ -33,6 +33,16 @@ array-typed inputs and mapped-array results remains separate work: the public
 `Reactive<T>` alias is still `T`. See the
 [aggregate contracts](../../features/collection-aggregates.md).
 
+### Narrowing a scoped cell nested inside a print
+
+A scoped cell that capability narrowing reaches directly is rebuilt with its
+original scope and a narrowed cell. A scoped cell held by an optional member of
+a printed value remains whole: the member prints as a union, and capability
+narrowing does not reach the scope wrapper through that union. A read of one
+value path therefore retains the authored cell capability and the full value
+shape. Completing least-capability and path-sensitive shrinking for this shape
+requires reaching the cell through the printed union while retaining its scope.
+
 ## Implementation Snapshot (March 17, 2026)
 
 - Landed:

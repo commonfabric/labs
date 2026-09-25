@@ -2130,13 +2130,13 @@ function objectLiteralHasPreservedValueTypeNodes(
       state,
     );
     // Inference can erase a scope wrapper or print a writer binding as a
-    // structural function type. Authored syntax retains both declarations.
+    // structural function type. The explicit node names what it loses: a scope
+    // wrapper, which a node printed from the binding's declared type names
+    // too, and a writer binding, which only authored syntax names.
     if (
       explicit &&
       (namesValueBinding(explicit.typeNode, checker) ||
-        typeNodeContainsScopeWrapper(explicit.typeNode) ||
-        (explicit.preservedTypeNode &&
-          typeNodeContainsScopeWrapper(explicit.preservedTypeNode)))
+        typeNodeContainsScopeWrapper(explicit.typeNode))
     ) {
       return true;
     }

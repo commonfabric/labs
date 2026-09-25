@@ -48,16 +48,33 @@ export default pattern<Input<${argument}>>(({ c }) => ({
   };
 }
 
-/** The input and result schemas of the first `lift()` in `source`. */
-async function liftSchemas(source: string): Promise<unknown[]> {
+/**
+ * The input and result schemas of the one `lift()` in `source` whose callback
+ * reads `read`.
+ */
+async function liftSchemas(
+  source: string,
+  read: string,
+): Promise<{ input: unknown; result: unknown }> {
   const output = await transformSource(source, {
     types: COMMONFABRIC_TYPES,
     typeCheck: true,
   });
-  const [lift] = callsNamed(parseModule(output), "lift");
-  return lift!.arguments
-    .filter(ts.isSatisfiesExpression)
-    .map((argument) => literalToValue(argument.expression));
+  const root = parseModule(output);
+  const lifts = callsNamed(root, "lift").filter((lift) =>
+    lift.arguments[0]?.getText(root).includes(read)
+  );
+  if (lifts.length !== 1) {
+    throw new Error(`Expected one lift reading ${read}, found ${lifts.length}`);
+  }
+  const [, input, result] = lifts[0]!.arguments;
+  const schema = (argument: ts.Expression | undefined) => {
+    if (!argument || !ts.isSatisfiesExpression(argument)) {
+      throw new Error("Expected a schema literal");
+    }
+    return literalToValue(argument.expression);
+  };
+  return { input: schema(input), result: schema(result) };
 }
 
 /**
@@ -129,6 +146,48 @@ describe("printed type node schema", () => {
           required: ["text"],
           asCell: ["cell"],
         }),
+        scope: "user",
+      };
+
+      expect(capture).toEqual(scoped);
+      expect(result).toEqual(scoped);
+    });
+
+    it("reads the instantiated fields of a scoped tuple holding an empty tuple", async () => {
+      const { capture, result } = await schemasOfBinding(
+        "PerUser<[Box<T>, []]>",
+        "number",
+      );
+      const scoped = {
+        type: "array",
+        items: {
+          anyOf: [{ type: "array", items: false }, box({ type: "number" })],
+        },
+        scope: "user",
+      };
+
+      expect(capture).toEqual(scoped);
+      expect(result).toEqual(scoped);
+    });
+
+    it("keeps a cell argument in a scoped tuple holding an empty tuple", async () => {
+      const { capture, result } = await schemasOfBinding(
+        "PerUser<[Box<T>, []]>",
+        "Writable<{ text: string }>",
+      );
+      const scoped = {
+        type: "array",
+        items: {
+          anyOf: [
+            { type: "array", items: false },
+            box({
+              type: "object",
+              properties: { text: { type: "string" } },
+              required: ["text"],
+              asCell: ["cell"],
+            }),
+          ],
+        },
         scope: "user",
       };
 
@@ -213,7 +272,10 @@ export default pattern<{ n: number }>(({ n }) => ({
     });
   });
 
-  describe("a type the checker will not print", () => {
+  describe("a type holding an empty tuple", () => {
+    // `Default<[]>` resolves to `[] & brand`, and the checker prints a type
+    // holding `[]` only when asked to.
+
     for (
       const [item, itemSchema] of [
         ["string", { type: "string" }],
@@ -289,20 +351,61 @@ export default function contextualCell() {
       });
     }
 
-    it("reads an array of cells with an empty default by its type", async () => {
-      const [, result] = await liftSchemas(
+    it("keeps the cell boundary of an array of cells with an empty default", async () => {
+      const { result } = await liftSchemas(
         `${IMPORTS}interface Item { title: string; attachments: Writable<any>[] | Default<[]>; }
 interface Input { item: Item; }
 export default pattern<Input>(({ item }) => {
   const attachments = computed(() => item.attachments ?? []);
   return { count: computed(() => attachments.length) };
 });`,
+        "item.attachments",
       );
 
       expect(result).toEqual({
         type: "array",
         items: { asCell: ["cell"] },
         default: [],
+      });
+    });
+
+    it("keeps the items and default of an element type the module does not import through capability narrowing", async () => {
+      const output = await transformFiles({
+        "/queue.tsx":
+          `import { type Default, pattern, type PerUser, Writable } from "commonfabric";
+interface Run { status: string; }
+export interface Entry { host: string; run: PerUser<Writable<Run>>; }
+interface QueueIO { entries: Writable<Entry[] | Default<[]>>; }
+export default pattern<QueueIO, QueueIO>(({ entries }) => ({ entries }));`,
+        "/main.tsx":
+          `import { computed, pattern, Writable } from "commonfabric";
+import Queue from "./queue.tsx";
+export default pattern<{ n: number }>(() => {
+  const queue = Queue({ entries: Writable.of([]) });
+  return {
+    status: computed(() => queue.entries.get()[0]?.run.get().status ?? ""),
+  };
+});`,
+      }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+      const [input] = callSchemas(parseModule(output["/main.tsx"]!), "lift");
+      const queue = (input!.properties as Schema).queue as Schema;
+
+      expect((queue.properties as Schema).entries).toEqual({
+        type: "array",
+        items: { $ref: "#/$defs/Entry" },
+        default: [],
+        asCell: ["readonly"],
+      });
+      expect((input!.$defs as Schema).Entry).toEqual({
+        type: "object",
+        properties: {
+          host: { type: "string" },
+          run: {
+            $ref: "#/$defs/Run",
+            asCell: [{ kind: "cell", scope: "user" }],
+          },
+        },
+        required: ["host", "run"],
       });
     });
   });
@@ -982,7 +1085,7 @@ export default pattern<Record<string, never>>(() => {
       // The optional member prints as a union holding the scoped cell: the
       // union unfolds, and the scoped cell is kept whole rather than taken
       // apart.
-      const [capture] = await liftSchemas(
+      const { input: capture } = await liftSchemas(
         `import { computed, pattern, wish, Writable, type PerUser } from "commonfabric";
 interface Note { title: string; }
 export default pattern<{ x: string }>(() => {
@@ -992,6 +1095,7 @@ export default pattern<{ x: string }>(() => {
   });
   return { title: computed(() => found.result?.note?.get()?.title) };
 });`,
+        "found.result?.note",
       );
 
       expect((capture as Schema).properties).toMatchObject({
@@ -1013,7 +1117,7 @@ export default pattern<{ x: string }>(() => {
     it("reads elements compared only by identity inside a printed value as comparable", async () => {
       // Reading `title` as well leaves nothing to shrink, so the node the
       // identity pass builds is the one schema generation reads.
-      const [capture] = await liftSchemas(
+      const { input: capture } = await liftSchemas(
         `import { computed, equals, pattern, Writable } from "commonfabric";
 interface Note { title: string; body: string; }
 export default pattern<{
@@ -1025,6 +1129,7 @@ export default pattern<{
     String((doc.get().notes ?? []).some((n) => equals(n, self)))
   ),
 }));`,
+        "doc.get().notes",
       );
 
       expect((capture as Schema).properties).toMatchObject({
@@ -1040,10 +1145,10 @@ export default pattern<{
       });
     });
 
-    it("keeps the alias a cell inside a printed value is given", async () => {
-      // The cell's value type expands `EntriesValue`; the type argument its
-      // wrapper was given keeps the name.
-      const [capture] = await liftSchemas(
+    it("prints the value of a cell inside a printed value, expanded, where the expansion holds an empty tuple", async () => {
+      // With empty tuples printable, the cell's value is printed expanded, and
+      // keeps its items and default.
+      const { input: capture } = await liftSchemas(
         `import { Cell, computed, Default, pattern, wish } from "commonfabric";
 interface Entry { readonly profile: Cell<{ name: string }>; }
 type EntriesValue = Entry[] | Default<[]>;
@@ -1058,6 +1163,7 @@ export default pattern<{ x: string }>(() => {
     ),
   };
 });`,
+        "found.result?.entries",
       );
 
       expect((capture as Schema).properties).toMatchObject({
@@ -1066,7 +1172,12 @@ export default pattern<{ x: string }>(() => {
             result: {
               anyOf: [{
                 properties: {
-                  entries: { $ref: "#/$defs/EntriesValue", asCell: ["cell"] },
+                  entries: {
+                    type: "array",
+                    items: { $ref: "#/$defs/Entry" },
+                    default: [],
+                    asCell: ["cell"],
+                  },
                 },
               }, { type: "undefined" }],
             },
@@ -1078,7 +1189,7 @@ export default pattern<{ x: string }>(() => {
     it("shrinks the aliased value of a cell inside a printed value", async () => {
       // The value is printed expanded, so shrinking reaches inside the union
       // the alias names.
-      const [capture] = await liftSchemas(
+      const { input: capture } = await liftSchemas(
         `import { computed, pattern, Writable } from "commonfabric";
 type Item =
   | { kind: "a"; x: string; extra: string }
@@ -1086,6 +1197,7 @@ type Item =
 export default pattern<{ list: Writable<Item>[] }>(({ list }) => ({
   first: computed(() => list[1]?.get().kind),
 }));`,
+        "list[1]",
       );
 
       const kindOnly = (kind: string) => ({
@@ -1104,7 +1216,7 @@ export default pattern<{ list: Writable<Item>[] }>(({ list }) => ({
     it("keeps a printed literal with a symbol-keyed property whole", async () => {
       // A symbol-keyed property says something only as a whole, so the print
       // is not shrunk to the member read.
-      const [capture] = await liftSchemas(
+      const { input: capture } = await liftSchemas(
         `import { computed, pattern, Writable } from "commonfabric";
 declare const tag: unique symbol;
 export default pattern<{
@@ -1112,6 +1224,7 @@ export default pattern<{
 }>(({ doc }) => ({
   n: computed(() => doc.get().name),
 }));`,
+        "doc.get().name",
       );
 
       expect((capture as Schema).properties).toEqual({
@@ -1139,7 +1252,7 @@ export default pattern<{
     });
 
     it("keeps a symbol-keyed printed literal whole where identity paths reach inside", async () => {
-      const [capture] = await liftSchemas(
+      const { input: capture } = await liftSchemas(
         `import { computed, equals, pattern, Writable } from "commonfabric";
 declare const tag: unique symbol;
 interface Note { title: string; body: string; }
@@ -1151,6 +1264,7 @@ export default pattern<{
     doc.get().title + String(doc.get().notes.some((n) => equals(n, self)))
   ),
 }));`,
+        "doc.get().notes",
       );
 
       expect((capture as Schema).properties).toMatchObject({
@@ -1183,7 +1297,7 @@ export default pattern<{
     });
 
     it("holds a printed nullable scoped value's nullish alternatives inside its scope wrapper", async () => {
-      const [capture] = await liftSchemas(
+      const { input: capture } = await liftSchemas(
         `import { pattern, wish, Writable, type PerUser } from "commonfabric";
 interface Named { name: string; }
 export default pattern<{ x: string }>(() => {
@@ -1191,6 +1305,7 @@ export default pattern<{ x: string }>(() => {
   const name = found.result?.get()?.name;
   return { name };
 });`,
+        "found.result",
       );
 
       expect((capture as Schema).properties).toEqual({

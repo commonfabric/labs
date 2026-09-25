@@ -40,6 +40,12 @@ export type ServingLoopStats = {
   /** Exhausted cycles, including zero-delta cycles that close no wave. */
   wavesBudgetExhausted: number;
 
+  /** Exhausted cycles whose committed wave still advanced W, to the input
+   * head the cut settle had proven covered (serving-loop.md §3's prefix
+   * coverage). A subset of `wavesBudgetExhausted`: the rest carried no
+   * watermark movement. */
+  exhaustedAdvances: number;
+
   supersededWrites: number;
   authoredSeen: number;
   effectAcks: number;
@@ -663,6 +669,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
   activeSpaces: 0,
   waves: 0,
   wavesBudgetExhausted: 0,
+  exhaustedAdvances: 0,
   supersededWrites: 0,
   authoredSeen: 0,
   effectAcks: 0,

@@ -675,7 +675,13 @@ using them is not optional in code that can reach a stored value:
   `FabricValue` without being known to be one — a schema `const` against a
   stored value, a schema default against a materialized one, a write against
   the value it replaces, a request against the snapshot a policy was checked
-  over. It is a structural walk that decides every `FabricSpecialObject` it
+  over. Its operands are values, never query-result views, at any depth. A
+  caller whose operands may hold views compares them with the runner's
+  `fabricAwareEqualThroughViews()`, which walks the views and hands the value
+  model only the special objects they read, or compares stored values (a
+  cell's `getRaw()`). `snapshotQueryResult()` is no substitute: it
+  copies a `FabricInstance` read through a view as an empty record. It is a
+  structural walk that decides every `FabricSpecialObject` it
   reaches by content rather than by properties: two of one class go to
   `valueEqual()`, and a pair whose classes differ, or with a special object on
   one side only, is unequal without either one's contents being read. Neither half serves alone: `valueEqual()` throws

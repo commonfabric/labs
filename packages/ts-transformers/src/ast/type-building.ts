@@ -397,10 +397,12 @@ export function typeToTypeNodeWithRegistry(
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
   flags = DEFAULT_TYPE_NODE_FLAGS,
 ): ts.TypeNode {
+  // Without `AllowEmptyTuple` the checker prints nothing at all for a type
+  // that holds `[]` anywhere, as `Default<[]>` resolves to `[] & brand`.
   const rawNode = context.checker.typeToTypeNode(
     type,
     context.sourceFile,
-    flags,
+    flags | ts.NodeBuilderFlags.AllowEmptyTuple,
   ) ?? context.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
 
   // Rewrite commonfabric type references to the always-resolvable
@@ -733,11 +735,7 @@ export function getPreservedTypeForBindingElement(
     },
     typeRegistry,
   );
-  return {
-    typeNode,
-    printedFrom: instantiated.type,
-    preservedTypeNode: preserved,
-  };
+  return { typeNode, printedFrom: instantiated.type };
 }
 
 /**
@@ -752,14 +750,6 @@ export interface PreservedBindingType {
 
   /** Type `typeNode` was printed from, when it was printed, not authored. */
   readonly printedFrom?: ts.Type;
-
-  /**
-   * Authored node a printed `typeNode` stands in for, with each alias that
-   * names a wrapper resolved. The printer can reduce a type to `unknown`, and
-   * this node still names the wrappers the type carried. It is for inspection,
-   * not emission: its type parameters are unresolved.
-   */
-  readonly preservedTypeNode?: ts.TypeNode;
 }
 
 /**
