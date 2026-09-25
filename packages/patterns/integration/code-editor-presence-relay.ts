@@ -15,11 +15,13 @@ type RelayClient = {
   latest?: RelayRecord;
 };
 
+/** A browser-test relay's WebSocket endpoint and cleanup operation. */
 export type PresenceRelay = {
   url: string;
   close(): Promise<void>;
 };
 
+/** Starts an isolated relay on an available loopback port. */
 export function startPresenceRelay(): PresenceRelay {
   const rooms = new Map<string, Map<WebSocket, RelayClient>>();
   const broadcast = (
