@@ -149,19 +149,26 @@ describe("cfc-nested-link-policy-applicability", () => {
 
   /**
    * Writes `profile` into a panel's `addedByProfile` as `identity`, through
-   * `schema` (the claim-bearing panel schema unless given).
+   * `schema`: the claim-bearing panel schema unless given, and no schema at
+   * all for `"none"`, so that the write records no schema input of its own.
    */
   const writeProfile = async (
     rt: Runtime,
     identity: ImplementationIdentity,
     panelId: string,
     profile: Cell<unknown>,
-    schema: JSONSchema = panelSchema,
+    schema: JSONSchema | "none" = panelSchema,
   ): Promise<string | undefined> => {
     const tx = rt.edit();
     tx.setCfcImplementationIdentity(identity);
-    const panel = rt.getCell(signer.did(), panelId, schema, tx);
-    panel.set({ addedByProfile: profile.withTx(tx) });
+    if (schema === "none") {
+      rt.getCell(signer.did(), panelId, undefined, tx).key("addedByProfile")
+        .set(profile.withTx(tx));
+    } else {
+      rt.getCell(signer.did(), panelId, schema, tx).set({
+        addedByProfile: profile.withTx(tx),
+      });
+    }
     tx.prepareCfc();
     const error = (await tx.commit()).error?.message;
     await rt.idle();
@@ -188,9 +195,11 @@ describe("cfc-nested-link-policy-applicability", () => {
       });
 
       it(`refuses a ${kind} profile ${label} written over a stored claim by a module whose schema declares none`, async () => {
-        // The claim is stored by the admitting module's first write; the
-        // forger's own schema carries no claim, so only the stored one gates
-        // its write.
+        // The claim is stored by the admitting module's first write, and the
+        // forger's own schema declares none. The write's schema input still
+        // carries the stored claim, merged in before verification, so this
+        // case holds with or without the link-write overlay; the case below,
+        // which records no schema input, is the one that depends on it.
         const rt = open();
         const profile = await make(rt, space);
         expect(await writeProfile(rt, asAdmitter, `stored-${kind}`, profile))
@@ -204,6 +213,19 @@ describe("cfc-nested-link-policy-applicability", () => {
             replacement,
             claimlessPanelSchema,
           ),
+        ).toMatch(/writeAuthorizedBy failed at \/addedByProfile/);
+      });
+
+      it(`refuses a ${kind} profile ${label} written over a stored claim through a cell with no schema`, async () => {
+        // The write records no schema input, so the one claim that gates it
+        // is the stored one the link write's target path carries.
+        const rt = open();
+        const profile = await make(rt, space);
+        expect(await writeProfile(rt, asAdmitter, `bare-${kind}`, profile))
+          .toBeUndefined();
+        const replacement = await make(rt, space, `bare-replacement-${kind}`);
+        expect(
+          await writeProfile(rt, asForger, `bare-${kind}`, replacement, "none"),
         ).toMatch(/writeAuthorizedBy failed at \/addedByProfile/);
       });
 

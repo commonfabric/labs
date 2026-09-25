@@ -174,11 +174,14 @@ describe("CFC wildcard policy applicability on links below the policy's path", (
   });
 
   it("applies a `oneOf` whose branches a nested link matches more than one of", () => {
+    // Each branch conditions the same field differently, and the value holds a
+    // link there, which matches both. Requiring exactly one branch would
+    // exclude the entry.
     const schema = {
-      type: "object",
-      properties: {
-        field: { oneOf: [{ type: "object" }, { type: "string" }] },
-      },
+      oneOf: [
+        { type: "object", properties: { field: { type: "string" } } },
+        { type: "object", properties: { field: { type: "number" } } },
+      ],
     } as const satisfies JSONSchema;
     expect(
       wildcardPolicyMatchesValue(tx, target, schema, {
