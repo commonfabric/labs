@@ -31,6 +31,9 @@ let host: ExecutorHost | undefined;
  * space). An operator-tunable posture, not a spec constant. */
 export const DEFAULT_MAX_OUTSTANDING_EFFECTS = 16;
 
+/** The longest delay `setTimeout()` honors, in milliseconds. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 /** The Phase-6 policy knobs the toolshed bootstrap threads into the
  * ExecutorHost (`SpaceServerPolicy`'s env-overridable subset). */
 export type ServerExecutionEnvPolicy = {
@@ -38,6 +41,7 @@ export type ServerExecutionEnvPolicy = {
   maxOutstandingEffects?: number;
   egressRatePerSecond?: number;
   storeReadThrough?: boolean;
+  parkedRuntimeRetentionMs?: number;
 };
 
 /**
@@ -54,7 +58,12 @@ export type ServerExecutionEnvPolicy = {
  *   value is a deliberate operator choice);
  * - the store read-through (`SpaceServerPolicy.storeReadThrough`,
  *   SERVER_EXECUTION_STORE_READ_THROUGH) defaults OFF; only the literal
- *   `true` turns it on.
+ *   `true` turns it on;
+ * - how long an idle-parked space's runtime is kept for its next tenure
+ *   (`SpaceServerPolicy.parkedRuntimeRetentionMs`,
+ *   SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS) stays the host's
+ *   built-in default unless overridden; the literal `0` keeps none, and
+ *   a value past the longest delay a timer honors reads as unset.
  *
  * Parsing is FAIL-CLOSED for the cap: an unparseable or negative value
  * ("abc", "-1", "1.5") falls back to the default and warns, instead of
@@ -120,6 +129,27 @@ export function serverExecutionPolicyFromEnv(
       maxOutstandingEffects = value;
     }
   }
+  const retentionRaw = readRaw(
+    "SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS",
+  );
+  // The retention arms a timer, and a delay past the timer's range fires
+  // at once, so such a value reads as unset rather than as "keep long".
+  const retentionValue = retentionRaw === undefined
+    ? undefined
+    : strictNonNegativeInt(retentionRaw);
+  const parkedRuntimeRetentionMs = retentionValue !== undefined &&
+      retentionValue <= MAX_TIMER_DELAY_MS
+    ? retentionValue
+    : undefined;
+  if (retentionRaw !== undefined && parkedRuntimeRetentionMs === undefined) {
+    warn(
+      "Server-execution v2: ignoring " +
+        "SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS=" +
+        `${JSON.stringify(retentionRaw)} (expected a non-negative integer ` +
+        `of at most ${MAX_TIMER_DELAY_MS}; the literal 0 keeps no parked ` +
+        "runtime); using the built-in default",
+    );
+  }
   const readThroughRaw = readRaw("SERVER_EXECUTION_STORE_READ_THROUGH");
   let storeReadThrough: boolean | undefined;
   if (readThroughRaw === "true") {
@@ -136,6 +166,9 @@ export function serverExecutionPolicyFromEnv(
     ...(maxOutstandingEffects !== undefined ? { maxOutstandingEffects } : {}),
     ...(egressRatePerSecond !== undefined ? { egressRatePerSecond } : {}),
     ...(storeReadThrough !== undefined ? { storeReadThrough } : {}),
+    ...(parkedRuntimeRetentionMs !== undefined
+      ? { parkedRuntimeRetentionMs }
+      : {}),
   };
 }
 

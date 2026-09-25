@@ -43,7 +43,9 @@ toolshed process
 ```
 
 A space is ACTIVE when it has ≥1 live client session or undelivered
-events; otherwise it MAY be parked (runtime disposed, lease released).
+events; otherwise it MAY be parked (lease released, loop stopped, and
+the runtime disposed or kept for the space's next tenure — Parking
+below).
 Activation on: session open, event append, or explicit warm request.
 *(AMENDED 2026-09-09: a fourth trigger — a pattern-lifecycle verb
 request, which the host queues on the space's serving loop; the loop
@@ -183,6 +185,54 @@ engine-direct commits produced no notice at all, so a subscribed client
 saw them only on its next own sync. Beneficial (staleness removed),
 never load-bearing: no client in the ruled flows subscribes to setup
 docs before activation.
+
+**Parking.** A park releases the lease and stops the loop. A park for a
+lost lease, a failed loop, a failed initialization or a closing host
+disposes the runtime. An IDLE park (§3's "on idle") that abandoned no
+open wave and left no effect unretired in its outbox (§4: an effect
+dispatched or held when the park closes the outbox is recovered by a
+fresh runtime's memo re-miss, and its completion carries identity only
+that outbox holds) offers it to the host instead, which keeps it for the
+space's next tenure — for `SpaceServerPolicy.parkedRuntimeRetentionMs` (default
+10 minutes; `SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS` in the
+toolshed bootstrap, where the literal `0` disposes at every park), and
+at most `maxParkedRuntimes` (default 8) across the host, the
+longest-kept disposed first. A tenure that takes a kept runtime serves
+with it as it stands: no compile, no module evaluation, no piece
+restart and no pre-sync, where a fresh runtime pays all four for every
+demanded piece. It takes one only when the runtime holds exactly the
+idle state the parked tenure left over exactly the store that tenure
+last saw:
+
+- The parked tenure leaves every demanded entity it entered, warm
+  demand included, so what the runtime serves next is the successor's
+  demand alone.
+- A kept runtime NEVER commits. Its seal destination refuses every
+  transaction it closes, and the parked tenure's own destination refuses
+  a transaction the tenure opened and closed after the park (§2's
+  stop-committing MUST, carried past the park). A refusal TAINTS the
+  runtime: something in it moved while nothing could land. One that
+  lands while the park is still under way keeps the runtime from being
+  offered at all.
+- A storage subscription taints it on any change its replica takes in —
+  a delivered frame, a load, a retraction, a reset — for its home space
+  or any other.
+- The successor, holding the lease, takes it only while the space's
+  store head is the head recorded at the park. A commit that reached the
+  store by any route fails this, including one this process's memory
+  server never admitted and so never delivered (a second process on the
+  same store), and the successor builds fresh.
+
+A tainted runtime is disposed at once, and one turned down at activation
+then, each under the same deadline as a park's own dispose
+(`parkDisposeTimeoutMs`), past which the dispose is abandoned. Kept
+state is process memory only; recovery (§6) is unchanged, and a fresh
+runtime is what every other activation builds. The cost is
+the memory the kept runtimes hold, which is what their tenures held
+while active: measured on 30 small pieces, about 3 MB of post-GC heap
+per kept runtime (1.2 MB on 10), so the defaults bound the extra at
+eight such runtimes for ten minutes each. A visit after the window
+closes pays the fresh build. Counted: `parkedRuntimes` (§7).
 
 Wiring, by plane. Every byte between these components travels on
 exactly ONE of two planes; the split is what keeps bookkeeping off
@@ -1645,9 +1695,14 @@ maxAccumulatedDeliveryFailureMs, deliveryFailureWakesArmed,
 deliveryFailureWakesFired, needsAttention: {total, byPhase},
 needsAttentionSealFailures, deliveryCheckpointWriteFailures, explicitRetries,
 dropped}, memo: {hits, misses, inflight}, outbox: {queued, completed, failed,
-budgetDeferrals}, lease: {held, lost}, push: {prioritizedSessions,
-followerSessions, mixedFlushes} }`
-(`structureLoadFailures`/`structureLoadDeferred` count demanded-structure loads
+budgetDeferrals}, lease: {held, lost}, parkedRuntimes: {retained, reused,
+discarded, held}, push: {prioritizedSessions, followerSessions,
+mixedFlushes} }`
+(`parkedRuntimes` counts the runtimes idle parks kept, those a successor
+tenure served with, and those disposed unused — expired, evicted, tainted,
+or turned down at activation because the store head moved — with `held`
+the number kept now; §1's Parking;
+`structureLoadFailures`/`structureLoadDeferred` count demanded-structure loads
 that threw / could not land yet — never-a-piece id classes are EXCLUDED from
 piece demand and count nothing, RULED 2026-08-07; `structureLoadFailures` also
 counts a piece-start commit that failed AFTER its start resolved (the §3d
