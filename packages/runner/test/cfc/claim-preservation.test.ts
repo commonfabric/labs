@@ -206,6 +206,30 @@ describe("droppedStoredClaim()", () => {
     ).toBeUndefined();
   });
 
+  it("keeps apart two paths whose segments would join to the same string", () => {
+    // `["a", "b"]` is foreign, `["a\u0000b"]` is not, and both hold the same
+    // schema object, so a memo keyed on the joined path would reuse the
+    // foreign verdict for the other one.
+    const claimed = { type: "object", properties: { pin: PIN } } as const;
+    const plain = { type: "object", properties: { pin: LABELED } } as const;
+    const shape = (node: unknown) =>
+      ({
+        type: "object",
+        properties: {
+          a: { type: "object", properties: { b: node } },
+          "a\u0000b": node,
+        },
+      }) as JSONSchema;
+    const foreign = {
+      holdsForeign: (path: readonly string[]) =>
+        path.length === 2 && path[0] === "a" && path[1] === "b",
+      variesBelow: () => true,
+    };
+    expect(droppedStoredClaim(shape(claimed), shape(plain), foreign)).toBe(
+      "the merged schema drops the stored uiContract at /a\u0000b/pin",
+    );
+  });
+
   it("returns a claim on every property that the merged schema drops", () => {
     expect(
       droppedStoredClaim(

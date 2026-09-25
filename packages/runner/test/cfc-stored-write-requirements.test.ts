@@ -1208,6 +1208,70 @@ describe("stored write requirements", () => {
       ).toBeUndefined();
     });
 
+    it("leaves the linked profile's own claim to the profile's envelope", async () => {
+      // The holder's release re-describes the profile's claims in the
+      // holder's envelope; the profile document still enforces its own.
+      const runtime = start();
+      const profileDocument = {
+        ...profileSchema("release-1"),
+        ifc: { ...WRITER_LABEL },
+      } as JSONSchema;
+      const profile = runtime.getCell(space, "own-claim-profile");
+      {
+        const tx = runtime.edit();
+        tx.setCfcTrustSnapshot({
+          id: `trust-${space}`,
+          actingPrincipal: space,
+        });
+        tx.setCfcImplementationIdentity({
+          kind: "verified",
+          moduleIdentity: "release-1",
+          sourceFile: "/profile.tsx",
+          bindingPath: ["setAvatar"],
+        });
+        runtime.getCell(space, "own-claim-profile", profileDocument, tx).set(
+          { avatar: "a" } as never,
+        );
+        expect((await tx.commit()).error).toBeUndefined();
+      }
+      {
+        const tx = runtime.edit();
+        tx.setCfcTrustSnapshot({
+          id: `trust-${space}`,
+          actingPrincipal: space,
+        });
+        markRelease(runtime, tx, "own-claim-holder");
+        runtime.getCell(
+          space,
+          "own-claim-holder",
+          holderSchema("release-1"),
+          tx,
+        )
+          .set({ profile, profiles: [profile], other: "o" } as never);
+        expect((await tx.commit()).error).toBeUndefined();
+      }
+      const value = { profile, profiles: [profile], other: "o" };
+      expect(
+        (await rewriteUnderNextRelease(runtime, "own-claim-holder", value))
+          .error,
+      ).toBeUndefined();
+
+      const tx = runtime.edit();
+      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+      tx.setCfcImplementationIdentity({
+        kind: "builtin",
+        builtinId: "mallory",
+      });
+      runtime.getCell(space, "own-claim-profile", undefined, tx).key("avatar")
+        .set("evil" as never);
+      expect(refusalOf(await tx.commit())).toContain(
+        "writeAuthorizedBy requires a trusted verified binding identity at /avatar",
+      );
+      expect(runtime.getCell(space, "own-claim-profile").get()).toEqual({
+        avatar: "a",
+      });
+    });
+
     for (const release of ["none", "unauthorized"] as const) {
       it(`keeps the claims beneath a linked profile in a write that is no release (${release})`, async () => {
         // Only the runtime's release of the piece follows a new release's
