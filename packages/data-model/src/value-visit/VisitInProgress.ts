@@ -533,9 +533,13 @@ export class VisitInProgress<
             case "mapTo": {
               const allegedKeyResult = keyResult.value;
               if (typeof allegedKeyResult !== "string") {
-                throw new Error(debugStr`Visit of key $quote${key} mapped to non-string: $quote${allegedKeyResult}`);
+                throw new Error(
+                  debugStr`Visit of key $quote${key} mapped to non-string: $quote${allegedKeyResult}`,
+                );
               } else if (isUnsafeObjectKey(allegedKeyResult)) {
-                throw new Error(debugStr`Visit of key $quote${key} mapped to unsafe key: $quote${allegedKeyResult}`);
+                throw new Error(
+                  debugStr`Visit of key $quote${key} mapped to unsafe key: $quote${allegedKeyResult}`,
+                );
               }
               keyMappedTo = allegedKeyResult;
               break;
@@ -575,7 +579,11 @@ export class VisitInProgress<
           mapResult[keyMappedTo] = valueMappedTo;
         }
 
-        const result = vis.visitedFabricPlainObjectEntry(plainObj, keyMappedTo, valueMappedTo);
+        const result = vis.visitedFabricPlainObjectEntry(
+          plainObj,
+          keyMappedTo,
+          valueMappedTo,
+        );
         if (result?.type === "mainResult") {
           return result;
         }
