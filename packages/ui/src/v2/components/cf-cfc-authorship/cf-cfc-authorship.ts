@@ -3,6 +3,7 @@ import {
   authorPrincipalCandidates,
   PRINCIPAL_CLAIM_KINDS,
   principalClaimSubject,
+  representsPrincipalSubject,
 } from "@commonfabric/runner/cfc/represents-principal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { css, html } from "lit";
@@ -78,6 +79,24 @@ const hasReadableClaim = (
   (typeof (value as { get?: unknown }).get === "function" ||
     typeof (value as { sync?: unknown }).sync === "function");
 
+/**
+ * The subject a claim of `kind` names, read as every check here reads it:
+ * `principalClaimSubject` for a kind in `PRINCIPAL_CLAIM_KINDS`, and for
+ * `represents-principal` only a well-formed DID, as
+ * `representsPrincipalSubject` requires. The runtime refuses a
+ * pattern-authored claim of those kinds in any spelling that names someone
+ * else and guards no other kind, so an atom of any other kind names nobody.
+ */
+const authorshipClaimSubject = (
+  atom: unknown,
+  kind: string,
+): string | undefined => {
+  if (!PRINCIPAL_CLAIM_KINDS.has(kind)) return undefined;
+  return kind === "represents-principal"
+    ? representsPrincipalSubject(atom)
+    : principalClaimSubject(atom, kind);
+};
+
 const labelHasRootIntegrityKind = (
   view: CfcLabelView,
   kind: string,
@@ -85,7 +104,7 @@ const labelHasRootIntegrityKind = (
   view.entries.some((entry) =>
     entry.path.length === 0 &&
     (entry.label.integrity ?? []).some((atom) =>
-      principalClaimSubject(atom, kind) !== undefined
+      authorshipClaimSubject(atom, kind) !== undefined
     )
   );
 
@@ -306,19 +325,15 @@ const principalAuthorClaim = (
 
 /**
  * Whether `atom` says its value was written by the author `author` claims:
- * `atom` is a claim of `kind` in the one spelling a reader accepts
- * (`principalClaimSubject`), and its subject is one of the claim's author ids.
- * Only a kind in `PRINCIPAL_CLAIM_KINDS` can match: the runtime refuses a
- * pattern-authored claim of those kinds in any spelling that names someone
- * else, and guards no other kind, so an atom of any other kind proves nothing.
+ * the subject `authorshipClaimSubject` reads from it is one of the claim's
+ * author ids.
  */
 export const integrityAtomMatchesAuthor = (
   atom: unknown,
   author: unknown,
   kind: string = DEFAULT_AUTHORSHIP_KIND,
 ): boolean => {
-  if (!PRINCIPAL_CLAIM_KINDS.has(kind)) return false;
-  const subject = principalClaimSubject(atom, kind);
+  const subject = authorshipClaimSubject(atom, kind);
   return subject !== undefined && authorIdsForClaim(author).includes(subject);
 };
 
@@ -331,7 +346,7 @@ const hasAuthorshipIntegrity = (
 ): boolean =>
   entries.some((entry) =>
     (entry.label.integrity ?? []).some((atom) =>
-      principalClaimSubject(atom, kind) !== undefined
+      authorshipClaimSubject(atom, kind) !== undefined
     )
   );
 

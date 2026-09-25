@@ -1187,6 +1187,8 @@ names.
 
 The component itself checks its value's `authored-by` against the same
 principal, and marks the content verified when they match. Both checks read an
-atom only in the form the runtime writes it, the object `{ kind, subject }`
-with the subject exactly as written; the `authored-by:<subject>` string form
-and other fields of the atom are not read.
+atom only as the object the runtime writes, `{ kind, subject }`, taking the
+subject exactly as written and ignoring any other field; a
+`represents-principal` subject counts only when it is a well-formed DID. The
+`authored-by:<subject>` string form is not read, and only the kinds
+`authored-by` and `represents-principal` can verify.

@@ -6192,9 +6192,13 @@ const derivePersistedLinkLabel = (
       input.target.path,
     ),
   ));
+  // Counted without the principal claims `persistedLinkEntries` strips from
+  // the view, so a view carrying only those does not stand in for the
+  // source's labels.
   const hasCarriedLabel =
-    input.cfcLabelView?.entries.some((entry) => hasLabelValues(entry.label)) ??
-      false;
+    input.cfcLabelView?.entries.some((entry) =>
+      hasLabelValues(withoutPrincipalClaims(entry.label))
+    ) ?? false;
   if (
     sourceMetadata === undefined && pendingSourceSchema === undefined &&
     !hasLabelValues(linkSchemaLabel) && !hasCarriedLabel &&
