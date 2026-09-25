@@ -331,6 +331,16 @@ export class VisitInProgress<
         lastIdx = idxNumber;
 
         const element = array[idxNumber]!;
+        const visitingResult = vis.visitingFabricArrayElement(
+          array,
+          idxNumber,
+          element,
+        );
+
+        if (visitingResult?.type === "mainResult") {
+          return visitingResult;
+        }
+
         const elemResult = this.#handleMappingAsAppropriate(
           element,
           this.#visitValue(element),
@@ -413,6 +423,15 @@ export class VisitInProgress<
     this.#stack.push(instance);
 
     try {
+      const visitingResult = vis.visitingFabricInstanceState(
+        instance,
+        state,
+      );
+
+      if (visitingResult?.type === "mainResult") {
+        return visitingResult;
+      }
+
       const stateResult = this.#handleMappingAsAppropriate(
         state,
         this.#visitValue(state),
@@ -526,6 +545,16 @@ export class VisitInProgress<
 
     try {
       for (const [key, value] of entries) {
+        const visitingResult = vis.visitingFabricPlainObjectEntry(
+          plainObj,
+          key,
+          value,
+        );
+
+        if (visitingResult?.type === "mainResult") {
+          return visitingResult;
+        }
+
         const keyResult = this.#handleMappingAsAppropriate(
           key,
           doKeys ? this.#visitValue(key) : undefined,
