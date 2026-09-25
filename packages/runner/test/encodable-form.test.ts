@@ -499,22 +499,24 @@ describe("encodable-form", () => {
   });
 
   describe("replaceArtifacts() typing", () => {
-    it("types a `FabricExecPlainObject` argument as one in its result", () => {
+    it("types a `FabricExecPlainObject` argument as one in its result, and a `FabricExecValue` as a `FabricExecValue`", () => {
       // Asserted when the file is type-checked: the carrier is never called.
       // A record is copied rather than replaced, so the narrower overload
-      // holds; a `FabricExecValue` argument gets no such promise.
+      // holds; a `FabricExecValue` argument is promised a `FabricExecValue`
+      // and nothing narrower.
 
       function carrier(record: FabricExecPlainObject, value: FabricExecValue) {
         const fromRecord: FabricExecPlainObject = replaceArtifacts(
           record,
           () => {},
         );
+        const asExecValue: FabricExecValue = replaceArtifacts(value, () => {});
         // @ts-expect-error a `FabricExecValue` argument is typed only as one
         const fromValue: FabricExecPlainObject = replaceArtifacts(
           value,
           () => {},
         );
-        return { fromRecord, fromValue };
+        return { fromRecord, asExecValue, fromValue };
       }
 
       expect(typeof carrier).toBe("function");
