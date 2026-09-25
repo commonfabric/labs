@@ -42,6 +42,7 @@ import {
   PiecesController,
   type PieceSourceActionResult,
   servedInstantiatePiece,
+  ServedLifecycleRefusal,
 } from "@commonfabric/piece/ops";
 import {
   Cell,
@@ -1730,8 +1731,9 @@ async function createWithReceipt(
       );
     } catch (error) {
       if (
-        error instanceof ServedLifecycleError && error.status >= 400 &&
-        error.status < 500 && error.status !== 408
+        error instanceof ServedLifecycleRefusal ||
+        (error instanceof ServedLifecycleError && error.status >= 400 &&
+          error.status < 500 && error.status !== 408)
       ) {
         throw error;
       }

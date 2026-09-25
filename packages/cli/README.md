@@ -861,7 +861,9 @@ synchronized.
 `--request-key <key>` retains a creation receipt on both client-executed and
 server-executed deployments. Retrying the same key returns the same piece and
 resumes incomplete registration without replacing its current content. Keep the
-same input and source when retrying; use a new key for a new document.
+same input and source when retrying; use a new key for a new document. The
+receipt identifies the original creation: supplying different input with an
+existing key does not update the note or create another one.
 
 Against a deployment that runs the serving loop — one whose published posture
 selects `EXPERIMENTAL_SERVER_EXECUTION`, which the connection adopts —

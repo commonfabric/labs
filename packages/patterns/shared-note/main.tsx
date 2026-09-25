@@ -4,7 +4,6 @@ import {
   computed,
   Default,
   handler,
-  ifElse,
   NAME,
   pattern,
   type PerSpace,
@@ -62,7 +61,7 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
       normalizePresenceParticipantName(profileName.result ?? "")
     );
     const hasProfile = computed(() =>
-      normalizePresenceParticipantName(profileName.result ?? "") !== "" &&
+      participantName !== "" &&
       profile.result !== undefined
     );
     const error = new Writable.perSession("");
@@ -88,17 +87,17 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
             placeholder="Untitled note"
             style={{ flex: "1 1 16rem", minWidth: "0" }}
           />
-          {ifElse(
-            hasProfile,
-            <cf-profile-badge variant="chip" $profile={profile.result} />,
-            <div
-              id="shared-note-profile-setup"
-              style={{ minWidth: "0", maxWidth: "100%" }}
-            >
-              <cf-text>Choose a Fabric profile to label your cursor.</cf-text>
-              {profile[UI]}
-            </div>,
-          )}
+          {hasProfile
+            ? <cf-profile-badge variant="chip" $profile={profile.result} />
+            : (
+              <div
+                id="shared-note-profile-setup"
+                style={{ minWidth: "0", maxWidth: "100%" }}
+              >
+                <cf-text>Choose a Fabric profile to label your cursor.</cf-text>
+                {profile[UI]}
+              </div>
+            )}
         </cf-hstack>
         {hasError ? <cf-text role="alert">{error}</cf-text> : null}
         {hasRecovery

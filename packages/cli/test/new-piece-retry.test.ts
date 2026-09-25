@@ -9,7 +9,10 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { pieceId } from "@commonfabric/piece";
-import { PiecesController } from "@commonfabric/piece/ops";
+import {
+  PiecesController,
+  ServedLifecycleRefusal,
+} from "@commonfabric/piece/ops";
 import { type Cell, Runtime, type RuntimeProgram } from "@commonfabric/runner";
 import { pieceListSchema } from "@commonfabric/runner/schemas";
 import {
@@ -91,7 +94,6 @@ describe("newPiece()", () => {
 
   afterEach(async () => {
     await runtime?.dispose();
-    await storageManager?.close();
     await server?.close();
   });
 
@@ -125,17 +127,20 @@ describe("newPiece()", () => {
   async function reconnect(): Promise<void> {
     const rootId = pieceId(root)!;
     await runtime.dispose();
-    await storageManager.close();
     await openClient();
     root = (await pieces.get(rootId)).getCell();
   }
 
   /** Creates a note through the CLI with a caller-owned retry identity. */
-  function createNote(requestKey: string, body: string): Promise<string> {
+  function createNote(
+    requestKey: string,
+    body: string,
+    slug?: string,
+  ): Promise<string> {
     return newPiece(
       CONFIG,
       { mainPath: "/notes/main.tsx" },
-      { requestKey, input: { title: "Imported note", body } },
+      { requestKey, input: { title: "Imported note", body }, slug },
       {
         loadPieces: () => Promise.resolve(controller),
         loadIdentity: () => Promise.resolve(signer),
@@ -180,6 +185,17 @@ describe("newPiece()", () => {
     expect((await pieces.getRegisteredPieces()).map((entry) => entry.id))
       .toEqual([created]);
     expect(await registrationAttempts()).toEqual([created]);
+  });
+
+  it("preserves a definite refusal when a different creation claims a taken slug", async () => {
+    const created = await createNote("original", "# Original", "shared-note");
+
+    await expect(createNote("other", "# Other", "shared-note"))
+      .rejects.toBeInstanceOf(ServedLifecycleRefusal);
+    await expect(createNote("other", "# Other", "shared-note"))
+      .rejects.toThrow('Slug "shared-note" already points at');
+    expect((await pieces.getRegisteredPieces()).map((entry) => entry.id))
+      .toEqual([created]);
   });
 
   it("registers the retained piece after repairing an incomplete registration", async () => {
