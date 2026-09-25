@@ -29,12 +29,25 @@ export interface UiContractHint {
 }
 
 /**
+ * The value a node was narrowed from, such as a capture written with only the
+ * members its callback reads. Only the value's own type, or the declaration
+ * spelling it, says which CFC labels it carries.
+ */
+export interface NarrowedFrom {
+  readonly type: ts.Type;
+  /** The declaration's own node for `type`, where one is at hand. */
+  readonly typeNode?: ts.TypeNode;
+}
+
+/**
  * Per-node overrides supplied by the caller, keyed by the node the hint
  * applies to. The generator only reads these, so every member is read-only.
  */
 export interface SchemaHint {
   readonly items?: unknown;
   readonly cfcUiContract?: UiContractHint;
+  /** The value the node narrows, whose CFC labels its schema keeps. */
+  readonly narrowedFrom?: NarrowedFrom;
 }
 
 export type SchemaHints = WeakMap<ts.Node, SchemaHint>;
@@ -191,6 +204,13 @@ export interface GenerationContext {
    * every child context.
    */
   uninterpretedTypeNodes?: ts.TypeNode[];
+
+  /**
+   * Reads only the CFC labels a type attaches at its top: a type that no CFC
+   * wrapper holds, other than a union or an intersection, whose members can
+   * carry labels to it, is read as accepting anything, and not formatted.
+   */
+  labelsOnly?: boolean;
 
   /**
    * Type parameters read as their arguments' types, for a payload read from

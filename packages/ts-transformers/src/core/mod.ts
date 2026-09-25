@@ -85,8 +85,10 @@
  *   Readers: ast/call-kind.ts, closures/strategies/array-method-policy.ts
  *
  * SchemaHints (WeakMap<ts.Node, SchemaHint>)
- *   Overrides default schema generation behavior (e.g., array items: false).
- *   Writers: capture analysis in schema-injection
+ *   Overrides default schema generation behavior (e.g., array items: false),
+ *   and names the value a node narrows, whose CFC labels its schema keeps.
+ *   Writers: capture analysis in schema-injection; the narrowing sites in
+ *            ast/type-building.ts and transformers/type-shrinking.ts
  *   Readers: schema-generator
  *
  * nodeLinks.capabilitySummary (NodeTypeLinks field; was CapabilitySummaryRegistry)

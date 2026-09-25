@@ -153,5 +153,96 @@ describe("CrossStageState", () => {
         ).toBeUndefined();
       });
     });
+
+    describe("recordSchemaHint()", () => {
+      const node = () =>
+        ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword);
+
+      it("keeps the hints of other kinds a node already has", () => {
+        const state = new CrossStageState();
+        const hinted = node();
+        state.recordSchemaHint(hinted, { items: false });
+        state.recordSchemaHint(hinted, {
+          cfcUiContract: { helper: "UiAction", action: "save" },
+        });
+
+        expect(state.lookupSchemaHint(hinted)).toEqual({
+          items: false,
+          cfcUiContract: { helper: "UiAction", action: "save" },
+        });
+      });
+    });
+
+    describe("recordNarrowedFrom()", () => {
+      const f = ts.factory;
+      const valueType = { flags: ts.TypeFlags.Object } as ts.Type;
+      const partType = { flags: ts.TypeFlags.Object } as ts.Type;
+      const node = () => f.createKeywordTypeNode(ts.SyntaxKind.StringKeyword);
+
+      it("records the value a node narrows", () => {
+        const state = new CrossStageState();
+        const narrowed = node();
+        state.recordNarrowedFrom(narrowed, { type: valueType });
+
+        expect(state.lookupSchemaHint(narrowed)?.narrowedFrom).toEqual({
+          type: valueType,
+        });
+      });
+
+      it("keeps the hints of other kinds the node already has", () => {
+        const state = new CrossStageState();
+        const narrowed = node();
+        state.recordSchemaHint(narrowed, { items: false });
+        state.recordNarrowedFrom(narrowed, { type: valueType });
+
+        expect(state.lookupSchemaHint(narrowed)).toEqual({
+          items: false,
+          narrowedFrom: { type: valueType },
+        });
+      });
+
+      it("records a narrowed node's value for a node narrowing it", () => {
+        const state = new CrossStageState();
+        const first = node();
+        const second = node();
+        state.recordNarrowedFrom(first, { type: valueType });
+        state.recordNarrowedFrom(second, { type: partType, typeNode: first });
+
+        expect(state.lookupSchemaHint(second)?.narrowedFrom).toEqual({
+          type: valueType,
+        });
+      });
+
+      it("leaves the node's original without a hint", () => {
+        const state = new CrossStageState();
+        const original = node();
+        const narrowed = ts.setOriginalNode(node(), original);
+        state.recordNarrowedFrom(narrowed, { type: valueType });
+
+        expect(state.schemaHints.get(original)).toBeUndefined();
+      });
+    });
+
+    describe("narrowedFrom()", () => {
+      const f = ts.factory;
+      const valueType = { flags: ts.TypeFlags.Object } as ts.Type;
+      const node = () => f.createKeywordTypeNode(ts.SyntaxKind.StringKeyword);
+
+      it("returns the value a node was recorded as narrowing", () => {
+        const state = new CrossStageState();
+        const narrowed = node();
+        state.recordNarrowedFrom(narrowed, { type: valueType });
+
+        expect(state.narrowedFrom(narrowed)).toEqual({ type: valueType });
+      });
+
+      it("returns `undefined` for a node recorded as narrowing nothing", () => {
+        const state = new CrossStageState();
+        const hinted = node();
+        state.recordSchemaHint(hinted, { items: false });
+
+        expect(state.narrowedFrom(hinted)).toBeUndefined();
+      });
+    });
   });
 });
