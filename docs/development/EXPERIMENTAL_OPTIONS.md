@@ -1566,9 +1566,10 @@ the per-epic implementation notes).
   posture in [#8068](https://github.com/commonfabric/labs/pull/8068): the
   profile-create surface's handler emits such an event to seed the new
   Profile's name. `packages/runner/test/executor-events-down.test.ts` pins the
-  re-read. Measured in the benchmark record #8068 adds, one run per arm on a
-  shared four-core machine, with the browser, the bench process and the
-  toolshed contending for it: the served navigation `journey`
+  re-read. Measured in #8068's record
+  ([`docs/history/development/performance/2026-09-25-server-execution-topics-lunch-benchmarks.md`](../history/development/performance/2026-09-25-server-execution-topics-lunch-benchmarks.md)),
+  one run per arm on a shared four-core machine, with the browser, the bench
+  process and the toolshed contending for it: the served navigation `journey`
   ran in 6.19 s against 6.89 s without the posture, a difference within that
   record's noise floor of about a fifth; seeding a 30-topic board took 63 to
   67 s against 79 to 125 s; and a cold board load after the space parked took
