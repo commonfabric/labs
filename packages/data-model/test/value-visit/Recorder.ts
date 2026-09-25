@@ -239,7 +239,9 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     count: number,
   ): VisitedResult<unknown> {
     this.events.push(["visitingFabricArrayGap", array, start, count]);
-    return this.onVisitingFabricArrayGap ? this.onVisitingFabricArrayGap(start, count) : undefined;
+    return this.onVisitingFabricArrayGap
+      ? this.onVisitingFabricArrayGap(start, count)
+      : undefined;
   }
 
   override visitingFabricInstanceState(
