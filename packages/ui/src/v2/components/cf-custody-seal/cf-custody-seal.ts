@@ -160,8 +160,9 @@ function describeSource(source: unknown): string {
  *
  * @element cf-custody-seal
  * @fires cf-sealed - The value is sealed; `detail.instance` is the instance
- *   sealed into, the digest of the terms, which anyone who reads the terms can
- *   compute
+ *   sealed into, the digest of the terms with each seat resolved to its DID.
+ *   It names no member, but code holding it can test a guess at the whole
+ *   set of seat DIDs against it
  */
 export class CFCustodySeal extends BaseElement {
   static override styles = [

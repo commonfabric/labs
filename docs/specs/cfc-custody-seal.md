@@ -164,8 +164,11 @@ that receives a link to the instance's box once the seal commits. The host
 derives the box's address from `(P, D)`, so a pattern never computes it. The
 link grants nothing: the box's entries carry `[P]` and its root `P ∨ Space(S)`,
 so what the pattern computes from them is shown or written anywhere only as
-`P`'s release rules allow. `cf-sealed` carries the instance `D`, which anyone
-who reads the terms can compute. Neither the component nor the worker hands
+`P`'s release rules allow. `cf-sealed` carries the instance `D`. `D` digests
+the resolved terms, so it is computable by whoever can read the terms and the
+attestations on their seat cells; a pattern, which reads neither DIDs nor
+attestations, gains from `D` only a test of a guess at the whole set of seat
+DIDs, and the box's address already gives it the same test. Neither the component nor the worker hands
 the pattern the entry's key: a pattern that held it could write down which
 member's entry it is. `packages/patterns/cfc-exchange-rules/custody-projector.tsx`
 is such a room, and `packages/patterns/integration/cfc-custody-projector.test.ts`
@@ -220,7 +223,7 @@ root included when the seal creates the box. The anchor's clause fits the room
 space's residency ceiling, and on an entry it sits beside the entry's declared
 `[P]`, which still bounds who reads the entry.
 
-Anyone who can read the terms can compute both addresses, so the seal refuses a
+Anyone who can compute `D` can compute both addresses, so the seal refuses a
 box whose root the seal did not write, and an anchor whose value is not the
 seal's constant or whose label is not exactly `P ∨ Space(S)` with no integrity.
 An anchor holding a link would otherwise carry its target's clauses into every

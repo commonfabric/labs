@@ -1173,9 +1173,12 @@ disconnecting the component invalidates the review, and the runtime refuses a
 seal when the draft, the terms, the room's policy, the room's readers or the
 actor's source policy changed after preparation, up to the moment the entry is
 written. When the seal commits, the component writes `$box` and then emits
-`cf-sealed` with `detail.instance`, the digest of the terms, which anyone who
-reads the terms can compute. The event carries neither the value nor the key
-of the actor's entry in the room. A binding that changes while a commit is in flight
+`cf-sealed` with `detail.instance`, the digest of the terms with each seat
+resolved to its DID. It names no member, but code holding it can test a guess
+at the whole set of seat DIDs against it. The event carries neither the value
+nor the key of the actor's entry in the room. Bind `$box` to a cell that
+declares no label of its own: the box's entries carry the room's policy, and a
+read through the link carries it. A binding that changes while a commit is in flight
 leaves the component without that event even if the seal committed, so a
 pattern that must know should read the room rather than rely on it.
 

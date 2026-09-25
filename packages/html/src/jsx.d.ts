@@ -4345,7 +4345,7 @@ interface CFCustodySealAttributes<T> extends CFHTMLAttributes<T> {
   "$sources"?: CellLike<unknown>;
   /** Writable cell receiving a link to the instance's box once sealed. */
   "$box"?: CellLike<unknown>;
-  /** Fires once sealed; `instance` is the digest of the terms sealed under. */
+  /** Fires once sealed; `instance` is the digest of the resolved terms. */
   "oncf-sealed"?: EventHandler<{ instance: string }>;
 }
 
