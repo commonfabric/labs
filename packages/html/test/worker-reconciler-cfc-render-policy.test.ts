@@ -3816,7 +3816,8 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         // The policy's subject is a different space from the one the label is
         // stored in, so the watch below can only name the storage space if
         // manifests are looked up where the label was read, not by subject.
-        const subjectSpace = "did:key:z6MkPolicySubjectSpaceForManifestLocality";
+        const subjectSpace =
+          "did:key:z6MkPolicySubjectSpaceForManifestLocality";
         const policyRef = cfcAtom.modulePolicyRef(
           manifest.manifest.moduleIdentity,
           manifest.manifest.symbol,

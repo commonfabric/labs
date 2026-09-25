@@ -530,14 +530,24 @@ describe("CFC module policy templates", () => {
     expect(isExactModulePolicyRef({ ...fields })).toBe(true);
 
     const { subject, ...rest } = fields;
-    expect(isExactModulePolicyRef(Object.assign(Object.create({ subject }), rest)))
+    expect(
+      isExactModulePolicyRef(Object.assign(Object.create({ subject }), rest)),
+    )
       .toBe(false);
     const hidden = { ...rest };
-    Object.defineProperty(hidden, "subject", { value: subject, enumerable: false });
+    Object.defineProperty(hidden, "subject", {
+      value: subject,
+      enumerable: false,
+    });
     expect(isExactModulePolicyRef(hidden)).toBe(false);
     const accessor = { ...rest };
-    Object.defineProperty(accessor, "subject", { get: () => subject, enumerable: true });
+    Object.defineProperty(accessor, "subject", {
+      get: () => subject,
+      enumerable: true,
+    });
     expect(isExactModulePolicyRef(accessor)).toBe(false);
-    expect(isExactModulePolicyRef({ ...fields, [Symbol("extra")]: 1 })).toBe(false);
+    expect(isExactModulePolicyRef({ ...fields, [Symbol("extra")]: 1 })).toBe(
+      false,
+    );
   });
 });
