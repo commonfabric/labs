@@ -263,6 +263,8 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 
 ## Investigations, journals, and working notes
 
+- [Staged-reference derivation cache](development/performance/2026-09-25-staged-reference-cache/README.md) — Alternating main/cache measurements, warmed chain controls, exact metadata equivalence, and the remaining flat-map growth; probe and raw records accompany the report (2026-09-25).
+
 - [Scoped conflict recovery review](packages/runner/scoped-conflict-recovery-review-2026-09-16.md) — 2026-09-16: review of merged scoped conflict pulls, the reactive scheduler integration gap, and the regression and lifetime requirements retained from the inactive transaction-owned repair proposal.
 
 - [Where the pattern type check spends its time](development/2026-09-15-cfcheck-cost-decomposition.md) — measured cost decomposition of `deno task cfcheck` over 414 patterns: a fixed cost under four seconds against 94% variable, four disjoint slices costing what one whole run costs, transform and emit at 77% of the batch against 22% for the type check, output-identical per-file emit, one program per file in the union, per-pattern costs spanning 1 ms to 2.4 s, and what a filtered run costs at seven sizes.
