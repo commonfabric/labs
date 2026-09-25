@@ -678,8 +678,8 @@ using them is not optional in code that can reach a stored value:
   over. Its operands are values, never query-result views, at any depth. A
   caller whose operands may hold views compares them with the runner's
   `fabricAwareEqualThroughViews()`, which walks the views and hands the value
-  model only the special objects stored where they read, or compares stored
-  values (a cell's `getRaw()`). `snapshotQueryResult()` is no substitute: it
+  model only the special objects they read, or compares stored values (a
+  cell's `getRaw()`). `snapshotQueryResult()` is no substitute: it
   copies a `FabricInstance` read through a view as an empty record. It is a
   structural walk that decides every `FabricSpecialObject` it
   reaches by content rather than by properties: two of one class go to

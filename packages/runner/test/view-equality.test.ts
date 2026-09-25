@@ -8,7 +8,12 @@ import { Identity } from "@commonfabric/identity";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
-import { isCellResult } from "../src/query-result-proxy.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
+import { validateSchemaValue } from "../src/cfc/schema-sanitization.ts";
+import {
+  createQueryResultProxy,
+  isCellResult,
+} from "../src/query-result-proxy.ts";
 import { fabricAwareEqualThroughViews } from "../src/view-equality.ts";
 
 const signer = await Identity.fromPassphrase("view-equality");
@@ -106,14 +111,92 @@ describe("view-equality", () => {
     ).toBe(true);
   });
 
-  it("finds the views of one link an array holds twice equal", () => {
-    const target = runtime.getCell<unknown>(space, "shared", undefined, tx);
-    target.set(FabricError.fromNativeError(new Error("shared")) as never);
-    const list = runtime.getCell<unknown[]>(space, "twice", undefined, tx);
-    list.set([target, target] as never);
-    const [first, second] = list.get();
+  it("compares two values whose links lead back into them without recursing forever", () => {
+    // Each document links to itself, so the walk meets the pair of their
+    // views again one level down, and again below that.
 
-    expect(fabricAwareEqualThroughViews(first, second)).toBe(true);
+    const selfLinked = (cause: string, label: string) => {
+      const cell = runtime.getCell<unknown>(space, cause, undefined, tx);
+      cell.set({ label, next: cell } as never);
+      return cell.get();
+    };
+
+    expect(
+      fabricAwareEqualThroughViews(selfLinked("x", "a"), selfLinked("y", "a")),
+    ).toBe(true);
+    expect(
+      fabricAwareEqualThroughViews(selfLinked("p", "a"), selfLinked("q", "b")),
+    ).toBe(false);
+  });
+
+  it("decides a pinned view of a `FabricError` as the instance of its own instant", () => {
+    // A later write in the view's transaction is not visible to the view, so
+    // neither is it to the comparison.
+
+    const cell = runtime.getCell<unknown>(space, "pinned-error", undefined, tx);
+    cell.set(FabricError.fromNativeError(new Error("before")) as never);
+    const before = cell.getRaw();
+    tx.markLazyMaterialize(true);
+    const view = createQueryResultProxy<{ message: string }>(
+      runtime,
+      tx,
+      cell.getAsNormalizedFullLink(),
+    );
+    cell.set(FabricError.fromNativeError(new Error("after")) as never);
+    const after = cell.getRaw();
+
+    expect(view.message).toBe("before");
+    expect(fabricAwareEqualThroughViews(view, before)).toBe(true);
+    expect(fabricAwareEqualThroughViews(view, after)).toBe(false);
+    expect(validateSchemaValue({ const: before } as JSONSchema, view))
+      .toBeUndefined();
+    expect(validateSchemaValue({ const: after } as JSONSchema, view))
+      .toBe("value does not match const");
+  });
+
+  it("reads no more of a projected view than the comparison walks", async () => {
+    // Reading `description`, which the schema leaves out, would carry its
+    // confidentiality into the write below, and the commit would refuse it.
+
+    const SECRET = {
+      type: "https://commonfabric.org/cfc/atom/User",
+      subject: "secret",
+    };
+    const storage = StorageManager.emulate({ as: signer });
+    const strict = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage,
+      cfcEnforcementMode: "enforce-strict",
+      cfcFlowLabels: "persist",
+    });
+    try {
+      const seed = strict.edit();
+      const record = strict.getCell(space, "projected", {
+        type: "object",
+        properties: {
+          description: { type: "string", ifc: { confidentiality: [SECRET] } },
+          amount: { type: "number" },
+        },
+      }, seed);
+      record.set({ description: "private note", amount: 12 });
+      expect((await seed.commit()).error).toBeUndefined();
+      await record.sync();
+
+      const read = strict.edit();
+      const projected = record.asSchema({
+        type: "object",
+        properties: { amount: { type: "number" } },
+      }).withTx(read).get();
+      const same = fabricAwareEqualThroughViews(projected, { amount: 12 });
+      strict.getCell<boolean>(space, "projected-same", undefined, read)
+        .set(same);
+
+      expect(same).toBe(true);
+      expect((await read.commit()).error).toBeUndefined();
+    } finally {
+      await strict.dispose();
+      await storage.close();
+    }
   });
 
   it("compares two views of one location read through different schemas by what they read", () => {

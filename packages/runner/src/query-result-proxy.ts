@@ -995,6 +995,16 @@ function createViewProxy<T>(
     },
   }) as T;
 
+  // A client that must compare or hand on the instance itself, rather than a
+  // record with no keys, asks `instanceReadThroughView()`, which reads it the
+  // way a method call on this view does.
+  if (boundKind === "FabricInstance") {
+    instanceReaders.set(
+      proxy as object,
+      () => atEpoch(() => currentValue(true)) as FabricInstance,
+    );
+  }
+
   // Cache the proxy in the appropriate cache before returning
   txCache.byLink.set(cacheKey, proxy);
   // Not the by-value index for a pinned view: it names a value rather than an
@@ -1069,6 +1079,32 @@ export function snapshotQueryResult<T>(value: T): T {
     return object;
   };
   return snapshot(value) as T;
+}
+
+/**
+ * For each view built over a `FabricInstance`, the read that returns the
+ * instance it describes.
+ */
+const instanceReaders = new WeakMap<object, () => FabricInstance>();
+
+/**
+ * The `FabricInstance` a view built over one reads, or `undefined` for any
+ * other value.
+ *
+ * A view over an instance hides it from `instanceof` (the marker above the
+ * proxy construction says why), so a client that has to compare or hand on the
+ * instance itself asks here. The instance comes the way the view's own method
+ * calls get it: read inside the view's instant, so a pinned view answers for
+ * the instant it describes, with the read of the instance's document that
+ * reading an instance takes. Any other value is asked nothing and read
+ * nothing: the proxy records which views it built over an instance.
+ */
+export function instanceReadThroughView(
+  value: unknown,
+): FabricInstance | undefined {
+  return typeof value === "object" && value !== null
+    ? instanceReaders.get(value)?.()
+    : undefined;
 }
 
 /**
