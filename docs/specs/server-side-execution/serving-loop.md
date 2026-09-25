@@ -187,7 +187,9 @@ last saw:
   transaction it closes, and the parked tenure's own destination refuses
   a transaction the tenure opened and closed after the park (§2's
   stop-committing MUST, carried past the park). A refusal TAINTS the
-  runtime: something in it moved while nothing could land.
+  runtime: something in it moved while nothing could land. One that
+  lands while the park is still under way keeps the runtime from being
+  offered at all.
 - A storage subscription taints it on any change its replica takes in —
   a delivered frame, a load, a retraction, a reset — for its home space
   or any other.
@@ -198,8 +200,10 @@ last saw:
   same store), and the successor builds fresh.
 
 A tainted runtime is disposed at once, and one turned down at activation
-then. Kept state is process memory only; recovery (§6) is unchanged,
-and a fresh runtime is what every other activation builds. The cost is
+then, each under the same deadline as a park's own dispose
+(`parkDisposeTimeoutMs`), past which the dispose is abandoned. Kept
+state is process memory only; recovery (§6) is unchanged, and a fresh
+runtime is what every other activation builds. The cost is
 the memory the kept runtimes hold, which is what their tenures held
 while active: measured on 30 small pieces, about 3 MB of post-GC heap
 per kept runtime (1.2 MB on 10), so the defaults bound the extra at

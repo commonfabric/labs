@@ -140,7 +140,11 @@ describe("serverExecutionPolicyFromEnv", () => {
 
   it("threads the parked-runtime retention knob, the literal 0 included; garbage reads as unset with a warning", () => {
     const warnings: string[] = [];
-    const cases: [string, number][] = [["60000", 60_000], ["0", 0]];
+    const cases: [string, number][] = [
+      ["60000", 60_000],
+      ["0", 0],
+      ["2147483647", 2_147_483_647],
+    ];
     for (const [raw, parkedRuntimeRetentionMs] of cases) {
       expect(
         serverExecutionPolicyFromEnv(
@@ -153,19 +157,24 @@ describe("serverExecutionPolicyFromEnv", () => {
       ).toEqual({ parkedRuntimeRetentionMs });
     }
     expect(warnings).toEqual([]);
-    expect(
-      serverExecutionPolicyFromEnv(
-        envOf({
-          SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS: "-1",
-          SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0",
-        }),
-        (m) => warnings.push(m),
-      ),
-    ).toEqual({});
-    expect(warnings.length).toBe(1);
-    expect(warnings[0]).toContain(
-      "SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS",
-    );
+    // One past the longest delay a timer honors reads as unset too.
+    for (const raw of ["-1", "2147483648"]) {
+      expect(
+        serverExecutionPolicyFromEnv(
+          envOf({
+            SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS: raw,
+            SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0",
+          }),
+          (m) => warnings.push(m),
+        ),
+      ).toEqual({});
+    }
+    expect(warnings.length).toBe(2);
+    for (const warning of warnings) {
+      expect(warning).toContain(
+        "SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS",
+      );
+    }
   });
 });
 

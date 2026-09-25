@@ -521,5 +521,34 @@ describe("parked-runtime", () => {
       expect(built).toHaveLength(2);
       expect(host.stats().parkedRuntimes.reused).toBe(0);
     });
+
+    it("is not kept when its tenure refused a write while the park was still under way", async () => {
+      host = newHost({});
+      await startPieces();
+      const reader = await openReader();
+      await readAll(reader, (index) => (index + 1) * 2);
+      const serving = built[0];
+      const tx = serving.edit();
+      serving.getCell<{ value: number }>(space, "argument-2").withTx(tx)
+        .set({ value: 100 });
+      const tenure = host.spaceServer(space)!;
+      expect(tenure.suspendedOnInput).toBe(true);
+
+      // The park refuses writes from its first step, and offers the runtime
+      // only at its last.
+      const parking = tenure.park("idle");
+      const { error } = await tx.commit();
+      await parking;
+      await closeClient(reader);
+
+      expect(error).toMatchObject({
+        name: "StorageTransactionAborted",
+        reason: { message: SEAL_AFTER_PARK_REFUSED },
+      });
+      expect(host.stats().parkedRuntimes).toMatchObject({
+        retained: 0,
+        held: 0,
+      });
+    });
   });
 });

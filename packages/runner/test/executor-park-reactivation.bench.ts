@@ -57,6 +57,9 @@ type Fixture = {
 
   /** Demands every piece, moves each input, and reads every new value. */
   revisit(): Promise<void>;
+
+  /** Closes the reader, the host with any runtime it keeps, and the server. */
+  close(): Promise<void>;
 };
 
 /**
@@ -187,10 +190,19 @@ async function buildFixture(
     }
   };
 
+  const close = async () => {
+    if (reader !== undefined) await closeClient(reader);
+    reader = undefined;
+    await host.close();
+    await server.close();
+  };
+
   // The first visit runs the pieces on the space's first tenure.
   await revisit();
-  return { park, revisit };
+  return { park, revisit, close };
 }
+
+const fixtures: Promise<Fixture>[] = [];
 
 for (const pieces of [10, 30]) {
   for (const retain of [true, false]) {
@@ -202,7 +214,10 @@ for (const pieces of [10, 30]) {
       n: 10,
       warmup: 1,
       async fn(b) {
-        fixture ??= buildFixture(pieces, retain);
+        if (fixture === undefined) {
+          fixture = buildFixture(pieces, retain);
+          fixtures.push(fixture);
+        }
         const { park, revisit } = await fixture;
         await park();
         b.start();
@@ -212,3 +227,7 @@ for (const pieces of [10, 30]) {
     });
   }
 }
+
+globalThis.addEventListener("unload", () => {
+  for (const fixture of fixtures) void fixture.then(({ close }) => close());
+});

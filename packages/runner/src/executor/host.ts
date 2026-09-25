@@ -41,6 +41,7 @@ import {
   ParkedServingRuntime,
 } from "./parked-runtime.ts";
 import {
+  awaitDisposeTimeboxed,
   LIFECYCLE_VERB_SPACE_PARKED,
   type LifecycleVerb,
   type RuntimeFactoryContext,
@@ -880,12 +881,21 @@ export class ExecutorHost {
   /**
    * Helper for the retention methods above, which disposes a parked
    * runtime that will not be reused, counted, with `close()` able to wait
-   * for it.
+   * for it. The dispose runs under the park's dispose deadline
+   * (`SpaceServerPolicy.parkDisposeTimeoutMs`), so that one that hangs
+   * cannot hold `close()` open.
    */
   #disposeParkedRuntime(parked: ParkedServingRuntime): void {
     this.#stats.parkedRuntimes.discarded += 1;
     const space = parked.space;
-    const disposal = parked.dispose().catch((error) => {
+    const disposal = awaitDisposeTimeboxed(parked.dispose(), {
+      policy: this.#options.policy,
+      stats: this.#stats,
+      space,
+      overrun: (timeoutMs) =>
+        `space ${space}: disposing a parked runtime overran ` +
+        `${timeoutMs}ms; abandoning it`,
+    }).catch((error) => {
       logger.warn("parked-runtime-dispose-failed", () => [
         `space ${space}: disposing a parked runtime failed`,
         error,

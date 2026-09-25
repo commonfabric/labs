@@ -435,6 +435,59 @@ const DEFAULT_IDLE_PARK_MS = 30_000;
 const DEFAULT_PARK_DISPOSE_TIMEOUT_MS = 5_000;
 
 /**
+ * Awaits `pending`, a runtime dispose, under the park's dispose deadline
+ * (`SpaceServerPolicy.parkDisposeTimeoutMs`). Rejects as `pending` does
+ * when it fails in time. On overrun the dispose is abandoned: counted in
+ * `stats.parkDisposeTimeouts`, logged as an error with `overrun`'s
+ * message, and left running with its eventual outcome logged, while the
+ * returned promise resolves.
+ */
+export async function awaitDisposeTimeboxed(
+  pending: Promise<void>,
+  options: {
+    policy: SpaceServerPolicy | undefined;
+    stats: ServingLoopStats;
+    space: string | undefined;
+    overrun: (timeoutMs: number) => string;
+  },
+): Promise<void> {
+  const timeoutMs = options.policy?.parkDisposeTimeoutMs ??
+    DEFAULT_PARK_DISPOSE_TIMEOUT_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const winner = await Promise.race([
+    pending.then(
+      () => "disposed" as const,
+      () => "failed" as const,
+    ),
+    new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), timeoutMs);
+    }),
+  ]);
+  if (timer !== undefined) clearTimeout(timer);
+  // Re-awaited so that the caller sees the dispose's own error.
+  if (winner === "failed") return pending;
+  if (winner === "disposed") return;
+  options.stats.parkDisposeTimeouts += 1;
+  logger.error("park-dispose-timeout", options.overrun(timeoutMs));
+  // The abandoned dispose keeps running; observe its eventual fate so a
+  // late completion is visible and a late rejection never becomes an
+  // unhandled rejection.
+  pending.then(
+    () => {
+      logger.warn("park-dispose-late", () => [
+        `space ${options.space}: abandoned park dispose completed late`,
+      ]);
+    },
+    (error) => {
+      logger.warn("park-dispose-late-failed", () => [
+        `space ${options.space}: abandoned park dispose failed late`,
+        error,
+      ]);
+    },
+  );
+}
+
+/**
  * Phase 5's foreign re-mark decision (serving-loop.md §3b's cross-space
  * bullet; §6 step 2): the (action, instance) set whose recorded FOREIGN
  * inputs moved — each basis row whose `entity_space` is not the home
@@ -612,6 +665,12 @@ export class SpaceServer implements TransactionSealDestination {
 
   /** The fenced runtime this tenure handed over when it parked idle. */
   #retainedAs: ParkedServingRuntime | undefined;
+
+  /**
+   * Whether this tenure refused a write because it had parked. A runtime
+   * that tried to write after its park is never offered on.
+   */
+  #refusedWriteAfterPark = false;
 
   #sink: WaveCommitSink | undefined;
   #renewTimer: ReturnType<typeof setInterval> | undefined;
@@ -1868,7 +1927,7 @@ export class SpaceServer implements TransactionSealDestination {
     // what keeps a successor tenure from being handed a runtime that
     // tried to write in between.
     if (this.#parkRequested) {
-      this.#retainedAs?.noteRefusedWrite();
+      this.#noteRefusedWriteAfterPark();
       return Promise.resolve({
         error: {
           name: "StorageTransactionAborted",
@@ -2031,7 +2090,7 @@ export class SpaceServer implements TransactionSealDestination {
   ): void {
     if (this.#parkRequested) {
       // The same refusal `seal()` gives a transaction outliving the tenure.
-      this.#retainedAs?.noteRefusedWrite();
+      this.#noteRefusedWriteAfterPark();
       throw new Error(
         `space ${this.#options.space}: a cross-space event append was ` +
           "staged after its serving tenure parked; nothing commits once " +
@@ -6477,59 +6536,26 @@ export class SpaceServer implements TransactionSealDestination {
     this.#viewPlanPublisher.dispose();
     const dispose = this.#disposeRuntime;
     if (dispose === undefined) return;
-    const timeoutMs = this.#options.policy?.parkDisposeTimeoutMs ??
-      DEFAULT_PARK_DISPOSE_TIMEOUT_MS;
-    const pending = dispose();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const winner = await Promise.race([
-      pending.then(
-        () => "disposed" as const,
-        () => "failed" as const,
-      ),
-      new Promise<"timeout">((resolve) => {
-        timer = setTimeout(() => resolve("timeout"), timeoutMs);
-      }),
-    ]);
-    if (timer !== undefined) clearTimeout(timer);
-    if (winner === "failed") {
-      // Re-await so the caller's catch logs the error (the existing
-      // park-dispose-failed arm).
-      return pending;
-    }
-    if (winner === "timeout") {
-      this.#options.stats.parkDisposeTimeouts += 1;
-      logger.error(
-        "park-dispose-timeout",
+    // A dispose that fails in time rejects here, for the caller's
+    // park-dispose-failed arm to log.
+    await awaitDisposeTimeboxed(dispose(), {
+      policy: this.#options.policy,
+      stats: this.#options.stats,
+      space: this.#options.space,
+      overrun: (timeoutMs) =>
         `space ${this.#options.space}: runtime dispose overran ` +
-          `${timeoutMs}ms during park (${reason}); abandoning the ` +
-          "factory handle and completing the park — loop stopped, " +
-          "wave abandoned, seal chain drained; lease releases and " +
-          "whenParked resolves now (park liveness)",
-      );
-      // The abandoned dispose keeps running; observe its eventual fate
-      // so a late completion is visible and a late rejection never
-      // becomes an unhandled rejection.
-      pending.then(
-        () => {
-          logger.warn("park-dispose-late", () => [
-            `space ${this.#options.space}: abandoned park dispose ` +
-            "completed late",
-          ]);
-        },
-        (error) => {
-          logger.warn("park-dispose-late-failed", () => [
-            `space ${this.#options.space}: abandoned park dispose ` +
-            "failed late",
-            error,
-          ]);
-        },
-      );
-    }
+        `${timeoutMs}ms during park (${reason}); abandoning the ` +
+        "factory handle and completing the park — loop stopped, " +
+        "wave abandoned, seal chain drained; lease releases and " +
+        "whenParked resolves now (park liveness)",
+    });
   }
 
-  /** Park (serving-loop.md §1): release the lease, dispose the runtime.
-   * A park racing an incoming commit self-heals — the admission hook
-   * re-fires on the next admission and the host re-activates. */
+  /** Park (serving-loop.md §1): release the lease, and either hand the
+   * runtime to `retainParkedRuntime` — an idle park, when the caller keeps
+   * it — or dispose it, as every other park does. A park racing an
+   * incoming commit self-heals — the admission hook re-fires on the next
+   * admission and the host re-activates. */
   async park(reason: string): Promise<void> {
     // A park already in flight — the renew arm's lease-lost park runs
     // unawaited — is what a second caller waits for: the host's close
@@ -6709,9 +6735,11 @@ export class SpaceServer implements TransactionSealDestination {
    * Helper for `#parkResources()`, which offers the detached runtime to
    * `retainParkedRuntime` and returns whether it was kept. The store head
    * it records is read after the tenure's last seal settled, so it covers
-   * everything the tenure committed.
+   * everything the tenure committed. A runtime that tried to write after
+   * the park is not offered.
    */
   #offerRuntime(): boolean {
+    if (this.#refusedWriteAfterPark) return false;
     const runtime = this.#runtime!;
     const dispose = this.#disposeRuntime!;
     this.#viewPlanPublisher.dispose();
@@ -6750,5 +6778,16 @@ export class SpaceServer implements TransactionSealDestination {
         scope: scopeOfScopeKey(key.slice(0, sep)) as CellScope,
       });
     }
+  }
+
+  /**
+   * Helper for `seal()` and `stageOutboundAppend()`, which records a write
+   * refused because this tenure had parked: on this tenure while its
+   * runtime has not been offered yet, and on the fenced instance holding
+   * it once it has.
+   */
+  #noteRefusedWriteAfterPark(): void {
+    this.#refusedWriteAfterPark = true;
+    this.#retainedAs?.noteRefusedWrite();
   }
 }
