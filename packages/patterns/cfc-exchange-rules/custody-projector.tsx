@@ -29,12 +29,16 @@
  * bounded array of closed ratings, one per option, which is the shape the
  * seal admits for a multiple choice.
  *
- * The rule names the projector by its identity alone. A rule that also
- * requires an input witness, `TransformedBy{builtin cfc-custody-seal}` on
+ * The rule names the projector by its identity alone, which is weaker than
+ * it looks: `box` is ordinary room data, so a member's code can link it to a
+ * document of its own that mixes another member's entry with entries it made
+ * up, and learn that entry from the answers the rule releases. A rule that
+ * also requires an input witness, `TransformedBy{builtin cfc-custody-seal}` on
  * everything confidential the projector read, is the shape a rule over sealed
- * custody is meant to take, but the witness does not reach what a lift reads
- * through its argument, so such a rule releases nothing a pattern computes;
- * see `docs/specs/cfc-custody-seal.md`.
+ * custody is meant to take and would refuse those, but the witness does not
+ * reach what a lift reads through its argument, so such a rule releases
+ * nothing a pattern computes; see `docs/specs/cfc-custody-seal.md`. Until it
+ * does, this room keeps a member's rating from honest members' code only.
  */
 
 import {

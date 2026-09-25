@@ -8,7 +8,9 @@
  * read from the label of the pattern's `policy` cell, and the box the seal
  * returns is linked into the pattern's `box`. The pattern's projector then
  * reads the box, and of what it computes only its answer is shown to a reader
- * of the room.
+ * of the room. This is the honest path; that the rule names the projector by
+ * identity alone, and so releases what it computes over a crafted box, is in
+ * the spec's limits.
  *
  * Each member runs its own runtime over one in-process memory server. No
  * toolshed or browser is involved; the trusted click is built the way the

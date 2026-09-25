@@ -94,11 +94,13 @@ if any holds something else, so the value checked is the value committed.
 - **The value is instruction-inert.** `stanceSchema` may admit only booleans,
   `null`, numbers with a finite `minimum` and `maximum`, `const` and `enum`
   primitives, closed objects of these, and arrays of these, at most eight
-  levels deep. An array names one `items` schema, itself inert, and an integer
-  `maxItems` of at most 64, with an optional `minItems` no greater; tuple
-  forms, `prefixItems` and the other array keywords are refused, as is an
-  array keyword on a node that is not an array. A list of ratings, one per
-  option, is such an array. The schema admits no free strings, including in a
+  levels deep. An array names one `items` schema, itself inert and not an
+  array, and an integer `maxItems` of at most 64, with an optional `minItems`
+  no greater; tuple forms, `prefixItems` and the other array keywords are
+  refused, as is an array keyword on a node that is not an array. A list of
+  ratings, one per option, is such an array. An array is not free text, but
+  like an object of enumerated fields it carries as many bits as its elements
+  do. The schema admits no free strings, including in a
   property or an element the value leaves out. The value must satisfy the
   schema.
 - **The actor holds a seat** in the terms.
@@ -131,12 +133,18 @@ reference to a cell whose stored label attests one principal: a
 `represents-principal` integrity atom at the cell's root or on one of its
 top-level fields, as a profile's owner-protected fields carry their owner's.
 This is the evidence `cf-cfc-authorship` reads an author claim from. A runtime
-binds that atom's subject to its acting principal and refuses a literal one, so
-a cell attests only the principal whose runtime wrote it. The seal resolves the
-cell the reference names, reads its label, and refuses a cell that attests no
+binds the subject of an atom in the form `{kind, subject}` to its acting
+principal and refuses a literal DID there, so in that form a cell attests only
+the principal whose runtime wrote it. The seal counts only that form: an atom
+whose subject is exactly a well-formed DID, with no other key. Any other
+spelling that names a principal, the `represents-principal:<did>` string form
+or a subject padded with spaces among them, gets past the runtime's refusal,
+and the seal refuses a seat whose cell carries one. The seal resolves the cell
+the reference names, reads its label, and refuses a cell that attests no
 principal or more than one; the read is evidence the entry's transaction
-verifies, so a seat that attests another principal by then makes the review
-stale. Only `seats` may hold references; the other fields are read as values.
+verifies, so a seat that attests another principal before the entry is written
+refuses the seal. Only `seats` may hold references; the other fields are read
+as values.
 
 Naming a seat grants the named member nothing and takes nothing from them: only
 that member can seal into it, since the seal requires the storage signer to be
@@ -271,10 +279,16 @@ of it.
   not the set of writers with the set of seats. That count is sound only while
   each seat seals once and only seats can seal.
 - **Which box a room reads.** The link a pattern holds to the box is
-  ordinary pattern data, so a member's code can point it at the box of another
-  instance under the same `P`. The entries carry their terms, so a projector
-  that compares them with its seat count reads only a complete instance, but
-  which instance it reads is the pattern's.
+  ordinary pattern data, so a member's code can point it at another document:
+  the box of another instance under the same `P`, or one that links to some of
+  the real entries beside entries of its own. A projector checking the entries'
+  terms and their number against the seats cannot tell such a document from the
+  box. While the room's rule names its projector by identity alone, a member
+  can therefore run the projector over another member's entry and values of
+  their own, varied to learn that entry answer by answer, and the rule releases
+  each answer. The input witness is what closes this: every entry the seal
+  wrote carries `TransformedBy{builtin cfc-custody-seal}`, and a document the
+  member made does not.
 - **An input witness from pattern code.** A projector written as a pattern
   `lift` reads the box through its argument document, and the witness does not
   reach that read today, so a rule requiring

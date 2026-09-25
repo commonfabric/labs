@@ -26,7 +26,9 @@ only what its projector computes over the sealed box: one of the listed answers.
 It shows the pattern side of the
 [custody seal](../../../docs/specs/cfc-custody-seal.md): seats named by attested
 cells, the policy read from a declaring cell's label, and the box link the host
-writes back.
+writes back. Its rule names the projector by identity alone, so a member's own
+code can feed the projector a crafted box and learn another member's entry from
+the answers; the spec's limits say what closes that.
 
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space
