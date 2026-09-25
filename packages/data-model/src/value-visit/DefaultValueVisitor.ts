@@ -447,7 +447,7 @@ export abstract class DefaultValueVisitor<
    *
    * If not overridden, this returns `undefined`.
    */
-  override visitedFabricInstance(
+  override visitedFabricInstanceState(
     _instance: FabricInstancePlus<PlusType>,
     _state: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType> {

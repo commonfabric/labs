@@ -23,7 +23,7 @@ describe("BaseValueVisitor", () => {
       return undefined;
     }
 
-    override visitedFabricInstance(): undefined {
+    override visitedFabricInstanceState(): undefined {
       return undefined;
     }
 

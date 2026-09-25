@@ -197,7 +197,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     return this.onVisitedGap ? this.onVisitedGap(start, count) : undefined;
   }
 
-  override visitedFabricInstance(
+  override visitedFabricInstanceState(
     instance: FabricInstancePlus<unknown>,
     state: unknown,
   ): VisitedResult<unknown> {

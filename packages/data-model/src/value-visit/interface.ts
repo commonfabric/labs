@@ -266,7 +266,7 @@ export interface ValueVisitor<
    * result for a visited `FabricInstance` and is called _after_ the instance's
    * state was directly visited.
    */
-  visitedFabricInstance(
+  visitedFabricInstanceState(
     instance: FabricInstancePlus<PlusType>,
     state: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType>;

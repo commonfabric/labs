@@ -428,7 +428,7 @@ export class VisitInProgress<
         }
       }
 
-      const result = vis.visitedFabricInstance(instance, mappedTo);
+      const result = vis.visitedFabricInstanceState(instance, mappedTo);
       if (result?.type === "mainResult") {
         return result;
       }

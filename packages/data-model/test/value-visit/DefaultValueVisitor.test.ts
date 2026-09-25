@@ -244,7 +244,7 @@ describe("DefaultValueVisitor", () => {
 
         expect(vis.visitedFabricArrayElement([1], 0, 1)).toBeUndefined();
         expect(vis.visitedFabricArrayGap([], 0, 1)).toBeUndefined();
-        expect(vis.visitedFabricInstance(new FabricMap(new Map()), {}))
+        expect(vis.visitedFabricInstanceState(new FabricMap(new Map()), {}))
           .toBeUndefined();
         expect(vis.visitedFabricPlainObjectEntry({}, "k", 1)).toBeUndefined();
       });

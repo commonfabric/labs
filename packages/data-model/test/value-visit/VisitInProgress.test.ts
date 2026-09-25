@@ -469,7 +469,7 @@ describe("VisitInProgress", () => {
         // fresh on each encode and can hold a `cause`, which is what a cycle
         // through an instance needs.
 
-        it("visits the state under the instance, then reports both to `visitedFabricInstance()`", () => {
+        it("visits the state under the instance, then reports both to `visitedFabricInstanceState()`", () => {
           const rec = new Recorder();
           const payload = { id: "fid1:abc" };
           const link = new FabricLink(payload);
@@ -529,7 +529,7 @@ describe("VisitInProgress", () => {
           ]);
         });
 
-        it("ends the visit from inside the state, before `visitedFabricInstance()`", () => {
+        it("ends the visit from inside the state, before `visitedFabricInstanceState()`", () => {
           const rec = new Recorder();
           rec.onPrimitive = (v) =>
             (v === "boom") ? mainResult("found") : undefined;
@@ -544,7 +544,7 @@ describe("VisitInProgress", () => {
           expect(rec.names).not.toContain("visitedInstance");
         });
 
-        it("ends the visit from `visitedFabricInstance()`", () => {
+        it("ends the visit from `visitedFabricInstanceState()`", () => {
           const rec = new Recorder();
           rec.onVisitedInstance = () => mainResult("after");
           const link = new FabricLink({ id: "fid1:abc" });

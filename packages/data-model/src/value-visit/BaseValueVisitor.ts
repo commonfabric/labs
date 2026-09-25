@@ -48,7 +48,7 @@ export abstract class BaseValueVisitor<
   ): VisitedResult<ResultType>;
 
   /** @inheritDoc */
-  abstract visitedFabricInstance(
+  abstract visitedFabricInstanceState(
     instance: FabricInstancePlus<PlusType>,
     state: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType>;
