@@ -29,6 +29,7 @@ import { collectConsumedLabel } from "./prepare.ts";
 import { representsPrincipalSubject } from "./represents-principal.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { isRendererTrustedEvent } from "./ui-contract.ts";
+import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 /** Destination whose stored identity or resolved space determines the audience. */
 export type SnapshotShareAudience =
@@ -331,7 +332,7 @@ export async function commitSnapshotShare(
         throw new Error("Snapshot review changed before commit");
       }
     }
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: SHARE_WRITER,
     });

@@ -17,6 +17,7 @@ import {
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const visitor = await Identity.fromPassphrase("snapshot-share-visitor");
 const owner = await Identity.fromPassphrase("snapshot-share-owner");
@@ -54,7 +55,7 @@ const setup = async () => {
   );
   const [reader, author] = runtimes;
   const authorTx = author.edit();
-  authorTx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(authorTx, {
     kind: "builtin",
     builtinId: "snapshot-owner",
   });
@@ -523,7 +524,7 @@ describe("cfc-share-snapshot", () => {
       const target = { user: fixture.recipient };
       const prepared = prepareSnapshotShare(fixture.source, target);
       const tx = fixture.runtimes[0].edit();
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "snapshot-owner",
       });
@@ -788,7 +789,7 @@ describe("cfc-share-snapshot", () => {
         thirdMember.getCellFromLink(shared.getAsNormalizedFullLink()).get()
       ).toThrow(/read ceiling/);
       const createOutsider = thirdMember.edit();
-      createOutsider.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(createOutsider, {
         kind: "builtin",
         builtinId: "snapshot-owner",
       });

@@ -17,6 +17,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { VDomOp } from "../src/vdom-ops.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
+import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 
 const INTEGRITY = CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM;
 const signer = await Identity.fromPassphrase(
@@ -72,7 +73,7 @@ Deno.test("profile-home shows every fresh verified identity with a badge bound t
     // Loom's verifier writes the assertions as a builtin, the only author the
     // runtime lets mint the verified-identity atom.
     const assertionTx = runtime.edit();
-    assertionTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(assertionTx, {
       kind: "builtin",
       builtinId: "loom-verified-identity-publisher",
     });

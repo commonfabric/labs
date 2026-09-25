@@ -64,6 +64,7 @@
     "./cfc": "./src/cfc/mod.ts",
     "./cfc/share-snapshot": "./src/cfc/share-snapshot.ts",
     "./cfc/custody-seal": "./src/cfc/custody-seal.ts",
+    "./cfc/trust-authority": "./src/cfc/trust-authority.ts",
     "./cfc/owner-adoption": "./src/cfc/owner-adoption.ts",
     "./cfc/clause": "./src/cfc/clause.ts",
     "./cfc/trust": "./src/cfc/trust.ts",

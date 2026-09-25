@@ -76,10 +76,8 @@ import type {
   CfcWriteFloorMode,
   ConsultedGrant,
   ConsultedPolicyManifest,
-  ImplementationIdentity,
   PostCommitSideEffect,
   RuntimeWritePolicyAuthorization,
-  TrustSnapshot,
   WritePolicyInput,
 } from "../cfc/mod.ts";
 import type { EntityId } from "../create-ref.ts";
@@ -2130,12 +2128,6 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   prepareCfc(): string;
 
   /**
-   * Sets (or clears) the CFC trust snapshot for this transaction. See
-   * ownership note above.
-   */
-  setCfcTrustSnapshot(snapshot: TrustSnapshot | undefined): void;
-
-  /**
    * Marks the values the runtime initializes in this transaction as
    * attributed to the acting principal (`CfcTxState.attributedInitialization`):
    * the runner marks the transaction of a handler run the principal invoked,
@@ -2145,14 +2137,6 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    */
   markCfcAttributedInitialization(
     authorization: RuntimeWritePolicyAuthorization,
-  ): void;
-
-  /**
-   * Sets (or clears) the implementation identity that will be folded
-   * into the CFC digest for this transaction. See ownership note above.
-   */
-  setCfcImplementationIdentity(
-    identity: ImplementationIdentity | undefined,
   ): void;
 
   /**

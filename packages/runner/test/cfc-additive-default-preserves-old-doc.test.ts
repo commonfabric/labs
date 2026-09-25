@@ -8,6 +8,10 @@ import { mergeCfcSchemaEnvelopes } from "../src/cfc/schema-merge.ts";
 import { CFC_SCHEMA_MIGRATION_INCOMPATIBLE_REASON } from "../src/cfc/migration-reason.ts";
 import { NAME, UI } from "../src/builder/types.ts";
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "../src/storage/extended-storage-transaction.ts";
 
 // Why: reproduces the live Estuary "home stays bricked" incident's next layer.
 // The cold-start-setup-repair materializes the real home pattern over a home
@@ -150,11 +154,11 @@ describe("CFC additive-required default preserves old documents", () => {
       //    favorites and the handlers.
       {
         const tx = runtime.edit();
-        tx.setCfcTrustSnapshot({
+        setCfcTrustSnapshot(tx, {
           id: `trust-${space}`,
           actingPrincipal: space,
         });
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: OWNER_WRITER,
         });
@@ -224,8 +228,8 @@ describe("CFC additive-required default preserves old documents", () => {
     const space = alice.did();
     const ROOT = "legacy-home-root-reject";
     const seedMeta = (tx: ReturnType<typeof runtime.edit>) => {
-      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
-      tx.setCfcImplementationIdentity({
+      setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: OWNER_WRITER,
       });

@@ -24,6 +24,7 @@ import {
 } from "../src/cfc/types.ts";
 import type { JSONSchema, Pattern } from "../src/builder/types.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-writer-fit");
 
@@ -2022,7 +2023,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       expect(raw.secret).toBe("s3cr3t");
       // The trusted policy-writer authors under a builtin identity, the one
       // sanctioned writer of the reserved grant namespace.
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "cfc-grant-writer",
       });

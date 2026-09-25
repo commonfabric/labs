@@ -27,6 +27,7 @@ import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 // An endorsed transformer's output is released by an exchange rule guarded on
 // the `TransformedBy` atom the runtime mints for it. Naming only the code that
@@ -195,7 +196,7 @@ const transform = async (
 ): Promise<void> => {
   const identities = Array.isArray(identity) ? identity : [identity];
   const tx = runtime.edit();
-  tx.setCfcImplementationIdentity(identities[0]);
+  setCfcImplementationIdentity(tx, identities[0]);
   const values = inputs.map((cause) =>
     runtime.getCell(space, cause, undefined, tx).getRaw()
   );
@@ -209,7 +210,7 @@ const transform = async (
   // A second identity writing in the same transaction leaves the whole
   // transaction unattributed (`CfcTxState.writeIdentity`).
   for (const other of identities.slice(1)) {
-    tx.setCfcImplementationIdentity(other);
+    setCfcImplementationIdentity(tx, other);
     const scratch = runtime.getCell(space, `${output}-scratch`, undefined, tx)
       .getAsNormalizedFullLink().id;
     tx.writeOrThrow({ space, scope: "space", id: scratch, path: ["value"] }, 1);
@@ -465,7 +466,7 @@ describe("TransformedBy input witnesses", () => {
           () => ({ votes: ["reject"] }),
         );
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity(ATTACKER);
+        setCfcImplementationIdentity(tx, ATTACKER);
         const alice = runtime.getCell(space, "alice-note", undefined, tx)
           .getRaw() as { note: string };
         const chosen = runtime.getCell(
@@ -481,7 +482,7 @@ describe("TransformedBy input witnesses", () => {
         expect((await tx.commit()).error).toBeUndefined();
 
         const tallyTx = runtime.edit();
-        tallyTx.setCfcImplementationIdentity(TALLY);
+        setCfcImplementationIdentity(tallyTx, TALLY);
         const selected = runtime.getCell(
           space,
           "selection",

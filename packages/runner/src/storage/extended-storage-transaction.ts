@@ -434,6 +434,25 @@ export const readOnlyCfcView = <T>(value: T): T => {
   return view as T;
 };
 
+// The transaction's trust state — who is acting, and which implementation is
+// writing — is what the CFC gates decide on, and pattern-authored code reaches
+// the transaction its cells are bound to. So no method sets it. The classes
+// below hand these module-private functions their private fields, and the
+// exported `setCfcTrustSnapshot` and `setCfcImplementationIdentity` are the
+// only way in: a module the sandbox does not let pattern code import, and a
+// brand check no object pattern code builds or reshapes can pass.
+let assignCfcTrustSnapshot: (
+  tx: object,
+  snapshot: TrustSnapshot | undefined,
+) => boolean;
+let assignCfcImplementationIdentity: (
+  tx: object,
+  identity: ImplementationIdentity | undefined,
+) => boolean;
+let unwrapTransaction: (
+  tx: object,
+) => IExtendedStorageTransaction | undefined;
+
 export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   #commitCallbacks = new Set<
     (
@@ -1870,22 +1889,25 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     }
   }
 
-  setCfcTrustSnapshot(snapshot: TrustSnapshot | undefined): void {
-    this.#noteCfcActivity();
-    this.#cfcState.trustSnapshot = deepFreeze(snapshot);
-    if (this.#cfcState.prepare.status === "prepared") {
-      this.invalidateCfc("trust-snapshot-changed");
-    }
-  }
-
-  setCfcImplementationIdentity(
-    identity: ImplementationIdentity | undefined,
-  ): void {
-    this.#noteCfcActivity();
-    this.#cfcState.implementationIdentity = deepFreeze(identity);
-    if (this.#cfcState.prepare.status === "prepared") {
-      this.invalidateCfc("implementation-identity-changed");
-    }
+  static {
+    assignCfcTrustSnapshot = (tx, snapshot) => {
+      if (!(#cfcState in tx)) return false;
+      tx.#noteCfcActivity();
+      tx.#cfcState.trustSnapshot = deepFreeze(snapshot);
+      if (tx.#cfcState.prepare.status === "prepared") {
+        tx.invalidateCfc("trust-snapshot-changed");
+      }
+      return true;
+    };
+    assignCfcImplementationIdentity = (tx, identity) => {
+      if (!(#cfcState in tx)) return false;
+      tx.#noteCfcActivity();
+      tx.#cfcState.implementationIdentity = deepFreeze(identity);
+      if (tx.#cfcState.prepare.status === "prepared") {
+        tx.invalidateCfc("implementation-identity-changed");
+      }
+      return true;
+    };
   }
 
   markCfcAttributedInitialization(
@@ -4128,14 +4150,8 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     return this.#wrapped.prepareCfc();
   }
 
-  setCfcTrustSnapshot(snapshot: TrustSnapshot | undefined): void {
-    this.#wrapped.setCfcTrustSnapshot(snapshot);
-  }
-
-  setCfcImplementationIdentity(
-    identity: ImplementationIdentity | undefined,
-  ): void {
-    this.#wrapped.setCfcImplementationIdentity(identity);
+  static {
+    unwrapTransaction = (tx) => #wrapped in tx ? tx.#wrapped : undefined;
   }
 
   markCfcAttributedInitialization(
@@ -4575,4 +4591,64 @@ function schemaMetaCarrierOf(
     return { [SCHEMA_META_MEMBER]: value };
   }
   return undefined;
+}
+
+/**
+ * Runs `assign` on the transaction `tx` is, or wraps, and throws when neither
+ * is one this module built.
+ */
+const assignTrustState = (
+  tx: IExtendedStorageTransaction,
+  assign: (tx: object) => boolean,
+  what: string,
+): void => {
+  let current: IExtendedStorageTransaction | undefined = tx;
+  while (current !== undefined) {
+    if (assign(current)) return;
+    current = unwrapTransaction(current);
+  }
+  throw new Error(
+    `${what} requires a transaction the runtime created`,
+  );
+};
+
+/**
+ * Sets (or clears) the CFC trust snapshot for `tx`: the acting principal the
+ * CFC gates take this transaction's trust from.
+ *
+ * The runtime sets it when it creates a transaction. Only host code calls
+ * this: the sandbox does not let pattern code import it, and the transaction
+ * has no method that does the same.
+ */
+export function setCfcTrustSnapshot(
+  tx: IExtendedStorageTransaction,
+  snapshot: TrustSnapshot | undefined,
+): void {
+  assignTrustState(
+    tx,
+    (target) => assignCfcTrustSnapshot(target, snapshot),
+    "setCfcTrustSnapshot()",
+  );
+}
+
+/**
+ * Sets (or clears) the implementation identity that authors `tx`'s writes
+ * from here on. Each write-policy input captures the identity current when it
+ * is recorded, and `writeAuthorizedBy`, the runtime-minted integrity gate and
+ * the grant writer all trust it.
+ *
+ * The runner sets it for the handlers and builtins it runs, and host code sets
+ * it for the writes it makes as a trusted builtin. The sandbox does not let
+ * pattern code import this, and the transaction has no method that does the
+ * same.
+ */
+export function setCfcImplementationIdentity(
+  tx: IExtendedStorageTransaction,
+  identity: ImplementationIdentity | undefined,
+): void {
+  assignTrustState(
+    tx,
+    (target) => assignCfcImplementationIdentity(target, identity),
+    "setCfcImplementationIdentity()",
+  );
 }

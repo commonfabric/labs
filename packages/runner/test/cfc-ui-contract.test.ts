@@ -23,6 +23,7 @@ import { resolvedSchema } from "./schema-ref-helpers.ts";
 import type { EventHandler } from "../src/scheduler.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-ui-contract");
 const space = signer.did();
@@ -1722,7 +1723,7 @@ describe("CFC trusted UI event enforcement", () => {
 
     const trustedHandler = Object.assign(
       ((tx: IExtendedStorageTransaction) => {
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: "trusted-module",
           sourceFile: "/trusted.tsx",
@@ -1940,7 +1941,7 @@ describe("CFC trusted UI event enforcement", () => {
 
     const trustedHandler = Object.assign(
       ((tx: IExtendedStorageTransaction) => {
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: "trusted-module",
           sourceFile: "/trusted.tsx",

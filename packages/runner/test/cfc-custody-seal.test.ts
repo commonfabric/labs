@@ -36,6 +36,7 @@ import { Runtime } from "../src/runtime.ts";
 import { isAllowedAuthoredImportSpecifier } from "../src/sandbox/runtime-module-policy.ts";
 import { getRuntimeModuleExports } from "../src/sandbox/runtime-modules.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const alice = await Identity.fromPassphrase("custody-seal-alice");
 const bob = await Identity.fromPassphrase("custody-seal-bob");
@@ -345,7 +346,7 @@ const project = async (
     await runtime.getCellFromLink(cell.getAsNormalizedFullLink()).sync();
   }
   const tx = runtime.edit();
-  tx.setCfcImplementationIdentity(PROJECT);
+  setCfcImplementationIdentity(tx, PROJECT);
   const entries = local.withTx(tx).getRaw() as Record<string, unknown>;
   for (const cell of extra) {
     runtime.getCellFromLink(cell.getAsNormalizedFullLink()).withTx(tx)
@@ -416,7 +417,7 @@ describe("cfc-custody-seal", () => {
         // room; what matters is its identity, not whose runtime it is.
         const runtime = fixture.runtimes.get(alice)!;
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: "sha256:attacker",
           symbol: "bitOfNote",
@@ -539,7 +540,7 @@ describe("cfc-custody-seal", () => {
         const outcomes: Record<string, boolean> = {};
         for (const [where, write] of writes) {
           const tx = runtime.edit();
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "verified",
             moduleIdentity: "sha256:attacker",
             symbol: "overwrite",
@@ -571,7 +572,7 @@ describe("cfc-custody-seal", () => {
         const local = runtime.getCellFromLink(box.getAsNormalizedFullLink());
         await local.sync();
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: "sha256:attacker",
           symbol: "replace",
@@ -599,7 +600,7 @@ describe("cfc-custody-seal", () => {
           const instance = hashStringOf(TERMS);
           const runtime = fixture.runtimes.get(mallory)!;
           const tx = runtime.edit();
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "verified",
             moduleIdentity: "sha256:attacker",
             symbol: "squat",
@@ -635,7 +636,7 @@ describe("cfc-custody-seal", () => {
         const runtime = fixture.runtimes.get(alice)!;
         await syncManifest(runtime);
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: "sha256:attacker",
           symbol: "squat",
@@ -680,7 +681,7 @@ describe("cfc-custody-seal", () => {
         const runtime = fixture.runtimes.get(mallory)!;
         await syncManifest(runtime);
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: "sha256:attacker",
           symbol: "squat",

@@ -46,6 +46,7 @@ import { ExecutorHost } from "../src/executor/host.ts";
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { awaitAdmitted } from "./support/serving-waits.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const spaceSigner = await Identity.fromPassphrase("trust attribution space");
 const space = spaceSigner.did() as MemorySpace;
@@ -363,7 +364,7 @@ describe("executor-trust-attribution", () => {
       const cancelProbe = serving.scheduler.addEventHandler(
         (tx, event) => {
           const docName = (event as { doc?: string })?.doc ?? "flag5-doc";
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "builtin",
             builtinId: TRUSTED_WRITER,
           });
@@ -429,7 +430,7 @@ describe("executor-trust-attribution", () => {
       const serving = servingRuntime!;
       const cancelProbe = serving.scheduler.addEventHandler(
         (tx, _event) => {
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "builtin",
             builtinId: TRUSTED_WRITER,
           });
@@ -485,7 +486,7 @@ describe("executor-trust-attribution", () => {
           if (kind === "s18-setup") {
             // A LEGIT mint first, so the doc holds a well-formed
             // envelope for the forgery to target.
-            tx.setCfcImplementationIdentity({
+            setCfcImplementationIdentity(tx, {
               kind: "builtin",
               builtinId: TRUSTED_WRITER,
             });
@@ -577,7 +578,7 @@ describe("executor-trust-attribution", () => {
       const cancelProbe = serving.scheduler.addEventHandler(
         (tx, event) => {
           const docName = (event as { doc?: string })?.doc ?? "multi-doc";
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "builtin",
             builtinId: TRUSTED_WRITER,
           });
@@ -682,7 +683,7 @@ describe("executor-trust-attribution", () => {
       const cancelProbe = serving.scheduler.addEventHandler(
         (tx, _event) => {
           dispatches += 1;
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "builtin",
             builtinId: TRUSTED_WRITER,
           });

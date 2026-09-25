@@ -32,6 +32,7 @@ import {
   SharedServerStorageManager,
   sourceDescriptor,
 } from "./debug_view_support.ts";
+import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 
 Deno.test("debug deployment replaces a view when its pattern identity changes", async () => {
   const session = await createSession({
@@ -555,7 +556,7 @@ Deno.test("debug deployment rejects stale registration across runtimes", async (
         );
         await commitEntered.promise;
         const competingResult = await writerRuntime.editWithRetry((tx) => {
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "builtin",
             builtinId: AGENT_CONNECTOR_WRITER_ID,
           });

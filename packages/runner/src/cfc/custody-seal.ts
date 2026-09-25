@@ -64,6 +64,7 @@ import { CfcReadCeilingError } from "./read-ceiling.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
 import { isRendererTrustedEvent } from "./ui-contract.ts";
+import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 /** Builtin implementation identity that alone may write a custody box. */
 export const CUSTODY_SEAL_WRITER = "cfc-custody-seal";
@@ -1257,7 +1258,7 @@ export async function commitCustodySeal(
         }
         return;
       }
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: CUSTODY_SEAL_WRITER,
       });
@@ -1280,7 +1281,7 @@ export async function commitCustodySeal(
   const receiptTx = runtime.edit();
   let receipt: Cell<unknown>;
   try {
-    receiptTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(receiptTx, {
       kind: "builtin",
       builtinId: CUSTODY_SEAL_WRITER,
     });
@@ -1336,7 +1337,7 @@ export async function commitCustodySeal(
           throw new Error("Custody seal review changed before commit");
         }
       }
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: CUSTODY_SEAL_WRITER,
       });

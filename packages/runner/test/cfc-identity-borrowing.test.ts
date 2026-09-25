@@ -5,6 +5,7 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-identity-borrowing");
 
@@ -57,7 +58,7 @@ describe("CFC write-policy identity borrowing", () => {
       // Later in the same transaction a trusted builtin identity becomes active
       // (e.g. an unrelated builtin runs). The earlier unattributed write must
       // NOT borrow it to satisfy writeAuthorizedBy.
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "trustedIncrement",
       });
@@ -98,12 +99,13 @@ describe("CFC write-policy identity borrowing", () => {
           schema,
           tx,
         );
-        tx.setCfcImplementationIdentity(trusted);
+        setCfcImplementationIdentity(tx, trusted);
         cell.set({ counter: 1 });
-        tx.setCfcImplementationIdentity(firstAttributed ? trusted : undefined);
+        setCfcImplementationIdentity(tx, firstAttributed ? trusted : undefined);
         const target = { ...cell.getAsNormalizedFullLink(), path: ["counter"] };
         tx.recordCfcWritePolicyInput({ kind: "schema", target, schema: field });
-        tx.setCfcImplementationIdentity(
+        setCfcImplementationIdentity(
+          tx,
           firstAttributed
             ? { kind: "builtin", builtinId: "untrusted" }
             : trusted,

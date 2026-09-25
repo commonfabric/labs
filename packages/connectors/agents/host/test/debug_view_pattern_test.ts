@@ -39,6 +39,10 @@ import {
   tableRowWithFirstCell,
   tableWithHeaders,
 } from "./debug_view_support.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "@commonfabric/runner/cfc/trust-authority";
 
 Deno.test("debug pattern accepts empty target cells before collection", async () => {
   const session = await createSession({
@@ -276,7 +280,7 @@ Deno.test("debug pattern submits commands and links row data to separate views",
     );
     resultInspect.abort();
     const resultAttack = runtime.edit();
-    resultAttack.setCfcTrustSnapshot({
+    setCfcTrustSnapshot(resultAttack, {
       id: "principal:did:key:other-debug-owner",
       actingPrincipal: "did:key:other-debug-owner",
     });
@@ -771,7 +775,7 @@ Deno.test("debug pattern submits commands and links row data to separate views",
     );
 
     const attack = runtime.edit();
-    attack.setCfcTrustSnapshot({
+    setCfcTrustSnapshot(attack, {
       id: "principal:did:key:other-owner",
       actingPrincipal: "did:key:other-owner",
     });
@@ -839,7 +843,7 @@ Deno.test("debug pattern bounds raw-data links to one session page", async () =>
       path: [],
     });
     const staleIndexTx = runtime.edit();
-    staleIndexTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(staleIndexTx, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });

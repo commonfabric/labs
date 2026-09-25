@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 
 import { StorageManager } from "../../src/storage/cache.deno.ts";
-import { ExtendedStorageTransaction } from "../../src/storage/extended-storage-transaction.ts";
+import {
+  ExtendedStorageTransaction,
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "../../src/storage/extended-storage-transaction.ts";
 import { Runtime } from "../../src/runtime.ts";
 
 const signer = await Identity.fromPassphrase("prepared-digest-test");
@@ -170,8 +174,8 @@ describe("prepared digest transaction binding", () => {
     try {
       const trust = { id: "trust", revision: "1" };
       const identity = { kind: "verified" as const, bindingPath: ["one"] };
-      tx.setCfcTrustSnapshot(trust);
-      tx.setCfcImplementationIdentity(identity);
+      setCfcTrustSnapshot(tx, trust);
+      setCfcImplementationIdentity(tx, identity);
       const digest = tx.accessForTestingOnly.preparedDigest();
       expect(() => {
         trust.revision = "2";
@@ -180,7 +184,7 @@ describe("prepared digest transaction binding", () => {
         identity.bindingPath.push("two");
       }).toThrow(TypeError);
       expect(tx.accessForTestingOnly.preparedDigest()).toBe(digest);
-      tx.setCfcTrustSnapshot({ id: "trust", revision: "2" });
+      setCfcTrustSnapshot(tx, { id: "trust", revision: "2" });
       expect(tx.accessForTestingOnly.preparedDigest()).not.toBe(digest);
     } finally {
       tx.abort();

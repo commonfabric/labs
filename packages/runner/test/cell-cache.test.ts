@@ -46,6 +46,7 @@ import {
   dataFileSpecifier,
   sourceRootSpecifier,
 } from "../src/sandbox/module-record-compiler.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 // These tests drive the sync parse internals directly (below the async flow
 // boundaries that normally load the deferred compiler stack), so load it here.
@@ -1071,7 +1072,7 @@ describe("cell-cache", () => {
       const utilIdentity = identityOf(PROGRAM, "/util.ts");
       const wtx = runtime.edit();
       const prior = wtx.getCfcState().implementationIdentity;
-      wtx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(wtx, {
         kind: "builtin",
         builtinId: "compile-cache",
       });
@@ -1087,7 +1088,7 @@ describe("cell-cache", () => {
         filename: "/util.ts",
         imports: [],
       });
-      wtx.setCfcImplementationIdentity(prior);
+      setCfcImplementationIdentity(wtx, prior);
       wtx.prepareCfc();
       await wtx.commit();
 
@@ -1158,7 +1159,7 @@ describe("cell-cache", () => {
       ) => {
         const tx = runtime.edit();
         const previousIdentity = tx.getCfcState().implementationIdentity;
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "compile-cache",
         });
@@ -1174,7 +1175,7 @@ describe("cell-cache", () => {
           delete next.patternCoverageSpans;
           cell.set({ ...next, ...value });
         } finally {
-          tx.setCfcImplementationIdentity(previousIdentity);
+          setCfcImplementationIdentity(tx, previousIdentity);
         }
         tx.prepareCfc();
         expect((await tx.commit()).ok).toBeDefined();
@@ -1253,7 +1254,7 @@ describe("cell-cache", () => {
       const replace = async (value: Record<string, unknown>) => {
         const tx = runtime.edit();
         const previousIdentity = tx.getCfcState().implementationIdentity;
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "compile-cache",
         });
@@ -1269,7 +1270,7 @@ describe("cell-cache", () => {
           delete next.builderSourceSites;
           cell.set({ ...next, ...value });
         } finally {
-          tx.setCfcImplementationIdentity(previousIdentity);
+          setCfcImplementationIdentity(tx, previousIdentity);
         }
         tx.prepareCfc();
         expect((await tx.commit()).ok).toBeDefined();
@@ -1400,7 +1401,7 @@ describe("cell-cache", () => {
       const replaceEntryFields = async (fields: Record<string, unknown>) => {
         const tx = runtime.edit();
         const previousIdentity = tx.getCfcState().implementationIdentity;
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "compile-cache",
         });
@@ -1416,7 +1417,7 @@ describe("cell-cache", () => {
             ...fields,
           });
         } finally {
-          tx.setCfcImplementationIdentity(previousIdentity);
+          setCfcImplementationIdentity(tx, previousIdentity);
         }
         tx.prepareCfc();
         expect((await tx.commit()).ok).toBeDefined();
@@ -1530,7 +1531,7 @@ describe("cell-cache", () => {
       )!;
       const rewireTx = runtime.edit();
       const previousIdentity = rewireTx.getCfcState().implementationIdentity;
-      rewireTx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(rewireTx, {
         kind: "builtin",
         builtinId: "compile-cache",
       });
@@ -1554,7 +1555,7 @@ describe("cell-cache", () => {
           })),
         });
       } finally {
-        rewireTx.setCfcImplementationIdentity(previousIdentity);
+        setCfcImplementationIdentity(rewireTx, previousIdentity);
       }
       rewireTx.prepareCfc();
       expect((await rewireTx.commit()).error).toBeUndefined();
@@ -1613,7 +1614,7 @@ describe("cell-cache", () => {
       const entryIdentity = "compiled-entry-with-missing-link";
       const wtx = runtime.edit();
       const previousIdentity = wtx.getCfcState().implementationIdentity;
-      wtx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(wtx, {
         kind: "builtin",
         builtinId: "compile-cache",
       });
@@ -1633,7 +1634,7 @@ describe("cell-cache", () => {
           ],
         });
       } finally {
-        wtx.setCfcImplementationIdentity(previousIdentity);
+        setCfcImplementationIdentity(wtx, previousIdentity);
       }
       wtx.prepareCfc();
       await wtx.commit();
@@ -1984,7 +1985,7 @@ describe("cell-cache", () => {
         protectedSchema,
       );
       const seed = await runtime.editWithRetry((tx) => {
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: predecessorIdentity,
           sourceFile: "/main.tsx",
@@ -1995,7 +1996,7 @@ describe("cell-cache", () => {
       expect(seed.error).toBeUndefined();
 
       const denied = await runtime.editWithRetry((tx) => {
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: importerIdentity,
           sourceFile: "/main.tsx",
@@ -2008,7 +2009,7 @@ describe("cell-cache", () => {
 
       const damageTx = runtime.edit();
       const previousIdentity = damageTx.getCfcState().implementationIdentity;
-      damageTx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(damageTx, {
         kind: "builtin",
         builtinId: "compile-cache",
       });
@@ -2026,7 +2027,7 @@ describe("cell-cache", () => {
           damageTx,
         ).set({ damaged: true });
       } finally {
-        damageTx.setCfcImplementationIdentity(previousIdentity);
+        setCfcImplementationIdentity(damageTx, previousIdentity);
       }
       damageTx.prepareCfc();
       expect((await damageTx.commit()).error).toBeUndefined();

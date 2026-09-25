@@ -38,7 +38,10 @@ import {
   EmulatedStorageManager,
   StorageManager,
 } from "../src/storage/cache.deno.ts";
-import { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
+import {
+  ExtendedStorageTransaction,
+  setCfcImplementationIdentity,
+} from "../src/storage/extended-storage-transaction.ts";
 import {
   isCfcEnforcementRejection,
   isPermanentRejection,
@@ -308,7 +311,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
     overrides: Record<string, unknown> = {},
   ): Promise<{ space: string; id: string }> => {
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: "cfc-grant-writer",
     });
@@ -511,7 +514,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
         const receiptId = cfcGrantConsumedReceiptId(grantId);
         // Seed a receipt as another release would have committed it.
         const seed = runtime.edit();
-        seed.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(seed, {
           kind: "builtin",
           builtinId: "cfc-grant-writer",
         });
