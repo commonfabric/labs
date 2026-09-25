@@ -572,7 +572,9 @@ export class VisitInProgress<
           case "mapTo": {
             keyMappedTo = this.#assertValidPlainObjectKey(key, keyResult.value);
             if (Object.hasOwn(mapResult!, keyMappedTo)) {
-              throw new Error(`Visit of key $quote${key} mapped to already-mapped key: $quote${keyMappedTo}`)
+              throw new Error(
+                debugStr`Visit of key $quote${key} mapped to already-mapped key: $quote${keyMappedTo}`,
+              );
             }
             break;
           }
