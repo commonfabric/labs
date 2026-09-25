@@ -52,6 +52,7 @@ import {
   buildCfcPolicyArtifactManifest,
   CFC_ENFORCEMENT_MODES,
   cfcLabelViewForCell,
+  createRuntimeCfcModulePolicySource,
   linkCfcLabelView,
   setLinkCfcLabelView,
 } from "@commonfabric/runner/cfc";
@@ -169,7 +170,14 @@ describe("runtime-processor", () => {
       const { runtime, storageManager } = createRuntime();
       try {
         expect(
-          renderConfidentialityResolverFor(runtime, cfcSigner, undefined),
+          renderConfidentialityResolverFor(
+            runtime,
+            cfcSigner,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+          ),
         ).toBeUndefined();
       } finally {
         await runtime.dispose();
@@ -180,9 +188,14 @@ describe("runtime-processor", () => {
     it("resolves the acting user's own space against a ceiling", async () => {
       const { runtime, storageManager } = createRuntime();
       try {
-        const resolver = renderConfidentialityResolverFor(runtime, cfcSigner, {
-          atoms: [cfcAtom.user(cfcSigner.did())],
-        });
+        const resolver = renderConfidentialityResolverFor(
+          runtime,
+          cfcSigner,
+          { atoms: [cfcAtom.user(cfcSigner.did())] },
+          undefined,
+          undefined,
+          undefined,
+        );
         expect(resolver).toBeDefined();
         const ceiling = [cfcAtom.user(cfcSigner.did())];
         // The acting user's own space (space DID == principal DID) is a verified
@@ -219,6 +232,8 @@ describe("runtime-processor", () => {
           cfcSigner,
           { atoms: [cfcAtom.user(cfcSigner.did())] },
           sessionSpace,
+          undefined,
+          undefined,
         );
         const ceiling = [cfcAtom.user(cfcSigner.did())];
         // The session workspace resolves...
@@ -265,6 +280,8 @@ describe("runtime-processor", () => {
           cfcSigner,
           { atoms: [cfcAtom.user(delegate)] },
           sessionSpace,
+          undefined,
+          undefined,
         );
         const ceiling = [cfcAtom.user(delegate)];
         // The key holder's workspace stays blocked for the delegate.
@@ -328,9 +345,14 @@ describe("runtime-processor", () => {
         await runtime.idle();
         await storageManager.synced();
 
-        const resolver = renderConfidentialityResolverFor(runtime, cfcSigner, {
-          atoms: [cfcAtom.user(cfcSigner.did())],
-        });
+        const resolver = renderConfidentialityResolverFor(
+          runtime,
+          cfcSigner,
+          { atoms: [cfcAtom.user(cfcSigner.did())] },
+          undefined,
+          undefined,
+          undefined,
+        );
         const ceiling = [cfcAtom.user(cfcSigner.did())];
         // The ACL-granted space resolves to User(actingUser).
         expect(
@@ -404,9 +426,14 @@ describe("runtime-processor", () => {
         expect((await install.commit()).ok).toBeDefined();
         await storageManager.synced();
 
-        const resolver = renderConfidentialityResolverFor(runtime, cfcSigner, {
-          atoms: [cfcAtom.user(cfcSigner.did())],
-        });
+        const resolver = renderConfidentialityResolverFor(
+          runtime,
+          cfcSigner,
+          { atoms: [cfcAtom.user(cfcSigner.did())] },
+          undefined,
+          undefined,
+          createRuntimeCfcModulePolicySource(runtime),
+        );
         const ceiling = [cfcAtom.user(cfcSigner.did())];
         expect(
           atomsOutsideCeiling(
@@ -540,9 +567,14 @@ describe("runtime-processor", () => {
         await runtime.idle();
         await storageManager.synced();
 
-        const resolver = renderConfidentialityResolverFor(runtime, cfcSigner, {
-          atoms: [cfcAtom.user(own)],
-        });
+        const resolver = renderConfidentialityResolverFor(
+          runtime,
+          cfcSigner,
+          { atoms: [cfcAtom.user(own)] },
+          undefined,
+          undefined,
+          createRuntimeCfcModulePolicySource(runtime),
+        );
         // The label read from `holding`, where a labeling commit installs
         // the manifest; by default the subject space itself.
         const outside = (subject: string, holding = subject) =>

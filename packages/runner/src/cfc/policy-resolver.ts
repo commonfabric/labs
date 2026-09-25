@@ -3,12 +3,10 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { Cancel } from "../cancel.ts";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
-import {
-  type CfcModulePolicyResolver,
-  isExactModulePolicyRef,
-} from "./exchange-eval.ts";
+import type { CfcModulePolicyResolver } from "./exchange-eval.ts";
 import {
   cfcPolicyManifestDocId,
+  isExactModulePolicyRef,
   type PolicyArtifactManifestV1,
 } from "./policy.ts";
 
@@ -93,6 +91,13 @@ const noopCancel: Cancel = () => {};
  * nothing. Because the digest covers the whole manifest, where it was read
  * from cannot change which rules it carries, and the subject, committed or
  * not, plays no part in finding it.
+ *
+ * This is not `Runtime.hasCfcPolicyManifest`. The runtime's per-space
+ * manifest record gains a space when a transaction installs a manifest
+ * there, before that transaction commits, so it answers "this space holds or
+ * is about to hold it" — the question the commit gate asks. The display
+ * boundary needs a manifest read and verified from the local replica
+ * (§4.4.1), and this source keeps only those.
  *
  * The display boundary resolves a label every time a cell renders, so a
  * verified manifest is kept, keyed by space and digest, and a later lookup of

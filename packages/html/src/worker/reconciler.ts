@@ -370,14 +370,14 @@ export class WorkerReconciler {
       // value when an ACL changes.
       let lastRootValue: unknown;
       let rootHasRendered = false;
-      const rootWatchedSpaces = new Set<string>();
+      const rootWatchedDocs = new Set<string>();
       const renderRoot = (resolvedVnode: unknown) => {
         logger.debug("root-cell-update", () => ({ resolvedVnode }));
         lastRootValue = resolvedVnode;
         rootHasRendered = true;
         this.#watchCellMembership(
           vnode as Cell<unknown>,
-          rootWatchedSpaces,
+          rootWatchedDocs,
           addCancel,
           () => {
             if (rootHasRendered) renderRoot(lastRootValue);
@@ -1536,8 +1536,9 @@ export class WorkerReconciler {
   /**
    * §4.9.3 Stage 2 (spec §18.4.5): subscribe `reeval` to the ACL docs of the
    * spaces the render resolver consults for `cell`'s label
-   * (`membershipSpacesInConfidentiality`, which extends the spec's `Space(X)`
-   * candidates with module-policy subjects), and to the manifest document of
+   * (`membershipSpacesInConfidentiality`, which adds module-policy subjects to
+   * the spec's `Space(X)` candidates per `docs/specs/cfc-spec-changes.md`
+   * SC-44), and to the manifest document of
    * each module policy the label selects in each space the label was read
    * from, so a fail-closed over-block re-renders when an ACL later grants (or
    * revokes) READ or a manifest arrives. Shared by the descendant-cell
@@ -1588,7 +1589,10 @@ export class WorkerReconciler {
     };
     if (provider !== undefined) {
       for (const space of membershipSpacesInConfidentiality(confidentiality)) {
-        watch(space, () => provider.subscribe(space, reeval));
+        watch(
+          `membership:${space}`,
+          () => provider.subscribe(space, reeval),
+        );
       }
     }
     if (manifests !== undefined) {
@@ -1596,9 +1600,8 @@ export class WorkerReconciler {
         const reference of modulePolicyRefsInConfidentiality(confidentiality)
       ) {
         for (const space of source.spaces) {
-          // Keyed apart from the space DIDs above, which never start with "[".
           watch(
-            JSON.stringify([space, reference.policyDigest]),
+            `manifest:${JSON.stringify([space, reference.policyDigest])}`,
             () => manifests.subscribe(reference, space, reeval),
           );
         }
@@ -3998,7 +4001,7 @@ export class WorkerReconciler {
     // cell is labeled with, so a fail-closed over-block upgrades to an admit
     // when a `Space(X)` ACL syncs in (and a revoke re-blocks) — a re-evaluation
     // with the last resolved value, forced past the value-identity dedupe.
-    const watchedSpaces = new Set<string>();
+    const watchedDocs = new Set<string>();
 
     const renderResolved = (resolvedChild: unknown, forced = false) => {
       const isInitialRender = childState.nodeId === -1;
@@ -4010,7 +4013,7 @@ export class WorkerReconciler {
       childState.currentValue = resolvedChild;
       this.#watchCellMembership(
         cell,
-        watchedSpaces,
+        watchedDocs,
         addCancel,
         () => renderResolved(childState.currentValue, true),
       );

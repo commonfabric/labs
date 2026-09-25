@@ -1,3 +1,7 @@
+import {
+  CFC_ATOM_TYPE,
+  type CfcModulePolicyRefAtom,
+} from "@commonfabric/api/cfc";
 import { deepFreeze, hashStringOf } from "@commonfabric/data-model";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
@@ -5,12 +9,43 @@ import {
   isAtomPattern,
   isAtomVarPlaceholder,
 } from "./atom-pattern.ts";
+import { isCfcFieldCommitment } from "./label-representation.ts";
 
 export const CFC_POLICY_MANIFEST_ID_PREFIX = "of:cfc-policy-manifest:";
 
 export const cfcPolicyManifestDocId = (
   policyDigest: string,
 ): `of:${string}` => `${CFC_POLICY_MANIFEST_ID_PREFIX}${policyDigest}`;
+
+const MODULE_POLICY_REF_KEYS = new Set([
+  "type",
+  "policyRefKind",
+  "moduleIdentity",
+  "symbol",
+  "policyDigest",
+  "subject",
+]);
+
+/** A complete module-policy reference, with nothing missing or extra. */
+export const isExactModulePolicyRef = (
+  value: unknown,
+): value is CfcModulePolicyRefAtom => {
+  if (!isObjectNotArray(value)) return false;
+  if (
+    value.type !== CFC_ATOM_TYPE.Policy || value.policyRefKind !== "module" ||
+    typeof value.moduleIdentity !== "string" ||
+    value.moduleIdentity.length === 0 || typeof value.symbol !== "string" ||
+    value.symbol.length === 0 || typeof value.policyDigest !== "string" ||
+    value.policyDigest.length === 0 ||
+    !(
+      (typeof value.subject === "string" && value.subject.length > 0) ||
+      isCfcFieldCommitment(value.subject)
+    )
+  ) {
+    return false;
+  }
+  return Object.keys(value).every((key) => MODULE_POLICY_REF_KEYS.has(key));
+};
 
 /**
  * Policy records + exchange rules (spec §4.3/§4.4, Epic B2 of
@@ -804,7 +839,10 @@ export const buildCfcPolicyArtifactManifest = (
  * The artifacts {@link validateCfcPolicyArtifactManifest} has returned. Each is
  * deep-frozen, so one handed back for validation again is still exactly what
  * passed, and is returned without recomputing its digest. The display
- * boundary validates the same kept artifact on every render.
+ * boundary validates the same kept artifact on every render. The set is
+ * process-global, shared by every runtime in the process; that is sound
+ * because membership says only that validation produced this exact frozen
+ * object, which no runtime can change, and a `WeakSet` retains nothing.
  */
 const validatedArtifacts = new WeakSet<PolicyArtifactManifestV1>();
 

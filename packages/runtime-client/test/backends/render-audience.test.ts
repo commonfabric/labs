@@ -246,6 +246,7 @@ describe("render-audience", () => {
           ceiling,
           options.spaceDid,
           membership,
+          undefined,
         );
         const ops: VDomOp[] = [];
         const allText: string[] = [];

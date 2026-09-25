@@ -549,17 +549,21 @@ export function browserWorkerParamsFromInitializationData(
  * (`PolicyOf<...>`) runs that module's exchange rules too, with its manifest
  * read and verified through `modulePolicySource` from the space the label is
  * stored in, and the policy's subject space's membership looked up like a
- * `Space(...)` atom's. Service DIDs are NOT threaded to the worker today (design §9), so `serviceDids` is `[]` and
- * service principals — which rarely render — fail closed. Returns undefined
- * when no ceiling is configured (no render gating — today's behavior).
+ * `Space(...)` atom's. The source is required so the caller shares one with
+ * the reconciler, which re-renders through its subscriptions; `undefined`
+ * resolves no manifest, and every `PolicyOf` label stays sealed. Service DIDs
+ * are NOT threaded to the worker today (design §9), so `serviceDids` is `[]`
+ * and service principals — which rarely render — fail closed. Returns
+ * undefined when no ceiling is configured (no render gating — today's
+ * behavior).
  */
 export function renderConfidentialityResolverFor(
   runtime: Runtime,
   identity: Identity,
   ceiling: RenderConfidentialityCeiling | undefined,
-  sessionSpace?: string,
-  membershipProvider?: SpaceMembershipProvider,
-  modulePolicySource?: CfcModulePolicySource,
+  sessionSpace: string | undefined,
+  membershipProvider: SpaceMembershipProvider | undefined,
+  modulePolicySource: CfcModulePolicySource | undefined,
 ): RenderConfidentialityResolver | undefined {
   if (ceiling === undefined) {
     return undefined;
@@ -585,12 +589,10 @@ export function renderConfidentialityResolverFor(
       createRuntimeSpaceMembershipProvider(runtime, actingPrincipal),
     // A `PolicyOf` label's module rules run at the display boundary too,
     // resolved through the runtime's verified manifest read; a manifest that
-    // is missing or fails verification leaves the label sealed. Shared with
-    // the reconciler like the membership provider, so the manifests it
-    // watches and the ones this resolves are one cache.
-    modulePolicyResolver:
-      (modulePolicySource ?? createRuntimeCfcModulePolicySource(runtime))
-        .resolve,
+    // is missing or fails verification leaves the label sealed. The source is
+    // the reconciler's, so the manifests it watches and the ones this
+    // resolves are one cache.
+    modulePolicyResolver: modulePolicySource?.resolve,
   });
 }
 

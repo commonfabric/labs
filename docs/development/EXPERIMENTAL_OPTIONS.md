@@ -1415,9 +1415,10 @@ the per-epic implementation notes).
   the worker resolves shared `Space` labels through verified reader membership,
   and runs the exchange rules of any module policy (`PolicyOf`) a label
   selects, reading that policy's manifest from the space the label is stored
-  in and verifying its digest; a delegate's access to the session workspace requires its own
-  membership evidence. Confidentiality the ceiling does not satisfy stays
-  blocked, and author-supplied render-boundary declassification is denied.
+  in and verifying its digest; a delegate's access to the session workspace
+  requires its own membership evidence. Confidentiality the ceiling does not
+  satisfy stays blocked, and author-supplied render-boundary declassification
+  is denied.
 - **Current default and planned end state.** On by default; a browser profile
   opts out with `commonfabric.cfcRenderCeiling(false)`, which is what the
   `cfcRenderCeiling` localStorage key records. The end state is to remove the
