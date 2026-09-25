@@ -239,7 +239,7 @@ export interface ValueVisitor<
   visitedFabricArrayElement(
     array: FabricArrayPlus<PlusType>,
     index: number,
-    value: FabricValuePlus<PlusType>,
+    value: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType>;
 
   /**
@@ -268,7 +268,7 @@ export interface ValueVisitor<
    */
   visitedFabricInstance(
     instance: FabricInstancePlus<PlusType>,
-    state: FabricValuePlus<PlusType>,
+    state: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType>;
 
   /**
@@ -280,6 +280,6 @@ export interface ValueVisitor<
   visitedFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<PlusType>,
     key: FabricValuePlus<PlusType>,
-    value: FabricValuePlus<PlusType>,
+    value: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType>;
 }

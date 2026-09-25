@@ -424,7 +424,7 @@ export abstract class DefaultValueVisitor<
   override visitedFabricArrayElement(
     _array: FabricArrayPlus<PlusType>,
     _index: number,
-    _value: FabricValuePlus<PlusType>,
+    _value: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType> {
     return undefined;
   }
@@ -449,7 +449,7 @@ export abstract class DefaultValueVisitor<
    */
   override visitedFabricInstance(
     _instance: FabricInstancePlus<PlusType>,
-    _state: FabricValuePlus<PlusType>,
+    _state: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType> {
     return undefined;
   }
@@ -462,7 +462,7 @@ export abstract class DefaultValueVisitor<
   override visitedFabricPlainObjectEntry(
     _container: FabricPlainObjectPlus<PlusType>,
     _key: FabricValuePlus<PlusType>,
-    _value: FabricValuePlus<PlusType>,
+    _value: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType> {
     return undefined;
   }
