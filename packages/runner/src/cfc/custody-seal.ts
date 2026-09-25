@@ -92,10 +92,12 @@ export interface CustodyRoom {
 
   /**
    * The room's custody policy; its subject must be the room space. A host
-   * whose policy reference is stored passes the cell holding it: the seal then
-   * reads the cell at prepare and again at commit, refuses a commit whose
-   * reading differs from the one the actor reviewed, and has the transaction
-   * that writes the entry verify that the cell still holds it.
+   * whose policy reference is stored passes the cell holding it, or a cell
+   * whose stored label declares it, as a pattern's cell declared `PolicyOf`
+   * the room's rules does: the seal then reads the cell at prepare and again
+   * at commit, refuses a commit whose reading differs from the one the actor
+   * reviewed, and has the transaction that writes the entry verify that the
+   * cell still holds it.
    */
   readonly policy: CfcModulePolicyRefAtom | Cell<unknown>;
 }
@@ -1083,10 +1085,57 @@ const allowedSourcesOf = async (
   }
 };
 
+/** Whether `value` has the shape of a module policy reference at all. */
+const isModulePolicyShaped = (value: unknown): boolean =>
+  isObjectNotArray(value) && value.type === CFC_ATOM_TYPE.Policy &&
+  value.policyRefKind === "module";
+
 /**
- * Returns the policy reference `policy` names: the reference itself, or what
- * its cell holds. A cell's read is added to `evidence`, so the entry's
- * transaction verifies it. The caller checks the reference.
+ * The one module policy reference the stored label of the cell at `link`
+ * declares on the cell itself, or `undefined` when it declares none.
+ *
+ * @throws If the label names more than one.
+ */
+const declaredPolicyOf = (
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+): unknown => {
+  const view = cfcLabelViewFromMetadata(
+    readStoredCfcMetadata(tx, link),
+    link.path.map(String),
+  );
+  const found: unknown[] = [];
+  for (const entry of view?.entries ?? []) {
+    if (entry.path.length > 0) continue;
+    if (entry.observes !== undefined && entry.observes !== "value") continue;
+    for (const clause of entry.label.confidentiality ?? []) {
+      for (const atom of clauseAlternatives(clause as CfcConfClause)) {
+        if (
+          isModulePolicyShaped(atom) &&
+          !found.some((known) => deepEqual(known, atom))
+        ) found.push(atom);
+      }
+    }
+  }
+  if (found.length > 1) {
+    throw new Error(
+      "Custody seal refuses a policy cell whose label declares more than one module policy",
+    );
+  }
+  return found[0];
+};
+
+/**
+ * Returns the policy reference `policy` names: the reference itself, what its
+ * cell holds, or, for a cell holding no reference, the one module policy the
+ * cell's stored label declares. The label is how a pattern names its own
+ * room's policy: it cannot write the reference, which names its module's
+ * content identity and manifest digest, but a cell it declares `PolicyOf` its
+ * rules carries that reference, with the room space the runtime bound as its
+ * subject. A cell's reads are added to `evidence`, so the entry's transaction
+ * verifies them. The caller checks the reference.
+ *
+ * @throws If a cell's label declares more than one module policy.
  */
 const requestedPolicyOf = async (
   runtime: Cell<unknown>["runtime"],
@@ -1100,9 +1149,13 @@ const requestedPolicyOf = async (
   await policy.sync();
   const tx = runtime.edit();
   try {
-    const value = snapshotJsonValue(policy.withTx(tx).get());
+    const cell = policy.withTx(tx).resolveAsCell();
+    const value = cell.getRawUntyped({ frozen: false });
+    const requested = isModulePolicyShaped(value)
+      ? snapshotJsonValue(value)
+      : declaredPolicyOf(tx, cell.getAsNormalizedFullLink());
     evidence.push(...readEvidence(tx));
-    return value;
+    return requested;
   } finally {
     tx.abort();
   }

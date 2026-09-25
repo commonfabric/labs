@@ -1106,6 +1106,64 @@ describe("cfc-custody-seal", () => {
       }
     });
 
+    it("takes the room's policy from the label a policy cell declares", async () => {
+      // A pattern cannot write its own policy's reference as a value: the
+      // reference names the module's content identity and manifest digest.
+      // It can declare a cell `PolicyOf` its rules, and the runtime binds
+      // that reference, with the room as its subject, into the cell's label.
+      const fixture = await setup();
+      try {
+        const runtime = fixture.runtimes.get(alice)!;
+        const declaring = runtime.getCell(S, "custody-room-state");
+        const draft = await fixture.draft(alice, honestStance);
+        const prepared = await prepareCustodySeal(draft, {
+          ...fixture.room(alice),
+          policy: declaring,
+        });
+        expect(prepared.policy).toEqual(P);
+        const { box } = await commitCustodySeal(
+          prepared.consent,
+          trustedClick(),
+        );
+        expect(box.getAsNormalizedFullLink().space).toBe(S);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a policy cell whose label declares no policy, or more than one", async () => {
+      const fixture = await setup();
+      try {
+        const runtime = fixture.runtimes.get(alice)!;
+        runtime.registerCfcPolicyManifests(undefined, [SCRATCH]);
+        const tx = runtime.edit();
+        const plain = runtime.getCell(S, "plain-room-state", undefined, tx);
+        plain.set({ open: true } as never);
+        const twice = runtime.getCell(S, "twice-declared", {
+          type: "object",
+          ifc: {
+            confidentiality: [
+              { ...P, subject: { __ctOwningSpace: true } },
+              { ...policyOf(SCRATCH), subject: { __ctOwningSpace: true } },
+            ],
+          },
+        } as never, tx);
+        twice.set({ open: true } as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        const draft = await fixture.draft(alice, honestStance);
+        await expect(prepareCustodySeal(draft, {
+          ...fixture.room(alice),
+          policy: plain.withTx(undefined),
+        })).rejects.toThrow(/exact module policy reference/);
+        await expect(prepareCustodySeal(draft, {
+          ...fixture.room(alice),
+          policy: twice.withTx(undefined),
+        })).rejects.toThrow(/declares more than one module policy/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
     it("refuses a policy whose subject is not the room space", async () => {
       const fixture = await setup();
       try {
