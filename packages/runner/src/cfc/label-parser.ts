@@ -46,10 +46,7 @@ const invalid = (path: readonly string[], reason: string): never => {
 
 type DataProperty = readonly [key: string, value: unknown];
 
-/**
- * Returns the inert data properties of a JSON object without evaluating an
- * accessor.
- */
+/** Returns inert JSON object properties without evaluating an accessor. */
 const objectProperties = (
   value: unknown,
   path: readonly string[],
@@ -175,7 +172,7 @@ const cloneJsonValue = (
 /** Whether `value` is an absolute URI usable as an atom type identifier. */
 const isAtomTypeUri = (value: string): boolean => {
   try {
-    return new URL(value).protocol !== "";
+    return value.trim() === value && new URL(value).protocol !== "";
   } catch {
     return false;
   }

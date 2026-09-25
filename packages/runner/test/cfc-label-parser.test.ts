@@ -55,7 +55,7 @@ describe("label-parser", () => {
       });
     });
 
-    it("preserves an atom with an unknown type URI", () => {
+    it("preserves an unknown type URI and rejects padding", () => {
       const extension = {
         type: "https://example.com/cfc/atom/Extension",
         claim: { level: 2 },
@@ -63,6 +63,8 @@ describe("label-parser", () => {
       expect(parseIfcLabel({ integrity: [extension] })).toEqual({
         integrity: [extension],
       });
+      extension.type = ` ${extension.type}`;
+      expectInvalid({ integrity: [extension] }, "/integrity/0/type");
     });
 
     it("accepts empty and multi-alternative confidentiality `anyOf` clauses", () => {

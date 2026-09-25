@@ -81,6 +81,15 @@ checks may collect on succeeding operations too, so this counter measures work
 rather than rejected commits. Both counters are measurement only and do not
 affect CFC relevance, preparation, or enforcement.
 
+`overlapWildcardQueries` and `overlapConcreteQueries` count label-index queries
+during preparation, split by whether the query path contains `"*"`.
+`authoritativeCoverCalls` counts carried label entries checked against source
+authority, including checks answered from the preparation-local cover cache.
+`flowTemplateContainers` counts container stamps and `flowTemplateEntriesMinted`
+counts their three child templates (`shape`, `value`, and `followRef`). These
+counters measure work before final entry coalescing; they do not count distinct
+persisted entries.
+
 ## Parsing untrusted CFC labels
 
 `parseIfcLabel` from `@commonfabric/runner/cfc` is the public boundary for a
@@ -91,15 +100,6 @@ and returns a deeply detached `IFCLabel`.
 Malformed values throw `InvalidIfcLabelError` with a JSON-pointer-like `path`.
 Callers must treat the refusal as an invalid label, never as an unlabeled value.
 The parser checks grammar only; consumers remain responsible for policy meaning.
-
-`overlapWildcardQueries` and `overlapConcreteQueries` count label-index queries
-during preparation, split by whether the query path contains `"*"`.
-`authoritativeCoverCalls` counts carried label entries checked against source
-authority, including checks answered from the preparation-local cover cache.
-`flowTemplateContainers` counts container stamps and `flowTemplateEntriesMinted`
-counts their three child templates (`shape`, `value`, and `followRef`). These
-counters measure work before final entry coalescing; they do not count distinct
-persisted entries.
 
 ## Architecture
 
