@@ -94,6 +94,18 @@ describe("represents-principal", () => {
       expect(authorPrincipalCandidates(label)).toEqual([]);
     });
 
+    it("does not count an entry a link carries from another document", () => {
+      // A document linking Bob's profile at a top-level field holds a copy of
+      // that profile's label there, marked as a link's; it says what the link
+      // points to, not whom this document represents.
+      const label = view([
+        representsAt(["name"], DID),
+        { ...representsAt(["friend"], OTHER_DID), observes: "followRef" },
+        { ...representsAt([], OTHER_DID), observes: "followRef" },
+      ]);
+      expect(authorPrincipalCandidates(label)).toEqual([DID]);
+    });
+
     it("returns no DID for a label with no represents-principal atom", () => {
       const label = view([
         {

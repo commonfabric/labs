@@ -11,6 +11,7 @@ import {
   principalClaimSubject,
   representsPrincipalSubject,
 } from "../src/cfc/represents-principal.ts";
+import { writeResultSchemaMeta } from "../src/result-schema-meta.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 
 const alice = await Identity.fromPassphrase(
@@ -430,6 +431,128 @@ describe("represents-principal writer check", () => {
         },
       );
       expect(error).toBeUndefined();
+      expect(subjects).not.toContain(bob.did());
+    });
+
+    // A source schema whose field `p` names Bob, which no write ever reaches,
+    // so the write check never looks at it.
+    const unwrittenForgery: JSONSchema = {
+      type: "object",
+      properties: {
+        q: { type: "string" },
+        p: {
+          type: "string",
+          ifc: {
+            addIntegrity: [
+              { kind: "represents-principal", subject: bob.did() },
+              { kind: "authored-by", subject: bob.did() },
+            ],
+          },
+        },
+      },
+    } as JSONSchema;
+
+    const profileTarget: JSONSchema = {
+      type: "object",
+      properties: { name: { type: "string" }, avatar: {} },
+      ifc: { integrity: ["target-mark"] },
+    } as JSONSchema;
+
+    // In one transaction, Alice's pattern writes `source` through `prepare`,
+    // then links its unwritten field `p` into a new profile-shaped document.
+    const linkUnwrittenFieldAsAlice = async (
+      cause: string,
+      prepare: (
+        tx: IExtendedStorageTransaction,
+        runtime: Runtime,
+      ) => ReturnType<Runtime["getCell"]>,
+      linkPath: string,
+    ) => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const tx = runtime.edit();
+        actAsPatternFor(tx, alice.did());
+        const source = prepare(tx, runtime);
+        const target = runtime.getCell(
+          alice.did(),
+          `${cause}-target`,
+          profileTarget,
+          tx,
+        );
+        target.set({ name: "Bob", avatar: source.key(linkPath) } as never);
+        tx.prepareCfc();
+        const result = await tx.commit();
+        return {
+          error: result.error?.message,
+          subjects: storedClaimSubjects(
+            runtime,
+            target.getAsNormalizedFullLink(),
+          ),
+        };
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+
+    it("stores no claim from a same-transaction source schema entry the write check skipped", async () => {
+      const { subjects } = await linkUnwrittenFieldAsAlice(
+        "represents-principal-link-pending",
+        (tx, runtime) => {
+          const source = runtime.getCell(
+            alice.did(),
+            "represents-principal-link-pending-source",
+            unwrittenForgery,
+            tx,
+          );
+          source.set({ q: "x" });
+          return source;
+        },
+        "p",
+      );
+      expect(subjects).not.toContain(bob.did());
+    });
+
+    it("stores no claim from a source's setup result schema", async () => {
+      const { subjects } = await linkUnwrittenFieldAsAlice(
+        "represents-principal-link-setup",
+        (tx, runtime) => {
+          const source = runtime.getCell(
+            alice.did(),
+            "represents-principal-link-setup-source",
+            undefined,
+            tx,
+          );
+          source.set({ q: "x" });
+          writeResultSchemaMeta(source.withTx(tx), unwrittenForgery);
+          return source;
+        },
+        "p",
+      );
+      expect(subjects).not.toContain(bob.did());
+    });
+
+    it("carries a same-transaction source's checked self-attestation", async () => {
+      const { error, subjects } = await linkUnwrittenFieldAsAlice(
+        "represents-principal-link-pending-genuine",
+        (tx, runtime) => {
+          const source = runtime.getCell(
+            alice.did(),
+            "represents-principal-link-pending-genuine-source",
+            claimSchema([{
+              kind: "represents-principal",
+              subject: CURRENT_PRINCIPAL,
+            }]),
+            tx,
+          );
+          source.set({ name: "Ada" });
+          recordTrustedEdit(tx, source.getAsNormalizedFullLink());
+          return source;
+        },
+        "name",
+      );
+      expect(error).toBeUndefined();
+      expect(subjects).toContain(alice.did());
       expect(subjects).not.toContain(bob.did());
     });
 

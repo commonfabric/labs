@@ -44,6 +44,48 @@ describe("ownerPrincipalFromLabel", () => {
     expect(ownerPrincipalFromLabel(label)).toBeUndefined();
   });
 
+  it("names no owner from an atom below the top-level fields", () => {
+    // A document holding a link to Bob's profile deeper down carries that
+    // profile's label there; it is not the owner of this document.
+    const label = view([
+      {
+        path: ["elements", "0", "cell"],
+        label: { integrity: [{ kind: "represents-principal", subject: DID }] },
+      },
+    ]);
+    expect(ownerPrincipalFromLabel(label)).toBeUndefined();
+  });
+
+  it("names no owner from an entry a link carries", () => {
+    const label = view([
+      {
+        path: ["friend"],
+        label: { integrity: [{ kind: "represents-principal", subject: DID }] },
+        observes: "followRef",
+      },
+    ]);
+    expect(ownerPrincipalFromLabel(label)).toBeUndefined();
+  });
+
+  it("names no owner when top-level atoms name two principals", () => {
+    const label = view([
+      {
+        path: ["name"],
+        label: { integrity: [{ kind: "represents-principal", subject: DID }] },
+      },
+      {
+        path: ["avatar"],
+        label: {
+          integrity: [{
+            kind: "represents-principal",
+            subject: DID.replace("z6Mk", "z6Mm"),
+          }],
+        },
+      },
+    ]);
+    expect(ownerPrincipalFromLabel(label)).toBeUndefined();
+  });
+
   it("ignores unrelated integrity atoms", () => {
     const label = view([
       {
