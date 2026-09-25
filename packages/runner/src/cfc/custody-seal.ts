@@ -1085,6 +1085,16 @@ const allowedSourcesOf = async (
   }
 };
 
+/**
+ * Loads `cell` and the document it resolves to. A cell a pattern hands the
+ * host is often a field of its result that links to the document holding
+ * the value, as a computed output or an argument does.
+ */
+const syncResolved = async (cell: Cell<unknown>): Promise<void> => {
+  await cell.sync();
+  await cell.resolveAsCell().sync();
+};
+
 /** Whether `value` has the shape of a module policy reference at all. */
 const isModulePolicyShaped = (value: unknown): boolean =>
   isObjectNotArray(value) && value.type === CFC_ATOM_TYPE.Policy &&
@@ -1146,7 +1156,7 @@ const requestedPolicyOf = async (
   if (policy.runtime !== runtime) {
     throw new Error("Custody seal handles must belong to the same runtime");
   }
-  await policy.sync();
+  await syncResolved(policy);
   const tx = runtime.edit();
   try {
     const cell = policy.withTx(tx).resolveAsCell();
@@ -1177,7 +1187,10 @@ const inspect = async (
   if (requestedRoom.terms.runtime !== runtime) {
     throw new Error("Custody seal handles must belong to the same runtime");
   }
-  await Promise.all([draft.sync(), requestedRoom.terms.sync()]);
+  await Promise.all([
+    syncResolved(draft),
+    syncResolved(requestedRoom.terms),
+  ]);
 
   const evidence: ReadEvidence[] = [];
   const allowed = await allowedSourcesOf(runtime, options, evidence);
@@ -1260,9 +1273,13 @@ const inspect = async (
     termsTx.abort();
   }
   const terms = await resolveSeats(runtime, rawTerms, seatLinks, evidence);
+  // Read through a schema that admits the whole manifest, so the sync loads
+  // the documents its rules are stored in as well as the manifest's own.
   const manifest = runtime.getCellFromEntityId(
     room,
     cfcPolicyManifestDocId(policy.policyDigest),
+    [],
+    { type: "object", additionalProperties: true },
   );
   await manifest.sync();
   const manifestTx = runtime.edit();
