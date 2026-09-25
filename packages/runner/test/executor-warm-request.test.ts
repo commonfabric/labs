@@ -31,6 +31,7 @@ import type { Options } from "../src/storage/v2.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
+import type { SpaceServerPolicy } from "../src/executor/space-server.ts";
 import {
   ArrivalLog,
   awaitAdmitted,
@@ -94,7 +95,7 @@ describe("executor-warm-request", () => {
    * refusal for the state under test. Cleared when consumed. */
   let failNextRuntimeFor: MemorySpace | undefined;
 
-  const newHost = (): ExecutorHost =>
+  const newHost = (policy: SpaceServerPolicy = {}): ExecutorHost =>
     new ExecutorHost({
       server,
       serviceIdentity: serviceSigner.did(),
@@ -125,7 +126,7 @@ describe("executor-warm-request", () => {
           },
         });
       },
-      policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
+      policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000, ...policy },
       onActivationSettled: (space, outcome) =>
         activations.record({ space, outcome }),
     });
@@ -440,7 +441,10 @@ describe("executor-warm-request", () => {
   });
 
   it("re-buffers drained warm notices when the activation they were drained into FAILS — the warm demand reaches the eventual successor (OW46-family, no crash required)", async () => {
-    host = newHost();
+    // The failure is stubbed into runtime construction, so the successor
+    // must construct one: a runtime kept from the idle park below would
+    // serve it without.
+    host = newHost({ parkedRuntimeRetentionMs: 0 });
 
     // A live target, activated the ordinary way (as in the park-race
     // pin); the failure under test is downstream of ordinary activation.

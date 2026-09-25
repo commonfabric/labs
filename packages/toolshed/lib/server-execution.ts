@@ -38,6 +38,7 @@ export type ServerExecutionEnvPolicy = {
   maxOutstandingEffects?: number;
   egressRatePerSecond?: number;
   storeReadThrough?: boolean;
+  parkedRuntimeRetentionMs?: number;
 };
 
 /**
@@ -54,7 +55,11 @@ export type ServerExecutionEnvPolicy = {
  *   value is a deliberate operator choice);
  * - the store read-through (`SpaceServerPolicy.storeReadThrough`,
  *   SERVER_EXECUTION_STORE_READ_THROUGH) defaults OFF; only the literal
- *   `true` turns it on.
+ *   `true` turns it on;
+ * - how long an idle-parked space's runtime is kept for its next tenure
+ *   (`SpaceServerPolicy.parkedRuntimeRetentionMs`,
+ *   SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS) stays the host's
+ *   built-in default unless overridden; the literal `0` keeps none.
  *
  * Parsing is FAIL-CLOSED for the cap: an unparseable or negative value
  * ("abc", "-1", "1.5") falls back to the default and warns, instead of
@@ -120,6 +125,20 @@ export function serverExecutionPolicyFromEnv(
       maxOutstandingEffects = value;
     }
   }
+  const retentionRaw = readRaw(
+    "SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS",
+  );
+  const parkedRuntimeRetentionMs = retentionRaw === undefined
+    ? undefined
+    : strictNonNegativeInt(retentionRaw);
+  if (retentionRaw !== undefined && parkedRuntimeRetentionMs === undefined) {
+    warn(
+      "Server-execution v2: ignoring " +
+        "SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS=" +
+        `${JSON.stringify(retentionRaw)} (expected a non-negative integer; ` +
+        "the literal 0 keeps no parked runtime); using the built-in default",
+    );
+  }
   const readThroughRaw = readRaw("SERVER_EXECUTION_STORE_READ_THROUGH");
   let storeReadThrough: boolean | undefined;
   if (readThroughRaw === "true") {
@@ -136,6 +155,9 @@ export function serverExecutionPolicyFromEnv(
     ...(maxOutstandingEffects !== undefined ? { maxOutstandingEffects } : {}),
     ...(egressRatePerSecond !== undefined ? { egressRatePerSecond } : {}),
     ...(storeReadThrough !== undefined ? { storeReadThrough } : {}),
+    ...(parkedRuntimeRetentionMs !== undefined
+      ? { parkedRuntimeRetentionMs }
+      : {}),
   };
 }
 

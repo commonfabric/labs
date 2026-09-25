@@ -137,6 +137,36 @@ describe("serverExecutionPolicyFromEnv", () => {
     expect(warnings.length).toBe(1);
     expect(warnings[0]).toContain("SERVER_EXECUTION_STORE_READ_THROUGH");
   });
+
+  it("threads the parked-runtime retention knob, the literal 0 included; garbage reads as unset with a warning", () => {
+    const warnings: string[] = [];
+    const cases: [string, number][] = [["60000", 60_000], ["0", 0]];
+    for (const [raw, parkedRuntimeRetentionMs] of cases) {
+      expect(
+        serverExecutionPolicyFromEnv(
+          envOf({
+            SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS: raw,
+            SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0",
+          }),
+          (m) => warnings.push(m),
+        ),
+      ).toEqual({ parkedRuntimeRetentionMs });
+    }
+    expect(warnings).toEqual([]);
+    expect(
+      serverExecutionPolicyFromEnv(
+        envOf({
+          SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS: "-1",
+          SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0",
+        }),
+        (m) => warnings.push(m),
+      ),
+    ).toEqual({});
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain(
+      "SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS",
+    );
+  });
 });
 
 describe("startServerExecutionHost OFF witness", () => {
