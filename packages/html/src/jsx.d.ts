@@ -4343,7 +4343,10 @@ interface CFCustodySealAttributes<T> extends CFHTMLAttributes<T> {
   "$policy"?: CellLike<unknown>;
   /** The actor's source policy, in the actor's home space. */
   "$sources"?: CellLike<unknown>;
-  "oncf-sealed"?: EventHandler<{}>;
+  /** Writable cell receiving a link to the instance's box once sealed. */
+  "$box"?: CellLike<unknown>;
+  /** Fires once sealed; `instance` is the digest of the terms sealed under. */
+  "oncf-sealed"?: EventHandler<{ instance: string }>;
 }
 
 interface CFOwnerViewAttributes<T> extends CFHTMLAttributes<T> {

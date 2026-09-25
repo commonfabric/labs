@@ -173,6 +173,7 @@ import {
   type CfcLabelViewResponse,
   ClientNotificationType,
   type CustodySealCommitRequest,
+  type CustodySealCommitResponse,
   type CustodySealPrepareRequest,
   type CustodySealPreview,
   type DetectNonIdempotentRequest,
@@ -2077,7 +2078,7 @@ export class RuntimeProcessor {
   async handleCustodySealCommit(
     request: CustodySealCommitRequest,
     client: WorkerClient = ownerClient,
-  ): Promise<CellResponse> {
+  ): Promise<CustodySealCommitResponse> {
     const key = clientScopedKey(client, request.id);
     const pending = this.#custodySeals.get(key);
     this.#custodySeals.delete(key);
@@ -2103,7 +2104,11 @@ export class RuntimeProcessor {
       const sealed = await commitCustodySeal(pending.consent, event, {
         signal: commit.signal,
       });
-      return { cell: createCellRef(sealed.receipt) };
+      return {
+        receipt: createCellRef(sealed.receipt),
+        box: createCellRef(sealed.box),
+        instance: sealed.instance,
+      };
     } finally {
       this.#custodySealCommits.delete(key);
     }

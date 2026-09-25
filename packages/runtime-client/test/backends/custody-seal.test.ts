@@ -288,13 +288,22 @@ describe("custody-seal", () => {
       const sealed = await processor.handleRequest({
         type: RequestType.CustodySealCommit,
         id: preview.id,
-      }, first) as { cell: CellRef };
-      const receipt = runtime.getCellFromLink(sealed.cell);
-      expect(sealed.cell.space).toBe(alice.did());
+      }, first) as { receipt: CellRef; box: CellRef; instance: string };
+      const receipt = runtime.getCellFromLink(sealed.receipt);
+      expect(sealed.receipt.space).toBe(alice.did());
       expect(receipt.get()).toMatchObject({
         policy: P,
         instance: preview.instance,
       });
+      // The box a pattern's projector reads: the instance's one document in
+      // the room space, holding the entry the receipt names.
+      expect(sealed.instance).toBe(preview.instance);
+      expect(sealed.box.space).toBe(S);
+      expect(sealed.box.path).toEqual([]);
+      const box = runtime.getCellFromLink(sealed.box);
+      expect(Object.keys(box.getRaw() as object)).toEqual([
+        (receipt.get() as { entryKey: string }).entryKey,
+      ]);
     });
   });
 
@@ -576,7 +585,7 @@ describe("custody-seal", () => {
           type: RequestType.CustodySealCommit,
           id: retained.id,
         }, second),
-      ).toHaveProperty("cell");
+      ).toHaveProperty("box");
     });
   });
 });

@@ -1277,6 +1277,22 @@ export type CustodySealCommitRequest = BaseRequest & {
   id: string;
 };
 
+/**
+ * What a committed custody seal wrote, answered to the trusted host. The
+ * entry's blinded key is not part of it: the host hands the box to the
+ * pattern, and nothing a pattern can read says which entry is the actor's.
+ */
+export type CustodySealCommitResponse = {
+  /** The actor-private receipt, in the actor's home space. */
+  receipt: CellRef;
+
+  /** The instance's box, in the room space: what the room's projector reads. */
+  box: CellRef;
+
+  /** The instance the entry was sealed into: the digest of the terms. */
+  instance: string;
+};
+
 /** The {@link RequestType.CustodySealCancel} request. */
 export type CustodySealCancelRequest = BaseRequest & {
   type: RequestType.CustodySealCancel;
@@ -3646,6 +3662,7 @@ export type RemoteResponse =
   | CfcLabelViewResponse
   | SnapshotSharePreview
   | CustodySealPreview
+  | CustodySealCommitResponse
   | SqliteQueryResponse
   | GraphSnapshotResponse
   | LoggerCountsResponse
@@ -3877,7 +3894,7 @@ export type Commands = {
   };
   [RequestType.CustodySealCommit]: {
     request: CustodySealCommitRequest;
-    response: CellResponse;
+    response: CustodySealCommitResponse;
   };
   [RequestType.CustodySealCancel]: {
     request: CustodySealCancelRequest;

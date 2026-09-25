@@ -18,6 +18,7 @@ type SealBinding = {
   terms: CellHandle;
   policy: CellHandle;
   sources: CellHandle;
+  box: CellHandle | undefined;
   generation: number;
 };
 
@@ -150,8 +151,17 @@ function describeSource(source: unknown): string {
  * those answers reveals. The exact values are under details. Only a trusted
  * click on the dialog's own confirmation seals.
  *
+ * Once the value is sealed, the component writes a link to the instance's box
+ * into `$box`, when bound: the box is the one document the room's projector
+ * reads, and a pattern has no other way to address it. Reading it stays
+ * label-gated, so what the pattern computes from it leaves the room only
+ * through the room policy's own release rules. The blinded key of the actor's
+ * entry never reaches the pattern.
+ *
  * @element cf-custody-seal
- * @fires cf-sealed - The value is sealed; the event carries nothing
+ * @fires cf-sealed - The value is sealed; `detail.instance` is the instance
+ *   sealed into, the digest of the terms, which anyone who reads the terms can
+ *   compute
  */
 export class CFCustodySeal extends BaseElement {
   static override styles = [
@@ -288,6 +298,10 @@ export class CFCustodySeal extends BaseElement {
   @property({ attribute: false })
   accessor sources: CellHandle | undefined;
 
+  /** Optional writable cell that receives a link to the instance's box. */
+  @property({ attribute: false })
+  accessor box: CellHandle | undefined;
+
   #preview: SealPreview | undefined;
   #binding: SealBinding | undefined;
   #busy = false;
@@ -318,7 +332,7 @@ export class CFCustodySeal extends BaseElement {
   override willUpdate(changed: PropertyValues): void {
     super.willUpdate(changed);
     if (
-      ["draft", "terms", "policy", "sources", "runtime"].some((key) =>
+      ["draft", "terms", "policy", "sources", "box", "runtime"].some((key) =>
         changed.has(key)
       )
     ) {
@@ -447,13 +461,13 @@ export class CFCustodySeal extends BaseElement {
     return this.isConnected && binding.generation === this.#generation &&
       binding.runtime === this.runtime && binding.draft === this.draft &&
       binding.terms === this.terms && binding.policy === this.policy &&
-      binding.sources === this.sources;
+      binding.sources === this.sources && binding.box === this.box;
   }
 
   /** Asks the worker for the checked preview and opens the dialog on it. */
   #prepare = async (): Promise<void> => {
     if (this.#busy) return;
-    const { runtime, draft, terms, policy, sources } = this;
+    const { runtime, draft, terms, policy, sources, box } = this;
     if (
       !runtime || !draft || !terms || !policy || !sources || !this.isConnected
     ) {
@@ -466,6 +480,7 @@ export class CFCustodySeal extends BaseElement {
       terms,
       policy,
       sources,
+      box,
       generation: this.#generation,
     };
     this.#binding = binding;
@@ -524,12 +539,14 @@ export class CFCustodySeal extends BaseElement {
     this.#error = "";
     this.requestUpdate();
     try {
-      await binding.runtime.commitCustodySeal(preview.id);
+      const sealed = await binding.runtime.commitCustodySeal(preview.id);
       // The preview is consumed; nothing is left to cancel.
       this.#preview = undefined;
       if (!this.#current(binding)) return;
+      if (binding.box) await binding.box.setStrict(sealed.box);
+      if (!this.#current(binding)) return;
       this.#invalidate();
-      this.emit("cf-sealed");
+      this.emit("cf-sealed", { instance: sealed.instance });
     } catch (error) {
       this.#preview = undefined;
       if (!this.#current(binding)) return;

@@ -1,4 +1,4 @@
-import type { CellHandle, RuntimeClient } from "@commonfabric/runtime-client";
+import type { RuntimeClient } from "@commonfabric/runtime-client";
 import { expect } from "@std/expect";
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import { CFCustodySeal } from "./index.ts";
@@ -29,7 +29,7 @@ const preview: Preview = {
 /** Mounts host UI with independently controlled preparation and commit calls. */
 async function mountSeal(overrides: Partial<{
   prepareCustodySeal: RuntimeClient["prepareCustodySeal"];
-  commitCustodySeal: (id: string) => Promise<CellHandle>;
+  commitCustodySeal: RuntimeClient["commitCustodySeal"];
   cancelCustodySeal: (id: string) => Promise<void>;
 }> = {}) {
   const element = document.createElement("cf-custody-seal") as CFCustodySeal;
@@ -51,7 +51,12 @@ async function mountSeal(overrides: Partial<{
     },
     commitCustodySeal: () => {
       calls.push("commit");
-      return Promise.resolve(createMockCellHandle<unknown>({}));
+      const handle = createMockCellHandle<unknown>({});
+      return Promise.resolve({
+        receipt: handle,
+        box: handle,
+        instance: "instance-digest",
+      });
     },
     cancelCustodySeal: () => Promise.resolve(),
     ...overrides,

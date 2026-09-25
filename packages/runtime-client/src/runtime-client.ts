@@ -300,14 +300,23 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
 
   /**
    * Seals a prepared preview after the trusted host receives the actor's
-   * confirmation, answering with the actor's receipt.
+   * confirmation, answering with the actor's receipt, the instance's box
+   * that the room's projector reads, and the instance sealed into.
    */
-  async commitCustodySeal<T = unknown>(id: string): Promise<CellHandle<T>> {
+  async commitCustodySeal(id: string): Promise<{
+    receipt: CellHandle<unknown>;
+    box: CellHandle<unknown>;
+    instance: string;
+  }> {
     const response = await this.#conn.request<RequestType.CustodySealCommit>({
       type: RequestType.CustodySealCommit,
       id,
     });
-    return new CellHandle<T>(this, response.cell);
+    return {
+      receipt: new CellHandle(this, response.receipt),
+      box: new CellHandle(this, response.box),
+      instance: response.instance,
+    };
   }
 
   /** Discards a custody seal preview the host closed or replaced. */
