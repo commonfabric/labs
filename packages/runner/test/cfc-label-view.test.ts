@@ -21,6 +21,7 @@ import {
   cfcLabelViewFromMetadata,
   cfcLabelViewSourceForCell,
   cfcLabelViewSymbol,
+  getCarriedCfcLabelView,
 } from "../src/cfc/mod.ts";
 import {
   cfcLabelViewOriginSpaces,
@@ -503,6 +504,26 @@ describe("CFC label view helpers", () => {
         cfcLabelViewSourceForCell(resolved.asSchema({ type: "string" }))
           .spaces,
       ).toEqual([signer.did()]);
+      // A schema traversal slices the carried view per field through its
+      // rebaser, and a cell it mints below the link keeps the same origins.
+      const objectSource = await seedIn(elsewhere, "spaces-object", {
+        text: "open",
+      }, []);
+      const objectHolder = await seedIn(signer.did(), "spaces-object-holder", {
+        detail: objectSource.getAsLink(),
+      }, [{ path: ["detail"], label: { confidentiality: ["holder-conf"] } }]);
+      const minted = objectHolder.key("detail").asSchema({
+        type: "object",
+        properties: { text: { type: "string", asCell: ["cell"] } },
+      }).get().text as unknown;
+      expect(
+        getCarriedCfcLabelView(minted)?.entries.map((entry) =>
+          entry.label.confidentiality
+        ),
+      ).toEqual([["holder-conf"]]);
+      expect(cfcLabelViewSourceForCell(minted).spaces).toEqual([
+        signer.did(),
+      ]);
     } finally {
       await runtime.dispose();
       await storageManager.close();
