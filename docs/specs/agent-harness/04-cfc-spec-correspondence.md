@@ -108,7 +108,7 @@ was read against.
 
 | Clause      | CFC section       | Relation | Notes |
 | ----------- | ----------------- | -------- | ----- |
-| `AH-CFC-20` | §18.2.3.5, §18.2.3.6 | `fused` | §18.2.3.5 makes the protected label transport inaccessible to sandboxed code and requires label metadata to move monotonically with every mutation. §18.2.3.6 makes gVisor mediation the enforcement point and treats FUSE-side restrictions as guardrails. `AH-CFC-20` combines those obligations at harness admission: until a trusted path establishes both, the projection is read-only. |
+| `AH-CFC-20` | §18.2.3.5, §18.2.3.6 | `fused` | §18.2.3.5 makes the protected label transport inaccessible to sandboxed code and requires label metadata to move monotonically with every mutation. §18.2.3.6 makes gVisor mediation the enforcement point and treats FUSE-side restrictions as guardrails. `AH-CFC-20` combines those obligations at harness admission: until a trusted path establishes the protected transport, syscall mediation, trusted write-label propagation, and atomic mutation, the projection is read-only. |
 
 ## Where the derivation carries weight
 

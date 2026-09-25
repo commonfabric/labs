@@ -2,7 +2,7 @@
 
 Status: draft conformance statement\
 Profile date: 2026-09-25\
-Implementation revision: Labs `4fce10f7a6`
+Implementation revision: Labs `65989f0111`
 
 The [system map](system-map/README.md) moves in lockstep with this
 implementation profile.
@@ -71,7 +71,8 @@ The four §18.2.7 obligations that are this package's:
   published and does not carry §18.2.7's classification; no mount carries a
   measured image or rootfs digest. A harness-provisioned `fabric-fuse` bind is
   always read-only; writable admission remains unavailable until a trusted path
-  can attest the protected label transport and atomic label-plus-value commit.
+  can attest the protected label transport, syscall-level CFC enforcement,
+  trusted write-label propagation, and atomic label-plus-value commit.
 - **Where the opaque-handle store and label store live.** The handle table is
   session-local, persisted with the run's artifacts, reconstructed across batch
   resume, and never visible to the sandbox, which sees only tokens. The label
