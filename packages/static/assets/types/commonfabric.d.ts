@@ -856,16 +856,16 @@ export interface CompactDebugStringOptions extends DebugValueOptions {
 /**
  * A value that can appear in an in-memory fabric execution graph.
  *
- * Unlike a {@link FabricValue}, a `FabricExecValue` may contain functions,
- * patterns, and modules, and therefore is not necessarily durable or
- * serializable: it is `FabricValuePlus` at {@link FabricExecPlusType}, so any
- * of those may sit at the top or inside any container.
+ * Unlike a {@link FabricValue}, a `FabricExecValue` may contain builder
+ * artifacts, patterns, and modules, and therefore is not necessarily durable
+ * or serializable: it is `FabricValuePlus` at {@link FabricExecPlusType}, so
+ * any of those may sit at the top or inside any container.
  */
 export type FabricExecValue = FabricValuePlus<FabricExecPlusType>;
 
 /**
  * What a {@link FabricExecValue} admits beyond a {@link FabricValue}: a
- * function, a {@link Pattern}, or a {@link Module}.
+ * callable builder artifact, a {@link Pattern}, or a {@link Module}.
  *
  * A pattern and a module are each a member in their own right rather than a
  * plain object of execution values. Each declares the members it has, and
@@ -873,8 +873,15 @@ export type FabricExecValue = FabricValuePlus<FabricExecPlusType>;
  */
 export type FabricExecPlusType = FabricExecFunction | Pattern | Module;
 
-/** A callable leaf in a {@link FabricExecValue} graph. */
-export type FabricExecFunction = (...args: any[]) => any;
+/**
+ * A callable leaf in a {@link FabricExecValue} graph: a builder artifact, which
+ * says what it is through {@link toEncodableForm}.
+ *
+ * No other function belongs in a graph. A module's implementation is a
+ * function, but it is a declared member of that {@link Module}, not a value in
+ * the graph.
+ */
+export type FabricExecFunction = ((...args: any[]) => any) & toEncodableForm;
 
 /** Read-only array of fabric execution values. */
 export type FabricExecArray = FabricArrayPlus<FabricExecPlusType>;
