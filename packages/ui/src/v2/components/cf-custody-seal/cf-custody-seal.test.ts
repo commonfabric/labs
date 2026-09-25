@@ -448,6 +448,31 @@ describe("CFCustodySeal confirmation", () => {
     ]);
   });
 
+  it("announces a seal whose box link could not be written, and says so", async () => {
+    const element = new OpenDialogSeal();
+    using state = setup({ element });
+    element.box = {
+      setStrict: () => Promise.reject(new Error("write refused")),
+    } as unknown as CellHandle;
+    element.willUpdate(new Map([["box", undefined]]));
+    const sealed: CustomEvent[] = [];
+    element.addEventListener(
+      "cf-sealed",
+      (event) => sealed.push(event as CustomEvent),
+    );
+    await element.accessForTestingOnly.prepare();
+    await element.accessForTestingOnly.confirm(
+      trustedClick(element.confirmButton),
+    );
+    expect(state.committed).toEqual([preview.id]);
+    expect(sealed.map((event) => event.detail)).toEqual([
+      { instance: "instance" },
+    ]);
+    expect(element.accessForTestingOnly.error).toBe(
+      "Sealed, but the link to the room's box was not saved: write refused",
+    );
+  });
+
   it("does not seal on a trusted click on anything but its own button", async () => {
     const element = new OpenDialogSeal();
     using state = setup({ element });

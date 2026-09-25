@@ -543,9 +543,22 @@ export class CFCustodySeal extends BaseElement {
       // The preview is consumed; nothing is left to cancel.
       this.#preview = undefined;
       if (!this.#current(binding)) return;
-      if (binding.box) await binding.box.setStrict(sealed.box);
+      // The value is sealed whatever becomes of the link, so a failed write
+      // is reported as that and the seal is still announced: a second seal
+      // would be refused as a second entry.
+      let linkError = "";
+      if (binding.box) {
+        try {
+          await binding.box.setStrict(sealed.box);
+        } catch (error) {
+          linkError = `Sealed, but the link to the room's box was not saved: ${
+            error instanceof Error ? error.message : "the write failed"
+          }`;
+        }
+      }
       if (!this.#current(binding)) return;
       this.#invalidate();
+      this.#error = linkError;
       this.emit("cf-sealed", { instance: sealed.instance });
     } catch (error) {
       this.#preview = undefined;
