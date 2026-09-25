@@ -2917,11 +2917,12 @@ describe("Phase 3 events-down (serving side)", () => {
     // seals both sidecars itself. As the wave commits, admission stamps the
     // appended entry's `seq` and advances each touched stream's
     // `eventWatermark`, so the sidecars the store holds are not the ones
-    // the replica sealed. With no session
-    // watch to deliver them, the feed's refresh of the loop's own commit is
-    // the one path that brings them into the replica. A drain queues an
-    // entry only once the replica's view holds it at its stamped seq, so a
-    // view left with a sealed copy defers every later event in the space.
+    // the replica sealed. With no session watch to deliver them, the feed's
+    // refresh of the loop's own commit is the one path that brings them
+    // into the replica. A drain queues an entry only once the replica's view
+    // holds it at its stamped seq, so a view left with a sealed copy defers
+    // every later event in the space. The refresh rides the commit's feed
+    // record, so a later cycle with no new sidecar write re-reads nothing.
 
     ({ manager: clientManager, runtime: clientRuntime } = openClient());
     const engine = await server.engineForSpace(space);
@@ -2962,6 +2963,11 @@ describe("Phase 3 events-down (serving side)", () => {
       expect(replica.getDocument(id as URI)?.value).toEqual(stored);
     }
     expect(host.stats().events.visibilityDeferrals).toBe(0);
+
+    const refreshes = host.stats().storeRefreshes;
+    expect(refreshes).toBeGreaterThan(0);
+    await kickAndSettle(engine);
+    expect(host.stats().storeRefreshes).toBe(refreshes);
     cancelDemand();
   });
 

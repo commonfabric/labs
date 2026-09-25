@@ -3654,12 +3654,17 @@ export class SpaceServer implements TransactionSealDestination {
    * watch would otherwise have delivered. Of the loop's own derived
    * commits only the stream sidecars are re-read. Admission rewrites a
    * sidecar a derived commit touches: it stamps each appended entry's
-   * `seq` and recomputes the stream's `eventWatermark`, so the sidecar the
-   * store holds is not the one the replica sealed, and the drain queues an
-   * entry only once the replica's view holds it at its stamped seq. Any
-   * other document an own commit writes holds what the replica sealed,
-   * merged at most with a foreign commit whose own record the feed
-   * carries, so re-reading it here would only cost the engine a read.
+   * `seq` and `firedAt` and recomputes the stream's `eventWatermark`, so
+   * the sidecar the store holds is not the one the replica sealed, and
+   * the drain queues an entry only once the replica's view holds it at
+   * its stamped seq. Admission also rewrites the effects doc, stamping
+   * each intent's `issuedIn` and dropping an appended intent whose nonce
+   * the store already holds; the loop reads neither from the replica,
+   * since retirement scans the store and an intent is a tail append the
+   * store resolves, so that doc is not re-read. Any other document an
+   * own commit writes holds what the replica sealed, merged at most with
+   * a foreign commit whose own record the feed carries, so re-reading it
+   * here would only cost the engine a read.
    * Returns whether the record's writes reached the replica. A read or
    * integration that throws leaves the record to the next cycle, which
    * retries it: the drain must not consume a record whose writes never

@@ -1547,8 +1547,9 @@ the per-epic implementation notes).
   stamps each appended entry's seq and advances the stream's `eventWatermark`
   in the sidecar the store keeps, and the event drain queues an entry only once
   the serving replica's view holds it at that seq. Without that re-read a
-  same-space event a served handler emits into a sidecar is deferred on every
-  drain pass, and every later event in the space waits behind it. That is how
+  same-space event a served handler emits into a sidecar, and that the drain
+  has to dispatch, is deferred on every drain pass, and every later event in
+  the space waits behind it. That is how
   the topic-board navigation benchmark's `comment` segment stalled under the
   posture in [#8068](https://github.com/commonfabric/labs/pull/8068): the
   profile-create surface's handler emits such an event to seed the new
