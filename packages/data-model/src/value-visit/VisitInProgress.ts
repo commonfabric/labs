@@ -680,7 +680,7 @@ export class VisitInProgress<
     } else if (isUnsafeObjectKey(value)) {
       if (original === value) {
         throw new Error(
-          debugStr`Visit of unsafe key $quote${original} mapped to itself.`
+          debugStr`Visit of unsafe key $quote${original} mapped to itself.`,
         );
       } else {
         throw new Error(
