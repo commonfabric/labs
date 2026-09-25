@@ -95,6 +95,7 @@ jobs:
             packages/fuse/entity-projection.bench.ts \
             packages/memory/test/v2-entity-id-list.bench.ts \
             packages/memory/test/v2-cached-patch-replay.bench.ts \
+            packages/memory/test/v2-engine-read.bench.ts \
             packages/memory/test/v2-path.bench.ts \
             packages/data-model/bench/hashing.bench.ts \
             packages/data-model/bench/codec-json.bench.ts \

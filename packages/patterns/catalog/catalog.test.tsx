@@ -61,6 +61,9 @@ export default pattern(() => {
     if (findElement(catalog[UI], "cf-hover-reveal") != null) {
       return "hover-reveal";
     }
+    if (findElement(catalog[UI], "cf-hover-card") != null) {
+      return "hover-card";
+    }
     if (findElement(catalog[UI], "cf-button") != null) return "button";
     return "none";
   });
@@ -75,6 +78,10 @@ export default pattern(() => {
 
   const action_pick_hover_reveal = action(() => {
     click(catalog[UI], "Hover Reveal");
+  });
+
+  const action_pick_hover_card = action(() => {
+    click(catalog[UI], "Hover Card");
   });
 
   // The catalog collapses its sidebar when a story is picked, so reopening it
@@ -113,6 +120,9 @@ export default pattern(() => {
   const assert_shows_hover_reveal = assert(() =>
     catalog.selectedStory === "hover-reveal" && showing === "hover-reveal"
   );
+  const assert_shows_hover_card = assert(() =>
+    catalog.selectedStory === "hover-card" && showing === "hover-card"
+  );
 
   // Picking a story collapses the sidebar, so the category headings go away
   // and the reopen button takes their place.
@@ -141,6 +151,10 @@ export default pattern(() => {
       { action: action_reopen_sidebar },
       { action: action_pick_hover_reveal },
       { assertion: assert_shows_hover_reveal },
+
+      { action: action_reopen_sidebar },
+      { action: action_pick_hover_card },
+      { assertion: assert_shows_hover_card },
     ],
     catalog,
   };

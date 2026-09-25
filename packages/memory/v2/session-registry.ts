@@ -244,6 +244,14 @@ export class SessionRegistry {
     return this.#sessions.get(sessionKey(space, sessionId)) ?? null;
   }
 
+  /**
+   * Like `get()`, except that it prunes nothing, so it may return a session
+   * whose detach grace has run out but which no read has pruned yet.
+   */
+  peek(space: string, sessionId: string): SessionState | undefined {
+    return this.#sessions.get(sessionKey(space, sessionId));
+  }
+
   hasOpenSessionForPrincipal(
     space: string,
     principal: string | undefined,

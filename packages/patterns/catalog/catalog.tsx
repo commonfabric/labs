@@ -108,6 +108,7 @@ interface CatalogInput {
           { id: "skeleton"; label: "Skeleton" },
           { id: "alert"; label: "Alert" },
           { id: "toast"; label: "Toast" },
+          { id: "hover-card"; label: "Hover Card" },
         ];
       },
       {

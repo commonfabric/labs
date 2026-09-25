@@ -3009,6 +3009,7 @@ interface CFCustodySealElement extends CFHTMLElement {}
 interface CFBadgeElement extends CFHTMLElement {}
 interface CFChipElement extends CFHTMLElement {}
 interface CFEmptyStateElement extends CFHTMLElement {}
+interface CFHoverCardElement extends CFHTMLElement {}
 interface CFHoverRevealElement extends CFHTMLElement {}
 interface CFProgressElement extends CFHTMLElement {}
 interface CFSkeletonElement extends CFHTMLElement {}
@@ -5426,6 +5427,10 @@ declare global {
       "cf-empty-state": CFDOM.DetailedHTMLProps<
         CFEmptyStateAttributes<CFEmptyStateElement>,
         CFEmptyStateElement
+      >;
+      "cf-hover-card": CFDOM.DetailedHTMLProps<
+        CFHTMLAttributes<CFHoverCardElement>,
+        CFHoverCardElement
       >;
       "cf-hover-reveal": CFDOM.DetailedHTMLProps<
         CFHoverRevealAttributes<CFHoverRevealElement>,

@@ -14,7 +14,9 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  countElements,
   findNode,
+  findNodeById,
   findNodeByProp,
   fireClick,
   isButton,
@@ -218,6 +220,19 @@ export default pattern(() => {
   const assert_tallies_mark_only_viewers_own = assert(() =>
     talliesText(bobSeesFirst.tallies) === "😺 2*, 😿 1"
   );
+  const assert_tally_lists_reactors_in_order = assert(() => {
+    const [cats, cries] = aliceSeesFirst.tallies;
+    return cats.reactors.length === 2 &&
+      equals(cats.reactors[0], aliceProfile) &&
+      equals(cats.reactors[1], bobProfile) &&
+      cries.reactors.length === 1 &&
+      equals(cries.reactors[0], aliceProfile);
+  });
+  const assert_row_shows_a_badge_per_reactor = assert(() =>
+    countElements(aliceSeesFirst[UI], "cf-hover-card") === 2 &&
+    // The sender's badge, and one for each reactor: two cats and one cry.
+    countElements(aliceSeesFirst[UI], "cf-profile-badge") === 1 + 3
+  );
   const assert_linked_viewer_sees_own_marked = assert(() =>
     talliesText(aliceSeesFirstThroughLink.tallies) === "😺 2*, 😿 1*"
   );
@@ -228,13 +243,32 @@ export default pattern(() => {
   );
   const assert_taken_back_reaction_can_return = assert(() =>
     storedIn(reactions).length === 3 &&
-    talliesText(aliceSeesFirst.tallies) === "😺 2*, 😿 1*"
+    talliesText(aliceSeesFirst.tallies) === "😺 2*, 😿 1*" &&
+    equals(aliceSeesFirst.tallies[0].reactors[0], bobProfile) &&
+    equals(aliceSeesFirst.tallies[0].reactors[1], aliceProfile)
   );
   const assert_each_message_tallies_its_own = assert(() =>
     storedIn(reactions).length === 4 &&
     talliesText(aliceSeesSecond.tallies) === "😺 1*" &&
     talliesText(aliceSeesFirst.tallies) === "😺 2*, 😿 1*"
   );
+  const assert_card_ids_unique = assert(() => {
+    const ids = [...aliceSeesFirst.tallies, ...aliceSeesSecond.tallies].map(
+      (tally) => tally.cardId,
+    );
+    return ids.length === 3 && new Set(ids).size === 3 &&
+      ids.every((id) => !id.includes("unsaved"));
+  });
+  const assert_count_described_by_its_card = assert(() => {
+    const [cats] = aliceSeesFirst.tallies;
+    const count = findNodeByProp(
+      aliceSeesFirst[UI],
+      "aria-describedby",
+      cats.cardId,
+    );
+    const card = findNodeById(aliceSeesFirst[UI], cats.cardId);
+    return count !== undefined && card !== undefined;
+  });
   const assert_unoffered_emoji_refused = assert(() =>
     storedIn(reactions).length === 4
   );
@@ -277,6 +311,8 @@ export default pattern(() => {
       { action: bobCatsFirst, trustedUi: reactGesture },
       { assertion: assert_tallies_in_offered_order },
       { assertion: assert_tallies_mark_only_viewers_own },
+      { assertion: assert_tally_lists_reactors_in_order },
+      { assertion: assert_row_shows_a_badge_per_reactor },
       { assertion: assert_linked_viewer_sees_own_marked },
       { action: aliceCatsFirst, trustedUi: reactGesture },
       { assertion: assert_second_use_takes_reaction_back },
@@ -284,6 +320,8 @@ export default pattern(() => {
       { assertion: assert_taken_back_reaction_can_return },
       { action: aliceCatsSecond, trustedUi: reactGesture },
       { assertion: assert_each_message_tallies_its_own },
+      { assertion: assert_card_ids_unique },
+      { assertion: assert_count_described_by_its_card },
       { action: aliceOffersADog, trustedUi: reactGesture },
       { assertion: assert_unoffered_emoji_refused },
       { action: pendingCatsFirst, trustedUi: reactGesture },

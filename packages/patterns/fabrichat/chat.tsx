@@ -140,6 +140,19 @@ export interface ReactionTally {
 
   /** Whether the viewer is one of them. */
   mine: boolean;
+
+  /**
+   * Their profiles, in the order the reactions list holds them. That is the
+   * order of adding in a single session; reactions added at once in different
+   * sessions can land in either order.
+   */
+  reactors: ProfileCell[];
+
+  /**
+   * An id for the card that lists them, unique on the page, so the count can
+   * name the card as its description.
+   */
+  cardId: string;
 }
 
 /** A conversation's messages, oldest first. */
@@ -247,15 +260,20 @@ export const reactionKeyFor = (
 
 /**
  * The emoji `reactions` hold for `message`, in the order `FABRICHAT_REACJI`
- * lists them, leaving out any nobody used. A reaction is the viewer's when its
- * profile is the viewer's profile cell.
+ * lists them, leaving out any nobody used, each with the profiles that used
+ * it. A reaction is the viewer's when its profile is the viewer's profile
+ * cell.
  */
 export const reactionTallies = (
   reactions: readonly FabriChatReaction[],
   message: MessageCell | FabriChatMessage | undefined,
   viewer: ProfileCell | undefined,
-): ReactionTally[] =>
-  FABRICHAT_REACJI.map((emoji) => {
+): ReactionTally[] => {
+  const messageRef = message === undefined ? undefined : getEntityId(message);
+  const cardIdPrefix = `fabrichat-reactors-${
+    messageRef === undefined ? "unsaved" : entityRefToString(messageRef)
+  }`;
+  return FABRICHAT_REACJI.map((emoji, index) => {
     const onThis = reactions.filter((reaction) =>
       reaction?.emoji === emoji && equals(reaction.message, message)
     );
@@ -264,8 +282,11 @@ export const reactionTallies = (
       count: onThis.length,
       mine: viewer !== undefined &&
         onThis.some((reaction) => equals(reaction.reactorProfile, viewer)),
+      reactors: onThis.map((reaction) => reaction.reactorProfile),
+      cardId: `${cardIdPrefix}-${index}`,
     };
   }).filter((tally) => tally.count > 0);
+};
 
 /**
  * Clears the record at `key`. A reaction's record outlives its place in the
@@ -397,28 +418,40 @@ export const FabriChatMessageRow = pattern<
                 }}
               >
                 {tallies.map((tally) => (
-                  <cf-button
-                    data-ui-action={FABRICHAT_REACT_ACTION}
-                    size="sm"
-                    color="primary"
-                    variant={tally.mine ? "outline" : "ghost"}
-                    disabled={cannotReact}
-                    onClick={commitReact({
-                      emoji: tally.emoji,
-                      message,
-                      myProfile,
-                      reactions,
-                    } as CommitReactInput)}
-                  >
-                    {
-                      /* One item in the button's row, so the emoji and its
-                      count read as one run of text. */
-                    }
-                    <span>
-                      <span style={REACJI_STYLE}>{tally.emoji}</span>{" "}
-                      {tally.count}
-                    </span>
-                  </cf-button>
+                  <cf-hover-card>
+                    <cf-button
+                      data-ui-action={FABRICHAT_REACT_ACTION}
+                      aria-describedby={tally.cardId}
+                      size="sm"
+                      color="primary"
+                      variant={tally.mine ? "outline" : "ghost"}
+                      disabled={cannotReact}
+                      onClick={commitReact({
+                        emoji: tally.emoji,
+                        message,
+                        myProfile,
+                        reactions,
+                      } as CommitReactInput)}
+                    >
+                      {
+                        /* One item in the button's row, so the emoji and its
+                        count read as one run of text. */
+                      }
+                      <span>
+                        <span style={REACJI_STYLE}>{tally.emoji}</span>{" "}
+                        {tally.count}
+                      </span>
+                    </cf-button>
+                    <cf-vstack id={tally.cardId} slot="card" gap="1">
+                      {tally.reactors.map((reactor) => (
+                        <cf-profile-badge
+                          size="sm"
+                          noNavigate
+                          $profile={reactor}
+                        />
+                      ))}
+                    </cf-vstack>
+                  </cf-hover-card>
                 ))}
               </div>
             </cf-vstack>

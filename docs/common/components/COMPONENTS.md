@@ -140,6 +140,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-grid` | CSS Grid layout | |
 | `cf-heading` | Theme-compliant heading replacing `h1`–`h6` | |
 | `cf-hgroup` | Horizontal group with automatic gap management | |
+| `cf-hover-card` | A card that appears beside its content on hover or focus (see [cf-hover-card](#cf-hover-card)) | |
 | `cf-hover-reveal` | Content whose `actions` slot appears on hover or focus (see [cf-hover-reveal](#cf-hover-reveal)) | |
 | `cf-hscroll` | Horizontal scroll container | |
 | `cf-hstack` | Horizontal stack layout (flexbox) (see [stacks](#cf-vstack--cf-hstack)) | |
@@ -651,6 +652,34 @@ slot. Optional `icon` and `action` slots render above and below the message.
     Add first item
   </cf-button>
 </cf-empty-state>
+```
+
+---
+
+## cf-hover-card
+
+A small card that appears beside its content while the pointer rests on the
+content or focus is inside it, as a reaction count shows who reacted. What the
+card shows goes in the `card` slot. The card sits above the content, or below
+when there is no room above, in the browser's top layer, so no ancestor that
+clips its overflow can cut it off, and it follows the content as the page
+scrolls. It hides when the pointer and focus have both left. The pointer cannot
+reach the card, so what it shows is for reading, not for clicking; to have it
+read as a description of its content, point `aria-describedby` from the content
+to the element in the `card` slot.
+
+Showing and hiding is the component's own, so hovering runs no handler and
+writes no state.
+
+```tsx
+// Shown as JSX element children.
+<cf-hover-card>
+  <cf-button size="sm" aria-describedby="cats-reactors">😺 2</cf-button>
+  <cf-vstack id="cats-reactors" slot="card" gap="1">
+    <cf-text>Alice</cf-text>
+    <cf-text>Bob</cf-text>
+  </cf-vstack>
+</cf-hover-card>
 ```
 
 ---

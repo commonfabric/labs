@@ -223,12 +223,11 @@ export function readsOverlapWrites(
 }
 
 /**
- * Visit every writer whose static write surface overlaps one of `reads` /
- * `shallowReads`, via the writersByEntity index. The one entity-pruned
- * overlap scan behind collectDirectWritersForLog,
- * collectReverseDependenciesForLog, the effect-resubscribe stale-input
- * re-check, and the declared-read writer closure — call-site policy (which
- * writers qualify, dedup, early exit) stays in the visitor.
+ * Visit every writer whose write surface overlaps one of `reads` /
+ * `shallowReads`, via the writersByEntity index: the entity-pruned overlap
+ * scan, testing each read alone against the writers indexed on its entity.
+ * Call-site policy (which writers qualify, dedup, early exit) stays in the
+ * visitor.
  *
  * `filter` is the cheap pre-overlap writer filter; `onCandidate` fires once
  * per (read, surviving writer) pair before the overlap test (trace
