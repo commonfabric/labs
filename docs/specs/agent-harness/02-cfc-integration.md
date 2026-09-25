@@ -142,3 +142,11 @@ a value that crosses into model context.
 **AH-CFC-19.** Handle mappings are sensitive provenance evidence. Their access,
 retention, child-transfer, and model-disclosure boundaries MUST be at least as
 strict as those of the canonical references they contain.
+
+## 9. Fabric mount admission
+
+**AH-CFC-20.** A harness-provisioned Common Fabric FUSE projection MUST be
+mounted read-only unless a trusted admission path verifies the protected label
+transport and atomic label-plus-value persistence before the sandbox starts.
+Missing or failed admission MUST select read-only. A sandbox-visible status file
+or extended attribute MUST NOT authorize a writable mount.

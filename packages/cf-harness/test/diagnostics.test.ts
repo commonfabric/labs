@@ -81,10 +81,12 @@ class FakeSandboxRuntime implements SandboxRuntime {
 
 class FakeFabricSandboxRuntime extends FakeSandboxRuntime {
   readonly #fabricStatusJson?: string;
+  readonly #readOnly: boolean;
 
-  constructor(fabricStatusJson?: string) {
+  constructor(fabricStatusJson?: string, readOnly = true) {
     super();
     this.#fabricStatusJson = fabricStatusJson;
+    this.#readOnly = readOnly;
   }
 
   override runShell(
@@ -114,7 +116,11 @@ class FakeFabricSandboxRuntime extends FakeSandboxRuntime {
         workspaceMountPath: "/workspace",
         mounts: [
           { kind: "workspace", sandboxPath: "/workspace", readOnly: false },
-          { kind: "fabric-fuse", sandboxPath: "/fabric", readOnly: false },
+          {
+            kind: "fabric-fuse",
+            sandboxPath: "/fabric",
+            readOnly: this.#readOnly,
+          },
         ],
       },
     };
@@ -218,9 +224,9 @@ Deno.test("collectHarnessCapabilitySnapshot reports configured Fabric mounts", a
       kind: "fabric-fuse",
       status: "configured",
       sandboxPath: "/fabric",
-      readOnly: false,
+      readOnly: true,
       writeGovernance: {
-        policy: "host-writable-non-strict",
+        policy: "host-read-only",
         statusProbe: "missing",
         delegatedToCfc: false,
       },
@@ -296,10 +302,11 @@ Deno.test("collectHarnessCapabilitySnapshot reports configured host bind mounts"
   ]);
 });
 
-Deno.test("collectHarnessCapabilitySnapshot records strict CFC attestation for writable Fabric mounts", async () => {
+Deno.test("collectHarnessCapabilitySnapshot reports strict daemon status for writable Fabric descriptions", async () => {
   const snapshot = await collectHarnessCapabilitySnapshot(
     new FakeFabricSandboxRuntime(
       JSON.stringify({ cfc: { mode: "enforce-strict" } }),
+      false,
     ),
     "/workspace",
     "2026-04-29T23:05:00.000Z",
@@ -314,9 +321,9 @@ Deno.test("collectHarnessCapabilitySnapshot records strict CFC attestation for w
   });
 });
 
-Deno.test("collectHarnessCapabilitySnapshot records strict writable Fabric mounts without attestation", async () => {
+Deno.test("collectHarnessCapabilitySnapshot reports writable Fabric descriptions without daemon attestation", async () => {
   const snapshot = await collectHarnessCapabilitySnapshot(
-    new FakeFabricSandboxRuntime(),
+    new FakeFabricSandboxRuntime(undefined, false),
     "/workspace",
     "2026-04-29T23:10:00.000Z",
     { cfcEnforcementMode: "enforce-strict" },

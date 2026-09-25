@@ -1,8 +1,8 @@
 # cf-harness Implementation Profile
 
 Status: draft conformance statement\
-Profile date: 2026-09-03\
-Implementation revision: Labs `889e34c55a`
+Profile date: 2026-09-25\
+Implementation revision: Labs `4fce10f7a6`
 
 The [system map](system-map/README.md) moves in lockstep with this
 implementation profile.
@@ -69,7 +69,9 @@ The four §18.2.7 obligations that are this package's:
   are classified as `workspace`, `fabric-fuse`, or `host-bind` and recorded per
   run with host path, sandbox path, read-only flag, and mode. That inventory is
   published and does not carry §18.2.7's classification; no mount carries a
-  measured image or rootfs digest.
+  measured image or rootfs digest. A harness-provisioned `fabric-fuse` bind is
+  always read-only; writable admission remains unavailable until a trusted path
+  can attest the protected label transport and atomic label-plus-value commit.
 - **Where the opaque-handle store and label store live.** The handle table is
   session-local, persisted with the run's artifacts, reconstructed across batch
   resume, and never visible to the sandbox, which sees only tokens. The label

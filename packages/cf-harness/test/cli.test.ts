@@ -5337,9 +5337,13 @@ Deno.test("buildCfHarnessOperatorSystemPrompt includes fabric mount guidance", (
   });
   assertEquals(
     prompt.includes(
-      "A Common Fabric space is mounted at /fabric. You may browse its contents for context.",
+      "A Common Fabric space is mounted read-only at /fabric for browsing and context.",
     ),
     true,
+  );
+  assertStringIncludes(
+    formatCfHarnessCliUsage(),
+    "Host path for a Fabric FUSE mount (mounted read-only at /fabric in the sandbox)",
   );
 });
 
@@ -5430,9 +5434,10 @@ Deno.test("runCfHarnessCli threads fabric-mount into engine additionalMounts", a
   assertEquals(mounts?.length, 2);
   assertEquals(mounts?.[1]?.kind, "fabric-fuse");
   assertEquals(mounts?.[1]?.sandboxPath, "/fabric");
+  assertEquals(mounts?.[1]?.readOnly, true);
   assertEquals(
     runPromptOptions?.systemPrompt?.includes(
-      "A Common Fabric space is mounted at /fabric",
+      "A Common Fabric space is mounted read-only at /fabric",
     ),
     true,
   );
