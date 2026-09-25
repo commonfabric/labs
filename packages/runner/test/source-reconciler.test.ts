@@ -1918,6 +1918,30 @@ describe("piece source reconciliation", () => {
       expect(requests).toBe(1);
     });
 
+    it("answers undefined when disposal lands as a kept pattern is found", async () => {
+      const identity = await identityFor(source("v1"));
+      createRuntime(servingFetch(() => identity, () => source("v1")));
+      expect(await open(runtime.getCell(signer.did(), "kept-before-disposal")))
+        .toBeDefined();
+      const { suppliedSources } = runtime.sourceReconciler.accessForTestingOnly;
+      const get = suppliedSources.get.bind(suppliedSources);
+      let disposing: Promise<void> | undefined;
+      suppliedSources.get = (key) => {
+        const kept = get(key);
+        disposing ??= runtime.sourceReconciler.dispose();
+        return kept;
+      };
+      try {
+        expect(
+          await open(runtime.getCell(signer.did(), "kept-during-disposal")),
+        ).toBeUndefined();
+        expect(disposing).toBeDefined();
+        await disposing;
+      } finally {
+        suppliedSources.get = get;
+      }
+    });
+
     for (const phase of ["initial sync", "compilation"] as const) {
       it(`supplies nothing after disposal during ${phase}`, async () => {
         const identity = await identityFor(source("v1"));

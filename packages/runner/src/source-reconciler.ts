@@ -779,6 +779,8 @@ export class SourceReconciler {
         fetch,
         signal,
       );
+      // A stopped pass answers with nothing, kept pattern or not.
+      signal.throwIfAborted();
       const epoch = schemaRegistryEpoch();
       if (resolved.compiled?.epoch === epoch) return resolved.compiled.pattern;
       // The destination must hold the closure behind its creation revision.
