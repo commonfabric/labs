@@ -77,6 +77,8 @@ Deno.test("cf-hover-card places its card above its content when there is room", 
   const { element } = await mount(200);
   try {
     element.dispatchEvent(new PointerEvent("pointerenter"));
+    // A hidden card has an empty box at the origin, which is above anything.
+    expect(element.open).toBe(true);
     expect(cardRect(element).bottom).toBeLessThanOrEqual(
       element.getBoundingClientRect().top,
     );
@@ -89,6 +91,8 @@ Deno.test("cf-hover-card places its card below its content at the top of the win
   const { element } = await mount(0);
   try {
     element.dispatchEvent(new PointerEvent("pointerenter"));
+    // A hidden card has an empty box at the origin, which is above anything.
+    expect(element.open).toBe(true);
     expect(cardRect(element).top).toBeGreaterThanOrEqual(
       element.getBoundingClientRect().bottom,
     );
