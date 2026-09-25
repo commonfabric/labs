@@ -137,6 +137,13 @@ two outputs. This shared ancestry exercises repeated paths to the same upstream
 value. Replica setup and plan indexing stay outside timing; the timed interval
 covers one proof against unchanged values.
 
+`packages/runner/test/materializer-writers.bench.ts` measures
+`collectMaterializerWritersForLog()` over logs of 100, 1,000, and 3,500 deep
+reads of one document, the entity eight materializers write, each materializer
+overlapping only a read near the end of the log. Index registration and log
+construction stay outside timing; the timed interval covers one collection, and
+the writer count is checked after it.
+
 ## Constraints on bench files
 
 **Stdout must stay pure JSON.** The workflow redirects all of stdout to
