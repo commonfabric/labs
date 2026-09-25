@@ -1064,6 +1064,10 @@ const OPTION_VALUE_PROVIDERS: Readonly<Record<string, OptionProvider>> = {
   // A data file has no fixed extension; the shell's own file completion is the
   // only honest candidate set.
   datafile: () => Promise.resolve(directive({ kind: "files" })),
+  "input-file": onlyOn(
+    ["piece new"],
+    () => Promise.resolve(directive({ kind: "files" })),
+  ),
   // A clone directory on `space clone`, and a sequence number on `inspect
   // diff`.
   to: onlyOn(

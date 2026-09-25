@@ -851,6 +851,20 @@ landed since.
 
 ## Where a piece is created
 
+`cf piece new <main> --input-file <path>` reads a JSON object and uses it as the
+piece's initial argument. Setup commits these values before starting or
+registering the piece, so a viewer opens the populated document. A missing file,
+invalid JSON, or a non-object value refuses before creation. Omitting the flag
+uses the pattern's defaults. The file is read once; later edits to it are not
+synchronized.
+
+`--request-key <key>` retains a creation receipt on both client-executed and
+server-executed deployments. Retrying the same key returns the same piece and
+resumes incomplete registration without replacing its current content. Keep the
+same input and source when retrying; use a new key for a new document. The
+receipt identifies the original creation: supplying different input with an
+existing key does not update the note or create another one.
+
 Against a deployment that runs the serving loop — one whose published posture
 selects `EXPERIMENTAL_SERVER_EXECUTION`, which the connection adopts —
 `cf piece new` does not compile or commit in this process. It resolves the
