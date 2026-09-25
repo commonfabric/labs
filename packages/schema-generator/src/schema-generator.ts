@@ -47,6 +47,7 @@ import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
 import {
   declaredIfcLabels,
   holdsIfcLabels,
+  joinMemberIfcLabels,
   stateReferencedIfcLabels,
   withIfcLabels,
 } from "./ifc-labels.ts";
@@ -1427,6 +1428,10 @@ export class SchemaGenerator {
         context.emittedRefs.add(namedKey);
         return { "$ref": `#/$defs/${namedKey}` };
       }
+      // Read for its labels alone, a value's recursion adds none to its top,
+      // and naming it would name the type for every schema this generator
+      // writes afterwards.
+      if (context.labelsOnly) return {};
       const syntheticKey = this.#ensureSyntheticName(type, context);
       context.inProgressNames.add(syntheticKey);
       context.emittedRefs.add(syntheticKey);
@@ -1582,7 +1587,8 @@ export class SchemaGenerator {
   ): Record<string, unknown> | undefined {
     const node = context.typeNode ?? context.hintsNode;
     if (!node || !context.schemaHints || context.labelsOnly) return undefined;
-    const narrowedFrom = context.schemaHints.get(node)?.narrowedFrom;
+    const narrowedFrom = context.schemaHints.get(node)?.narrowedFrom ??
+      context.schemaHints.get(unwrapTypeParentheses(node))?.narrowedFrom;
     if (!narrowedFrom) return undefined;
     // The value is read apart from this position, into definitions of its
     // own, and what reading it only for its labels leaves unread is no
@@ -1610,9 +1616,10 @@ export class SchemaGenerator {
    * Helper for {@link #narrowedFromLabels}, which returns the labels `type`,
    * spelled by `typeNode` where given, attaches at its top in `context`. A
    * value that may be missing, `T | undefined` or `T | null`, has the labels
-   * of `T`, which formatting attaches to that member. A union whose members
-   * formatting labels each on its own is confidential under every member's
-   * confidentiality: a node narrowed from it stands for any of them.
+   * of `T`, which formatting attaches to that member. A node narrowed from
+   * any other union stands for any of its members, so it has the labels
+   * formatting attaches to the union joined with those of its members
+   * (`joinMemberIfcLabels()`).
    */
   #labelsOf(
     type: ts.Type,
@@ -1636,15 +1643,13 @@ export class SchemaGenerator {
     }
     const whole = this.formatChildType(type, context, typeNode);
     const labels = declaredIfcLabels(whole, context.definitions);
-    if (labels || values.length < 2) return labels;
-    const confidentiality = values.flatMap((member) => {
-      const atoms = this.#labelsOf(member, memberNode(member), context)
-        ?.confidentiality;
-      return Array.isArray(atoms) ? atoms : [];
-    });
-    return confidentiality.length > 0
-      ? { confidentiality: dedupeByValueEqual(confidentiality) }
-      : undefined;
+    if (values.length < 2) return labels;
+    return joinMemberIfcLabels(
+      labels ?? {},
+      values.map((member) =>
+        this.#labelsOf(member, memberNode(member), context) ?? {}
+      ),
+    );
   }
 
   /**

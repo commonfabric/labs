@@ -153,6 +153,12 @@ export class CrossStageState {
    */
   readonly #reportedDiagnosticKeys = new Set<string>();
 
+  /** The declared value each print stands for (`recordDeclaredValue()`). */
+  readonly #declaredValues = new WeakMap<
+    ts.Node,
+    NonNullable<SchemaHint["narrowedFrom"]>
+  >();
+
   /**
    * First of the four marker-family WeakSets — with
    * `syntheticComputeCallbackRegistry`, `syntheticComputeOwnedNodeRegistry`,
@@ -262,6 +268,27 @@ export class CrossStageState {
     this.#addSchemaHint(node, {
       narrowedFrom: (whole && this.narrowedFrom(whole)) ?? narrowedFrom,
     });
+  }
+
+  /**
+   * Records that `node`, a print of a value's type, stands for the value
+   * `declared` spells. A print spells none of what only a declaration does,
+   * such as a `typeof` binding in a label, so a node built from part of the
+   * print narrows the declared value (`carryNarrowing()` in
+   * `transformers/type-shrinking.ts`). The print itself is read by its type.
+   */
+  recordDeclaredValue(
+    node: ts.TypeNode,
+    declared: NonNullable<SchemaHint["narrowedFrom"]>,
+  ): void {
+    this.#declaredValues.set(node, declared);
+  }
+
+  /** The value `node` was recorded as standing for (`recordDeclaredValue()`). */
+  declaredValue(
+    node: ts.Node,
+  ): NonNullable<SchemaHint["narrowedFrom"]> | undefined {
+    return this.#declaredValues.get(node);
   }
 
   /** The value `node` was recorded as narrowing (`recordNarrowedFrom()`). */

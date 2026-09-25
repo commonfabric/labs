@@ -1561,11 +1561,13 @@ function recordNarrowing(
 }
 
 /**
- * Records each part of `result`, a node rebuilt from `base`, as narrowing what
- * the part of `base` in the same place narrows: a property by its name, and
- * an element by its array. A node built from the type `base` was registered
- * with, or rebuilt from `base` afresh, keeps no trace of `base`, so a value
- * `base` holds only part of would lose its labels.
+ * Records each part of `result`, a node built from `base` or from the type it
+ * spells, as narrowing what the part of `base` in the same place narrows, or
+ * stands for: a property by its name, and an element by its array. A node
+ * built from a type, or rebuilt afresh, keeps no trace of the node it stands
+ * for, and only that node's record says which value it narrows, or which
+ * declaration spells what a print of its type cannot
+ * (`CrossStageState.recordNarrowedFrom()`, `recordDeclaredValue()`).
  */
 function carryNarrowing(
   base: ts.TypeNode,
@@ -1575,8 +1577,10 @@ function carryNarrowing(
   if (!result || !state || result === base) return;
   const from = unwrapTypeParentheses(base);
   const to = unwrapTypeParentheses(result);
-  const narrowedFrom = state.narrowedFrom(from);
-  if (narrowedFrom) state.recordNarrowedFrom(to, narrowedFrom);
+  const value = state.narrowedFrom(from) ?? state.declaredValue(from);
+  if (value) state.recordNarrowedFrom(to, value);
+  const carry = (fromPart: ts.TypeNode, toPart: ts.TypeNode | undefined) =>
+    carryNarrowing(fromPart, toPart, state);
   if (ts.isTypeLiteralNode(from) && ts.isTypeLiteralNode(to)) {
     for (const member of to.members) {
       const name = ts.isPropertySignature(member) && member.type &&
@@ -1587,15 +1591,14 @@ function carryNarrowing(
           getPropertyNameText(candidate.name) === name
         );
       if (source) {
-        carryNarrowing(
+        carry(
           (source as ts.PropertySignature).type!,
           (member as ts.PropertySignature).type,
-          state,
         );
       }
     }
   } else if (ts.isArrayTypeNode(from) && ts.isArrayTypeNode(to)) {
-    carryNarrowing(from.elementType, to.elementType, state);
+    carry(from.elementType, to.elementType);
   }
 }
 
@@ -4795,6 +4798,7 @@ export function applyShrinkAndWrap(
           fullShapePaths,
         )
         : undefined;
+      carryNarrowing(shrinkBaseTypeNode, typeDriven, context?.state);
       shrunk = choosePreferredShrinkCandidate(
         "node",
         nodeDriven,
@@ -4809,18 +4813,27 @@ export function applyShrinkAndWrap(
       next = shrunk;
     }
   }
+  // Each pass below rebuilds the node it is handed, so each part of what it
+  // returns narrows what the part it rebuilt narrowed.
+  const carried = (from: ts.TypeNode, to: ts.TypeNode): ts.TypeNode => {
+    carryNarrowing(from, to, context?.state);
+    return to;
+  };
   if (!identityOnlyRoot && identityPaths.length > 0) {
-    next = applyIdentityOnlyPathsToTypeNode(
+    next = carried(
       next,
-      identityPaths,
-      appliedIdentityCellPaths,
-      appliedComparableCellPaths,
-      factory,
-      checker,
-      baseType,
-      context?.state.typeRegistry,
-      sourceFile,
-      context?.state,
+      applyIdentityOnlyPathsToTypeNode(
+        next,
+        identityPaths,
+        appliedIdentityCellPaths,
+        appliedComparableCellPaths,
+        factory,
+        checker,
+        baseType,
+        context?.state.typeRegistry,
+        sourceFile,
+        context?.state,
+      ),
     );
     shrunk = next;
   }
@@ -4837,30 +4850,32 @@ export function applyShrinkAndWrap(
     );
   }
 
-  next = applyCapabilityDefaultsToTypeNode(
+  next = carried(
     next,
-    paramSummary.defaults,
-    baseType,
-    retainedPaths,
-    paramSummary.wildcard,
-    checker,
-    sourceFile,
-    factory,
-    context?.state,
+    applyCapabilityDefaultsToTypeNode(
+      next,
+      paramSummary.defaults,
+      baseType,
+      retainedPaths,
+      paramSummary.wildcard,
+      checker,
+      sourceFile,
+      factory,
+      context?.state,
+    ),
   );
-  const capable = applyCellCapabilityPathsToTypeNode(
+  next = carried(
     next,
-    cellCapabilityPaths,
-    factory,
-    checker,
-    sourceFile,
-    context?.state.typeRegistry,
-    context?.state,
+    applyCellCapabilityPathsToTypeNode(
+      next,
+      cellCapabilityPaths,
+      factory,
+      checker,
+      sourceFile,
+      context?.state.typeRegistry,
+      context?.state,
+    ),
   );
-  // The pass rebuilds the node it is handed, so each part of what it returns
-  // narrows what the part it rebuilt narrowed.
-  carryNarrowing(next, capable, context?.state);
-  next = capable;
 
   if (!shouldWrap) {
     return next;

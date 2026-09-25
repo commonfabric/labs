@@ -3,10 +3,10 @@ import { describe, it } from "@std/testing/bdd";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callSchemas, parseModule } from "./transformed-ast.ts";
-import { transformSource } from "./utils.ts";
+import { transformFiles, transformSource } from "./utils.ts";
 
 const IMPORTS =
-  `import { computed, handler, pattern, type Confidential, type WriteAuthorizedBy, Writable } from "commonfabric";
+  `import { computed, handler, pattern, type Confidential, type RepresentsCurrentUser, type WriteAuthorizedBy, Writable } from "commonfabric";
 interface Secret { a: string; b: string; }
 `;
 
@@ -29,6 +29,10 @@ function reading(input: string, read: string): string {
   out: computed(() => ${read}),
 }));`;
 }
+
+/** A union of two labeled values that share the property `a`. */
+const EITHER = `interface Other { a: string; c: number; }
+type Either = Confidential<Secret, ["x"]> | Confidential<Other, ["y"]>;`;
 
 /** The schema of `Secret` with only `a` read, labeled with `ifc`. */
 const A_ONLY = (ifc?: Schema) => ({
@@ -158,6 +162,101 @@ export default pattern<{ either: Either }>(
 );`);
 
     expect(capture.either).toEqual(A_ONLY({ confidentiality: ["x", "y"] }));
+  });
+
+  it("keeps each element's label on a nullable element read by index", async () => {
+    const capture = await captureOf(`
+export default pattern<{ rows: (Confidential<Secret, ["row"]> | undefined)[] }>(
+  ({ rows }) => ({ out: computed(() => rows[0]?.a ?? "") }),
+);`);
+
+    expect(capture.rows).toEqual({
+      type: "array",
+      items: {
+        anyOf: [{ type: "undefined" }, A_ONLY()],
+        ifc: { confidentiality: ["row"] },
+      },
+    });
+  });
+
+  it("reads a policy its declaration names by `typeof` through an optional chain", async () => {
+    const output = await transformFiles({
+      "/rules.ts":
+        `import { exchangeRule, exchangeRules, THIS_POLICY } from "commonfabric/cfc";
+export const neverRelease = exchangeRule({
+  appliesTo: THIS_POLICY,
+  pre: { integrity: ["never"] },
+  post: { dropClause: true },
+});
+export const rules = exchangeRules([neverRelease]);`,
+      "/test.tsx": `${IMPORTS}
+import { type PolicyOf } from "commonfabric/cfc";
+import { rules } from "./rules.ts";
+export default pattern<{ secret: Confidential<Secret, [PolicyOf<typeof rules>]> }>(
+  ({ secret }) => ({ out: computed(() => secret?.a ?? "") }),
+);`,
+    }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+    const [capture] = callSchemas(parseModule(output["/test.tsx"]!), "lift");
+
+    expect((capture!.properties as Schema).secret).toMatchObject({
+      ifc: {
+        confidentiality: [{
+          policyRefKind: "module",
+          __ctPolicyIdentityOf: { file: "/rules.ts", path: ["rules"] },
+        }],
+      },
+    });
+  });
+
+  it("keeps a union's own label and each member's confidentiality", async () => {
+    const capture = await captureOf(`
+${EITHER}
+export default pattern<{ either: Confidential<Either, ["outer"]> }>(
+  ({ either }) => ({ out: computed(() => either.a) }),
+);`);
+
+    expect(capture.either).toEqual(
+      A_ONLY({ confidentiality: ["outer", "x", "y"] }),
+    );
+  });
+
+  it("keeps each member's confidentiality under a union's empty label", async () => {
+    const capture = await captureOf(`
+${EITHER}
+export default pattern<{ either: Confidential<Either, []> }>(
+  ({ either }) => ({ out: computed(() => either.a) }),
+);`);
+
+    expect(capture.either).toEqual(A_ONLY({ confidentiality: ["x", "y"] }));
+  });
+
+  it("keeps a label every member of a union declares alike", async () => {
+    const capture = await captureOf(`
+interface Other { a: string; c: number; }
+type Either =
+  | RepresentsCurrentUser<Confidential<Secret, ["x"]>>
+  | RepresentsCurrentUser<Confidential<Other, ["y"]>>;
+export default pattern<{ either: Either }>(
+  ({ either }) => ({ out: computed(() => either.a) }),
+);`);
+
+    expect((capture.either as Schema).ifc).toEqual({
+      confidentiality: ["x", "y"],
+      addIntegrity: [{
+        kind: "represents-principal",
+        subject: { __ctCurrentPrincipal: true },
+      }],
+    });
+  });
+
+  it("adds no label of a property a rest binding does not read", async () => {
+    const capture = await captureOf(`
+export default pattern<{
+  others: Confidential<Secret, ["wrong"]>;
+  x: { y: string; z: string };
+}>(({ ...others }) => ({ out: computed(() => others.x.y) }));`);
+
+    expect((capture.others as Schema).ifc).toBeUndefined();
   });
 
   it("adds no label to a value that carries none", async () => {

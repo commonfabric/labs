@@ -1314,9 +1314,9 @@ function describeCapture(expression: ts.Expression, fallback: string): string {
  * none of the property's own flags, so what the property declares is read
  * from the aggregate's type. For a renamed binding (`{ source: local }`) the
  * property is the SOURCE one. The source key may be an identifier, string, or
- * numeric literal (`{ "k": local }`, `{ 0: local }`); a computed key
- * (`{ [expr]: local }`) is not statically resolvable and falls back to
- * `localName`.
+ * numeric literal (`{ "k": local }`, `{ 0: local }`). A computed key
+ * (`{ [expr]: local }`) is not statically resolvable, and a rest binding
+ * (`{ ...local }`) reads no one property, so neither names one.
  */
 function destructuredSourceProperty(
   identifier: ts.Identifier,
@@ -1346,13 +1346,16 @@ function destructuredSourceProperty(
     : ts.isVariableDeclaration(host) && host.initializer
     ? checker.getTypeAtLocation(host.initializer)
     : undefined;
-  const sourceName = binding.propertyName &&
-      (ts.isIdentifier(binding.propertyName) ||
-        ts.isStringLiteralLike(binding.propertyName) ||
-        ts.isNumericLiteral(binding.propertyName))
-    ? binding.propertyName.text
-    : localName;
-  return aggregateType?.getProperty(sourceName);
+  const key = binding.propertyName;
+  const sourceName = !key
+    ? binding.dotDotDotToken ? undefined : localName
+    : ts.isIdentifier(key) || ts.isStringLiteralLike(key) ||
+        ts.isNumericLiteral(key)
+    ? key.text
+    : undefined;
+  return sourceName === undefined
+    ? undefined
+    : aggregateType?.getProperty(sourceName);
 }
 
 /**
@@ -1411,6 +1414,26 @@ export function buildTypeElementsFromCaptureTree(
     if (childNode.expression) {
       // Leaf node with source expression - use it directly
       typeNode = expressionToTypeNode(childNode.expression, context);
+      // A node narrowed from this one narrows the value the leaf's declaration
+      // spells, which a print of its type may not.
+      const declared = declaredTypeNode(
+        ts.isIdentifier(childNode.expression)
+          ? destructuredSourceProperty(
+            childNode.expression,
+            propName,
+            checker,
+          ) ??
+            checker.getSymbolAtLocation(childNode.expression)
+          : ts.isPropertyAccessExpression(childNode.expression)
+          ? checker.getSymbolAtLocation(childNode.expression.name)
+          : undefined,
+      );
+      if (declared && declared !== typeNode) {
+        context.state.recordDeclaredValue(typeNode, {
+          type: checker.getTypeAtLocation(childNode.expression),
+          typeNode: declared,
+        });
+      }
 
       // Judge unknown-ness from the type that drives the emitted schema — the
       // same one expressionToTypeNode uses. A bare getTypeAtLocation would skip

@@ -26,17 +26,35 @@ type StoredEntry = {
   origin?: string;
 };
 
-/** A pattern over `secret`, declared as `declaration`, returning `out`. */
+/**
+ * A pattern over `secret`, declared as `declaration`, returning `out`, beside
+ * a module declaring the exchange rules `rules`.
+ */
 const program = (declaration: string, out: string): RuntimeProgram => ({
   main: "/main.tsx",
   files: [{
     name: "/main.tsx",
     contents: [
       "import { computed, pattern, type Confidential } from 'commonfabric';",
+      "import { type PolicyOf } from 'commonfabric/cfc';",
+      "import { rules } from './rules.ts';",
       "interface Secret { a: string; b: string }",
+      "interface Other { a: string; c: number }",
+      "type Either = Confidential<Secret, ['x']> | Confidential<Other, ['y']>;",
       `export default pattern<{ secret: ${declaration} }>(({ secret }) => ({`,
       `  out: computed(() => ${out}),`,
       "}));",
+    ].join("\n"),
+  }, {
+    name: "/rules.ts",
+    contents: [
+      "import { exchangeRule, exchangeRules, THIS_POLICY } from 'commonfabric/cfc';",
+      "export const neverRelease = exchangeRule({",
+      "  appliesTo: THIS_POLICY,",
+      "  pre: { integrity: ['never'] },",
+      "  post: { dropClause: true },",
+      "});",
+      "export const rules = exchangeRules([neverRelease]);",
     ].join("\n"),
   }],
 });
@@ -112,6 +130,39 @@ describe("cfc-narrowed-capture-floor", () => {
         'secret?.a ?? ""',
       ),
     ).toEqual([{ confidentiality: ["topsecret"] }]);
+  });
+
+  it("labels the result of a lift reading a labeled union with every member's confidentiality", async () => {
+    const [label] = await declaredLabelsOfOut(
+      'Confidential<Either, ["outer"]>',
+      "secret.a",
+    );
+
+    expect(new Set(label?.confidentiality as unknown[])).toEqual(
+      new Set(["outer", "x", "y"]),
+    );
+  });
+
+  it("labels the result of a lift reading a union under an empty label with each member's confidentiality", async () => {
+    const [label] = await declaredLabelsOfOut(
+      "Confidential<Either, []>",
+      "secret.a",
+    );
+
+    expect(new Set(label?.confidentiality as unknown[])).toEqual(
+      new Set(["x", "y"]),
+    );
+  });
+
+  it("labels the result of a lift reading a value by an optional chain with its declared policy", async () => {
+    expect(
+      await declaredLabelsOfOut(
+        "Confidential<Secret, [PolicyOf<typeof rules>]>",
+        'secret?.a ?? ""',
+      ),
+    ).toMatchObject([{
+      confidentiality: [{ policyRefKind: "module", symbol: "rules" }],
+    }]);
   });
 
   it("labels nothing for a lift reading an unlabeled value", async () => {

@@ -1944,12 +1944,16 @@ adjustments:
   the value it stands for, through the `narrowedFrom` schema hint, with the
   node the value's declaration writes where one is at hand; schema generation
   adds the labels that value's own formatting attaches at its top (the
-  schema-generator mapping spec's §13). A node built from part of a narrowed
-  node, rebuilt from one, or built from the type of a narrowed node, whose
-  parts are matched to the narrowed node's by property name and array element,
-  narrows the same value (`recordNarrowedFrom` in `core/cross-stage-state.ts`;
-  `recordNarrowing` and `carryNarrowing` in `transformers/type-shrinking.ts`;
-  `test/narrowed-capture-labels.test.ts`)
+  schema-generator mapping spec's §13). A capture leaf printed from its type
+  stands for the value its declaration spells, which the print may not, as
+  with a `typeof` binding in a label. A node built from part of a narrowed
+  node or of such a print, rebuilt from one by a later pass, or built from the
+  type of one narrows the same value, its parts matched by property name and
+  array element (`recordNarrowedFrom` and `recordDeclaredValue` in
+  `core/cross-stage-state.ts`; `recordNarrowing` and `carryNarrowing` in
+  `transformers/type-shrinking.ts`; `test/narrowed-capture-labels.test.ts`).
+  A rest binding (`{ ...rest }`), and a binding under a computed key, reads
+  no one property, so no property's declaration spells its value
 - a pass that reads the structure of a node printed from a type reads the
   print's unfolding in its place: a node of the print's own kind built from the
   type it was printed from, each type node below it printed afresh from its own

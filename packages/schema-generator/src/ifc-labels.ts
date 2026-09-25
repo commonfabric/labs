@@ -94,6 +94,40 @@ export const holdsIfcLabels = (
   });
 
 /**
+ * The labels of a value that may be any one of `members`, a union's, under
+ * the union's own `labels`: every confidentiality atom any of them declares,
+ * the union's other labels, and each other label every member declares alike.
+ * A member's other labels bind only while the value is that member.
+ */
+export const joinMemberIfcLabels = (
+  labels: IfcLabels,
+  members: readonly IfcLabels[],
+): Record<string, unknown> | undefined => {
+  const joined: Record<string, unknown> = { ...labels };
+  const atoms = [labels, ...members].flatMap(({ confidentiality }) =>
+    Array.isArray(confidentiality) ? confidentiality : []
+  );
+  if (atoms.length > 0) {
+    joined.confidentiality = dedupeByValueEqual(atoms as FabricValue[]);
+  }
+  const [first, ...rest] = members;
+  for (const [key, declared] of Object.entries(first ?? {})) {
+    if (key === "confidentiality" || declared === undefined || key in joined) {
+      continue;
+    }
+    if (
+      rest.every((member) =>
+        member[key] !== undefined &&
+        valueEqual(member[key] as FabricValue, declared as FabricValue)
+      )
+    ) {
+      joined[key] = declared;
+    }
+  }
+  return Object.keys(joined).length > 0 ? joined : undefined;
+};
+
+/**
  * `schema` with `labels` combined into its own, as an outer declaration's.
  */
 export const withIfcLabels = (

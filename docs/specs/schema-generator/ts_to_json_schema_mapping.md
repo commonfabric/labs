@@ -1164,11 +1164,13 @@ role?; kind?; trustedPattern?; requiredEventIntegrity? }`, and `NarrowedFrom`
 is `{ type: ts.Type; typeNode?: ts.TypeNode }`. Every member is read-only: the
 generator only reads hints, and copies the `requiredEventIntegrity` list on the
 way into the emitted schema. A node holds a hint of each kind, recorded apart
-from the others. Lookups of `items` and `cfcUiContract` try the node and
-`ts.getOriginalNode(node)` (`src/ui-contract.ts`, called from
-`schema-generator.ts` and `object-formatter.ts`; the producer writes both —
-`cross-stage-state.ts`); `narrowedFrom` is written to, and read from, the node
-alone.
+from the others. The producer writes `items` and `cfcUiContract` to the node
+and its original (`cross-stage-state.ts`), and `narrowedFrom` to the node
+alone. A `cfcUiContract` lookup tries the node and `ts.getOriginalNode(node)`
+(`src/ui-contract.ts`, called from `schema-generator.ts` and
+`object-formatter.ts`); an `items` lookup reads the current hint node
+(`common-fabric-formatter.ts`); a `narrowedFrom` lookup reads the node, and the
+node inside its parentheses (`schema-generator.ts`).
 
 - **`items: false`** — array-typed wrapper contents collapse to
   `items: { type: "unknown", …element wrapper markers }` for property-only
@@ -1197,11 +1199,11 @@ alone.
   the position, in definitions of its own, with nothing reported, and only for
   its labels: a type no CFC wrapper holds, other than a union or an
   intersection, reads as `{}` (`GenerationContext.labelsOnly`). A value that
-  may be `undefined` or `null` has the labels of its one other member. A union
-  whose members formatting labels each on its own, with no label at its top,
-  is confidential under every member's confidentiality, and has no other
-  label. A schema whose own reference chain already holds every label is left
-  as it is (`holdsIfcLabels`).
+  may be `undefined` or `null` has the labels of its one other member. A node
+  narrowed from any other union stands for any of its members, so it has the
+  union's labels, every member's confidentiality, and each other label every
+  member declares alike (`joinMemberIfcLabels`). A schema whose own reference
+  chain already holds every label is left as it is (`holdsIfcLabels`).
 
 ## 14. Options
 
