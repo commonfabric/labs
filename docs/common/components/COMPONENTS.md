@@ -674,8 +674,8 @@ writes no state.
 ```tsx
 // Shown as JSX element children.
 <cf-hover-card>
-  <cf-button size="sm">😺 2</cf-button>
-  <cf-vstack slot="card" gap="1">
+  <cf-button size="sm" aria-describedby="cats-reactors">😺 2</cf-button>
+  <cf-vstack id="cats-reactors" slot="card" gap="1">
     <cf-text>Alice</cf-text>
     <cf-text>Bob</cf-text>
   </cf-vstack>

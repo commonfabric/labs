@@ -23,21 +23,38 @@ export default pattern<HoverCardStoryInput, HoverCardStoryOutput>(() => {
         }}
       >
         <cf-hover-card>
-          <cf-button size="sm" variant="ghost">😺 2</cf-button>
-          <cf-vstack slot="card" gap="1">
+          <cf-button
+            size="sm"
+            variant="ghost"
+            aria-describedby="story-cats-reactors"
+          >
+            😺 2
+          </cf-button>
+          <cf-vstack id="story-cats-reactors" slot="card" gap="1">
             <cf-text>Alice</cf-text>
             <cf-text>Bob</cf-text>
           </cf-vstack>
         </cf-hover-card>
         <cf-hover-card>
-          <cf-button size="sm" variant="ghost">🙀 1</cf-button>
-          <cf-text slot="card">Carol</cf-text>
+          <cf-button
+            size="sm"
+            variant="ghost"
+            aria-describedby="story-scream-reactors"
+          >
+            🙀 1
+          </cf-button>
+          <cf-text id="story-scream-reactors" slot="card">Carol</cf-text>
         </cf-hover-card>
       </div>
     ),
     controls: (
       <Controls>
-        <></>
+        <div
+          style={{ color: "#6b7280", fontSize: "13px", padding: "8px 12px" }}
+        >
+          No controls. Rest the pointer on a count, or focus it, to see its
+          card.
+        </div>
       </Controls>
     ),
   };

@@ -167,9 +167,12 @@ async function waitForReactorCard(
     }
     const found: Element[] = [];
     collect(document, found);
-    const button = found[0]?.querySelector("cf-button")?.shadowRoot
-      ?.querySelector("button");
-    (button as HTMLElement | null | undefined)?.focus();
+    // The `cf-button` host is what takes focus from a keyboard.
+    const count = found[0]?.querySelector<HTMLElement>("cf-button");
+    if (!count) {
+      throw new Error("There is no reaction count to focus.");
+    }
+    count.focus();
   });
   await waitForCondition(
     page,
