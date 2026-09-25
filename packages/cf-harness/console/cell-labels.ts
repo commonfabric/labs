@@ -33,7 +33,6 @@ import {
   type LabelObservationClass,
   rebaseCfcLabelView,
 } from "@commonfabric/runner/cfc/label-view-core";
-import { isObjectOrArray } from "@commonfabric/utils/types";
 import { parseConsoleReference } from "./reference.ts";
 
 import type {
@@ -155,27 +154,16 @@ export interface ConsoleCellLabelsSummary {
 
 const dedupe = (names: readonly string[]): string[] => [...new Set(names)];
 
-/** What a provenance atom's identity resolves to, in as few words as carry it. */
+/** What a transformation atom names, in as few words as carry it. */
 const producerOf = (atom: HarnessCfcAtom | undefined): string | undefined => {
-  const identity = atom?.fields?.identity;
-  if (!isObjectOrArray(identity)) {
-    return undefined;
-  }
-  const fields = identity as Record<string, unknown>;
   const named = (key: string): string | undefined =>
-    typeof fields[key] === "string" ? fields[key] as string : undefined;
-  // A builtin names itself; a verified implementation is named by its symbol
-  // within its module, and by its module alone when the symbol is absent.
-  const builtin = named("builtinId");
-  if (builtin !== undefined) {
-    return builtin;
-  }
-  const symbol = named("symbol");
-  const module = named("moduleIdentity");
-  if (symbol !== undefined) {
-    return module === undefined ? symbol : `${symbol} in ${module}`;
-  }
-  return module ?? named("className");
+    typeof atom?.fields?.[key] === "string"
+      ? atom.fields[key] as string
+      : undefined;
+  const codeHash = named("codeHash");
+  if (codeHash === undefined) return undefined;
+  const operation = named("operation");
+  return operation === undefined ? codeHash : `${operation} in ${codeHash}`;
 };
 
 const entryOf = (entry: HarnessCellLabelEntry): ConsoleCellLabelEntry => {

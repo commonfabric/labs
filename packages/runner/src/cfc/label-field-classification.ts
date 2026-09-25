@@ -43,7 +43,7 @@ export type LabelFieldClassificationEntry = {
 
   /**
    * Path of the classified field inside the atom, e.g. `["source"]` or
-   * `["identity", "sourceFile"]`. Family-scoped: a Caveat's `source` is
+   * `["inputs", "ref"]`. Family-scoped: a Caveat's `source` is
    * classified wherever the Caveat atom appears, including nested inside
    * other atoms — the Stage 1 transform consults the table per atom as it
    * walks, so nesting needs no extra rows.
@@ -105,23 +105,15 @@ export const LABEL_FIELD_CLASSIFICATION:
     // nothing dereferences the persisted copy."
     entry({ type: CFC_ATOM_TYPE.LinkReference }, ["source"], "commitment"),
     entry({ type: CFC_ATOM_TYPE.LinkReference }, ["target"], "commitment"),
-    // "TransformedBy.identity.sourceFile/bindingPath → commitment —
-    // human-readable code layout is the leak; trust statements should bind
-    // the content-addressed moduleIdentity (public) instead."
+    // TransformedBy's artifact digest and operation are public trust anchors.
+    // Input references reveal source topology, so persist them as commitments;
+    // nested witness atoms are classified again under their own families.
+    entry({ type: CFC_ATOM_TYPE.TransformedBy }, ["codeHash"], "public"),
+    entry({ type: CFC_ATOM_TYPE.TransformedBy }, ["operation"], "public"),
     entry(
       { type: CFC_ATOM_TYPE.TransformedBy },
-      ["identity", "sourceFile"],
+      ["inputs", "ref"],
       "commitment",
-    ),
-    entry(
-      { type: CFC_ATOM_TYPE.TransformedBy },
-      ["identity", "bindingPath"],
-      "commitment",
-    ),
-    entry(
-      { type: CFC_ATOM_TYPE.TransformedBy },
-      ["identity", "moduleIdentity"],
-      "public",
     ),
     // "authored-by / represents-principal .subject → public —
     // product-displayed attribution, minted under the acting principal's own
@@ -162,9 +154,7 @@ const CLASSIFICATION_BY_KEY: ReadonlyMap<
  * Kind-shaped families the table actually classifies. Used by the Stage 1
  * transform's walk to decide whether a `kind`-bearing record (with no `type`)
  * is a claim-family ATOM (resets the classification context) or an ordinary
- * nested record that merely happens to carry a `kind` field — e.g. the
- * `ImplementationIdentity` record inside `TransformedBy.identity`, whose
- * `kind: "verified"` is a variant discriminator, not an atom family. Only a
+ * nested record that merely happens to carry a `kind` field. Only a
  * table-classified kind resets context; everything else extends the current
  * atom's field path so multi-segment rows keep resolving.
  */

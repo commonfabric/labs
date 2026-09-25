@@ -67,6 +67,36 @@ Deno.test("cfcAtom mints HasRole facts", () => {
   });
 });
 
+Deno.test("cfcAtom.transformedBy mints the exact operation and input shape", () => {
+  const input = {
+    ref: {
+      space: "did:key:source",
+      id: "of:source",
+      path: ["record", "value"],
+    },
+    witnesses: [cfcAtom.injectionSafe()],
+  };
+  assertEquals(
+    cfcAtom.transformedBy({
+      codeHash: "cf:module/content-hash",
+      operation: "transform",
+      inputs: [input],
+    }),
+    {
+      type: CFC_ATOM_TYPE.TransformedBy,
+      codeHash: "cf:module/content-hash",
+      operation: "transform",
+      inputs: [input],
+    },
+  );
+  assertFalse(
+    Object.hasOwn(
+      cfcAtom.transformedBy({ codeHash: "builtin-hash", inputs: [] }),
+      "operation",
+    ),
+  );
+});
+
 Deno.test("cfcAtom.boundaryContext omits absent optionals", () => {
   assertEquals(cfcAtom.boundaryContext("sinkClass"), {
     type: CFC_ATOM_TYPE.BoundaryContext,

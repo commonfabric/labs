@@ -33,11 +33,14 @@ const FOREIGN_DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 
 const atom = (name: string) => ({ type: name, name });
 
-/** The provenance atom for one identity arm, as the space stores it. */
-const provenance = (identity: Record<string, unknown>) => ({
+/** One transformation atom, as the space stores it. */
+const provenance = (fields: {
+  codeHash: string;
+  operation?: string;
+}) => ({
   type: TRANSFORMED_BY,
   name: "TransformedBy",
-  fields: { identity },
+  fields: { ...fields, inputs: [] },
 });
 
 const declared: HarnessCellLabelEntry = {
@@ -47,13 +50,16 @@ const declared: HarnessCellLabelEntry = {
   origin: "declared",
 };
 
-const derived = (identity: Record<string, unknown>): HarnessCellLabelEntry => ({
+const derived = (fields: {
+  codeHash: string;
+  operation?: string;
+}): HarnessCellLabelEntry => ({
   path: ["summary"],
   confidentiality: [atom("demo-secret")],
-  integrity: [atom("cf-compiled-by:cf-compiler"), provenance(identity)],
+  integrity: [atom("cf-compiled-by:cf-compiler"), provenance(fields)],
   origin: "derived",
   observes: "members",
-  transformedBy: provenance(identity),
+  transformedBy: provenance(fields),
 });
 
 const record = (
@@ -86,7 +92,7 @@ const readSnapshot = snapshot([
 const PIECE = entity("piece");
 const ROOTED = entity("rooted");
 
-const LIFT = { kind: "builtin", builtinId: "llm" };
+const LIFT = { codeHash: "of:builtin/llm", operation: "llm" };
 
 /**
  * Two documents to narrow into. `PIECE` labels two of its paths and leaves a
@@ -297,7 +303,7 @@ describe("console/cell-labels", () => {
       const labels = consoleCellLabels(
         record(LABELLED, `/${LABELLED}`, [
           declared,
-          derived({ kind: "builtin", builtinId: "llm" }),
+          derived(LIFT),
         ]),
       );
       expect(labels.confidentiality).toEqual(["demo-secret"]);
@@ -324,39 +330,38 @@ describe("console/cell-labels", () => {
       const labels = consoleCellLabels(
         record(LABELLED, `/${LABELLED}`, [
           declared,
-          derived({ kind: "builtin", builtinId: "llm" }),
+          derived(LIFT),
         ]),
       );
       expect(labels.derived).toBe(true);
     });
 
-    it("returns the builtin's own id as the producer of a builtin identity", () => {
+    it("returns `<operation> in <artifact>` when both are recorded", () => {
       const labels = consoleCellLabels(
         record(LABELLED, `/${LABELLED}`, [
-          derived({ kind: "builtin", builtinId: "llm" }),
+          derived(LIFT),
         ]),
       );
-      expect(labels.transformedBy).toEqual(["llm"]);
-      expect(labels.entries[0].transformedBy).toBe("llm");
+      expect(labels.transformedBy).toEqual(["llm in of:builtin/llm"]);
+      expect(labels.entries[0].transformedBy).toBe("llm in of:builtin/llm");
     });
 
-    it("returns `<symbol> in <module>` as the producer of a verified identity carrying both", () => {
+    it("returns an exported operation in its module artifact", () => {
       const labels = consoleCellLabels(
         record(LABELLED, `/${LABELLED}`, [
           derived({
-            kind: "verified",
-            moduleIdentity: "cf:module/abc",
-            symbol: "__cfLift_2",
+            codeHash: "cf:module/abc",
+            operation: "__cfLift_2",
           }),
         ]),
       );
       expect(labels.transformedBy).toEqual(["__cfLift_2 in cf:module/abc"]);
     });
 
-    it("returns the module as the producer of a verified identity carrying no symbol", () => {
+    it("returns the artifact when no operation is recorded", () => {
       const labels = consoleCellLabels(
         record(LABELLED, `/${LABELLED}`, [
-          derived({ kind: "verified", moduleIdentity: "cf:module/abc" }),
+          derived({ codeHash: "cf:module/abc" }),
         ]),
       );
       expect(labels.transformedBy).toEqual(["cf:module/abc"]);
@@ -653,7 +658,7 @@ describe("console/cell-labels", () => {
       it("returns `derived` true and the producer when the narrowed path holds one", () => {
         const labels = cellLabelsAt(piece, `/${PIECE}/briefing`);
         expect(labels?.derived).toBe(true);
-        expect(labels?.transformedBy).toEqual(["llm"]);
+        expect(labels?.transformedBy).toEqual(["llm in of:builtin/llm"]);
       });
 
       it("returns the atom at a path the reference reaches through a `value` segment", () => {

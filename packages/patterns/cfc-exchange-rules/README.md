@@ -14,11 +14,11 @@ surfaces are intentionally separate.
 policy's own module. When every write of a transaction comes from one verified
 function, the runtime mints a `TransformedBy` atom naming that function's module
 and export name onto what it writes, and the rule matches it with
-`moduleIdentity: THIS_POLICY.moduleIdentity`, which binds to the defining
-module's identity at evaluation time. Another function of the same module, a
-handler copying a raw input, or a different version of the module does not
-satisfy the rule. `blessed-object.tsx` does the same for a function returning an
-object, whose object node is released along with its fields.
+`codeHash: THIS_POLICY.moduleIdentity`, which binds to the defining module's
+identity at evaluation time. Another function of the same module, a handler
+copying a raw input, or a different version of the module does not satisfy the
+rule. `blessed-object.tsx` does the same for a function returning an object,
+whose object node is released along with its fields.
 
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space

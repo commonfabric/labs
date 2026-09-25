@@ -1,10 +1,50 @@
-import { hashOf } from "@commonfabric/data-model";
+import type { CfcTransformedByAtom } from "@commonfabric/api/cfc";
+import { hashStringOf } from "@commonfabric/data-model";
 
 import type { Module } from "../builder/types.ts";
 import type { HarnessedFunction } from "../harness/types.ts";
 import { getVerifiedProvenance } from "../harness/verified-provenance.ts";
 import type { ImplementationIdentity } from "./types.ts";
 import { normalizeIdentitySource } from "./writer-claim-correspondence.ts";
+
+const BUILTIN_ARTIFACT_FORMAT = "commonfabric/cfc/builtin-registry/v1";
+
+type TransformedByOperation = Pick<
+  CfcTransformedByAtom,
+  "codeHash" | "operation"
+>;
+
+/**
+ * Content identity for a versioned builtin-registry entry. The entry is an
+ * artifact description rather than executable source, so its digest is stable
+ * across bundling and minification.
+ */
+export const builtinArtifactCodeHash = (builtinId: string): string =>
+  // This registry artifact covers the builtin id, not implementation bytes.
+  hashStringOf({ format: BUILTIN_ARTIFACT_FORMAT, operation: builtinId });
+
+/**
+ * Converts an internal writer identity into the exact public operation
+ * identity carried by `TransformedBy`.
+ */
+export const transformedByOperation = (
+  identity: ImplementationIdentity | undefined,
+): TransformedByOperation | undefined => {
+  if (identity?.kind === "builtin") {
+    return {
+      codeHash: builtinArtifactCodeHash(identity.builtinId),
+      operation: identity.builtinId,
+    };
+  }
+  if (identity?.kind !== "verified" || identity.moduleIdentity === undefined) {
+    return undefined;
+  }
+  const operation = identity.symbol ?? identity.bindingPath?.join(".");
+  return {
+    codeHash: identity.moduleIdentity,
+    ...(operation === undefined ? {} : { operation }),
+  };
+};
 
 /**
  * Resolve the policy-facing implementation identity for a module invocation.
@@ -84,9 +124,5 @@ const resolveProvenanceImplementationIdentity = (
         bindingPath: [...provenance.bindingIdentity.bindingPath],
       }
       : {}),
-    ...(provenance.bindingIdentity ? {} : {
-      codeHash: hashOf(Function.prototype.toString.call(implementation))
-        .toString(),
-    }),
   };
 };

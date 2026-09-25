@@ -1,11 +1,15 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import {
+  CFC_ATOM_TYPE,
+  type CfcTransformedByAtom,
+} from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { ImplementationIdentity } from "../src/cfc/mod.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { buildCfcPolicyArtifactManifest } from "../src/cfc/policy.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -29,11 +33,8 @@ const artifact = buildCfcPolicyArtifactManifest({
         confidentiality: [{ thisPolicy: true }],
         integrity: [{
           type: CFC_ATOM_TYPE.TransformedBy,
-          identity: {
-            kind: "verified",
-            moduleIdentity: { thisPolicyField: "moduleIdentity" },
-            symbol: "tally",
-          },
+          codeHash: { thisPolicyField: "moduleIdentity" },
+          operation: "tally",
         }],
       },
       postCondition: { confidentiality: [], integrity: [] },
@@ -75,7 +76,6 @@ const verified = (moduleIdentity: string, symbol: string) =>
     kind: "verified",
     moduleIdentity,
     symbol,
-    codeHash: `code:${symbol}`,
   }) satisfies ImplementationIdentity;
 
 const TALLY = verified(MODULE, "tally");
@@ -145,10 +145,11 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
     identity: ImplementationIdentity,
     cause: string,
     key: (note: string) => string,
+    source = "brief",
   ): Promise<void> => {
     const tx = runtime.edit();
     tx.setCfcImplementationIdentity(identity);
-    const brief = runtime.getCell(space, "brief", briefSchema, tx).get();
+    const brief = runtime.getCell(space, source, briefSchema, tx).get();
     runtime.getCell<Record<string, number>>(space, cause, undefined, tx)
       .key(key(brief.note)).set(2);
     expect((await tx.commit()).error).toBeUndefined();
@@ -196,8 +197,44 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
 
   it("releases an object after the named function writes a field again", async () => {
     await tallyInto("counts", TALLY);
-    await writeKeyAs(TALLY, "counts", () => "approve");
+
+    const setup = runtime.edit();
+    const refreshedSource = runtime.getCell(
+      space,
+      "refreshed-brief",
+      briefSchema,
+      setup,
+    );
+    refreshedSource.set({ vote: "reject", note: "new-secret-note" });
+    const refreshedSourceId = refreshedSource.getAsNormalizedFullLink().id;
+    expect((await setup.commit()).error).toBeUndefined();
+
+    await writeKeyAs(TALLY, "counts", () => "approve", "refreshed-brief");
     expect(await publishCounts("counts")).toBe(true);
+
+    const tx = runtime.edit();
+    const link = runtime.getCell(space, "counts", undefined, tx)
+      .getAsNormalizedFullLink();
+    const transformedByOf = (entry: {
+      label: { integrity?: readonly unknown[] };
+    }): CfcTransformedByAtom[] =>
+      (entry.label.integrity ?? []).filter(
+        (atom): atom is CfcTransformedByAtom =>
+          (atom as { type?: unknown }).type === CFC_ATOM_TYPE.TransformedBy,
+      );
+    const refreshedEntries =
+      (readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [])
+        .filter((entry) => entry.origin === "structure")
+        .filter((entry) =>
+          transformedByOf(entry).some((atom) =>
+            atom.inputs.some((input) => input.ref.id === refreshedSourceId)
+          )
+        );
+    tx.abort();
+    expect(refreshedEntries.length).toBeGreaterThan(0);
+    for (const entry of refreshedEntries) {
+      expect(transformedByOf(entry)).toHaveLength(1);
+    }
   });
 
   it("refuses an object written by another function of the same module", async () => {

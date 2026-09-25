@@ -218,6 +218,27 @@ export type CfcUserSurfaceInputAtom = CfcAtomObject & {
   readonly valueDigest: string;
 };
 
+/** Stable reference to content consumed by a transformation (spec §8.7.1). */
+export type CfcTransformedByReference = CfcAtomObject & {
+  readonly space: string;
+  readonly id: string;
+  readonly path: readonly string[];
+};
+
+/** One content input, with the evidence retained at that exact reference. */
+export type CfcTransformedByInput = CfcAtomObject & {
+  readonly ref: CfcTransformedByReference;
+  readonly witnesses?: readonly CfcAtom[];
+};
+
+/** Runtime-minted evidence identifying one exact transformation operation. */
+export type CfcTransformedByAtom = CfcAtomObject & {
+  readonly type: typeof CFC_ATOM_TYPE.TransformedBy;
+  readonly codeHash: string;
+  readonly operation?: string;
+  readonly inputs: readonly CfcTransformedByInput[];
+};
+
 export type CfcLlmDerivedAtom = CfcAtomObject & {
   readonly type: typeof CFC_ATOM_TYPE.LlmDerived;
   // The model that produced the bytes, when known. Audit/display metadata —
@@ -326,7 +347,7 @@ export type CfcThisPolicySubjectPattern = CfcAtomObject & {
 /**
  * The content identity of the module defining the selected policy, bound at
  * evaluation time. A rule uses it to name a function of its own module in a
- * `TransformedBy` identity pattern without spelling the module's hash.
+ * `TransformedBy` pattern without spelling the module's hash.
  */
 export type CfcThisPolicyModuleIdentityPattern = CfcAtomObject & {
   readonly thisPolicyField: "moduleIdentity";
@@ -780,6 +801,14 @@ export const cfcAtom = {
       ...(value === undefined ? {} : { value }),
       ...(ref === undefined ? {} : { ref }),
     };
+  },
+
+  transformedBy(fields: {
+    codeHash: string;
+    operation?: string;
+    inputs: readonly CfcTransformedByInput[];
+  }): CfcTransformedByAtom {
+    return { ...pruneOptional(fields), type: CFC_ATOM_TYPE.TransformedBy };
   },
 
   // The option-object mint helpers spell their field types explicitly rather

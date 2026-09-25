@@ -23,6 +23,11 @@ import {
   TRUSTED_DECLASSIFIER_CONCEPT,
 } from "../src/cfc/custody-seal.ts";
 import { ACLManager } from "../src/acl-manager.ts";
+import { type AtomPattern, matchAtomPattern } from "../src/cfc/atom-pattern.ts";
+import {
+  builtinArtifactCodeHash,
+  transformedByOperation,
+} from "../src/cfc/implementation-identity.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import {
   buildCfcPolicyArtifactManifest,
@@ -324,7 +329,8 @@ const storedEntries = (runtime: Runtime, cell: Cell<unknown>) => {
 
 const sealedBy = {
   type: CFC_ATOM_TYPE.TransformedBy,
-  identity: SEAL_IDENTITY,
+  codeHash: builtinArtifactCodeHash(SEAL_IDENTITY.builtinId),
+  operation: SEAL_IDENTITY.builtinId,
 };
 
 /**
@@ -364,11 +370,25 @@ const project = async (
   );
 };
 
-const witnessed = {
+const projectPattern = {
   type: CFC_ATOM_TYPE.TransformedBy,
-  identity: PROJECT,
-  inputWitness: sealedBy,
+  ...transformedByOperation(PROJECT)!,
 };
+
+const witnessed = (box: Cell<unknown>) => ({
+  ...projectPattern,
+  inputs: [{
+    ref: {
+      space: box.getAsNormalizedFullLink().space,
+      id: box.getAsNormalizedFullLink().id,
+      path: [],
+    },
+    witnesses: [sealedBy],
+  }],
+});
+
+const containsMatch = (integrity: readonly unknown[], pattern: AtomPattern) =>
+  integrity.some((atom) => matchAtomPattern(pattern, atom as never) !== null);
 
 describe("cfc-custody-seal", () => {
   describe("the box", () => {
@@ -387,7 +407,9 @@ describe("cfc-custody-seal", () => {
         expect(paths).toContain("");
         expect(valueEntries.length).toBeGreaterThan(2);
         for (const entry of valueEntries) {
-          expect(entry.label.integrity).toContainEqual(sealedBy);
+          expect(containsMatch(entry.label.integrity ?? [], sealedBy)).toBe(
+            true,
+          );
         }
       } finally {
         await fixture.dispose();
@@ -401,7 +423,7 @@ describe("cfc-custody-seal", () => {
         await fixture.seal(bob);
         await fixture.seal(carol);
         const integrity = await project(fixture, carol, box);
-        expect(integrity).toContainEqual(witnessed);
+        expect(containsMatch(integrity, witnessed(box))).toBe(true);
       } finally {
         await fixture.dispose();
       }
@@ -430,11 +452,8 @@ describe("cfc-custody-seal", () => {
         expect((await tx.commit()).error).toBeUndefined();
 
         const integrity = await project(fixture, carol, box, [crafted]);
-        expect(integrity).toContainEqual({
-          type: CFC_ATOM_TYPE.TransformedBy,
-          identity: PROJECT,
-        });
-        expect(integrity).not.toContainEqual(witnessed);
+        expect(containsMatch(integrity, projectPattern)).toBe(true);
+        expect(containsMatch(integrity, witnessed(box))).toBe(false);
       } finally {
         await fixture.dispose();
       }
@@ -580,11 +599,8 @@ describe("cfc-custody-seal", () => {
         local.withTx(tx).set("gone" as never);
         expect((await tx.commit()).error).toBeUndefined();
         const integrity = await project(fixture, carol, box);
-        expect(integrity).toContainEqual({
-          type: CFC_ATOM_TYPE.TransformedBy,
-          identity: PROJECT,
-        });
-        expect(integrity).not.toContainEqual(witnessed);
+        expect(containsMatch(integrity, projectPattern)).toBe(true);
+        expect(containsMatch(integrity, witnessed(box))).toBe(false);
       } finally {
         await fixture.dispose();
       }

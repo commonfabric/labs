@@ -177,31 +177,25 @@ describe("CFC label representation transform (inv-12 Stage 1)", () => {
       }]);
     });
 
-    it("commits nested TransformedBy identity fields via family-scoped paths", () => {
+    it("keeps operation identity public and commits TransformedBy input references", () => {
+      const inputRef = {
+        space: "did:key:source",
+        id: "of:source",
+        path: ["private", "value"],
+      };
       const transformed = transformCfcLabelForCrossSpacePersist({
         integrity: [{
           type: CFC_ATOM_TYPE.TransformedBy,
-          identity: {
-            kind: "verified",
-            moduleIdentity: "cf:module/abc",
-            sourceFile: "/patterns/secret-app.tsx",
-            bindingPath: ["handlers", "onSave"],
-            codeHash: "deadbeef",
-          },
+          codeHash: "cf:module/abc",
+          operation: "onSave",
+          inputs: [{ ref: inputRef }],
         }],
       });
       expect(transformed.integrity).toEqual([{
         type: CFC_ATOM_TYPE.TransformedBy,
-        identity: {
-          kind: "verified",
-          // Content-addressed identity is the PUBLIC trust anchor.
-          moduleIdentity: "cf:module/abc",
-          sourceFile: commitCfcFieldValue("/patterns/secret-app.tsx"),
-          bindingPath: commitCfcFieldValue(["handlers", "onSave"]),
-          // Unclassified fields persist verbatim: the table owns the
-          // protected set.
-          codeHash: "deadbeef",
-        },
+        codeHash: "cf:module/abc",
+        operation: "onSave",
+        inputs: [{ ref: commitCfcFieldValue(inputRef) }],
       }]);
     });
 

@@ -254,11 +254,9 @@ const documents: Record<string, unknown> = {
                 "cf-compiled-by:cf-compiler",
                 {
                   type: TRANSFORMED_BY,
-                  identity: {
-                    kind: "verified",
-                    moduleIdentity: "cf:module/abc",
-                    symbol: "__cfLift_2",
-                  },
+                  codeHash: "cf:module/abc",
+                  operation: "__cfLift_2",
+                  inputs: [],
                 },
               ],
             },
@@ -648,11 +646,9 @@ describe("space-labels", () => {
         type: TRANSFORMED_BY,
         name: "TransformedBy",
         fields: {
-          identity: {
-            kind: "verified",
-            moduleIdentity: "cf:module/abc",
-            symbol: "__cfLift_2",
-          },
+          codeHash: "cf:module/abc",
+          operation: "__cfLift_2",
+          inputs: [],
         },
       };
       expect(entry.path).toEqual(["summary"]);

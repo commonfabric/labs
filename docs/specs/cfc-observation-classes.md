@@ -172,8 +172,9 @@ authored under one identity. Membership stamps survive a slot write that adds or
 replaces a child, so attribution on any carried `derived` or `structure` entry
 meets across the writers of its path: a transaction writing at, above, or below
 the entry's path (for a `*` template, its container's) leaves on it only the
-`TransformedBy` atoms its own join carries. A later writer under another
-identity, or under none, therefore leaves the entry naming no function — also
+`TransformedBy` operation its own join carries. A later write by the same
+operation refreshes the stamp with the new exact atom and its current inputs;
+a writer under another operation, or under none, leaves the entry naming no function — also
 when that transaction read nothing and carries no labels of its own, since a
 write below a stamp carrying `TransformedBy` admits its document to the persist
 step whatever the join. The meet covers `TransformedBy` only: a hereditary

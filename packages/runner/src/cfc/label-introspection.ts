@@ -235,7 +235,7 @@ const protectedFieldObservationLabel = (
  *    (the normative §4.6.4.2 default).
  * 2. A field the Stage-0 classification table marks `public` (disclosure is
  *    the feature: authored attribution subjects, Policy/Context ref
- *    name/hash, `TransformedBy.identity.moduleIdentity`) is public.
+ *    name/hash, `TransformedBy.codeHash`/`operation`) is public.
  *    (Arms 1-2 are `labelMetadataFieldIsProtected`, shared with the persist
  *    seam's mint so the two cannot drift.)
  * 3. Every other present field is source-protected:
@@ -310,8 +310,8 @@ const atomProjectionLabel = (
     }
     // A record carrying a string `type` or `kind` is an atom for
     // classification purposes; plain nested records keep the enclosing
-    // atom's context. Field-path depth beyond one segment (the
-    // `TransformedBy.identity.*` rows) is handled by the recursion: the
+    // atom's context. Field-path depth beyond one segment (such as
+    // `TransformedBy.inputs[].ref`) is handled by the recursion: the
     // nested record's fields are classified against the CONTEXT atom with
     // the single-segment path, and where that misses the table the field is
     // conservatively protected — strictly more protective than the Stage 1

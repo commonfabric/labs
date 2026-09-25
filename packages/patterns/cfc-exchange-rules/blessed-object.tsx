@@ -40,11 +40,8 @@ export const releaseCounts = exchangeRule({
   pre: {
     integrity: [{
       type: "https://commonfabric.org/cfc/atom/TransformedBy",
-      identity: {
-        kind: "verified",
-        moduleIdentity: THIS_POLICY.moduleIdentity,
-        symbol: "countBallot",
-      },
+      codeHash: THIS_POLICY.moduleIdentity,
+      operation: "countBallot",
     }],
   },
   post: { dropClause: true },

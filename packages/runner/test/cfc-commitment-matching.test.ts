@@ -152,20 +152,21 @@ describe("CFC commitment-form matching (inv-12 Stage 1)", () => {
       ).toBeNull();
     });
 
-    it("digest-matches a concrete ARRAY pattern value against a committed field", () => {
-      // TransformedBy.identity.bindingPath commits an ARRAY field value —
-      // the concrete-pattern check must recurse through array patterns
-      // (and refuse arrays that carry variables).
-      const bindingPath = ["handlers", "onSave"];
+    it("digest-matches a concrete input reference against a committed field", () => {
+      const ref = {
+        space: "did:key:source",
+        id: "of:source",
+        path: ["handlers", "onSave"],
+      };
       const committed = {
         type: CFC_ATOM_TYPE.TransformedBy,
-        identity: { bindingPath: commitCfcFieldValue(bindingPath) },
+        inputs: [{ ref: commitCfcFieldValue(ref) }],
       };
       expect(
         matchAtomPattern(
           {
             type: CFC_ATOM_TYPE.TransformedBy,
-            identity: { bindingPath },
+            inputs: [{ ref }],
           },
           committed,
         ),
@@ -174,7 +175,13 @@ describe("CFC commitment-form matching (inv-12 Stage 1)", () => {
         matchAtomPattern(
           {
             type: CFC_ATOM_TYPE.TransformedBy,
-            identity: { bindingPath: ["handlers", { var: "$x" }] },
+            inputs: [{
+              ref: {
+                space: "did:key:source",
+                id: "of:source",
+                path: ["handlers", { var: "$x" }],
+              },
+            }],
           },
           committed,
         ),

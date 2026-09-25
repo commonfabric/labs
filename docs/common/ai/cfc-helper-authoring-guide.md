@@ -130,7 +130,7 @@ the runtime-minted `TransformedBy` atom and name the module with
 `THIS_POLICY.moduleIdentity` rather than a pasted hash; see
 `packages/patterns/cfc-exchange-rules/blessed-computation.tsx`. The runtime
 mints that atom only when every write of a transaction comes from one verified
-function, and the pattern's `symbol` must be that function's export name — the
+function, and the pattern's `operation` must be that function's export name — the
 function exported under that one name — or the rule never fires. The compiler
 rejects dynamic content, unbound variables, unguarded rules, non-exported
 declarations, and reused rules. At label creation the runtime

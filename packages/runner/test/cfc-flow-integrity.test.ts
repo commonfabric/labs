@@ -13,6 +13,7 @@ import {
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { atomPropagationClass } from "../src/cfc/atom-classes.ts";
+import { builtinArtifactCodeHash } from "../src/cfc/implementation-identity.ts";
 import type { IFCLabel } from "../src/cfc/mod.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -96,6 +97,8 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
   it("classifies atoms with a fail-safe default", () => {
     expect(atomPropagationClass(certified("p"))).toBe("hereditary");
     expect(atomPropagationClass({ type: CFC_ATOM_TYPE.InjectionSafe }))
+      .toBe("value-bound");
+    expect(atomPropagationClass({ type: CFC_ATOM_TYPE.TransformedBy }))
       .toBe("value-bound");
     expect(atomPropagationClass({ type: CFC_ATOM_TYPE.Builtin, name: "x" }))
       .toBe("provenance");
@@ -235,7 +238,15 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       const integrity = derivedIntegrity(storageManager, outId);
       expect(integrity).toContainEqual({
         type: CFC_ATOM_TYPE.TransformedBy,
-        identity: { kind: "builtin", builtinId: "flow-test-builtin" },
+        codeHash: builtinArtifactCodeHash("flow-test-builtin"),
+        operation: "flow-test-builtin",
+        inputs: [{
+          ref: {
+            space,
+            id: src.getAsNormalizedFullLink().id,
+            path: [],
+          },
+        }],
       });
     } finally {
       await runtime.dispose();
@@ -367,11 +378,21 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       const integrity = derivedIntegrity(storageManager, outId);
       expect(integrity).toContainEqual({
         type: CFC_ATOM_TYPE.TransformedBy,
-        identity: { kind: "builtin", builtinId: "the-author" },
+        codeHash: builtinArtifactCodeHash("the-author"),
+        operation: "the-author",
+        inputs: [{
+          ref: {
+            space,
+            id: src.getAsNormalizedFullLink().id,
+            path: [],
+          },
+        }],
       });
       expect(integrity).not.toContainEqual({
         type: CFC_ATOM_TYPE.TransformedBy,
-        identity: { kind: "builtin", builtinId: "the-bystander" },
+        codeHash: builtinArtifactCodeHash("the-bystander"),
+        operation: "the-bystander",
+        inputs: [],
       });
     } finally {
       await runtime.dispose();
@@ -391,7 +412,11 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
               ifc: {
                 integrity: [
                   certified("forged"),
-                  { type: CFC_ATOM_TYPE.TransformedBy, identity: "fake" },
+                  {
+                    type: CFC_ATOM_TYPE.TransformedBy,
+                    codeHash: "fake",
+                    inputs: [],
+                  },
                   "plain-claim",
                 ],
               },
@@ -417,7 +442,8 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       expect(declared).not.toContainEqual(certified("forged"));
       expect(declared).not.toContainEqual({
         type: CFC_ATOM_TYPE.TransformedBy,
-        identity: "fake",
+        codeHash: "fake",
+        inputs: [],
       });
     } finally {
       await runtime.dispose();

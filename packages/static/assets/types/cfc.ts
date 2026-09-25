@@ -103,6 +103,21 @@ export type CfcUserSurfaceInputAtom = CfcAtomObject & {
   readonly surface: string;
   readonly valueDigest: string;
 };
+type CfcTransformedByReference = CfcAtomObject & {
+  readonly space: string;
+  readonly id: string;
+  readonly path: readonly string[];
+};
+type CfcTransformedByInput = CfcAtomObject & {
+  readonly ref: CfcTransformedByReference;
+  readonly witnesses?: readonly CfcAtom[];
+};
+type CfcTransformedByAtom = CfcAtomObject & {
+  readonly type: typeof CFC_ATOM_TYPE.TransformedBy;
+  readonly codeHash: string;
+  readonly operation?: string;
+  readonly inputs: readonly CfcTransformedByInput[];
+};
 type CfcLlmDerivedAtom = CfcAtomObject & {
   readonly type: typeof CFC_ATOM_TYPE.LlmDerived;
   readonly model?: string;
@@ -415,6 +430,11 @@ export declare const cfcAtom: {
     value?: string,
     ref?: CfcAtom,
   ) => CfcBoundaryContextAtom;
+  readonly transformedBy: (fields: {
+    codeHash: string;
+    operation?: string;
+    inputs: readonly CfcTransformedByInput[];
+  }) => CfcTransformedByAtom;
   readonly caveatScreened: (fields: {
     kind: string;
     source: CfcAtom;

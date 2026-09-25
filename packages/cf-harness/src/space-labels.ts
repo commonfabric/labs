@@ -36,7 +36,7 @@ import {
   type HarnessCfcAtom,
 } from "./contracts/cell-labels.ts";
 
-/** The atom type whose identity resolves a derived value to its producer. */
+/** The atom type whose artifact and operation name a derived value's producer. */
 const TRANSFORMED_BY = "https://commonfabric.org/cfc/atom/TransformedBy";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

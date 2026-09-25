@@ -77,10 +77,8 @@ Runner side:
 - **Propagation classes with a fail-safe default.** `atomPropagationClass`
   ([atom-classes.ts](../../packages/runner/src/cfc/atom-classes.ts)) defaults
   unknown types to value-bound (SC-10), so new atom families are safe before
-  their class entry ships. `TransformedBy` exists in code (classed
-  `provenance`; the spec registry says value-bound — both drop in the §8.9.3
-  meet, and the difference matters only for endorsed-preservation
-  eligibility, which F does not use).
+  their class entry ships. `TransformedBy` is classed value-bound, so it drops
+  in the §8.9.3 meet and is not eligible for endorsed preservation.
 - **The authorship family exists as an authoring alias.**
   `AuthoredByCurrentUser` ([api/cfc.ts](../../packages/api/cfc.ts)) mints
   kind-shaped `{ kind: "authored-by", subject }` atoms with acting-user
@@ -310,9 +308,7 @@ Per materialization it mints, whole-field:
   verified commit signers). Per §4.5.1.1 the mint says which trusted
   implementation ran and what evidence it checked — it does not claim the
   output inherits any input atom. It is minted fresh per materialization and
-  drops in the meet regardless of how the `TransformedBy` class question
-  (repo `provenance` vs registry value-bound, §2) resolves; F depends on
-  neither reading.
+  drops in the meet as value-bound evidence.
 - **Checkpoint granularity is the confidentiality honesty unit.** The
   materialized field's derived confidentiality follows the default transition
   over what the materializing computation consumed: the checkpoint plus ops

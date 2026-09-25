@@ -1,7 +1,12 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { CFC_ATOM_TYPE, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
+import {
+  CFC_ATOM_TYPE,
+  type CfcAtom,
+  cfcAtom,
+  type CfcTransformedByInput,
+} from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 
@@ -11,7 +16,9 @@ import {
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { createRef } from "../src/create-ref.ts";
 import type { AtomPattern } from "../src/cfc/atom-pattern.ts";
+import { transformedByOperation } from "../src/cfc/implementation-identity.ts";
 import type {
   ImplementationIdentity,
   LabelMapEntry,
@@ -23,19 +30,21 @@ import {
   mintTransformedBy,
   retainedInputWitnesses,
 } from "../src/cfc/input-witness.ts";
+import { canonicalizeTransformedByInputs } from "../src/cfc/canonical.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { toURI } from "../src/uri-utils.ts";
 
 // An endorsed transformer's output is released by an exchange rule guarded on
 // the `TransformedBy` atom the runtime mints for it. Naming only the code that
 // wrote the output lets any caller of that code choose what it computes over:
 // an unendorsed derivation reshapes a secret into input the endorsed code
 // accepts, the endorsed code writes, and the rule releases the result. These
-// cases pin the witness-bearing form, `TransformedBy{identity, inputWitness}`,
-// which additionally states what wrote every confidential input the
-// transformation consumed, and the laundering shapes it has to refuse.
+// cases pin the exact input record and its witnesses, which additionally
+// state what wrote each confidential input the transformation consumed, and
+// the laundering shapes it has to refuse.
 
 const signer = await Identity.fromPassphrase("runner-cfc-input-witness");
 const space = signer.did();
@@ -62,22 +71,41 @@ const OTHER = verified("module:attacker", "helper");
 
 const transformedBy = (identity: ImplementationIdentity) => ({
   type: CFC_ATOM_TYPE.TransformedBy,
-  identity: {
-    kind: "verified",
-    moduleIdentity: (identity as { moduleIdentity: string }).moduleIdentity,
-    symbol: (identity as { symbol: string }).symbol,
-  },
+  ...transformedByOperation(identity)!,
 });
 
-// The guard existing rules are written with: which code wrote the value.
+const inputRef = (cause: string, path: readonly string[] = []) => ({
+  space,
+  id: toURI(createRef({}, cause)),
+  path,
+});
+
+const witnessedInput = (
+  cause: string,
+  writer: ImplementationIdentity = COMMIT,
+) => ({
+  ref: inputRef(cause),
+  witnesses: [{ ...transformedBy(writer) }],
+});
+
+const exactTransformedBy = (
+  identity: ImplementationIdentity,
+  inputs: readonly CfcTransformedByInput[] = [],
+) => mintTransformedBy(transformedByOperation(identity)!, inputs);
+
+// The guard existing rules are written with: which operation wrote the value.
 const IDENTITY_GUARD: AtomPattern = transformedBy(TALLY);
+
+const guardForInputs = (
+  inputs: readonly CfcTransformedByInput[],
+): AtomPattern => ({
+  ...transformedBy(TALLY),
+  inputs: canonicalizeTransformedByInputs(inputs),
+});
 
 // The witnessed guard: the tally wrote it, and everything confidential the
 // tally read was written by the commit step.
-const WITNESSED_GUARD: AtomPattern = {
-  ...transformedBy(TALLY),
-  inputWitness: transformedBy(COMMIT),
-};
+const WITNESSED_GUARD = guardForInputs([witnessedInput("committed")]);
 
 const releaseRule = (guard: AtomPattern): CfcPolicyRecordInput[] => [{
   id: "conclave-release",
@@ -283,26 +311,25 @@ const seedRoom = async (runtime: Runtime): Promise<void> => {
 
 describe("TransformedBy input witnesses", () => {
   describe("minting", () => {
-    it("names what wrote every confidential input beside the transformer", async () => {
+    it("names each input reference and its retained witnesses", async () => {
       await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
         await seedRoom(runtime);
         await commitStances(runtime);
         await transform(runtime, TALLY, ["committed"], "ballot", tally);
 
         const integrity = storedIntegrity(runtime, "ballot");
-        expect(integrity).toContainEqual({
-          type: CFC_ATOM_TYPE.TransformedBy,
-          identity: TALLY,
-        });
-        expect(integrity).toContainEqual({
-          type: CFC_ATOM_TYPE.TransformedBy,
-          identity: TALLY,
-          inputWitness: { type: CFC_ATOM_TYPE.TransformedBy, identity: COMMIT },
-        });
+        const commitAtom = exactTransformedBy(COMMIT, [
+          { ref: inputRef("alice-note") },
+          { ref: inputRef("bob-note") },
+        ]);
+        expect(integrity).toContainEqual(exactTransformedBy(TALLY, [{
+          ref: inputRef("committed"),
+          witnesses: [commitAtom],
+        }]));
       });
     });
 
-    it("mints no witness when a confidential input was written by other code", async () => {
+    it("keeps distinct witness sets on distinct input references", async () => {
       await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
         await seedRoom(runtime);
         await commitStances(runtime);
@@ -316,25 +343,38 @@ describe("TransformedBy input witnesses", () => {
         );
 
         const integrity = storedIntegrity(runtime, "ballot");
-        expect(integrity).toContainEqual({
-          type: CFC_ATOM_TYPE.TransformedBy,
-          identity: TALLY,
-        });
+        const [atom] = integrity.filter((candidate) =>
+          (candidate as { operation?: unknown }).operation === "tallyBallot"
+        ) as Array<{ inputs: CfcTransformedByInput[] }>;
+        expect(atom.inputs.map((input) => input.ref)).toEqual(
+          canonicalizeTransformedByInputs([
+            { ref: inputRef("committed") },
+            { ref: inputRef("crafted") },
+          ]).map((input) => input.ref),
+        );
         expect(
-          integrity.some((atom) =>
-            (atom as { inputWitness?: unknown }).inputWitness !== undefined
+          atom.inputs.map((input) =>
+            input.witnesses?.map((witness) =>
+              (witness as { operation?: unknown }).operation
+            )
           ),
-        ).toBe(false);
+        ).toEqual(
+          atom.inputs.map((input) =>
+            input.ref.id === inputRef("committed").id
+              ? ["commitStances"]
+              : ["bitOfNote"]
+          ),
+        );
       });
     });
   });
 
-  describe("an identity-only guard", () => {
+  describe("an operation-only guard", () => {
     // What a rule guarded on the writer alone admits. The first case is the
     // endorsed path; the second is the laundering this primitive exists for,
     // pinned so a rule author can see why the identity alone is not enough.
     // Both stay admitted: the witness is additive, and existing guards keep
-    // matching the identity-only atom.
+    // matching the exact atom by its operation fields.
     it("releases the endorsed transformer's output", async () => {
       await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
         await seedRoom(runtime);
@@ -365,7 +405,11 @@ describe("TransformedBy input witnesses", () => {
     });
 
     it("releases when the transformer also reads public inputs", async () => {
-      await withRuntime(WITNESSED_GUARD, async ({ runtime }) => {
+      const guard = guardForInputs([
+        witnessedInput("committed"),
+        { ref: inputRef("ballot-options") },
+      ]);
+      await withRuntime(guard, async ({ runtime }) => {
         await seedRoom(runtime);
         await seedPublic(runtime, "ballot-options", { options: ["a", "b"] });
         await commitStances(runtime);
@@ -390,7 +434,11 @@ describe("TransformedBy input witnesses", () => {
     });
 
     it("refuses when a crafted input is mixed in with committed ones", async () => {
-      await withRuntime(WITNESSED_GUARD, async ({ runtime }) => {
+      const guard = guardForInputs([
+        witnessedInput("committed"),
+        witnessedInput("crafted"),
+      ]);
+      await withRuntime(guard, async ({ runtime }) => {
         await seedRoom(runtime);
         await commitStances(runtime);
         await bitOfAlicesNote(runtime);
@@ -406,7 +454,11 @@ describe("TransformedBy input witnesses", () => {
     });
 
     it("refuses when a transformer read a secret directly", async () => {
-      await withRuntime(WITNESSED_GUARD, async ({ runtime }) => {
+      const guard = guardForInputs([
+        witnessedInput("committed"),
+        witnessedInput("alice-note"),
+      ]);
+      await withRuntime(guard, async ({ runtime }) => {
         await seedRoom(runtime);
         await commitStances(runtime);
         await transform(
@@ -524,13 +576,17 @@ describe("TransformedBy input witnesses", () => {
     // input. A guard pinning one level trusts whatever the commit step was
     // fed; a guard pinning the commit step's own witness does not.
     const SUBMIT = verified("module:conclave", "submitStance");
-    const pinsChain: AtomPattern = {
-      ...transformedBy(TALLY),
-      inputWitness: {
-        ...transformedBy(COMMIT),
-        inputWitness: transformedBy(SUBMIT),
-      },
+    const commitPattern = {
+      ...transformedBy(COMMIT),
+      inputs: canonicalizeTransformedByInputs([
+        witnessedInput("alice-stance", SUBMIT),
+        witnessedInput("bob-stance", SUBMIT),
+      ]),
     };
+    const pinsChain = guardForInputs([{
+      ref: inputRef("committed"),
+      witnesses: [commitPattern],
+    }]);
 
     // Each member's stance is born in the room: the submit step reads the
     // room's roster (so its write is attributed) and writes the stance.
@@ -557,18 +613,25 @@ describe("TransformedBy input witnesses", () => {
         await commitSubmitted(runtime, ["alice-stance", "bob-stance"]);
         await transform(runtime, TALLY, ["committed"], "ballot", tally);
 
-        expect(storedIntegrity(runtime, "ballot")).toContainEqual({
-          type: CFC_ATOM_TYPE.TransformedBy,
-          identity: TALLY,
-          inputWitness: {
-            type: CFC_ATOM_TYPE.TransformedBy,
-            identity: COMMIT,
-            inputWitness: {
-              type: CFC_ATOM_TYPE.TransformedBy,
-              identity: SUBMIT,
-            },
+        const submitAtom = exactTransformedBy(SUBMIT, [{
+          ref: inputRef("roster"),
+        }]);
+        const commitAtom = exactTransformedBy(COMMIT, [
+          {
+            ref: inputRef("alice-stance"),
+            witnesses: [submitAtom],
           },
-        });
+          {
+            ref: inputRef("bob-stance"),
+            witnesses: [submitAtom],
+          },
+        ]);
+        expect(storedIntegrity(runtime, "ballot")).toContainEqual(
+          exactTransformedBy(TALLY, [{
+            ref: inputRef("committed"),
+            witnesses: [commitAtom],
+          }]),
+        );
       });
     });
 
@@ -593,8 +656,8 @@ describe("TransformedBy input witnesses", () => {
     });
 
     it("a guard pinning one level admits crafted input fed to the inner step", async () => {
-      // Every value the commit step writes carries the commit step's
-      // identity-only atom, whatever it was fed, so a one-level pin is
+      // Every value the commit step writes carries the commit operation,
+      // whatever it was fed, so a one-level pin is
       // satisfied by it. A rule pins as deep as the code it trusts.
       await withRuntime(WITNESSED_GUARD, async ({ runtime }) => {
         await submitStances(runtime);
@@ -612,10 +675,12 @@ describe("TransformedBy input witnesses", () => {
       await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
         await seedRoom(runtime);
         await commitStances(runtime);
-        expect(storedIntegrity(runtime, "committed")).toContainEqual({
-          type: CFC_ATOM_TYPE.TransformedBy,
-          identity: COMMIT,
-        });
+        expect(storedIntegrity(runtime, "committed")).toContainEqual(
+          exactTransformedBy(COMMIT, [
+            { ref: inputRef("alice-note") },
+            { ref: inputRef("bob-note") },
+          ]),
+        );
       });
     });
   });
@@ -624,10 +689,8 @@ describe("TransformedBy input witnesses", () => {
     // Each case pairs a control, where the witness is minted, with the same
     // transformation over an input that violates one guard, where it must not
     // be. The control keeps the refusal from passing for an unrelated reason.
-    const tb = (identity: ImplementationIdentity) => ({
-      type: CFC_ATOM_TYPE.TransformedBy,
-      identity,
-    });
+    const tb = (identity: ImplementationIdentity) =>
+      exactTransformedBy(identity);
     const COMMITTED_VALUE = (integrity: CfcAtom[]): LabelMapEntry => ({
       path: [],
       origin: "derived",
@@ -641,9 +704,23 @@ describe("TransformedBy input witnesses", () => {
     };
     const witnessesOf = (runtime: Runtime, cause: string): unknown[] =>
       storedIntegrity(runtime, cause).flatMap((atom) => {
-        const witness = (atom as { inputWitness?: unknown }).inputWitness;
-        return witness === undefined ? [] : [witness];
+        const inputs = (atom as { inputs?: CfcTransformedByInput[] }).inputs;
+        return inputs?.flatMap((input) => input.witnesses ?? []) ?? [];
       });
+
+    const inputsOf = (
+      runtime: Runtime,
+      cause: string,
+    ): readonly CfcTransformedByInput[] => {
+      const atom = storedIntegrity(runtime, cause).find((candidate) =>
+        (candidate as { type?: unknown }).type === CFC_ATOM_TYPE.TransformedBy
+      ) as { inputs?: CfcTransformedByInput[] } | undefined;
+      return atom?.inputs ?? [];
+    };
+    const witnessOperationsOf = (runtime: Runtime, cause: string): unknown[] =>
+      witnessesOf(runtime, cause).map((witness) =>
+        (witness as { operation?: unknown }).operation
+      );
 
     it("a witnessed child does not vouch for an unwitnessed `*` slot beside it", async () => {
       // The `*` slot stands for the children with no entry of their own, and
@@ -697,10 +774,10 @@ describe("TransformedBy input witnesses", () => {
       });
     });
 
-    it("observing confidential label metadata empties the witnesses", async () => {
-      // Label metadata is a confidential input that carries no evidence. The
-      // observation is recorded through the transaction's channel directly,
-      // as `inspectStoredConfLabel` records one for a protected result.
+    it("does not represent a label-metadata observation as a content input", async () => {
+      // The observation is recorded through the transaction's channel
+      // directly, as `inspectStoredConfLabel` records one for a protected
+      // result. It affects confidentiality but is not a consumed content ref.
       await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
         await seedRoom(runtime);
         await commitStances(runtime);
@@ -728,14 +805,19 @@ describe("TransformedBy input witnesses", () => {
           },
         );
 
-        expect(witnessesOf(runtime, "control")).toEqual([tb(COMMIT)]);
-        expect(witnessesOf(runtime, "ballot")).toEqual([]);
+        expect(witnessOperationsOf(runtime, "control")).toEqual([
+          "commitStances",
+        ]);
+        expect(witnessOperationsOf(runtime, "ballot")).toEqual([
+          "commitStances",
+        ]);
+        expect(inputsOf(runtime, "ballot")).toHaveLength(1);
       });
     });
 
-    it("confidential external content without the witness empties it", async () => {
-      // A host-observed row is a confidential input like any read; the
-      // producer that records it is the transformer here.
+    it("keeps an external content input distinct when it has no witness", async () => {
+      // A host-observed row is a content input like any read. It receives its
+      // own reference rather than erasing evidence held by another input.
       const PRODUCER = "input-witness-producer";
       const producer: ImplementationIdentity = {
         kind: "builtin",
@@ -776,8 +858,18 @@ describe("TransformedBy input witnesses", () => {
           },
         );
 
-        expect(witnessesOf(runtime, "control")).toEqual([tb(COMMIT)]);
-        expect(witnessesOf(runtime, "ballot")).toEqual([]);
+        expect(witnessOperationsOf(runtime, "control")).toEqual([
+          "commitStances",
+        ]);
+        expect(witnessOperationsOf(runtime, "ballot")).toEqual([
+          "commitStances",
+        ]);
+        expect(inputsOf(runtime, "ballot")).toHaveLength(2);
+        expect(
+          inputsOf(runtime, "ballot").some((input) =>
+            input.witnesses === undefined
+          ),
+        ).toBe(true);
       });
     });
 
@@ -818,35 +910,60 @@ describe("TransformedBy input witnesses", () => {
         await transform(runtime, TALLY, ["pair-ab", "pair-ba"], "ab", tally);
         await transform(runtime, TALLY, ["pair-ba", "pair-ab"], "ba", tally);
 
-        expect(witnessesOf(runtime, "ab")).toHaveLength(2);
+        expect(witnessesOf(runtime, "ab")).toHaveLength(4);
         expect(JSON.stringify(storedIntegrity(runtime, "ba"))).toBe(
           JSON.stringify(storedIntegrity(runtime, "ab")),
         );
       });
     });
   });
-});
 
-describe("mintTransformedBy", () => {
-  const A = { type: CFC_ATOM_TYPE.TransformedBy, identity: COMMIT };
-  const B = { type: CFC_ATOM_TYPE.TransformedBy, identity: OTHER };
+  describe("mintTransformedBy", () => {
+    const A = exactTransformedBy(COMMIT);
+    const B = exactTransformedBy(OTHER);
 
-  it("orders witnesses canonically, not by arrival", () => {
-    expect(JSON.stringify(mintTransformedBy(TALLY, [B, A]))).toBe(
-      JSON.stringify(mintTransformedBy(TALLY, [A, B])),
-    );
-  });
+    it("orders input references and witnesses canonically", () => {
+      const first: CfcTransformedByInput[] = [
+        { ref: inputRef("b"), witnesses: [B, A] },
+        { ref: inputRef("a") },
+      ];
+      const second: CfcTransformedByInput[] = [
+        { ref: inputRef("a") },
+        { ref: inputRef("b"), witnesses: [A, B] },
+      ];
+      expect(
+        JSON.stringify(
+          mintTransformedBy(transformedByOperation(TALLY)!, first),
+        ),
+      ).toBe(
+        JSON.stringify(
+          mintTransformedBy(transformedByOperation(TALLY)!, second),
+        ),
+      );
+    });
 
-  it("mints one atom per distinct witness", () => {
-    expect(mintTransformedBy(TALLY, [A, { ...A }, B])).toHaveLength(3);
-  });
+    it("deduplicates one reference by meeting its witness observations", () => {
+      const atom = mintTransformedBy(transformedByOperation(TALLY)!, [
+        { ref: inputRef("same"), witnesses: [A, { ...A }, B] },
+        { ref: inputRef("same"), witnesses: [A] },
+      ]);
+      expect(atom.inputs).toEqual([{
+        ref: inputRef("same"),
+        witnesses: [A],
+      }]);
+    });
 
-  it("retains no witness at the depth cap", () => {
-    let atom: CfcAtom = A;
-    for (let depth = 0; depth < INPUT_WITNESS_MAX_DEPTH; depth++) {
-      atom = { ...B, inputWitness: atom };
-    }
-    expect(inputWitnessDepth(atom)).toBe(INPUT_WITNESS_MAX_DEPTH);
-    expect(retainedInputWitnesses([atom])).toEqual([]);
+    it("truncates a retained witness so the next mint stays at the cap", () => {
+      let atom: CfcAtom = A;
+      for (let depth = 0; depth < INPUT_WITNESS_MAX_DEPTH; depth++) {
+        atom = exactTransformedBy(OTHER, [{
+          ref: inputRef(`depth-${depth}`),
+          witnesses: [atom],
+        }]);
+      }
+      expect(inputWitnessDepth(atom)).toBe(INPUT_WITNESS_MAX_DEPTH);
+      const [retained] = retainedInputWitnesses([atom]);
+      expect(inputWitnessDepth(retained)).toBe(INPUT_WITNESS_MAX_DEPTH - 1);
+    });
   });
 });

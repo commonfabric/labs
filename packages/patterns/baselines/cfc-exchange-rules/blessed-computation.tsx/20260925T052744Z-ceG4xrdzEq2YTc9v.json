@@ -1,0 +1,173 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Brief": {
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "vote": {
+            "enum": [
+              "approve",
+              "reject"
+            ]
+          }
+        },
+        "required": [
+          "vote",
+          "note"
+        ],
+        "type": "object"
+      },
+      "PrivateBrief": {
+        "$ref": "#/$defs/Brief",
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "YAcxZoUjCCL1-6a7Vu8OIoOUN29z_AqDB0S32Zwpy1A",
+              "policyDigest": "V7dXBg7IYzW8j4YHCgI1-MWNe9Was_9yT4XWXobYqDs",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "ballotRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        }
+      },
+      "RoomText": {
+        "ifc": {
+          "maxConfidentiality": []
+        },
+        "type": "string"
+      }
+    },
+    "properties": {
+      "briefs": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/PrivateBrief"
+        },
+        "type": "array"
+      },
+      "roomEcho": {
+        "$ref": "#/$defs/RoomText",
+        "asCell": [
+          "cell"
+        ],
+        "default": ""
+      },
+      "roomNote": {
+        "$ref": "#/$defs/RoomText",
+        "asCell": [
+          "cell"
+        ],
+        "default": ""
+      },
+      "roomTally": {
+        "$ref": "#/$defs/RoomText",
+        "asCell": [
+          "cell"
+        ],
+        "default": ""
+      }
+    },
+    "required": [
+      "briefs",
+      "roomTally",
+      "roomEcho",
+      "roomNote"
+    ],
+    "type": "object"
+  },
+  "pattern": "cfc-exchange-rules/blessed-computation.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Brief": {
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "vote": {
+            "enum": [
+              "approve",
+              "reject"
+            ]
+          }
+        },
+        "required": [
+          "vote",
+          "note"
+        ],
+        "type": "object"
+      },
+      "RoomText": {
+        "ifc": {
+          "maxConfidentiality": []
+        },
+        "type": "string"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "publishEcho": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "publishFirstNote": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "publishTally": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "roomEcho": {
+        "$ref": "#/$defs/RoomText"
+      },
+      "roomNote": {
+        "$ref": "#/$defs/RoomText"
+      },
+      "roomTally": {
+        "$ref": "#/$defs/RoomText"
+      },
+      "submit": {
+        "$ref": "#/$defs/Brief",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "tally": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tally",
+      "roomTally",
+      "roomEcho",
+      "roomNote",
+      "submit",
+      "publishTally",
+      "publishEcho",
+      "publishFirstNote",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

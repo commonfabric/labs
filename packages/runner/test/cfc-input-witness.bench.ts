@@ -8,11 +8,12 @@
  * N; the pass should grow about linearly.
  */
 
-import { CFC_ATOM_TYPE, type CfcAtom } from "@commonfabric/api/cfc";
+import type { CfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray } from "@commonfabric/utils/types";
 
+import { transformedByOperation } from "../src/cfc/implementation-identity.ts";
+import { mintTransformedBy } from "../src/cfc/input-witness.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import type {
   ImplementationIdentity,
@@ -43,6 +44,7 @@ const identity = (symbol: string): ImplementationIdentity => ({
 });
 const WRITER = identity("writer");
 const READER = identity("reader");
+const WRITER_ATOM = mintTransformedBy(transformedByOperation(WRITER)!, []);
 
 for (const count of [500, 2000, 4000]) {
   const derived = (path: string[]): LabelMapEntry => ({
@@ -51,7 +53,7 @@ for (const count of [500, 2000, 4000]) {
     observes: "value",
     label: {
       confidentiality: ["room"],
-      integrity: [{ type: CFC_ATOM_TYPE.TransformedBy, identity: WRITER }],
+      integrity: [WRITER_ATOM],
     },
   });
   const entries: LabelMapEntry[] = [
@@ -93,10 +95,12 @@ for (const count of [500, 2000, 4000]) {
       // The witness must be the writer's, so a fixture whose per-key entries
       // stopped resolving fails here rather than timing a degenerate read.
       const witnessed = join.integrity.some((atom) => {
-        const witness = (atom as { inputWitness?: CfcAtom }).inputWitness;
-        return isObjectNotArray(witness) &&
-          witness.type === CFC_ATOM_TYPE.TransformedBy &&
-          deepEqual(witness.identity, WRITER);
+        const inputs = (atom as {
+          inputs?: Array<{ witnesses?: CfcAtom[] }>;
+        }).inputs;
+        return inputs?.some((input) =>
+          input.witnesses?.some((witness) => deepEqual(witness, WRITER_ATOM))
+        );
       });
       if (!witnessed) throw new Error(`Expected a witness at N=${count}`);
     } finally {

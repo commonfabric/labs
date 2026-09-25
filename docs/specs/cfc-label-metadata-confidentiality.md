@@ -20,7 +20,7 @@ persists into a space-B document:
 | `User{subject}`, `Space{id}`, `PersonalSpace{owner}` clause atoms | **yes — DIDs** | read gating (equality), §4.9.3 ACL point query (`Space.id` dereference) |
 | `Caveat{kind, source, by}` | **yes** — `source` is a full nested atom | evidence binding (inv-10: discharge must bind the same caveat source) |
 | `LinkReference{source:{space,id,path}, target:{…}}` | **yes** — space DID + doc id + path | provenance display; S7 exemption keys on atom *type* only |
-| `TransformedBy{identity}` | code identity: `moduleIdentity`, `sourceFile`, `bindingPath`, `codeHash` | trust statements (B3 pattern match) |
+| `TransformedBy{codeHash, operation?, inputs}` | artifact and operation identity plus consumed content references | trust statements (B3 pattern match); input-witness guards |
 | `HasRole`, `UserSurfaceInput`, vouched-channel `ExternalIngest`, `authored-by`/`represents-principal` | **yes — DIDs** | role guards; authorship UI (product feature); fetch-ingest provenance carries a URL and commit SHA instead |
 | sigil-link `cfcLabelView` **inside `value`** | same atom set, second copy | link-carried enforcement at B |
 | `cfc.schemaHash` + replicated schema doc (`ensureSchemaDocument`) | policy structure, field names | schema-driven enforcement |
@@ -98,7 +98,8 @@ Default assignments (initial table, revisable per family):
 | `Policy`/`Context` ref `.name`/`.hash` | **public** | B2b label-carried selection must dereference them against the destination's deployment snapshot (the `Space.id` argument); they identify a policy profile, not a person, and `hash` is already a content digest |
 | `Policy`/`Context` ref `.subject` | commitment | a DID, equality-shaped at selection (well-formedness only — selection keys on name+hash and accepts the commitment marker); rules binding variables from it fail closed at the destination, the narrow direction |
 | `LinkReference.source/target` | commitment (paths), public (space? no — commitment) | display/provenance only; nothing dereferences the persisted copy |
-| `TransformedBy.identity.sourceFile/bindingPath` | commitment | human-readable code layout is the leak; trust statements should bind the content-addressed `moduleIdentity` (public) instead |
+| `TransformedBy.codeHash` / `.operation` | public | content-addressed trust anchors used by operation patterns |
+| `TransformedBy.inputs[].ref` | commitment | source topology; persisted policy evidence does not dereference the copy |
 | `authored-by` / `represents-principal` `.subject` | public | product-displayed attribution, minted under the acting principal's own authority |
 | `HasRole` / `UserSurfaceInput.user` / vouched-channel `ExternalIngest.audience` | commitment | evidence families; equality-consumed; fetch-ingest provenance has no audience |
 

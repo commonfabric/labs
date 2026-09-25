@@ -23,18 +23,15 @@ import {
 // `TransformedBy` onto what it writes, naming the function's module by content
 // identity and the function by its export name; `THIS_POLICY.moduleIdentity`
 // binds to the identity of the module defining these rules, so the rule keeps
-// naming this module's `tallyBallot` however the module is edited. `symbol` is
+// naming this module's `tallyBallot` however the module is edited. `operation` is
 // that export name, so the function must be exported, under that one name.
 export const releaseTally = exchangeRule({
   appliesTo: THIS_POLICY,
   pre: {
     integrity: [{
       type: "https://commonfabric.org/cfc/atom/TransformedBy",
-      identity: {
-        kind: "verified",
-        moduleIdentity: THIS_POLICY.moduleIdentity,
-        symbol: "tallyBallot",
-      },
+      codeHash: THIS_POLICY.moduleIdentity,
+      operation: "tallyBallot",
     }],
   },
   post: { dropClause: true },

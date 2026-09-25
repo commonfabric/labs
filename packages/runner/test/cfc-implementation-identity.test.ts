@@ -1,11 +1,16 @@
 import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { hashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { raw } from "../src/module.ts";
 import { createNodeFactory } from "../src/builder/module.ts";
 import { Runtime } from "../src/runtime.ts";
-import { resolvePolicyFacingImplementationIdentity } from "../src/cfc/implementation-identity.ts";
+import {
+  builtinArtifactCodeHash,
+  resolvePolicyFacingImplementationIdentity,
+  transformedByOperation,
+} from "../src/cfc/implementation-identity.ts";
 import { getTopFrame } from "../src/builder/pattern.ts";
 import {
   getVerifiedProvenance,
@@ -25,6 +30,42 @@ describe("CFC builtin implementation identity", () => {
     await storageManager?.close();
     runtime = undefined;
     storageManager = undefined;
+  });
+
+  it("derives builtin provenance from a versioned registry artifact", () => {
+    expect(transformedByOperation({ kind: "builtin", builtinId: "map" }))
+      .toEqual({
+        codeHash: hashStringOf({
+          format: "commonfabric/cfc/builtin-registry/v1",
+          operation: "map",
+        }),
+        operation: "map",
+      });
+    expect(builtinArtifactCodeHash("map")).not.toBe(
+      builtinArtifactCodeHash("filter"),
+    );
+  });
+
+  it("does not accept a function-source hash as artifact identity", () => {
+    expect(transformedByOperation(
+      {
+        kind: "verified",
+        codeHash: "hash-of-Function-toString",
+        symbol: "tally",
+      } as unknown as Parameters<typeof transformedByOperation>[0],
+    ))
+      .toBeUndefined();
+  });
+
+  it("uses the verified module artifact and operation", () => {
+    expect(transformedByOperation({
+      kind: "verified",
+      moduleIdentity: "cf:module/content-hash",
+      symbol: "tally",
+    })).toEqual({
+      codeHash: "cf:module/content-hash",
+      operation: "tally",
+    });
   });
 
   it("stamps registered raw builtins with a stable builtin identity", () => {

@@ -153,24 +153,26 @@ D}}`, labeled `P ∨ Space(S)`. The anchor is created in a transaction of its ow
 the first time it is needed, written only where absent. It carries no
 create-only mark: two first seals that race to create it write the same
 constant, and the loser's retry finds the winner's anchor. The read makes every
-location the seal writes carry `TransformedBy{builtin cfc-custody-seal}`, the
+location the seal writes carry the `cfc-custody-seal` operation's
+`TransformedBy`, the
 root included when the seal creates the box. The anchor's clause fits the room
 space's residency ceiling, and on an entry it sits beside the entry's declared
 `[P]`, which still bounds who reads the entry.
 
 Anyone who can read the terms can compute both addresses, so the seal refuses a
 box whose root the seal did not write, and an anchor whose value is not the
-seal's constant or whose label is not exactly `P ∨ Space(S)` with no integrity.
+seal's constant or whose label is not exactly `P ∨ Space(S)` with no integrity
+other than the seal operation's own `TransformedBy`.
 An anchor holding a link would otherwise carry its target's clauses into every
 entry, and integrity on the anchor would reach every entry's label. The anchor
 is checked before the receipt is written, so a squatted anchor leaves nothing
 durable.
 
 The consequence is the property a release rule relies on. A transformation that
-reads the whole box mints
-`TransformedBy{identity, inputWitness: TransformedBy{builtin cfc-custody-seal}}`.
-A transformation that also reads one confidential value the seal did not write
-mints no such atom.
+reads the whole box mints one `TransformedBy` whose box input carries the seal
+operation's atom in `witnesses`. A transformation that also reads one value the
+seal did not write records that value as a second input, so a guard requiring
+the exact box-only input list does not match.
 
 ### The blinded entry key
 
