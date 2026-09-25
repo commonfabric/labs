@@ -6,7 +6,7 @@
 // turn for a fraction of the cost. These tests pin all four properties: the
 // two the delivery model is for, and the two that keep it from costing a
 // timer wake-up per frame. They also pin `delivered()`, which lets a caller
-// wait for the queue those turns drain to run empty.
+// wait for the frames queued at its call to be handed over.
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
@@ -207,6 +207,22 @@ describe("client", () => {
 
       expect(settledAtFrame).toEqual([false, false, false]);
       expect(h.received.length).toBe(3);
+      await h.transport.close();
+    });
+
+    it("resolves delivered() without waiting for frames queued after the call", async () => {
+      // A server that keeps sending must not hold the wait open. Each of the
+      // first frames handed over queues another, so the queue stays non-empty
+      // long past the two frames the wait covers.
+      const refills = 20;
+      const h = harness((index) => {
+        if (index < refills) h.emit(1);
+      });
+      h.emit(2);
+      await h.transport.delivered!();
+
+      expect(h.received.length).toBe(2);
+      await h.delivered(2 + refills);
       await h.transport.close();
     });
 

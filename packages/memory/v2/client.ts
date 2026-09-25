@@ -75,9 +75,10 @@ export type Transport = {
   setMessageCompressionEnabled?(enabled: boolean): void;
 
   /**
-   * Resolves once every server frame this transport holds has been handed to
-   * the receiver, and at once when it holds none. A transport that hands each
-   * frame over as it arrives holds none and leaves this out.
+   * Resolves once every server frame this transport held at the call has been
+   * handed to the receiver, and at once when it held none or has closed.
+   * Frames that arrive after the call do not extend the wait. A transport
+   * that hands each frame over as it arrives holds none and leaves this out.
    */
   delivered?(): Promise<void>;
 };
@@ -289,8 +290,8 @@ export class Client {
   }
 
   /**
-   * Resolves once every server frame the transport holds has reached this
-   * client. What a frame goes on to do from there — a response resolving, a
+   * Resolves once every server frame the transport held at the call has
+   * reached this client. What a frame goes on to do from there — a response resolving, a
    * sync frame handed to its session — is microtask work after that.
    */
   delivered(): Promise<void> {
@@ -2388,21 +2389,30 @@ export const loopback = (server: Server): Transport => {
   let closed = false;
   const queue: string[] = [];
   let turn: ArmedTurn | null = null;
-  // Callers of `delivered()` waiting for the queue to empty.
-  let emptied: PromiseWithResolvers<void> | null = null;
-  const noteEmptied = () => {
-    if (queue.length > 0 && !closed) return;
-    emptied?.resolve();
-    emptied = null;
+  // Frames queued and frames handed over since the transport opened. A
+  // `delivered()` caller waits for `handedOver` to reach the `queued` it saw,
+  // so frames queued after its call never extend its wait.
+  let queued = 0;
+  let handedOver = 0;
+  // Callers of `delivered()`, in call order and so in order of their targets.
+  const deliveryWaiters: { target: number; resolve: () => void }[] = [];
+  const releaseWaiters = () => {
+    while (
+      deliveryWaiters.length > 0 &&
+      (closed || deliveryWaiters[0].target <= handedOver)
+    ) {
+      deliveryWaiters.shift()!.resolve();
+    }
   };
   const drainOne = () => {
     turn = null;
     if (closed) return;
     const frame = queue.shift();
     if (frame === undefined) return;
+    handedOver++;
     receiver(frame);
     if (queue.length > 0) schedule();
-    else noteEmptied();
+    releaseWaiters();
   };
   const schedule = () => {
     turn ??= armTurn(drainOne);
@@ -2410,6 +2420,7 @@ export const loopback = (server: Server): Transport => {
   const connection = server.connect((message) => {
     if (closed) return;
     queue.push(encodeMemoryBoundary(message));
+    queued++;
     schedule();
   });
   return {
@@ -2421,7 +2432,7 @@ export const loopback = (server: Server): Transport => {
       turn?.cancel();
       turn = null;
       queue.length = 0;
-      noteEmptied();
+      releaseWaiters();
       connection.close();
       return Promise.resolve();
     },
@@ -2430,9 +2441,10 @@ export const loopback = (server: Server): Transport => {
     },
     setCloseReceiver() {},
     delivered() {
-      if (queue.length === 0 || closed) return Promise.resolve();
-      emptied ??= Promise.withResolvers<void>();
-      return emptied.promise;
+      if (closed || handedOver >= queued) return Promise.resolve();
+      const { promise, resolve } = Promise.withResolvers<void>();
+      deliveryWaiters.push({ target: queued, resolve });
+      return promise;
     },
   };
 };
