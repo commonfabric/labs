@@ -1,8 +1,8 @@
 # cf-harness Current State
 
 Status: current implementation reference\
-Last verified: 2026-09-22\
-Revision: `7827662012`
+Last verified: 2026-09-25\
+Revision: `65989f0111`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -75,7 +75,9 @@ The current package provides:
 - machine-readable capability discovery with `--describe-capabilities`;
 - persistent provider configuration and structured config/auth control, with
   durable bounded Codex refresh health;
-- workspace, Fabric, and explicit host mounts with path containment;
+- workspace and explicit host mounts with path containment, plus read-only
+  Fabric projections; an explicit writable Fabric request is refused before
+  Docker starts;
 - sandboxed shell, file, image, web-fetch, skills, edit/write, and delegation
   tools;
 - children through `default`, `browser`, `web_fetch`, `web_search`, and
