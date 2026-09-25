@@ -7,8 +7,10 @@ describe("CFHoverReveal", () => {
     expect(customElements.get("cf-hover-reveal")).toBe(CFHoverReveal);
   });
 
-  it("starts with its actions not forced into view", () => {
-    const element = new CFHoverReveal();
-    expect(element.revealed).toBe(false);
+  describe("constructor()", () => {
+    it("starts with its actions not forced into view", () => {
+      const element = new CFHoverReveal();
+      expect(element.revealed).toBe(false);
+    });
   });
 });

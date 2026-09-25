@@ -155,6 +155,22 @@ export default pattern(() => {
     myProfile: aliceProfile,
     reactions,
   } as CommitReactInput);
+  // The same reactions, chosen from a picker that is open.
+  const openPicker = Writable.of(true);
+  const pendingCatsFirstFromPicker = commitReact({
+    emoji: "😺",
+    message: messages.key(0),
+    myProfile: pendingProfile,
+    reactions,
+    pickerOpen: openPicker,
+  } as CommitReactInput);
+  const aliceCriesSecondFromPicker = commitReact({
+    emoji: "😿",
+    message: messages.key(1),
+    myProfile: aliceProfile,
+    reactions,
+    pickerOpen: openPicker,
+  } as CommitReactInput);
   const pendingCatsFirst = commitReact({
     emoji: "😺",
     message: messages.key(0),
@@ -203,6 +219,12 @@ export default pattern(() => {
   const assert_reaction_without_profile_refused = assert(() =>
     storedIn(reactions).length === 4
   );
+  const assert_refusal_leaves_picker_open = assert(() =>
+    storedIn(reactions).length === 4 && openPicker.get() === true
+  );
+  const assert_reaction_closes_picker = assert(() =>
+    storedIn(reactions).length === 5 && openPicker.get() === false
+  );
   const assert_picker_starts_closed = assert(() =>
     pickerButtonCount(aliceSeesFirst[UI]) === 0
   );
@@ -242,6 +264,10 @@ export default pattern(() => {
       { assertion: assert_unoffered_emoji_refused },
       { action: pendingCatsFirst, trustedUi: reactGesture },
       { assertion: assert_reaction_without_profile_refused },
+      { action: pendingCatsFirstFromPicker, trustedUi: reactGesture },
+      { assertion: assert_refusal_leaves_picker_open },
+      { action: aliceCriesSecondFromPicker, trustedUi: reactGesture },
+      { assertion: assert_reaction_closes_picker },
       { assertion: assert_picker_starts_closed },
       { action: action_toggle_picker },
       { assertion: assert_picker_offers_every_cat },

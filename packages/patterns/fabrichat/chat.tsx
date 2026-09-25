@@ -110,7 +110,9 @@ export interface FabriChatReaction {
   emoji: string;
 }
 
-/** A stored reaction: written only by `commitReact`, labeled with its reactor. */
+/**
+ * A stored reaction: written only by `commitReact`, labeled with its reactor.
+ */
 export type SentReaction = AuthoredByCurrentUser<
   TrustedActionWrite<
     FabriChatReaction,
@@ -247,20 +249,18 @@ export const reactionKeyFor = (
  */
 export const reactionTallies = (
   reactions: readonly FabriChatReaction[],
-  message: unknown,
-  viewer: unknown,
+  message: MessageCell | FabriChatMessage | undefined,
+  viewer: ProfileCell | undefined,
 ): ReactionTally[] =>
   FABRICHAT_REACJI.map((emoji) => {
     const onThis = reactions.filter((reaction) =>
-      reaction?.emoji === emoji && equals(reaction.message, message as object)
+      reaction?.emoji === emoji && equals(reaction.message, message)
     );
     return {
       emoji,
       count: onThis.length,
       mine: viewer !== undefined &&
-        onThis.some((reaction) =>
-          equals(reaction.reactorProfile, viewer as object)
-        ),
+        onThis.some((reaction) => equals(reaction.reactorProfile, viewer)),
     };
   }).filter((tally) => tally.count > 0);
 
@@ -277,10 +277,12 @@ const clearReaction = (reactions: ReactionsCell, key: string): void => {
 };
 
 /**
- * Adds the viewer's `emoji` reaction to `message`, or removes it when the viewer
- * already has it there. It refuses an emoji not on offer, and it refuses to
- * react before the viewer's profile is known. It also closes the picker the
- * reaction was chosen from, when there is one.
+ * Adds the viewer's `emoji` reaction to `message`, or removes it when the
+ * viewer already has it there, and closes the picker the reaction was chosen
+ * from, when there is one. It refuses an emoji not on offer, and it refuses to
+ * react before the viewer's profile is known, leaving the picker open. The
+ * profile can reach the handler later than it reaches the viewer's page, as
+ * `commitSend` describes, and a click the handler refuses is spent.
  */
 export const commitReact = handler<
   unknown,
@@ -293,7 +295,6 @@ export const commitReact = handler<
     pickerOpen?: Writable<boolean>;
   }
 >((_event, { emoji, message, myProfile, reactions, pickerOpen }) => {
-  pickerOpen?.set(false);
   if (!(FABRICHAT_REACJI as readonly string[]).includes(emoji)) return;
   const reactor = myProfile?.resolveAsCell();
   const target = message.resolveAsCell();
@@ -301,6 +302,7 @@ export const commitReact = handler<
   const key = reactionKeyFor(reactor, target, emoji);
   if (key === undefined) return;
 
+  pickerOpen?.set(false);
   const mine = reactions.elementById(key);
   if (mine.get() !== undefined) {
     reactions.removeByValue(mine);

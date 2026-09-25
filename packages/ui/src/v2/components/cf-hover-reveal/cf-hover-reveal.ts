@@ -6,9 +6,9 @@ import { BaseElement } from "../../core/base-element.ts";
  * it or focus is inside it, as a chat message shows its reaction button.
  *
  * The actions stay laid out and focusable while hidden, so revealing them
- * never moves the content and a keyboard can still reach them. Setting `revealed` keeps them shown, for instance while a picker
- * they opened is still open. On a device that cannot hover, they are always
- * shown.
+ * never moves the content and a keyboard can still reach them. Setting
+ * `revealed` keeps them shown, for instance while a picker they opened is
+ * still open. On a device that cannot hover, they are always shown.
  *
  * @element cf-hover-reveal
  *

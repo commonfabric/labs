@@ -670,11 +670,11 @@ no state.
 ```tsx
 // Shown inside a pattern body.
 const pickerOpen = new Writable.perSession(false);
-const openPicker = action(() => pickerOpen.set(!pickerOpen.get()));
+const togglePicker = action(() => pickerOpen.set(!pickerOpen.get()));
 
 <cf-hover-reveal revealed={pickerOpen}>
   <cf-text>Lunch at noon?</cf-text>
-  <cf-button slot="actions" size="sm" onClick={openPicker}>
+  <cf-button slot="actions" size="sm" onClick={togglePicker}>
     React
   </cf-button>
 </cf-hover-reveal>

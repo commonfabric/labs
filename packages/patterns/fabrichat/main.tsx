@@ -4,8 +4,9 @@
  * it.
  *
  * This is the room from `chat.tsx`, given the viewer's real profile. The
- * messages and their reactions are shared by everyone in the space. A viewer with no profile can
- * read the conversation, and is offered the form that creates one.
+ * messages and their reactions are shared by everyone in the space. A viewer
+ * with no profile can read the conversation, and is offered the form that
+ * creates one.
  */
 import {
   computed,
