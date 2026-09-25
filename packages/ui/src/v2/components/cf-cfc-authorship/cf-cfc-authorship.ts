@@ -1,6 +1,7 @@
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
 import {
   authorPrincipalCandidates,
+  PRINCIPAL_CLAIM_KINDS,
   principalClaimSubject,
 } from "@commonfabric/runner/cfc/represents-principal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
@@ -313,15 +314,16 @@ const principalAuthorClaim = (
  * Whether `atom` says its value was written by the author `author` claims:
  * `atom` is a claim of `kind` in the one spelling a reader accepts
  * (`principalClaimSubject`), and its subject is one of the claim's author ids.
- * For the principal claim kinds the runtime refuses a pattern-authored claim
- * in any other spelling, so reading one here would trust what a pattern could
- * have written.
+ * Only a kind in `PRINCIPAL_CLAIM_KINDS` can match: the runtime refuses a
+ * pattern-authored claim of those kinds in any spelling that names someone
+ * else, and guards no other kind, so an atom of any other kind proves nothing.
  */
 export const integrityAtomMatchesAuthor = (
   atom: unknown,
   author: unknown,
   kind: string = DEFAULT_AUTHORSHIP_KIND,
 ): boolean => {
+  if (!PRINCIPAL_CLAIM_KINDS.has(kind)) return false;
   const subject = principalClaimSubject(atom, kind);
   return subject !== undefined && authorIdsForClaim(author).includes(subject);
 };
@@ -387,7 +389,8 @@ export const authorshipStateForLabel = (
  *   integrity verification.
  * @prop {"ok"|"blocked"} textIntegrityState - Renderer-reported descendant text
  *   integrity state.
- * @attr {string} kind - Integrity object kind; defaults to `authored-by`.
+ * @attr {string} kind - Integrity object kind, `authored-by` (the default) or
+ *   `represents-principal`; any other kind never verifies.
  */
 export class CFCFCAuthorship extends BaseElement {
   static override styles = [

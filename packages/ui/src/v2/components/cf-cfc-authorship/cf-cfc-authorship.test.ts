@@ -946,6 +946,26 @@ describe("CFCFCAuthorship integrity matching", () => {
     )).toBe(false);
   });
 
+  it("matches no kind the runtime does not guard", () => {
+    // A pattern sets `kind` and may write any atom of a kind outside the
+    // principal claims, so such an atom proves nothing about its author.
+    const view = {
+      version: 1 as const,
+      entries: [{
+        path: [],
+        label: { integrity: [{ kind: "x-auth", subject: "alice" }] },
+      }],
+    };
+    expect(integrityAtomMatchesAuthor(
+      { kind: "x-auth", subject: "alice" },
+      "alice",
+      "x-auth",
+    )).toBe(false);
+    expect(authorshipStateForLabel(view, "alice", "x-auth")).not.toBe(
+      "verified",
+    );
+  });
+
   it("matches no string atom and no author field but the subject", () => {
     // The runtime refuses a pattern-authored claim spelled any other way, so
     // these are claims nothing checked.

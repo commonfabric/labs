@@ -1186,4 +1186,7 @@ different policy, and avoid cell-backed `$author` for purely decorative author
 names.
 
 The component itself checks its value's `authored-by` against the same
-principal, and marks the content verified when they match.
+principal, and marks the content verified when they match. Both checks read an
+atom only in the form the runtime writes it, the object `{ kind, subject }`
+with the subject exactly as written; the `authored-by:<subject>` string form
+and other fields of the atom are not read.
