@@ -144,6 +144,13 @@ export type VisitResult<PlusType, ResultType> =
  */
 export type VisitedResult<ResultType> = BaselineVisitorMethodResult<ResultType>;
 
+/**
+ * Possible results from `visiting*()` calls (container iteration pre-visit
+ * methods).
+ */
+export type VisitingResult<ResultType> = BaselineVisitorMethodResult<ResultType>;
+
+
 //
 // Visitor interface
 //
@@ -243,24 +250,6 @@ export interface ValueVisitor<
   ): VisitedResult<ResultType>;
 
   /**
-   * Indicates that an array gap (one or more holes) was just nominally visited.
-   * This method is called as a result of the visitor returning a `recurse`
-   * result for a visited array and is called during iteration as gaps are
-   * encountered. The sequencing of this call is meant to mirror
-   * `visitedFabricArrayElement()`, but since there is nothing to recurse on
-   * (it's a gap, not any actual values), there is no regular `visitValue()`
-   * call which immediately precedes it (hence the visit was "nominal"). `start`
-   * is the start index of the gap (integer `>= 0`), and `count` is the number
-   * of holes in the gap (integer `>= 1`). This method is called as a result of
-   * the visitor returning a `recurse` result for a visited array.
-   */
-  visitedFabricArrayGap(
-    array: FabricArrayPlus<PlusType>,
-    start: number,
-    count: number,
-  ): VisitedResult<ResultType>;
-
-  /**
    * Indicates that the instance state of a `FabricInstance` was just visited.
    * This method is called as a result of the visitor returning a `recurse`
    * result for a visited `FabricInstance` and is called _after_ the instance's
@@ -282,4 +271,59 @@ export interface ValueVisitor<
     key: string,
     value: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType>;
+
+  /**
+   * Indicates that an array element is about to be visited. This method is
+   * called as a result of the visitor returning a `recurse` result for a
+   * visited array, and it is called _just before_ `visitValue()` is called on
+   * the element itself.
+   */
+  visitingFabricArrayElement(
+    array: FabricArrayPlus<PlusType>,
+    index: number,
+    value: FabricValuePlus<PlusType>,
+  ): VisitingResult<ResultType>;
+
+  /**
+   * Indicates that an array gap (one or more holes) is about to be nominally
+   * visited. This method is called as a result of the visitor returning a
+   * `recurse` result for a visited array, and it is called during iteration as
+   * gaps are encountered. The sequencing of this call is meant to mirror
+   * `visitingFabricArrayElement()`, but since there is nothing to recurse on
+   * (it's a gap, not any actual values), there is no regular `visitValue()`
+   * call which immediately follows it, nor is there a post-visit `visited*()`
+   * call (hence the visit was "nominal"). `start` is the start index of the gap
+   * (integer `>= 0`), and `count` is the number of holes in the gap (integer
+   * `>= 1`). This method is called as a result of the visitor returning a
+   * `recurse` result for a visited array.
+   */
+  visitingFabricArrayGap(
+    array: FabricArrayPlus<PlusType>,
+    start: number,
+    count: number,
+  ): VisitingResult<ResultType>;
+
+  /**
+   * Indicates that the instance state of a `FabricInstance` is about to be
+   * visited. This method is called as a result of the visitor returning a
+   * `recurse` result for a visited `FabricInstance`, and it is called _just
+   * before_ `visitValue()` is called on the instance state itself.
+   */
+  visitingFabricInstanceState(
+    instance: FabricInstancePlus<PlusType>,
+    state: FabricValuePlus<PlusType>,
+  ): VisitingResult<ResultType>;
+
+  /**
+   * Indicates that `FabricPlainObject` entry is about to be visited. This
+   * method is called as a result of the visitor returning a `recurse` result
+   * for a visited `FabricPlainObject`, and it is called _just before_
+   * `visitValue()` is called on the key and/or value of the entry (as indicated
+   * by the `recurse` result that caused iteration to happen).
+   */
+  visitingFabricPlainObjectEntry(
+    container: FabricPlainObjectPlus<PlusType>,
+    key: string,
+    value: FabricValuePlus<PlusType>,
+  ): VisitingResult<ResultType>;
 }

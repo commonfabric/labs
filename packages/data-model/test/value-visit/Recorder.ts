@@ -20,6 +20,7 @@ import type {
 import {
   DefaultValueVisitor,
   type VisitedResult,
+  type VisitingResult,
   type VisitResult,
 } from "@/value-visit";
 
@@ -96,6 +97,22 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     key: unknown,
     value: unknown,
   ) => VisitedResult<unknown>;
+  onVisitingFabricArrayElement?: (
+    index: number,
+    value: unknown,
+  ) => VisitingResult<unknown>;
+  onVisitingFabricArrayGap?: (
+    start: number,
+    count: number,
+  ) => VisitingResult<unknown>;
+  onVisitingFabricInstanceState?: (
+    instance: FabricInstancePlus<unknown>,
+    state: unknown,
+  ) => VisitingResult<unknown>;
+  onVisitingFabricPlainObjectMapping?: (
+    key: unknown,
+    value: unknown,
+  ) => VisitingResult<unknown>;
 
   /** The names of the recorded calls, in order. */
   get names(): string[] {
@@ -182,26 +199,17 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     index: number,
     value: unknown,
   ): VisitedResult<unknown> {
-    this.events.push(["visitedElement", array, index, value]);
+    this.events.push(["visitedFabricArrayElement", array, index, value]);
     return this.onVisitedElement
       ? this.onVisitedElement(index, value)
       : undefined;
-  }
-
-  override visitedFabricArrayGap(
-    array: FabricArrayPlus<unknown>,
-    start: number,
-    count: number,
-  ): VisitedResult<unknown> {
-    this.events.push(["visitedGap", array, start, count]);
-    return this.onVisitedGap ? this.onVisitedGap(start, count) : undefined;
   }
 
   override visitedFabricInstanceState(
     instance: FabricInstancePlus<unknown>,
     state: unknown,
   ): VisitedResult<unknown> {
-    this.events.push(["visitedInstance", instance, state]);
+    this.events.push(["visitedFabricInstanceState", instance, state]);
     return this.onVisitedInstance
       ? this.onVisitedInstance(instance, state)
       : undefined;
@@ -215,6 +223,47 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     this.events.push(["visitedFabricPlainObjectEntry", container, key, value]);
     return this.onVisitedMapping
       ? this.onVisitedMapping(key, value)
+      : undefined;
+  }
+
+  override visitingFabricArrayElement(
+    array: FabricArrayPlus<unknown>,
+    index: number,
+    value: unknown,
+  ): VisitedResult<unknown> {
+    this.events.push(["visitingFabricArrayElement", array, index, value]);
+    return this.onVisitingFabricArrayElement
+      ? this.onVisitingFabricArrayElement(index, value)
+      : undefined;
+  }
+
+  override visitingFabricArrayGap(
+    array: FabricArrayPlus<unknown>,
+    start: number,
+    count: number,
+  ): VisitedResult<unknown> {
+    this.events.push(["visitingFabricArrayGap", array, start, count]);
+    return this.onVisitedGap ? this.onVisitedGap(start, count) : undefined;
+  }
+
+  override visitingFabricInstanceState(
+    instance: FabricInstancePlus<unknown>,
+    state: unknown,
+  ): VisitedResult<unknown> {
+    this.events.push(["visitingFabricInstanceState", instance, state]);
+    return this.onVisitingFabricInstanceState
+      ? this.onVisitingFabricInstanceState(instance, state)
+      : undefined;
+  }
+
+  override visitingFabricPlainObjectEntry(
+    container: FabricPlainObjectPlus<unknown>,
+    key: unknown,
+    value: unknown,
+  ): VisitedResult<unknown> {
+    this.events.push(["visitingFabricPlainObjectEntry", container, key, value]);
+    return this.onVisitingFabricPlainObjectMapping
+      ? this.onVisitingFabricPlainObjectMapping(key, value)
       : undefined;
   }
 }

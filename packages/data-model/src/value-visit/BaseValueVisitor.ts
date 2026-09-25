@@ -11,6 +11,7 @@ import { debugStr } from "@/value-debug";
 import {
   ValueVisitor,
   type VisitedResult,
+  type VisitingResult,
   type VisitResult,
 } from "./interface.ts";
 
@@ -41,13 +42,6 @@ export abstract class BaseValueVisitor<
   ): VisitedResult<ResultType>;
 
   /** @inheritDoc */
-  abstract visitedFabricArrayGap(
-    array: FabricArrayPlus<PlusType>,
-    start: number,
-    count: number,
-  ): VisitedResult<ResultType>;
-
-  /** @inheritDoc */
   abstract visitedFabricInstanceState(
     instance: FabricInstancePlus<PlusType>,
     state: FabricValuePlus<ResultType>,
@@ -59,6 +53,33 @@ export abstract class BaseValueVisitor<
     key: string,
     value: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType>;
+
+  /** @inheritDoc */
+  abstract visitingFabricArrayElement(
+    array: FabricArrayPlus<PlusType>,
+    index: number,
+    value: FabricValuePlus<PlusType>,
+  ): VisitingResult<ResultType>;
+
+  /** @inheritDoc */
+  abstract visitingFabricArrayGap(
+    array: FabricArrayPlus<PlusType>,
+    start: number,
+    count: number,
+  ): VisitingResult<ResultType>;
+
+  /** @inheritDoc */
+  abstract visitingFabricInstanceState(
+    instance: FabricInstancePlus<PlusType>,
+    state: FabricValuePlus<PlusType>,
+  ): VisitingResult<ResultType>;
+
+  /** @inheritDoc */
+  abstract visitingFabricPlainObjectEntry(
+    container: FabricPlainObjectPlus<PlusType>,
+    key: string,
+    value: FabricValuePlus<PlusType>,
+  ): VisitingResult<ResultType>;
 
   //
   // Instance methods

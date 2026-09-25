@@ -318,7 +318,7 @@ export class VisitInProgress<
 
         if (idxNumber !== (lastIdx + 1)) {
           // There's a gap just before this element.
-          const result = vis.visitedFabricArrayGap(
+          const result = vis.visitingFabricArrayGap(
             array,
             lastIdx + 1,
             idxNumber - lastIdx - 1,
@@ -366,7 +366,7 @@ export class VisitInProgress<
 
       if (array.length !== (lastIdx + 1)) {
         // There's a gap at the end of the array.
-        const result = vis.visitedFabricArrayGap(
+        const result = vis.visitingFabricArrayGap(
           array,
           lastIdx + 1,
           array.length - lastIdx - 1,

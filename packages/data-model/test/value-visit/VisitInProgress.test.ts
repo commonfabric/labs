@@ -305,9 +305,9 @@ describe("VisitInProgress", () => {
           expect(rec.names).not.toContain("visitedFabricPlainObjectEntry");
         });
 
-        it("ends the visit from `visitedFabricArrayGap()`, for a gap before an element", () => {
+        it("ends the visit from `visitingFabricArrayGap()`, for a gap before an element", () => {
           const rec = new Recorder();
-          rec.onVisitedGap = () => mainResult("gap");
+          rec.onVisitingFabricArrayGap = () => mainResult("gap");
 
           // deno-lint-ignore no-sparse-arrays
           expect(visit([, 1], rec)).toBe("gap");
