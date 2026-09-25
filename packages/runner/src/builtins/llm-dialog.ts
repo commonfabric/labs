@@ -199,13 +199,7 @@ type SerializeForLLMObservationParams = {
 
 function normalizeInputSchema(schemaLike: unknown): JSONSchema {
   let inputSchema: any = schemaLike;
-  if (isBoolean(inputSchema)) {
-    inputSchema = {
-      type: "object",
-      properties: {},
-      additionalProperties: inputSchema,
-    };
-  }
+  if (isBoolean(inputSchema)) inputSchema = objectSchemaOfBoolean(inputSchema);
   if (!isObjectNotArray(inputSchema)) inputSchema = { type: "object" };
   const stripped = stripInjectedResult(inputSchema);
   return prepareSchemaForLLM(stripped);
@@ -331,11 +325,25 @@ function resolveRefsForLLM(
 }
 
 /**
- * Prepare a schema for use in LLM tool definitions by:
- * 1. Stripping internal `asCell` markers and removing cycles
- * 2. Inlining all $ref references
+ * The object form of a boolean schema: an object that declares no properties
+ * and allows any others (`true`) or none (`false`). The LLM routes take a
+ * schema only as an object.
+ */
+function objectSchemaOfBoolean(schema: boolean): JSONSchema {
+  return { type: "object", properties: {}, additionalProperties: schema };
+}
+
+/**
+ * Prepare a schema for an LLM request, as a tool's input or as the shape of a
+ * generated object, by:
+ * 1. Writing a `true` schema in its object form (`objectSchemaOfBoolean`). A
+ *    `false` schema stays as written: its object form would accept `{}`, where
+ *    `false` accepts nothing, so the LLM routes refuse the request instead
+ * 2. Stripping internal `asCell` markers and removing cycles
+ * 3. Inlining all $ref references
  */
 function prepareSchemaForLLM(schema: JSONSchema): JSONSchema {
+  if (schema === true) return objectSchemaOfBoolean(schema);
   if (!isObjectOrArray(schema)) return schema;
   const sanitized = sanitizeSchemaForLinks(schema);
   return resolveRefsForLLM(sanitized);
