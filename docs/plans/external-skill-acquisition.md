@@ -290,8 +290,8 @@ Checked in code, that is wrong in a way worth stating precisely, because it
 changes what this plan has to build.
 
 **The labeling half exists.** `packages/runner/src/cfc/external-ingest.ts`
-mints an `ExternalIngest` provenance mark on a durably-written value.
-`CFC_ATOM_TYPE.ExternalIngest` is classified as `provenance` in
+mints a digest-bound `ExternalIngest` admission claim on a durably-written
+value. `CFC_ATOM_TYPE.ExternalIngest` is classified as `value-bound` in
 `atom-classes.ts`. The design is a **split-mint**: every field of the mark
 comes from the trusted operator-side helper and none from the presenter's
 payload, "which is what makes the mark honest: the mint derives only from this

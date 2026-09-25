@@ -73,6 +73,20 @@ export const LABEL_FIELD_CLASSIFICATION:
     // "Caveat.source, nested caveat sources → commitment — consumed by
     // equality-shaped evidence binding; the audit's named leak."
     entry({ type: CFC_ATOM_TYPE.Caveat }, ["source"], "commitment"),
+    // Source addresses and connector-account identifiers cross space as
+    // commitments. Policy matching consumes them by equality and does not
+    // dereference the persisted copy.
+    entry({ type: CFC_ATOM_TYPE.Origin }, ["uri"], "commitment"),
+    entry(
+      { type: CFC_ATOM_TYPE.ConnectorObserved },
+      ["connection"],
+      "commitment",
+    ),
+    entry(
+      { type: CFC_ATOM_TYPE.NetworkProvenance },
+      ["host"],
+      "commitment",
+    ),
     // "User.subject / PersonalSpace.owner in confidentiality clauses →
     // commitment — gating is pure equality against the acting reader."
     entry({ type: CFC_ATOM_TYPE.User }, ["subject"], "commitment"),
