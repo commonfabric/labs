@@ -59,6 +59,28 @@ const DOUBLED_SCHEMA = {
   required: ["doubled"],
 } as const satisfies JSONSchema;
 
+/** A piece whose one derived value is a network request's response. */
+const FETCHER_SOURCE = `
+import { fetchText, pattern } from "commonfabric";
+export default pattern<{ url: string }, { fetched: any }>(
+  ({ url }) => ({ fetched: fetchText({ url }) }),
+);
+`;
+
+/** The result schema a reader demands the fetching piece under. */
+const FETCHED_SCHEMA = {
+  type: "object",
+  properties: {
+    fetched: {
+      type: "object",
+      properties: {
+        pending: { type: "boolean" },
+        result: { type: "string" },
+      },
+    },
+  },
+} as const satisfies JSONSchema;
+
 /** How many pieces the space runs. */
 const PIECES = 3;
 
@@ -661,6 +683,55 @@ describe("parked-runtime", () => {
       });
       await revisit();
       expect(built).toHaveLength(2);
+    });
+
+    it("is not kept when its tenure parks with an effect still in flight", async () => {
+      const url = "https://example.test/parked-runtime-fetch";
+      const request = Promise.withResolvers<Response>();
+      const issued = Promise.withResolvers<void>();
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (input, init) => {
+        const requested = input instanceof Request ? input.url : String(input);
+        if (!requested.startsWith(url)) return originalFetch(input, init);
+        issued.resolve();
+        return request.promise;
+      };
+      try {
+        host = newHost({});
+        const writer = newClient();
+        try {
+          const pattern = await writer.patternManager.compilePattern({
+            main: "/main.tsx",
+            files: [{ name: "/main.tsx", contents: FETCHER_SOURCE }],
+          }, { space });
+          await writer.patternManager.flushCompileCacheWrites();
+          const tx = writer.edit();
+          const argument = writer.getCell<{ url: string }>(space, "fetch-in");
+          argument.withTx(tx).set({ url });
+          writer.run(
+            tx,
+            pattern,
+            argument,
+            writer.getCell(space, "fetch-out"),
+          );
+          expect((await tx.commit()).error).toBeUndefined();
+        } finally {
+          await closeClient(writer);
+        }
+        const reader = newClient();
+        await reader.getCell(space, "fetch-out", FETCHED_SCHEMA).sync();
+        await issued.promise;
+        await closeClient(reader);
+        await parkedIdle();
+
+        expect(host.stats().parkedRuntimes).toMatchObject({
+          retained: 0,
+          held: 0,
+        });
+      } finally {
+        request.resolve(new Response("late payload"));
+        globalThis.fetch = originalFetch;
+      }
     });
   });
 

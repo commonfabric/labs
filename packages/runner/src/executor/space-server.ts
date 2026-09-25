@@ -6759,6 +6759,15 @@ export class SpaceServer implements TransactionSealDestination {
     this.#currentWave = undefined;
     await this.#sealChain;
     wave?.abandon(`parked: ${reason}`);
+    // An effect this tenure admitted and has not retired is tied to the
+    // outbox closed below. A held dispatch is dropped there, and only a
+    // fresh runtime's memo re-miss fires it again; a dispatched one
+    // completes after the close, and a successor would commit that
+    // completion without the identity carriage this outbox holds for it.
+    const effectsSettled = (this.#outbox?.inflightCount ?? 0) === 0 &&
+      [...this.#pendingEffectsByWave.values()].every((batches) =>
+        batches.length === 0
+      );
     // Stage G: an abandoned wave's deferred effects are DISCARDED with
     // it — the runtime below is disposed, so this is the
     // crash-equivalent path §4/§6 already cover (the effect re-misses
@@ -6800,11 +6809,13 @@ export class SpaceServer implements TransactionSealDestination {
       ]);
     }
     // A runtime whose observers did not all detach still reports into this
-    // tenure, and one whose open wave was just abandoned holds runs its
-    // scheduler counts as done whose writes never committed; either is
+    // tenure, one whose open wave was just abandoned holds runs its
+    // scheduler counts as done whose writes never committed, and one with
+    // effects unsettled holds work only a fresh runtime recovers; each is
     // disposed rather than offered on.
     if (
-      !(offerRuntime && detached && wave === undefined && this.#offerRuntime())
+      !(offerRuntime && detached && wave === undefined && effectsSettled &&
+        this.#offerRuntime())
     ) {
       try {
         await this.#disposeRuntimeTimeboxed(reason);

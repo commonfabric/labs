@@ -189,8 +189,11 @@ docs before activation.
 **Parking.** A park releases the lease and stops the loop. A park for a
 lost lease, a failed loop, a failed initialization or a closing host
 disposes the runtime. An IDLE park (§3's "on idle") that abandoned no
-open wave offers it to the host instead, which keeps it for the space's
-next tenure — for `SpaceServerPolicy.parkedRuntimeRetentionMs` (default
+open wave and left no effect unretired in its outbox (§4: an effect
+dispatched or held when the park closes the outbox is recovered by a
+fresh runtime's memo re-miss, and its completion carries identity only
+that outbox holds) offers it to the host instead, which keeps it for the
+space's next tenure — for `SpaceServerPolicy.parkedRuntimeRetentionMs` (default
 10 minutes; `SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS` in the
 toolshed bootstrap, where the literal `0` disposes at every park), and
 at most `maxParkedRuntimes` (default 8) across the host, the
