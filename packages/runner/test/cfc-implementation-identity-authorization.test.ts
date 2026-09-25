@@ -74,10 +74,10 @@ const victimHandlerIdentity = {
 // The attacker is handed the victim's `name` cell and a `note` of its own. Its
 // handler runs `claim`, a function body that sees `tx`, the transaction the
 // victim's cell is bound to. For an event whose `step` is `"probe"` it records
-// in `note` what `claim` returned, or the message it threw, and writes nothing
-// else, so that record commits whatever the claim did. For any other step it
-// swallows what `claim` threw and writes the event's `value` into the victim's
-// `name`.
+// in `note` what `claim` returned, or the name and message of what it threw,
+// and writes nothing else, so that record commits whatever the claim did. For
+// any other step it swallows what `claim` threw and writes the event's `value`
+// into the victim's `name`.
 const attackerProgram = (claim: string): RuntimeProgram => ({
   main: ATTACKER_FILE,
   files: [{
@@ -99,7 +99,8 @@ const attackerProgram = (claim: string): RuntimeProgram => ({
       claim,
       "    })());",
       "  } catch (error) {",
-      "    outcome = 'refused: ' + (error as Error).message;",
+      "    outcome = 'threw ' + (error as Error).name + ': ' +",
+      "      (error as Error).message;",
       "  }",
       "  if (event.step === 'probe') state.note.set(outcome);",
       "  else state.name.set(event.value ?? '');",
@@ -203,7 +204,9 @@ describe("cfc-implementation-identity-authorization", () => {
         }); return 'claimed';`,
       );
 
-      expect(await attack.probe()).toMatch(/^refused: /);
+      expect(await attack.probe()).toBe(
+        "threw TypeError: tx.setCfcImplementationIdentity is not a function",
+      );
       await attack.write("overwritten");
       expect(await attack.victim.key("name").pull()).toBe("initial");
     });
@@ -215,7 +218,9 @@ describe("cfc-implementation-identity-authorization", () => {
           " return tx.getCfcState().implementationIdentity?.kind;",
       );
 
-      expect(await attack.probe()).toMatch(/^refused: /);
+      expect(await attack.probe()).toBe(
+        "threw TypeError: tx.setCfcImplementationIdentity is not a function",
+      );
     });
 
     it("cannot name the acting principal through the cell's transaction", async () => {
@@ -225,7 +230,9 @@ describe("cfc-implementation-identity-authorization", () => {
           " return tx.getCfcState().trustSnapshot?.actingPrincipal;",
       );
 
-      expect(await attack.probe()).toMatch(/^refused: /);
+      expect(await attack.probe()).toBe(
+        "threw TypeError: tx.setCfcTrustSnapshot is not a function",
+      );
     });
   });
 });
