@@ -1539,7 +1539,7 @@ export const runPatternTool: HarnessToolDefinition<
     const releaseGateRejects =
       pieces.runtime.cfcEnforcementMode !== "disabled" &&
       pieces.runtime.cfcEnforcementMode !== "observe";
-    let sinkDecision: CfcSinkDecision | undefined;
+    let sinkDecision!: CfcSinkDecision;
     let attributionTraces: readonly CfcDereferenceTrace[] = [];
     let rawValue: unknown;
     const measureRelease = async () => {
@@ -1593,10 +1593,6 @@ export const runPatternTool: HarnessToolDefinition<
       stopPiece(piece.getCell());
       return cancelledOutput();
     }
-    if (sinkDecision === undefined) {
-      throw new Error("run_pattern release measurement produced no decision");
-    }
-
     // The measurement is read HERE, before the exits below, because every
     // one of them is an exit the boundary already decided at: a run whose
     // result fails to settle after the fit still had the fit performed, and a
