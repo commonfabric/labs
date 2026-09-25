@@ -1,6 +1,7 @@
 export type {
   CfcLabelView,
   CfcLabelViewEntry,
+  CfcLabelViewSource,
   CfcLabelViewStatus,
   ResolvedLabelReadOptions,
 } from "./label-view.ts";
@@ -38,6 +39,7 @@ export {
   cfcLabelViewForResolvedCell,
   cfcLabelViewForResolvedCellWithStatus,
   cfcLabelViewFromMetadata,
+  cfcLabelViewSourceForCell,
   cfcLabelViewSymbol,
   cloneCfcLabelView,
   getCarriedCfcLabelView,
@@ -144,7 +146,10 @@ export {
 export type { CfcConfClause, CfcOrClause } from "./clause.ts";
 export {
   type CfcModulePolicyLoader,
+  type CfcModulePolicySource,
+  createRuntimeCfcModulePolicySource,
   createTxCfcModulePolicyResolver,
+  type RenderModulePolicyResolver,
 } from "./policy-resolver.ts";
 export {
   clauseAlternatives,
@@ -168,7 +173,10 @@ export type {
   PolicyRecord,
   PolicySnapshot,
 } from "./policy.ts";
-export { buildCfcPolicySnapshot } from "./policy.ts";
+export {
+  buildCfcPolicyArtifactManifest,
+  buildCfcPolicySnapshot,
+} from "./policy.ts";
 export {
   MATERIAL_RISK_DISCHARGE_KINDS,
   MATERIAL_RISK_DISCHARGE_POLICY,
@@ -226,9 +234,10 @@ export type {
 } from "./render-ceiling.ts";
 export {
   createRenderConfidentialityResolver,
+  membershipSpacesInConfidentiality,
+  modulePolicyRefsInConfidentiality,
   RENDER_DISPLAY_SINK_CLASS,
   RENDER_SINK_NAME,
-  spaceAtomIdsInConfidentiality,
   STANDARD_RENDER_EXCHANGE_RULES,
 } from "./render-ceiling.ts";
 export type { SpaceMembershipProvider, SpaceRole } from "./space-membership.ts";

@@ -1,7 +1,7 @@
 /**
  * FabriChat in a browser, with real profiles: two people each create one
  * through the form FabriChat offers, send, and see each other's messages marked
- * as verified.
+ * as verified. One of them reacts to the other's message, and both see it.
  */
 import { debugStr } from "@commonfabric/data-model";
 import { env, Page, waitForCondition } from "@commonfabric/integration";
@@ -15,6 +15,7 @@ import {
   PiecesController,
 } from "./pieces-controller.ts";
 import {
+  clickCfButton,
   clickTrustedAction,
   fillCfInput,
   waitForRuntimeIdle,
@@ -24,9 +25,14 @@ import {
 const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
 
 // Trusted action names: the runtime's profile create form, and FabriChat's
-// send (`fabrichat/chat.tsx`).
+// send and reaction (`fabrichat/chat.tsx`).
 const PROFILE_CREATE_ACTION = "CreateProfile";
 const SEND_ACTION = "FabriChatSend";
+const REACT_ACTION = "FabriChatReact";
+
+// The control on each message that opens its reaction picker. The first one
+// enabled is on the oldest message.
+const ADD_REACTION = 'cf-button[aria-label="Add reaction"]';
 
 /** What one rendered message's authorship element reports. */
 interface AuthorshipReport {
@@ -85,7 +91,7 @@ describe("fabrichat integration test", () => {
     await cc?.dispose();
   });
 
-  it("lets each person join with their own profile and send", async () => {
+  it("lets each person join with their own profile, send, and react", async () => {
     const page = shell.page();
 
     await shell.goto({
@@ -109,6 +115,19 @@ describe("fabrichat integration test", () => {
     await waitForText(page, "#fabrichat-messages", "Grace Hopper");
     await waitForVerified(page, "Hi Ada, Grace here");
     await waitForVerified(page, "Hello from Ada");
+
+    // With the picker open on Ada's message, and no reactions yet, the first
+    // reaction control on the page is the picker's first cat.
+    await clickCfButton(page, ADD_REACTION);
+    await clickTrustedAction(page, REACT_ACTION);
+    await waitForText(page, "#fabrichat-messages", "😺 1");
+
+    await shell.goto({
+      frontendUrl: FRONTEND_URL,
+      view: { spaceName: SPACE_NAME, pieceId },
+      identity: firstIdentity,
+    });
+    await waitForText(page, "#fabrichat-messages", "😺 1");
   });
 });
 

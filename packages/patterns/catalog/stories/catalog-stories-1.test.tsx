@@ -36,6 +36,7 @@ import FieldStory from "./cf-field-story.tsx";
 import GridStory from "./cf-grid-story.tsx";
 import HeadingStory from "./cf-heading-story.tsx";
 import HgroupStory from "./cf-hgroup-story.tsx";
+import HoverRevealStory from "./cf-hover-reveal-story.tsx";
 import HscrollStory from "./cf-hscroll-story.tsx";
 import HstackStory from "./cf-hstack-story.tsx";
 import InputStory from "./cf-input-story.tsx";
@@ -68,6 +69,7 @@ export default pattern(() => {
   const gridStory = GridStory({});
   const headingStory = HeadingStory({});
   const hgroupStory = HgroupStory({});
+  const hoverRevealStory = HoverRevealStory({});
   const hscrollStory = HscrollStory({});
   const hstackStory = HstackStory({});
   const inputStory = InputStory({});
@@ -140,6 +142,10 @@ export default pattern(() => {
   const assert_cf_hgroup_story = assert(() =>
     hgroupStory[NAME] === "cf-hgroup Story" && hgroupStory[UI] != null
   );
+  const assert_cf_hover_reveal_story = assert(() =>
+    hoverRevealStory[NAME] === "cf-hover-reveal Story" &&
+    hoverRevealStory[UI] != null
+  );
   const assert_cf_hscroll_story = assert(() =>
     hscrollStory[NAME] === "cf-hscroll Story" && hscrollStory[UI] != null
   );
@@ -199,6 +205,7 @@ export default pattern(() => {
       { assertion: assert_cf_grid_story },
       { assertion: assert_cf_heading_story },
       { assertion: assert_cf_hgroup_story },
+      { assertion: assert_cf_hover_reveal_story },
       { assertion: assert_cf_hscroll_story },
       { assertion: assert_cf_hstack_story },
       { assertion: assert_cf_input_story },

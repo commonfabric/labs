@@ -2,7 +2,7 @@
   "name": "@commonfabric/agents-debug-view",
   "tasks": {
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../../../tasks/run-member-tests.ts deno-test",
-    "deno-test": "deno test --shuffle=$(deno task -q test-seed) -A --import-map ../../../patterns/test-import-map.json --ignore='**/*.test.tsx' ."
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) -A --ignore='**/*.test.tsx' ."
   },
   "exports": "./main.tsx"
 }

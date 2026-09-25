@@ -19,7 +19,10 @@ import type {
   OperationFieldSnapshot,
 } from "@commonfabric/memory/v2";
 import type { MetaField } from "@commonfabric/runner";
-import type { CfcConfClause } from "@commonfabric/runner/cfc";
+import type {
+  CfcConfClause,
+  CfcTrustConfigInput,
+} from "@commonfabric/runner/cfc";
 import type { CfcLabelView } from "@commonfabric/runner/cfc/label-view-core";
 import type {
   ActionRunTraceEntry,
@@ -178,6 +181,15 @@ export enum RequestType {
 
   /** Discards an unconfirmed snapshot owned by this client. */
   SnapshotShareCancel = "snapshotShare:cancel",
+
+  /** Prepares a custody seal and its terms for trusted host confirmation. */
+  CustodySealPrepare = "custodySeal:prepare",
+
+  /** Commits one client-owned custody seal confirmation. */
+  CustodySealCommit = "custodySeal:commit",
+
+  /** Discards an unconfirmed custody seal owned by this client. */
+  CustodySealCancel = "custodySeal:cancel",
 
   /** Lists the operation codecs available for a cell. */
   OperationCapabilities = "operation:capabilities",
@@ -824,6 +836,18 @@ export type InitializationData = {
   cfcReadOnExceed?: "fail" | "skip";
 
   /**
+   * The deployment trust configuration the worker's runtime evaluates concept
+   * guards under (`RuntimeOptions.cfcTrustConfig`): trust statements, verifier
+   * delegations and concept edges, such as a default profile's statement that
+   * a reviewed policy digest is a trusted declassifier. The runtime validates
+   * it at construction and refuses to start on a malformed one. It is fixed
+   * for the runtime's lifetime; a host that also declares `trustSnapshot`
+   * folds this configuration's version into that snapshot's `revision`.
+   * Absent means no statements, and every concept guard fails closed.
+   */
+  cfcTrustConfig?: CfcTrustConfigInput;
+
+  /**
    * Whether author-supplied render-boundary declassification is honored.
    * `allow` is the default. `deny` ignores an author's
    * `declassifyConfidentiality`, so that a pattern cannot release a secret
@@ -934,7 +958,10 @@ export type InitializeRequest = BaseRequest & {
  * one origin are one posture.
  *
  * **Every field here holds plain JSON-shaped values only.** They are compared
- * with `deepEqual`, which compares a class instance by its enumerable own
+ * with `deepEqual`, except `cfcTrustConfig`, which is compared by the digest
+ * the runner gives the configuration it normalizes (`buildCfcTrustConfig`), so
+ * key order and keys written as `undefined` do not refuse an attach. `deepEqual`
+ * compares a class instance by its enumerable own
  * properties -- so a `FabricValue`-carrying field would compare EQUAL between
  * two different values whose state lives in private fields, and an attach
  * asserting a different one would be accepted. A field that must carry such a
@@ -953,6 +980,7 @@ export type RuntimeSecurityContext =
     | "cfcFlowLabels"
     | "cfcReadMaxConfidentiality"
     | "cfcReadOnExceed"
+    | "cfcTrustConfig"
     | "renderDeclassificationPolicy"
     | "renderConfidentialityCeiling"
     | "trustSnapshot"
@@ -1176,6 +1204,82 @@ export type SnapshotShareCommitRequest = BaseRequest & {
 /** The {@link RequestType.SnapshotShareCancel} request. */
 export type SnapshotShareCancelRequest = BaseRequest & {
   type: RequestType.SnapshotShareCancel;
+  id: string;
+};
+
+/**
+ * The {@link RequestType.CustodySealPrepare} request: the cells a host binds
+ * the seal to. The worker reads each at the address named, and every
+ * authority the seal relies on comes from what it reads there, not from the
+ * request.
+ */
+export type CustodySealPrepareRequest = BaseRequest & {
+  type: RequestType.CustodySealPrepare;
+
+  /** The actor's draft, whose exact value is sealed. */
+  draft: CellRef;
+
+  /** The room's terms document; its space is the room space. */
+  terms: CellRef;
+
+  /** A cell holding the room's custody policy reference. */
+  policy: CellRef;
+
+  /** The actor's source policy, in the actor's home space. */
+  allowedSources: CellRef;
+};
+
+/** A principal the room space's access list lets read the room. */
+export type CustodyRoomReader = {
+  /** The principal's DID, or `*` for anyone. */
+  principal: string;
+
+  /** The capability the access list gives it. */
+  role: "owner" | "writer" | "reader";
+};
+
+/**
+ * What a trusted host shows before a custody seal: everything here was read
+ * and checked by the worker, not supplied by the caller.
+ */
+export type CustodySealPreview = {
+  /** Opaque confirmation id, good for one commit by this client. */
+  id: string;
+
+  /** The authenticated actor whose value is sealed. */
+  actor: DID;
+
+  /** The room space the value is sealed into. */
+  room: DID;
+
+  /** Who can read the room, and so see what it releases. */
+  readers: CustodyRoomReader[];
+
+  /** The terms, exactly as they are sealed. */
+  terms: JSONValue;
+
+  /** The instance: the digest of the terms. */
+  instance: string;
+
+  /** The room's custody policy. */
+  policy: CfcAtom;
+
+  /** The actor's `Context` and `Resource` sources the value draws on. */
+  sources: CfcAtom[];
+
+  /** The exact value that enters custody. */
+  stance: JSONValue;
+};
+
+/** The {@link RequestType.CustodySealCommit} request. */
+export type CustodySealCommitRequest = BaseRequest & {
+  type: RequestType.CustodySealCommit;
+  id: string;
+};
+
+/** The {@link RequestType.CustodySealCancel} request. */
+export type CustodySealCancelRequest = BaseRequest & {
+  type: RequestType.CustodySealCancel;
   id: string;
 };
 
@@ -2884,6 +2988,9 @@ export type IPCClientRequest =
   | SnapshotSharePrepareRequest
   | SnapshotShareCommitRequest
   | SnapshotShareCancelRequest
+  | CustodySealPrepareRequest
+  | CustodySealCommitRequest
+  | CustodySealCancelRequest
   | OperationCapabilitiesRequest
   | OperationQueryRequest
   | OperationApplyRequest
@@ -3538,6 +3645,7 @@ export type RemoteResponse =
   | CellResponse
   | CfcLabelViewResponse
   | SnapshotSharePreview
+  | CustodySealPreview
   | SqliteQueryResponse
   | GraphSnapshotResponse
   | LoggerCountsResponse
@@ -3761,6 +3869,18 @@ export type Commands = {
   };
   [RequestType.SnapshotShareCancel]: {
     request: SnapshotShareCancelRequest;
+    response: EmptyResponse;
+  };
+  [RequestType.CustodySealPrepare]: {
+    request: CustodySealPrepareRequest;
+    response: CustodySealPreview;
+  };
+  [RequestType.CustodySealCommit]: {
+    request: CustodySealCommitRequest;
+    response: CellResponse;
+  };
+  [RequestType.CustodySealCancel]: {
+    request: CustodySealCancelRequest;
     response: EmptyResponse;
   };
   [RequestType.OperationCapabilities]: {

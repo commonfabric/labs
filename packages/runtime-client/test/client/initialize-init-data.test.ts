@@ -115,6 +115,13 @@ describe("initialize-init-data", () => {
         cfcFlowLabels: "persist",
         cfcReadMaxConfidentiality: ["did:key:zOwner"],
         cfcReadOnExceed: "skip",
+        cfcTrustConfig: {
+          delegations: [{
+            delegator: "*",
+            verifier: "did:web:forwarding.example",
+            concepts: ["https://commonfabric.org/cfc/concepts/forwarding"],
+          }],
+        },
         renderDeclassificationPolicy: "deny",
         renderConfidentialityCeiling: { caveatKinds: ["forwarding"] },
         trustSnapshot: { id: "forwarding-snapshot" },

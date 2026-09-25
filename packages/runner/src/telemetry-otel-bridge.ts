@@ -8,9 +8,9 @@
 //
 // It depends ONLY on `@opentelemetry/api` (interface-only, side-effect free), so
 // importing it never pulls the OTel SDK into a bundle and never forces
-// `--allow-sys`. Each host (background-piece-service, toolshed, browser shell)
-// owns its SDK provider setup and passes a Tracer + Meter in. When no provider
-// is registered the API returns no-op instruments, so the bridge is inert.
+// `--allow-sys`. Each host (toolshed, browser shell) owns its SDK provider
+// setup and passes a Tracer + Meter in. When no provider is registered the API
+// returns no-op instruments, so the bridge is inert.
 //
 // Reuse across runtimes: the worker/server side exposes an EventTarget
 // (`runtime.telemetry`); the main thread / browser receives the same markers via
@@ -37,7 +37,7 @@ export interface OtelBridgeOptions {
    * Attributes stamped on every emitted span and metric — the dimensions the
    * markers themselves don't carry. Set here once at attach time from the host's
    * session/identity, e.g.:
-   *   { "user.did": principal, "space.did": space, "ct.runtime": "bg-piece" }
+   *   { "user.did": principal, "space.did": space, "ct.runtime": "server" }
    */
   attributes?: Attributes;
 

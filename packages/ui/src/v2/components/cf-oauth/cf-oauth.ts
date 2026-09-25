@@ -2,7 +2,6 @@ import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 
 import { BaseElement } from "../../core/base-element.ts";
-import { CFPiece } from "../cf-piece/index.ts";
 
 export interface OAuthData {
   accessToken?: string;
@@ -107,14 +106,8 @@ export class CFOAuth extends BaseElement {
 
     const authCellId = JSON.stringify(this.auth.ref());
 
-    const container = CFPiece.findPieceContainer(this);
-    if (!container) {
-      throw new Error("No <cf-piece> container.");
-    }
-    const { pieceId } = container;
     const payload = {
       authCellId,
-      integrationPieceId: pieceId,
       scopes: this.scopes,
     };
 

@@ -102,7 +102,6 @@ function recordingBuildDependencies(
     buildShell: record("buildShell"),
     prepareWorkspace: record("prepareWorkspace"),
     buildToolshed: record("buildToolshed"),
-    buildBgPieceService: record("buildBgPieceService"),
     buildCli: record("buildCli"),
     revertWorkspace: record("revertWorkspace"),
     ...overrides,
@@ -179,14 +178,6 @@ Deno.test("BuildConfig resolves workspace paths against the root", async () => {
     assertEquals(
       config.toolshedEntryPath(),
       join(root, "packages", "toolshed", "index.ts"),
-    );
-    assertEquals(
-      config.bgPieceServiceEntryPath(),
-      join(root, "packages", "background-piece-service", "src", "main.ts"),
-    );
-    assertEquals(
-      config.bgPieceServiceWorkerPath(),
-      join(root, "packages", "background-piece-service", "src", "worker.ts"),
     );
     assertEquals(
       config.toolshedEnvPath(),
@@ -403,7 +394,6 @@ Deno.test("each binary's modules and assets stay within BINARY_SOURCES", async (
   const roots = [
     buildBinariesScript,
     config.toolshedEntryPath(),
-    config.bgPieceServiceEntryPath(),
     config.cliEntryPath(),
     join(shell, "..", "felt", "cli.ts"),
     shellConfigPath,
@@ -500,7 +490,7 @@ Deno.test("the shell configuration reads no host variable", async () => {
 });
 
 Deno.test("requestedBinaries selects all binaries or named subsets", () => {
-  assertEquals(requestedBinaries([]), ["toolshed", "bg-piece-service", "cf"]);
+  assertEquals(requestedBinaries([]), ["toolshed", "cf"]);
   assertEquals(requestedBinaries(["toolshed"]), ["toolshed"]);
   assertEquals(requestedBinaries(["cf", "toolshed"]), ["toolshed", "cf"]);
   assertEquals(requestedBinaries(["cf", "cf"]), ["cf"]);
@@ -511,7 +501,7 @@ Deno.test("requestedBinaries rejects unknown build targets", () => {
   assertThrows(
     () => requestedBinaries(["unknown"]),
     Error,
-    'Unknown binary "unknown". Expected one or more of: toolshed, bg-piece-service, cf',
+    'Unknown binary "unknown". Expected one or more of: toolshed, cf',
   );
   assertThrows(
     () => requestedBinaries(["--cli-only", "toolshed"]),
@@ -562,7 +552,6 @@ Deno.test("BuildConfig selects named binaries and rejects conflicting options", 
     assertEquals(config.binaries, ["toolshed", "cf"]);
     assertEquals(config.cliOnly, false);
     assertEquals(config.builds("toolshed"), true);
-    assertEquals(config.builds("bg-piece-service"), false);
     assertEquals(config.builds("cf"), true);
 
     const duplicateCliConfig = new BuildConfig({
@@ -572,6 +561,7 @@ Deno.test("BuildConfig selects named binaries and rejects conflicting options", 
     });
     assertEquals(duplicateCliConfig.binaries, ["cf"]);
     assertEquals(duplicateCliConfig.cliOnly, true);
+    assertEquals(duplicateCliConfig.builds("toolshed"), false);
 
     assertThrows(
       () => new BuildConfig({ root, toolshedFlags: [], binaries: [] }),
@@ -605,15 +595,6 @@ Deno.test("build runs only the steps required by each binary", async () => {
           "buildShell",
           "prepareWorkspace",
           "buildToolshed",
-          "revertWorkspace",
-        ],
-      },
-      {
-        binaries: ["bg-piece-service"] as const,
-        expected: [
-          "ensureDistDir",
-          "prepareWorkspace",
-          "buildBgPieceService",
           "revertWorkspace",
         ],
       },
@@ -892,19 +873,17 @@ Deno.test("each build step throws naming its output when its command fails", asy
     const {
       buildShell,
       buildToolshed,
-      buildBgPieceService,
       buildCli,
     } = defaultBuildDependencies;
     const steps: [(config: BuildConfig) => Promise<void>, string][] = [
       [buildShell, "Failed to build shell app"],
       [buildToolshed, "Failed to build toolshed binary"],
-      [buildBgPieceService, "Failed to build background piece service binary"],
       [buildCli, "Failed to build CLI binary"],
     ];
     for (const [step, message] of steps) {
       await assertRejects(() => step(config), Error, message);
     }
-    for (const binary of ["toolshed", "bg-piece-service", "cf"]) {
+    for (const binary of ["toolshed", "cf"]) {
       assert(!(await exists(config.distPath(binary))), binary);
     }
   } finally {

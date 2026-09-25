@@ -11,6 +11,7 @@
 
 import {
   type AliasResolver,
+  isMainPush,
   parseReportGroups,
   type RunContext,
   type StoredReport,
@@ -314,14 +315,8 @@ export function provenance(
   if (context.ci === undefined) return undefined;
   const branch = context.branch ?? "";
   if (branch.length === 0) return undefined;
-  // A baseline is a run of code the tree itself carries: a push to the
-  // default branch that the fork flag does not mark. The flag marks a run
-  // whose head repository differs from this one, and marks a run whose
-  // payload did not name both, so neither can stand as a baseline.
-  const place =
-    context.ci.event === "push" && branch === "main" && !context.ci.fork
-      ? "main"
-      : "pr";
+  // A baseline is a run of code the tree itself carries.
+  const place = isMainPush(context) ? "main" : "pr";
   return { place, source: branch };
 }
 

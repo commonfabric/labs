@@ -794,8 +794,7 @@ inside a Claude Code session reports both.
 A service reaches this through `OTEL_SERVICE_NAME`, which it already sets to
 name itself for tracing. Every process it spawns inherits the variable, so a
 harness a service launches reports `invoker=service` and carries the service's
-own name in `service`. The local dev launcher sets the name for both toolshed
-and the background piece service.
+own name in `service`.
 
 No filesystem path and no git metadata contributes to any field. An absent field
 means the value was not there to read.

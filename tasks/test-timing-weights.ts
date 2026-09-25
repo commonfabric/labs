@@ -122,7 +122,6 @@ export const WORKSPACE_TEST_WEIGHTS: Readonly<Record<string, number>> = {
   "connectors/agents/host (3/5)": 13.8,
   "connectors/agents/host (4/5)": 12,
   "connectors/agents/host (5/5)": 11.6,
-  "background-piece-service": 7.2,
   "cf-harness": 29.9,
   "cli (1/10)": 50.5,
   "cli (2/10)": 71,
