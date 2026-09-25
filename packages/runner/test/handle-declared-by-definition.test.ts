@@ -354,6 +354,43 @@ describe("handle declared by a definition", () => {
         ).toEqual(expected);
       });
 
+      if (!lazy) {
+        it("resolves at most two references for each linked element it reads as a handle", async () => {
+          // Every handle an eager read reaches is asked whether it declares
+          // the handle at its root. One declared there is answered without
+          // resolving its reference, which the rest of the read resolves
+          // under two times per element.
+
+          const resolutions = async (count: number) => {
+            const profile = await storedProfile(`profile-${count}`, "Ada");
+            const write = runtime.edit();
+            runtime.getCell(space, `holder-${count}`, undefined, write).setRaw(
+              {
+                profiles: Array.from({ length: count }, () => profile),
+              } as never,
+            );
+            await write.commit();
+            const tx = runtime.edit();
+            tx.markLazyMaterialize(false);
+            using resolve = spy(ContextualFlowControl, "resolveSchemaRefs");
+            const holder = runtime.getCell(
+              space,
+              `holder-${count}`,
+              profileList(atReference),
+              tx,
+            );
+            expect((holder.get() as { profiles: unknown[] }).profiles.length)
+              .toBe(count);
+            tx.abort();
+            return resolve.calls.length;
+          };
+
+          const few = await resolutions(25);
+          const many = await resolutions(50);
+          expect(many - few).toBeLessThanOrEqual(2 * 25);
+        });
+      }
+
       it("reads linked array elements typed as a union of handle definitions as the reference-site union does", async () => {
         const profiles = [
           await storedProfile("first-union-profile", "Ada"),

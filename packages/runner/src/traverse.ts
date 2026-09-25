@@ -1033,9 +1033,15 @@ function declaresAsCellMemoized(schema: JSONSchemaObj): boolean {
  * handle is a handle as well (`SchemaObjectTraverser.hasAsCell()`), but which
  * option's handle turns on the value, so the union's branches are traversed
  * and their merge mints it.
+ *
+ * Every handle an eager read reaches is asked this, so a handle written at the
+ * root is answered without resolving anything, and only a root `$ref` that
+ * carries no handle of its own is read through.
  */
 function declaresHandleAtRoot(schema: JSONSchema | undefined): boolean {
-  return isObjectNotArray(schema) &&
+  if (!isObjectNotArray(schema)) return false;
+  if (ContextualFlowControl.getAsCellValues(schema).length > 0) return true;
+  return typeof schema.$ref === "string" &&
     ContextualFlowControl.getAsCellValues(resolveRootRefForStructure(schema))
         .length > 0;
 }
