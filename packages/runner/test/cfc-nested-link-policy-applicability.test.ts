@@ -60,6 +60,18 @@ const panelSchema: JSONSchema = {
   },
 };
 
+/** The same panel as a module that declares no claim on it describes it. */
+const claimlessPanelSchema: JSONSchema = {
+  type: "object",
+  properties: {
+    addedByProfile: {
+      type: "object",
+      properties: { name: { type: "string" }, avatar: { type: "string" } },
+      asCell: ["cell"],
+    },
+  },
+};
+
 /** A profile document labeled with integrity only, as a Fabric profile is. */
 const profileSchema: JSONSchema = {
   type: "object",
@@ -101,9 +113,10 @@ describe("cfc-nested-link-policy-applicability", () => {
   const plainProfile = async (
     rt: Runtime,
     space: MemorySpace,
+    id = "plain-profile",
   ): Promise<Cell<unknown>> => {
     const tx = rt.edit();
-    const profile = rt.getCell(space, "plain-profile", profileSchema, tx);
+    const profile = rt.getCell(space, id, profileSchema, tx);
     profile.set({ name: "Ada", avatar: "ada.png" });
     tx.prepareCfc();
     expect((await tx.commit()).error).toBeUndefined();
@@ -117,13 +130,14 @@ describe("cfc-nested-link-policy-applicability", () => {
   const resultProfile = async (
     rt: Runtime,
     space: MemorySpace,
+    id = "result-profile",
   ): Promise<Cell<unknown>> => {
     const tx = rt.edit();
-    const name = rt.getCell(space, "result-profile-name", undefined, tx);
+    const name = rt.getCell(space, `${id}-name`, undefined, tx);
     name.set("Ada");
-    const avatar = rt.getCell(space, "result-profile-avatar", undefined, tx);
+    const avatar = rt.getCell(space, `${id}-avatar`, undefined, tx);
     avatar.set("ada.png");
-    const profile = rt.getCell(space, "result-profile", profileSchema, tx);
+    const profile = rt.getCell(space, id, profileSchema, tx);
     profile.setRaw({
       name: name.getAsWriteRedirectLink(),
       avatar: avatar.getAsWriteRedirectLink(),
@@ -133,16 +147,20 @@ describe("cfc-nested-link-policy-applicability", () => {
     return profile;
   };
 
-  /** Writes `profile` into a fresh panel's `addedByProfile` as `identity`. */
+  /**
+   * Writes `profile` into a panel's `addedByProfile` as `identity`, through
+   * `schema` (the claim-bearing panel schema unless given).
+   */
   const writeProfile = async (
     rt: Runtime,
     identity: ImplementationIdentity,
     panelId: string,
     profile: Cell<unknown>,
+    schema: JSONSchema = panelSchema,
   ): Promise<string | undefined> => {
     const tx = rt.edit();
     tx.setCfcImplementationIdentity(identity);
-    const panel = rt.getCell(signer.did(), panelId, panelSchema, tx);
+    const panel = rt.getCell(signer.did(), panelId, schema, tx);
     panel.set({ addedByProfile: profile.withTx(tx) });
     tx.prepareCfc();
     const error = (await tx.commit()).error?.message;
@@ -167,6 +185,26 @@ describe("cfc-nested-link-policy-applicability", () => {
         const profile = await make(rt, space);
         expect(await writeProfile(rt, asForger, `forged-${kind}`, profile))
           .toMatch(/writeAuthorizedBy failed at \/addedByProfile/);
+      });
+
+      it(`refuses a ${kind} profile ${label} written over a stored claim by a module whose schema declares none`, async () => {
+        // The claim is stored by the admitting module's first write; the
+        // forger's own schema carries no claim, so only the stored one gates
+        // its write.
+        const rt = open();
+        const profile = await make(rt, space);
+        expect(await writeProfile(rt, asAdmitter, `stored-${kind}`, profile))
+          .toBeUndefined();
+        const replacement = await make(rt, space, `replacement-${kind}`);
+        expect(
+          await writeProfile(
+            rt,
+            asForger,
+            `stored-${kind}`,
+            replacement,
+            claimlessPanelSchema,
+          ),
+        ).toMatch(/writeAuthorizedBy failed at \/addedByProfile/);
       });
 
       it(`commits a ${kind} profile ${label} written by the module the claim names`, async () => {

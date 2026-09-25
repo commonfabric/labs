@@ -535,15 +535,19 @@ describe("loom-root", () => {
       panel.resolveAsCell()
     );
     expect(panels.length).toBe(profiles.length);
-    for (const [index, profile] of profiles.entries()) {
-      // Each panel links the profile it was added under, and its declared
-      // entry names whoever acted.
-      expect(
-        panels[index].key("addedByProfile").resolveAsCell().equals(profile),
-      )
-        .toBe(true);
-      expect(declaredAdders(panels[index])).toEqual([signer.did()]);
-    }
+    // Each panel links the profile it was added under, and its declared
+    // entry names whoever acted: the plain control, the profile-home profile
+    // in the Loom's space, and the one in another space, each on its own.
+    expect(
+      panels.map((panel, index) =>
+        panel.key("addedByProfile").resolveAsCell().equals(profiles[index])
+      ),
+    ).toEqual([true, true, true]);
+    expect(panels.map(declaredAdders)).toEqual([
+      [signer.did()],
+      [signer.did()],
+      [signer.did()],
+    ]);
   });
 
   it("names the actor, not the owner, when `as` names another person's profile whose fields are redirect links", async () => {
