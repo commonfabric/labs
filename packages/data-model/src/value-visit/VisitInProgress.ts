@@ -47,7 +47,8 @@ type RecurseOfForm<PlusType> = {
  */
 type MainVisitResult<PlusType, ResultType> = Exclude<
   VisitResult<PlusType, ResultType>,
-  RecurseForm | ReplaceForm<PlusType>>;
+  RecurseForm | ReplaceForm<PlusType>
+>;
 
 /**
  * State of a visit currently in progress, along with most of the visit
@@ -79,7 +80,7 @@ export class VisitInProgress<
    * Cached result of a call to `#visitor.isDomainAssignableToResultType()`, if
    * ever called.
    */
-  #isDomainAssignableToResultType: boolean | undefined  = undefined;
+  #isDomainAssignableToResultType: boolean | undefined = undefined;
 
   /**
    * Constructs an instance.
@@ -518,8 +519,8 @@ export class VisitInProgress<
     value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
   ): ResultType {
     if (this.#isDomainAssignableToResultType === undefined) {
-      this.#isDomainAssignableToResultType =
-        this.#visitor.isDomainAssignableToResultType();
+      this.#isDomainAssignableToResultType = this.#visitor
+        .isDomainAssignableToResultType();
     }
 
     if (this.#isDomainAssignableToResultType) {
