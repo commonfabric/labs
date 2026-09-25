@@ -232,75 +232,102 @@ async function readPageFields(page: Page): Promise<ShellPageProbe> {
 /**
  * Helper for {@link readShellPageProbe}, which asks the page's runtime for the
  * messages its worker has logged at `warn` or `error`. It never rejects: a
- * worker that does not answer within `budgetMs`, a runtime that refuses, and a
- * page that cannot be asked all come back as the reason.
+ * worker that does not answer within `budgetMs`, a runtime that refuses, a page
+ * that cannot be asked, and a page whose main thread stops answering all come
+ * back as the reason.
+ *
+ * The page enforces `budgetMs` itself, which it cannot do once its main thread
+ * has stopped, so the whole read is also bounded here, at that budget plus the
+ * time {@link PROBE_READ_LIMIT_MS} gives a page to answer.
  */
 async function readWorkerProblems(
   page: Page,
   budgetMs: number,
 ): Promise<Pick<ShellPageProbe, "workerProblems" | "workerProblemsError">> {
+  const pageLimitMs = budgetMs + PROBE_READ_LIMIT_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const unanswered = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(new Error(`the page did not answer within ${pageLimitMs}ms`)),
+      pageLimitMs,
+    );
+  });
   try {
-    return await page.evaluate(async (budgetMs: number) => {
-      type LogCountsByMessage = Record<
-        string,
-        number | { warn?: number; error?: number }
-      >;
-      const rt = (globalThis as typeof globalThis & {
-        commonfabric?: {
-          rt?: {
-            getLoggerCounts?: () => Promise<{
-              counts: Record<string, number | LogCountsByMessage>;
-            }>;
-          };
-        };
-      }).commonfabric?.rt;
-      let workerProblems: WorkerLogProblem[] | undefined;
-      let workerProblemsError: string | undefined;
-      if (rt?.getLoggerCounts) {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          const unanswered = new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () =>
-                reject(
-                  new Error(
-                    `the worker did not answer within ${budgetMs}ms`,
-                  ),
-                ),
-              budgetMs,
-            );
-          });
-          const { counts } = await Promise.race([
-            rt.getLoggerCounts(),
-            unanswered,
-          ]);
-          // `total` is reserved at both levels of the counts, as the sum of
-          // what sits beside it.
-          workerProblems = [];
-          for (const [logger, byMessage] of Object.entries(counts)) {
-            if (logger === "total" || typeof byMessage !== "object") continue;
-            for (const [message, levels] of Object.entries(byMessage)) {
-              if (message === "total" || typeof levels !== "object") continue;
-              const warn = levels.warn ?? 0;
-              const error = levels.error ?? 0;
-              if (warn > 0 || error > 0) {
-                workerProblems.push({ logger, message, warn, error });
-              }
-            }
-          }
-          workerProblems.sort((a, b) => b.error - a.error || b.warn - a.warn);
-        } catch (error) {
-          workerProblems = undefined;
-          workerProblemsError = String(error);
-        } finally {
-          if (timer !== undefined) clearTimeout(timer);
-        }
-      }
-      return { workerProblems, workerProblemsError };
-    }, { args: [budgetMs] });
+    return await Promise.race([
+      readWorkerProblemsInPage(page, budgetMs),
+      unanswered,
+    ]);
   } catch (error) {
     return { workerProblemsError: describeThrown(error) };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+/** Helper for {@link readWorkerProblems}, which is the read in the page. */
+async function readWorkerProblemsInPage(
+  page: Page,
+  budgetMs: number,
+): Promise<Pick<ShellPageProbe, "workerProblems" | "workerProblemsError">> {
+  return await page.evaluate(async (budgetMs: number) => {
+    type LogCountsByMessage = Record<
+      string,
+      number | { warn?: number; error?: number }
+    >;
+    const rt = (globalThis as typeof globalThis & {
+      commonfabric?: {
+        rt?: {
+          getLoggerCounts?: () => Promise<{
+            counts: Record<string, number | LogCountsByMessage>;
+          }>;
+        };
+      };
+    }).commonfabric?.rt;
+    let workerProblems: WorkerLogProblem[] | undefined;
+    let workerProblemsError: string | undefined;
+    if (rt?.getLoggerCounts) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const unanswered = new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `the worker did not answer within ${budgetMs}ms`,
+                ),
+              ),
+            budgetMs,
+          );
+        });
+        const { counts } = await Promise.race([
+          rt.getLoggerCounts(),
+          unanswered,
+        ]);
+        // `total` is reserved at both levels of the counts, as the sum of
+        // what sits beside it.
+        workerProblems = [];
+        for (const [logger, byMessage] of Object.entries(counts)) {
+          if (logger === "total" || typeof byMessage !== "object") continue;
+          for (const [message, levels] of Object.entries(byMessage)) {
+            if (message === "total" || typeof levels !== "object") continue;
+            const warn = levels.warn ?? 0;
+            const error = levels.error ?? 0;
+            if (warn > 0 || error > 0) {
+              workerProblems.push({ logger, message, warn, error });
+            }
+          }
+        }
+        workerProblems.sort((a, b) => b.error - a.error || b.warn - a.warn);
+      } catch (error) {
+        workerProblems = undefined;
+        workerProblemsError = String(error);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    }
+    return { workerProblems, workerProblemsError };
+  }, { args: [budgetMs] });
 }
 
 /**
@@ -447,8 +474,8 @@ export async function readAndDescribeShellPage(page: Page): Promise<string> {
       );
     });
     const probe = await Promise.race([readPageFields(page), unanswered]);
-    // The worker read carries its own budget, which is longer than this bound
-    // and which the page's main thread, having just answered, enforces.
+    // The worker read carries its own budget, which is longer than this bound,
+    // and bounds itself against a page that stops answering.
     const worker = probe.runtime
       ? await readWorkerProblems(page, WORKER_LOG_BUDGET_MS)
       : {};

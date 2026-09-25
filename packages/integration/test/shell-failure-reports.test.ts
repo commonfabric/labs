@@ -128,16 +128,22 @@ const LOGGING_RUNTIME_DOCUMENT = `<!DOCTYPE html>
           total: 13,
           scheduler: {
             total: 2,
-            "schedule-error": { debug: 0, info: 0, warn: 0, error: 2 },
+            "schedule-error": { debug: 0, info: 0, warn: 0, error: 2, total: 2 },
           },
           "storage.v2": {
             total: 5,
-            "sync-load-failure": { debug: 0, info: 0, warn: 1, error: 3 },
-            "quiet": { debug: 1, info: 0, warn: 0, error: 0 },
+            "sync-load-failure": {
+              debug: 0,
+              info: 0,
+              warn: 1,
+              error: 3,
+              total: 4,
+            },
+            "quiet": { debug: 1, info: 0, warn: 0, error: 0, total: 1 },
           },
           runner: {
             total: 6,
-            "action-failed": { debug: 0, info: 0, warn: 4, error: 2 },
+            "action-failed": { debug: 0, info: 0, warn: 4, error: 2, total: 6 },
           },
         },
       }),
@@ -169,6 +175,23 @@ const REFUSING_WORKER_DOCUMENT = `<!DOCTYPE html>
   globalThis.commonfabric = {
     rt: {
       getLoggerCounts: () => Promise.reject(new Error("the worker has gone")),
+    },
+  };
+</script>
+</body></html>`;
+
+// A booted shell whose page answers until it is asked for the worker's logs,
+// and then holds its main thread for good.
+const WEDGING_WORKER_READ_DOCUMENT = `<!DOCTYPE html>
+<html><head><title>Common Fabric</title></head>
+<body><x-root-view></x-root-view>
+<script>
+  globalThis.commonfabric = {
+    rt: {
+      getPendingRequests: () => [],
+      getLoggerCounts: () => {
+        while (true) { /* hold the main thread */ }
+      },
     },
   };
 </script>
@@ -230,6 +253,10 @@ function handle(request: Request): Response {
       });
     case "/wedged-worker":
       return new Response(WEDGED_WORKER_DOCUMENT, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    case "/wedging-worker-read":
+      return new Response(WEDGING_WORKER_READ_DOCUMENT, {
         headers: { "content-type": "text/html; charset=utf-8" },
       });
     case "/refusing-worker":
@@ -451,6 +478,27 @@ describe("shell-failure-reports", () => {
       const probe = await readShellPageProbe(page);
       expect(probe.workerProblems).toBeUndefined();
       expect(probe.workerProblemsError).toContain("the worker has gone");
+    });
+
+    it("returns the page it read when the page stops answering during the worker read", async () => {
+      // Its own browser, because the wedge below is permanent: the page's main
+      // thread is held for good once the worker's logs are asked for.
+      const wedged = await Browser.launch();
+      try {
+        const wedgedPage = await wedged.newPage(
+          `${origin}/wedging-worker-read`,
+        );
+        const probe = await readShellPageProbe(wedgedPage, {
+          workerBudgetMs: 100,
+        });
+        expect(probe.rootView).toBe(true);
+        expect(probe.pendingRequests).toEqual([]);
+        expect(probe.workerProblemsError).toContain(
+          "the page did not answer within 10100ms",
+        );
+      } finally {
+        await wedged.close();
+      }
     });
 
     it("returns the console messages the page retained", async () => {
