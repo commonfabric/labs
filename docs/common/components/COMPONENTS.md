@@ -124,7 +124,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-code-editor` | Code/prose editor with highlighting and `[[`-mention completion | `$value`, `$mentionable`, `$mentioned` |
 | `cf-collapsible` | Single collapsible section with trigger and content | |
 | `cf-copy-button` | Copy-to-clipboard button with visual feedback | |
-| `cf-custody-seal` | Native confirmation that seals the actor's draft into a custody room, showing the runtime-verified room, readers, seats, policy and sources beside what the terms say (see [custody seal](#cf-custody-seal)) | `$draft`, `$terms`, `$policy`, `$sources` |
+| `cf-custody-seal` | Native confirmation that seals the actor's draft into a custody room, showing the runtime-verified room, readers, seats, policy and sources beside what the terms say (see [custody seal](#cf-custody-seal)) | `$draft`, `$terms`, `$policy`, `$sources`, `$box` |
 | `cf-dot-mark` | Scatter/dot mark rendered inside `cf-chart` | `$data` |
 | `cf-drag-source` | Wraps draggable content; pairs with `cf-drop-zone` (see [drag-and-drop](../patterns/meta/drag-and-drop.md)) | `$cell` |
 | `cf-draggable` | Absolutely-positioned draggable container (x/y) | |
@@ -1133,9 +1133,20 @@ identity claims.
 `cf-custody-seal` seals the actor's draft into the custody of a room's trusted
 declassifier policy, as the [custody seal](../../specs/cfc-custody-seal.md)
 specifies. Bind `$draft` to the value to seal, `$terms` to the room's terms
-document, `$policy` to a cell holding the room's custody policy reference, and
-`$sources` to the actor's source policy: a list of the actor's own `Context`
-and `Resource` atoms in the actor's home space.
+document, `$policy` to the room's custody policy, and `$sources` to the actor's
+source policy: a list of the actor's own `Context` and `Resource` atoms in the
+actor's home space. Optionally bind `$box` to a writable cell that receives a
+link to the instance's box once the value is sealed.
+
+A room pattern needs no DID and no reference it cannot write. Its terms name
+each seat by a cell whose stored label attests one member, such as that
+member's profile, and the runtime seals the DID the cell attests. `$policy` may
+be any cell the pattern declares `PolicyOf` its custody rules: the runtime
+reads the policy from that cell's label, where the reference, its module
+identity, digest and room subject, is bound. The box `$box` receives is the one
+document the room's projector reads; reading it is label-gated like any other
+read. `packages/patterns/cfc-exchange-rules/custody-projector.tsx` is a room
+built this way.
 
 The button opens a native modal dialog. Its first part comes from what the
 runtime read and checked, not from anything the pattern renders: the room space;
@@ -1161,9 +1172,10 @@ scripted click cannot seal. Changing a binding, dismissing the dialog, or
 disconnecting the component invalidates the review, and the runtime refuses a
 seal when the draft, the terms, the room's policy, the room's readers or the
 actor's source policy changed after preparation, up to the moment the entry is
-written. When the seal commits, the component emits
-`cf-sealed` with no payload. The event carries neither the value nor the
-actor's entry in the room. A binding that changes while a commit is in flight
+written. When the seal commits, the component writes `$box` and then emits
+`cf-sealed` with `detail.instance`, the digest of the terms, which anyone who
+reads the terms can compute. The event carries neither the value nor the key
+of the actor's entry in the room. A binding that changes while a commit is in flight
 leaves the component without that event even if the seal committed, so a
 pattern that must know should read the room rather than rely on it.
 
