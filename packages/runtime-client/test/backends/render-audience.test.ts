@@ -611,5 +611,174 @@ describe("render-audience", () => {
         cancel();
       }
     });
+
+    /**
+     * A shell-configured worker rendering a note whose PolicyOf label reaches
+     * the renderer only as a view carried on the rendered cell. The note is
+     * stored unlabeled in another space; a holder document in the session
+     * space links to it and labels that link, which is where a labeling
+     * commit installs the manifest. Resolving the holder's link carries the
+     * holder's label onto the cell, as `Cell.resolveAsCell` does in
+     * production. The manifest is installed in `manifestSpace` alone.
+     */
+    async function renderCarriedPolicyNote(
+      { acting, manifestSpace }: {
+        acting?: Identity;
+        manifestSpace: "holder" | "value";
+      },
+    ): Promise<readonly string[]> {
+      const identity = await Identity.generate({ implementation: "noble" });
+      const valueSpace = (await Identity.generate({ implementation: "noble" }))
+        .did();
+      const session = await createSession({
+        identity,
+        spaceDid: identity.did(),
+      });
+      const viewer = acting ?? identity;
+      const options = createRuntimeClientOptions({
+        session,
+        apiUrl: new URL("http://localhost/"),
+        cfcRenderCeiling: true,
+        trustSnapshot: {
+          id: `principal:${viewer.did()}`,
+          actingPrincipal: viewer.did(),
+        },
+      });
+      await using runtime = createWorkerRuntime(options);
+      const seedValue = runtime.edit();
+      writeSeedEnvelopeDoc(seedValue, valueSpace);
+      const stored = runtime.getCell<WorkerRenderNode>(
+        valueSpace,
+        "Carried note",
+        undefined,
+        seedValue,
+      );
+      seedStoredEnvelope(seedValue, {
+        space: valueSpace,
+        id: stored.getAsNormalizedFullLink().id!,
+        type: "application/json",
+        path: [],
+      }, {
+        value: "Carried note",
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: { version: 1, entries: [] },
+        },
+      } as never);
+      expect((await seedValue.commit()).error).toBeUndefined();
+      const seedHolder = runtime.edit();
+      writeSeedEnvelopeDoc(seedHolder, session.space);
+      const holder = runtime.getCell<{ note: unknown }>(
+        session.space,
+        "Carried note holder",
+        undefined,
+        seedHolder,
+      );
+      seedStoredEnvelope(seedHolder, {
+        space: session.space,
+        id: holder.getAsNormalizedFullLink().id!,
+        type: "application/json",
+        path: [],
+      }, {
+        value: { note: stored.getAsLink() },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: ["note"],
+              label: {
+                confidentiality: [cfcAtom.modulePolicyRef(
+                  directReleaseManifest.manifest.moduleIdentity,
+                  directReleaseManifest.manifest.symbol,
+                  directReleaseManifest.policyDigest,
+                  session.space,
+                )],
+              },
+            }],
+          },
+        },
+      } as never);
+      expect((await seedHolder.commit()).error).toBeUndefined();
+      const install = runtime.storageManager.edit();
+      install.write({
+        space: (manifestSpace === "holder"
+          ? session.space
+          : valueSpace) as typeof session.space,
+        id: `of:cfc-policy-manifest:${directReleaseManifest.policyDigest}`,
+        type: "application/json",
+        path: ["value"],
+      }, directReleaseManifest as never);
+      expect((await install.commit()).error).toBeUndefined();
+      await runtime.storageManager.synced();
+
+      const note = holder.key("note").resolveAsCell();
+      // The carried view is what gates it: the note's own document is
+      // unlabeled, and it lives in neither the viewer's space nor the
+      // holder's.
+      expect(note.getAsNormalizedFullLink().space).toEqual(valueSpace);
+
+      const ceiling = options.renderConfidentialityCeiling;
+      const membership = renderMembershipProviderFor(
+        runtime,
+        identity,
+        ceiling,
+      );
+      const manifests = renderModulePolicySourceFor(runtime, ceiling);
+      const ops: VDomOp[] = [];
+      const reconciler = new WorkerReconciler({
+        onOps: (batch) => ops.push(...batch),
+        renderDeclassificationPolicy: options.renderDeclassificationPolicy,
+        renderConfidentialityCeiling: ceiling,
+        resolveRenderConfidentiality: renderConfidentialityResolverFor(
+          runtime,
+          identity,
+          ceiling,
+          options.spaceDid,
+          membership,
+          manifests,
+        ),
+        membershipProvider: membership,
+        modulePolicySource: manifests,
+      });
+      const cancel = reconciler.mount({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [note as never],
+      });
+      try {
+        await runtime.storageManager.synced();
+        await runtime.idle();
+        reconciler.flush();
+        return emittedText(ops);
+      } finally {
+        cancel();
+      }
+    }
+
+    it("shows the owner a PolicyOf note whose label is carried", async () => {
+      const text = await renderCarriedPolicyNote({ manifestSpace: "holder" });
+      expect(text).toContain("Carried note");
+    });
+
+    it("keeps a carried PolicyOf note sealed from a non-reader", async () => {
+      const text = await renderCarriedPolicyNote({
+        acting: await Identity.generate({ implementation: "noble" }),
+        manifestSpace: "holder",
+      });
+      expect(text).toContain("Content hidden by policy");
+      expect(text).not.toContain("Carried note");
+    });
+
+    it("keeps a carried PolicyOf note sealed with its manifest only beside the value", async () => {
+      // The value's space is where the note lives, not where the label that
+      // selects the policy was stored.
+      const text = await renderCarriedPolicyNote({ manifestSpace: "value" });
+      expect(text).toContain("Content hidden by policy");
+      expect(text).not.toContain("Carried note");
+    });
   });
 });
