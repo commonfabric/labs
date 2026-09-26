@@ -626,7 +626,8 @@ export class VisitInProgress<
           }
 
           mapResult[finalKey] = valueMappedTo;
-          anyChanges ||= !Object.is(key, finalKey) || !Object.is(value, valueMappedTo);
+          anyChanges ||= !Object.is(key, finalKey) ||
+            !Object.is(value, valueMappedTo);
         }
       }
 
@@ -768,7 +769,10 @@ export class VisitInProgress<
       }
 
       case undefined: {
-        return { type: "mapTo", value: this.#assertValidPlainObjectKey(original, original) };
+        return {
+          type: "mapTo",
+          value: this.#assertValidPlainObjectKey(original, original),
+        };
       }
 
       default: {
