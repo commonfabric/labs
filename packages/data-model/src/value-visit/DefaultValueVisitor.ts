@@ -30,7 +30,7 @@ import { debugStr } from "@/value-debug";
 import { BaseValueVisitor } from "./BaseValueVisitor.ts";
 import {
   DO_RECURSE_VALUES,
-  type VisitedResult,
+  type MappedResult,
   type VisitingResult,
   type VisitResult,
 } from "./interface.ts";
@@ -330,7 +330,7 @@ export abstract class DefaultValueVisitor<
     _array: FabricArrayPlus<PlusType>,
     _index: number,
     _value: FabricValuePlus<ResultType>,
-  ): VisitedResult<ResultType> {
+  ): MappedResult<ResultType> {
     return undefined;
   }
 
@@ -342,7 +342,7 @@ export abstract class DefaultValueVisitor<
   override mappedFabricInstanceState(
     _instance: FabricInstancePlus<PlusType>,
     _state: FabricValuePlus<ResultType>,
-  ): VisitedResult<ResultType> {
+  ): MappedResult<ResultType> {
     return undefined;
   }
 
@@ -355,7 +355,7 @@ export abstract class DefaultValueVisitor<
     _container: FabricPlainObjectPlus<PlusType>,
     _key: string,
     _value: FabricValuePlus<ResultType>,
-  ): VisitedResult<ResultType> {
+  ): MappedResult<ResultType> {
     return undefined;
   }
 

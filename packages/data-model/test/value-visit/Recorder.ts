@@ -19,7 +19,7 @@ import type {
 } from "@";
 import {
   DefaultValueVisitor,
-  type VisitedResult,
+  type MappedResult,
   type VisitingResult,
   type VisitResult,
 } from "@/value-visit";
@@ -88,15 +88,15 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
   onMappedFabricArrayElement?: (
     index: number,
     value: unknown,
-  ) => VisitedResult<unknown>;
+  ) => MappedResult<unknown>;
   onMappedFabricInstanceState?: (
     instance: FabricInstancePlus<unknown>,
     state: unknown,
-  ) => VisitedResult<unknown>;
+  ) => MappedResult<unknown>;
   onMappedFabricPlainObjectEntry?: (
     key: unknown,
     value: unknown,
-  ) => VisitedResult<unknown>;
+  ) => MappedResult<unknown>;
   onVisitingFabricArrayElement?: (
     index: number,
     value: unknown,
@@ -205,7 +205,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     array: FabricArrayPlus<unknown>,
     index: number,
     value: unknown,
-  ): VisitedResult<unknown> {
+  ): MappedResult<unknown> {
     this.events.push(["mappedFabricArrayElement", array, index, value]);
     return this.onMappedFabricArrayElement
       ? this.onMappedFabricArrayElement(index, value)
@@ -215,7 +215,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
   override mappedFabricInstanceState(
     instance: FabricInstancePlus<unknown>,
     state: unknown,
-  ): VisitedResult<unknown> {
+  ): MappedResult<unknown> {
     this.events.push(["mappedFabricInstanceState", instance, state]);
     return this.onMappedFabricInstanceState
       ? this.onMappedFabricInstanceState(instance, state)
@@ -226,7 +226,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     container: FabricPlainObjectPlus<unknown>,
     key: unknown,
     value: unknown,
-  ): VisitedResult<unknown> {
+  ): MappedResult<unknown> {
     this.events.push(["mappedFabricPlainObjectEntry", container, key, value]);
     return this.onMappedFabricPlainObjectEntry
       ? this.onMappedFabricPlainObjectEntry(key, value)
