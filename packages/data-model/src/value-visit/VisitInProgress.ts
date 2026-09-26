@@ -805,7 +805,7 @@ export class VisitInProgress<
     visitResult: MainVisitResult<PlusType, ResultType>,
   ): MainResultForm<ResultType> | MapToForm<string> | undefined {
     if (!this.#doMap) {
-      return undefined;
+      return (visitResult?.type === "mainResult") ? visitResult : undefined;
     }
 
     switch (visitResult?.type) {
@@ -835,16 +835,17 @@ export class VisitInProgress<
 
   /**
    * Converts a `#visitValue()` result from a `recurse`-induced sub-value
-   * iteration as appropriate, based on the `#doMap` mode. Specifically, this
-   * always returns a `mapTo` result when mapping (furthermore validating the
-   * result as necessary), and always returns `undefined` when _not_ mapping.
+   * iteration as appropriate, based on the `#doMap` mode. Specifically, a
+   * `mainResult` is always returned as-is. Other than that, this always returns
+   * a `mapTo` result when mapping (furthermore validating the result as
+   * necessary), and always returns `undefined` when _not_ mapping.
    */
   #handleMappingAsAppropriate(
     original: FabricValuePlus<PlusType>,
     visitResult: MainVisitResult<PlusType, ResultType>,
   ): MainVisitResult<PlusType, ResultType> {
     if (!this.#doMap) {
-      return undefined;
+      return (visitResult?.type === "mainResult") ? visitResult : undefined;
     }
 
     switch (visitResult?.type) {
