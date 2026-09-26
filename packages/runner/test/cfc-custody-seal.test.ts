@@ -500,14 +500,20 @@ describe("cfc-custody-seal", () => {
         const { box } = await fixture.seal(alice, {
           ratings: ["yes", "no", "maybe"],
         });
-        await fixture.seal(bob, { ratings: ["no", "no", "yes"] });
+        const { entryKey } = await fixture.seal(bob, {
+          ratings: ["no", "no", "yes"],
+        });
         const reader = fixture.runtimes.get(carol)!;
         const local = reader.getCellFromLink(box.getAsNormalizedFullLink());
         await local.sync();
         const valueEntries = storedEntries(reader, local).filter((entry) =>
           entry.origin === "derived" && entry.observes === "value"
         );
-        expect(valueEntries.map((entry) => entry.path.at(-1))).toContain("2");
+        // The seal sets the entry whole, array included, so its stamp is at
+        // the entry and covers each element.
+        expect(valueEntries.map((entry) => entry.path.join("/"))).toContain(
+          entryKey,
+        );
         for (const entry of valueEntries) {
           expect(entry.label.integrity).toContainEqual(sealedBy);
         }
