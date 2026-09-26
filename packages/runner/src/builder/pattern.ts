@@ -57,6 +57,7 @@ import { reactive } from "./reactive.ts";
 import {
   type CellAliasResolver,
   moduleToEncodableForm,
+  moduleWithAliasBindings,
   patternToEncodableForm,
   withAliasBindings,
 } from "./to-encodable-form.ts";
@@ -587,14 +588,17 @@ function factoryFromPattern<T, R>(
   const resultSchema = resultSchemaArg ?? {};
 
   const serializedNodes = Array.from(allNodes).map((node) => {
-    // A module is not an execution value (its `implementation` may be a plain
-    // function), so the walk's result is asserted back to one; see the note at
-    // the end of `withAliasBindings()`.
-    const module = withAliasBindings(
-      node.module,
-      resolveCellAlias,
-      false,
-    ) as unknown as Module;
+    // A module binds through its members. A node whose module is a pattern or
+    // a reactive (the dynamic-module arm, which no builder makes yet) binds it
+    // as the value it is, which the serialized `Node.module` type does not yet
+    // say (see the TODO on `Node`).
+    const module = isModule(node.module)
+      ? moduleWithAliasBindings(node.module, resolveCellAlias, false)
+      : withAliasBindings(
+        node.module,
+        resolveCellAlias,
+        false,
+      ) as unknown as Module;
     const inputs = withAliasBindings(
       node.inputs,
       resolveCellAlias,

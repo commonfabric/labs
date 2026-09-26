@@ -14,6 +14,7 @@ import {
   type FabricExecFunction,
   type FabricExecPlainObject,
   type FabricExecValue,
+  isModule,
   isPattern,
   type Module,
   type Pattern,
@@ -208,67 +209,205 @@ export function withAliasBindings(
     }
   }
 
-  // If this is an object or a pattern, process each key recursively.
+  // If this is an object or a pattern, process each key recursively. A
+  // pattern's `nodes` are bound node by node, each node's module as a module;
+  // see `nodesWithAliasBindings()`.
   if (isObjectOrArray(value) || isPattern(value)) {
     // Guard against circular object references (e.g. schema objects with
     // shared identity between $defs and sibling properties).
-    if (!seen) seen = new WeakMap();
-    // Circularity is keyed on object identity, and the conversion above is
-    // the only thing that could hand back a different one -- which it does
-    // only for a leaf, and every leaf returns or is refused on the spot. So a
-    // value reaching this walk still carries the identity it arrived under,
-    // and marking that one identity catches every cycle back to it.
-    const depth = seen.get(value as object) ?? 0;
-    if (depth > 0) return {}; // Actually circular
-    seen.set(value as object, depth + 1);
+    const seenMap = seen ?? new WeakMap();
 
     // If this is a pattern, serialize it through the INTERNAL graph
     // serializer (its toJSON under the internal-serialization context): this
     // function builds the in-memory node representation, so embedded
     // sub-pattern graphs must stay bare — no boundary `$patternRef`.
-    const valueToProcess: Readonly<Record<string, unknown>> =
+    const isGraph = isPattern(value);
+    const record: Readonly<Record<string, unknown>> =
       (isPattern(value) && hasEncodableForm(value))
         ? serializePatternGraph(value)
         : (value as Readonly<Record<string, unknown>>);
 
-    const result: Record<string, FabricExecValue> = {};
-    for (const key in valueToProcess) {
-      const boundValue = withAliasBindings(
-        valueToProcess[key],
-        resolveCellAlias,
-        ignoreSelfAliases,
-        [...path, key],
-        seen,
-      );
-      if (boundValue !== undefined) {
-        result[key] = boundValue;
-      }
-    }
-
-    // Restore depth so shared references can be re-serialized
-    seen.set(value as object, depth);
-
-    // Register the copy's derivation link so trust and the content-addressed
-    // entry ref carry to the serialized copy (side table; symbol keys would be
-    // dropped by JSON anyway).
-    if (isPattern(value)) noteDerivedCopy(result, value);
-
-    return result;
+    return recordWithAliasBindings(
+      value,
+      record,
+      seenMap,
+      (key, member) =>
+        (isGraph && key === "nodes")
+          ? nodesWithAliasBindings(
+            member,
+            resolveCellAlias,
+            ignoreSelfAliases,
+            [...path, key],
+            seenMap,
+          )
+          : withAliasBindings(
+            member,
+            resolveCellAlias,
+            ignoreSelfAliases,
+            [...path, key],
+            seenMap,
+          ),
+    );
   }
 
   // What remains is a leaf that is not an object: a primitive or a function.
   if (isPrimitive(value)) return value;
 
-  // A function stands as itself. It is a builder artifact, or a member of a
-  // module this walk is rebuilding key by key: a JavaScript module's
-  // `implementation`, or an artifact's own serializers. That second kind is
-  // not an execution value, which this cast does not show, and which is why
-  // `pattern.ts` asserts a walked module back to a `Module`.
-  //
-  // TODO(danfuzz): bind a module, and a pattern graph's nodes, through their
-  // declared members rather than as records, at which point a function reaching
-  // here is always an artifact and neither assertion is needed.
+  // The only function an execution graph holds is a builder artifact, which
+  // stands as itself. A module's own functions (a JavaScript module's
+  // `implementation`, an artifact's serializers) never reach here, a module
+  // being bound through its members by `moduleWithAliasBindings()`; so any
+  // other function has no place in the graph, and is refused here rather than
+  // carried to wherever it would fail with less to say about where it came
+  // from.
+  if (!hasEncodableForm(value)) {
+    throw new Error(
+      "Cannot bind a function that is not a builder artifact into a pattern",
+    );
+  }
   return value as FabricExecFunction;
+}
+
+/**
+ * Binds a module's aliases through what a module is, rather than as a record.
+ *
+ * A module is not an execution value: among its declared members are functions
+ * that are not builder artifacts -- a JavaScript module's `implementation`, and
+ * an artifact's own serializers. So it is rebuilt member by member. Such a
+ * function stands as it is, and every other member is bound as the execution
+ * value it is. A function that is a pattern (a pattern module's
+ * `implementation` is the pattern's factory) is one of the latter, and is
+ * serialized to its graph as a pattern is anywhere else in the walk.
+ */
+export function moduleWithAliasBindings(
+  module: Module,
+  resolveCellAlias?: CellAliasResolver,
+  ignoreSelfAliases: boolean = false,
+  path: readonly PropertyKey[] = [],
+  seen: WeakMap<object, number> = new WeakMap(),
+): Module {
+  // A module is read by key here, which its declared type does not offer.
+  const members = module as unknown as Readonly<Record<string, unknown>>;
+  const result = recordWithAliasBindings(
+    module,
+    members,
+    seen,
+    (key, member) =>
+      ((typeof member === "function") && !isPattern(member))
+        ? member
+        : withAliasBindings(
+          member,
+          resolveCellAlias,
+          ignoreSelfAliases,
+          [...path, key],
+          seen,
+        ),
+  );
+
+  // Rebuilt key by key from a module, each member either standing as it was
+  // or bound as the value it was, so the result has the module's shape.
+  return result as unknown as Module;
+}
+
+/**
+ * Binds a pattern graph's `nodes`: each node is a record whose `module` is a
+ * module, bound by `moduleWithAliasBindings()`, and whose other members are
+ * execution values.
+ *
+ * What is only asserted by position is checked before it is relied on: a
+ * `nodes` that is not an inert array, a node that is not an inert plain object,
+ * and a `module` that `isModule()` does not accept are each walked as the
+ * value they are, as they were before a graph's nodes had a walk of their own.
+ */
+function nodesWithAliasBindings(
+  nodes: unknown,
+  resolveCellAlias: CellAliasResolver | undefined,
+  ignoreSelfAliases: boolean,
+  path: readonly PropertyKey[],
+  seen: WeakMap<object, number>,
+): FabricExecValue {
+  if (!isInertArray(nodes)) {
+    return withAliasBindings(
+      nodes,
+      resolveCellAlias,
+      ignoreSelfAliases,
+      path,
+      seen,
+    );
+  }
+
+  return nodes.map((node, i) => {
+    const nodePath = [...path, i];
+    if (!isInertPlainObject(node)) {
+      return withAliasBindings(
+        node,
+        resolveCellAlias,
+        ignoreSelfAliases,
+        nodePath,
+        seen,
+      );
+    }
+    return recordWithAliasBindings(
+      node,
+      node,
+      seen,
+      (key, member) =>
+        ((key === "module") && isModule(member))
+          ? moduleWithAliasBindings(
+            member,
+            resolveCellAlias,
+            ignoreSelfAliases,
+            [...nodePath, key],
+            seen,
+          )
+          : withAliasBindings(
+            member,
+            resolveCellAlias,
+            ignoreSelfAliases,
+            [...nodePath, key],
+            seen,
+          ),
+    );
+  });
+}
+
+/**
+ * Helper for the binding walks, which rebuilds a record key by key through
+ * `bindMember`, dropping a member that binds to `undefined`.
+ *
+ * `original` is what circularity is keyed on, and what a pattern's derivation
+ * link is carried from: the record walked may be a pattern's serialized graph
+ * rather than the pattern itself. A record reached again while it is being
+ * rebuilt is a cycle, and binds to `{}`; one reached again afterward is shared
+ * structure, and is rebuilt at each site.
+ */
+function recordWithAliasBindings<Member>(
+  original: object,
+  record: Readonly<Record<string, unknown>>,
+  seen: WeakMap<object, number>,
+  bindMember: (key: string, member: unknown) => Member,
+): Record<string, Member> {
+  const depth = seen.get(original) ?? 0;
+  if (depth > 0) return {}; // Actually circular
+  seen.set(original, depth + 1);
+
+  const result: Record<string, Member> = {};
+  for (const key in record) {
+    const bound = bindMember(key, record[key]);
+    if (bound !== undefined) {
+      result[key] = bound;
+    }
+  }
+
+  // Restore depth so shared references can be re-serialized
+  seen.set(original, depth);
+
+  // Register the copy's derivation link so trust and the content-addressed
+  // entry ref carry to the serialized copy (side table; symbol keys would be
+  // dropped by JSON anyway).
+  if (isPattern(original)) noteDerivedCopy(result, original);
+
+  return result;
 }
 
 export function moduleToEncodableForm(module: Module): FabricExecPlainObject {
