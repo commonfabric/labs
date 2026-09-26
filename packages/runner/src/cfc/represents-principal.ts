@@ -129,11 +129,55 @@ export const representsPrincipalSubjects = (
  */
 export const authorPrincipalCandidates = (
   view: CfcLabelView | undefined,
-): string[] =>
-  view === undefined ? [] : [
-    ...new Set(
-      representsPrincipalSubjects(
-        view.entries.filter((entry) => entry.path.length <= 1),
-      ),
-    ),
-  ];
+): string[] => [
+  ...new Set(representsPrincipalSubjects(principalClaimEntries(view))),
+];
+
+/**
+ * The entries of `view` a principal claim is read from: those at the root and
+ * on top-level fields, where a profile's owner-protected fields carry their
+ * owner's atom. Entries deeper down come from documents the value links, and
+ * so does an entry a link carries from the document it points to (`observes`
+ * of `followRef`): it says whom that document represents, not whom the one
+ * holding the link does.
+ */
+export const principalClaimEntries = (
+  view: CfcLabelView | undefined,
+): CfcLabelView["entries"] =>
+  view === undefined
+    ? []
+    : view.entries.filter((entry) =>
+      entry.path.length <= 1 && entry.observes !== "followRef"
+    );
+
+/**
+ * The principals `view` attests in exactly the form a runtime mints, read
+ * from the entries {@link principalClaimEntries} names, or `undefined` when
+ * any atom there names a principal in another form. A runtime binds a
+ * `{ kind, subject }` atom's subject to its acting principal and refuses a
+ * literal DID only in that form, so the string form, a padded subject, or an
+ * atom with another key may have been written by someone other than the
+ * principal it names. A caller that must know who wrote the attestation,
+ * rather than whom a claim is about, refuses those.
+ */
+export const exactPrincipalAttestations = (
+  view: CfcLabelView | undefined,
+): string[] | undefined => {
+  const principals = new Set<string>();
+  for (const entry of principalClaimEntries(view)) {
+    for (const atom of entry.label.integrity ?? []) {
+      const spelling = principalClaimSpelling(atom);
+      if (spelling === undefined) continue;
+      // Any string-form claim is refused: no reader counts one, and the
+      // write check refuses a pattern writing one.
+      if (spelling === "string") return undefined;
+      if ((atom as { kind?: unknown }).kind !== REPRESENTS_PRINCIPAL) continue;
+      const subject = representsPrincipalSubject(atom);
+      if (subject === undefined || Object.keys(atom as object).length !== 2) {
+        return undefined;
+      }
+      principals.add(subject);
+    }
+  }
+  return [...principals];
+};
