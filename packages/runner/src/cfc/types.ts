@@ -724,7 +724,10 @@ export type PreparedDigestInput = {
    * keep its digest. Absent when empty, so a transaction that recorded none
    * keeps the established prepared-digest spelling.
    */
-  readonly assertedValueRoots?: CfcTxState["assertedValueRoots"];
+  readonly assertedValueRoots?: readonly {
+    readonly address: CfcAddress;
+    readonly identity: ImplementationIdentity | undefined;
+  }[];
 
   /**
    * List-coordinator containers whose membership preparation re-stamps

@@ -593,28 +593,27 @@ export const canonicalizePreparedDigestInput = (
       input.assertedValueRoots.length > 0
     ? {
       assertedValueRoots: [...input.assertedValueRoots]
-        .map((root) => ({
-          address: canonicalizeAttemptedWrite(root.address),
-          identity: root.identity,
-        }))
-        .map((root) => ({
-          ...root,
-          identityHash: hashStringOf(root.identity ?? null),
-        }))
+        .map((root) => {
+          const canonical = {
+            address: canonicalizeAttemptedWrite(root.address),
+            identity: root.identity,
+          };
+          // The whole canonical record's hash, so two roots compare equal only
+          // when they are the same root.
+          return { ...canonical, recordHash: hashStringOf(canonical) };
+        })
         .sort((left, right) =>
           compareAddress(left.address, right.address) ||
-          (left.identityHash < right.identityHash
+          (left.recordHash < right.recordHash
             ? -1
-            : left.identityHash > right.identityHash
+            : left.recordHash > right.recordHash
             ? 1
             : 0)
         )
         // A root recorded twice stamps once (`assertedValueRootPaths` keeps
         // the first of each path), so a repeat is not digest content.
         .filter((root, index, sorted) =>
-          index === 0 ||
-          compareAddress(root.address, sorted[index - 1].address) !== 0 ||
-          root.identityHash !== sorted[index - 1].identityHash
+          index === 0 || root.recordHash !== sorted[index - 1].recordHash
         )
         .map(({ address, identity }) => ({ address, identity })),
     }

@@ -180,6 +180,15 @@ describe("prepared digest transaction binding", () => {
     expect(digest([{ path: [], by: "commit" }])).not.toBe(atA);
     expect(digest([{ path: ["a"], by: "other" }])).not.toBe(atA);
     expect(digest([{ path: ["a"], by: "commit" }])).toBe(atA);
+    // The roots are a set: recording order is not digest content.
+    const two = digest([
+      { path: ["a"], by: "commit" },
+      { path: [], by: "commit" },
+    ]);
+    expect(
+      digest([{ path: [], by: "commit" }, { path: ["a"], by: "commit" }]),
+    ).toBe(two);
+    expect(two).not.toBe(atA);
     // Recorded twice, a root stamps once, and the digest says the same.
     expect(
       digest([{ path: ["a"], by: "commit" }, { path: ["a"], by: "commit" }]),
