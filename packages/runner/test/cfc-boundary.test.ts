@@ -62,6 +62,10 @@ import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
 import { refuseAtCommitBoundary } from "./refused-commit.ts";
 import type { FabricValue } from "@commonfabric/data-model";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-boundary-tests");
 
@@ -1479,12 +1483,12 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       cell.set({ secret: "value" });
 
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "snapshot-a",
         actingPrincipal: signer.did(),
       });
       tx.prepareCfc();
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "snapshot-b",
         actingPrincipal: signer.did(),
       });
@@ -1522,12 +1526,12 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       cell.set({ secret: "value" });
 
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "builtin:a",
       });
       tx.prepareCfc();
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "builtin:b",
       });
@@ -5859,11 +5863,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "trust-snapshot-1",
         actingPrincipal: signer.did(),
       });
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "module-hash-1",
         sourceFile: "/main.tsx",
@@ -5908,11 +5912,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "trust-snapshot-current-profile",
         actingPrincipal: signer.did(),
       });
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "module-hash-1",
         sourceFile: "/trusted.tsx",
@@ -6008,11 +6012,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "trust-snapshot-current-message",
         actingPrincipal: signer.did(),
       });
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "module-hash-1",
         sourceFile: "/trusted.tsx",
@@ -6108,7 +6112,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "trust-snapshot-current-missing-write",
         actingPrincipal: signer.did(),
       });
@@ -6155,10 +6159,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot(
+      setCfcTrustSnapshot(
+        tx,
         {
           actingPrincipal: signer.did(),
-        } as unknown as Parameters<typeof tx.setCfcTrustSnapshot>[0],
+        } as unknown as Parameters<typeof setCfcTrustSnapshot>[1],
       );
 
       const cell = runtime.getCell(
@@ -6209,7 +6214,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "trust-snapshot-current-missing-acting-principal",
       });
 
@@ -6261,11 +6266,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "trust-snapshot-current-missing-ui",
         actingPrincipal: signer.did(),
       });
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "module-hash-1",
         sourceFile: "/trusted.tsx",
@@ -6316,11 +6321,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "trust-snapshot-current-literal-did",
         actingPrincipal: signer.did(),
       });
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "module-hash-1",
         sourceFile: "/trusted.tsx",
@@ -6397,11 +6402,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "trust-snapshot-1",
         actingPrincipal: signer.did(),
       });
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "module-hash-1",
         sourceFile: "/main.tsx",

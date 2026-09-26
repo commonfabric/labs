@@ -161,7 +161,11 @@ import { isSchemaMismatchError } from "./schema-view.ts";
 import { rendererVDOMSchema } from "./schemas.ts";
 import { combineOptionalSchema } from "./traverse.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
-import { TransactionWrapper } from "./storage/extended-storage-transaction.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+  TransactionWrapper,
+} from "./storage/extended-storage-transaction.ts";
 import { getTransactionReadActivities } from "./storage/transaction-inspection.ts";
 import {
   type CommitError,
@@ -7532,7 +7536,7 @@ export class Runner {
             ...(options?.directCommit === true ? { directCommit: true } : {}),
           });
           if (options?.cfcTrustSnapshot !== undefined) {
-            tx.setCfcTrustSnapshot(options.cfcTrustSnapshot);
+            setCfcTrustSnapshot(tx, options.cfcTrustSnapshot);
           }
           assertExpectedPatternIdentity(resultCell.withTx(tx));
           return this.#setupInternal(
@@ -10707,7 +10711,7 @@ export class Runner {
         policyFacingIdentity,
       );
       if (policyFacingIdentity) {
-        tx.setCfcImplementationIdentity(policyFacingIdentity);
+        setCfcImplementationIdentity(tx, policyFacingIdentity);
       }
       // The principal invoked this handler, so the values the run initializes
       // — the protected defaults of a piece it creates among them — are theirs
@@ -11030,7 +11034,7 @@ export class Runner {
       );
       (action as Action & { lastFrame?: Frame }).lastFrame = frame;
       if (policyFacingIdentity) {
-        tx.setCfcImplementationIdentity(policyFacingIdentity);
+        setCfcImplementationIdentity(tx, policyFacingIdentity);
       }
 
       const handleErrorOutput = (error: unknown) => {
@@ -11739,7 +11743,7 @@ export class Runner {
 
     const builtinIdentity = resolveBuiltinImplementationIdentity(module);
     if (builtinIdentity) {
-      tx.setCfcImplementationIdentity(builtinIdentity);
+      setCfcImplementationIdentity(tx, builtinIdentity);
     }
 
     const builtinFrame = builtinIdentity

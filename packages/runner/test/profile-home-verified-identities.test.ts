@@ -10,6 +10,7 @@ import { cfcLabelViewForCell } from "../src/cfc/mod.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase(
   "profile-home-verified-identities",
@@ -89,7 +90,7 @@ describe("profile-home verified external identities", () => {
       // Loom's verifier writes the assertion as a builtin, the only author
       // the runtime lets mint the verified-identity atom.
       const assertionTx = runtime.edit();
-      assertionTx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(assertionTx, {
         kind: "builtin",
         builtinId: "loom-verified-identity-publisher",
       });

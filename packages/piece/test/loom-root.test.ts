@@ -17,6 +17,10 @@ import {
   readStoredCfcMetadata,
 } from "@commonfabric/runner/cfc";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "@commonfabric/runner/cfc/trust-authority";
 
 const signer = await Identity.fromPassphrase("loom-root-contract");
 const foreignSigner = await Identity.fromPassphrase("loom-root-foreign");
@@ -114,8 +118,8 @@ const writeOwnedProfile = async (
       properties: { name: ownerProtected({ type: "string" }, owner) },
     };
   const tx = runtime.edit();
-  tx.setCfcTrustSnapshot({ id: `trust-${owner}`, actingPrincipal: owner });
-  tx.setCfcImplementationIdentity({
+  setCfcTrustSnapshot(tx, { id: `trust-${owner}`, actingPrincipal: owner });
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: PROFILE_WRITER,
   });
@@ -158,8 +162,8 @@ const writeOwnedString = async (
   owner: string,
 ): Promise<Cell<unknown>> => {
   const tx = runtime.edit();
-  tx.setCfcTrustSnapshot({ id: `trust-${owner}`, actingPrincipal: owner });
-  tx.setCfcImplementationIdentity({
+  setCfcTrustSnapshot(tx, { id: `trust-${owner}`, actingPrincipal: owner });
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: PROFILE_WRITER,
   });

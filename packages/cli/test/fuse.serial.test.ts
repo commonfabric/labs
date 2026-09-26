@@ -1823,6 +1823,10 @@ describe("fuse mount option validation", () => {
   });
 
   it("documents both cache flags in the mount help", () => {
+    // A subcommand renders help with its root's handler, which cliffy installs
+    // only when the root first parses or renders help. Render the root's help
+    // first, so this case does not depend on an earlier case having parsed.
+    fuse.getHelp();
     const help = fuse.getCommand("mount")!.getHelp();
     expect(help).toContain("--noattrcache");
     expect(help).toContain("--attrcache-timeout");

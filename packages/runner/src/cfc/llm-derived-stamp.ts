@@ -6,7 +6,7 @@
  * (`gateRuntimeMintedIntegrity`, audit S4) admits it only from a write whose
  * implementation identity is a builtin, which is what stops pattern code
  * from forging it. A writer therefore pairs one of these schemas with
- * `tx.setCfcImplementationIdentity({ kind: "builtin", builtinId })` on the
+ * `setCfcImplementationIdentity(tx, { kind: "builtin", builtinId })` on the
  * transaction that writes the model bytes, and applies the stamp at that
  * write rather than on a shared result schema, so a builtin's control-state
  * writes stay CFC-inert.

@@ -27,6 +27,7 @@ import {
   recordValue,
 } from "./command-authorization.ts";
 import type { BoundCommandProducer } from "./command-producers.ts";
+import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 
 const AGENT_SESSIONS_DEBUG_CAUSE_PREFIX = "agent-sessions-debug";
 const SHALLOW_PIECE_LINK_LIST_SCHEMA = internSchema({
@@ -46,7 +47,7 @@ async function protectOwnerDebugCells(
   expectedDocuments?: ReadonlyMap<Cell<unknown>, unknown>,
 ): Promise<void> {
   const tx = manager.runtime.edit();
-  tx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: AGENT_CONNECTOR_WRITER_ID,
   });
@@ -410,7 +411,7 @@ async function debugRegistration(
   );
   await syncDocumentRoot(manager, registration);
   const tx = manager.runtime.edit();
-  tx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: AGENT_CONNECTOR_WRITER_ID,
   });
@@ -584,7 +585,7 @@ async function registerDebugPiece(
     throw error;
   }
   const privateUpdate = await manager.runtime.editWithRetry((tx) => {
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -675,7 +676,7 @@ async function registerDebugPiece(
       }
     }
     const registrationRollback = await manager.runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: AGENT_CONNECTOR_WRITER_ID,
       });

@@ -16,7 +16,11 @@ import {
 } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+  TransactionWrapper,
+} from "../src/storage/extended-storage-transaction.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -81,7 +85,7 @@ const withRuntime = async (
 const identifyProducer = (
   tx: ReturnType<Runtime["edit"]>,
 ): void => {
-  tx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: PRODUCER,
   });
@@ -883,7 +887,7 @@ describe("external content observation", () => {
         value: { title: "private row" },
         producer: PRODUCER,
       });
-      targetTx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(targetTx, {
         id: "changed-trust",
         actingPrincipal: space,
       });

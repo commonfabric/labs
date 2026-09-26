@@ -18,6 +18,10 @@ import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-stamp-adoption");
 const space = signer.did();
@@ -68,7 +72,7 @@ describe("adopting an unstamped writer claim", () => {
   });
 
   const trust = (tx: IExtendedStorageTransaction) =>
-    tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+    setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
 
   // Stores `{name, other}` under an unstamped claim at `name`. A host's
   // policy application is how a claim comes to rest over a value nobody who
@@ -90,7 +94,7 @@ describe("adopting an unstamped writer claim", () => {
     }
     const tx = runtime.edit();
     trust(tx);
-    tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: "host" });
+    setCfcImplementationIdentity(tx, { kind: "builtin", builtinId: "host" });
     applyCfcPolicyToExistingValue(
       runtime.getCell(space, id, schemaWith(claim(AGED_FILE)), tx),
     );
@@ -174,7 +178,7 @@ describe("adopting an unstamped writer claim", () => {
 
     const write = runtime.edit();
     trust(write);
-    write.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(write, {
       kind: "verified",
       moduleIdentity: PROFILE_MODULE,
       sourceFile: RELEASE_FILE,
@@ -257,7 +261,7 @@ describe("adopting an unstamped writer claim", () => {
       const runtime = await start(id);
       const tx = runtime.edit();
       trust(tx);
-      if (identity !== undefined) tx.setCfcImplementationIdentity(identity);
+      if (identity !== undefined) setCfcImplementationIdentity(tx, identity);
       writeOtherUnder(runtime, tx, id, claim(RELEASE_FILE, PROFILE_MODULE));
       expect(refusalOf(await tx.commit())).toContain(
         "writeAuthorizedBy must remain stable at /name",
@@ -297,7 +301,7 @@ describe("adopting an unstamped writer claim", () => {
     const runtime = await start("other-export");
     const tx = runtime.edit();
     trust(tx);
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: PROFILE_MODULE,
       sourceFile: RELEASE_FILE,
@@ -321,7 +325,7 @@ describe("adopting an unstamped writer claim", () => {
     const runtime = await start("own-stamp");
     const tx = runtime.edit();
     trust(tx);
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: PROFILE_MODULE,
       sourceFile: RELEASE_FILE,

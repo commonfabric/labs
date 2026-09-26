@@ -8,6 +8,7 @@ import { writerClaimFilesCorrespond } from "../src/cfc/writer-claim-corresponden
 import { mergeCfcSchemaEnvelopes } from "../src/cfc/schema-merge.ts";
 import { reportDroppedCfcRejectedWrite } from "../src/scheduler/cfc-rejection-report.ts";
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 /**
  * `writeAuthorizedBy` anchors on `moduleIdentity` + `bindingPath`; the claim's
@@ -132,7 +133,7 @@ describe("writeAuthorizedBy across resolver spellings (labs#4772)", () => {
       }),
       tx,
     );
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: MODULE_IDENTITY,
       sourceFile: HTTP_SPELLING,
@@ -157,7 +158,7 @@ describe("writeAuthorizedBy across resolver spellings (labs#4772)", () => {
       claimSchema({ file: HTTP_SPELLING, path: ["setBio"] }),
       tx,
     );
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: MODULE_IDENTITY,
       sourceFile: HTTP_SPELLING,
@@ -185,7 +186,7 @@ describe("writeAuthorizedBy across resolver spellings (labs#4772)", () => {
       claimSchema({ file: PIECE_SPELLING, path: ["setBio"] }),
       tx,
     );
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: "would-be-thief-module-identity",
       sourceFile: HTTP_SPELLING,
@@ -214,7 +215,7 @@ describe("writeAuthorizedBy across resolver spellings (labs#4772)", () => {
       }),
       tx,
     );
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: "profile-home-module-identity-v2",
       sourceFile: HTTP_SPELLING,
@@ -240,7 +241,7 @@ describe("writeAuthorizedBy across resolver spellings (labs#4772)", () => {
       claimSchema({ file: PIECE_SPELLING, path: ["setBio"] }),
       tx,
     );
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: "attacker-module-identity",
       sourceFile: "/attacker/profile-home.tsx",
@@ -466,7 +467,7 @@ describe("the labs#4772 heal end-to-end: exact mint + tolerant adoption + identi
       merged as unknown as JSONSchema,
       tx,
     );
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: MODULE_IDENTITY,
       sourceFile: HTTP_SPELLING,

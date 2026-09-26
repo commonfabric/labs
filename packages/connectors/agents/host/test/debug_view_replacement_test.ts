@@ -26,6 +26,7 @@ import {
   SharedServerStorageManager,
   sourceDescriptor,
 } from "./debug_view_support.ts";
+import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 
 Deno.test("debug replacement stops every superseded local runner", async () => {
   const session = await createSession({
@@ -53,7 +54,7 @@ Deno.test("debug replacement stops every superseded local runner", async () => {
     );
     await registration.sync();
     const addRetiredResult = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "commonfabric.agents-connector",
       });

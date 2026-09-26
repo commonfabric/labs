@@ -32,6 +32,7 @@ import {
   type PieceSourceTransition,
   preparePieceSourceTransitionBaseline,
 } from "../src/runner.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 await ensureCompilerStack();
 
@@ -716,7 +717,7 @@ describe("module identity delegation", () => {
       protectedSchema,
     );
     const seed = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: oldIdentity,
         sourceFile: "/writer.ts",
@@ -738,7 +739,7 @@ describe("module identity delegation", () => {
       .toBeUndefined();
 
     const denied = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/writer.ts",
@@ -773,7 +774,7 @@ describe("module identity delegation", () => {
       protectedSchema,
     );
     const seed = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: oldIdentity,
         sourceFile: "/writer.ts",
@@ -784,7 +785,7 @@ describe("module identity delegation", () => {
     expect(seed.error).toBeUndefined();
 
     const denied = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/writer.ts",
@@ -805,7 +806,7 @@ describe("module identity delegation", () => {
     expect(closure?.get(successor.identity)).toBeDefined();
 
     const allowed = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/writer.ts",
@@ -819,7 +820,7 @@ describe("module identity delegation", () => {
     // Resolver-dependent source-file spelling is diagnostic once the
     // successor's authenticated delegation has established module authority.
     const differentFileAllowed = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/resolver-prefix/writer.ts",
@@ -833,7 +834,7 @@ describe("module identity delegation", () => {
     // Delegation grants only module authority; it must not relax which binding
     // inside that module may write the protected field.
     const wrongPathDenied = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/writer.ts",
@@ -871,7 +872,7 @@ describe("module identity delegation", () => {
 
     const id = "module-delegation-labeled-successor";
     const seed = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: oldIdentity,
         sourceFile: "/writer.ts",
@@ -904,7 +905,7 @@ describe("module identity delegation", () => {
     } as unknown as JSONSchema;
     const successorWrite = (schema: JSONSchema, value: string) =>
       runtime.editWithRetry((tx) => {
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: successor.identity,
           sourceFile: "/writer.ts",
@@ -993,7 +994,7 @@ describe("module identity delegation", () => {
       protectedSchema,
     );
     const seed = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: oldIdentity,
         sourceFile: "/writer.ts",
@@ -1004,7 +1005,7 @@ describe("module identity delegation", () => {
     expect(seed.error).toBeUndefined();
 
     const denied = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/writer.ts",

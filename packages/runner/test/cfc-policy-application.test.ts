@@ -14,6 +14,10 @@ import type { EventHandler } from "../src/scheduler.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-policy-application");
 const space = signer.did();
@@ -100,9 +104,9 @@ describe("a runtime policy application", () => {
   };
 
   const trust = (tx: IExtendedStorageTransaction, builtinId?: string) => {
-    tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+    setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
     if (builtinId !== undefined) {
-      tx.setCfcImplementationIdentity({ kind: "builtin", builtinId });
+      setCfcImplementationIdentity(tx, { kind: "builtin", builtinId });
     }
   };
 
@@ -328,7 +332,7 @@ describe("a runtime policy application", () => {
     const runtime = await start("verified-applier");
     const tx = runtime.edit();
     trust(tx);
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: "some-module",
       sourceFile: "/some.tsx",

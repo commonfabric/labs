@@ -45,7 +45,7 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import { utf8Compare, utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 import { type Cell, isCell } from "../cell.ts";
-import type { NormalizedFullLink } from "../link-utils.ts";
+import { type NormalizedFullLink, parseLink } from "../link-utils.ts";
 import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
@@ -57,13 +57,19 @@ import {
   clauseAlternatives,
   clausesEqual,
 } from "./clause.ts";
+import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
-import { cfcPolicyManifestDocId } from "./policy.ts";
+import { cfcPolicyManifestDocId, type PolicyTemplateV1 } from "./policy.ts";
 import { collectConsumedLabel } from "./prepare.ts";
 import { CfcReadCeilingError } from "./read-ceiling.ts";
+import {
+  exactPrincipalAttestations,
+  principalClaimEntries,
+} from "./represents-principal.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
 import { isRendererTrustedEvent } from "./ui-contract.ts";
+import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 /** Builtin implementation identity that alone may write a custody box. */
 export const CUSTODY_SEAL_WRITER = "cfc-custody-seal";
@@ -90,10 +96,12 @@ export interface CustodyRoom {
 
   /**
    * The room's custody policy; its subject must be the room space. A host
-   * whose policy reference is stored passes the cell holding it: the seal then
-   * reads the cell at prepare and again at commit, refuses a commit whose
-   * reading differs from the one the actor reviewed, and has the transaction
-   * that writes the entry verify that the cell still holds it.
+   * whose policy reference is stored passes the cell holding it, or a cell
+   * whose stored label declares it, as a pattern's cell declared `PolicyOf`
+   * the room's rules does: the seal then reads the cell at prepare and again
+   * at commit, refuses a commit whose reading differs from the one the actor
+   * reviewed, and has the transaction that writes the entry verify that the
+   * cell still holds it.
    */
   readonly policy: CfcModulePolicyRefAtom | Cell<unknown>;
 }
@@ -167,6 +175,17 @@ export interface PreparedCustodySeal {
   /** The actor's `Context` and `Resource` sources the value draws on. */
   readonly sources: readonly CfcAtom[];
 
+  /**
+   * Whether every release rule of the room's policy requires that everything
+   * confidential its releasing code read was written by this seal: an
+   * integrity guard on `TransformedBy` with the seal's builtin identity as its
+   * input witness. When it is `false`, a member's own code can run the
+   * room's releasing code over the actor's entry and values it made up, and
+   * learn the entry one answer at a time; the confirmation must say so rather
+   * than state a bound on what an answer reveals.
+   */
+  readonly witnessedRelease: boolean;
+
   /** One-use authority bound to this preview and authenticated actor. */
   readonly consent: CustodySealConsent;
 }
@@ -193,6 +212,9 @@ export interface CustodySealResult {
   /** The blinded key of the actor's entry in the box. */
   readonly entryKey: string;
 
+  /** The instance `D` the entry was sealed into: the digest of the terms. */
+  readonly instance: string;
+
   /** The actor-private receipt, in the actor's home space. */
   readonly receipt: Cell<unknown>;
 }
@@ -217,6 +239,7 @@ interface Inspection {
   readonly policy: CfcModulePolicyRefAtom;
   readonly sources: readonly CfcAtom[];
   readonly entryKey: string;
+  readonly witnessedRelease: boolean;
   readonly evidence: readonly ReadEvidence[];
 }
 
@@ -250,9 +273,21 @@ const STANCE_SCHEMA_KEYS = new Set([
   "additionalProperties",
   "minimum",
   "maximum",
+  "items",
+  "minItems",
+  "maxItems",
   "title",
   "description",
 ]);
+
+/** The keywords that describe an array, and nothing else. */
+const STANCE_ARRAY_KEYS = ["items", "minItems", "maxItems"] as const;
+
+/**
+ * The most elements a stance array may hold. An array is a list of ratings or
+ * choices the confirmation shows one by one, so its bound is small.
+ */
+const MAX_STANCE_ARRAY_ITEMS = 64;
 
 const ENTRY_KEY_DOMAIN = "cfc-custody-seal/entry-key/v1\n";
 
@@ -377,8 +412,15 @@ const UNUSED_PROPERTY: unique symbol = Symbol("unused property");
 /**
  * Checks that `value` satisfies `schema`, and that `schema` admits only
  * instruction-inert values: booleans, bounded numbers, constants, and
- * enumerated primitives, composed by closed objects. Arrays are refused; a
- * multiple choice is an object of booleans.
+ * enumerated primitives, composed by closed objects and by arrays whose one
+ * `items` schema is itself inert and whose length `maxItems` bounds. An array
+ * is a list of closed values, as a rating per option is, and never free text:
+ * every element meets the same inert schema, and no array appears anywhere
+ * inside an array's elements. Like an object of enumerated fields, it is a
+ * bounded payload rather than an instruction: it carries what its elements
+ * carry, up to `maxItems` of them, plus `log₂(maxItems − minItems + 1)` bits
+ * in its length, and an array of bounded numbers is a payload of that many
+ * numbers.
  *
  * @throws If the schema admits free text or any other open-ended leaf, or if
  *   the value does not satisfy it.
@@ -387,6 +429,7 @@ const checkInertStance = (
   schema: unknown,
   value: unknown,
   path: readonly (string | number)[] = [],
+  insideArray = false,
 ): void => {
   // A property the value leaves out still has its schema checked, so an
   // optional open-ended property is refused whether or not a value uses it.
@@ -403,6 +446,12 @@ const checkInertStance = (
   for (const key of Object.keys(node)) {
     if (!STANCE_SCHEMA_KEYS.has(key)) {
       refuse(`the schema keyword \`${key}\` is not allowed`);
+    }
+  }
+  if (node.type !== "array") {
+    const misplaced = STANCE_ARRAY_KEYS.find((key) => Object.hasOwn(node, key));
+    if (misplaced !== undefined) {
+      refuse(`\`${misplaced}\` applies only to an array`);
     }
   }
   const isPrimitive = (entry: unknown) =>
@@ -469,7 +518,12 @@ const checkInertStance = (
       ) refuse("`required` names a key the object does not declare");
       if (!checksValue) {
         for (const [key, entry] of Object.entries(properties as object)) {
-          checkInertStance(entry, UNUSED_PROPERTY, [...path, key]);
+          checkInertStance(
+            entry,
+            UNUSED_PROPERTY,
+            [...path, key],
+            insideArray,
+          );
         }
         return;
       }
@@ -488,7 +542,42 @@ const checkInertStance = (
           entry,
           Object.hasOwn(record, key) ? record[key] : UNUSED_PROPERTY,
           [...path, key],
+          insideArray,
         );
+      }
+      return;
+    }
+    case "array": {
+      const { items, minItems = 0, maxItems } = node;
+      if (
+        typeof maxItems !== "number" || !Number.isInteger(maxItems) ||
+        maxItems < 0 || maxItems > MAX_STANCE_ARRAY_ITEMS
+      ) {
+        refuse(
+          `an array needs an integer \`maxItems\` of at most ${MAX_STANCE_ARRAY_ITEMS}`,
+        );
+      }
+      if (
+        typeof minItems !== "number" || !Number.isInteger(minItems) ||
+        minItems < 0 || minItems > (maxItems as number)
+      ) refuse("`minItems` must be an integer no greater than `maxItems`");
+      // One level of list: an array anywhere inside an array's elements,
+      // directly or within an object, would multiply the bound by itself.
+      if (insideArray) refuse("an array inside an array's elements");
+      if (!checksValue) {
+        checkInertStance(items, UNUSED_PROPERTY, [...path, "items"], true);
+        return;
+      }
+      // The element schema is checked on its own first, so an array the value
+      // leaves empty is held to the same schema as a full one.
+      checkInertStance(items, UNUSED_PROPERTY, [...path, "items"], true);
+      if (!Array.isArray(value)) refuse("the value is not an array");
+      const list = value as unknown[];
+      if (
+        list.length < (minItems as number) || list.length > (maxItems as number)
+      ) refuse("the array's length is outside its bounds");
+      for (let index = 0; index < list.length; index++) {
+        checkInertStance(items, list[index], [...path, index], true);
       }
       return;
     }
@@ -609,6 +698,76 @@ const readEvidence = (tx: IExtendedStorageTransaction): ReadEvidence[] => {
     };
   });
 };
+
+/**
+ * Whether every exchange rule of `template` guards on the code that computed
+ * what it releases, and every such `TransformedBy` guard names the seal's own
+ * `TransformedBy{builtin cfc-custody-seal}` as its input witness, so that no
+ * rule releases what code computed over anything the seal did not write. A
+ * policy with no rules releases nothing and passes.
+ *
+ * The witness is necessary, not sufficient. A witness is the meet over the
+ * confidential observations of the releasing code only, so a document that
+ * mixes a real entry with unlabeled entries of a member's own still carries
+ * it. A room's release also rests on writer policies on the box and on the
+ * releasing code's output, and on endorsed releasing code that takes no
+ * public selector parameters.
+ *
+ * TODO(L14b): until a pattern's reads carry the witness, a rule in this form
+ * releases nothing a pattern computes, so every pattern room reports
+ * `false`. Once they do, and once the conditions above can be checked, a seal
+ * into a policy whose rules are not all witnessed should be refused rather
+ * than warned about.
+ */
+export const releaseRequiresSealWitness = (
+  template: PolicyTemplateV1,
+): boolean =>
+  template.exchangeRules.every((rule) => {
+    const transformers = rule.preCondition.integrity.filter((guard) =>
+      isObjectNotArray(guard) && guard.type === CFC_ATOM_TYPE.TransformedBy
+    );
+    return transformers.length > 0 &&
+      transformers.every((guard) => {
+        const record = guard as Record<string, unknown>;
+        return namesConcreteCode(record.identity) &&
+          deepEqual(record.inputWitness, SEALED_BY);
+      });
+  });
+
+/**
+ * Whether a `TransformedBy` guard's `identity` names one piece of code
+ * outright. Guards match by subset, so an identity left out, held in a
+ * variable, or missing the fields that pick out the code (a verified
+ * identity's module and symbol, or its code hash; a builtin's id) matches any
+ * code of that kind, and a witness on such a guard vouches for nothing the
+ * rule releases.
+ * `THIS_POLICY.moduleIdentity` names the policy's own module, so it counts.
+ */
+const namesConcreteCode = (identity: unknown): boolean => {
+  if (!isObjectNotArray(identity) || containsVariable(identity)) return false;
+  switch (identity.kind) {
+    case "verified":
+      return (typeof identity.codeHash === "string" &&
+        identity.codeHash.length > 0) ||
+        (typeof identity.symbol === "string" &&
+          (typeof identity.moduleIdentity === "string" ||
+            deepEqual(identity.moduleIdentity, {
+              thisPolicyField: "moduleIdentity",
+            })));
+    case "builtin":
+      return typeof identity.builtinId === "string";
+    default:
+      return false;
+  }
+};
+
+/** Whether `pattern` holds a `{ var }` placeholder anywhere. */
+const containsVariable = (pattern: unknown): boolean =>
+  Array.isArray(pattern)
+    ? pattern.some(containsVariable)
+    : isObjectNotArray(pattern) &&
+      (Object.hasOwn(pattern, "var") ||
+        Object.values(pattern).some(containsVariable));
 
 /**
  * Whether the document at `link` is absent, or its root was written by the
@@ -899,6 +1058,146 @@ const sourcePolicyIn = (
   return value as unknown as CfcAtom[];
 };
 
+/**
+ * Reads the terms at `terms`, whose transaction is the caller's: every field
+ * as a JSON value, except `seats`, whose entries may each be a DID or a
+ * reference to a cell attesting a principal. Each reference is
+ * returned by its position, for {@link resolveSeats}; the seat is `null`
+ * until then.
+ *
+ * @throws If the terms are not an object, or a field other than `seats`
+ *   holds a value that is not JSON.
+ */
+const readTerms = (terms: Cell<unknown>): {
+  terms: Record<string, JSONValue>;
+  seatLinks: Map<number, NormalizedFullLink>;
+} => {
+  const raw = terms.getRawUntyped({ frozen: false });
+  if (!isObjectNotArray(raw)) {
+    throw new Error("Custody terms must be an object");
+  }
+  const read: Record<string, JSONValue> = {};
+  const seatLinks = new Map<number, NormalizedFullLink>();
+  for (const key of Object.keys(raw)) {
+    // A field is read through the references it holds: the runtime may store
+    // a nested list or object as a document of its own.
+    if (key !== "seats") {
+      read[key] = snapshotJsonValue(terms.key(key as never).get());
+      continue;
+    }
+    const seatsCell = terms.key("seats" as never).resolveAsCell();
+    const seats = seatsCell.getRawUntyped({ frozen: false });
+    if (!Array.isArray(seats)) {
+      read.seats = snapshotJsonValue(seats);
+      continue;
+    }
+    const base = seatsCell.getAsNormalizedFullLink();
+    read.seats = seats.map((seat, index) => {
+      if (typeof seat === "string") return seat;
+      const link = parseLink(seat, base);
+      if (link === undefined) return snapshotJsonValue(seat);
+      seatLinks.set(index, link);
+      return null;
+    });
+  }
+  return { terms: read, seatLinks };
+};
+
+/**
+ * The first of `clauses` that neither the room space nor the room's policy
+ * satisfies, or `undefined`: what the terms carry is copied into every entry
+ * and shown to every reader of the room, so it may carry only what they hold.
+ */
+const clauseWithheldFromRoom = (
+  clauses: readonly CfcConfClause[],
+  room: string,
+  policy: CfcModulePolicyRefAtom,
+): CfcConfClause | undefined =>
+  clauses.find((clause) =>
+    !clauseAlternatives(clause).some((atom) =>
+      deepEqual(atom, cfcAtom.space(room)) || deepEqual(atom, policy)
+    )
+  );
+
+/**
+ * Returns `terms` with each seat named by a reference replaced by the one
+ * principal its cell attests, in exactly the form a runtime mints (see
+ * `exactPrincipalAttestations`), with a well-formed DID for its subject. A
+ * pattern holds a member's profile, not the member's DID, so a seat can name
+ * what the member's own runtime attested. The reads are added to `evidence`,
+ * so the transaction that writes the entry verifies them.
+ *
+ * @throws If a referenced cell attests no principal or more than one, or
+ *   carries an attestation in any form but the one a runtime mints.
+ */
+const resolveSeats = async (
+  runtime: Cell<unknown>["runtime"],
+  terms: Record<string, JSONValue>,
+  seatLinks: ReadonlyMap<number, NormalizedFullLink>,
+  { room, policy }: { room: string; policy: CfcModulePolicyRefAtom },
+  evidence: ReadEvidence[],
+): Promise<JSONValue> => {
+  if (seatLinks.size === 0) return terms;
+  const seats = [...(terms.seats as JSONValue[])];
+  for (const [index, link] of seatLinks) {
+    const seat = runtime.getCellFromLink(link);
+    await seat.sync();
+    await seat.resolveAsCell().sync();
+    const tx = runtime.edit();
+    try {
+      const target = seat.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
+      const view = cfcLabelViewFromMetadata(
+        readStoredCfcMetadata(tx, target),
+        target.path.map(String),
+      );
+      // The seal writes the DID into terms every reader of the room sees, so
+      // the cell must already be one they hold, whether or not its label
+      // traveled into the terms with the reference.
+      // The attestation is read from these entries, so they are the ones the
+      // room's readers must hold, whatever their observation class. The
+      // attestation's subject is itself public metadata (a
+      // `represents-principal` subject is classified public for invariant
+      // 12), so no label-metadata clause governs the DID.
+      const withheld = clauseWithheldFromRoom(
+        principalClaimEntries(view)
+          .flatMap((entry) =>
+            (entry.label.confidentiality ?? []) as CfcConfClause[]
+          ),
+        room,
+        policy,
+      );
+      if (withheld !== undefined) {
+        throw new Error(
+          debugStr`Custody terms name seat ${index} by a cell with a clause the room's readers do not hold: $quote,long${withheld}`,
+        );
+      }
+      const principals = exactPrincipalAttestations(view);
+      if (
+        principals === undefined || !principals.every(isWellFormedDID)
+      ) {
+        throw new Error(
+          `Custody terms name seat ${index} by a cell with an attestation that is not in the form a runtime mints`,
+        );
+      }
+      if (principals.length === 0) {
+        throw new Error(
+          `Custody terms name seat ${index} by a cell that attests no principal`,
+        );
+      }
+      if (principals.length > 1) {
+        throw new Error(
+          `Custody terms name seat ${index} by a cell that attests more than one principal`,
+        );
+      }
+      seats[index] = principals[0];
+      evidence.push(...readEvidence(tx));
+    } finally {
+      tx.abort();
+    }
+  }
+  return { ...terms, seats };
+};
+
 const STALE_REVIEW = "Custody seal review is stale; review the value again";
 
 /**
@@ -931,9 +1230,66 @@ const allowedSourcesOf = async (
 };
 
 /**
- * Returns the policy reference `policy` names: the reference itself, or what
- * its cell holds. A cell's read is added to `evidence`, so the entry's
- * transaction verifies it. The caller checks the reference.
+ * Loads `cell` and the document it resolves to. A cell a pattern hands the
+ * host is often a field of its result that links to the document holding
+ * the value, as a computed output or an argument does.
+ */
+const syncResolved = async (cell: Cell<unknown>): Promise<void> => {
+  await cell.sync();
+  await cell.resolveAsCell().sync();
+};
+
+/** Whether `value` has the shape of a module policy reference at all. */
+const isModulePolicyShaped = (value: unknown): boolean =>
+  isObjectNotArray(value) && value.type === CFC_ATOM_TYPE.Policy &&
+  value.policyRefKind === "module";
+
+/**
+ * The one module policy reference the stored label of the cell at `link`
+ * declares on the cell itself, or `undefined` when it declares none.
+ *
+ * @throws If the label names more than one.
+ */
+const declaredPolicyOf = (
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+): unknown => {
+  const view = cfcLabelViewFromMetadata(
+    readStoredCfcMetadata(tx, link),
+    link.path.map(String),
+  );
+  const found: unknown[] = [];
+  for (const entry of view?.entries ?? []) {
+    if (entry.path.length > 0) continue;
+    if (entry.observes !== undefined && entry.observes !== "value") continue;
+    for (const clause of entry.label.confidentiality ?? []) {
+      for (const atom of clauseAlternatives(clause as CfcConfClause)) {
+        if (
+          isModulePolicyShaped(atom) &&
+          !found.some((known) => deepEqual(known, atom))
+        ) found.push(atom);
+      }
+    }
+  }
+  if (found.length > 1) {
+    throw new Error(
+      "Custody seal refuses a policy cell whose label declares more than one module policy",
+    );
+  }
+  return found[0];
+};
+
+/**
+ * Returns the policy reference `policy` names: the reference itself, what its
+ * cell holds, or, for a cell holding no reference, the one module policy the
+ * cell's stored label declares. The label is how a pattern names its own
+ * room's policy: it cannot write the reference, which names its module's
+ * content identity and manifest digest, but a cell it declares `PolicyOf` its
+ * rules carries that reference, with the room space the runtime bound as its
+ * subject. A cell's reads are added to `evidence`, so the entry's transaction
+ * verifies them. The caller checks the reference.
+ *
+ * @throws If a cell's label declares more than one module policy.
  */
 const requestedPolicyOf = async (
   runtime: Cell<unknown>["runtime"],
@@ -944,12 +1300,16 @@ const requestedPolicyOf = async (
   if (policy.runtime !== runtime) {
     throw new Error("Custody seal handles must belong to the same runtime");
   }
-  await policy.sync();
+  await syncResolved(policy);
   const tx = runtime.edit();
   try {
-    const value = snapshotJsonValue(policy.withTx(tx).get());
+    const cell = policy.withTx(tx).resolveAsCell();
+    const value = cell.getRawUntyped({ frozen: false });
+    const requested = isModulePolicyShaped(value)
+      ? snapshotJsonValue(value)
+      : declaredPolicyOf(tx, cell.getAsNormalizedFullLink());
     evidence.push(...readEvidence(tx));
-    return value;
+    return requested;
   } finally {
     tx.abort();
   }
@@ -971,7 +1331,10 @@ const inspect = async (
   if (requestedRoom.terms.runtime !== runtime) {
     throw new Error("Custody seal handles must belong to the same runtime");
   }
-  await Promise.all([draft.sync(), requestedRoom.terms.sync()]);
+  await Promise.all([
+    syncResolved(draft),
+    syncResolved(requestedRoom.terms),
+  ]);
 
   const evidence: ReadEvidence[] = [];
   const allowed = await allowedSourcesOf(runtime, options, evidence);
@@ -1020,7 +1383,8 @@ const inspect = async (
 
   const termsTx = runtime.edit();
   let termsLink: NormalizedFullLink;
-  let terms: JSONValue;
+  let rawTerms: Record<string, JSONValue>;
+  let seatLinks: ReadonlyMap<number, NormalizedFullLink>;
   let policy: CfcModulePolicyRefAtom;
   let room: string;
   try {
@@ -1031,37 +1395,57 @@ const inspect = async (
       throw new Error("Custody terms must live in a space named by a DID");
     }
     policy = checkPolicy(requestedPolicy, room);
-    terms = snapshotJsonValue(requestedRoom.terms.withTx(termsTx).get());
+    ({ terms: rawTerms, seatLinks } = readTerms(
+      runtime.getCellFromLink(termsLink, undefined, termsTx),
+    ));
     // Terms are copied into every entry, so they may carry only what the
     // room's readers already hold: a clause admitting the room space, or the
     // room's own policy.
-    for (const clause of collectConsumedLabel(termsTx).confidentiality) {
-      if (
-        !clauseAlternatives(clause).some((atom) =>
-          deepEqual(atom, cfcAtom.space(room)) || deepEqual(atom, policy)
-        )
-      ) {
-        throw new Error(
-          debugStr`Custody terms carry a clause the room's readers do not hold: $quote,long${clause}`,
-        );
-      }
+    const withheld = clauseWithheldFromRoom(
+      collectConsumedLabel(termsTx).confidentiality,
+      room,
+      policy,
+    );
+    if (withheld !== undefined) {
+      throw new Error(
+        debugStr`Custody terms carry a clause the room's readers do not hold: $quote,long${withheld}`,
+      );
     }
     evidence.push(...readEvidence(termsTx));
   } finally {
     termsTx.abort();
   }
+  const terms = await resolveSeats(
+    runtime,
+    rawTerms,
+    seatLinks,
+    { room, policy },
+    evidence,
+  );
+  // Read through a schema that admits the whole manifest, so the sync loads
+  // the documents its rules are stored in as well as the manifest's own.
   const manifest = runtime.getCellFromEntityId(
     room,
     cfcPolicyManifestDocId(policy.policyDigest),
+    [],
+    { type: "object", additionalProperties: true },
   );
   await manifest.sync();
   const manifestTx = runtime.edit();
+  let witnessedRelease: boolean;
   try {
-    if (!runtime.resolveCfcPolicyManifest(policy, manifestTx, room, false)) {
+    const artifact = runtime.resolveCfcPolicyManifest(
+      policy,
+      manifestTx,
+      room,
+      false,
+    );
+    if (!artifact) {
       throw new Error(
         debugStr`Custody seal refuses a policy not installed in the room space: $quote${policy.policyDigest}`,
       );
     }
+    witnessedRelease = releaseRequiresSealWitness(artifact.manifest.template);
   } finally {
     manifestTx.abort();
   }
@@ -1123,6 +1507,7 @@ const inspect = async (
     policy,
     sources,
     entryKey,
+    witnessedRelease,
     evidence,
   };
 };
@@ -1173,6 +1558,7 @@ export async function prepareCustodySeal(
     instance: inspected.instance,
     policy: inspected.policy,
     sources: inspected.sources,
+    witnessedRelease: inspected.witnessedRelease,
     consent,
   });
 }
@@ -1257,7 +1643,7 @@ export async function commitCustodySeal(
         }
         return;
       }
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: CUSTODY_SEAL_WRITER,
       });
@@ -1280,7 +1666,7 @@ export async function commitCustodySeal(
   const receiptTx = runtime.edit();
   let receipt: Cell<unknown>;
   try {
-    receiptTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(receiptTx, {
       kind: "builtin",
       builtinId: CUSTODY_SEAL_WRITER,
     });
@@ -1336,7 +1722,7 @@ export async function commitCustodySeal(
           throw new Error("Custody seal review changed before commit");
         }
       }
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: CUSTODY_SEAL_WRITER,
       });
@@ -1387,6 +1773,7 @@ export async function commitCustodySeal(
   return {
     box: box!.withTx(undefined) as Cell<unknown>,
     entryKey,
+    instance,
     receipt: receipt.withTx(undefined),
   };
 }

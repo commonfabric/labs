@@ -19,6 +19,7 @@ import {
   recordVerifiedProvenance,
 } from "../src/harness/verified-provenance.ts";
 import { Runtime } from "../src/runtime.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 /**
  * C5 red-team gate for PR C (content-addressed `$implRef` + CFC provenance) of
@@ -333,7 +334,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
       const cell = runtime.getCell(signer.did(), "attack4-binding", schema, tx);
 
       // Attacker's verified identity claims a DIFFERENT module/path (their own).
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "attacker-module-identity",
         sourceFile: "/attacker.tsx",
@@ -386,7 +387,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
 
       // Same module + file, but a DIFFERENT binding (a sibling handler in the
       // same module must not be able to write the owner's field).
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "shared-module-identity",
         sourceFile: "/shared.tsx",
@@ -442,7 +443,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
         tx,
       );
       // Different verified writer — the rebind cannot overwrite the owner's stamp.
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "attacker-module",
         sourceFile: "/attacker.tsx",
@@ -491,7 +492,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
         tx,
       );
 
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "match-module-identity",
         sourceFile: "/match.tsx",
@@ -535,7 +536,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
         required: ["owned"],
       } as unknown as JSONSchema;
       const cell = runtime.getCell(signer.did(), name, schema, tx);
-      tx.setCfcImplementationIdentity(identity as never);
+      setCfcImplementationIdentity(tx, identity as never);
       cell.set({ owned: "x" });
       const digest = tx.prepareCfc();
       const result = await tx.commit();
@@ -843,7 +844,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
       required: ["owned"],
     } as unknown as JSONSchema;
     const cell = runtime.getCell(signer.did(), name, schema, tx);
-    tx.setCfcImplementationIdentity(identity as never);
+    setCfcImplementationIdentity(tx, identity as never);
     cell.set({ owned: "x" });
     const digest = tx.prepareCfc();
     const result = await tx.commit();

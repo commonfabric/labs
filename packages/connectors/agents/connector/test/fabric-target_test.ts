@@ -51,6 +51,10 @@ import {
   type GitCommandRunner,
   GitContextResolver,
 } from "../src/git-context.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "@commonfabric/runner/cfc/trust-authority";
 
 async function publishedManifestCell(
   connection: Parameters<typeof readStableCellGraphValue>[0],
@@ -400,7 +404,7 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
       agentOwnerSchema(space),
     );
     const malformedReceiptTx = runtime.edit();
-    malformedReceiptTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(malformedReceiptTx, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -428,7 +432,7 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
       agentOwnerSchema(space),
     );
     const wrongOwnerReceiptTx = runtime.edit();
-    wrongOwnerReceiptTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(wrongOwnerReceiptTx, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -613,7 +617,7 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
     try {
       const command = JSON.stringify({ id: "command-2" });
       const tx = runtime.edit();
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity:
           commandWriterAuthorization.__ctWriterIdentityOf.moduleIdentity,
@@ -1047,11 +1051,11 @@ Deno.test("Fabric target data is owner-scoped and owner-confidential", async () 
     inspect.abort();
 
     const attack = runtime.edit();
-    attack.setCfcTrustSnapshot({
+    setCfcTrustSnapshot(attack, {
       id: `principal:${otherOwner.did()}`,
       actingPrincipal: otherOwner.did(),
     });
-    attack.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(attack, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -1537,7 +1541,7 @@ Deno.test("Fabric target refuses an owner root with another writer", async () =>
       agentPrincipalSchema(owner.did(), [otherWriter]),
     );
     const seed = runtime.edit();
-    seed.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(seed, {
       kind: "builtin",
       builtinId: otherWriter,
     });
@@ -2766,7 +2770,7 @@ Deno.test("publication refuses a stored index whose source surfaces are malforme
     // A surface that is not a string, written into the stored row past the
     // connector; a pattern reading `surfaces` would otherwise throw on it.
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -2824,7 +2828,7 @@ Deno.test("publication refuses a stored index whose source capabilities are malf
     // A capability flag that is not a boolean, written into the stored row
     // past the connector, as a row the connector never produced would be.
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -2871,7 +2875,7 @@ Deno.test("Fabric target binds producer queues and reads commands from every bou
     value: string,
   ) => {
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: authorization.__ctWriterIdentityOf.moduleIdentity,
       sourceFile: authorization.__ctWriterIdentityOf.file,

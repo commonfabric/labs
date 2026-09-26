@@ -19,6 +19,10 @@ import {
 } from "../src/storage/v2-emulate.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase(
   "runner-cfc-stored-write-requirements",
@@ -411,11 +415,11 @@ describe("stored write requirements", () => {
         cancel();
       } else {
         const tx = runtime.edit();
-        tx.setCfcTrustSnapshot({
+        setCfcTrustSnapshot(tx, {
           id: `trust-${space}`,
           actingPrincipal: space,
         });
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: BUILTIN_WRITER,
         });
@@ -640,8 +644,8 @@ describe("stored write requirements", () => {
 
     const seed = async (runtime: Runtime, id: string) => {
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
-      tx.setCfcImplementationIdentity({
+      setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: BUILTIN_WRITER,
       });
@@ -804,8 +808,8 @@ describe("stored write requirements", () => {
       value: unknown,
     ) => {
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
-      tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: WRITER });
+      setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
+      setCfcImplementationIdentity(tx, { kind: "builtin", builtinId: WRITER });
       runtime.getCell(space, id, schema, tx).set(value as never);
       expect((await tx.commit()).error).toBeUndefined();
     };
@@ -861,11 +865,14 @@ describe("stored write requirements", () => {
         const id = `named-writer-beneath-${writer}`;
         await seed(runtime, id, STORED, SEED);
         const tx = runtime.edit();
-        tx.setCfcTrustSnapshot({
+        setCfcTrustSnapshot(tx, {
           id: `trust-${space}`,
           actingPrincipal: space,
         });
-        tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: WRITER });
+        setCfcImplementationIdentity(tx, {
+          kind: "builtin",
+          builtinId: WRITER,
+        });
         runtime.getCell(
           space,
           id,
@@ -888,11 +895,11 @@ describe("stored write requirements", () => {
       const id = "unrecorded-beside-named";
       await seed(runtime, id, STORED, SEED);
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
-      tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: WRITER });
+      setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
+      setCfcImplementationIdentity(tx, { kind: "builtin", builtinId: WRITER });
       const cell = runtime.getCell(space, id, undefined, tx);
       cell.key("frozen").key("digest" as never).set("e" as never);
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "mallory",
       });
@@ -924,11 +931,14 @@ describe("stored write requirements", () => {
         const runtime = start();
         await seed(runtime, "item-named-writer", ITEMS, ITEMS_SEED);
         const tx = runtime.edit();
-        tx.setCfcTrustSnapshot({
+        setCfcTrustSnapshot(tx, {
           id: `trust-${space}`,
           actingPrincipal: space,
         });
-        tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: WRITER });
+        setCfcImplementationIdentity(tx, {
+          kind: "builtin",
+          builtinId: WRITER,
+        });
         runtime.getCell(space, "item-named-writer", undefined, tx)
           .key("items").key(0 as never).key("name" as never)
           .set("b" as never);
@@ -941,11 +951,11 @@ describe("stored write requirements", () => {
         const runtime = start();
         await seed(runtime, "item-other-writer", ITEMS, ITEMS_SEED);
         const tx = runtime.edit();
-        tx.setCfcTrustSnapshot({
+        setCfcTrustSnapshot(tx, {
           id: `trust-${space}`,
           actingPrincipal: space,
         });
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "mallory",
         });
@@ -963,8 +973,8 @@ describe("stored write requirements", () => {
       const root = { type: "object", ifc: CLAIM } as const satisfies JSONSchema;
       await seed(runtime, "named-writer-under-root", root, { a: 1, b: 2 });
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
-      tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: WRITER });
+      setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
+      setCfcImplementationIdentity(tx, { kind: "builtin", builtinId: WRITER });
       runtime.getCell(space, "named-writer-under-root", undefined, tx).key("a")
         .set(3 as never);
       expect((await tx.commit()).error).toBeUndefined();
@@ -1007,8 +1017,8 @@ describe("stored write requirements", () => {
       value: unknown,
     ) => {
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
-      tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: WRITER });
+      setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
+      setCfcImplementationIdentity(tx, { kind: "builtin", builtinId: WRITER });
       runtime.getCell(space, id, schema, tx).set(value as never);
       expect((await tx.commit()).error).toBeUndefined();
     };
@@ -1148,8 +1158,8 @@ describe("stored write requirements", () => {
         expect((await tx.commit()).error).toBeUndefined();
       }
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
-      tx.setCfcImplementationIdentity({
+      setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "release-1",
         sourceFile: "/profile.tsx",
@@ -1179,7 +1189,7 @@ describe("stored write requirements", () => {
       raw = false,
     ) => {
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+      setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
       if (release !== "none") {
         markRelease(runtime, tx, id, release === "authorized");
       }
@@ -1219,11 +1229,11 @@ describe("stored write requirements", () => {
       const profile = runtime.getCell(space, "own-claim-profile");
       {
         const tx = runtime.edit();
-        tx.setCfcTrustSnapshot({
+        setCfcTrustSnapshot(tx, {
           id: `trust-${space}`,
           actingPrincipal: space,
         });
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: "release-1",
           sourceFile: "/profile.tsx",
@@ -1236,7 +1246,7 @@ describe("stored write requirements", () => {
       }
       {
         const tx = runtime.edit();
-        tx.setCfcTrustSnapshot({
+        setCfcTrustSnapshot(tx, {
           id: `trust-${space}`,
           actingPrincipal: space,
         });
@@ -1257,8 +1267,8 @@ describe("stored write requirements", () => {
       ).toBeUndefined();
 
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
-      tx.setCfcImplementationIdentity({
+      setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "mallory",
       });
@@ -1336,8 +1346,8 @@ describe("stored write requirements", () => {
       // What may later come to be held there answers to the position's own
       // claim.
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
-      tx.setCfcImplementationIdentity({
+      setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "mallory",
       });
@@ -1350,11 +1360,11 @@ describe("stored write requirements", () => {
       // The position's own writer holds no authority over the fields beneath:
       // an inline avatar answers to the avatar's writer, now release 2's.
       const picker = runtime.edit();
-      picker.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(picker, {
         id: `trust-${space}`,
         actingPrincipal: space,
       });
-      picker.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(picker, {
         kind: "builtin",
         builtinId: "profile-picker",
       });
@@ -1389,7 +1399,7 @@ describe("stored write requirements", () => {
         other: "o",
       }));
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+      setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
       markRelease(runtime, tx, "item-then-list");
       const holder = runtime.getCell(
         space,
@@ -1475,11 +1485,11 @@ describe("stored write requirements", () => {
       const runtime = start();
       {
         const tx = runtime.edit();
-        tx.setCfcTrustSnapshot({
+        setCfcTrustSnapshot(tx, {
           id: `trust-${space}`,
           actingPrincipal: space,
         });
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: NODE_WRITER,
         });
@@ -1489,8 +1499,8 @@ describe("stored write requirements", () => {
         expect((await tx.commit()).error).toBeUndefined();
       }
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
-      tx.setCfcImplementationIdentity({
+      setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: NODE_WRITER,
       });
@@ -1559,10 +1569,10 @@ describe("stored write requirements", () => {
       write: (tx: IExtendedStorageTransaction) => void,
     ) => {
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
+      setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
       // A builtin list claim names builtins; one identity per transaction,
       // so a write naming both writers runs as the one the test is about.
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: builtinIds[0],
       });
@@ -1582,8 +1592,8 @@ describe("stored write requirements", () => {
       value: Record<string, unknown>,
     ) => {
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
-      tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: SEEDER });
+      setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
+      setCfcImplementationIdentity(tx, { kind: "builtin", builtinId: SEEDER });
       holder(runtime, id, tx).set(value as never);
       expect((await tx.commit()).error).toBeUndefined();
     };
@@ -1700,8 +1710,8 @@ describe("stored write requirements", () => {
         profiles: [],
       });
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: `trust-${space}`, actingPrincipal: space });
-      tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: SEEDER });
+      setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
+      setCfcImplementationIdentity(tx, { kind: "builtin", builtinId: SEEDER });
       markRelease(runtime, tx, "ordering");
       tx.writeValueOrThrow({
         ...holder(runtime, "ordering", tx).getAsNormalizedFullLink(),

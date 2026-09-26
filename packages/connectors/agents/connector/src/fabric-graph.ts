@@ -11,6 +11,7 @@ import { readStoredCfcMetadata } from "@commonfabric/runner/cfc";
 import { addressKey } from "@commonfabric/runner/shared";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { stableFabricValue } from "./stable-fabric-value.ts";
+import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 
 export interface AgentFabricConnection {
   runtime: Runtime;
@@ -182,7 +183,7 @@ export async function pushStableCellGraph(
   }
 
   const tx = connection.runtime.edit();
-  tx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: AGENT_CONNECTOR_WRITER_ID,
   });

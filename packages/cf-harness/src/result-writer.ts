@@ -60,6 +60,7 @@ import {
   resolveHandleToken,
 } from "./handle-table.ts";
 import { validateStructuredResultValue } from "./structured-result.ts";
+import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 
 /** The builtin the result write is attributed to. */
 export const AGENT_RESULT_BUILTIN_ID = "agent";
@@ -907,7 +908,7 @@ export const writeAgentResult = async (
   const tx = runtime.edit();
   const enforcing = runtime.cfcEnforcementMode !== "disabled";
   if (enforcing || hasUnreferencedDocument) {
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: AGENT_RESULT_BUILTIN_ID,
     });

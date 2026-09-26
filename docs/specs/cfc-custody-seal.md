@@ -27,8 +27,12 @@ It accepts only a renderer-trusted DOM event whose `provenance.ui.pattern` is
 `CustodySeal`, and it inspects everything again before writing.
 
 A room is its terms document and its policy. The terms document's space is the
-room space `S`. The terms are a JSON object that names `seats`, the DIDs that may
-seal, and `stanceSchema`, the schema every sealed value satisfies. The seats
+room space `S`. The terms are a JSON object that names `seats`, the principals
+that may seal, and `stanceSchema`, the schema every sealed value satisfies. A
+seat is a DID, or a reference to a cell that attests one principal (see
+[Seats](#seats)); the seal replaces each reference by the DID it attests, and
+it is these resolved terms that the actor reviews, that `D` digests, and that
+each entry carries. The resolved seats
 must be distinct DIDs in the syntax of W3C DID Core (a lowercase method, then an
 identifier of letters, digits, `.`, `-`, `_`, percent-escapes and `:`, not
 ending in `:`), at most 256 characters long, so that the confirmation can show
@@ -89,16 +93,30 @@ if any holds something else, so the value checked is the value committed.
   A room whose readers change after the review makes the review stale.
 - **The value is instruction-inert.** `stanceSchema` may admit only booleans,
   `null`, numbers with a finite `minimum` and `maximum`, `const` and `enum`
-  primitives, and closed objects of these, at most eight levels deep. It admits
-  no free strings and no arrays, including in a property the value leaves out.
-  The value must satisfy the schema.
+  primitives, closed objects of these, and arrays of these, at most eight
+  levels deep. An array names one `items` schema, itself inert, and an
+  integer `maxItems` of at most 64, with an optional `minItems` no greater; no
+  array may appear anywhere inside an array's elements, directly or within an
+  object. Tuple forms, `prefixItems` and the other array keywords are refused,
+  as is an array keyword on a node that is not an array. A list of ratings, one
+  per option, is such an array. An array is not free text, but like an object
+  of enumerated fields it is a payload: its elements' bits, up to `maxItems` of
+  them, plus `log₂(maxItems − minItems + 1)` bits in its length, and an array
+  of bounded numbers carries that many numbers. The schema admits no free strings, including in a
+  property or an element the value leaves out. The value must satisfy the
+  schema.
 - **The actor holds a seat** in the terms.
 - **The terms carry nothing the room's readers lack.** Every clause of the
   terms document's label must admit `Space(S)` or `P`, because the terms are
   copied into each entry.
 - **The policy is the room's.** `P` must be an exact module policy reference
   whose subject is `S`, and its manifest must be installed in `S`. A host whose
-  reference is stored passes the cell that holds it. The actor consents to the
+  reference is stored passes the cell that holds it, or a cell whose stored
+  label declares it: a cell holding no reference names the one module policy
+  its label carries at the cell itself, and a label carrying more than one is
+  refused. A pattern cannot write its own policy's reference, which names its
+  module's content identity and manifest digest, but a cell it declares
+  `PolicyOf` its rules carries it, with the room space bound as the subject. The actor consents to the
   reference they reviewed, so the seal never seals another one: a cell that
   holds a different reference at commit makes the review stale, and the read
   is one of those the entry's transaction verifies.
@@ -109,6 +127,54 @@ if any holds something else, so the value checked is the value committed.
   `moduleIdentity` and `symbol` are written by its author, so a statement that
   leaves the digest open would be met by any manifest that copies them.
 - **The actor has not sealed this instance.**
+
+### Seats
+
+A pattern holds a member's profile, never the member's DID. So a seat may be a
+reference to a cell whose stored label attests one principal: a
+`represents-principal` integrity atom at the cell's root or on one of its
+top-level fields, as a profile's owner-protected fields carry their owner's.
+This is the evidence `cf-cfc-authorship` reads an author claim from. A runtime
+binds the subject of an atom in the form `{kind, subject}` to its acting
+principal and refuses a literal DID there, so in that form a cell attests only
+the principal whose runtime wrote it. The seal counts only that form: an atom
+whose subject is exactly a well-formed DID, with no other key, on any label
+entry at the cell or one of its top-level fields, whatever that entry's origin. Any other
+spelling that names a principal, the `represents-principal:<did>` string form
+or a subject padded with spaces among them, gets past the runtime's refusal,
+and the seal refuses a seat whose cell carries one. The seal resolves the cell
+the reference names, reads its label, and refuses a cell that attests no
+principal or more than one, and a cell whose own label carries a clause
+neither `Space(S)` nor `P` satisfies, since the DID it attests is shown to every
+reader of the room; the read is evidence the entry's transaction
+verifies, so a seat that attests another principal before the entry is written
+refuses the seal. Only `seats` may hold references; the other fields are read
+as values.
+
+Naming a seat grants the named member nothing and takes nothing from them: only
+that member can seal into it, since the seal requires the storage signer to be
+the acting principal. A terms author can name any member's profile as a seat,
+as it could write any DID, and the confirmation shows every seat's DID.
+
+## Reaching the seal from a pattern
+
+A room is a pattern, and it reaches the seal through `cf-custody-seal`, which
+the pattern binds to its own cells: `$terms`, whose seats are references;
+`$policy`, a cell it declares `PolicyOf` its custody rules; and `$box`, a cell
+that receives a link to the instance's box once the seal commits. The host
+derives the box's address from `(P, D)`, so a pattern never computes it. The
+link grants nothing: the box's entries carry `[P]` and its root `P ∨ Space(S)`,
+so what the pattern computes from them is shown or written anywhere only as
+`P`'s release rules allow. `cf-sealed` carries the instance `D`. `D` digests
+the resolved terms, so it is computable by whoever can read the terms and the
+attestations on their seat cells; a pattern, which reads neither DIDs nor
+attestations, gains from `D` only a test of a guess at the whole set of seat
+DIDs, and the box's address already gives it the same test. Neither the component nor the worker hands
+the pattern the entry's key: a pattern that held it could write down which
+member's entry it is. `packages/patterns/cfc-exchange-rules/custody-projector.tsx`
+is such a room, and `packages/patterns/integration/cfc-custody-projector.test.ts`
+seals two members' stances through its cells and shows that a room reader sees
+its projector's answer and not a member's rating.
 
 ## What the seal writes
 
@@ -158,7 +224,7 @@ root included when the seal creates the box. The anchor's clause fits the room
 space's residency ceiling, and on an entry it sits beside the entry's declared
 `[P]`, which still bounds who reads the entry.
 
-Anyone who can read the terms can compute both addresses, so the seal refuses a
+Anyone who can compute `D` can compute both addresses, so the seal refuses a
 box whose root the seal did not write, and an anchor whose value is not the
 seal's constant or whose label is not exactly `P ∨ Space(S)` with no integrity.
 An anchor holding a link would otherwise carry its target's clauses into every
@@ -220,6 +286,33 @@ of it.
   releasing code can compare the number of entries with the number of seats,
   not the set of writers with the set of seats. That count is sound only while
   each seat seals once and only seats can seal.
+- **Which box a room reads.** The link a pattern holds to the box is
+  ordinary pattern data, so a member's code can point it at another document:
+  the box of another instance under the same `P`, or one that links to some of
+  the real entries beside entries of its own. A projector checking the entries'
+  terms and their number against the seats cannot tell such a document from the
+  box. While the room's rule names its projector by identity alone, a member
+  can therefore run the projector over another member's entry and values of
+  their own, varied to learn that entry answer by answer, and the rule releases
+  each answer. Requiring the input witness is necessary to close this, and not
+  sufficient. The witness is the meet over the releasing code's confidential
+  observations only, so a document of the member's own that sits a real,
+  sealed entry beside unlabeled entries it made up still carries it. Closing
+  the gap also takes writer policies on the box and on the releasing code's
+  output, and endorsed releasing code that takes no public selector
+  parameters. The preview reports whether every rule of `P` requires the
+  witness on a guard naming its releasing code outright (`witnessedRelease`),
+  and when one does not, the confirmation shows a warning that a member's own
+  code can learn the actor's stance one answer at a time, in place of a bound
+  on what an answer reveals. Once a pattern's reads carry the witness and the
+  other conditions can be checked, the seal is meant to refuse such a policy
+  instead of warning.
+- **An input witness from pattern code.** A projector written as a pattern
+  `lift` reads the box through its argument document, and the witness does not
+  reach that read today, so a rule requiring
+  `inputWitness: TransformedBy{builtin cfc-custody-seal}` releases nothing a
+  pattern computes. A room's rule names its projector by identity until it
+  does.
 - **Freezing the room's readers.** Whoever can read `S` when a released value
   is rendered is its audience. Keeping the audience at the seats, whether with
   a room access list fixed at the first seal or with a render fact that admits

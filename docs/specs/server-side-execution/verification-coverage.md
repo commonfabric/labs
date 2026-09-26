@@ -9706,7 +9706,7 @@ supply; OW29/OW32/OW34 closed):
     provider refactored onto it, so a trust-config change invalidates
     per-run served digests exactly as ambient ones — INV-G); the
     SpaceServer's `#stampRun` attaches the per-run snapshot via
-    `tx.setCfcTrustSnapshot(...)` with the ruled precedence —
+    `setCfcTrustSnapshot(tx, ...)` with the ruled precedence —
     `delegated.acting.user`, else the handler's acting
     (LT6-inherited pairs included), else a demanded derivation's
     `scopeKeyIdentity.principal` (the Q2 arm — ships, severable),

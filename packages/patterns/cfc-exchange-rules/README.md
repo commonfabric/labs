@@ -20,6 +20,32 @@ handler copying a raw input, or a different version of the module does not
 satisfy the rule. `blessed-object.tsx` does the same for a function returning an
 object, whose object node is released along with its fields.
 
+`custody-projector.tsx` is demo-grade until a pattern's reads carry the seal's
+input witness. It is a room whose members seal their stances into the policy's
+custody through the host's `cf-custody-seal`, and whose policy releases only
+what its projector computes over the sealed box: one of the listed answers. It
+shows the pattern side of the
+[custody seal](../../../docs/specs/cfc-custody-seal.md): seats named by attested
+cells, the policy read from a declaring cell's label, and the box link the host
+writes back. Its rule names the projector by identity alone, so a member's own
+code can feed the projector a crafted box and learn another member's entry from
+the answers; the spec's limits say what closes that.
+
+`witnessed-chain.tsx` narrows the tally rule with an `inputWitness`: it releases
+the tally only when every confidential location the tally read was written by
+the module's `commit` step. Public inputs do not constrain the witness, so it
+does not prove that every value the tally read came from `commit`. A relay
+between the two, a vote planted beside the committed ones, and a vote list
+written by other code are refused, though the tally's own identity would release
+each of them. The guard pins one level, so it trusts every input `commit` read,
+directly or through any copy: if other code mirrors the committed votes into
+another document and `commit` appended to the mirror, a vote planted there would
+be released. Pinning `commit`'s own inputs to `submit` would release nothing
+here: the briefs are objects in a list, which the runtime stores as references,
+and a reference retains no witness.
+`docs/specs/cfc-transformed-by-input-witnesses.md` says what the witness covers
+and what it does not.
+
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space
 as the policy subject and requires that exact manifest to be installed in the
@@ -45,4 +71,6 @@ deno task cf check packages/patterns/cfc-exchange-rules/direct-release.tsx --sho
 deno task cf test packages/patterns/cfc-exchange-rules/direct-release.test.tsx
 deno task cf test packages/patterns/cfc-exchange-rules/blessed-computation.test.tsx
 deno task cf test packages/patterns/cfc-exchange-rules/blessed-object.test.tsx
+deno task cf test packages/patterns/cfc-exchange-rules/custody-projector.test.tsx
+deno task cf test packages/patterns/cfc-exchange-rules/witnessed-chain.test.tsx
 ```
