@@ -156,16 +156,7 @@ export class VisitInProgress<
 
         default: {
           // deno-coverage-ignore-start
-
-          // This is a defense-in-depth protection against bugs in this file.
-          // Binding `result` as `never` also makes a result form which
-          // `#visitValue()` can return, but which isn't handled above, a
-          // compile-time error right here.
-          const unhandled: never = result;
-          const type = (unhandled as { type: string }).type;
-          throw new Error(
-            `Shouldn't happen: Got result type \`${type}\` at the top level of a visit.`,
-          );
+          this.#throwShouldntHappenResultType(result as never);
         }
           // deno-coverage-ignore-stop
       }
@@ -609,6 +600,12 @@ export class VisitInProgress<
             valueMappedTo = undefined;
             break;
           }
+
+          default: {
+            // deno-coverage-ignore-start
+            this.#throwShouldntHappenResultType(valueResult as never);
+          }
+            // deno-coverage-ignore-stop
         }
 
         if (mapResult) {
@@ -777,13 +774,7 @@ export class VisitInProgress<
 
       default: {
         // deno-coverage-ignore-start
-
-        // This is a defense-in-depth protection against bugs in this file.
-        const unhandled: never = visitResult;
-        const type = (unhandled as { type: string }).type;
-        throw new Error(
-          `Shouldn't happen: Got result type \`${type}\`.`,
-        );
+        this.#throwShouldntHappenResultType(visitResult as never);
       }
         // deno-coverage-ignore-stop
     }
@@ -815,15 +806,20 @@ export class VisitInProgress<
 
       default: {
         // deno-coverage-ignore-start
-
-        // This is a defense-in-depth protection against bugs in this file.
-        const unhandled: never = visitResult;
-        const type = (unhandled as { type: string }).type;
-        throw new Error(
-          `Shouldn't happen: Got result type \`${type}\`.`,
-        );
+        this.#throwShouldntHappenResultType(visitResult as never);
       }
         // deno-coverage-ignore-stop
     }
   }
+
+  // deno-coverage-ignore-start
+  /**
+   * Throws a "shouldn't happen" error, used in `default` cases of `switch`
+   * statements that should never end up called by virtue of all the possible
+   * result types being handled.
+   */
+  #throwShouldntHappenResultType(result: { type: string }): never {
+    throw new Error(`Shouldn't happen: Got result type \`${result.type}\`.`);
+  }
+  // deno-coverage-ignore-stop
 }
