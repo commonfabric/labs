@@ -493,7 +493,11 @@ export abstract class DefaultValueVisitor<
     return undefined;
   }
 
-  /** @inheritDoc */
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `undefined`.
+   */
   override visitingFabricPlainObjectEntry(
     _container: FabricPlainObjectPlus<PlusType>,
     _key: string,

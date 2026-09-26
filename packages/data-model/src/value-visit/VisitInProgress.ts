@@ -795,7 +795,7 @@ export class VisitInProgress<
   #handleMappingAsAppropriate(
     original: FabricValuePlus<PlusType>,
     visitResult: MainVisitResult<PlusType, ResultType>,
-  ): MainVisitResult<PlusType, ResultType> | undefined {
+  ): MainVisitResult<PlusType, ResultType> {
     if (!this.#doMap) {
       return undefined;
     }
