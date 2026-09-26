@@ -32,12 +32,16 @@ code can feed the projector a crafted box and learn another member's entry from
 the answers; the spec's limits say what closes that.
 
 `witnessed-chain.tsx` narrows the tally rule with an `inputWitness`: it releases
-the tally only when everything the tally read was written by the module's
-`commit` step. A relay between the two, a vote planted beside the committed
-ones, and a vote list written by other code are refused, though the tally's own
-identity would release each of them.
-`docs/specs/cfc-transformed-by-input-witnesses.md` says what the witness covers
-and what it does not.
+the tally only when every confidential location the tally read was written by
+the module's `commit` step. Public inputs do not constrain the witness, so it
+does not prove that every value the tally read came from `commit`. A relay
+between the two, a vote planted beside the committed ones, and a vote list
+written by other code are refused, though the tally's own identity would release
+each of them. The guard pins one level, so it trusts whatever `commit` read.
+Pinning `commit`'s own inputs to `submit` would release nothing here: the briefs
+are objects in a list, which the runtime stores as references, and a reference
+retains no witness. `docs/specs/cfc-transformed-by-input-witnesses.md` says what
+the witness covers and what it does not.
 
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space

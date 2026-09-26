@@ -130,7 +130,16 @@ included. A destination qualifies only when all of these hold:
 - no reference sits anywhere in its final value, because a pointer the diff
   found in place, such as a write redirect it writes through, is not one the
   writer supplied;
-- the join fits every ceiling declared at or beneath it.
+- the join fits every ceiling declared at or beneath it;
+- the transaction created the destination, or read no content at or beneath
+  it, nor recursively above it. A writer that read its destination can carry a
+  value it found there into what it sets, and the diff leaves that value in
+  place. The diff's own reads of the destination, and the reference probe that
+  resolves it, do not count.
+
+A peer that adds a member beneath the destination after the writer read its
+replica makes the writer's commit a conflict, so the retry sets over the
+member rather than stamping it.
 
 Other destinations keep the stamps the diff's own writes get. Collection
 operations (`push`, `addUnique`, `removeByValue`, `increment`) record nothing:
@@ -234,12 +243,17 @@ not rely on the witness without them.
   commit a stance computed from another member's note. The stance is then
   witnessed exactly like an honest one. What separates the two is the event's
   provenance, which is the proof-of-gesture work, not this.
-- **Read-modify-write re-attributes what the writer re-sets.** A writer that
-  reads its own output and sets it again, planted members included, is stamped
-  as their writer, because its `set` supplied them. Its own witnesses still
-  record what it read, so a guard pinning one more level refuses the planted
-  member. A guard pinning one level trusts the step's inputs, as it always
-  does.
+- **A one-level guard trusts what the endorsed step read.** The innermost step
+  a rule pins stamps whatever it writes as its own, so a value it copied from
+  an input another writer crafted passes as its output. Re-setting its own
+  destination is the exception: a step that read the document it sets is not
+  stamped over it whole, so a crafted value it carried through unchanged keeps
+  the crafted writer's stamp. A rule that must not trust the step's other
+  inputs pins one more level. That needs the step's inputs to carry their
+  writer's stamp too: a list of objects is stored as references, which retain
+  no witness, and a list another transaction created, a `Default` among them,
+  keeps no writer on its container node, so a two-level guard over such a
+  list releases nothing.
 - **Selection among committed values.** A transformation fed a subset of
   honestly committed inputs computes over a choice. References are refused
   above; a selection made by endorsed code is that code's semantics.
