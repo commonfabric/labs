@@ -72,10 +72,10 @@ export type VisitInProgressConfig =
  * This class is _intentionally_ omitted from the barrel `export` file for the
  * submodule.
  *
- * TODO(danfuzz): (1) Stop ignoring config `freeze`. (2) `mapped*()` methods
- * should take both "before" and "after" values. (3) `visiting*()` methods
- * should be able to return `replace` (but _not_ `recurse`!). (4) `visiting*()`
- * methods for not-`FabricInstance` should be able to return `omit`.
+ * TODO(danfuzz): (1) `mapped*()` methods should take both "before" and "after"
+ * values. (2) `visiting*()` methods should be able to return `replace` (but
+ * _not_ `recurse`!). (3) `visiting*()` methods for not-`FabricInstance` should
+ * be able to return `omit`.
  */
 export class VisitInProgress<
   PlusType = never,
@@ -427,9 +427,7 @@ export class VisitInProgress<
         }
       }
 
-      return (mapResult && anyChanges)
-        ? { type: "mapTo", value: this.#assertResultType(mapResult) }
-        : undefined;
+      return this.#makeRecurseResult(array, mapResult, anyChanges);
     } finally {
       this.#stack.popExpect(array);
     }
@@ -503,64 +501,22 @@ export class VisitInProgress<
         return result;
       }
 
-      if (Object.is(mappedTo, state)) {
-        // The state visit returned the original state value, so we in turn
-        // return the original `FabricInstance`.
+      // This is a little less than ideal, because in the case of a mapping, the
+      // `mapTo` we might get back is for the _state_ and not the
+      // `FabricInstance`. We do this so that `#makeRecurseResult()` doesn't
+      // have to have a special case for `FabricInstance` (because we don't want
+      // to construct a new `FabricInstance` unless we have to). In the end,
+      // it's one small additional allocation during a procedure which involves
+      // a _lot_ of allocations, so we accept the cost.
+      const recurseResult =
+        this.#makeRecurseResult(state, mappedTo, !Object.is(mappedTo, state));
+
+      if (recurseResult === undefined) {
         return undefined;
-      }
-
-      // This cast is sound because `FabricInstance` implementations aren't
-      // supposed to care about what their `PlusType` is. What we're saying
-      // here is that whatever codec was used to encode the instance as
-      // `FabricInstancePlus<PlusType>` is fine to use as a
-      // `FabricInstancePlus<ResultType>` on state of type
-      // `FabricValuePlus<ResultType>` to decode back into an instance.
-      const codecForResultType = codec as NonterminalCodec<
-        unknown
-      > as NonterminalCodec<ResultType>;
-
-      let canDecode;
-      try {
-        canDecode = codecForResultType.canDecode(mappedTo);
-      } catch (cause) {
-        throw new Error(
-          debugStr`Codec of $quote${instance} failed while checking replacement state $quote${mappedTo}`,
-          { cause },
-        );
-      }
-
-      if (!canDecode) {
-        throw new Error(
-          debugStr`Codec of $quote${instance} refused replacement state $quote${mappedTo}`,
-        );
-      }
-
-      let codecTag;
-      try {
-        codecTag = codec.tagForValue(instance);
-      } catch (cause) {
-        throw new Error(
-          debugStr`Codec of $quote${instance} failed when asked for a tag.`,
-          { cause },
-        );
-      }
-
-      try {
-        return {
-          type: "mapTo",
-          value: this.#assertResultType(
-            codecForResultType.decode(
-              codecTag,
-              mappedTo,
-              NULL_LIVE_ENVIRONMENT,
-            ),
-          ),
-        };
-      } catch (cause) {
-        throw new Error(
-          debugStr`Codec of $quote${instance} accepted but then failed to decode replacement state $quote${mappedTo}`,
-          { cause },
-        );
+      } else {
+        const instanceResult =
+          this.#reconstructFabricInstance(instance, codec, recurseResult.value);
+        return this.#makeRecurseResult(instance, instanceResult, false);
       }
     } finally {
       this.#stack.popExpect(instance);
@@ -685,9 +641,7 @@ export class VisitInProgress<
         }
       }
 
-      return (mapResult && anyChanges)
-        ? { type: "mapTo", value: this.#assertResultType(mapResult) }
-        : undefined;
+      return this.#makeRecurseResult(plainObj, mapResult, anyChanges);
     } finally {
       this.#stack.popExpect(plainObj);
     }
@@ -790,16 +744,6 @@ export class VisitInProgress<
   }
 
   /**
-   * Gets the tag for the given value, consulting the visitor's `isPlusType()`
-   * only where the value cannot be a `FabricValue`.
-   */
-  #tagOfValueElseNull(
-    value: FabricValuePlus<PlusType>,
-  ): FabricValuePlusTag | null {
-    return tagOfFabricValueElseNull(value, this.#isPlusType);
-  }
-
-  /**
    * Converts a `#visitValue()` result being used as a plain object key, from a
    * `recurse`-induced sub-value iteration, as appropriate, based on `#mapMode`.
    */
@@ -867,6 +811,106 @@ export class VisitInProgress<
       }
         // deno-coverage-ignore-stop
     }
+  }
+
+  /**
+   * Makes the result value for one of the `recurse*()` methods.
+   */
+  #makeRecurseResult(
+    originalValue: FabricValuePlus<PlusType>,
+    resultValue: FabricValuePlus<ResultType> | undefined,
+    anyChanges: boolean,
+  ): MapToForm<ResultType> | undefined {
+    if (resultValue === undefined) {
+      // We're not in `#mapMode`. Checking `resultValue === undefined` is the
+      // equivalent check, while also letting TS narrow its type.
+      return undefined;
+    }
+
+    // We're doing a structural map. See the main docs for `mapValue()` and
+    // `mutableMapValue()` in re when `undefined` can be returned and when
+    // copies of containers must be made.
+
+    if (this.#freezeMappedContainers) {
+      if (!anyChanges && Object.isFrozen(originalValue)) {
+        return undefined;
+      }
+
+      Object.freeze(resultValue);
+      // ...and continue below, producing a `mapTo` result.
+    }
+
+    return { type: "mapTo", value: this.#assertResultType(resultValue) };
+  }
+
+  /**
+   * Helper for `#recurseFabricInstance`, which uses the original instance's
+   * codec to reconstruct a result from the original's encoded state, with lots
+   * of error checking to help produce nice messages.
+   */
+  #reconstructFabricInstance(
+    originalInstance: FabricInstancePlus<PlusType>,
+    originalCodec: NonterminalCodec<PlusType>,
+    resultState: FabricValuePlus<ResultType>,
+  ): FabricInstancePlus<ResultType> {
+    // This cast is sound because `FabricInstance` implementations aren't
+    // supposed to care about what their `PlusType` is. What we're saying here
+    // is that whatever codec was used to encode the instance as
+    // `FabricInstancePlus<PlusType>` is fine to use as a
+    // `FabricInstancePlus<ResultType>` on state of type
+    // `FabricValuePlus<ResultType>` to decode back into an instance.
+    const resultCodec = originalCodec as NonterminalCodec<
+      unknown
+    > as NonterminalCodec<ResultType>;
+
+    let canDecode;
+    try {
+      canDecode = resultCodec.canDecode(resultState);
+    } catch (cause) {
+      throw new Error(
+        debugStr`Codec of $quote${originalInstance} failed while checking replacement state $quote${resultState}`,
+        { cause },
+      );
+    }
+
+    if (!canDecode) {
+      throw new Error(
+        debugStr`Codec of $quote${originalInstance} refused replacement state $quote${resultState}`,
+      );
+    }
+
+    let codecTag;
+    try {
+      codecTag = originalCodec.tagForValue(originalInstance);
+    } catch (cause) {
+      throw new Error(
+        debugStr`Codec of $quote${originalInstance} failed when asked for a tag.`,
+        { cause },
+      );
+    }
+
+    try {
+      return resultCodec.decode(
+        codecTag,
+        resultState,
+        NULL_LIVE_ENVIRONMENT,
+      ) as FabricInstancePlus<ResultType>;
+    } catch (cause) {
+      throw new Error(
+        debugStr`Codec of $quote${originalInstance} accepted but then failed to decode replacement state $quote${resultState}`,
+        { cause },
+      );
+    }
+  }
+
+  /**
+   * Gets the tag for the given value, consulting the visitor's `isPlusType()`
+   * only where the value cannot be a `FabricValue`.
+   */
+  #tagOfValueElseNull(
+    value: FabricValuePlus<PlusType>,
+  ): FabricValuePlusTag | null {
+    return tagOfFabricValueElseNull(value, this.#isPlusType);
   }
 
   // deno-coverage-ignore-start

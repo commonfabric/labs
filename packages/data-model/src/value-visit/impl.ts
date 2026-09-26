@@ -11,6 +11,11 @@ import { VisitInProgress } from "./VisitInProgress.ts";
  * Performs a one-off structural-map of a value, with the given visitor, with
  * all resulting mapped containers frozen.
  *
+ * In cases where a visited value or subvalue is itself frozen _and_ the
+ * structural-map operation resulted in no change to the value (that is, it
+ * mapped to itself), then the result of this operation includes those unchanged
+ * values directly (as opposed to including copies of them).
+ *
  * See `visitValue()` in re `value` validation.
  */
 export function mapValue<PlusType, ResultType>(
@@ -27,6 +32,10 @@ export function mapValue<PlusType, ResultType>(
 /**
  * Performs a one-off structural-map of a value, with the given visitor, with
  * all resulting mapped containers left mutable.
+ *
+ * The result of this operation always includes copies of containers encountered
+ * during the structural map, even if those containers were not changed by the
+ * map (that is, they mapped to themselves).
  *
  * See `visitValue()` in re `value` validation.
  */
