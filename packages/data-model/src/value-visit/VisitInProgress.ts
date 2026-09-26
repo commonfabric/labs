@@ -509,14 +509,20 @@ export class VisitInProgress<
       // to construct a new `FabricInstance` unless we have to). In the end,
       // it's one small additional allocation during a procedure which involves
       // a _lot_ of allocations, so we accept the cost.
-      const recurseResult =
-        this.#makeRecurseResult(state, mappedTo, !Object.is(mappedTo, state));
+      const recurseResult = this.#makeRecurseResult(
+        state,
+        mappedTo,
+        !Object.is(mappedTo, state),
+      );
 
       if (recurseResult === undefined) {
         return undefined;
       } else {
-        const instanceResult =
-          this.#reconstructFabricInstance(instance, codec, recurseResult.value);
+        const instanceResult = this.#reconstructFabricInstance(
+          instance,
+          codec,
+          recurseResult.value,
+        );
         return this.#makeRecurseResult(instance, instanceResult, false);
       }
     } finally {
