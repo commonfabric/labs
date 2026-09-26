@@ -9073,19 +9073,8 @@ export function* prepareBoundaryCommitSteps(
           continue;
         }
       }
-      // A per-value stamp is not the declared component: a declared entry
-      // re-minted at its path leaves it to the flow-clear below, which drops
-      // it only under a path this transaction wrote. Dropping it here would
-      // take the `TransformedBy` of a value written whole at a member path
-      // whose schema declares a label, the first time any other member of
-      // the same document is written.
-      const perValueStamp =
-        (entry.origin === "derived" || entry.origin === "structure") &&
-        !isRuntimeMintedTemplate({ origin: entry.origin, path: entryPath });
       if (
-        (!perValueStamp &&
-          (persistedLabelEntryKeys.has(key) ||
-            remintedDeclaredPaths.has(key))) ||
+        persistedLabelEntryKeys.has(key) || remintedDeclaredPaths.has(key) ||
         currentLinkWritePaths.has(key)
       ) {
         if (

@@ -136,10 +136,6 @@ Other destinations keep the stamps the diff's own writes get. Collection
 operations (`push`, `addUnique`, `removeByValue`, `increment`) record nothing:
 they carry existing members through without the writer's code consuming them.
 
-A value stamp persists at a path whose schema declares a label. The declared
-entry re-minted there on a later write to the document replaces the declared
-component only; the stamp is dropped only by a write at or above it.
-
 The redundant-entry collapse cannot hide an unattributed write from this. The
 collapse removes a derived entry only when the resolution without it gains no
 integrity (`isRedundantWithDeclared` in `prepare.ts`), so a location whose
