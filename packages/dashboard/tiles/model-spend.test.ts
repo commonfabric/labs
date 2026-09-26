@@ -348,7 +348,14 @@ Deno.test("model spend: a denied Anthropic exchange marks Anthropic $??? and gra
 // tile grays with Anthropic $??? instead of dropping the provider silently, and
 // the Admin key beside it is not used.
 Deno.test("model spend: a partial federation setup shows Anthropic $??? and sends nothing to Anthropic", async () => {
-  await withFetch({ "api.openai.com": openaiPaged }, async () => {
+  // Both hosts answer, so a request to either would succeed rather than fail
+  // quietly into the same $???; the recorded calls are what prove none is made.
+  const touched: string[] = [];
+  const record: Handler = (url) => {
+    touched.push(url.href);
+    return json({ access_token: "sk-ant-oat01-x", data: [] });
+  };
+  await withFetch({ "api.openai.com": openaiPaged, "api.anthropic.com": record, "metadata.google.internal": record }, async () => {
     const v = await modelSpend.collect(ctx({
       ANTHROPIC_FEDERATION_RULE_ID: "fdrl_x",
       ANTHROPIC_ADMIN_KEY: "stray",
@@ -356,5 +363,6 @@ Deno.test("model spend: a partial federation setup shows Anthropic $??? and send
     }));
     assertEquals(v.status, "unknown");
     assertStringIncludes(v.extra ?? "", "Anthropic $???");
+    assertEquals(touched, []);
   });
 });
