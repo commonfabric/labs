@@ -183,6 +183,7 @@ import {
 } from "./schema-refs.ts";
 import { createTrustResolver } from "./trust.ts";
 import {
+  CFC_ENFORCING_STRICTNESS,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
   cfcEnforcementStrictness,
@@ -6092,6 +6093,14 @@ const linkDocument = (address: LinkWritePolicyInput["source"]) => ({
  * write reaches it, so an entry no write reaches holds claims nothing checked.
  * A claim another entry contributes, through a copy or projection, is not
  * taken either.
+ *
+ * Reaching the entry means the check ran, not that it passed. Only an
+ * enforcing mode aborts the commit when a check fails; under `observe` or
+ * `disabled` a failed check only keeps the source's own declared label from
+ * persisting, so there this returns none. It cannot ask whether the source's
+ * check passed instead: link labels are derived while the documents of the
+ * transaction are verified one at a time, and the source may not have been
+ * verified yet.
  */
 const checkedSchemaPrincipalClaims = (
   tx: IExtendedStorageTransaction,
@@ -6103,6 +6112,12 @@ const checkedSchemaPrincipalClaims = (
   },
   path: readonly string[],
 ): readonly CfcAtom[] => {
+  if (
+    cfcEnforcementStrictness(tx.getCfcState().enforcementMode) <
+      CFC_ENFORCING_STRICTNESS
+  ) {
+    return [];
+  }
   const logicalPath = canonicalizeLogicalPath(path);
   let match: ReturnType<typeof cfcSchemaEntries>[number] | undefined;
   for (const entry of cfcSchemaEntries(schema)) {
