@@ -387,6 +387,9 @@ describe("sqlite handle across runtimes (rule term lists)", () => {
         value?.pending === true && value.requestHash !== initial.requestHash,
     );
     expect(typeof pending.requestHash).toBe("string");
+    // Only the handle's revision moved, so the claim left behind is a
+    // refresh, holding the first answer beside its flag.
+    expect(pending.result).toEqual(initial.result);
     await runtimeA.patternManager.flushCompileCacheWrites();
     await runtimeA.storageManager.synced();
     runtimeA.scheduler.dispose();
