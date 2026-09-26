@@ -615,6 +615,15 @@ export enum RuntimeErrorCode {
    * rather than a retry.
    */
   CompilerStackLoadFailed = "compiler-stack-load-failed",
+
+  /**
+   * The boot-time health check found the backend, or one of the space hosts,
+   * unreachable. The worker is running regardless and its storage reconnects
+   * by itself, so the client's remedy is to wait or to say so, not to retry
+   * the initialization. Posted once, to the clients connected when the check
+   * answers; a client that attaches later is not told.
+   */
+  HostUnreachable = "host-unreachable",
 }
 
 /**
@@ -923,6 +932,17 @@ export type InitializationData = {
    * the next runtime rather than live. Off by default.
    */
   concurrentWatchRefresh?: boolean;
+
+  /**
+   * Hold the {@link RequestType.Initialize} reply until the backend's health
+   * check has answered, and refuse the initialization when a host fails it.
+   * Off by default: the worker answers as soon as its runtime stands, the
+   * check runs alongside, and a host it cannot reach is reported as a
+   * {@link NotificationType.ErrorReport} carrying
+   * {@link RuntimeErrorCode.HostUnreachable} while the memory client keeps
+   * reconnecting on its own.
+   */
+  awaitHealth?: boolean;
 };
 
 /**
