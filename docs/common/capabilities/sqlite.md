@@ -90,6 +90,14 @@ Where a pattern also writes to the database, pass `{ reactOn: db }` so the read
 re-runs after a committed write. An input a pattern only reads has nothing to
 react to.
 
+A re-run that asks the same question keeps its previous rows readable. When
+only `reactOn` changed, `result` still holds the last answer while `pending` is
+`true`, and the new rows replace it when they land, so a list rendered from
+`result` does not blank in between. When the question changes — another
+statement, parameter or database — `result` is cleared as the new request goes
+out, so rows never stand under a question they do not answer. `pending` beside
+rows is a refresh; `pending` with no `result` is a first load.
+
 ## A param is a value
 
 A bind param is resolved as the statement is issued, and `undefined` is refused

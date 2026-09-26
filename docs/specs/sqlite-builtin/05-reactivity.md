@@ -22,6 +22,17 @@ long way without a query-dependency analyzer.
   invalidation pass a narrower cell (e.g. a per-table or per-topic cell they bump
   themselves from the same handler that writes), trading precision for manual
   bookkeeping. v1 does not parse SQL to compute fine-grained read sets.
+- **A refresh keeps the previous answer readable.** `reactOn` says when to ask
+  again; everything else the request carries — the database, statement,
+  parameters, reader and ceilings — is the question. The request hash records
+  the two apart, as the question's digest and `reactOn`'s joined by `.`. A
+  re-issue whose question matches the one the stored rows answer is a refresh:
+  its claim writes `pending` and the request hash and nothing else, so
+  `result` and `withheld` stay readable beside `pending: true` until the
+  refreshed rows replace them. Any other re-issue claims the whole result cell
+  and clears them, so rows never stand beside `pending` under a question they
+  do not answer. A refresh that fails replaces the rows with its `error`, as a
+  first issue's failure does.
 - **A row keeps its document across re-runs.** The write-back stores each
   result row as an entity document of its own under the query's result cell,
   keyed so that a row which did not change keeps its document and writes

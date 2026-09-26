@@ -229,7 +229,8 @@ db.query<Row = Record<string, unknown>>(
   options?: {
     /** Positional (`?`) or named (`:name`) bindings. */
     params?: ReadonlyArray<unknown> | Record<string, unknown>;
-    /** Reactivity input. When its committed value changes, the query re-runs.
+    /** Reactivity input. When its committed value changes, the query re-runs,
+     *  and `result` keeps the previous rows while that re-run is pending.
      *  Pass the whole `db` for "any committed write to this database re-runs".
      *  See Section 05. */
     reactOn?: unknown;

@@ -1478,7 +1478,11 @@ For `fetch*`, `generate*`, `sqlite*` (the §3.5 effectful class):
 - **Storage**: the result is an ordinary cell commit; the memo key is
   written alongside the result (same doc, `requestHash` field). A builtin
   may also write this field with `pending: true` to select the current
-  request; that marker alone is not a stored result. No new tables.
+  request; that marker alone is not a stored result. `sqlite*` writes the
+  marker beside the previous settled rows when only its `reactOn` moved
+  (sqlite-builtin 05, "A refresh keeps the previous answer readable"); those
+  rows answer the previous request, so they are not a hit for this one. No
+  new tables.
 - **Hit rule**: if the recomputed key equals the stored key and a settled
   result or error is present, the stored result IS the node's value — no effect fires. This is what makes
   restart-recovery safe: recompute pure nodes, re-derive keys, reuse

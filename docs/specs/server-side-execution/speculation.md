@@ -84,7 +84,9 @@ currency. The existing overlay and retirement rules below still apply.
   client-side. A speculative read of such a node returns its last
   committed result (read-through). If inputs changed so the memo key
   differs, the node reads as pending — the UI shows its ordinary loading
-  state until the server's result arrives. No exceptions: no "just this
+  state until the server's result arrives. A `sqlite*` key that differs in
+  its `reactOn` digest alone is a refresh, which reads as pending beside the
+  rows it last committed (sqlite-builtin 05). No exceptions: no "just this
   one idempotent GET". OBLIGATION for the read-through's memo-key
   comparison (pinned 2026-08-22, inherited by the arrival-witness
   train's read-through work): a session-scoped CLEARED `sqlite*`

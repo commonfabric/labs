@@ -763,6 +763,17 @@ does not change between the two writes, so nothing re-derives it. A reader of
 says about the routing bit still holds of the request that set it; what is
 recorded durably is the hash.
 
+A refresh — a request that differs from the stored one in `reactOn` alone
+(section 05) — claims through `/pending` and `/requestHash` and leaves the
+rows standing, so its issuing transaction declares on those two paths and
+writes nothing under `/result`. It writes each path on its own rather than
+reading the stored value to write it back: that read would carry `/result`'s
+membership declaration, the join of the rows' own labels, into the issuing
+transaction, and from there onto the control paths. The kept rows remain what
+they were — their documents, their labels, and a shared result's membership
+declaration — and each cell read of them is still judged against the
+observer's ceiling.
+
 The foreign-space refusal below is the exception, and the only one. It is
 written by the ISSUING transaction — the one carrying the clause it refuses
 over, since that is the condition it fires on — so the route declares that
