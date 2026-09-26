@@ -142,9 +142,13 @@ export class VisitInProgress<
       const result = this.#visitValue(value);
       switch (result?.type) {
         case undefined: {
-          // `ResultType` might or might not include `undefined`, so we have to
-          // check.
-          return this.#assertResultType(undefined);
+          if (doMap) {
+            return this.#assertResultType(value);
+          } else {
+            // `ResultType` might or might not include `undefined`, so we have to
+            // check.
+            return this.#assertResultType(undefined);
+          }
         }
 
         case "mainResult":
