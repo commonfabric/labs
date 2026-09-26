@@ -55,6 +55,23 @@ one it has. A line mapping a whole scope, for a package rename, goes in
 aliases, so which file holds a line changes nothing about what it means;
 the division keeps two changes that rename tests in different test files
 from appending to the same file, and so from conflicting when they merge.
+Two renames that land in one alias file — the same test file, or test files
+sharing a last path segment — do still append to it, and `.gitattributes` gives
+the directory's files the `union` merge driver, which keeps both sides' lines
+rather than raising a conflict. Keeping both is right when the two lines can
+coexist, and merging is then silent. When they cannot — both sides mapped the
+same old identity, or together they close a cycle — the merge is still silent
+and `deno task check-test-aliases` is what reports it, so a failing gate after a
+merge that raised no conflict is this case. Resolve it on your branch rather
+than in the file's history. The gate takes its merge base against
+`origin/main`, so on
+the merge ref every line already on main counts as committed and dropping one
+breaks append-only; the line you can still change is the one your branch added.
+Drop that line and append what the two renames together actually mean — and
+appending a second mapping for an identity already mapped is not that, since
+three mappings fail where two did. Which line belongs is a question about the
+renames, not about the files: two mappings from one identity mean one of the two
+renames is not what happened.
 `deno task check-test-aliases` holds the directory to append-only,
 no-double-mapping, acyclic rules: each file only ever grows, none goes
 away, and no identity is mapped twice across all of them. It also fails a
