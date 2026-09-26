@@ -142,7 +142,12 @@ fields to are all persisted without a claim about the current principal.
 Other integrity the schema adds is minted as for any write. No owner is bound by such an initialization: the field's
 `ownerPrincipal` binding is established by the first write an acting
 principal makes through the field's writer, and that write mints the claim
-for its actor as every handler write does.
+for its actor as every handler write does. From then on the field is that
+principal's: the `ownerPrincipal` placeholder names the principal the stored
+label represents, and a write through the writer by any other principal is
+refused (`ownerPrincipal mismatch`), as is one to a field whose stored label
+names more than one principal. An initialization on nobody's behalf leaves
+the stored owner as it is.
 
 An initialization that is nobody's act leaves the claim a stored label
 already makes at its path about a principal: the claim is carried forward as
