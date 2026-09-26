@@ -770,6 +770,18 @@ export class VisitInProgress<
       case undefined: {
         return { type: "mapTo", value: this.#assertValidPlainObjectKey(original, original) };
       }
+
+      default: {
+        // deno-coverage-ignore-start
+
+        // This is a defense-in-depth protection against bugs in this file.
+        const unhandled: never = visitResult;
+        const type = (unhandled as { type: string }).type;
+        throw new Error(
+          `Shouldn't happen: Got result type \`${type}\`.`,
+        );
+      }
+        // deno-coverage-ignore-stop
     }
   }
 
@@ -796,6 +808,18 @@ export class VisitInProgress<
       case undefined: {
         return { type: "mapTo", value: this.#assertResultType(original) };
       }
+
+      default: {
+        // deno-coverage-ignore-start
+
+        // This is a defense-in-depth protection against bugs in this file.
+        const unhandled: never = visitResult;
+        const type = (unhandled as { type: string }).type;
+        throw new Error(
+          `Shouldn't happen: Got result type \`${type}\`.`,
+        );
+      }
+        // deno-coverage-ignore-stop
     }
   }
 }
