@@ -368,6 +368,12 @@ export class VisitInProgress<
           case undefined: {
             break;
           }
+
+          default: {
+            // deno-coverage-ignore-start
+            this.#throwShouldntHappenResultType(elemResult);
+          }
+            // deno-coverage-ignore-stop
         }
       }
 
@@ -440,13 +446,21 @@ export class VisitInProgress<
           // Not mapping.
           return undefined;
         }
+
+        case "mapTo": {
+          // We are doing a structural-map operation. (The `mapTo` might have
+          // been transformed from a "no change" `undefined`.) Handled below.
+          break;
+        }
+
+        default: {
+          // deno-coverage-ignore-start
+          this.#throwShouldntHappenResultType(stateResult);
+        }
+          // deno-coverage-ignore-stop
       }
 
-      // We are doing a structural-map operation, and `stateResult` is
-      // necessarily a `mapTo` (which might have been transformed from an "no
-      // change" `undefined`).
-
-      const mappedTo = (stateResult as MapToForm<ResultType>).value;
+      const mappedTo = stateResult.value;
       const result = vis.visitedFabricInstanceState(instance, mappedTo);
       if (result?.type === "mainResult") {
         return result;
