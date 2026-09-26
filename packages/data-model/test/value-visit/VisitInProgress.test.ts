@@ -916,7 +916,7 @@ describe("VisitInProgress", () => {
           const rec = new Recorder();
 
           visit([1, { a: new FabricLink({ id: "fid1:abc" }) }], rec);
-          expect(rec.names.filter((n) => n.startsWith("visited"))).toEqual([]);
+          expect(rec.names.filter((n) => n.startsWith("mapped"))).toEqual([]);
           expect(rec.names.filter((n) => n.startsWith("visiting"))).toEqual([
             "visitingFabricArrayElement",
             "visitingFabricArrayElement",

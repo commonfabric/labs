@@ -118,9 +118,8 @@ export const DO_RECURSE_VALUES: RecurseForm = Object.freeze(
  * See the included result types for details on what they mean. As for
  * `undefined`, if a visitor returns it in the context of this type, it means
  * that the visit of the given value was completed; the visitor engine will not
- * process it further. For a top-level `map()` call, this additionally means
- * that the originally-visited value is the mapped result of the visit of the
- * value.
+ * process it further. In a structural-map operation, this additionally means
+ * that the value maps to itself.
  */
 export type BaselineVisitorMethodResult<ResultType> =
   | MainResultForm<ResultType>
