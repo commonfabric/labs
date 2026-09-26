@@ -55,6 +55,10 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
    */
   readonly resultTypeChecks: unknown[] = [];
 
+  /** How many times `isDomainAssignableToResultType()` has been called. */
+  domainAssignableChecks = 0;
+
+  onIsDomainAssignableToResultType?: () => boolean;
   onIsPlusType?: (value: unknown) => boolean;
   onIsResultType?: (value: unknown) => boolean;
   onValue?: (
@@ -105,7 +109,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     instance: FabricInstancePlus<unknown>,
     state: unknown,
   ) => VisitingResult<unknown>;
-  onVisitingFabricPlainObjectMapping?: (
+  onVisitingFabricPlainObjectEntry?: (
     key: unknown,
     value: unknown,
   ) => VisitingResult<unknown>;
@@ -113,6 +117,13 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
   /** The names of the recorded calls, in order. */
   get names(): string[] {
     return this.events.map((e) => e[0]);
+  }
+
+  override isDomainAssignableToResultType(): boolean {
+    this.domainAssignableChecks++;
+    return this.onIsDomainAssignableToResultType
+      ? this.onIsDomainAssignableToResultType()
+      : super.isDomainAssignableToResultType();
   }
 
   override isPlusType(value: unknown): value is unknown {
@@ -226,7 +237,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     array: FabricArrayPlus<unknown>,
     index: number,
     value: unknown,
-  ): VisitedResult<unknown> {
+  ): VisitingResult<unknown> {
     this.events.push(["visitingFabricArrayElement", array, index, value]);
     return this.onVisitingFabricArrayElement
       ? this.onVisitingFabricArrayElement(index, value)
@@ -237,7 +248,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     array: FabricArrayPlus<unknown>,
     start: number,
     count: number,
-  ): VisitedResult<unknown> {
+  ): VisitingResult<unknown> {
     this.events.push(["visitingFabricArrayGap", array, start, count]);
     return this.onVisitingFabricArrayGap
       ? this.onVisitingFabricArrayGap(start, count)
@@ -247,7 +258,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
   override visitingFabricInstanceState(
     instance: FabricInstancePlus<unknown>,
     state: unknown,
-  ): VisitedResult<unknown> {
+  ): VisitingResult<unknown> {
     this.events.push(["visitingFabricInstanceState", instance, state]);
     return this.onVisitingFabricInstanceState
       ? this.onVisitingFabricInstanceState(instance, state)
@@ -258,10 +269,10 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     container: FabricPlainObjectPlus<unknown>,
     key: unknown,
     value: unknown,
-  ): VisitedResult<unknown> {
+  ): VisitingResult<unknown> {
     this.events.push(["visitingFabricPlainObjectEntry", container, key, value]);
-    return this.onVisitingFabricPlainObjectMapping
-      ? this.onVisitingFabricPlainObjectMapping(key, value)
+    return this.onVisitingFabricPlainObjectEntry
+      ? this.onVisitingFabricPlainObjectEntry(key, value)
       : undefined;
   }
 }
@@ -269,6 +280,11 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
 /** Returns a `mainResult` form carrying the given value. */
 export function mainResult<T>(value: T): { type: "mainResult"; value: T } {
   return { type: "mainResult", value };
+}
+
+/** Returns a `mapTo` form carrying the given value. */
+export function mapTo<T>(value: T): { type: "mapTo"; value: T } {
+  return { type: "mapTo", value };
 }
 
 /** Returns a `replace` form carrying the given value. */
