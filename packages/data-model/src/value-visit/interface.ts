@@ -108,7 +108,7 @@ export const DO_RECURSE_VALUES: RecurseForm = Object.freeze(
 );
 
 //
-// `visit*()` method result union types
+// Visitor method result union types
 //
 
 /**
@@ -127,6 +127,12 @@ export type BaselineVisitorMethodResult<ResultType> =
   | undefined;
 
 /**
+ * Possible results from `mapped*()` calls (container iteration post-visit
+ * methods).
+ */
+export type MappedResult<ResultType> = BaselineVisitorMethodResult<ResultType>;
+
+/**
  * Possible results from `visitValue()`, `visitCycle()`, or one of the methods
  * that `DefaultValueVisitor.visitValue()` can call (directly or indirectly).
  *
@@ -137,12 +143,6 @@ export type VisitResult<PlusType, ResultType> =
   | MapToForm<ResultType>
   | RecurseForm
   | ReplaceForm<PlusType>;
-
-/**
- * Possible results from `mapped*()` calls (container iteration post-visit
- * methods).
- */
-export type VisitedResult<ResultType> = BaselineVisitorMethodResult<ResultType>;
 
 /**
  * Possible results from `visiting*()` calls (container iteration pre-visit
@@ -220,7 +220,7 @@ export interface ValueVisitor<
     array: FabricArrayPlus<PlusType>,
     index: number,
     value: FabricValuePlus<ResultType>,
-  ): VisitedResult<ResultType>;
+  ): MappedResult<ResultType>;
 
   /**
    * Indicates that the instance state of a `FabricInstance` was just mapped.
@@ -232,7 +232,7 @@ export interface ValueVisitor<
   mappedFabricInstanceState(
     instance: FabricInstancePlus<PlusType>,
     state: FabricValuePlus<ResultType>,
-  ): VisitedResult<ResultType>;
+  ): MappedResult<ResultType>;
 
   /**
    * Indicates that `FabricPlainObject` entry was just mapped. This method is
@@ -244,7 +244,7 @@ export interface ValueVisitor<
     container: FabricPlainObjectPlus<PlusType>,
     key: string,
     value: FabricValuePlus<ResultType>,
-  ): VisitedResult<ResultType>;
+  ): MappedResult<ResultType>;
 
   /**
    * Visits a container value which is already in the process of being visited.
