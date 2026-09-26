@@ -2131,7 +2131,11 @@ describe("cfc-custody-seal", () => {
     });
     const byProjector = {
       type: CFC_ATOM_TYPE.TransformedBy,
-      identity: { kind: "verified", symbol: "projectBallot" },
+      identity: {
+        kind: "verified",
+        moduleIdentity: MODULE,
+        symbol: "projectBallot",
+      },
     };
     const template = (rules: readonly unknown[]) => ({
       templateVersion: 1 as const,
@@ -2157,12 +2161,49 @@ describe("cfc-custody-seal", () => {
         releaseRequiresSealWitness(template([rule([
           {
             type: CFC_ATOM_TYPE.TransformedBy,
-            identity: { kind: "verified", symbol: "helper" },
+            identity: {
+              kind: "verified",
+              moduleIdentity: MODULE,
+              symbol: "helper",
+            },
             inputWitness: sealedBy,
           },
           byProjector,
         ])])),
       ).toBe(false);
+      // A witnessed guard that does not name the releasing code matches any
+      // code under subset matching, so it witnesses nothing: no identity, a
+      // variable identity or field, or an identity missing its symbol.
+      for (
+        const identity of [
+          undefined,
+          { var: "code" },
+          { kind: "verified", moduleIdentity: MODULE, symbol: { var: "s" } },
+          { kind: "verified", moduleIdentity: MODULE },
+          { kind: "verified", symbol: "projectBallot" },
+          { kind: "builtin" },
+        ]
+      ) {
+        expect(
+          releaseRequiresSealWitness(template([rule([{
+            type: CFC_ATOM_TYPE.TransformedBy,
+            ...(identity === undefined ? {} : { identity }),
+            inputWitness: sealedBy,
+          }])])),
+        ).toBe(false);
+      }
+      // THIS_POLICY's module identity names the policy's own module.
+      expect(
+        releaseRequiresSealWitness(template([rule([{
+          type: CFC_ATOM_TYPE.TransformedBy,
+          identity: {
+            kind: "verified",
+            moduleIdentity: { thisPolicyField: "moduleIdentity" },
+            symbol: "projectBallot",
+          },
+          inputWitness: sealedBy,
+        }])])),
+      ).toBe(true);
       // A rule with no transformer guard at all is not witnessed.
       expect(releaseRequiresSealWitness(template([rule([])]))).toBe(false);
       // A witness naming some other writer is not the seal's.

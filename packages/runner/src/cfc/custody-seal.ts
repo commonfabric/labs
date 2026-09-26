@@ -702,13 +702,21 @@ const readEvidence = (tx: IExtendedStorageTransaction): ReadEvidence[] => {
  * Whether every exchange rule of `template` guards on the code that computed
  * what it releases, and every such `TransformedBy` guard names the seal's own
  * `TransformedBy{builtin cfc-custody-seal}` as its input witness, so that no
- * rule releases what code computed over anything the seal did not write. A policy with no rules
- * releases nothing and passes.
+ * rule releases what code computed over anything the seal did not write. A
+ * policy with no rules releases nothing and passes.
+ *
+ * The witness is necessary, not sufficient. A witness is the meet over the
+ * confidential observations of the releasing code only, so a document that
+ * mixes a real entry with unlabeled entries of a member's own still carries
+ * it. A room's release also rests on writer policies on the box and on the
+ * releasing code's output, and on endorsed releasing code that takes no
+ * public selector parameters.
  *
  * TODO(L14b): until a pattern's reads carry the witness, a rule in this form
  * releases nothing a pattern computes, so every pattern room reports
- * `false`. Once they do, a seal into a policy whose rules are not all
- * witnessed should be refused rather than warned about.
+ * `false`. Once they do, and once the conditions above can be checked, a seal
+ * into a policy whose rules are not all witnessed should be refused rather
+ * than warned about.
  */
 export const releaseRequiresSealWitness = (
   template: PolicyTemplateV1,
@@ -718,10 +726,44 @@ export const releaseRequiresSealWitness = (
       isObjectNotArray(guard) && guard.type === CFC_ATOM_TYPE.TransformedBy
     );
     return transformers.length > 0 &&
-      transformers.every((guard) =>
-        deepEqual((guard as Record<string, unknown>).inputWitness, SEALED_BY)
-      );
+      transformers.every((guard) => {
+        const record = guard as Record<string, unknown>;
+        return namesConcreteCode(record.identity) &&
+          deepEqual(record.inputWitness, SEALED_BY);
+      });
   });
+
+/**
+ * Whether a `TransformedBy` guard's `identity` names one piece of code
+ * outright. Guards match by subset, so an identity left out, held in a
+ * variable, or missing the field that picks out the code (a verified
+ * identity's module or symbol, a builtin's id) matches any code of that kind,
+ * and a witness on such a guard vouches for nothing the rule releases.
+ * `THIS_POLICY.moduleIdentity` names the policy's own module, so it counts.
+ */
+const namesConcreteCode = (identity: unknown): boolean => {
+  if (!isObjectNotArray(identity) || containsVariable(identity)) return false;
+  switch (identity.kind) {
+    case "verified":
+      return typeof identity.symbol === "string" &&
+        (typeof identity.moduleIdentity === "string" ||
+          deepEqual(identity.moduleIdentity, {
+            thisPolicyField: "moduleIdentity",
+          }));
+    case "builtin":
+      return typeof identity.builtinId === "string";
+    default:
+      return false;
+  }
+};
+
+/** Whether `pattern` holds a `{ var }` placeholder anywhere. */
+const containsVariable = (pattern: unknown): boolean =>
+  Array.isArray(pattern)
+    ? pattern.some(containsVariable)
+    : isObjectNotArray(pattern) &&
+      (Object.hasOwn(pattern, "var") ||
+        Object.values(pattern).some(containsVariable));
 
 /**
  * Whether the document at `link` is absent, or its root was written by the

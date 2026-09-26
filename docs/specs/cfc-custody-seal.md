@@ -294,13 +294,18 @@ of it.
   box. While the room's rule names its projector by identity alone, a member
   can therefore run the projector over another member's entry and values of
   their own, varied to learn that entry answer by answer, and the rule releases
-  each answer. The input witness is what closes this: every entry the seal
-  wrote carries `TransformedBy{builtin cfc-custody-seal}`, and a document the
-  member made does not. The preview reports whether every rule of `P` requires
-  that witness (`witnessedRelease`), and when one does not, the confirmation
-  shows a warning that a member's own code can learn the actor's stance one
-  answer at a time, in place of a bound on what an answer reveals. Once a
-  pattern's reads carry the witness, the seal is meant to refuse such a policy
+  each answer. Requiring the input witness is necessary to close this, and not
+  sufficient. The witness is the meet over the releasing code's confidential
+  observations only, so a document of the member's own that sits a real,
+  sealed entry beside unlabeled entries it made up still carries it. Closing
+  the gap also takes writer policies on the box and on the releasing code's
+  output, and endorsed releasing code that takes no public selector
+  parameters. The preview reports whether every rule of `P` requires the
+  witness on a guard naming its releasing code outright (`witnessedRelease`),
+  and when one does not, the confirmation shows a warning that a member's own
+  code can learn the actor's stance one answer at a time, in place of a bound
+  on what an answer reveals. Once a pattern's reads carry the witness and the
+  other conditions can be checked, the seal is meant to refuse such a policy
   instead of warning.
 - **An input witness from pattern code.** A projector written as a pattern
   `lift` reads the box through its argument document, and the witness does not
