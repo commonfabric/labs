@@ -578,6 +578,12 @@ export class VisitInProgress<
             keyMappedTo = undefined;
             break;
           }
+
+          default: {
+            // deno-coverage-ignore-start
+            this.#throwShouldntHappenResultType(keyResult as never);
+          }
+            // deno-coverage-ignore-stop
         }
 
         const valueResult = this.#handleMappingAsAppropriate(
