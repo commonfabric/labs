@@ -472,28 +472,46 @@ describe("represents-principal writer check", () => {
       ifc: { integrity: ["target-mark"] },
     } as JSONSchema;
 
-    // In one transaction, Alice's pattern writes `source` through `prepare`,
-    // then links its unwritten field `p` into a new profile-shaped document.
-    const linkUnwrittenFieldAsAlice = async (
+    // A source document for one transaction: the cell, and the writes that
+    // give it its value.
+    type SameTransactionSource = {
+      source: ReturnType<Runtime["getCell"]>;
+      write: () => void;
+    };
+
+    // In one transaction, Alice's pattern writes the source `prepare` names
+    // and links its field `linkPath` into a new profile-shaped document, in
+    // the order `order` names. Returns the principal claim subjects stored on
+    // the new document.
+    const linkSameTransactionAsAlice = async (
       cause: string,
       prepare: (
         tx: IExtendedStorageTransaction,
         runtime: Runtime,
-      ) => ReturnType<Runtime["getCell"]>,
+      ) => SameTransactionSource,
       linkPath: string,
+      order: "source first" | "link first",
     ) => {
       const { runtime, storageManager } = createRuntime();
       try {
         const tx = runtime.edit();
         actAsPatternFor(tx, alice.did());
-        const source = prepare(tx, runtime);
+        const { source, write } = prepare(tx, runtime);
         const target = runtime.getCell(
           alice.did(),
           `${cause}-target`,
           profileTarget,
           tx,
         );
-        target.set({ name: "Bob", avatar: source.key(linkPath) } as never);
+        const link = () =>
+          target.set({ name: "Bob", avatar: source.key(linkPath) } as never);
+        if (order === "source first") {
+          write();
+          link();
+        } else {
+          link();
+          write();
+        }
         tx.prepareCfc();
         const result = await tx.commit();
         return {
@@ -509,66 +527,78 @@ describe("represents-principal writer check", () => {
       }
     };
 
-    it("stores no claim from a same-transaction source schema entry the write check skipped", async () => {
-      const { subjects } = await linkUnwrittenFieldAsAlice(
-        "represents-principal-link-pending",
-        (tx, runtime) => {
-          const source = runtime.getCell(
-            alice.did(),
-            "represents-principal-link-pending-source",
-            unwrittenForgery,
-            tx,
-          );
-          source.set({ q: "x" });
-          return source;
-        },
-        "p",
-      );
-      expect(subjects).not.toContain(bob.did());
-    });
+    for (const order of ["source first", "link first"] as const) {
+      it(`stores no claim from a same-transaction source schema entry the write check skipped, ${order}`, async () => {
+        const { subjects } = await linkSameTransactionAsAlice(
+          "represents-principal-link-pending",
+          (tx, runtime) => {
+            const source = runtime.getCell(
+              alice.did(),
+              "represents-principal-link-pending-source",
+              unwrittenForgery,
+              tx,
+            );
+            return { source, write: () => source.set({ q: "x" }) };
+          },
+          "p",
+          order,
+        );
+        expect(subjects).not.toContain(bob.did());
+      });
 
-    it("stores no claim from a source's setup result schema", async () => {
-      const { subjects } = await linkUnwrittenFieldAsAlice(
-        "represents-principal-link-setup",
-        (tx, runtime) => {
-          const source = runtime.getCell(
-            alice.did(),
-            "represents-principal-link-setup-source",
-            undefined,
-            tx,
-          );
-          source.set({ q: "x" });
-          writeResultSchemaMeta(source.withTx(tx), unwrittenForgery);
-          return source;
-        },
-        "p",
-      );
-      expect(subjects).not.toContain(bob.did());
-    });
+      it(`stores no claim from a source's setup result schema, ${order}`, async () => {
+        const { subjects } = await linkSameTransactionAsAlice(
+          "represents-principal-link-setup",
+          (tx, runtime) => {
+            const source = runtime.getCell(
+              alice.did(),
+              "represents-principal-link-setup-source",
+              undefined,
+              tx,
+            );
+            return {
+              source,
+              write: () => {
+                source.set({ q: "x" });
+                writeResultSchemaMeta(source.withTx(tx), unwrittenForgery);
+              },
+            };
+          },
+          "p",
+          order,
+        );
+        expect(subjects).not.toContain(bob.did());
+      });
 
-    it("carries a same-transaction source's checked self-attestation", async () => {
-      const { error, subjects } = await linkUnwrittenFieldAsAlice(
-        "represents-principal-link-pending-genuine",
-        (tx, runtime) => {
-          const source = runtime.getCell(
-            alice.did(),
-            "represents-principal-link-pending-genuine-source",
-            claimSchema([{
-              kind: "represents-principal",
-              subject: CURRENT_PRINCIPAL,
-            }]),
-            tx,
-          );
-          source.set({ name: "Ada" });
-          recordTrustedEdit(tx, source.getAsNormalizedFullLink());
-          return source;
-        },
-        "name",
-      );
-      expect(error).toBeUndefined();
-      expect(subjects).toContain(alice.did());
-      expect(subjects).not.toContain(bob.did());
-    });
+      it(`carries a same-transaction source's checked self-attestation, ${order}`, async () => {
+        const { error, subjects } = await linkSameTransactionAsAlice(
+          "represents-principal-link-pending-genuine",
+          (tx, runtime) => {
+            const source = runtime.getCell(
+              alice.did(),
+              "represents-principal-link-pending-genuine-source",
+              claimSchema([{
+                kind: "represents-principal",
+                subject: CURRENT_PRINCIPAL,
+              }], { ownerPrincipal: CURRENT_PRINCIPAL }),
+              tx,
+            );
+            return {
+              source,
+              write: () => {
+                source.set({ name: "Ada" });
+                recordTrustedEdit(tx, source.getAsNormalizedFullLink());
+              },
+            };
+          },
+          "name",
+          order,
+        );
+        expect(error).toBeUndefined();
+        expect(subjects).toContain(alice.did());
+        expect(subjects).not.toContain(bob.did());
+      });
+    }
 
     it("refuses a link to an unlabeled source whose carried view holds only claims", async () => {
       // With the claims gone the view carries nothing, so the link must meet
