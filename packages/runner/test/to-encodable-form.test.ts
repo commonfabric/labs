@@ -25,7 +25,11 @@ import {
 } from "@commonfabric/data-model/fabric-primitives";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 
-import { withAliasBindings } from "../src/builder/to-encodable-form.ts";
+import {
+  moduleWithAliasBindings,
+  withAliasBindings,
+} from "../src/builder/to-encodable-form.ts";
+import type { Module } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createCell } from "../src/cell.ts";
 
@@ -289,6 +293,70 @@ describe("to-encodable-form", () => {
       expect(withAliasBindings([1, 2])).toEqual([1, 2]);
     });
 
+    it("refuses a function that is not a builder artifact, at the top and nested", () => {
+      // The only function an execution graph holds is a builder artifact; a
+      // module's own functions are bound through the module instead.
+      expect(() => withAliasBindings(() => 1)).toThrow(
+        "not a builder artifact",
+      );
+      expect(() => withAliasBindings({ f: () => 1 })).toThrow(
+        "not a builder artifact",
+      );
+    });
+
+    it("returns a builder artifact function as itself, at the top and nested", () => {
+      const artifact = Object.assign(() => {}, {
+        toEncodableForm: () => ({ type: "javascript" }),
+      });
+
+      expect(withAliasBindings(artifact)).toBe(artifact);
+      expect((withAliasBindings({ a: artifact }) as any).a).toBe(artifact);
+    });
+
+    it("binds a graph node's module through the module's members", () => {
+      // The module's `implementation` is a plain function, which the walk
+      // refuses anywhere but in a module; reaching it here without a refusal
+      // is what shows the node's `module` went through the module binding.
+      const implementation = () => 1;
+      const graph = {
+        argumentSchema: {},
+        resultSchema: {},
+        nodes: [{
+          module: { type: "javascript", implementation },
+          inputs: { x: 1 },
+          outputs: {},
+        }],
+      };
+
+      const out = withAliasBindings(graph) as any;
+      expect(out.nodes[0].module.implementation).toBe(implementation);
+      expect(out.nodes[0].module.type).toBe("javascript");
+      expect(out.nodes[0].inputs).toEqual({ x: 1 });
+    });
+
+    it("refuses a graph node's module that is not an inert plain object, rather than rebuilding it", () => {
+      // Rebuilt member by member, a getter would run and be stored as a data
+      // property. The node's `module` goes to the module binding only once it
+      // is known to be inert; anything else is walked as a value, which
+      // refuses it.
+      let reads = 0;
+      const module = {
+        type: "javascript",
+        get live() {
+          reads++;
+          return 1;
+        },
+      };
+      const graph = {
+        argumentSchema: {},
+        resultSchema: {},
+        nodes: [{ module, inputs: {}, outputs: {} }],
+      };
+
+      expect(() => withAliasBindings(graph)).toThrow("Not representable");
+      expect(reads).toBe(0);
+    });
+
     it("leaves ordinary containers alone", () => {
       // The conversion above must not reach an inert plain object or an array;
       // those are already `FabricValue`s and are walked, not converted.
@@ -299,6 +367,37 @@ describe("to-encodable-form", () => {
       const arr = withAliasBindings([1, "x"]) as any;
       expect(arr).toEqual([1, "x"]);
       expect(Array.isArray(arr)).toBe(true);
+    });
+  });
+
+  describe("moduleWithAliasBindings", () => {
+    it("keeps a module's function members as themselves and binds the rest", () => {
+      // `bound` is a member the walk visibly changes: binding an alias
+      // record raises its `defer`, where a member merely copied would not.
+
+      const implementation = () => 1;
+      const toJSON = () => ({});
+      const module: Module & { toJSON: () => unknown; bound: unknown } = {
+        type: "javascript",
+        implementation,
+        toJSON,
+        argumentSchema: { type: "object" },
+        bound: { $alias: { cell: "argument", path: ["a"] } },
+      };
+
+      const out = moduleWithAliasBindings(module) as Module & {
+        toJSON?: unknown;
+        bound?: unknown;
+      };
+
+      expect(out).not.toBe(module);
+      expect(out.implementation).toBe(implementation);
+      expect(out.toJSON).toBe(toJSON);
+      expect(out.type).toBe("javascript");
+      expect(out.argumentSchema).toEqual({ type: "object" });
+      expect(out.bound).toEqual({
+        $alias: { cell: "argument", path: ["a"], defer: 1 },
+      });
     });
   });
 });
