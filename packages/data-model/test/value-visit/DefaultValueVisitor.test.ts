@@ -28,7 +28,7 @@ type Call = [name: string, ...args: unknown[]];
  * categories those roll up to.
  */
 const TRACED_METHODS = [
-  "visitAnyValue",
+  "visitUnhandledValue",
   "visitBigint",
   "visitBoolean",
   "visitFabricArray",
@@ -97,7 +97,7 @@ function trace(
 function primitiveTail(value: unknown, tag: string): Call[] {
   return [
     ["visitPrimitiveValue", value, tag],
-    ["visitAnyValue", value, tag],
+    ["visitUnhandledValue", value, tag],
   ];
 }
 
@@ -172,7 +172,7 @@ for (
     ], DO_RECURSE_VALUES],
     ["the tag `PlusType`", date, "PlusType", [
       ["visitPlusType", date],
-      ["visitAnyValue", date, "PlusType"],
+      ["visitUnhandledValue", date, "PlusType"],
     ], undefined],
   );
 }
