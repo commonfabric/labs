@@ -1174,6 +1174,32 @@ describe("VisitInProgress", () => {
           expect(map({ a: 1, b: 2 }, rec)).toEqual({ z: 1, b: 2 });
         });
 
+        it("returns a new object with mapped keys and the original values, for `DO_RECURSE_KEYS`", () => {
+          const rec = new Recorder();
+          rec.onPlainObject = () => DO_RECURSE_KEYS;
+          rec.onPrimitive = (v) => (v === "a") ? mapTo("z") : undefined;
+          const inner = { c: 3 };
+          const result = map({ a: 1, b: inner }, rec) as Record<
+            string,
+            unknown
+          >;
+
+          expect(result).toEqual({ z: 1, b: inner });
+          expect(result.b).toBe(inner);
+          expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
+            ["primitive", "a", "string"],
+            ["primitive", "b", "string"],
+          ]);
+        });
+
+        it("returns the same object for `DO_RECURSE_KEYS` when no key changes", () => {
+          const rec = new Recorder();
+          rec.onPlainObject = () => DO_RECURSE_KEYS;
+          const object = { a: 1, b: { c: 3 } };
+
+          expect(map(object, rec)).toBe(object);
+        });
+
         it("reports each entry's final key and mapped value to `visitedFabricPlainObjectEntry()`, after visiting the entry", () => {
           const rec = new Recorder();
           rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
