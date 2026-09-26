@@ -38,6 +38,7 @@ import {
   markRendererTrustedEvent,
 } from "@commonfabric/runner/cfc";
 import { clauseAlternatives } from "@commonfabric/runner/cfc/clause";
+import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import {
   commitCustodySeal,
@@ -161,7 +162,7 @@ describe("sealed custody through a pattern", () => {
       const seatOf = async (identity: Identity) => {
         const runtime = runtimeFor(identity);
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: SEAT_WRITER,
         });
