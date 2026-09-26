@@ -141,19 +141,36 @@ describe("represents-principal", () => {
     });
 
     it("refuses a claim in any form the runtime does not mint", () => {
-      // authorPrincipalCandidates reads each of these as naming DID.
-      const atoms: NonNullable<
-        CfcLabelView["entries"][number]["label"]["integrity"]
-      > = [
-        `represents-principal:${DID}`,
-        { kind: "represents-principal", subject: ` ${DID}` },
-        { kind: "represents-principal", subject: DID, scope: "x" },
+      // No reader counts a string-form or padded claim, and one with another
+      // key is read for its subject; a caller that must know who wrote an
+      // attestation refuses the whole label for any of them.
+      const cases: [
+        NonNullable<CfcLabelView["entries"][number]["label"]["integrity"]>[
+          number
+        ],
+        string[],
+      ][] = [
+        [`represents-principal:${DID}`, []],
+        [{ kind: "represents-principal", subject: ` ${DID}` }, []],
+        [{ kind: "represents-principal", subject: DID, scope: "x" }, [DID]],
       ];
-      for (const atom of atoms) {
+      for (const [atom, candidates] of cases) {
         const label = view([{ path: ["name"], label: { integrity: [atom] } }]);
-        expect(authorPrincipalCandidates(label)).toEqual([DID]);
+        expect(authorPrincipalCandidates(label)).toEqual(candidates);
         expect(exactPrincipalAttestations(label)).toBeUndefined();
       }
+    });
+
+    it("skips what a link carries and a claim of another kind", () => {
+      const label = view([
+        representsAt([], DID),
+        { ...representsAt(["name"], OTHER_DID), observes: "followRef" },
+        {
+          path: [],
+          label: { integrity: [{ kind: "authored-by", subject: OTHER_DID }] },
+        },
+      ]);
+      expect(exactPrincipalAttestations(label)).toEqual([DID]);
     });
   });
 });

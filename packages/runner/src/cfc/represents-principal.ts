@@ -129,14 +129,9 @@ export const representsPrincipalSubjects = (
  */
 export const authorPrincipalCandidates = (
   view: CfcLabelView | undefined,
-): string[] =>
-  view === undefined ? [] : [
-    ...new Set(
-      representsPrincipalSubjects(
-        view.entries.filter((entry) => entry.path.length <= 1),
-      ),
-    ),
-  ];
+): string[] => [
+  ...new Set(representsPrincipalSubjects(principalClaimEntries(view))),
+];
 
 /**
  * The entries of `view` a principal claim is read from: those at the root and
@@ -171,12 +166,16 @@ export const exactPrincipalAttestations = (
   const principals = new Set<string>();
   for (const entry of principalClaimEntries(view)) {
     for (const atom of entry.label.integrity ?? []) {
+      const spelling = principalClaimSpelling(atom);
+      if (spelling === undefined) continue;
+      // Any string-form claim is refused: no reader counts one, and the
+      // write check refuses a pattern writing one.
+      if (spelling === "string") return undefined;
+      if ((atom as { kind?: unknown }).kind !== REPRESENTS_PRINCIPAL) continue;
       const subject = representsPrincipalSubject(atom);
-      if (subject === undefined) continue;
-      if (
-        !isObjectNotArray(atom) || Object.keys(atom).length !== 2 ||
-        (atom as Record<string, unknown>).subject !== subject
-      ) return undefined;
+      if (subject === undefined || Object.keys(atom as object).length !== 2) {
+        return undefined;
+      }
       principals.add(subject);
     }
   }
