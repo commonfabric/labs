@@ -603,7 +603,7 @@ export const canonicalizePreparedDigestInput = (
           return { ...canonical, recordHash: hashStringOf(canonical) };
         })
         .sort((left, right) =>
-          compareAddress(left.address, right.address) ||
+          compareCanonicalAddress(left.address, right.address) ||
           (left.recordHash < right.recordHash
             ? -1
             : left.recordHash > right.recordHash
@@ -623,11 +623,13 @@ export const canonicalizePreparedDigestInput = (
   ...(input.structureContainers !== undefined &&
       input.structureContainers.length > 0
     ? {
+      // Compared as already canonical: `compareAddress` would strip a
+      // leading `value` again and merge two distinct containers.
       structureContainers: dedupeSorted(
         [...input.structureContainers].map(canonicalizeAttemptedWrite).sort(
-          compareAddress,
+          compareCanonicalAddress,
         ),
-        compareAddress,
+        compareCanonicalAddress,
       ),
     }
     : {}),

@@ -189,6 +189,15 @@ describe("prepared digest transaction binding", () => {
       digest([{ path: [], by: "commit" }, { path: ["a"], by: "commit" }]),
     ).toBe(two);
     expect(two).not.toBe(atA);
+    // Paths that differ only in a leading `value` are distinct roots.
+    const shallow = digest([{ path: ["value", "a"], by: "commit" }]);
+    const deep = digest([{ path: ["value", "value", "a"], by: "commit" }]);
+    const both = digest([
+      { path: ["value", "a"], by: "commit" },
+      { path: ["value", "value", "a"], by: "commit" },
+    ]);
+    expect(both).not.toBe(shallow);
+    expect(both).not.toBe(deep);
     // Recorded twice, a root stamps once, and the digest says the same.
     expect(
       digest([{ path: ["a"], by: "commit" }, { path: ["a"], by: "commit" }]),
@@ -218,6 +227,31 @@ describe("prepared digest transaction binding", () => {
         tx.abort();
       }
     }
+  });
+
+  it("binds structure containers whose paths differ only in a leading value", () => {
+    // `["value", "x"]` and `["value", "value", "x"]` are distinct paths once
+    // canonicalized (`["x"]` and `["value", "x"]`), so both containers are
+    // digest content, and the pair differs from either alone.
+    const digest = (paths: string[][]) => {
+      const tx = runtime.edit() as ExtendedStorageTransaction;
+      try {
+        tx.writeValueOrThrow({ ...address("output"), path: ["x"] }, 1);
+        for (const path of paths) {
+          tx.recordCfcStructureContainer({ ...address("output"), path });
+        }
+        return tx.accessForTestingOnly.preparedDigest();
+      } finally {
+        tx.abort();
+      }
+    };
+    const shallow = digest([["value", "x"]]);
+    const deep = digest([["value", "value", "x"]]);
+    const both = digest([["value", "x"], ["value", "value", "x"]]);
+    expect(deep).not.toBe(shallow);
+    expect(both).not.toBe(shallow);
+    expect(both).not.toBe(deep);
+    expect(digest([["value", "value", "x"], ["value", "x"]])).toBe(both);
   });
 
   it("retires the memo for writes and policy records before preparation", () => {
