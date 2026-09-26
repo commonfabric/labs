@@ -102,7 +102,9 @@ const labelHasRootIntegrityKind = (
   kind: string,
 ): boolean =>
   view.entries.some((entry) =>
-    entry.path.length === 0 &&
+    // An entry a link carried describes the linked document, so it does not
+    // stand in for reading that document's own label.
+    entry.path.length === 0 && entry.observes !== "followRef" &&
     (entry.label.integrity ?? []).some((atom) =>
       authorshipClaimSubject(atom, kind) !== undefined
     )
