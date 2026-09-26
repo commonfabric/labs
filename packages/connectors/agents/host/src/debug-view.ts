@@ -17,6 +17,7 @@ import {
   deepEqual,
   type Pattern,
 } from "@commonfabric/runner";
+import { applyCfcPolicyToExistingValue } from "@commonfabric/runner/cfc/policy-application";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { dirname, fromFileUrl, join, resolve } from "@std/path";
@@ -59,8 +60,9 @@ async function protectOwnerDebugCells(
       ) {
         throw new Error("debug view changed before owner protection");
       }
-      cell.withTx(tx).asSchema(agentOwnerSchema(ownerDid))
-        .applyCfcSchemaToExistingValue();
+      applyCfcPolicyToExistingValue(
+        cell.withTx(tx).asSchema(agentOwnerSchema(ownerDid)),
+      );
     }
     tx.prepareCfc();
   } catch (error) {
@@ -423,8 +425,9 @@ async function debugRegistration(
         `refusing to adopt an unprotected debug registration for ${ownerDid}`,
       );
     }
-    protectedRegistration.asSchema(agentOwnerSchema(ownerDid))
-      .applyCfcSchemaToExistingValue();
+    applyCfcPolicyToExistingValue(
+      protectedRegistration.asSchema(agentOwnerSchema(ownerDid)),
+    );
     tx.prepareCfc();
   } catch (error) {
     tx.abort(error);

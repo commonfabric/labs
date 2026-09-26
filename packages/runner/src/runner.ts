@@ -1043,8 +1043,31 @@ const markPieceOwnedStores = (
   resultCell: Cell<any>,
   pattern: Pattern,
 ): void => {
+  // The modules of the program this setup installs, whose writer stamps the
+  // pattern's schemas carry: a release adopts an unstamped stored claim only
+  // for one of them.
+  const patternManager = resultCell.runtime.patternManager;
+  const entry = patternManager.getArtifactEntryRef(pattern);
+  const modules = entry === undefined
+    ? undefined
+    : patternManager.programModuleIdentities(entry.identity);
   for (const store of pieceOwnedStores(tx, resultCell, pattern)) {
     recordRuntimeOwnedStore(tx, resultCell, store);
+    // This transaction is a release of the piece: the marker the release
+    // rules key on. A pattern defined in a module no evaluation ran as its
+    // main (a nested piece defined in a dependency) has no program recorded,
+    // so its release names none and adopts no stamp (see
+    // `programModuleIdentities`).
+    tx.recordCfcWritePolicyInput({
+      kind: "release-program",
+      target: {
+        space: store.space,
+        id: store.id,
+        scope: store.scope,
+        path: [],
+      },
+      modules: modules === undefined ? [] : [...modules].sort(),
+    }, runtimeWritePolicyAuthorization);
   }
 };
 

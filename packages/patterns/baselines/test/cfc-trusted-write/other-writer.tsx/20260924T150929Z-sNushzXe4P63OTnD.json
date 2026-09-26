@@ -1,0 +1,41 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "pinned": {
+        "asCell": [
+          "cell"
+        ],
+        "ifc": {
+          "confidentiality": [
+            {
+              "subject": {
+                "__ctCurrentPrincipal": true
+              },
+              "type": "https://commonfabric.org/cfc/atom/User"
+            }
+          ]
+        },
+        "type": "string"
+      }
+    },
+    "required": [
+      "pinned"
+    ],
+    "type": "object"
+  },
+  "pattern": "test/cfc-trusted-write/other-writer.tsx",
+  "resultSchema": {
+    "properties": {
+      "overwrite": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      }
+    },
+    "required": [
+      "overwrite"
+    ],
+    "type": "object"
+  }
+}

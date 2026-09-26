@@ -568,6 +568,25 @@ export type WritePolicyInput =
     readonly value: FabricValue;
   }
   | {
+    /**
+     * The transaction is a release of a piece (setup, a pattern swap, a start
+     * repair): it names one of the piece's stores and the modules of the
+     * program it installs, whose writer stamps the release's schema can adopt
+     * over unstamped stored claims. Authority is the runtime's mark.
+     */
+    readonly kind: "release-program";
+    readonly target: CfcAddress;
+    readonly modules: readonly string[];
+  }
+  | {
+    /**
+     * A host's application of a schema to a document it does not write
+     * (`applyCfcPolicyToExistingValue`). Authority is the runtime's mark.
+     */
+    readonly kind: "policy-application";
+    readonly target: CfcAddress;
+  }
+  | {
     /** An explicit host-authorized acceptance of existing unlabeled bytes. */
     readonly kind: "owner-adoption";
     readonly target: CfcAddress;

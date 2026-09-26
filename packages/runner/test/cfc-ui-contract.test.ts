@@ -50,6 +50,9 @@ const trustedPatternUiActionSchema = {
   },
 } as const;
 
+// No document these recorder cases write stores an envelope.
+const noStoredSchema = () => undefined;
+
 const rendererEvent = <T extends Record<string, unknown>>(event: T): T => {
   markRendererTrustedEvent(event);
   return event;
@@ -732,6 +735,7 @@ describe("CFC trusted UI event enforcement", () => {
           },
         },
       }),
+      noStoredSchema,
     );
 
     expect(
@@ -798,6 +802,7 @@ describe("CFC trusted UI event enforcement", () => {
           },
         },
       }),
+      noStoredSchema,
     );
 
     expect(
@@ -881,6 +886,7 @@ describe("CFC trusted UI event enforcement", () => {
         path: ["savedTitle"],
       }],
       rendererEvent(eventEnvelopeLink),
+      noStoredSchema,
     );
 
     expect(
@@ -961,6 +967,7 @@ describe("CFC trusted UI event enforcement", () => {
         path: ["savedTitle"],
       }],
       rendererEvent(eventEnvelope),
+      noStoredSchema,
     );
 
     expect(
@@ -1040,6 +1047,7 @@ describe("CFC trusted UI event enforcement", () => {
         path: ["messages", "0"],
       }],
       rendererEvent(eventEnvelope),
+      noStoredSchema,
     );
 
     expect(
@@ -1120,6 +1128,7 @@ describe("CFC trusted UI event enforcement", () => {
         path: ["savedTitle"],
       }],
       rendererEvent(eventEnvelope),
+      noStoredSchema,
     );
 
     expect(
@@ -1198,6 +1207,7 @@ describe("CFC trusted UI event enforcement", () => {
         path: ["savedTitle"],
       }],
       rendererEvent(eventEnvelope),
+      noStoredSchema,
     );
 
     expect(
@@ -1282,6 +1292,7 @@ describe("CFC trusted UI event enforcement", () => {
         path: ["savedTitle"],
       }],
       rendererEvent(eventEnvelope),
+      noStoredSchema,
     );
 
     expect(
@@ -1347,6 +1358,7 @@ describe("CFC trusted UI event enforcement", () => {
           },
         },
       }),
+      noStoredSchema,
     );
 
     expect(
@@ -1433,6 +1445,7 @@ describe("CFC trusted UI event enforcement", () => {
           },
         },
       }),
+      noStoredSchema,
     );
 
     const trustedScopes = writePolicyInputs.flatMap((input) =>

@@ -403,6 +403,18 @@ export function isReadMarkedAsAttemptedWrite(meta?: Metadata): boolean {
   return meta?.[markReadAsAttemptedWriteMarker] === true;
 }
 
+/**
+ * `meta` without the attempted-write mark, for a read a writer makes to find
+ * out where or what to write rather than at the place it writes. Such a read
+ * is not an attempt to write what it reads, and marking it one would make the
+ * commit boundary judge the write against every policy beneath that place.
+ */
+export function withoutAttemptedWriteMark(meta?: Metadata): Metadata {
+  const rest: Metadata = { ...meta };
+  delete rest[markReadAsAttemptedWriteMarker];
+  return rest;
+}
+
 export function isMergeableOpRead(meta?: Metadata): boolean {
   return meta?.[mergeableOpReadMarker] === true;
 }

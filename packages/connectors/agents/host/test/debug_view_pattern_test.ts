@@ -14,6 +14,10 @@ import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { createSession } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
+import {
+  type ImplementationIdentity,
+  loadStoredCfcEnvelope,
+} from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { assertEquals, assertNotEquals } from "@std/assert";
 import {
@@ -704,6 +708,12 @@ Deno.test("debug pattern submits commands and links row data to separate views",
         }),
     );
     let commandTx = runtime.edit();
+    // The queue answers to the handler that submits commands, so the fixture
+    // writes it as that handler.
+    setCfcImplementationIdentity(
+      commandTx,
+      commandWriterIdentity(runtime, protectedCommandLink),
+    );
     target.cells.commands.resolveAsCell()
       .asSchema(agentOwnerSchema(session.as.did(), false)).withTx(commandTx)
       .setRawUntyped(pageCommands);
@@ -732,6 +742,10 @@ Deno.test("debug pattern submits commands and links row data to separate views",
     )[0];
 
     commandTx = runtime.edit();
+    setCfcImplementationIdentity(
+      commandTx,
+      commandWriterIdentity(runtime, protectedCommandLink),
+    );
     target.cells.commands.resolveAsCell()
       .asSchema(agentOwnerSchema(session.as.did(), false)).withTx(commandTx)
       .setRawUntyped([
@@ -1661,3 +1675,38 @@ Deno.test("debug pattern loads connector child cells on a cold replica", async (
     await server.close();
   }
 });
+
+/** The verified identity of the writer the stored command queue names. */
+function commandWriterIdentity(
+  runtime: Runtime,
+  link: Parameters<typeof loadStoredCfcEnvelope>[1],
+): ImplementationIdentity {
+  const tx = runtime.edit();
+  try {
+    const envelope = loadStoredCfcEnvelope(tx, link);
+    const writer = envelope.status === "loaded"
+      ? (envelope.schema as {
+        ifc?: {
+          writeAuthorizedBy?: {
+            __ctWriterIdentityOf?: {
+              file?: string;
+              path?: string[];
+              moduleIdentity?: string;
+            };
+          };
+        };
+      }).ifc?.writeAuthorizedBy?.__ctWriterIdentityOf
+      : undefined;
+    if (!writer?.moduleIdentity || !writer.path) {
+      throw new Error("the command queue names no writer");
+    }
+    return {
+      kind: "verified",
+      moduleIdentity: writer.moduleIdentity,
+      sourceFile: writer.file,
+      bindingPath: writer.path,
+    };
+  } finally {
+    tx.abort();
+  }
+}

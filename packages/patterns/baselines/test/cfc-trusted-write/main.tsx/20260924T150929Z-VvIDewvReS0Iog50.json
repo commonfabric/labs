@@ -1,0 +1,72 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "test/cfc-trusted-write/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "PinnedNote": {
+        "ifc": {
+          "confidentiality": [
+            {
+              "subject": {
+                "__ctCurrentPrincipal": true
+              },
+              "type": "https://commonfabric.org/cfc/atom/User"
+            }
+          ],
+          "uiContract": {
+            "action": "PinNote",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "PinnedNoteSurface"
+            ],
+            "trustedPattern": "PinnedNoteSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/test/cfc-trusted-write/main.tsx",
+              "moduleIdentity": "1_Bbb5iBHEscdM7QpSYfFascLdyOc5LTruVYDxraql0",
+              "path": [
+                "pinDraft"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      }
+    },
+    "properties": {
+      "overwrite": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "pin": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "pinned": {
+        "$ref": "#/$defs/PinnedNote"
+      },
+      "repin": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      }
+    },
+    "required": [
+      "pinned",
+      "pin",
+      "repin",
+      "overwrite"
+    ],
+    "type": "object"
+  }
+}

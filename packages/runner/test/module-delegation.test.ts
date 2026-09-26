@@ -848,6 +848,104 @@ describe("module identity delegation", () => {
     expect(protectedCell.get()).toEqual({ value: "different-file" });
   });
 
+  it("refuses a successor writing through its own labeled schema until its delegation loads", async () => {
+    // The successor's schema restates the binding, which its own identity
+    // stamps, or restates only a label. Either way the field answers to the
+    // binding the document stores, stamped by the predecessor, so only the
+    // successor's loaded delegation lets it write.
+
+    const oldIdentity = computeModuleHashes(moduleProgram("old")).get(
+      "/writer.ts",
+    )!;
+    const successor = moduleFor(moduleProgram("new"));
+    const sourceTx = runtime.edit();
+    writeSourceDocs(
+      runtime,
+      space,
+      [successor],
+      successor.identity,
+      sourceTx,
+      new Map([[successor.identity, new Set([oldIdentity])]]),
+    );
+    runtime.prepareTxForCommit(sourceTx);
+    expect((await sourceTx.commit()).error).toBeUndefined();
+
+    const id = "module-delegation-labeled-successor";
+    const seed = await runtime.editWithRetry((tx) => {
+      setCfcImplementationIdentity(tx, {
+        kind: "verified",
+        moduleIdentity: oldIdentity,
+        sourceFile: "/writer.ts",
+        bindingPath: ["setValue"],
+      });
+      runtime.getCell(space, id, protectedSchema, tx).set({ value: "seed" });
+    });
+    expect(seed.error).toBeUndefined();
+
+    const label = { confidentiality: ["successor-label"] };
+    const restatesBinding = {
+      type: "object",
+      properties: {
+        value: {
+          type: "string",
+          ifc: {
+            ...label,
+            writeAuthorizedBy: {
+              __ctWriterIdentityOf: { file: "/writer.ts", path: ["setValue"] },
+            },
+          },
+        },
+      },
+      required: ["value"],
+    } as unknown as JSONSchema;
+    const labelOnly = {
+      type: "object",
+      properties: { value: { type: "string", ifc: label } },
+      required: ["value"],
+    } as unknown as JSONSchema;
+    const successorWrite = (schema: JSONSchema, value: string) =>
+      runtime.editWithRetry((tx) => {
+        setCfcImplementationIdentity(tx, {
+          kind: "verified",
+          moduleIdentity: successor.identity,
+          sourceFile: "/writer.ts",
+          bindingPath: ["setValue"],
+        });
+        runtime.getCell(space, id, schema, tx).set({ value });
+      }, 0);
+
+    for (const schema of [restatesBinding, labelOnly]) {
+      const denied = await successorWrite(schema, "before-load");
+      expect(denied.error?.message).toContain("writeAuthorizedBy failed");
+    }
+    expect(runtime.getCell(space, id, protectedSchema).get()).toEqual({
+      value: "seed",
+    });
+
+    const loadTx = runtime.edit();
+    const closure = await loadVerifiedSourceClosure(
+      runtime,
+      space,
+      successor.identity,
+      loadTx,
+    );
+    loadTx.abort?.("module-delegation source load complete");
+    expect(closure?.get(successor.identity)).toBeDefined();
+
+    for (
+      const [schema, value] of [[restatesBinding, "restated"], [
+        labelOnly,
+        "label-only",
+      ]] as const
+    ) {
+      const allowed = await successorWrite(schema, value);
+      expect(allowed.error).toBeUndefined();
+      expect(runtime.getCell(space, id, protectedSchema).get()).toEqual({
+        value,
+      });
+    }
+  });
+
   it("does not import module authority from another space", async () => {
     const attacker = await Identity.fromPassphrase(
       "module delegation attacker space",
