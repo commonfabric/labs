@@ -637,6 +637,23 @@ describe("TransformedBy input witnesses", () => {
       });
     });
 
+    it("refuses a crafted value the commit step read back and set again", async () => {
+      // The commit step appends to what it finds. The crafted vote it read
+      // is carried into its set unchanged, so the diff leaves it in place;
+      // the destination is not stamped whole over a value the step read.
+      await withRuntime(WITNESSED_GUARD, async ({ runtime }) => {
+        await seedRoom(runtime);
+        await bitOfAlicesNote(runtime, "committed");
+        await commitOver(runtime, (committed) => {
+          const previous = (committed.get() as { votes?: string[] })?.votes ??
+            [];
+          committed.set({ votes: [...previous, "approve", "reject"] });
+        });
+        await transform(runtime, TALLY, ["committed"], "ballot", tally);
+        expect(refusedByCeiling(publish(runtime, "ballot"))).toBe(true);
+      });
+    });
+
     it("refuses a crafted value a failed set left beside a write of its own", async () => {
       await withRuntime(WITNESSED_GUARD, async ({ runtime }) => {
         await seedRoom(runtime);

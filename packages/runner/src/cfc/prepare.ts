@@ -2959,7 +2959,14 @@ const containsCellLink = (value: unknown): boolean => {
  * - the join names the writer (`TransformedBy`), which is the one thing the
  *   stamp adds over the per-path stamps; and
  * - the join fits every ceiling declared at or beneath it, so the wider stamp
- *   never measures a misfit the per-path stamps did not.
+ *   never measures a misfit the per-path stamps did not; and
+ * - the destination is one this transaction created, or the transaction
+ *   read no content at or beneath it, nor recursively above it. A writer that read its destination can carry what it found into what
+ *   it sets, and the diff leaves such a value where it is; stamping the
+ *   destination whole would then name the writer as the author of a value
+ *   another writer put there. The diff's own reads of its destination
+ *   (`writeDestinationRead`) do not count, and nor does a reference probe,
+ *   which resolving the destination makes and which observes no content.
  * Recording is the runtime's alone (`recordCfcAssertedValueRoot`).
  */
 const assertedValueRootPaths = (
@@ -2972,11 +2979,41 @@ const assertedValueRootPaths = (
   writtenPaths: readonly (readonly string[])[],
   linkWritePaths: ReadonlySet<string>,
   fitsCeilingsFrom: (root: readonly string[]) => boolean,
+  previousPresence: ReadonlyMap<string, boolean> | undefined,
 ): (readonly string[])[] => {
   const key = targetKey(target);
   const roots: (readonly string[])[] = [];
   const seen = new Set<string>();
   const { writeIdentity } = tx.getCfcState();
+  let observed:
+    | { path: readonly string[]; recursive: boolean }[]
+    | undefined;
+  const observedWithin = (root: readonly string[]): boolean => {
+    if (observed === undefined) {
+      const found: { path: readonly string[]; recursive: boolean }[] = [];
+      forEachFlowObservation(
+        tx,
+        (space, id, scope, _type, logicalPath, observation) => {
+          if (
+            !observation.writeDestination &&
+            observation.shape !== "followRef" &&
+            targetKey({ space, id, scope }) === key
+          ) {
+            found.push({
+              path: logicalPath,
+              recursive: observation.shape === "value" &&
+                observation.nonRecursive !== true,
+            });
+          }
+          return false;
+        },
+      );
+      observed = found;
+    }
+    return observed.some(({ path, recursive }) =>
+      isPrefix(root, path) || (recursive && isPrefix(path, root))
+    );
+  };
   for (const { address, identity } of tx.getCfcState().assertedValueRoots) {
     if (targetKey(address) !== key) continue;
     // The stamp names the join's identity, so a root another identity wrote
@@ -2996,6 +3033,11 @@ const assertedValueRootPaths = (
     });
     if (value === undefined || containsCellLink(value)) continue;
     if (!fitsCeilingsFrom(root)) continue;
+    // A destination this transaction created holds nothing it did not
+    // write, whatever it read on the way.
+    if (previousPresence?.get(rootKey) !== false && observedWithin(root)) {
+      continue;
+    }
     roots.push(root);
   }
   return roots;
@@ -8842,6 +8884,7 @@ export function* prepareBoundaryCommitSteps(
             ]).length === 0
           );
         },
+        flowPreviousPresence,
       )
       : [];
     for (const root of assertedRoots) flowWrittenPrefixes.add(root);
