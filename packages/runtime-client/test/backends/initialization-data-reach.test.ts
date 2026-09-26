@@ -100,6 +100,7 @@ const SENT = {
   forwardWorkerConsole: true,
   patternCoverage: true,
   concurrentWatchRefresh: true,
+  awaitHealth: true,
 } satisfies
   & InitializationData
   & Record<keyof Required<InitializationData>, unknown>;
@@ -226,6 +227,10 @@ const REACH = {
   },
   concurrentWatchRefresh: {
     reads: (o) => o.storage.settings?.experimentalConcurrentWatchRefresh,
+    expected: true,
+  },
+  awaitHealth: {
+    reads: (o) => o.processor.accessForTestingOnly.awaitedHealth,
     expected: true,
   },
 } satisfies Record<keyof Required<InitializationData>, FieldReach>;

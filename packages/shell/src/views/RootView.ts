@@ -291,6 +291,9 @@ export class XRootView extends BaseView implements ShellApp {
             ? new URL("/scripts/worker-runtime.js", globalThis.location.href)
             : undefined,
           onError: (event) => this._handleRuntimeError(event, generation),
+          // The shell's boot refuses an unreachable backend rather than
+          // standing a runtime up over storage that is still reconnecting.
+          awaitHealth: true,
           // Per-profile dogfood toggles: worker-console forwarding and the
           // Epic H3a render ceiling (see lib/host-toggles.ts).
           ...runtimeHostFlags(),

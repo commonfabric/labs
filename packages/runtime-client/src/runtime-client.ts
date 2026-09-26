@@ -530,6 +530,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       forwardWorkerConsole: options.forwardWorkerConsole,
       patternCoverage: options.patternCoverage,
       concurrentWatchRefresh: options.concurrentWatchRefresh,
+      awaitHealth: options.awaitHealth,
     } satisfies EveryFieldOf<InitializationData>;
     const initialized = await (new RuntimeConnection(transport)).initialize(
       data,
