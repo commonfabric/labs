@@ -15,15 +15,15 @@ describe("BaseValueVisitor", () => {
       return undefined;
     }
 
-    override visitedFabricArrayElement(): undefined {
+    override mappedFabricArrayElement(): undefined {
       return undefined;
     }
 
-    override visitedFabricInstanceState(): undefined {
+    override mappedFabricInstanceState(): undefined {
       return undefined;
     }
 
-    override visitedFabricPlainObjectEntry(): undefined {
+    override mappedFabricPlainObjectEntry(): undefined {
       return undefined;
     }
 

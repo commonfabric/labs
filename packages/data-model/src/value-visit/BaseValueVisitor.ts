@@ -29,30 +29,30 @@ export abstract class BaseValueVisitor<
   //
 
   /** @inheritDoc */
-  abstract visitValue(
-    value: FabricValuePlus<PlusType>,
-    tag: FabricValuePlusTag | null,
-  ): VisitResult<PlusType, ResultType>;
-
-  /** @inheritDoc */
-  abstract visitedFabricArrayElement(
+  abstract mappedFabricArrayElement(
     array: FabricArrayPlus<PlusType>,
     index: number,
     value: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType>;
 
   /** @inheritDoc */
-  abstract visitedFabricInstanceState(
+  abstract mappedFabricInstanceState(
     instance: FabricInstancePlus<PlusType>,
     state: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType>;
 
   /** @inheritDoc */
-  abstract visitedFabricPlainObjectEntry(
+  abstract mappedFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<PlusType>,
     key: string,
     value: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType>;
+
+  /** @inheritDoc */
+  abstract visitValue(
+    value: FabricValuePlus<PlusType>,
+    tag: FabricValuePlusTag | null,
+  ): VisitResult<PlusType, ResultType>;
 
   /** @inheritDoc */
   abstract visitingFabricArrayElement(
