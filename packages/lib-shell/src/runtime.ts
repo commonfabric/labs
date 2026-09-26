@@ -996,12 +996,20 @@ export class RuntimeInternals extends EventTarget {
           getBuildHash,
         }),
       });
-    const client = attach
-      ? await RuntimeClient.attach(
-        connection,
-        attachOptionsFrom(clientOptions),
-      )
-      : await RuntimeClient.initialize(connection, clientOptions);
+    let client: RuntimeClient;
+    try {
+      client = attach
+        ? await RuntimeClient.attach(
+          connection,
+          attachOptionsFrom(clientOptions),
+        )
+        : await RuntimeClient.initialize(connection, clientOptions);
+    } catch (error) {
+      // A worker this call spawned has nobody else to end it; one that came
+      // in over `transport` is the embedder's to keep or drop.
+      if (!transport) await connection.dispose();
+      throw error;
+    }
 
     // Expose a usable RuntimeInternals immediately. Callers that need
     // storage/piece-manager convergence should await `rt.synced(space)`

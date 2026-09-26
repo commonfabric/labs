@@ -512,7 +512,9 @@ export enum NotificationType {
 
   /**
    * Reports an error that surfaced with no request to fail: a renderer error,
-   * or one raised by a pattern between requests.
+   * one raised by a pattern between requests, or the boot-time health check
+   * finding a host unreachable after `initialize` was answered, which carries
+   * {@link RuntimeErrorCode.HostUnreachable}.
    */
   ErrorReport = "callback:error",
 
