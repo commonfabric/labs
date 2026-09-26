@@ -303,6 +303,7 @@ export class VisitInProgress<
     const vis = this.#visitor;
     const mapResult: MutableFabricArrayPlusLayer<ResultType> | undefined =
       this.#doMap ? new Array(array.length) : undefined;
+    let anyChanges = false;
 
     this.#stack.push(array);
 
@@ -358,6 +359,7 @@ export class VisitInProgress<
             // `!` is valid, because we'll only see `mapTo` when we're actually
             // mapping.
             mapResult![idxNumber] = mappedTo;
+            anyChanges ||= (element !== mappedTo);
 
             const result = vis.visitedFabricArrayElement(
               array,
@@ -391,7 +393,7 @@ export class VisitInProgress<
         }
       }
 
-      return mapResult
+      return (mapResult && anyChanges)
         ? { type: "mapTo", value: this.#assertResultType(mapResult) }
         : undefined;
     } finally {
@@ -544,6 +546,7 @@ export class VisitInProgress<
     const vis = this.#visitor;
     const mapResult: MutableFabricPlainObjectPlusLayer<ResultType> | undefined =
       this.#doMap ? {} : undefined;
+    let anyChanges = false;
 
     this.#stack.push(plainObj);
 
@@ -623,10 +626,11 @@ export class VisitInProgress<
           }
 
           mapResult[finalKey] = valueMappedTo;
+          anyChanges ||= (key !== finalKey) || (value !== valueMappedTo);
         }
       }
 
-      return mapResult
+      return (mapResult && anyChanges)
         ? { type: "mapTo", value: this.#assertResultType(mapResult) }
         : undefined;
     } finally {
