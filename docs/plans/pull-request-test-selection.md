@@ -1937,9 +1937,10 @@ directly.
 
 What this costs is that a local record can now displace another test from
 a budgeted lane, rather than only ever adding to what runs. Three things
-bound that. Local keys are held by people with repository write access,
-which is the trust boundary the continuous-integration records already sit
-inside. Every manifest records the inputs behind every score, so a strange
+bound that. Every local key was minted by someone with repository write
+access, for themselves or for a person they chose to mint for, which is the
+trust boundary the continuous-integration records already sit inside.
+Every manifest records the inputs behind every score, so a strange
 selection can be traced back to the records that produced it. And the
 worst outcome is a pull request that ran a less useful set of tests, which
 `main` catches within about 15 minutes and reports back.
@@ -2263,8 +2264,12 @@ batchCost(batch) = suiteOverhead(suite)
                  + unitOverhead(suite) * the units the batch opens
 ```
 
-The setup costs are the table in
-[Capabilities and setup](#capabilities-and-setup).
+The setup costs are what the table in
+[Capabilities and setup](#capabilities-and-setup) describes, measured
+rather than written down: each lane records how long each capability
+took to open, and the publisher charges each capability the ninetieth
+percentile of its openings over the last week, for the reason the
+intercept below gives.
 
 `suiteOverhead(suite)`, `correction(suite)` and `unitOverhead(suite)` are
 the three numbers that make this work without constant tending, and they
@@ -2301,10 +2306,15 @@ what those two leave — and publishes the result in the next manifest.
 They start at zero, one and zero, and converge within a few days of lanes
 running. Three numbers per suite, all measured, none maintained by hand.
 
-The intercept is then raised until no batch anybody has seen is
-under-predicted, because a least-squares line sits in the middle of its
-observations and half the lanes would otherwise run past the budget they
-were packed against. The correction is fitted at all only once a suite has
+The intercept is then set at the ninetieth percentile of what each batch
+spent beyond what the other two charge it, because a least-squares line
+sits in the middle of its observations and half the lanes would
+otherwise run past the budget they were packed against. It is not raised
+to the slowest batch, because the intercept is charged to every lane
+that holds the suite: one slow runner would set what every lane pays,
+and every lane would pack short by that runner's excess. The percentile
+is the observation at its rank, so over nine or fewer batches it is the
+slowest of them. The correction is fitted at all only once a suite has
 enough batches, far enough apart in the seconds their tests took, for a
 slope to mean something: it is read far outside the range it was fitted
 over, since a suite whose every batch anybody has seen held six seconds of

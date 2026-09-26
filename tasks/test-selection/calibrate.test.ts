@@ -85,6 +85,30 @@ function spread(
 }
 
 /**
+ * `count` batches of one suite, all one size, of which one spent far more
+ * than the rest: the shape a window takes when one runner was slow. The
+ * slow batch is last.
+ */
+function withOneSlow(count: number): BatchObservation[] {
+  return Array.from({ length: count }, (_, i) => ({
+    suite: "s",
+    measured: false,
+    units: 10,
+    ran: 20,
+    spent: i === count - 1 ? 400 : 60 + i,
+  }));
+}
+
+/** What `fitted` charges a batch holding what `batch` held. */
+function chargeFor(
+  fitted: ReturnType<typeof fitSuite>,
+  batch: BatchObservation,
+): number {
+  return fitted.overhead + fitted.correction * batch.ran +
+    fitted.unitOverhead * batch.units;
+}
+
+/**
  * A suite's batches as they arrive when every lane fills to one budget:
  * all one size, disagreeing only in the seconds their tests took, each
  * paying `rate` for every unit it opened and nothing for itself.
@@ -409,7 +433,7 @@ describe("calibrate", () => {
     it("reads no rate from a batch that opened no unit", () => {
       // Such a batch says nothing about what opening one costs, and the
       // rate it would be read at is a division by nothing. The intercept
-      // covers it the way it covers every other observation.
+      // charges for it as it does for any other batch.
       const fitted = fitSuite([
         { suite: "s", measured: false, units: 0, ran: 10, spent: 30 },
         { suite: "s", measured: false, units: 10, ran: 10, spent: 30 },
@@ -473,10 +497,21 @@ describe("calibrate", () => {
       expect(fitted.overhead).toBeCloseTo(0, 6);
     });
 
-    it("never predicts a batch costing less than one was seen to", () => {
-      // A least-squares line sits in the middle of its observations,
-      // which for this quantity is half the lanes running past the
-      // budget they were packed against.
+    it("charges every batch at least what it spent while there are nine or fewer", () => {
+      // The ninetieth percentile over so few is the slowest of them, so a
+      // suite lanes have rarely run is charged what its slowest batch
+      // cost. A least-squares line would sit in the middle of them, which
+      // for this quantity is half the lanes running past the budget they
+      // were packed against.
+      for (let count = 1; count <= 9; count++) {
+        const seen = withOneSlow(count);
+        const fitted = fitSuite(seen);
+        for (const one of seen) {
+          expect(chargeFor(fitted, one)).toBeGreaterThanOrEqual(
+            one.spent - 1e-9,
+          );
+        }
+      }
       const seen: BatchObservation[] = [
         ...spread((ran, units) => 10 + 2 * ran + 0.5 * units),
         {
@@ -489,10 +524,30 @@ describe("calibrate", () => {
       ];
       const fitted = fitSuite(seen);
       for (const one of seen) {
-        expect(
-          fitted.overhead + fitted.correction * one.ran +
-            fitted.unitOverhead * one.units,
-        ).toBeGreaterThanOrEqual(one.spent - 1e-9);
+        expect(chargeFor(fitted, one)).toBeGreaterThanOrEqual(
+          one.spent - 1e-9,
+        );
+      }
+    });
+
+    it("charges nine batches in ten what they spent, and not what one slow batch did", () => {
+      // The fixed cost is charged to every lane holding the suite, so a
+      // charge read at the slowest batch would let that one batch set
+      // what every lane pays, and every lane would pack short by its
+      // excess.
+      for (const count of [10, 11, 20, 30, 100]) {
+        const seen = withOneSlow(count);
+        const typical = seen.slice(0, -1);
+        const charged = chargeFor(fitSuite(seen), seen[0]!);
+        expect(charged).toBeLessThanOrEqual(
+          Math.max(...typical.map((one) => one.spent)) + 1e-9,
+        );
+        const held = seen.filter((one) => one.spent <= charged + 1e-9);
+        expect(held.length).toBeGreaterThanOrEqual(0.9 * count);
+        const middle = typical.map((one) => one.spent).sort((a, b) => a - b)[
+          Math.floor(typical.length / 2)
+        ]!;
+        expect(charged).toBeGreaterThan(middle);
       }
     });
 
@@ -692,6 +747,41 @@ describe("calibrate", () => {
         52 / 3,
         6,
       );
+    });
+
+    it("charges a capability its slowest opening while there are nine or fewer", () => {
+      for (let count = 1; count <= 9; count++) {
+        const openings = [
+          ...Array.from({ length: count - 1 }, (_, i) => 10 + i),
+          90,
+        ];
+        const fitted = calibrate({
+          setup: new Map([["fuse", openings]]),
+          batches: [],
+        });
+        expect(fitted.setupCost["fuse"]).toBe(90);
+      }
+    });
+
+    it("charges nine openings in ten what they took, and not what one slow opening did", () => {
+      // A capability's setup is charged to every lane that opens it, so
+      // one runner's slow opening would otherwise set what every lane
+      // pays. The slow one comes first, since the charge must not depend
+      // on the order the openings were read in.
+      for (const count of [10, 11, 20, 30, 100]) {
+        const typical = Array.from({ length: count - 1 }, (_, i) => 10 + i);
+        const openings = [90, ...typical];
+        const charged = calibrate({
+          setup: new Map([["fuse", openings]]),
+          batches: [],
+        }).setupCost["fuse"]!;
+        expect(charged).toBeLessThanOrEqual(Math.max(...typical));
+        const held = openings.filter((seconds) => seconds <= charged);
+        expect(held.length).toBeGreaterThanOrEqual(0.9 * count);
+        expect(charged).toBeGreaterThan(
+          typical[Math.floor(typical.length / 2)]!,
+        );
+      }
     });
 
     it("fits a suite's batches run with coverage on apart from the rest", () => {

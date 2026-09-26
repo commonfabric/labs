@@ -65,6 +65,7 @@ import {
   LLM_DERIVED_RESULT_STAMP_SCHEMA,
   withLlmDerivedStamp,
 } from "../cfc/llm-derived-stamp.ts";
+import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 const logger = getLogger("llm", {
   enabled: true,
@@ -113,7 +114,7 @@ function attributeModelOutputWrite(
   builtinId: string,
 ): void {
   if (runtime.cfcEnforcementMode === "disabled") return;
-  tx.setCfcImplementationIdentity({ kind: "builtin", builtinId });
+  setCfcImplementationIdentity(tx, { kind: "builtin", builtinId });
 }
 
 /**
@@ -2395,7 +2396,7 @@ export function generateObject<T extends Record<string, unknown>>(
                 // the persist-time evidence gate trusts them (audit S4). The
                 // same attribution keeps the D1b LlmDerived stamp merged into
                 // the result schema root below.
-                tx.setCfcImplementationIdentity({
+                setCfcImplementationIdentity(tx, {
                   kind: "builtin",
                   builtinId: "generateObject",
                 });
@@ -2705,7 +2706,7 @@ export function generateObject<T extends Record<string, unknown>>(
                 // so the persist-time evidence gate trusts them (audit S4).
                 // The same attribution keeps the D1b LlmDerived stamp merged
                 // into the result schema root below.
-                tx.setCfcImplementationIdentity({
+                setCfcImplementationIdentity(tx, {
                   kind: "builtin",
                   builtinId: "generateObject",
                 });

@@ -71,31 +71,37 @@ function recordedBindingPaths(rt: Runtime): string[][] {
   return paths;
 }
 
-// Capture the bindingPaths of the writer identities STAMPED on transactions
-// while a handler runs — the value the CFC verifier consumes at commit.
-// Channel-agnostic: the identity may resolve through the content-addressed
-// provenance WeakMap or the legacy implementationRef registry; what matters
-// is the identity (with its bindingPath) reaching the transaction.
+// Capture the bindingPaths of the writer identities current on transactions
+// as a handler's writes are recorded — each write-policy input carries the
+// identity current when it was recorded, and that is the value the CFC
+// verifier consumes at commit. Channel-agnostic: the identity may resolve
+// through the content-addressed provenance WeakMap or the legacy
+// implementationRef registry; what matters is the identity (with its
+// bindingPath) reaching the transaction.
 async function bindingPathsResolvedDuring(
   rt: Runtime,
   fn: () => void,
 ): Promise<string[][]> {
   const proto = ExtendedStorageTransaction.prototype as unknown as {
-    setCfcImplementationIdentity: (identity: unknown) => void;
+    recordCfcWritePolicyInput: (...args: unknown[]) => void;
   };
-  const orig = proto.setCfcImplementationIdentity;
+  const orig = proto.recordCfcWritePolicyInput;
   const resolved: string[][] = [];
-  proto.setCfcImplementationIdentity = function (identity: unknown) {
-    const bindingPath = (identity as { bindingPath?: string[] } | undefined)
-      ?.bindingPath;
-    if (Array.isArray(bindingPath)) resolved.push(bindingPath);
-    return orig.call(this, identity);
+  proto.recordCfcWritePolicyInput = function (
+    this: ExtendedStorageTransaction,
+    ...args: unknown[]
+  ) {
+    const bindingPath = (this.getCfcState().implementationIdentity as
+      | { bindingPath?: string[] }
+      | undefined)?.bindingPath;
+    if (Array.isArray(bindingPath)) resolved.push([...bindingPath]);
+    return orig.apply(this, args);
   };
   try {
     fn();
     await (rt as any).idle?.();
   } finally {
-    proto.setCfcImplementationIdentity = orig;
+    proto.recordCfcWritePolicyInput = orig;
   }
   return resolved;
 }

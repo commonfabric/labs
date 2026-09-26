@@ -126,6 +126,7 @@ import {
   propagateRendererTrustedEvent,
 } from "./cfc/ui-contract.ts";
 import { createRef } from "./create-ref.ts";
+import { runtimeWritePolicyAuthorization } from "./cfc/types.ts";
 import { diffAndUpdate } from "./data-updating.ts";
 import {
   dataUriFromValueWithResolvedLinks,
@@ -2358,7 +2359,7 @@ export class CellImpl<T extends FabricValue>
       // The anchor id source makes sure each object in an array gets its own
       // doc, its id drawn from the frame this cell was made in
       // (`frameAnchorIds()`).
-      diffAndUpdate(
+      const changed = diffAndUpdate(
         this.runtime,
         this.tx,
         writeLink,
@@ -2367,6 +2368,23 @@ export class CellImpl<T extends FabricValue>
         undefined,
         frameAnchorIds(this.#frame),
       );
+
+      // The value at `writeLink` is now the one supplied here, whatever the
+      // diff found already in place, so flow labels may stamp it as a whole
+      // write (`CfcTxState.assertedValueRoots`). Recorded only once the diff
+      // has written: a set that threw part way, or wrote nothing, asserted
+      // nothing.
+      if (changed) {
+        this.tx.recordCfcAssertedValueRoot(
+          {
+            space: writeLink.space,
+            id: writeLink.id,
+            scope: writeLink.scope,
+            path: [...writeLink.path],
+          },
+          runtimeWritePolicyAuthorization,
+        );
+      }
 
       // A whole-value set reshapes what a mergeable op intent (an earlier push /
       // addUnique / increment / removeByValue in this transaction) refers to,

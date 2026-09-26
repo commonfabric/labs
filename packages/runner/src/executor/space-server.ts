@@ -159,6 +159,7 @@ import {
   sameDeliveryDeferral,
   spentDeliveryFailureMs,
 } from "./delivery-failure.ts";
+import { setCfcTrustSnapshot } from "../storage/extended-storage-transaction.ts";
 
 const logger = getLogger("space-server", { enabled: true, level: "warn" });
 
@@ -2406,7 +2407,8 @@ export class SpaceServer implements TransactionSealDestination {
       // The carriage's trust snapshot (OW34-family; serving-loop.md §3c):
       // the delegated writeback's CFC labels resolve against the
       // delegated acting principal, matching the memory-plane carriage.
-      tx.setCfcTrustSnapshot(
+      setCfcTrustSnapshot(
+        tx,
         this.#runtime!.trustSnapshotForPrincipal(info.delegated.acting.user),
       );
       stampWaveRunContext(tx, {
@@ -2441,7 +2443,8 @@ export class SpaceServer implements TransactionSealDestination {
     const trustPrincipal = (info.acting ?? acting)?.user ??
       (info.kind === "derivation" ? principal : undefined);
     if (trustPrincipal !== undefined) {
-      tx.setCfcTrustSnapshot(
+      setCfcTrustSnapshot(
+        tx,
         this.#runtime!.trustSnapshotForPrincipal(trustPrincipal),
       );
     }
@@ -5724,9 +5727,7 @@ export class SpaceServer implements TransactionSealDestination {
           // AFTER the stamp (which leaves an actor-less bookkeeping
           // run's snapshot alone), the owner-resolved per-run snapshot
           // — before the transaction's first read.
-          tx.setCfcTrustSnapshot(
-            runtime.trustSnapshotForPrincipal(owner),
-          );
+          setCfcTrustSnapshot(tx, runtime.trustSnapshotForPrincipal(owner));
         },
       });
       // The F2 bound: race the ensure against its deadline. On the

@@ -553,9 +553,10 @@ is no ambiguity about what changed, no shared infrastructure to blame,
 and no question about whether the failure was real, because they went on
 to fix it. What it costs is that a local record can now displace another
 test from a budgeted run rather than only ever adding to what runs. Three
-things bound that: local keys are held by people with repository write
-access, which is the trust boundary the continuous-integration records
-already sit inside; every manifest records the inputs behind every score,
+things bound that: every local key was minted by someone with repository
+write access, for themselves or for a person they chose to mint for,
+which is the trust boundary the continuous-integration records already
+sit inside; every manifest records the inputs behind every score,
 so a strange selection traces back to the records that produced it; and
 the worst outcome is a pull request that ran a less useful set of tests,
 which the full run on the default branch catches.

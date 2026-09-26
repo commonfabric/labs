@@ -161,7 +161,11 @@ import { isSchemaMismatchError } from "./schema-view.ts";
 import { rendererVDOMSchema } from "./schemas.ts";
 import { combineOptionalSchema } from "./traverse.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
-import { TransactionWrapper } from "./storage/extended-storage-transaction.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+  TransactionWrapper,
+} from "./storage/extended-storage-transaction.ts";
 import { getTransactionReadActivities } from "./storage/transaction-inspection.ts";
 import {
   type CommitError,
@@ -1039,8 +1043,31 @@ const markPieceOwnedStores = (
   resultCell: Cell<any>,
   pattern: Pattern,
 ): void => {
+  // The modules of the program this setup installs, whose writer stamps the
+  // pattern's schemas carry: a release adopts an unstamped stored claim only
+  // for one of them.
+  const patternManager = resultCell.runtime.patternManager;
+  const entry = patternManager.getArtifactEntryRef(pattern);
+  const modules = entry === undefined
+    ? undefined
+    : patternManager.programModuleIdentities(entry.identity);
   for (const store of pieceOwnedStores(tx, resultCell, pattern)) {
     recordRuntimeOwnedStore(tx, resultCell, store);
+    // This transaction is a release of the piece: the marker the release
+    // rules key on. A pattern defined in a module no evaluation ran as its
+    // main (a nested piece defined in a dependency) has no program recorded,
+    // so its release names none and adopts no stamp (see
+    // `programModuleIdentities`).
+    tx.recordCfcWritePolicyInput({
+      kind: "release-program",
+      target: {
+        space: store.space,
+        id: store.id,
+        scope: store.scope,
+        path: [],
+      },
+      modules: modules === undefined ? [] : [...modules].sort(),
+    }, runtimeWritePolicyAuthorization);
   }
 };
 
@@ -7509,7 +7536,7 @@ export class Runner {
             ...(options?.directCommit === true ? { directCommit: true } : {}),
           });
           if (options?.cfcTrustSnapshot !== undefined) {
-            tx.setCfcTrustSnapshot(options.cfcTrustSnapshot);
+            setCfcTrustSnapshot(tx, options.cfcTrustSnapshot);
           }
           assertExpectedPatternIdentity(resultCell.withTx(tx));
           return this.#setupInternal(
@@ -10684,7 +10711,7 @@ export class Runner {
         policyFacingIdentity,
       );
       if (policyFacingIdentity) {
-        tx.setCfcImplementationIdentity(policyFacingIdentity);
+        setCfcImplementationIdentity(tx, policyFacingIdentity);
       }
       // The principal invoked this handler, so the values the run initializes
       // — the protected defaults of a piece it creates among them — are theirs
@@ -11007,7 +11034,7 @@ export class Runner {
       );
       (action as Action & { lastFrame?: Frame }).lastFrame = frame;
       if (policyFacingIdentity) {
-        tx.setCfcImplementationIdentity(policyFacingIdentity);
+        setCfcImplementationIdentity(tx, policyFacingIdentity);
       }
 
       const handleErrorOutput = (error: unknown) => {
@@ -11716,7 +11743,7 @@ export class Runner {
 
     const builtinIdentity = resolveBuiltinImplementationIdentity(module);
     if (builtinIdentity) {
-      tx.setCfcImplementationIdentity(builtinIdentity);
+      setCfcImplementationIdentity(tx, builtinIdentity);
     }
 
     const builtinFrame = builtinIdentity

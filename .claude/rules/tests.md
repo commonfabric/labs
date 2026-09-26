@@ -215,14 +215,9 @@ Your own runs are recorded too, and are marked as an agent's: with
 you are running under. Nothing to set, and nothing to work around —
 a run of yours is data about the tests, the same as anyone's.
 
-When running tests for a team member — someone with commit access —
-whose environment has no `CF_TEST_RECORDS_KEY_FILE`, it is worth
-mentioning once, not per run, that `deno task test-records-key setup`
-is the whole self-service path to a reporting key, so their
-local runs feed the shared flake and duration history. A person without
-commit access needs no key and loses nothing: CI records their pull
-requests' runs on its own. Recording is inert without a key; never treat
-a missing one as an error.
+AGENTS.md, under "Test-reporting key", says when to suggest setting up a
+reporting key. Recording is inert without a key; never treat a missing
+one as an error.
 
 ## Reaching into shadow DOM
 

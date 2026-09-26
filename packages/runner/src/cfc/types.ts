@@ -568,6 +568,25 @@ export type WritePolicyInput =
     readonly value: FabricValue;
   }
   | {
+    /**
+     * The transaction is a release of a piece (setup, a pattern swap, a start
+     * repair): it names one of the piece's stores and the modules of the
+     * program it installs, whose writer stamps the release's schema can adopt
+     * over unstamped stored claims. Authority is the runtime's mark.
+     */
+    readonly kind: "release-program";
+    readonly target: CfcAddress;
+    readonly modules: readonly string[];
+  }
+  | {
+    /**
+     * A host's application of a schema to a document it does not write
+     * (`applyCfcPolicyToExistingValue`). Authority is the runtime's mark.
+     */
+    readonly kind: "policy-application";
+    readonly target: CfcAddress;
+  }
+  | {
     /** An explicit host-authorized acceptance of existing unlabeled bytes. */
     readonly kind: "owner-adoption";
     readonly target: CfcAddress;
@@ -716,6 +735,24 @@ export type PreparedDigestInput = {
    */
   readonly externalContentObservations?:
     readonly CfcExternalContentObservation[];
+
+  /**
+   * Whole-value write destinations and the identity that recorded each
+   * (`CfcTxState.assertedValueRoots`). They decide where preparation stamps
+   * the writer's flow label, so a transaction whose roots change must not
+   * keep its digest. Absent when empty, so a transaction that recorded none
+   * keeps the established prepared-digest spelling.
+   */
+  readonly assertedValueRoots?: readonly {
+    readonly address: CfcAddress;
+    readonly identity: ImplementationIdentity | undefined;
+  }[];
+
+  /**
+   * List-coordinator containers whose membership preparation re-stamps
+   * (`CfcTxState.structureContainers`). Absent when empty, like the roots.
+   */
+  readonly structureContainers?: readonly CfcAddress[];
 };
 
 /**
@@ -948,6 +985,18 @@ export type CfcTxState = {
   // fix, the dual of the input-read over-taint). map does NOT declare: it is
   // length-preserving with no membership secret, so its container stays clean.
   structureContainers: CfcAddress[];
+  // Destinations the runtime wrote a whole value to (`Cell.set`): the value
+  // there after the transaction is the one the writer supplied, however the
+  // diff split the write. Flow labels stamp such a destination as written,
+  // so what the writer asserted carries its `TransformedBy` even where the
+  // diff found a container already in place (`assertedValueRootPaths` in
+  // `prepare.ts`). Recorded only under the runtime's authorization, with the
+  // implementation identity that made the write, so a root stamps only for
+  // the identity the flow join names.
+  assertedValueRoots: {
+    address: CfcAddress;
+    identity: ImplementationIdentity | undefined;
+  }[];
   // Addresses whose invalidating writes scheduled this run (§8.9.2 trigger
   // reads): the decision to run *now* was influenced by their values, so
   // they join the flow-label derivation even when the run never re-reads

@@ -159,7 +159,10 @@ import {
   stampSpeculationRunContext,
 } from "./speculation/overlay-destination.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
-import { ExtendedStorageTransaction } from "./storage/extended-storage-transaction.ts";
+import {
+  ExtendedStorageTransaction,
+  setCfcTrustSnapshot,
+} from "./storage/extended-storage-transaction.ts";
 import type {
   ACL,
   ChangeGroup,
@@ -2566,7 +2569,7 @@ export class Runtime {
     wrapped.setCfcModuleDelegations(
       this.#moduleDelegationSnapshot(options.sourceUpdate),
     );
-    wrapped.setCfcTrustSnapshot(this.trustSnapshotProvider());
+    setCfcTrustSnapshot(wrapped, this.trustSnapshotProvider());
     wrapped.configureSealDestination(
       this.#transactionSealDestination ?? this.#speculationDestination(),
     );

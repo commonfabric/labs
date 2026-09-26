@@ -111,13 +111,20 @@ lines belong in the files inside. The same rename applies to every variant.
 
 ## Getting a key
 
-A key is what lets a team member's local runs report, and every team
-member is urged to set one up — the whole path is self-service and takes
-a couple of minutes. Contributing without commit access? Then keys are
-simply not part of your workflow yet, and skipping them costs you
-nothing: your local tests run identically without one, and CI records
-your pull requests' runs on its own, no key involved. The day you have
-commit access, the one command below is yours.
+A key is what lets a person's local runs report. Everyone who works in
+this repository regularly is encouraged to set one up; it takes a
+couple of minutes, and every run it records makes the shared history
+more useful to everyone. A key stays active while its holder has recent
+pull-request activity (see below), so it fits best once you are
+contributing regularly. There is no need to set one up for a first
+change or an occasional fix: local tests run identically without a key,
+and you are welcome to set one up whenever it suits you.
+
+With commit access the whole path is self-service. Without it, the path
+is the same command plus one workflow run that a team member will start
+for you, described below. If you don't have commit access, CI does not
+record your pull requests' runs, so a key is how your runs join the
+history.
 
 A key takes only a GitHub identity, and one command:
 
@@ -151,6 +158,19 @@ already holds a key and it re-checks the shell profile rather than
 minting a second one — unless a run is already minting for you, which it
 takes up, because the key that run delivers is the one replacing what is
 installed.
+
+Starting the workflow takes write access, so for someone without commit
+access a team member starts it for them. The person signs in with `gh auth login`
+(setup needs a GitHub login before it does anything else), runs `deno
+task test-records-key setup`, and sends a team member their GitHub login
+and the `cfr1...` recipient string the command prints. The string is a
+public key, so any channel will do. The team member opens the workflow
+page, chooses "Run workflow", and fills in the recipient string and, as
+the username, the person's login. Minting revokes every key that login
+already holds, so the team member checks the login before running it.
+The person's waiting command finds the run by the recipient in its name,
+checks that the key was minted for their own login, and installs it. The
+dispatch log records who minted for whom.
 
 `request` and `collect` are the same path in two invocations, for
 somewhere a watching command is unwanted — a shell without a terminal to

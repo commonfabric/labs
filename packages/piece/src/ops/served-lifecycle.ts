@@ -49,6 +49,7 @@ import {
   PieceSourceChangedError,
 } from "./piece-controller.ts";
 import type { PiecesController } from "./pieces-controller.ts";
+import { setCfcTrustSnapshot } from "@commonfabric/runner/cfc/trust-authority";
 
 /** A content-addressed pattern pointer: the closure and the export run. */
 export type ServedPatternRef = { identity: string; symbol: string };
@@ -348,7 +349,8 @@ export async function servedInstantiatePiece(
       actionId: `pattern-lifecycle/instantiate/${address}`,
       kind: "bookkeeping",
     });
-    tx.setCfcTrustSnapshot(
+    setCfcTrustSnapshot(
+      tx,
       runtime.trustSnapshotForPrincipal(request.actingUser),
     );
     const retained = requestRecord.withTx(tx).get();
@@ -449,7 +451,7 @@ export async function prepareServedRegistration(
         actionId: "pattern-lifecycle/registration-prepare",
         kind: "bookkeeping",
       });
-      tx.setCfcTrustSnapshot(runtime.trustSnapshotForPrincipal(actingUser));
+      setCfcTrustSnapshot(tx, runtime.trustSnapshotForPrincipal(actingUser));
     }
     const retained = requestRecord.withTx(tx).get();
     if (retained === undefined || retained.pieceId !== receipt.pieceId) {
@@ -588,7 +590,7 @@ export async function finishServedRegistration(
         actionId: "pattern-lifecycle/registration-finish",
         kind: "bookkeeping",
       });
-      tx.setCfcTrustSnapshot(runtime.trustSnapshotForPrincipal(actingUser));
+      setCfcTrustSnapshot(tx, runtime.trustSnapshotForPrincipal(actingUser));
     }
     const current = requestRecord.withTx(tx).get();
     if (current === undefined || current.pieceId !== receipt.pieceId) {

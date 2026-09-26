@@ -15,6 +15,7 @@ import type { CfcEnforcementMode } from "../src/cfc/types.ts";
 import { createLLMFriendlyLink } from "../src/link-types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("cfc agent tool-input integrity");
 const space = signer.did();
@@ -173,7 +174,7 @@ async function setupSendMail(
   // cfc-integrity-mint-gate.test.ts).
   const seedKernelRecipient = async (name: string, value: string) => {
     const seedTx = runtime.edit();
-    seedTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(seedTx, {
       kind: "builtin",
       builtinId: "agent-kernel-demo",
     });
@@ -220,7 +221,7 @@ async function setupSendMail(
       },
     } as const satisfies JSONSchema;
     const seedTx = runtime.edit();
-    seedTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(seedTx, {
       kind: "builtin",
       builtinId: "llm-dialog",
     });

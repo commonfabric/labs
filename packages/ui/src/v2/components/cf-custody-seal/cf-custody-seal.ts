@@ -18,6 +18,7 @@ type SealBinding = {
   terms: CellHandle;
   policy: CellHandle;
   sources: CellHandle;
+  box: CellHandle | undefined;
   generation: number;
 };
 
@@ -28,6 +29,19 @@ type SealSummary = {
   seats: string[];
   leakBits: string | undefined;
 };
+
+/**
+ * What the confirmation says in place of a bound on what an answer reveals
+ * when the room's policy does not require the seal's input witness on its
+ * release. Then a member's own code can run the room's releasing code over
+ * the actor's entry and values it made up, as many times as it likes, so no
+ * per-answer bound holds.
+ *
+ * TODO(L14b): once a pattern's reads carry the input witness, the seal should
+ * refuse such a policy and this warning goes with it.
+ */
+const UNWITNESSED_RELEASE_WARNING =
+  "This room protects your answer's inputs from members' honest code only; a member running their own code can learn your stance one answer at a time.";
 
 /** The longest room-authored string the confirmation shows, in characters. */
 const MAX_TERMS_TEXT = 280;
@@ -147,11 +161,24 @@ function describeSource(source: unknown): string {
  * can read it now, the seats, the policy that governs release, and which of
  * the actor's sources go in. Below that, set apart, it shows what the room's
  * terms say: the question, the answers they list, and the bound on what one of
- * those answers reveals. The exact values are under details. Only a trusted
+ * those answers reveals. When the worker found that the room's policy does
+ * not require the seal's input witness on what it releases, no such bound
+ * holds, and a warning saying so replaces it. The exact values are under
+ * details. Only a trusted
  * click on the dialog's own confirmation seals.
  *
+ * Once the value is sealed, the component writes a link to the instance's box
+ * into `$box`, when bound: the box is the one document the room's projector
+ * reads, and a pattern has no other way to address it. Reading it stays
+ * label-gated, so what the pattern computes from it leaves the room only
+ * through the room policy's own release rules. The blinded key of the actor's
+ * entry never reaches the pattern.
+ *
  * @element cf-custody-seal
- * @fires cf-sealed - The value is sealed; the event carries nothing
+ * @fires cf-sealed - The value is sealed; `detail.instance` is the instance
+ *   sealed into, the digest of the terms with each seat resolved to its DID.
+ *   It names no member, but code holding it can test a guess at the whole
+ *   set of seat DIDs against it
  */
 export class CFCustodySeal extends BaseElement {
   static override styles = [
@@ -250,6 +277,15 @@ export class CFCustodySeal extends BaseElement {
       [role="alert"] {
         color: #932c22;
       }
+      .warning {
+        margin: 1rem 0 0;
+        padding: .75rem 1rem;
+        border: 2px solid #932c22;
+        border-radius: .5rem;
+        background: #fbeeec;
+        color: #5c1711;
+        font-weight: 600;
+      }
       .principal,
       .digest {
         unicode-bidi: isolate;
@@ -288,6 +324,10 @@ export class CFCustodySeal extends BaseElement {
   @property({ attribute: false })
   accessor sources: CellHandle | undefined;
 
+  /** Optional writable cell that receives a link to the instance's box. */
+  @property({ attribute: false })
+  accessor box: CellHandle | undefined;
+
   #preview: SealPreview | undefined;
   #binding: SealBinding | undefined;
   #busy = false;
@@ -318,7 +358,7 @@ export class CFCustodySeal extends BaseElement {
   override willUpdate(changed: PropertyValues): void {
     super.willUpdate(changed);
     if (
-      ["draft", "terms", "policy", "sources", "runtime"].some((key) =>
+      ["draft", "terms", "policy", "sources", "box", "runtime"].some((key) =>
         changed.has(key)
       )
     ) {
@@ -334,6 +374,10 @@ export class CFCustodySeal extends BaseElement {
   override render() {
     const preview = this.#preview;
     const summary = preview ? summarizeCustodyTerms(preview.terms) : undefined;
+    // The bound on what an answer reveals is shown only when the worker found
+    // the room's release witnessed. A preview that does not say so, including
+    // one from a worker that predates the field, gets the warning instead.
+    const bounded = preview?.witnessedRelease === true;
     return html`
       <button type="button" ?disabled=${this.#busy || !this.#bound() ||
         !this.runtime}
@@ -389,11 +433,17 @@ export class CFCustodySeal extends BaseElement {
             }</ul>`
             : "These terms do not list the answers the room can give."}</dd>
         </dl>
-        <p class="leak">${summary?.leakBits !== undefined
-          ? `If the room releases only these answers, each answer reveals at most ${summary.leakBits} ${
-            summary.leakBits === "1" ? "bit" : "bits"
-          } about your values.`
-          : "These terms state no bound on what an answer reveals."}</p>
+        ${preview && !bounded
+          ? html`
+            <p class="warning" role="note">${UNWITNESSED_RELEASE_WARNING}</p>
+          `
+          : html`
+            <p class="leak">${summary?.leakBits !== undefined
+              ? `If the room releases only these answers, each answer reveals at most ${summary.leakBits} ${
+                summary.leakBits === "1" ? "bit" : "bits"
+              } about your values.`
+              : "These terms state no bound on what an answer reveals."}</p>
+          `}
         <details>
           <summary>Details</summary>
           <p>Your sealed values:</p>
@@ -447,13 +497,13 @@ export class CFCustodySeal extends BaseElement {
     return this.isConnected && binding.generation === this.#generation &&
       binding.runtime === this.runtime && binding.draft === this.draft &&
       binding.terms === this.terms && binding.policy === this.policy &&
-      binding.sources === this.sources;
+      binding.sources === this.sources && binding.box === this.box;
   }
 
   /** Asks the worker for the checked preview and opens the dialog on it. */
   #prepare = async (): Promise<void> => {
     if (this.#busy) return;
-    const { runtime, draft, terms, policy, sources } = this;
+    const { runtime, draft, terms, policy, sources, box } = this;
     if (
       !runtime || !draft || !terms || !policy || !sources || !this.isConnected
     ) {
@@ -466,6 +516,7 @@ export class CFCustodySeal extends BaseElement {
       terms,
       policy,
       sources,
+      box,
       generation: this.#generation,
     };
     this.#binding = binding;
@@ -524,12 +575,28 @@ export class CFCustodySeal extends BaseElement {
     this.#error = "";
     this.requestUpdate();
     try {
-      await binding.runtime.commitCustodySeal(preview.id);
+      const sealed = await binding.runtime.commitCustodySeal(preview.id);
       // The preview is consumed; nothing is left to cancel.
       this.#preview = undefined;
+      // The entry is durable, and the link is the room's only way to it, so
+      // it goes to the box binding the actor reviewed with, even when a
+      // binding has changed since. The value is sealed whatever becomes of
+      // the link, so a failed write is reported as that and the seal is still
+      // announced: a second seal would be refused as a second entry.
+      let linkError = "";
+      if (binding.box) {
+        try {
+          await binding.box.setStrict(sealed.box);
+        } catch (error) {
+          linkError = `Sealed, but the link to the room's box was not saved: ${
+            error instanceof Error ? error.message : "the write failed"
+          }`;
+        }
+      }
       if (!this.#current(binding)) return;
       this.#invalidate();
-      this.emit("cf-sealed");
+      this.#error = linkError;
+      this.emit("cf-sealed", { instance: sealed.instance });
     } catch (error) {
       this.#preview = undefined;
       if (!this.#current(binding)) return;

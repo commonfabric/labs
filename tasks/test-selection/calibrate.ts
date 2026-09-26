@@ -47,11 +47,20 @@
  *
  * Every fit here errs high. A cost model that under-estimates puts a lane
  * past the bound it is packed to finish inside, where one that
- * over-estimates leaves a lane finishing early. What a run is charged
- * errs high too, with one exception: `pricedCalibration` charges a run
- * with coverage on the fit without coverage for a suite no lane has yet
- * run with coverage on, and that is short by whatever instrumenting the
- * suite costs.
+ * over-estimates leaves a lane finishing early. The two charges that are
+ * read off what lanes have spent, a suite's fixed cost and a capability's
+ * setup, are each read at the ninetieth percentile of what lanes have
+ * seen. That is well above the typical observation, and it is not the
+ * slowest one. Each charge is paid by every lane that holds the suite or
+ * opens the capability, for as long as the window keeps the observations
+ * it was read from. Read at the slowest observation, a single slow batch
+ * would set what every lane is charged, and every lane would pack short
+ * by the whole of that batch's excess.
+ *
+ * What a run is charged errs high too, with one exception:
+ * `pricedCalibration` charges a run with coverage on the fit without
+ * coverage for a suite no lane has yet run with coverage on, and that is
+ * short by whatever instrumenting the suite costs.
  *
  * One reading cannot manage it at both ends. A suite's fixed cost and
  * what one of its units costs are measured from batches of much the same
@@ -73,6 +82,7 @@ import {
   MIN_CORRECTION_SAMPLES,
   MIN_CORRECTION_SPAN_SECONDS,
 } from "./policy.ts";
+import { percentile90 } from "./score.ts";
 
 /**
  * One thing a lane measured about itself, and the day it measured it.
@@ -421,10 +431,20 @@ function unitCostOf(
  * intercept and two figures charged in proportion to what the batch
  * holds.
  *
- * The intercept is raised until no observation is under-predicted,
- * whatever the other two came to. A least-squares line sits in the middle
- * of its observations by construction, which for this quantity means half
- * the lanes running past the budget they were packed against.
+ * The intercept is the ninetieth percentile of what each batch spent
+ * beyond what the other two charge it, whatever those came to, so at
+ * least nine batches in ten are charged what they spent or more. A
+ * least-squares line sits in the middle of its observations by
+ * construction, which for this quantity means half the lanes running past
+ * the budget they were packed against. An intercept that no batch exceeds
+ * is set by the single slowest batch in the window, whatever made that
+ * batch slow, and every lane holding the suite pays it.
+ *
+ * The percentile is the observation at that rank rather than a value
+ * between two of them, so over nine or fewer batches it is the largest,
+ * and over ten to nineteen it is the second largest. A suite lanes have
+ * rarely run is charged what its slowest batch cost, which errs high
+ * where there are too few batches to tell a slow one from the suite.
  *
  * The per-unit cost is read at a rate carrying a share of the suite's own
  * fixed cost, and the intercept is what that rate leaves. So a batch far
@@ -440,21 +460,24 @@ export function fitSuite(
 ): { overhead: number; correction: number; unitOverhead: number } {
   const correction = correctionOf(observations);
   const unitOverhead = unitCostOf(observations, correction);
-  const overhead = observations.reduce(
-    (most, o) =>
-      Math.max(most, o.spent - correction * o.ran - unitOverhead * o.units),
-    0,
-  );
+  const remainders = observations
+    .map((o) => o.spent - correction * o.ran - unitOverhead * o.units)
+    .sort((a, b) => a - b);
+  const overhead = Math.max(0, percentile90(remainders, remainders.length));
   return { overhead, correction, unitOverhead };
 }
 
 /** What a lane pays beyond its tests, fitted from what lanes have spent. */
 export function calibrate(observations: Observations): Calibration {
   const setupCost: Record<string, number> = {};
-  // The worst opening anybody has seen, which is the same reading the
-  // intercept takes and errs the same way.
+  // The ninetieth percentile of the openings lanes have seen, which is the
+  // reading the intercept takes, for the same reason: the slowest opening
+  // in the window is one runner's, and it would otherwise be charged to
+  // every lane that opens the capability. Over nine or fewer openings it
+  // is the slowest of them.
   for (const [capability, seconds] of observations.setup) {
-    setupCost[capability] = Math.max(...seconds);
+    const sorted = [...seconds].sort((a, b) => a - b);
+    setupCost[capability] = percentile90(sorted, sorted.length);
   }
   // Instrumenting a run costs it time, and how much is a property of the
   // suite, so a suite's batches run with coverage on are fitted apart

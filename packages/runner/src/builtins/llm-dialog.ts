@@ -128,6 +128,7 @@ import {
 } from "./llm-schemas.ts";
 import { resolveStoredPatternAsync } from "./op-pattern-ref.ts";
 import { ownedCell, recordRuntimeOwnedStore } from "./runtime-owned-store.ts";
+import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 // Message schema that mints the `LlmDerived` provenance stamp (Epic D1).
 // Recorded as the schema write-policy input for each model-produced message's
@@ -4146,7 +4147,7 @@ async function startRequest(
     // evidence family, so the persist-time gate (`gateRuntimeMintedIntegrity`,
     // audit S4) admits it only from builtin authors — the same gating that
     // stops pattern code from forging the stamp.
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: "llmDialog",
     });

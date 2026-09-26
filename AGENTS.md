@@ -111,6 +111,13 @@ found, as an agent's non-interactive shell is on a machine that never ran the
 install. The two differ in one respect: `cf which`, which reports the checkout a
 `cf` would run, is answered by `bin/cf` alone.
 
+### Test-reporting key
+
+If `CF_TEST_RECORDS_KEY_FILE` is unset or names a missing file, mention once per
+session, as a friendly suggestion, that `deno task test-records-key setup` is
+worth running once your user contributes regularly
+(`docs/development/test-records.md`, "Getting a key").
+
 ### Avoid timeouts, retry loops, and sleeps
 
 Timeouts cause flakiness because they put an upper bound on success: anything

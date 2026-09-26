@@ -58,6 +58,7 @@ import {
   cfcSchemaResolvedRoot,
   loadStoredCfcEnvelope,
   type MergeCfcSchemaEnvelopeOptions,
+  releaseMergeOptions,
   resolveCfcSchemaRefRoot,
   resolveCfcSchemaRefs,
   storedCfcEnvelopeMergeIssue,
@@ -5369,6 +5370,12 @@ function pieceSourceCfcEnvelopeIssue(
 ): string | undefined {
   // `readTx()` cannot write, so the two dry runs stay dry runs.
   const tx = pieces.runtime.readTx();
+  // The modules the release would install, as setup names them.
+  const patternManager = pieces.runtime.patternManager;
+  const entry = patternManager.getArtifactEntryRef(candidate);
+  const programModules = entry === undefined
+    ? []
+    : patternManager.programModuleIdentities(entry.identity) ?? [];
   const issues = [
     pieceDocumentCfcEnvelopeIssue(
       "argument",
@@ -5376,6 +5383,7 @@ function pieceSourceCfcEnvelopeIssue(
       candidate.argumentSchema,
       {},
       tx,
+      programModules,
     ),
     // Setup writes the result projection, and with it the schema input the
     // commit merges, only where the candidate's projection differs from the
@@ -5389,6 +5397,7 @@ function pieceSourceCfcEnvelopeIssue(
         candidate.resultSchema,
         { generatedOutputPaths: [[]] },
         tx,
+        programModules,
       )
       : undefined,
   ].filter((issue): issue is string => issue !== undefined);
@@ -5406,6 +5415,7 @@ function pieceDocumentCfcEnvelopeIssue(
   candidateSchema: JSONSchema,
   options: MergeCfcSchemaEnvelopeOptions,
   tx: IExtendedStorageTransaction,
+  programModules: Iterable<string>,
 ): string | undefined {
   const link = cell.getAsNormalizedFullLink();
   const stored = loadStoredCfcEnvelope(tx, {
@@ -5428,10 +5438,20 @@ function pieceDocumentCfcEnvelopeIssue(
       `document could not be read (${stored.reason}); applying a source ` +
       `would be rejected over the same failure`;
   }
+  // The update the check gates is a release of the piece, which merges with
+  // the release's options (see `releaseMergeOptions`).
   const issue = storedCfcEnvelopeMergeIssue(
     stored.schema,
     candidateSchema,
-    options,
+    {
+      ...options,
+      ...releaseMergeOptions(
+        tx,
+        { space: link.space, id: link.id, scope: link.scope },
+        stored.schema,
+        programModules,
+      ),
+    },
   );
   if (issue === undefined) return undefined;
   return issue.migration

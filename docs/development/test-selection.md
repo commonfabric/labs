@@ -1026,6 +1026,18 @@ calibration: `suites` for batches run without coverage, and `suitesWithCoverage`
 for batches run with it. The line counts each suite once whether it has one fit
 or two, and the last figure is how many have a coverage-on fit.
 
+The two fixed charges, a suite's `suiteOverhead` and a capability's
+`setupCost`, are each the ninetieth percentile of what lanes have seen in
+the window, the same percentile a test's own cost is read at. That is
+well above what a typical batch or opening takes. It is not the slowest
+one, because each charge is paid by every lane that holds the suite or
+opens the capability: read at the slowest observation, one slow runner
+would set what every lane pays, and every lane would pack short by that
+runner's excess. The percentile is the observation at its rank rather
+than a value between two, so over nine or fewer observations it is the
+slowest of them, and a suite lanes have rarely run is charged its
+slowest batch.
+
 A run charges each suite the fit for how it runs that suite's batches:
 `pricedForRun` in `tasks/test-selection/census.ts` charges the coverage-on fit
 for every suite of the full run, and for the suites of the sets the coverage
@@ -1105,12 +1117,13 @@ All four fill in as soon as a lane run the fold can place lands: every
 object the publisher folds for the first time gives up its lane
 measurements, so one run puts a figure in the model and seven days of
 runs fill the window `COST_WINDOW_DAYS` names. Until then the model is
-not merely thin. Every figure in it is a maximum — the worst capability
-opening seen, and the largest gap between what a batch's own tests took
-and what the batch took — so a model fitted over part of a window reads lower than
-one fitted over all of it, and reading low is the direction that
-overruns a lane. A suite with nothing at all in the window is charged
-nothing.
+not merely thin. Its fixed charges are ninetieth percentiles of what
+lanes have seen: of each capability's openings, and of what each batch
+spent beyond what its tests and its units account for. A model fitted
+over part of a window may not yet have seen the slow runs that set those
+percentiles, so it can read lower than one fitted over all of it, and
+reading low is the direction that overruns a lane. A suite with nothing
+at all in the window is charged nothing.
 
 Nothing recovers a figure from before the publisher could read it. An
 object the aggregate has already folded is never folded again, because

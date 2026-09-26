@@ -1444,3 +1444,59 @@ reactive re-render paragraph. Implemented in
 `packages/runner/src/cfc/render-ceiling.ts`
 (`membershipSpacesInConfidentiality`) and
 `packages/html/src/worker/reconciler.ts` (`#watchCellMembership`).
+
+## From the stored write-requirement enforcement (#8024, 2026-09-24)
+
+**SC-45 [normative] A module delegation is a verifier step — §8.15.6.**
+`open`. §8.15.6 says an updated handler MUST NOT inherit its predecessor's
+write authority. The runtime lets a republished module write a field whose
+stored `writeAuthorizedBy` names its predecessor when a delegation from the
+successor to the predecessor is registered, and `piece setsrc` and
+system-origin releases (the source reconciler) register one. Once stored claims
+bind every writer, a successor writing through its own labeled schema needs
+that delegation too. Ruled by Berni on #8024: "Yes, trust setsrc and system
+updates do set up a delegation, that is intended. Spec-wise it's effectively a
+verifier step." Proposed edit: in §8.15.6, say that authority does not pass by
+inheritance, and that a verifier may attest a succession (the update path
+registering the successor as a delegate of the predecessor). The attested
+successor then satisfies claims naming the predecessor. Name who may attest
+(the trusted update paths) and that the attestation is per space.
+
+**SC-46 [normative] Claims beneath a link position belong to the linked
+document — §8.15 + §8.12.** `open`. A schema can describe, beneath a position
+that holds a link, the fields of the document linked there, with their writer
+claims (a home document's profile links carry the profile pattern's field
+claims). Nothing in §8.15 or §8.12 says whose claims those are. The runtime
+treats them as the linked document's: that document's own envelope enforces
+them. The link position's own claims (`writeAuthorizedBy`/`uiContract` at the
+position) govern pointing it at another link, setting it from absent, and
+clearing it. Replacing inline data with a link, or a link with inline data,
+answers to the claims beneath as stored. Link positions are judged from the
+stored and new values, per item for a list. Proposed edit: a §8.15 subsection
+stating these rules, and a note in §8.15.3 ("authority is a property of the
+schema, not the value") that which document a schema position describes
+depends on whether the value there is a link.
+
+**SC-47 [normative] Release — §8.15.12 (new) + §8.12.3.** `open`. §8.12.3's
+strictly additive label evolution has no carve-out for re-describing what a
+store's schema says about other documents. Proposed clause: in the
+runtime-authorized transaction that installs a pattern over its own piece's
+stores (setup, a pattern swap, a start repair), (a) claims the stored schema
+describes beneath a position that, as the document stood before the
+transaction, held only links, or held nothing under a position that itself
+carries a writer claim, belong to the linked documents and are re-described
+by the release; (b) a stamped claim may adopt a stored
+unstamped claim per SC-48. Every other writer is held to strict monotonicity.
+Note that both rules rest on swap authority (who may move a piece's pattern
+pointer), which §8.15 should name.
+
+**SC-48 [normative] Adopting an unstamped writer claim — §8.15.1.** `open`.
+§8.15.1 names a writer by artifact hash and symbol. Claims stored before the
+runtime stamped them carry only a file spelling, which differs across compile
+roots. An unstamped claim authorizes no writer. The runtime lets a stamped
+claim adopt one when both name the same export and the same file below a
+known pattern root, and only when the stamp is one the transaction can vouch
+for: a module of the program a release installs (SC-47), or the verified
+writer the stamp itself names (its module, source file and export). Proposed edit: state that adoption is a
+one-time authenticated migration of legacy claims, and that once stored claims
+are stamped the file-correspondence rules are retired.
