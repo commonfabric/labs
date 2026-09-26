@@ -1360,6 +1360,19 @@ describe("VisitInProgress", () => {
             expect(rec.events.map((e) => e[1])).not.toContain(1);
           });
 
+          it("returns a new instance for a deeply frozen instance whose state changes", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = (v) =>
+              (v === "fid1:abc") ? mapTo("fid1:xyz") : undefined;
+            const original = deepFreeze(new FabricLink({ id: "fid1:abc" }));
+            const result = map(original, rec);
+
+            expect(result).toBeInstanceOf(FabricLink);
+            expect(result).not.toBe(original);
+            expect((result as FabricLink).payload).toEqual({ id: "fid1:xyz" });
+            expect(original.payload).toEqual({ id: "fid1:abc" });
+          });
+
           it("throws when the codec refuses the mapped state", () => {
             const rec = new Recorder();
             rec.onPrimitive = (v) => (v === "boom") ? mapTo(5) : undefined;
@@ -1367,6 +1380,33 @@ describe("VisitInProgress", () => {
             expect(() => map(error("boom"), rec)).toThrow(
               /Codec of .* refused replacement state /,
             );
+          });
+
+          it("throws when the codec refuses a state mapped to `undefined`", () => {
+            const rec = new Recorder();
+            rec.onPlainObject = () => mapTo(undefined);
+
+            expect(() => map(error("boom"), rec)).toThrow(
+              /Codec of .* refused replacement state `undefined`/,
+            );
+          });
+
+          it("decodes a state mapped to `undefined` when the codec accepts it", () => {
+            const rec = new Recorder();
+            rec.onPlainObject = () => mapTo(undefined);
+            const decoded = error("decoded");
+            const states: unknown[] = [];
+            const instance = errorWithCodec("boom", {
+              canDecode: () => true,
+              decode: (_tag: string, state: unknown) => {
+                states.push(state);
+                return decoded;
+              },
+            });
+
+            expect(map(instance, rec)).toBe(decoded);
+            expect(states.length).toBe(1);
+            expect(states[0]).toBeUndefined();
           });
 
           it("throws when the codec fails while checking the mapped state", () => {

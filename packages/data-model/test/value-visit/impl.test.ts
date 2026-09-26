@@ -5,15 +5,13 @@ import { deepFreeze } from "@/deep-freeze.ts";
 import {
   DefaultValueVisitor,
   makeMapValueFunction,
+  makeMutableMapValueFunction,
   makeVisitValueFunction,
   mapValue,
+  mutableMapValue,
   type VisitResult,
   visitValue,
 } from "@/value-visit";
-import {
-  makeMutableMapValueFunction,
-  mutableMapValue,
-} from "@/value-visit/impl.ts";
 
 import { mainResult, mapTo, Recorder } from "./Recorder.ts";
 
