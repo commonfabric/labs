@@ -2098,6 +2098,17 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   recordCfcStructureContainer(address: CfcAddress): void;
 
   /**
+   * Records a destination the runtime wrote a whole value to, so the flow
+   * stamp lands there rather than only at the paths the diff changed. See
+   * `CfcTxState.assertedValueRoots`. Dropped unless `authorization` carries
+   * the runtime's mark. The address is `deepFreeze()`d on entry.
+   */
+  recordCfcAssertedValueRoot(
+    address: CfcAddress,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): void;
+
+  /**
    * Settles whether this transaction is CFC-relevant — the flow-label
    * relevance probe, then the sink-request ceiling probe — and runs
    * `prepareCfc()` when it is.

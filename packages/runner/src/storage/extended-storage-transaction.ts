@@ -543,6 +543,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     prepare: { status: "unprepared" },
     dereferenceTraces: [],
     structureContainers: [],
+    assertedValueRoots: [],
     triggerReads: [],
     writePolicyInputs: [],
     writePolicyInputIdentities: new Map(),
@@ -1886,6 +1887,23 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.#cfcState.structureContainers.push(deepFreeze(address));
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("structure-container-added");
+    }
+  }
+
+  recordCfcAssertedValueRoot(
+    address: CfcAddress,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): void {
+    // A root widens where a flow stamp lands, so a record without the
+    // runtime's mark is dropped: pattern code reaches this transaction, and
+    // a root it named could re-stamp values it never wrote.
+    if (!runtimeWritePolicyAuthorized(authorization)) return;
+    this.#cfcState.assertedValueRoots.push(deepFreeze({
+      address,
+      identity: this.#cfcState.implementationIdentity,
+    }));
+    if (this.#cfcState.prepare.status === "prepared") {
+      this.invalidateCfc("asserted-value-root-added");
     }
   }
 
@@ -3489,6 +3507,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.#preparedDigestMemo = undefined;
     this.#cfcState.dereferenceTraces = [];
     this.#cfcState.structureContainers = [];
+    this.#cfcState.assertedValueRoots = [];
     const result = this.tx.abort(reason);
     // An abort is a terminal outcome, and it discards the staged writes the
     // same way a rejected commit does. Settle callbacks compensate for writes
@@ -4136,6 +4155,13 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   recordCfcStructureContainer(address: CfcAddress): void {
     this.#wrapped.recordCfcStructureContainer(address);
+  }
+
+  recordCfcAssertedValueRoot(
+    address: CfcAddress,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): void {
+    this.#wrapped.recordCfcAssertedValueRoot(address, authorization);
   }
 
   prepareForCommit(): void {

@@ -948,6 +948,18 @@ export type CfcTxState = {
   // fix, the dual of the input-read over-taint). map does NOT declare: it is
   // length-preserving with no membership secret, so its container stays clean.
   structureContainers: CfcAddress[];
+  // Destinations the runtime wrote a whole value to (`Cell.set`): the value
+  // there after the transaction is the one the writer supplied, however the
+  // diff split the write. Flow labels stamp such a destination as written,
+  // so what the writer asserted carries its `TransformedBy` even where the
+  // diff found a container already in place (`assertedValueRootPaths` in
+  // `prepare.ts`). Recorded only under the runtime's authorization, with the
+  // implementation identity that made the write, so a root stamps only for
+  // the identity the flow join names.
+  assertedValueRoots: {
+    address: CfcAddress;
+    identity: ImplementationIdentity | undefined;
+  }[];
   // Addresses whose invalidating writes scheduled this run (§8.9.2 trigger
   // reads): the decision to run *now* was influenced by their values, so
   // they join the flow-label derivation even when the run never re-reads
