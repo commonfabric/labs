@@ -18,44 +18,17 @@ import {
 } from "./integration.ts";
 import { PATTERN_TREES } from "./pattern-files.ts";
 
-Deno.test("selectPatternTestFiles assigns every file by stable FNV-1a hash", () => {
-  const files = [
-    "packages/patterns/notes/note.test.tsx",
-    "packages/patterns/notes/notebook.test.tsx",
-    "packages/patterns/dice.test.tsx",
-    "packages/patterns/shopping-list.test.tsx",
-    "packages/patterns/lunch-poll/main.test.tsx",
-    "packages/patterns/lunch-poll/multi-user.test.tsx",
-  ];
-
-  const expected = [
-    [
-      "packages/patterns/lunch-poll/multi-user.test.tsx",
-      "packages/patterns/notes/note.test.tsx",
-    ],
-    ["packages/patterns/shopping-list.test.tsx"],
-    ["packages/patterns/lunch-poll/main.test.tsx"],
+Deno.test("selectPatternTestFiles returns the files slash-separated and sorted", () => {
+  assertEquals(
+    selectPatternTestFiles([
+      "packages\\patterns\\notes\\note.test.tsx",
+      "packages/patterns/dice.test.tsx",
+    ]),
     [
       "packages/patterns/dice.test.tsx",
-      "packages/patterns/notes/notebook.test.tsx",
+      "packages/patterns/notes/note.test.tsx",
     ],
-  ];
-
-  for (
-    const paths of [
-      files,
-      files.map((file) => file.replaceAll("/", "\\")),
-    ]
-  ) {
-    assertEquals(
-      Array.from(
-        { length: 4 },
-        (_, index) =>
-          selectPatternTestFiles(paths, { index: index + 1, total: 4 }),
-      ),
-      expected,
-    );
-  }
+  );
 });
 
 Deno.test("selectIntegrationTestFiles keeps .test.ts files matching the filter", () => {

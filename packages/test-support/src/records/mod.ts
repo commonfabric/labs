@@ -157,6 +157,7 @@ export type {
   Manifest,
   ManifestEntry,
   ScoreInputs,
+  SuiteFit,
   UnavailableEntry,
   UnschedulableEntry,
   WithheldEntry,

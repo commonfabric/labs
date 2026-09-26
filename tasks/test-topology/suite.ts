@@ -107,9 +107,11 @@ export interface CommandContext {
   outputDir: string;
 
   /**
-   * Where coverage profiles go. A suite writes one directory under it
-   * per workspace member, named by {@link coverageMemberDirectory}, so
-   * that what one member's tests reached is converted on its own.
+   * Where coverage profiles go. A suite whose runner is `deno test` over
+   * files writes one directory under it per workspace member, named by
+   * {@link coverageMemberDirectory}, so that what one member's tests
+   * reached is converted on its own; a suite that builds its own command
+   * line writes one directory named for itself.
    * Absent where this batch is not being measured, which is every batch
    * outside the coverage gate and the full run.
    */

@@ -83,6 +83,29 @@ imported, so wiring one up as above satisfies the check. A dependency that is
 declared without a local import on purpose goes in the allowlist in
 `tasks/check-unused-deps.ts` with a one-line reason.
 
+### npm packages in the compiled binaries
+
+`deno task build-binaries` embeds in the `toolshed` and `cf` binaries only the
+npm packages that each binary's module graph reaches. The graph starts at the
+binary's entry point and at every module in a path the build embeds with
+`--include`. It follows static imports and dynamic imports whose specifier is a
+string literal. Each reached package is embedded whole, with its dependencies.
+Deno selects a package's platform-specific dependencies by operating system and
+processor but not by C library, so a Linux binary embeds both the glibc and the
+musl variant of each. An npm package that a binary loads only through a
+specifier computed at run time has to be named in `tasks/build-binaries.ts` with
+`--include npm:<package>`. Without that, the import fails when the binary runs,
+though it succeeds from source.
+
+The toolshed embeds the pattern trees so that it can serve them, which puts
+every module in them into its graph. It leaves out the files there that it never
+serves: the `integration/` and `baselines/` directories of `packages/patterns`,
+every test file (`*.test.ts` and `*.test.tsx`), and every iframe guest source,
+which the iframe wrapper generator has already bundled into each generated
+`main.tsx`. An npm import in a pattern tree belongs in one of those files.
+`tasks/build-binaries.test.ts` fails when any other module in a pattern tree
+reaches an npm package that the rest of the toolshed does not.
+
 ## Packages that must resolve to a single copy
 
 Most packages can be resolved twice without anyone noticing. A few cannot,
@@ -179,10 +202,10 @@ defends against us: nobody checks a 40-character commit by eye, so a commit
 that is not the release it claims to be would pass review on the strength of
 the comment beside it.
 
-`deno task check-action-pins`, a step in the `check` job, holds both. It asks
-GitHub which commit the named release points at and fails when a step names no
-commit, carries no release comment, or names a commit that release does not
-point at.
+`deno task check-action-pins`, a gate of the `repo-gates` suite in the test
+topology, holds both. It asks GitHub which commit the named release points at
+and fails when a step names no commit, carries no release comment, or names a
+commit that release does not point at.
 
 The comment names the release itself, `# v4.2.0` and not `# v4`. A publisher
 moves `v4` onto each release, so a comment naming one says only which major
@@ -226,7 +249,7 @@ The runtime compiles patterns itself, using the TypeScript compiler API at
 runtime. Seven runtime and build packages (`js-compiler`, `ts-transformers`,
 `schema-generator`, `runner`, `cli`, `static`, `deno-web-test`) import
 `npm:typescript`. The `api` package imports it for the type-profiling harness,
-`tasks` imports it for the coverage gate, which compiles a source file to find
+`tasks` imports it for the coverage metric, which compiles a source file to find
 out whether it holds any executable code, and `patterns` imports it for the
 Topics browser-measurement helper, which parses authored and compiled sources
 to find a lift's declaration. All ten workspace members pin the same version in
@@ -540,11 +563,9 @@ fetch-shaped value. Write the signature out instead. `HarnessFetch` in
 `packages/runner/src/runtime.ts` are the package-level contracts. They hold
 whichever version resolves and whichever compiler checks them.
 
-Two things make this class of breakage easy to miss. `deno task check` does not
-cover every package: `cf-harness` is type checked only by its own test task, so
-its type errors surface in a test shard rather than the Check job. And CI pins
-Deno 2.9.4 while `tasks/check.sh` accepts any 2.8.x or 2.9.x, so a local check
-and CI can disagree about what type checks.
+This class of breakage is easy to miss because CI pins Deno 2.9.4 while
+`tasks/check.sh` accepts any 2.8.x or 2.9.x, so a local check and CI can
+disagree about what type checks.
 
 ### Astral
 

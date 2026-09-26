@@ -1,0 +1,2 @@
+{"date":"2026-09-25","from":{"k":"unit","s":"tasks","n":"post-main-report > pullRequestHead() > gives the branch tip and the moment it was committed"},"to":{"k":"unit","s":"tasks","n":"post-main-report > pullRequestHead() > gives the branch tip"}}
+{"date":"2026-09-25","from":{"k":"unit","s":"tasks","n":"post-main-report > pullRequestHead() > gives nothing when the commit carries no usable date"},"to":{"k":"unit","s":"tasks","n":"post-main-report > committedAt() > gives nothing when the commit carries no usable date"}}

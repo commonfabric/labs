@@ -131,6 +131,7 @@ import {
 } from "./builtins/navigate-context.ts";
 import { opInputsDocKey } from "./builtins/op-pattern-ref.ts";
 import {
+  delegatedCarriageOf,
   requireWaveAcceptance,
   waveRunContextOf,
   waveSettlementOf,
@@ -1193,6 +1194,9 @@ export interface RunSyncedOptions {
    * caller-owned transaction, which keeps its owner's.
    */
   cfcTrustSnapshot?: TrustSnapshot;
+
+  /** See `RunnerRunOptions.attributeInitialization`. */
+  attributeInitialization?: boolean;
 }
 
 /** Options for a pattern setup whose fresh source revision proves a commit. */
@@ -1215,6 +1219,9 @@ type SetupValidationOptions = {
 
   /** See `RunnerRunOptions.referencedArgumentFields`. */
   referencedArgumentFields?: readonly string[];
+
+  /** See `RunnerRunOptions.attributeInitialization`. */
+  attributeInitialization?: boolean;
 
   /** Optional invariant over the argument stored before setup changes it. */
   validateCurrentArgument?: (argumentCell: Cell<unknown>) => void;
@@ -1542,7 +1549,7 @@ const LIST_OP_INPUT_SCHEMAS = {
 
 // Options shared by `run()`, `#startWithTx()`, and
 // `#startAfterSuccessfulCommit()`.
-type RunnerRunOptions = {
+export type RunnerRunOptions = {
   doNotUpdateOnPatternChange?: boolean;
   // Resumed-from-synced-state: hold each action's initial rehydration/run until
   // the space has finished syncing, so consumers don't race the data.
@@ -1565,6 +1572,14 @@ type RunnerRunOptions = {
   // alone: what a piece records after it exists is decided by a source
   // transition, never by another run of it.
   sourceOrigin?: string;
+  // Whether a piece this run brings into being outside any scheduled action
+  // is the acting principal's act, so that what its setup initializes is
+  // attributed to them (`CfcTxState.attributedInitialization`); `true` when
+  // absent. A builtin instantiating a pattern from a continuation of its
+  // action passes `false`: the piece is nobody's act. `false` declines the
+  // mark for this run's transaction and withdraws none the transaction
+  // carries, so such a run takes a transaction of its own.
+  attributeInitialization?: boolean;
 };
 
 // The relaxed copy of a handler's argument schema, built once per schema
@@ -3560,6 +3575,20 @@ export class Runner {
     }
 
     const { pattern, entryRef, resolvedPatternOrModule } = resolvedPattern;
+    // A piece brought into being outside any scheduled action — a deploy, a
+    // host creating one on the principal's behalf — is the acting principal's
+    // act, as a handler run is: what its setup initializes is attributed to
+    // them (`CfcTxState.attributedInitialization`). One a builtin instantiates
+    // is nobody's act: in an action, whose transaction names it, or from a
+    // continuation of one, which declines the mark. Nor is a run of a piece
+    // that is already there.
+    if (
+      previousIdentityRef === undefined && patternOrModule !== undefined &&
+      validationOptions.attributeInitialization !== false &&
+      tx.tx.sourceAction === undefined
+    ) {
+      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
+    }
     // The reuse arms below write the argument without reaching
     // `#applySetupState`, which names these stores for every other setup
     // write. Naming them twice on one transaction costs a second marker
@@ -4343,6 +4372,11 @@ export class Runner {
     // pattern can only change via a fresh run(), not via the meta watcher).
     const KEYLESS = "\0keyless";
     let currentPatternKey: string | undefined;
+    // The key of the pattern whose nodes are live, in `currentPatternKey`'s
+    // terms, which a swap whose setup does not land steps the watcher back to.
+    let instantiatedPatternKey: string | undefined;
+    // The swap requested last; only it may step the watcher back.
+    let latestSwap: object | undefined;
     // The identity of the pattern whose nodes are LIVE right now — which can
     // differ from `currentPatternKey` (the pointer value last observed): a
     // parent-driven start instantiates its given pattern while the durable
@@ -4642,9 +4676,7 @@ export class Runner {
             const settled = await settlement;
             if (settled.error === undefined) return;
 
-            const waveWithdrawalCause = (settled.error as {
-              waveWithdrawalCause?: unknown;
-            }).waveWithdrawalCause;
+            const waveWithdrawalCause = settled.error.waveWithdrawalCause;
             if (waveWithdrawalCause === "wave-abandoned") {
               // Explicit abandon is clean enclosing-lifecycle teardown, not a
               // structure-load failure. Keep it visible without incrementing
@@ -4694,6 +4726,8 @@ export class Runner {
         newRef: { identity: string; symbol: string },
       ) => {
         const pattern = this.#resolveToPattern(loaded as Pattern);
+        const swap = {};
+        latestSwap = swap;
         // Whoever moved the pointer may have staged the incoming pattern in
         // the same transaction, which is how a transition makes staging and
         // the pointer succeed or fail together. Its completion marker says
@@ -4707,6 +4741,7 @@ export class Runner {
           cancelNodes?.();
           instantiatePattern(pattern);
           runningRef = newRef;
+          instantiatedPatternKey = patternIdentityKey(newRef);
           return;
         }
         const setupTx = this.#runtime.edit();
@@ -4730,6 +4765,20 @@ export class Runner {
           instantiatePattern(pattern);
           runningRef = newRef;
           runningPattern = pattern;
+          instantiatedPatternKey = patternIdentityKey(newRef);
+        };
+        // A swap whose setup does not land leaves the running pattern in
+        // place. Neither the watcher nor the result-pattern memo may go on
+        // naming the pattern that did not arrive, or a later request for it
+        // reads as no change and the swap never happens.
+        const keepRunningPattern = () => {
+          if (
+            latestSwap === swap &&
+            currentPatternKey === patternIdentityKey(newRef)
+          ) {
+            currentPatternKey = instantiatedPatternKey;
+          }
+          this.#evictResultPatternMemos(`${pieceLink.space}/${pieceLink.id}`);
         };
         if (!this.#runtime.sealDestinationInstalled) {
           // The OFF arm (and ON-arm client speculation): setup commits to
@@ -4755,6 +4804,7 @@ export class Runner {
               `Setup for swapped-in pattern ${newRef.identity}#${newRef.symbol} failed`,
               error,
             );
+            keepRunningPattern();
             return;
           }
           finishSwap();
@@ -4791,6 +4841,7 @@ export class Runner {
                 `Setup for swapped-in pattern ${newRef.identity}#${newRef.symbol} was refused at the seal`,
                 committed.error,
               );
+              keepRunningPattern();
               return;
             }
           } catch (error) {
@@ -4799,6 +4850,7 @@ export class Runner {
               `Setup for swapped-in pattern ${newRef.identity}#${newRef.symbol} failed`,
               error,
             );
+            keepRunningPattern();
             return;
           }
           const settlement = waveSettlementOf(setupTx);
@@ -4812,6 +4864,7 @@ export class Runner {
                   settled.error,
                 ],
               );
+              keepRunningPattern();
               return;
             }
           }
@@ -5237,6 +5290,7 @@ export class Runner {
     // Determine initial pattern
     if (givenPattern) {
       currentPatternKey = initialRef ? patternIdentityKey(initialRef) : KEYLESS;
+      instantiatedPatternKey = currentPatternKey;
       try {
         instantiateInitialPattern(givenPattern, initialRef, tx);
         // Real artifact refs only: setup mints and INDEXES a `keyless:`
@@ -5302,6 +5356,7 @@ export class Runner {
 
     // Sync path - instantiate immediately
     currentPatternKey = patternIdentityKey(initialRef);
+    instantiatedPatternKey = currentPatternKey;
     const initialPattern = this.#resolveToPattern(initialResolved);
     instantiateInitialPattern(initialPattern, initialRef, tx);
     runningRef = initialRef;
@@ -5907,6 +5962,12 @@ export class Runner {
       if (ownership.isCancelled()) return;
 
       const startTx = this.#runtime.edit();
+      // A start deferred from a handler run initializes on that run's behalf.
+      if (tx.getCfcState().attributedInitialization) {
+        startTx.markCfcAttributedInitialization(
+          runtimeWritePolicyAuthorization,
+        );
+      }
       // Minted inside a commit callback — by definition outside any scheduler
       // run; the deferred start's node wiring is piece machinery, stamped
       // bookkeeping per serving-loop.md §3d. A flag-ON CLIENT's
@@ -6377,6 +6438,13 @@ export class Runner {
     const navigateContext = navigateEventContextFromRunInfo(
       waveRunContextOf(tx) ?? speculationContext,
     );
+    // Whether the setup is the principal's act was decided by the transaction
+    // the run was asked in — a handler run's, or one outside any scheduled
+    // action that did not decline it — and the transaction it runs in once
+    // the family has landed carries that decision, not one of its own.
+    const attributed = tx.getCfcState().attributedInitialization ||
+      (tx.tx.sourceAction === undefined &&
+        options.attributeInitialization !== false);
     const work = (async () => {
       let toName = named;
       let retriesLeft = PIECE_RUN_START_MAX_RETRIES;
@@ -6384,6 +6452,11 @@ export class Runner {
         await this.#nameFamilyBeforeRun(resultCell, toName, argument);
         if (ownership.isCancelled()) return;
         const startTx = this.#runtime.edit();
+        if (attributed) {
+          startTx.markCfcAttributedInitialization(
+            runtimeWritePolicyAuthorization,
+          );
+        }
         if (durableReads) markDurableReadTx(startTx);
         if (identity !== undefined) startTx.tx.scopeKeyIdentity = identity;
         // A speculative child's continuation keeps its origin across the
@@ -6428,7 +6501,7 @@ export class Runner {
             patternOrModule,
             argument,
             startCell,
-            options,
+            { ...options, attributeInitialization: false },
           );
           if (ownership.markInstalled(started.installedCancel)) {
             startTx.abort("Deferred runner start was cancelled");
@@ -6859,6 +6932,13 @@ export class Runner {
       if (ownership.isCancelled()) return;
 
       const startTx = this.#runtime.edit();
+      // A result pattern deferred from a handler run initializes on that
+      // run's behalf, as the deferred start above does.
+      if (tx.getCfcState().attributedInitialization) {
+        startTx.markCfcAttributedInitialization(
+          runtimeWritePolicyAuthorization,
+        );
+      }
       // Minted inside a commit callback — outside any scheduler run;
       // bookkeeping per serving-loop.md §3d, like the deferred start above (and
       // with the same §3d speculative-consequence stamp: a flag-ON client's
@@ -7108,6 +7188,7 @@ export class Runner {
       resultCell,
       {
         referencedArgumentFields: options.referencedArgumentFields,
+        attributeInitialization: options.attributeInitialization,
         ...(creatingPiece
           ? {
             initializePieceSourceHistory: true,
@@ -7144,11 +7225,21 @@ export class Runner {
     // The setup writes are staged in this transaction; the registration is
     // not, so a transaction that does not become durable would otherwise leave
     // a piece running over writes that never landed. A stale basis is the
-    // exception: the re-run that follows reuses what is already there.
+    // exception: the re-run that follows reuses what is already there. A wave
+    // withdrawing the transaction after accepting it releases the registration
+    // too, because the runs of its nodes are withdrawn with the transaction and
+    // a later setup of the same result starts nothing while it stands.
     if (installedCancel !== undefined) {
       const startedCancel = installedCancel;
-      tx.addCommitCallback((_settledTx, result) => {
-        if (!result.error) return;
+      tx.addCommitCallback((settledTx, result) => {
+        if (!result.error) {
+          const settlement = waveSettlementOf(settledTx) ??
+            waveSettlementOf(tx);
+          void settlement?.then(({ error }) => {
+            if (error) this.releaseChild(resultCell, startedCancel);
+          });
+          return;
+        }
         if (
           isConflictRejection(result.error) ||
           isStorageTransactionInconsistent(result.error)
@@ -7377,6 +7468,7 @@ export class Runner {
           pieceSourceTransition: options?.pieceSourceTransition,
           validateCurrentArgument: options?.validateCurrentArgument,
           validateArgumentLinks: options?.validateArgumentLinks,
+          attributeInitialization: options?.attributeInitialization,
         },
       );
     } else {
@@ -7431,6 +7523,7 @@ export class Runner {
               sourceUpdate,
               validateCurrentArgument: options?.validateCurrentArgument,
               validateArgumentLinks: options?.validateArgumentLinks,
+              attributeInitialization: options?.attributeInitialization,
             },
           );
         },
@@ -10593,6 +10686,10 @@ export class Runner {
       if (policyFacingIdentity) {
         tx.setCfcImplementationIdentity(policyFacingIdentity);
       }
+      // The principal invoked this handler, so the values the run initializes
+      // — the protected defaults of a piece it creates among them — are theirs
+      // to be represented by. No other run's initializations are.
+      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
 
       let popFrameAfterReturn = true;
       try {
@@ -12111,18 +12208,11 @@ export class Runner {
         // the client committing the program under the user's own session;
         // without it the wave's accept gate refuses the crossing and the
         // child space's program never materializes.
-        const runContext = waveRunContextOf(instanceTx);
         this.#runtime.patternManager.replicatePatternToSpace(
           patternImpl,
           childResultCell.space,
           parentResultCell.space,
-          runContext?.acting !== undefined &&
-            runContext.capabilityRef !== undefined
-            ? {
-              acting: runContext.acting,
-              capabilityRef: runContext.capabilityRef,
-            }
-            : undefined,
+          delegatedCarriageOf(waveRunContextOf(instanceTx)),
         );
       }
       // Only a child in a space of its own claims one: an in-space nested

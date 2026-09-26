@@ -1836,15 +1836,18 @@ reason. Narrowing past the circle with a projection beside the predicate —
 cwd-independent, with no Deno startup noise and roughly half the per-invocation
 cost. (`--cli-only` is a legacy alias for the same thing.)
 
-It exists for CI, which downloads it in `cli-integration-test` (on
-`$GITHUB_PATH`) and `pattern-unit-test` (as `CF_BINARY`). A CI run never edits
-the source the binary was built from, so it cannot go stale mid-run.
+It exists for release: on a push to `main`, the `build-cf` job builds it and
+`attest-binaries` signs and publishes it. CI's lanes run `bin/cf` from source
+rather than the binary, and the `binaries` suite compiles it as a test that it
+still compiles.
 
-That does not hold for a working tree you are editing, and there is no
-invalidation story to catch it — see "Why not `dist/cf`" under Installing `cf`
-on PATH. Use `bin/cf` or `deno task cf` locally. If you do build it, rebuild
-after every `git pull`: a stale binary rejects newer flags and can hit
-wire-protocol skew against an updated server.
+On a push to `main`, nothing edits the source between building the binary and
+shipping it, so the binary shipped cannot be stale. That does not hold for a
+working tree you are editing, and there is no invalidation story to catch it —
+see "Why not `dist/cf`" under Installing `cf` on PATH. Locally, use `bin/cf` or
+`deno task cf`. If you do build it, rebuild after every `git pull`: a stale
+binary rejects newer flags and can hit wire-protocol skew against an updated
+server.
 
 ## Launcher Contract
 
@@ -2060,10 +2063,11 @@ line), a missing `cf` shows up as "completion doesn't work", not as an error.
 `cf completion bash|zsh` therefore warns on stderr when it cannot find itself on
 PATH.
 
-(CI does resolve `cf` by name — `integration/integration.sh` runs `command cf`
-against a binary the workflow puts on `$GITHUB_PATH` — but it builds that PATH
-itself, and local runs of those same scripts set `CF_CLI_INTEGRATION_USE_LOCAL`
-to force the source CLI.)
+(CI resolves `cf` by name too. `integration/integration.sh` runs `command cf`,
+and the lane's `cf` capability puts the checkout's `bin/` directory at the front
+of the PATH it hands the suite, so CI runs `bin/cf` from source as well. Local
+runs of those same scripts can set `CF_CLI_INTEGRATION_USE_LOCAL` to run
+`deno task cli` in place of `cf`.)
 
 `bin/cf` is the install, with `bin/cfsh` beside it for the interactive shell.
 Both run from source, so neither goes stale against the checkout. One route,
@@ -2157,10 +2161,9 @@ Nor is mtime a usable substitute: `revertWorkspace` restores `deno.jsonc` and
 the compile-cache version module _after_ the binary is written, so `dist/cf` is
 older than its own inputs the moment the build finishes.
 
-CI is a different case and legitimately uses the binary — a workflow run never
-mutates the source it was built from. `cli-integration-test` puts it on
-`$GITHUB_PATH` and `pattern-unit-test` passes it as `CF_BINARY`. That reasoning
-does not transfer to a working tree you are actively editing.
+A release is a different case: nothing edits the source between building the
+binary and shipping it. That reasoning does not transfer to a working tree you
+are actively editing.
 
 ## Shell completion
 

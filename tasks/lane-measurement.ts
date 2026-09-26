@@ -18,6 +18,8 @@ import {
   isLaneMeasurement,
   LANE_MEASUREMENT_PREFIX,
   LANE_MEASUREMENT_SURFACE,
+  testIdentityKey,
+  testIdentityOfKey,
 } from "@commonfabric/test-support/records";
 
 export { isLaneMeasurement, LANE_MEASUREMENT_PREFIX, LANE_MEASUREMENT_SURFACE };
@@ -98,4 +100,32 @@ export function setupMeasurement(name: string): string | undefined {
   if (!name.startsWith(prefix)) return undefined;
   const capability = name.slice(prefix.length);
   return capability.length === 0 ? undefined : capability;
+}
+
+/** What a lane's record of an identity it excused is named for. */
+const EXCUSED_PREFIX = `${LANE_MEASUREMENT_PREFIX}excused `;
+
+/**
+ * What a lane's record of one excused identity is called: an identity
+ * whose failures the lane did not fail the run for, named by its
+ * canonical key.
+ *
+ * A lane writes one for each identity every batch that failed it
+ * excused, so that a reader learns what a run did not fail for from the
+ * run's own records. The record carries no figure: its `durationMs` is
+ * zero, and how often the identity failed is in the identity's own
+ * records.
+ */
+export function excusedMeasurementName(key: string): string {
+  return `${EXCUSED_PREFIX}${key}`;
+}
+
+/**
+ * The canonical key of the identity one excused measurement names, or
+ * `undefined` for any other name and for one naming no identity.
+ */
+export function excusedMeasurement(name: string): string | undefined {
+  if (!name.startsWith(EXCUSED_PREFIX)) return undefined;
+  const identity = testIdentityOfKey(name.slice(EXCUSED_PREFIX.length));
+  return identity === undefined ? undefined : testIdentityKey(identity);
 }

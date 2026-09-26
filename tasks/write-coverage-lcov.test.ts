@@ -1,24 +1,14 @@
-import {
-  assert,
-  assertEquals,
-  assertRejects,
-  assertStringIncludes,
-} from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { dirname, fromFileUrl, join, toFileUrl } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
   collectCoverageProfileFiles,
-  copyUnlaunchedMembers,
   isTrackedFile,
   normalizeLcovInstancePaths,
   parseFilesMissingTranspiledSource,
   parseFilesWithNoSource,
 } from "./write-coverage-lcov.ts";
 import { isTrackedSourcePath } from "./coverage-metrics.ts";
-import {
-  readUnlaunchedMembers,
-  writeUnlaunchedMembers,
-} from "./unlaunched-members.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 const SCRIPT = join(REPO_ROOT, "tasks/write-coverage-lcov.ts");
@@ -107,81 +97,6 @@ Deno.test("write-coverage-lcov writes an empty report when the profile dir is ab
     const result = await runScript([join(root, "missing"), output]);
     assertEquals(result.code, 0);
     assertEquals(await Deno.readTextFile(output), "");
-  } finally {
-    await Deno.remove(root, { recursive: true });
-  }
-});
-
-Deno.test("copyUnlaunchedMembers puts the profile directory's record beside the report", async () => {
-  const root = await Deno.makeTempDir({ prefix: "write-lcov-" });
-  try {
-    const profileDir = join(root, "raw");
-    await writeUnlaunchedMembers(profileDir, ["./packages/shell", "./tasks"]);
-
-    await copyUnlaunchedMembers(profileDir, join(root, "lcov", "out.lcov"));
-
-    assertEquals(await readUnlaunchedMembers(join(root, "lcov")), [
-      "./packages/shell",
-      "./tasks",
-    ]);
-  } finally {
-    await Deno.remove(root, { recursive: true });
-  }
-});
-
-Deno.test("copyUnlaunchedMembers writes nothing for a profile directory carrying no record", async () => {
-  const root = await Deno.makeTempDir({ prefix: "write-lcov-" });
-  try {
-    const profileDir = join(root, "raw");
-    await Deno.mkdir(profileDir);
-
-    await copyUnlaunchedMembers(profileDir, join(root, "lcov", "out.lcov"));
-
-    // With no record on either side there is nothing to say, and the report
-    // directory is not created for the sake of saying it.
-    await assertRejects(
-      () => Deno.stat(join(root, "lcov")),
-      Deno.errors.NotFound,
-    );
-  } finally {
-    await Deno.remove(root, { recursive: true });
-  }
-});
-
-Deno.test("copyUnlaunchedMembers clears a record an earlier run left beside the report", async () => {
-  const root = await Deno.makeTempDir({ prefix: "write-lcov-" });
-  try {
-    const profileDir = join(root, "raw");
-    const lcovDir = join(root, "lcov");
-    await Deno.mkdir(profileDir);
-    await writeUnlaunchedMembers(lcovDir, ["./packages/shell"]);
-
-    await copyUnlaunchedMembers(profileDir, join(lcovDir, "out.lcov"));
-
-    // The report and the record are uploaded together and read together, so a
-    // record describing an earlier run would qualify this run's report.
-    assertEquals([...Deno.readDirSync(lcovDir)], []);
-  } finally {
-    await Deno.remove(root, { recursive: true });
-  }
-});
-
-Deno.test("write-coverage-lcov carries the record over even when nothing converts", async () => {
-  // A run that stopped early is the run whose profiles are most likely to hold
-  // nothing convertible, so the copy has to happen ahead of that outcome.
-  const root = await Deno.makeTempDir({ prefix: "write-lcov-" });
-  try {
-    const profileDir = join(root, "raw");
-    await writeUnlaunchedMembers(profileDir, ["./packages/shell"]);
-    const output = join(root, "lcov", "workspace-1.lcov");
-
-    const result = await runScript([profileDir, output]);
-
-    assertEquals(result.code, 0);
-    assertEquals(await Deno.readTextFile(output), "");
-    assertEquals(await readUnlaunchedMembers(join(root, "lcov")), [
-      "./packages/shell",
-    ]);
   } finally {
     await Deno.remove(root, { recursive: true });
   }

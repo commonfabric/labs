@@ -587,6 +587,9 @@ function factoryFromPattern<T, R>(
   const resultSchema = resultSchemaArg ?? {};
 
   const serializedNodes = Array.from(allNodes).map((node) => {
+    // A module is not an execution value (its `implementation` may be a plain
+    // function), so the walk's result is asserted back to one; see the note at
+    // the end of `withAliasBindings()`.
     const module = withAliasBindings(
       node.module,
       resolveCellAlias,

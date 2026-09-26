@@ -1,9 +1,15 @@
 # Code coverage in CI
 
 This repository measures code coverage in two different ways, because it runs
-two different kinds of code. Keeping the two apart is the key to reading the
-numbers correctly and to deciding which test job should collect which kind of
+two different kinds of code. The numbers read correctly only when the two are
+kept apart, and the same distinction decides which suite collects which kind of
 coverage.
+
+Coverage is read two ways as well. The repository-wide figure, measured by the
+full run on `main`, is a trend: the dashboard shows it and nothing fails on it.
+The measured-set gate on pull requests is the only coverage check that fails
+anything, and it compares one suite's tests over one workspace member's lines
+against what the same set measured on `main`.
 
 ## Two kinds of code, two coverage mechanisms
 
@@ -12,12 +18,15 @@ coverage.
 The packages that make up the Common Fabric runtime (api, runner, identity,
 memory, and the rest) are ordinary TypeScript modules. Deno loads and runs them
 directly, so Deno's built-in V8 coverage can record which of their lines ran. A
-CI job turns this on by setting the `DENO_COVERAGE_DIR` environment variable.
-After the tests finish, `tasks/write-coverage-lcov.ts` converts the raw V8
-profile into an LCOV file, and the job uploads it as a `coverage-profile-*`
-artifact. Most test jobs set `DENO_COVERAGE_DIR`. The pattern and package
-integration jobs set it. The two workflow jobs running the opposite
-server-execution arm set none.
+lane turns this on for a batch by setting the `DENO_COVERAGE_DIR` environment
+variable. A suite whose runner is `deno test` over files sets it to a directory
+for that suite and that workspace member. `pattern-unit` and `pattern-reload`
+build their own command lines and set it to one directory named for the suite.
+After the batch finishes, the lane converts each such directory into one LCOV
+report with `writeLcovReport()` from `tasks/write-coverage-lcov.ts`, and the
+lane job uploads its reports as the `lane-coverage-tests-<lane>` artifact.
+[Which suite collects which coverage](#which-suite-collects-which-coverage) says
+which batches a lane measures.
 
 A focused `*.browser.test.ts` file run through `deno-web-test` executes its
 application module inside Chrome. That browser execution proves DOM behavior,
@@ -76,16 +85,20 @@ An empty report is not a failure by itself. `deno coverage` calls it an error
 when nothing survives its filters, which happens honestly whenever a profile set
 covers only test files, since those are excluded by design. With no repository
 file dropped, the script takes that emptiness at face value: it warns and exits
-zero. It also warns and exits zero when there was nothing to convert in the first
-place, which is what a job whose test step never ran produces — the profile
-directory is absent, or holds only empty files. Any other `deno coverage` failure
-is an error.
+zero. It also warns and exits zero when it is given nothing to convert, because
+the profile directory it is named is absent or holds only empty files. Any other
+`deno coverage` failure is an error.
 
-Every one of those paths writes an output file, so the artifact upload always has
-one to collect and the outcome is read from the conversion step rather than from
-a missing file. What reads the report decides what an empty one means: the pull
-request coverage gate fails a measured set the change forced whose reports name
-no line of its member, as [Test selection](test-selection.md) describes.
+Every one of those paths writes an output file, so the script always leaves a
+report, and its outcome is read from its exit status rather than from a missing
+file. A lane converts only the profile directories its batches wrote, so it
+never names the script an absent one. A batch whose tests never ran writes no
+profile directory, so the lane converts nothing for it and writes no report for
+it. A profile directory that holds only empty
+files is converted, and its report is empty. What reads the reports decides what
+an absent or empty one means: the pull request coverage gate fails a measured
+set the change forced whose reports name no line of its member, as [Test
+selection](test-selection.md) describes.
 
 ### Authored pattern code is measured by transformer instrumentation
 
@@ -155,17 +168,17 @@ against goes unrun. State those against the values the test's own actions put
 there, which says the setter stream reached the cell the field reports.
 
 A stream nobody sends to is the third. A handler the pattern exposes and no test
-drives has a body that runs in neither lane, so it sits at zero on every run
+drives has a body that runs in neither path, so it sits at zero on every run
 rather than moving between them. That is permanent debt rather than flap, and it
 costs one more action apiece to clear.
 
 `packages/patterns/cfc-spec-gallery/main.test.tsx` is the worked example. It
 reads its view, states its name and the four inputs it reports back out, and
 drives every stream the gallery exposes, which takes the file from 385 of its
-522 measured lines to all of them. Before that the integration lane was the only
+522 measured lines to all of them. Before that the integration path was the only
 one covering the other 137, and
 [the investigation record](../history/development/coverage-flake-cfc-spec-gallery-view-2026-09-01.md)
-is what that cost the group on a run where the lane's report went missing.
+is what that cost the group on a run where that path's report went missing.
 
 `CF_PATTERN_COVERAGE_DIR` names the directory the `*.pattern-coverage.lcov`
 files are written to. The `cf test` command in
@@ -173,68 +186,72 @@ files are written to. The `cf test` command in
 integration path does not run through `cf test`; there the integration harness
 reads the same variable to decide whether to turn worker coverage on and where to
 write the merged LCOV it pulls back from the browser (see "How the integration
-jobs collect authored-pattern coverage").
+suites collect authored-pattern coverage").
 
-## How the two feed the coverage gate
+## How the two are scored
 
-The Coverage Check job downloads every `coverage-profile-*` artifact with
-`actions/download-artifact`. The action checks each artifact's recorded digest.
-`tasks/coverage-check.ts` verifies that every expected artifact is present. It
-joins all the downloaded LCOV files together and hands them to
-`tasks/coverage-metrics.ts`. That code walks the tracked source files under
-`packages` and `tasks`. For each file, it counts how many lines no test covered.
-The top-level `scripts` directory is excluded from this gate. The counts roll up
-into
-`coverage-debt: <group> uncovered lines` metrics, for example
-`coverage-debt: packages/patterns uncovered lines`, and the coverage check
-gates a pull request on them.
+`tasks/coverage-metrics.ts` scores LCOV reports. It walks the tracked source
+files under `packages` and `tasks` and counts, for each file, how many lines no
+test covered. The top-level `scripts` directory is left out. The same counting
+serves both readers:
+
+- **The repository-wide figure** merges every report the full run's lanes wrote
+  and rolls the counts up into `coverage-debt: <group> uncovered lines` metrics,
+  for example `coverage-debt: packages/patterns uncovered lines`, and a
+  `workspace` total. `Status` measures it on a push with
+  `tasks/coverage-report.ts`, and it is a trend: nothing fails on it.
+- **A measured set's figure** reads only the reports that set's suite wrote for
+  its member, and counts only that member's own source files. That is what the
+  [measured-set gate](#the-measured-set-gate-and-accepting-debt) compares.
 
 Authored pattern files under `packages/patterns` are tracked source files, so
 their uncovered lines count toward `coverage-debt: packages/patterns`. Every
-authored-pattern coverage stream feeds this one metric: the `pattern-unit-test`
-job's coverage (`TN:pattern-runtime`) and the integration jobs' coverage
-(`TN:pattern-runtime-integration`) both join the combined LCOV, and a line
-covered by either counts covered. Nothing in the accounting reads the test name —
-the two are kept distinct only so a reader of the combined report can tell what
+authored-pattern coverage stream feeds this one metric: the `pattern-unit`
+suite's coverage (`TN:pattern-runtime`) and the integration suites' coverage
+(`TN:pattern-runtime-integration`) both join the merged report, and a line
+covered by either counts covered. Nothing in the accounting reads the test name
+— the two are kept distinct only so a reader of the merged report can tell what
 covered a line.
 
-One detail of the gate's accounting is worth knowing when reasoning about
-pattern coverage. A file with no LCOV record has every tracked line counted as
-uncovered, unless it compiles to no code at all, opts out of coverage, or sits
-in a package the run never started — see the subsections below. A file with a
-record is scored against the lines that record names.
-For a file measured by Deno's V8 coverage that is every executable line; pattern
-instrumentation names only the statements it could instrument, so a pattern
-file's first record both covers real lines and drops the never-named lines out of
-the count.
+One detail of the accounting is worth knowing when reasoning about pattern
+coverage. A file with no LCOV record has every tracked line counted as
+uncovered, unless it compiles to no code at all or opts out of coverage — see [A
+file that compiles to nothing is charged
+nothing](#a-file-that-compiles-to-nothing-is-charged-nothing) and [A file that
+opts out of coverage is charged
+nothing](#a-file-that-opts-out-of-coverage-is-charged-nothing). A file with a
+record is scored against the lines that record names. For a file measured by
+Deno's V8 coverage that is every executable line; pattern instrumentation names
+only the statements it could instrument, so a pattern file's first record both
+covers real lines and drops the never-named lines out of the count.
 
-The gate absorbs that safely, because it is a ratchet: it fails a pull request
-only when a group's uncovered count *rises* above its `main` baseline.
-Gaining a record can only *lower* a file's count, since the record names a subset
-of the file's lines and the rest stop being counted, so it settles at a lower —
-and therefore stricter — bar rather than failing anything. The instrumented
-statements are also the only lines this mechanism can speak to: a line the
-instrumentation cannot reach is not a line a pattern test could cover.
+Gaining a record can therefore only *lower* a file's count, since the record
+names a subset of the file's lines and the rest stop being counted. A figure
+whose file gains one moves down, and a measured set's baseline settles at a
+lower — and therefore stricter — bar rather than failing anything. The
+instrumented statements are also the only lines this mechanism can speak to: a
+line the instrumentation cannot reach is not a line a pattern test could cover.
 
 ### A file that compiles to nothing is charged nothing
 
-Charging every tracked line of a file with no coverage record is how the gate
+Charging every tracked line of a file with no coverage record is how the metric
 catches source that no test ever loaded. A second kind of file also has no
 record: one holding only declarations — interfaces, type aliases, ambient
 declarations — which compiles to an empty module. Such a file has no statement
 to run, so a test that loads it executes nothing and Deno's coverage has nothing
-to report. No test can cover a line of it, so the gate charges it nothing.
+to report. No test can cover a line of it, so the metric charges it nothing.
 
-The gate tells the two apart by compiling each file it finds no record for, and
-charges it only when something comes out. `tasks/executable-source.ts` runs the
-file through the TypeScript compiler and reads the emitted JavaScript: a file
-that emits no statement, an `export {}` module marker aside, is charged nothing,
-and every other file is charged its full tracked-line count. Which constructs
-reach the output is the compiler's rule. An enum, a namespace holding a value,
-and an import kept for its side effects all emit code. A type-only import, a
-namespace holding only types, and a comment do not. The compile happens at gate
-time, once per file the report leaves out. A file with a record never pays for
-it, because its record already says which of its lines ran.
+The metric tells the two apart by compiling each file it finds no record for,
+and charges it only when something comes out. `tasks/executable-source.ts` runs
+the file through the TypeScript compiler and reads the emitted JavaScript: a
+file that emits no statement, an `export {}` module marker aside, is charged
+nothing, and every other file is charged its full tracked-line count. Which
+constructs reach the output is the compiler's rule. An enum, a namespace holding
+a value, and an import kept for its side effects all emit code. A type-only
+import, a namespace holding only types, and a comment do not. The compile
+happens when the report is scored, once per file the report leaves out. A file
+with a record never pays for it, because its record already says which of its
+lines ran.
 
 Such a file occasionally does get a record. A comment that survives into the
 emitted output leaves Deno one line to report, and that line is hit the moment
@@ -250,14 +267,14 @@ only while nothing loads the file.
 
 A `// deno-coverage-ignore-file` comment on a file's first line, or on the line
 after its shebang, opts the file out of Deno's coverage: `deno coverage` leaves
-it out of the report it writes, whether or not a test loaded it. The gate reads
-the same line for a file the report has no record for, and charges such a file
-nothing, so the comment means the same thing on a file no test can load as on
-one a test did.
+it out of the report it writes, whether or not a test loaded it. The metric
+reads the same line for a file the report has no record for, and charges such a
+file nothing, so the comment means the same thing on a file no test can load as
+on one a test did.
 
 Those are the only lines Deno reads it from, ahead of every other comment and
 pragma; the same comment anywhere later leaves the file in Deno's report and
-charged by the gate. A `// @ts-check` or a `deno-lint-ignore-file` goes on the
+charged by the metric. A `// @ts-check` or a `deno-lint-ignore-file` goes on the
 line after it. Text may follow the directive after whitespace, which is the
 place for the reason:
 
@@ -270,85 +287,48 @@ source file that runs only in a browser, such as one imported as text and
 inlined into a document a frame loads: no Deno-run test can load it, so no
 test could pay its debt down, and the browser tests that do drive it report
 into nothing this metric reads. A file a Deno test could load is not such a
-file, and the ratchet is what holds it to its tests.
+file. Where its member carries a measured set, the measured-set gate is what
+holds it to its tests.
 
-### A package a run never started is not scored at all
+### A local run under coverage runs every package
 
-`deno task test` stops handing packages to its workers as soon as one of them
-fails, and the packages already running finish. What a failing run measured is
-therefore whatever was in flight rather than a prefix anyone chose, and the
-packages it never started have unknown coverage rather than none. Charging
-those the way a file no test loaded is charged reports a collapse of thousands
-of lines in packages the change under test never touched, in numbers that are
-otherwise well formed and that nothing downstream could tell from a real
-measurement.
-
-So the runner records the members it selected and never started, writing
-`unlaunched-members.txt` into the run's coverage profile directory
-([`tasks/unlaunched-members.ts`](../../tasks/unlaunched-members.ts) owns the
-file). `tasks/write-coverage-lcov.ts` copies that record beside the LCOV report
-it writes, the workspace test job uploads the two together as one artifact, and
-`tasks/coverage-check.ts` reads the union of the records every artifact
-carries. One job selects each member, so a member any record names is one that
-nothing in the run measured against its own tests.
-
-A run that started everything it selected removes any record it finds rather
-than leaving one, in the profile directory and beside the report alike, so that
-the record and the report always describe the same run. CI never reuses either
-directory — every job runs on a fresh runner, and nothing restores a
-`coverage/` path — but a local run that reuses one would otherwise go on
-suppressing groups that an earlier run stopped short of and this one measured,
-which is the same silent failure arriving from the other side.
-
-A metric group holding such a member is left out of the run's metrics
-altogether, and so is the workspace total, which no longer totals the
-workspace. The gate builds one row per metric the run produced, so a group with
-no metric is one the run does not speak for: it is neither gated nor reported,
-and the job's log names it. An `ACCEPT_COVERAGE_DEBT` line naming such a group
-fails the check, the same as one naming any group the run measured no coverage
-for.
-
-Two bounds are worth stating. The record names a member that never started, and
-not one whose tests started and then failed — that member is measured as far as
-its tests got, and the run's own failure report is what names it. And the whole
-group goes unscored rather than the unlaunched member's files alone: one member
-going unmeasured leaves the group's count short by whatever that member's tests
-would have covered, with nothing in the report to say by how much, so the
-members that did run are no more scorable than the one that did not. That
-reaches a package measured by more than one job — `packages/shell` is covered
-by both the workspace unit run and its own integration job — where the
-workspace run skipping it is enough on its own to leave the group unscored.
+With `DENO_COVERAGE_DIR` set, `deno task test` runs every package even after
+one fails, and still exits non-zero. So its profile holds a record for every
+package, and the metric never reads a package as source no test loaded merely
+because the run stopped early. Without the variable, it stops handing packages
+to its workers as soon as one of them fails, lets the packages already running
+finish, and names the packages it never started. A run with a failing test is
+still short by whatever that test would have reached past the point it failed.
+So read a local run's figures as exact only when every package passed. A lane
+runs every unit it was given the same way, and a failure in one batch does not
+stop the next.
 
 ## Coverage must not depend on the execution environment
 
 Whether a line counts as covered must not depend on how fast the machine ran,
-how the test files were distributed across shards, or any other property of the
-environment or configuration. A line that is covered on one run and uncovered
-on the next is a defect in the tests. It is not noise for the gate to absorb,
-and it is not something to wave through with an override.
+how the test files were distributed across lanes, or any other property of the
+environment or configuration. A line that is covered on one run and uncovered on
+the next is a defect in the tests. It is not noise for the gate or the trend to
+absorb, and it is not something to wave through with an override.
 
 So when you find a line whose coverage moves with the environment — a branch
 guarded on elapsed wall-clock time, a line whose count changes when test files
-are redistributed across shards, a path that only some runs happen to take —
+are packed into lanes differently, a path that only some runs happen to take —
 write a test that covers that line reliably on every run and under every
 configuration. Extract the code into something a plain unit test can call
 directly if that is what it takes: a unit test that constructs the input it
-wants does not care how loaded the machine is or which shard it landed in.
+wants does not care how loaded the machine is or which lane it landed in.
 
 The
 [2026-07-28 investigation record](../history/development/coverage-ratchet-noise-2026-07-28.md)
 works through two real instances, and describes how to localize a group-level
 change down to the specific file and line so you know what to write a test for.
 
-Before localizing, check that the group-level change is a measurement at all. A
-group marked `excl` in the job's table under the line "Not gated, because no
-baseline counts the same base-branch code as this run does" is comparing two
-different bodies of code, because the ratchet stepped back to an older baseline
-commit; its `Change` column then reports what the base branch did in between.
-Comparing two runs directly has the same trap in a different form, since a
-pull request's runs measure the merge ref, which GitHub rebuilds whenever the
-base branch moves. Compare only files whose content is identical between the
-two commits, and read the counts per line rather than per group.
+Before localizing, check that the group-level change is a measurement at all.
+Two runs of different commits count different bodies of code, and a pull
+request's runs measure the merge ref, which GitHub rebuilds whenever the base
+branch moves. Compare only files whose content is identical between the two
+commits, and read the counts per line rather than per group.
 
 ### Diagnostics that fire on wall-clock time
 
@@ -390,14 +370,14 @@ from inside a synchronous call either. A test that wants a chosen elapsed time
 therefore replaces `performance.now` outright, saving and restoring it rather
 than assuming it is the native one, since the preload already owns that
 property. That is also why the movement was collected by the
-pattern-integration jobs rather than by the runner suite: their coverage comes
+pattern integration suites rather than by `runner-unit`: their coverage comes
 from a browser worker, which a Deno `--preload` never reaches.
 
 Leaving the threshold comparison behind at the call site does not reduce the
 movement to nothing. The lines inside a guard are covered only on a run that
 took the branch, so a call site of the form
 `if (elapsed > SLOW_TRAVERSE_MS) report(...)` keeps its reporting line moving
-from one run to the next, and one line of movement fails the ratchet exactly as
+from one run to the next, and one line of movement moves a count exactly as
 thirty-nine did. Do not reason from what the `if` line itself reports either.
 That count is a projection of V8's block ranges onto lines: it differs between
 the one-line and the braced form of the same guard, and it changed between deno
@@ -648,14 +628,14 @@ ran in the measurement being read.
 holds the mechanics and a reproduction, under "A line two adjacent callbacks
 share".
 
-The gate merges the coverage artifacts a run uploads by adding each line's
-counts together, so a line one shard reaches is covered however many shards
-missed it. A shared line is not settled that way. It needs one artifact in
-which both callbacks ran, and which test files an artifact holds is decided by
-how the suite was split across shards. Nothing asserts that split, and it is
-repacked whenever a test file is added or removed: the runner suite's shards
-come from `tasks/select-runner-test-files.ts`, which packs the weighted list of
-test files into bins, so one new file moves whatever lands after it.
+The coverage readers merge the reports a run's lanes upload by adding each
+line's counts together, so a line one lane reaches is covered however many lanes
+missed it. A shared line is not settled that way. It needs one report in which
+both callbacks ran. Which test files a report holds is decided by how
+`tasks/ci-lane.ts` packs tests into lanes, and that packing changes from run to
+run. Nothing asserts that packing: it places
+each test by its measured cost, so one new file, or one test that got slower,
+moves whatever lands after it.
 
 Any two adjacent callback arguments sit in this position. The pair that
 produced it here is a request's two endings — the work to start once the
@@ -675,10 +655,10 @@ to a function already in hand, pass that function instead, as the direct
 `generateObject` path passes `settleAbandoned`.
 
 Driving both arms from one test file settles the count as well, since a file is
-what the shard split moves. Prefer the name: nothing keeps two cases in one
-file, and the next person to split an 800-line test suite has no way to know
-that a count depends on it.
-[The investigation record](../history/development/coverage-flake-shared-callback-line-2026-09-16.md)
+what the packer moves. Prefer the name: nothing keeps two cases in one file, and
+the next person to split an 800-line test suite has no way to know that a count
+depends on it. [The investigation
+record](../history/development/coverage-flake-shared-callback-line-2026-09-16.md)
 follows three such lines down to the shards that held the arms apart.
 
 ### Checks the layer below already makes
@@ -710,13 +690,13 @@ any input tells the two versions apart.
 
 `packages/ts-transformers` and `packages/schema-generator` move for a reason of
 their own: their unit suites never reach parts of the analyzer and the
-formatters. What reaches them is the pattern integration jobs, compiling
-whatever the pattern corpus happens to contain, on whichever shard the pattern
-landed on. So a branch for a language construct the corpus uses rarely — a
-`Stream<T>` parameter, a numeric literal type node, the bare `object` type —
-is covered when a shard happened to compile the one pattern that spells it,
-and uncovered otherwise. The carrier artifact names a different shard from one
-run to the next for the same line.
+formatters. What reaches them is the pattern integration suites, compiling
+whatever the pattern corpus happens to contain, in whichever lane the pattern
+landed in. So a branch for a language construct the corpus uses rarely — a
+`Stream<T>` parameter, a numeric literal type node, the bare `object` type — is
+covered when a lane happened to compile the one pattern that uses it, and
+uncovered otherwise. The report carrying the line comes from a different lane
+from one run to the next.
 
 These take a unit test, not a pattern. Both packages have `*-flap-coverage`
 test files that build the type or the source they need and call the analyzer or
@@ -737,8 +717,8 @@ installed. `tasks/test-records.ts` stamps a local test run with the branch,
 and records one only when git names one. Continuous integration builds a pull
 request from a detached merge commit, where `git branch --show-current` prints
 nothing, so the arm that records a branch ran on a developer's machine and not
-in that job. Its coverage then came from whatever else in the run happened to
-build a context, which is what made it move.
+in continuous integration. Its coverage then came from whatever else in the run
+happened to build a context, which is what made it move.
 
 A test that creates a scratch repository on a named branch does reach the arm,
 and asserting that git's answer reaches the context is worth doing. It does
@@ -770,7 +750,7 @@ reached. The brace counts as covered only when the script was loaded from the
 code cache.
 
 `deno run` writes a module into the code cache the first time it compiles it,
-so within one job a process that runs a module after another process has run it
+so within one lane a process that runs a module after another process has run it
 reads it from there. Which process that is can depend on which of two tests
 running at the same time starts first. A code cache carried over from an earlier
 run adds a dependence on history as well, because it holds only modules
@@ -779,239 +759,133 @@ of its top-level branches that `main` was reporting. The `📦 Cache Deno depend
 `.github/actions/deno-setup/action.yml` leaves the code cache out of what it
 saves, and `tasks/deno-setup-action.test.ts` holds it to that.
 
-### What the check says when the regression is not the pull request's
+## The measured-set gate and accepting debt
 
-The gate compares whole-group counts, so a flapping line fails whichever pull
-request is measured against a run that happened to cover it, however unrelated
-the diff. The check recognizes that case and says so: when a gated group is over
-its baseline and none of the lines the pull request added are uncovered, it
-reads the coverage reports of the `main` run its baseline came from and names
-every line this run leaves uncovered that the baseline run covered.
+The only coverage check that fails anything is the measured-set gate, which
+`Status` runs on every pull request. [The test-selection
+guide](test-selection.md#the-coverage-gate) is how to operate it and read its
+output, and [the test-selection contract](../specs/test-selection.md#coverage)
+is what it promises. In brief:
 
-The comment lists those lines file by file, gives the `ACCEPT_COVERAGE_DEBT`
-line that lets the pull request through, and carries a prompt for a fresh agent
-session to make the lines cover the same way every time. The author's pull
-request is not the place to fix them, and it is not held up waiting for someone
-to.
+- A **measured set** is one suite's tests over one workspace member's lines. A
+  change that reaches a set, unless it reaches more than
+  `LOCAL_COVERAGE_MAX_SETS`, runs every one of its units with coverage on, and
+  the gate adds the lanes' reports for that set together and scores them over
+  the member's own tracked source, by the rules in [How the two are
+  scored](#how-the-two-are-scored).
+- The **baseline** is what the same set measured at the newest `main` commit the
+  branch contains. The full run on `main` writes each set's figure into the
+  record store, the test-selection publisher carries the figures in the
+  manifest, and the gate reads them from the manifest current at the commit
+  under test. A set with no baseline the branch contains is reported rather than
+  failed.
+- A **rise** above the baseline fails the pull request, unless its description
+  accepts it.
 
-The prompt says where the measurement came from, so a session picking it up can
-locate it instead of reconstructing it: the page of the workflow run that
-measured the lines, the base-branch commit that run merged the pull request
-into, and — for each affected group — the baseline run its count was held
-against and the commit that run measured. The commit named for the measuring
-run is the base-branch commit rather than the pull request head, because a
-`pull_request` run measures `refs/pull/<number>/merge`, and because the
-question the reader has is what has landed on `main` since. The prompt hands
-them the command that answers it, `git log <base commit>.. -- <file>`, and
-tells them to say so and stop if a line has since changed or been given a test.
-
-Anything the run context does not name is left out rather than guessed at. A
-run of the checker outside GitHub Actions names no run page and no commit, and
-its prompt falls back to asking the reader to check what has landed since the
-measurement was taken.
-
-The identity travels on the rows the gate builds. Each row already records the
-baseline it was held against; it also records the run that measured it and the
-base-branch commit that run merged, both of which the check has in hand when it
-scores the row. The comment reads them back out of the rows it is given.
-
-Only files the pull request left alone are compared. A file it changed has
-different content in the two checkouts, so the same line number means a
-different line in each report and no comparison is possible. When the baseline
-run's coverage artifacts cannot be read — expired, or the download failed — the
-check falls back to the ordinary regression comment.
-
-## Ratchet baselines and accepting debt
-
-The ratchet applies per source group and only to the groups a PR changes: for
-each such group the uncovered-line count must not rise above the count from the
-`main` run for the base-branch commit the PR is merged with, or the nearest
-ancestor of it that has one (see "Which `main` run the ratchet compares
-against"). Debt in unchanged groups is still reported, but does not block the
-PR.
-
-Accept one group's increase with the narrow per-group marker in the PR
-description, on a line of its own and flush against the left margin:
+Accept a rise with a marker in the pull request's description, on a line of its
+own and flush against the left margin:
 
 ```text
-ACCEPT_COVERAGE_DEBT: packages/runner +12 lines
+ACCEPT_COVERAGE_DEBT: packages/memory +12 lines
 ```
 
-The marker names the source group — `workspace`, a top-level directory such as
-`tasks`, or a package as `packages/runner` — rather than the metric that group's
-lines are counted in. Only `packages` splits into a second level, because that is
-where the collection stops rolling a file up; `tasks/foo` names no group.
+The marker names a workspace member that some measured set scores, at whatever
+depth the workspace puts it — `packages/connectors/github/connector` as well as
+`packages/memory` — and accepts the rise for every measured set over that
+member. An acceptance naming anything but a member some measured set scores
+fails the gate, since nothing consults it. That covers a member with no measured
+set, a source group such as `packages/connectors` that holds members but is
+none, a package that is not there, and a misspelling of one that is. Each is
+refused rather than passed for an acceptance that had no effect. Two markers
+naming one member also fail, since the author meant one number and would be
+given the other.
 
-The same marker also accepts a rise in a measured set, and there it names a
-workspace member, which can sit deeper than a source group:
-`packages/connectors/github`. A name below `packages/` that is deeper than a
-group is read by the coverage gate alone, and this ratchet measures nothing for
-it and passes over it. The coverage gate fails on a name that is neither a
-member nor a group, so a name nothing could ever consult still fails a
-job — this one or that one. Which gate a marker is for follows from the
-name; see [the test-selection contract](../specs/test-selection.md#coverage).
-
-A name can have the shape of a group and still name none — a package that is not
-there, or a misspelling of one that is. Nothing would ever consult such a line,
-so rather than let it pass for an acceptance that had no effect, the check fails
-the job and lists the groups the run did measure.
-
-The number is how far above the baseline the group may rise, not the total it
-may reach. The gate passes the group when its uncovered-line count is at most
-the baseline plus that number, so a run whose baseline is 5746 accepts 5758 and
-fails at 5759. A group with no baseline yet is held to zero, and the whole of
-the accepted rise is available to it.
-
-Stating the rise is what makes the marker survive a rebase. The baseline the
-ratchet compares against is the `main` run for whatever base-branch commit the
-pull request is merged with, so it moves whenever the pull request is rebased. A
-total written for one baseline says something different against the next one:
-too generous when the base branch covered lines in the meantime, and short by the
-difference when it uncovered some, which fails the pull request for debt it did
-not add. A rise says the same thing against every baseline, so the marker keeps
-accepting exactly the debt its author accepted and no more.
-
-The check prints the line to paste, with the rise it measured already filled in,
-under `---BEGIN COPY-PASTE---` at the end of the Coverage Check job's log. A line
-that starts with `ACCEPT_COVERAGE_DEBT:` and that the check cannot read fails the
-job and says what form to write instead, rather than being passed over as though
-it were not there.
-
-An accepted group keeps its attribution. The gate keeps one comment on the pull
-request and rewrites it in place as the answer changes, and the comment an
-acceptance leaves behind names the files holding the lines it accepted, under
-"Files with new uncovered lines" — the same heading and the same counts the
-failing run wrote. So the pull request goes on saying which file the debt is in
-after the acceptance stops anything from failing over it.
+The number is how far above the baseline the set may rise, not the total it may
+reach. The gate passes the set when its uncovered-line count is at most the
+baseline plus that number. Stating the rise is what makes the marker survive a
+rebase: the baseline moves with the commit the branch contains, and a total
+written for one baseline says something different against the next, while a rise
+says the same thing against every baseline. The gate prints the line to paste,
+with the rise it measured already filled in.
 
 The left margin is what tells an acceptance from a mention of one. A description
 can name the marker in a sentence, and can indent an example of it into a code
 block, without either being read as accepting anything — or as a malformed
 attempt at it. Indent the line to show the form, and write it flush to use it. A
-pull request description often starts life as a commit message body, so a line
-indented there arrives indented, and stays an example. The check names each
-indented marker it passed over in its log, so an author who indented one meaning
-it as an acceptance can see why the gate carried on without it.
+line that starts with `ACCEPT_COVERAGE_DEBT:` and that the gate cannot read
+fails the gate and says what form to write instead.
 
-Use the broad reset marker only to bootstrap coverage data for the first time,
-or when the `main` baseline is known to be bogus and should be re-seeded for one
-cycle:
+A pull request has at most one coverage comment, marked so that a later run can
+find it. The gate writes the comment it wants, and the Pull Request Comments
+workflow posts it from the base repository's context, to the pull request whose
+head is the commit the run tested and to no other. A run whose gate failed posts
+that comment or rewrites it in place with what it found. A run whose gate passed
+rewrites an existing comment into a collapsed note saying so, and posts nothing
+where there is none, since a pull request the gate never failed has nothing to
+be told. A run whose tests failed scored nothing, so unless its gate found a
+failure of its own, such as an acceptance it cannot read, it leaves the comment
+as it was.
 
-```text
-NEW_COVERAGE_BASELINE
-```
-
-When that PR merges, the main run's coverage metrics become the new ratchet
-baseline for later PRs, and no run before it is one: the accepted level is what
-later runs are held to, and nothing older can undo it. That floor applies to the
-metrics the acceptance named, or to every coverage metric for the broad reset
-marker. It reaches only the PRs whose base-branch commit already contains the
-acceptance; a PR whose run started earlier is gated against the ancestry it does
-contain, and picks the floor up when a later run of it merges the acceptance. The
-check still requires the full expected coverage artifact set during that reset
-cycle. Jobs with no reportable covered files upload an empty LCOV report, so a
-missing artifact means the report upload itself failed.
-
-Each run writes a per-run baseline artifact recording its coverage-debt metrics
-and its compile cache states. It is named `perf-metrics` for historical reasons
-— it once also carried CI timing metrics for the removed performance gate — and
-keeps that name so the ratchet needs no migration; a run from before the gate
-was removed reads as a valid baseline unchanged. The file records each metric's
-uncovered-line count under a `durationSeconds` key, for the same reason the
-artifact keeps its name.
-
-The same figures also go into the run's record artifacts, and from there to
-the record store; every reader outside the ratchet takes them from one of the
-two, as "Coverage figures in the record store" below says.
-
-A later PR run reads its ratchet baseline from the `perf-metrics` artifact of the
-`main` run for the base-branch commit it merged, or of the nearest ancestor of
-that commit which has one; there is no separate history store. It finds that run
-in the CI workflow's run listing (see "How the ratchet finds that run"), keeping
-the successful pushes to `main` and ordering them from the nearest ancestor of
-that commit outwards — leaving out the runs for commits it does not contain —
-and then reading one run at a time, stopping as soon as every metric has a
-baseline. Usually the nearest run measured every metric, and that is the only
-baseline artifact read; reading further back happens when a run uploaded
-nothing, ran cold, or measured a metric no nearer run did. The walk reads twenty
-runs at most, so a metric no `main` run has measured yet, such as a new
-package's, costs a bounded number of reads. The runs the walk read are the ones
-the "Baseline source runs" log group names.
-
-The workflow downloads the current run's `coverage-profile-*` artifacts before
-starting `tasks/coverage-check.ts`. `COVERAGE_ARTIFACTS_DIR` points the script at
-one subdirectory per artifact. The download step checks the artifact digests. The
-script separately checks the expected artifact names
-(`EXPECTED_COVERAGE_ARTIFACT_NAMES`). It also rejects an artifact containing no
-coverage files. A manual run without the environment variable uses the GitHub API
-download path instead.
-
-The names the script checks come from the run's artifact listing, which is read
-through the GitHub API. When GitHub's rate limit refuses that listing, the
-subdirectories of `COVERAGE_ARTIFACTS_DIR` name the artifacts instead, so the run
-still measures its coverage; the files it measures are the downloaded ones
-either way. The compile cache states are not among the downloads, so such a run
-has none recorded, as when their artifacts are missing. A pull request's run
-without the environment variable has nothing to fall back on, and fails as it
-does for any other failure to read its own coverage, with the limit named in its
-log.
+`Status` reads the description through the API when the gate runs rather than
+from the event that started the run, so an acceptance written after the push
+counts on a re-run.
 
 ### Measuring a before/after locally
 
-The gate reports a group total rather than a per-line diff, so localizing a rise
-means measuring the same group twice: once with the branch's tree, once with the
+The gate reports a set's total rather than a per-line diff, so localizing a rise
+means measuring the same tests twice: once with the branch's tree, once with the
 tree it will merge onto. Set `DENO_COVERAGE_DIR` for each run and convert with
-`tasks/write-coverage-lcov.ts`, exactly as the CI jobs do, then compare the two
-LCOV reports' zero-hit lines across the files the branch changed. Point
-`DENO_DIR` at a new empty directory for each run, since each CI job starts
-without V8's code cache. With your usual Deno cache directory, a module that a
-test runs in a subprocess reports its top-level lines as covered or not
-depending on whether something had run it before.
+`tasks/write-coverage-lcov.ts`, as a lane does, then compare the two LCOV
+reports' zero-hit lines across the files the branch changed. Point `DENO_DIR` at
+a new empty directory for each run, since each lane starts without V8's code
+cache. With your usual Deno cache directory, a module that a test runs in a
+subprocess reports its top-level lines as covered or not depending on whether
+something had run it before.
 
 Take both measurements from the same base. Rebasing between them straddles two
 trees and the delta stops meaning anything, so rebase first and measure after.
 
-A local total will not match CI's. CI sums a group over every job that loads its
-files and one local suite loads a subset, so the absolute numbers differ. The
-offset is constant between two runs of the same suite, which is what leaves the
-delta comparable when the totals are not.
+To see the per-group counts of a local run, score its profile directory:
 
-The baseline half checks the merge base out over the packages being measured, so
-for the length of that run the worktree holds the base's code rather than the
-branch's. A tree sampled during it reads as though the branch had been reverted.
-It has not been: the branch's work is in its commits, and anything uncommitted is
-in the stash the measurement pushed. `git stash list` and
-`git grep <symbol> <branch-sha> -- <paths>` settle that from outside the run,
-without waiting for it to finish. Restore with `git checkout HEAD -- <paths>`
-followed by `git stash pop`.
+```bash
+DENO_COVERAGE_DIR="$(pwd)/coverage/raw/local" deno task test
+deno run --allow-read --allow-write --allow-run --allow-env \
+  tasks/coverage-metrics.ts \
+  --profile-dir="$(pwd)/coverage/raw/local" --root="$(pwd)"
+```
+
+A local group total will not match the repository-wide figure. That figure sums
+a group over every suite that loads its files, and one local run loads a subset,
+so the absolute numbers differ. The offset is constant between two runs of the
+same tests, which is what leaves the delta comparable when the totals are not. A
+measured set's figure is narrower still: only its own suite's tests, over only
+its member's files.
 
 ## Coverage figures in the record store
 
 A run's coverage figures travel to the
-[test-run record store](test-records.md) as records. The job that scores
-them writes each figure into its record spool as a measurement named
-`ci-lane coverage …`, the way a lane records measurements of itself: a count
-of uncovered lines per source group, `workspace` among them, and per
-measured set, and a mark where the compile byte cache was cold.
-[The record spec](../specs/test-records.md#recording) defines the names. Its
-shipping step gathers them, and the relay stores them under the context it
-composes for the job, which names the commit, the run, and whether the run
-was a push to `main`. Every reader that builds anything per test already
-passes over such measurements. `tasks/coverage-records.ts` is the writer both
-jobs share.
+[test-run record store](test-records.md) as records. On a push, `Status` scores
+them with `tasks/coverage-report.ts`, which writes each figure into the job's
+record spool as a measurement named `ci-lane coverage …`, the way a lane records
+measurements of itself: a count of uncovered lines per source group, `workspace`
+among them, and per measured set, and a mark where the compile byte cache was
+cold. [The record spec](../specs/test-records.md#recording) defines the names.
+Its shipping step gathers them, and the relay stores them under the context it
+composes for the job, which names the commit, the run, and whether the run was a
+push to `main`. Every reader that builds anything per test already passes over
+such measurements. `tasks/coverage-records.ts` is the writer.
 
-The Coverage Check job writes them beside its `perf-metrics` artifact.
-`tasks/coverage-report.ts` writes the same measurements for the full run of
-the CI lanes that
-[the test-selection plan](../plans/pull-request-test-selection.md) moves
-`main` onto, and writes no artifact. Either job ships them only from a push,
-under the artifact name `coverage`, which is `COVERAGE_ARTIFACT` in
-`@commonfabric/test-support/records`. Either runs only once every job whose
-coverage it scores has succeeded, so a run that failed elsewhere, in a
-deployment say, still has its figures read. The relay names the object after
-the artifact, so a reader finds a day's figures with one listing that the
-store filters by name, `COVERAGE_OBJECT_GLOB`, rather than by reading the
-day's tens of thousands of objects.
+`Status` ships them only from a push, under the artifact suffix `coverage`
+(`COVERAGE_ARTIFACT` in `@commonfabric/test-support/records`), which the
+shipping action uploads as `test-records-coverage-a<attempt>`. It runs after
+every lane has finished, whether the lanes passed or failed, unless the run was
+cancelled, so a run that failed elsewhere still has its figures read.
+`tasks/coverage-report.ts` publishes no figure for a measured set that a lane
+marked as measured through a failure, so no baseline comes from a failing
+run. The relay names the object
+after the artifact, so a reader finds a day's figures with one listing that the
+store filters by name, `COVERAGE_OBJECT_GLOB`, rather than by reading the day's
+tens of thousands of objects.
 
 Three things read them:
 
@@ -1035,11 +909,13 @@ Three things read them:
 
 ## Compile cache state and cold runs
 
-The pattern test jobs restore a compile byte cache keyed on a fingerprint hash
-over the compiler packages. A PR that changes that fingerprint runs cold: every
-pattern compiles from scratch. A cold run covers compile branches that only
-execute on a cold cache, which lowers its coverage debt, so ratcheting a warm PR
-against a cold `main` run would fail it with phantom uncovered lines.
+The pattern suites open a pattern compile byte cache, which the lane job
+restores from `.ci-cache/compile` under a key that names the compiler
+fingerprint. A change that moves the fingerprint runs cold: every pattern
+compiles from scratch. A cold run covers compile branches that only execute on a
+cold cache, which lowers its uncovered-line count with nothing about the tests
+changed, so a trend that took a cold run's figure beside a warm one's would show
+a drop the next warm run takes back.
 
 The pattern-integration process owns one shared cache in
 `packages/patterns/integration/pieces-controller.ts`. Its controller helper and
@@ -1049,220 +925,40 @@ create. A custom runtime in this suite must do the same. Setting
 bytes; a runtime uses those bytes only when it receives the cache through its
 `moduleByteCache` option.
 
-To tell cold from warm, each pattern job uploads a small `cache-state-*`
-artifact recording its cache restore result. The coverage check aggregates those
-into `compileCacheStates` in `perf-metrics.json`, and marks the run's coverage
-measurements cold when any family is. A job family is cold when
-any of its shards had a full cache miss, detected as the cache file being absent
-after the restore step (the combined `actions/cache` action does not expose the
-matched key). A partial hit through a restore key counts as warm: both key forms
-start with the fingerprint hash, so any restore means the compiled bytes are
-current. The ratchet skips a cold sample when choosing among the
-base-branch commit and its ancestors, so a cold `main` run cannot lower the
-baseline that warm PRs are held to.
-
-Every run stamps its own `perf-metrics.json`, so a baseline run's coldness is
-read straight off the artifact that run published. Before writing the stamp, a
-run fills in any family whose cache-state artifact did not arrive, using the
-compile fingerprint: `tasks/compile-cache-state.ts` mirrors the `cc-*` key globs
-(drift-guarded by a test that parses the workflow) and compares the run's commit
-against the commit whose cache it would have restored — the pull request's own
-changed files, or the previous `main` run for a push. A family with no recorded
-state is filled cold when those paths changed. Recorded states are ground truth
-and always win. A run a rate limit ends early writes the same stamped artifact
-before it stops, so it still tells later runs whether it was cold.
-
-Neither source is complete. Fingerprint inference cannot see non-fingerprint
-cold causes (cache eviction, cache-service outages), and a run whose cache-state
-artifacts and fingerprint comparison both failed publishes no stamp at all. A
-run with no recorded state is treated as not-cold and may still be used as a
-baseline.
-
-A CI lane records the state of the compile byte cache it restores
+Each lane records the state of the compile byte cache it restores
 (`COMPILE_CACHE_FILE` in `tasks/ci-capabilities.ts`) itself. A lane whose
 batches open that cache checks whether the file exists before its first batch
 runs, because the first pattern a batch compiles writes the file whatever the
-cache held. It writes `cold` or `warm` to `compile-cache-state.txt` at the top
-of the directory its coverage artifact holds. A file that exists reads as warm,
-which is sound only while the workflow keys the lanes' cache, and every restore
-key for it, on the compiler fingerprint, as it keys the jobs' caches: a file
-restored from a run of another compiler holds no bytes this one can use, and
-would read as warm all the same. `tasks/coverage-report.ts` reads every such
-record and marks the run's coverage measurements cold when any record says
-`cold` or says something it does not recognize, and not when every record says
-`warm` or no lane opened the cache. The dashboard's repository-wide trend leaves
-a cold run out, so a fingerprint change does not show as a drop in debt that the
-next warm run takes back.
+cache held. `writeCompileCacheState()` in `tasks/ci-lane.ts` writes `cold` or
+`warm` to `compile-cache-state.txt` at the top of the lane's report directory,
+where the lane's coverage artifact carries it. A file that exists reads as warm.
+That is sound only while the workflow keys the lanes' cache, and every restore
+key for it, on the compiler fingerprint. A file restored from a run of another
+compiler holds no bytes this one can use, and would read as warm all the same.
+A partial hit through the restore prefix counts as warm, since the prefix
+carries the fingerprint too.
 
-## Which `main` run the ratchet compares against
-
-A `pull_request` run checks out `refs/pull/<number>/merge`, whose first parent
-is the base-branch commit and whose second parent is the pull request head.
-GitHub rebuilds that merge ref whenever the base branch moves, so the run
-measures the pull request merged with `main` as it stood when the run started.
-
-The baseline is the `main` run for that commit, or for the nearest ancestor of
-it that has one. Comparing against the commit itself is exact: both numbers
-count the same base-branch code, so the only difference between them is the
-pull request. Runs that are not ancestors are never used, in either direction —
-one that landed after the run started measured code the run does not contain.
-
-The base commit's own run is usually available, but not always: it may still be
-going, or it may have failed. Rather than skip the gate, the ratchet steps back
-to the nearest ancestor that has a usable run. Whatever the base branch changed
-in between is then present in this run and absent from the baseline, so the
-groups it touched have totals that count different code on the two sides. Those
-groups are reported and not gated; every other group still is, which is the
-point of stepping back rather than giving up. A gap of one or two commits
-usually touches one or two groups.
-
-One case this does not reach: a base-branch commit that changes a test in one
-package can move the coverage of source in another, and no diff of that source
-names it. It ends when a `main` run measures the base commit.
-
-Two details of reading the base commit are load-bearing. It comes from the
-checked-out merge commit rather than the triggering event, because GitHub does
-not rewrite `pull_request.base.sha` when it rebuilds the merge ref. And it is
-read with `git cat-file commit HEAD` rather than `git log --format=%P`, because
-`actions/checkout` clones to depth one and git reports a shallow boundary commit
-as having no parents.
-
-### How the ratchet finds that run
-
-The `main` run for a commit is found in the CI workflow's run listing, which
-GitHub returns newest first, a hundred runs to a page. The check asks for that
-listing with no filter and keeps the successful pushes to `main` itself. GitHub
-serves a listing filtered by branch, status or event from a search index
-instead, and that index can return a window of runs that ended weeks earlier,
-with a success status and nothing in the response to say so. A baseline that
-exists then reads as one that does not.
-[The investigation record](../history/development/coverage-ratchet-stale-run-listing-2026-09-17.md)
-has the instances.
-
-The check does not take a listing's word for being current either. The run
-doing the asking was created before the listing was read, so a current listing
-shows it, ahead of every run created before it. Run ids grow with creation, so
-"created before" is a comparison of ids and needs no clock. A listing that shows
-a page of older runs and then a page that still lacks this run, or that ends
-without it, is not current. One page of grace covers two runs created together
-whose order puts a page boundary between them.
-
-A listing that is not current is read again, twice more at most. If it still
-leaves the run out, a pull request's job fails, and says why in its log, in an
-error annotation, in the job summary and in the pull request's coverage comment.
-It fails rather than passes because no baseline found through that listing can
-be trusted, and because the remedy is cheap: re-running the Coverage Check job
-reads the listing again, and the job takes about a minute. Nothing in that
-failure says the pull request regressed coverage. A run the gate compares
-nothing for passes with the warning instead: a `main` run, a pull request that
-changed no source group, and one whose description carries
-`NEW_COVERAGE_BASELINE`. Such a pull request still gets its coverage comment
-resolved, so a failure an earlier run reported does not stay open on it.
-
-The listing is read only as far back as the walk needs. The first reading goes
-back to the run asking, which is on the first page for a run whose tests have
-just finished. When the runs on those pages leave a metric without a baseline,
-the walk asks for the next older page, up to ten pages in all. That happens
-when a job is re-run days after its run was created: the commit it merges is
-as old as the run, and the newest pages hold only runs for commits that landed
-since. Ten pages reach back about three days. A run created longer ago than that
-is out of reach, together with the `main` runs for the commit it merges, and its
-changed groups are reported as not gated.
-
-The nearest ancestor is still the nearest one when the runs span pages. A page
-further back holds runs created earlier, and those are usually the ones for
-commits further from the base-branch commit, but two pushes that land together
-can have their runs created in the other order, with a page boundary between
-them. So before the walk reads the run for an ancestor, every commit nearer the
-base-branch commit has to be accounted for. A commit is accounted for once the
-listing has shown its push run, whatever that run's conclusion: a run still
-going and one that failed are runs the ratchet cannot use, and having seen one
-says there is nothing further back to find. Until then the walk reads another
-page, and it takes the ancestor it has when there are no more.
-
-Nothing but a shown run accounts for a commit. Its date does not: a commit's
-date is whatever the client that made it said it was, so it puts no bound on
-when the commit's run was created. Every commit on `main` normally has a run, so
-the search costs a page only in the case it exists for. A commit with no run at
-all, such as one pushed together with its descendants, costs the rest of the
-page budget on the runs that have to look past it.
-
-### When a changed group is not gated
-
-A pull request is not failed for a baseline that does not exist. That leaves a
-job that compared nothing looking exactly like one that found nothing, so the
-check says which it was. When the gate applied to a group — the pull request
-changed it, and the description accepted nothing for it — and held it against no
-baseline, the run reports it in four places:
-
-- The job's log, under `!!! COVERAGE WAS NOT GATED for …`, and in its last line,
-  which claims the ratchet only for the groups it compared.
-- A warning annotation on the run, which the pull request's checks show.
-- The job summary.
-- The pull request's coverage comment, headed "Test coverage was NOT gated on
-  this run". It is posted even on a pull request that had no coverage comment,
-  and the next run that gates every changed group rewrites it into the
-  collapsed summary.
-
-Each names the groups, and for each group one of four reasons:
-
-- No successful `main` run within reach measured the base-branch commit or an
-  ancestor of it.
-- The base branch changed the group between the nearest measured ancestor and
-  the base-branch commit, so the two totals count different code.
-- The base-branch commit could not be read from the checkout.
-- GitHub's API rate limit stopped the run reading the baseline data at all, so
-  no group was compared. A limit is read off the response — the status together
-  with the rate-limit headers — rather than off the wording of a refusal, whose
-  body the client cancels unread. The reads that treat an ordinary failure as
-  absent data, a run's artifact listing and the lookup of the pull request that
-  merged its commit among them, let a limit through instead: reported as absent
-  data it would become a claim that no `main` run has measured the group.
-
-For the first three, a later run of the pull request gates those groups, once a
-`main` run has measured the commit it merges. Re-running the Coverage Check job
-is enough when that `main` run has finished since; updating the branch gives the
-next run a newer commit to merge.
-
-A run a rate limit stopped passes, and re-running the Coverage Check job once
-the limit has reset is the whole remedy. It passes rather than fails because the
-limit bounds what this repository may ask of GitHub in an hour: it is a property
-of the moment rather than of the pull request, and a re-run started straight
-away meets it again, so failing would hold the pull request on a condition its
-author has no way to clear. That is the one thing separating it from a run
-listing that is not current, whose remedy is a re-run that costs about a minute.
-What makes the pass safe to keep is that it is no longer a quiet one — the run
-reports through the same four places above, so a pull request that was never
-gated does not read as one that was.
-
-A limit reached before the comparison, on the listing of the run's own
-artifacts, does not stop the run measuring what it downloaded (see "Ratchet
-baselines and accepting debt"). The comparison then reads the API again, and a
-limit still in force there ends the run as above, naming the groups it measured.
-
-The table header in the job's log is the quick check. `excl` beside a group the
-pull request changed means that group was not compared, and a header reading
-`OK: 0` with every group `excl` means nothing was. `ovrd` is what says an
-`ACCEPT_COVERAGE_DEBT` line took effect. A group with no baseline is held to
-zero, so an accepted rise covers it only when the group's whole count is that
-small; a group carrying any real debt reads `excl` beside its acceptance, and
-the line has accepted nothing on that run.
+`tasks/coverage-report.ts` reads every such record and marks the run's coverage
+measurements cold when any record says `cold` or says something it does not
+recognize, and not when every record says `warm` or no lane opened the cache.
+The dashboard's repository-wide trend leaves a cold run out, and the report a
+`main` run posts compares a cold run only with another cold one.
 
 ## A combined report for IDEs
 
-The same `coverage-profile-*` artifacts feed a second consumer. On `main`, the
-`attest-binaries` job downloads all of them, runs
+The lanes' coverage artifacts feed a second consumer. On `main`, the
+`attest-binaries` job downloads every `lane-coverage-*` artifact, runs
 `tasks/combine-coverage-lcov.ts` to merge them into one LCOV file, and uploads
 that file to the build-artifacts bucket next to the release tarball. The point
 is to give someone working in an IDE a single file that shows coverage for the
-whole repository, instead of one fragment per CI job.
+whole repository, instead of one fragment per lane.
 
 Two things happen during the merge. The source paths in each fragment are
 absolute paths rooted at whichever runner produced them, so they are rewritten
 to repository-relative paths that an IDE can map onto a local checkout. Records
 for the same source file are then combined into one, with the per-line hit
-counts added together, so a file exercised by several jobs is reported once with
-its combined coverage.
+counts added together, so a file exercised by several lanes is reported once
+with its combined coverage.
 
 The merged file carries line coverage only. LCOV identifies a function by its
 name, and `deno coverage --lcov` can emit several functions with the same name
@@ -1277,40 +973,62 @@ To download the report for a given commit:
 gsutil cp gs://commontools-build-artifacts/workspace-artifacts/labs-<commit-sha>.lcov .
 ```
 
-## Which job collects which coverage
+## Which suite collects which coverage
 
-| Job | Runtime (V8) coverage | Authored-pattern coverage |
+A run that collects coverage has each lane measure the suites it runs. The full
+run on `main` measures every suite, both server-execution arms of each included,
+because the baselines and the repository-wide trend both come out of it. A pull
+request measures only the members of the measured sets its coverage gate scores,
+and runs everything else with coverage off, since a profile no set is scored
+from is time spent on something nothing reads. The lane hands a measured batch a
+coverage directory of its suite's own. A suite whose runner is `deno test` over
+files writes one directory under it per workspace member, so that what one
+member's tests reached is converted on its own. `pattern-unit` and
+`pattern-reload` write one directory named for the suite.
+
+Runtime (V8) coverage comes from every suite whose runner is `deno test` over
+files, and from `pattern-unit` and `pattern-reload`. The suites that run the
+command line's integration scripts, `cli-core` and `cli-fuse`, collect none, and
+neither do the repository gates. Authored-pattern coverage comes from three
+suites, which the topology declares:
+
+| Suite | Runtime (V8) coverage | Authored-pattern coverage |
 | --- | --- | --- |
-| `pattern-unit-test` | yes | yes (`cf test` with `CF_PATTERN_COVERAGE_DIR`) |
-| `pattern-integration-test` | yes | yes (browser worker collector) |
-| `pattern-reload-integration-test` | yes | yes (browser worker collector) |
+| `pattern-unit` | yes | yes (`cf test` with `CF_PATTERN_COVERAGE_DIR`) |
+| `pattern-integration`, the arm with server execution off | yes | yes (browser worker collector) |
+| `pattern-reload` | yes | yes (browser worker collector) |
 
-The pattern unit job runs each `packages/patterns/**/*.test.tsx` file through
-`cf test` in-process. The two integration jobs run browser-driven `deno test`
+In the full run, `tasks/ci-lane.ts` hands each measured batch a pattern
+coverage directory, `lcov/pattern-runtime/<suite>` under the lane's coverage
+directory, and these three suites write their LCOV there. The lane's upload
+carries it to the repository-wide figure. A pull request's lanes collect no
+authored-pattern coverage, because no measured set is scored from it.
+
+The pattern unit suite runs each `packages/patterns/**/*.test.tsx` file through
+`cf test` in-process. The two integration suites run browser-driven `deno test`
 files against a running Toolshed server. Both kinds of authored-pattern coverage
-feed the same gated metric.
+feed the same `coverage-debt: packages/patterns` figure.
 
-The pattern integration job runs in two server-execution arms, and only the
+The pattern integration suite runs in two server-execution arms, and only the
 arm with the flag off collects authored-pattern coverage. The instrumentation
 records what the browser's runtime worker compiles, which is the whole of what
 ran only where that worker is the sole compiler; the arm with server execution
 on has a second compiler on the server. The arm with it off measures the same
-pattern files, so nothing goes unmeasured.
+pattern files, so nothing goes unmeasured. Both arms collect runtime coverage.
 
 The compile byte cache is available to `cf test` through
 `CF_COMPILE_CACHE_FILE`. Coverage and non-coverage compiles use different cache
 keys. Coverage cache entries also carry the spans registered during the
 transform, so a restored coverage compile can rebuild the current collector
-before the cached module bytes run. The `pattern-unit-test` job wires both
-`CF_PATTERN_COVERAGE_DIR` and `CF_COMPILE_CACHE_FILE`, which lets CI reuse
-coverage-transformed module bytes between runs without mixing them with ordinary
-compiled bytes.
+before the cached module bytes run. With both `CF_PATTERN_COVERAGE_DIR` and
+`CF_COMPILE_CACHE_FILE` set, a run reuses coverage-transformed module bytes
+between runs without mixing them with ordinary compiled bytes.
 
 With that file set, the pattern-test orchestrator in `tasks/integration.ts`
-fills it before any test runs. It sorts the shard's files by path, cuts them
-into runs of neighbors of about a fifth of the shard each, never across a
-program root, and hands each run to a `cf test --compile-only` process, five
-at a time; each compiles its files' programs and runs nothing. Files that sit
+fills it before any test runs. It sorts the files it was given by path, cuts
+them into runs of neighbors of about a fifth of the list each, never across a
+program root, and hands each run to a `cf test --compile-only` process, five at
+a time; each compiles its files' programs and runs nothing. Files that sit
 together share most of their modules, so each run compiles those once, and the
 test processes that follow, five at a time, all start from a full cache. A
 `cf test` process seeds from the file only as it starts, so without that pass
@@ -1330,9 +1048,9 @@ complete module identity set. It skips another persistence operation for the
 same closure. Concurrent requests for the same closure share one persistence
 operation.
 
-## How the integration jobs collect authored-pattern coverage
+## How the integration suites collect authored-pattern coverage
 
-For these jobs coverage is a runtime-level capability rather than a `cf test`
+For these suites coverage is a runtime-level capability rather than a `cf test`
 one, so the worker never reads `CF_PATTERN_COVERAGE_DIR`. In an integration test
 the pattern's event handlers run in the browser's runtime Web Worker, and that
 worker is constructed with `RuntimeOptions.patternCoverage` on — a
@@ -1378,17 +1096,16 @@ instrumented bytes, so the fileName-plus-span-id keys line up: a realm that only
 warm-loaded already-instrumented bytes reports hits that merge cleanly against
 the realm that compiled them and holds the spans. The harness merges the realms'
 hits and writes a `*.pattern-coverage.lcov` tagged
-`TN:pattern-runtime-integration`, which the job uploads in its
-`coverage-profile-*` artifact.
+`TN:pattern-runtime-integration` into `CF_PATTERN_COVERAGE_DIR`.
 
-### One report per test file, not one per shard
+### One report per test file, not one per batch
 
-`deno test` runs each test file in its own isolate. A shard's files therefore
+`deno test` runs each test file in its own isolate. A batch's files therefore
 hold separate instances of the harness module, each with its own collector and
 its own space, and each writes its own `*.pattern-coverage.lcov` under
-`CF_PATTERN_COVERAGE_DIR`. The gate copies and joins every `.lcov` in an
-artifact, so a shard's coverage arriving in several files reads the same as one,
-and a report is named apart from every other in the run for that reason.
+`CF_PATTERN_COVERAGE_DIR`. A reader joins every `.lcov` it is given, so a
+batch's coverage arriving in several files reads the same as one, and a report
+is named apart from every other in the run for that reason.
 
 The isolation runs the other way as well. A test file that runs its patterns
 only through a pieces controller in the test process, with no page to dump from,
@@ -1414,8 +1131,8 @@ environment, which the section above rules out. The lines at risk are the ones a
 flow reaches late — a derived expression that runs when the view renders it, a
 handler body that runs when the user gets that far. Whether the runtime holding
 those hits is the one still standing at teardown depends on how the run was
-timed and which shard the file landed in, and a line that drops out that way is
-charged to whichever pull request happened to reshuffle the shards.
+timed and which lane the file landed in, and a line that drops out that way
+moves the figure of whichever run happened to pack the file differently.
 
 A dump that comes back empty-handed is reported, with one exception: a page that
 never booted a runtime holds nothing, and is normal. A page that cannot be
@@ -1425,16 +1142,16 @@ hits and no spans is not one of those — that is exactly what a realm that
 warm-loaded somebody else's instrumented bytes reports, and those hits key
 against the spans the compiling realm registered.
 
-Integration coverage counts toward the gated `coverage-debt: packages/patterns`
-metric exactly like unit coverage, which means a broad end-to-end flow that runs a
-line without asserting on it lowers the debt. That trade is deliberate. Crediting
+Integration coverage counts toward the `coverage-debt: packages/patterns` figure
+exactly like unit coverage, which means a broad end-to-end flow that runs a line
+without asserting on it lowers the debt. That trade is deliberate. Crediting
 integration coverage only in a separate, never-gated number would score whatever
 an end-to-end flow reaches — a piece assembled across several patterns, a path
 through the shell no unit test drives — as uncovered however well it is
 exercised. Coverage does not measure verification either way (see the properties
 under "Authored pattern code is measured by transformer instrumentation"), so a
-unit test that asserts on what it ran remains the better test; the gate just does
-not treat what an integration test covers as worthless.
+unit test that asserts on what it ran remains the better test; the figure just
+does not treat what an integration test covers as worthless.
 
 A span's file name is whatever the realm that compiled it called the module, and
 that arrives in two shapes. A pattern the controller resolved off disk is named
@@ -1449,9 +1166,9 @@ because the realms do not all arrive the same way: the browser dumps are ingeste
 but a runtime this process runs registers its spans into the shared collector
 directly, as it compiles. Renaming on the way in silently covers only the first
 kind. A record naming a file that is not in the checkout is the failure mode to
-watch for — the gate matches records against the files it walked, so such a record
-matches nothing and drops its coverage without complaining, which looks exactly
-like a pattern nobody tested. Writing one warns.
+watch for — the metric matches records against the files it walked, so such a
+record matches nothing and drops its coverage without complaining, which looks
+exactly like a pattern nobody tested. Writing one warns.
 
 ## Known limitations and possible future work
 
@@ -1476,5 +1193,7 @@ like a pattern nobody tested. Writing one warns.
   why V8 can report a one-line conditional guard as uncovered when its branch
   is not taken.
 - [../common/workflows/pattern-testing.md](../common/workflows/pattern-testing.md)
-  — writing the pattern unit tests that the `pattern-unit-test` job runs through
-  `cf test`, the source of the gated authored-pattern coverage.
+  — writing the pattern unit tests that the `pattern-unit` suite runs through
+  `cf test`, one source of authored-pattern coverage.
+- [test-selection.md](test-selection.md#the-coverage-gate) — operating the
+  measured-set coverage gate.

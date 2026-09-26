@@ -442,18 +442,19 @@ server](#clients-that-are-not-built-alongside-their-server).
   integration coverage is whichever CI role resolves ON. In CI (testing.md §2), `default`
   follows the constant and `opposite` is its explicit inverse; both are
   probed through the shared role
-  resolver; the opposite lane uses `build-toolshed-opposite`, whose shell
-  define is baked from the resolved inverse. The
-  `deployed-topology-gate` job exercises cf-harness's fabric session at
-  the default resolution, and the CLI lanes probe the server their `cf`
-  adopts its posture from —
-  with ON-arm skips and OFF-arm authored coverage following the resolved arm.
-  Skips are only through `tasks/server-execution-on-skips.ts`, printed loudly
-  (EMPTY at the flip, its stated precondition). End
-  state: after a soak on main at the ON default, the flag retires and the
-  OFF code path is removed — a separate post-soak
-  PR (the plan's Phase 7 task 2; it also removes the opposite guard lanes and
-  `build-toolshed-opposite`).
+  resolver; the opposite suites use the `toolshed-baked-opposite` capability,
+  whose shell define is baked from the resolved inverse, and the
+  `binaries-opposite` suite compiles that toolshed. The `deployed-topology`
+  suite exercises cf-harness's fabric session at the default resolution, and the
+  CLI suites probe the server their `cf` adopts its posture from — with ON-arm
+  skips and OFF-arm authored coverage following the resolved arm. Skips are only
+  through `tasks/server-execution-on-skips.ts`. The test topology declares each
+  entry unavailable in the ON suite, and the selection manifest records it with
+  its phase and reason. The registry was EMPTY at the flip, its stated
+  precondition. End state: after a soak on main at the ON default, the flag
+  retires and the OFF code path is removed — a separate post-soak PR (the plan's
+  Phase 7 task 2; it also removes the opposite suites and the
+  `toolshed-baked-opposite` capability).
 - **Status on 2026-09-11 (the served source update).** Under ON,
   `setsrc` runs on the space's serving runtime as well, and `cf piece
   setsrc` requests it: the update's setup transaction commits directly to
@@ -536,7 +537,8 @@ server](#clients-that-are-not-built-alongside-their-server).
   (effects + outbox) remains.
 - **Path to removal.** Soak on main at the ON default; then the post-soak PR
   retires the flag, removes the OFF path (and the opposite regression-guard
-  lanes + `build-toolshed-opposite`), and closes out this entry.
+  suites and the `toolshed-baked-opposite` capability), and closes out this
+  entry.
 
 ---
 
@@ -1554,6 +1556,26 @@ the per-epic implementation notes).
   record. What stands between it and a default is soak with the posture forced
   on. The end state is on by default, then the session read path for the home
   space goes.
+- **Status on 2026-09-25.** Implemented, off by default. The feed's refresh
+  re-reads the stream sidecars the serving loop's own commits touch: admission
+  stamps each appended entry's seq and advances the stream's `eventWatermark`
+  in the sidecar the store keeps, and the event drain queues an entry only once
+  the serving replica's view holds it at that seq. Without that re-read a
+  same-space event a served handler emits into a sidecar, and that the drain
+  has to dispatch, is deferred on every drain pass, and every later event in
+  the space waits behind it. That is how
+  the topic-board navigation benchmark's `comment` segment stalled under the
+  posture in [#8068](https://github.com/commonfabric/labs/pull/8068): the
+  profile-create surface's handler emits such an event to seed the new
+  Profile's name. `packages/runner/test/executor-events-down.test.ts` pins the
+  re-read. Measured in #8068's record
+  ([`docs/history/development/performance/2026-09-25-server-execution-topics-lunch-benchmarks.md`](../history/development/performance/2026-09-25-server-execution-topics-lunch-benchmarks.md)),
+  one run per arm on a shared four-core machine, with the browser, the bench
+  process and the toolshed contending for it: the served navigation `journey`
+  ran in 6.19 s against 6.89 s without the posture, a difference within that
+  record's noise floor of about a fifth; seeding a 30-topic board took 63 to
+  67 s against 79 to 125 s; and a cold board load after the space parked took
+  15.8 s against 21.9 to 22.8 s.
 - **Status on 2026-09-11.** Implemented, off by default. With the posture
   forced on, the runner's executor suites pass except two steps whose
   expectations are session-specific: a precondition probe that reads the
@@ -1564,8 +1586,7 @@ the per-epic implementation notes).
   `packages/runner/test/executor-fan-out.test.ts`: the run that discovers
   session depth serves the session instance at the moved ratchet, and a later
   session-scoped write re-runs it under the session key. The toolshed-backed
-  integration lanes pass. Measured on the topic-board navigation benchmark:
-  the served journey runs in roughly a third of the time.
+  integration lanes pass.
 - **Path to removal.** Soak with the posture forced on, flip the default, then
   delete the knob and the home-space session read path it replaces.
 

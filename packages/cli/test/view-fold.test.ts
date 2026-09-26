@@ -224,6 +224,23 @@ Deno.test("isTestPath: directories and basenames", () => {
       "components/Button.stories.tsx",
       "conftest.py",
       "goldens/output.golden",
+      "packages/x/integration/helper.ts",
+      "packages/x/integration/pattern/board.tsx",
+      "packages/x/e2e/login.ts",
+      "src/__snapshots__/app.test.ts.snap",
+      "packages/x/baselines/main.tsx/contract.json",
+      "packages/x/browser-tests/repro.tsx",
+      "packages/test-support/src/mod.ts",
+      "src/test-utils/mock-document.ts",
+      "src/test_helpers.rb",
+      "patterns/render-test.tsx",
+      "types/api.test.d.ts",
+      "spec/models/user_spec.rb",
+      "packages/x/tile-layout-fixtures.ts",
+      "packages/x/login-fixture.ts",
+      "pkg/test_parse.py",
+      "goldens/OUTPUT.GOLDEN",
+      "packages\\x\\integration\\helper.ts",
     ]
   ) {
     assert(isTestPath(p), `expected ${p} to be a test file`);
@@ -234,6 +251,19 @@ Deno.test("isTestPath: directories and basenames", () => {
       "lib/latest.ts", // contains "test" only as a substring, not a segment/base pattern
       "docs/README.md",
       "attestation.ts",
+      "tasks/test-records-gather.ts",
+      "packages/cli/lib/test-runner.ts",
+      ".github/workflows/test-selection.yml",
+      "docs/specs/test-records.md",
+      "docs/specs/SES_SANDBOXING_SPEC.md",
+      "scripts/cell-spec.ts",
+      "tasks/aliases/Browser.test.ts.jsonl",
+      "packages/toolshed/routes/integrations/oauth.ts",
+      "src/latest/app.ts",
+      "src/mock-doc.ts",
+      "pkg/test_parse.ts",
+      "tasks/aliases/x-test.ts.jsonl",
+      "bin/test",
     ]
   ) {
     assert(!isTestPath(p), `expected ${p} not to be a test file`);

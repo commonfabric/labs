@@ -128,6 +128,22 @@ describe("agent builtin", () => {
     return result.key("run").resolveAsCell();
   };
 
+  /**
+   * Stops the piece behind `result` and runs it again with nothing carried
+   * over, as a process taking over from one that stopped does, and returns
+   * the new run's result once everything it started has settled.
+   */
+  const restart = async (id: string, result: Cell<AgentResult>) => {
+    runtime.runner.stop(result);
+    tx = runtime.edit();
+    const restarted = runAgentPattern(id);
+    await tx.commit();
+    const cancelDemand = restarted.sink(() => {});
+    await runtime.settled();
+    cancelDemand();
+    return restarted;
+  };
+
   it("settles with an error naming the flag when `agentBuiltin` is off", async () => {
     setUp({ experimental: { agentBuiltin: false } });
     const result = runAgentPattern("agent-flag-off");
@@ -627,6 +643,135 @@ describe("agent builtin", () => {
       expect(result.withTx().key("pending").get()).toBe(true);
     });
 
+    it("lists the record left unindexed once the piece starts again", async () => {
+      setUp();
+      const id = "agent-unindexed-restart";
+      const first = runAgentPattern(id);
+      rejectEffectWrite([2, 3]);
+      await tx.commit();
+      const record = await waitForRecord(first);
+      const queue = agentQueueIndexCell(runtime, space);
+      expect(queue.key("entries").get()).toEqual([]);
+
+      const second = await restart(id, first);
+      const entries = queue.key("entries").get() ?? [];
+
+      expect(entries.map((entry) => entry.run.getAsNormalizedFullLink().id))
+        .toEqual([record.getAsNormalizedFullLink().id]);
+      expect(record.get()?.state).toBe("queued");
+      expect(second.withTx().key("run").resolveAsCell().equals(record))
+        .toBe(true);
+      expect(second.withTx().key("pending").get()).toBe(true);
+    });
+
+    /**
+     * Leaves a `queued` record no index lists, then restarts its piece with
+     * the restarted node's listing rejected, and runs `race` as that
+     * listing is attempted. Returns the record and the restarted result.
+     */
+    const restartWithListingRejected = async (
+      id: string,
+      race: (record: Cell<unknown>) => Promise<void>,
+    ) => {
+      setUp();
+      const first = runAgentPattern(id);
+      rejectEffectWrite([2, 3]);
+      await tx.commit();
+      const record = await waitForRecord(first);
+      rejectEffectWrite([1], () => race(record));
+      return { record, second: await restart(id, first) };
+    };
+
+    it("leaves a record another node listed while this node's listing failed", async () => {
+      const { record, second } = await restartWithListingRejected(
+        "agent-listed-elsewhere",
+        async (record) => {
+          const list = runtime.edit();
+          agentQueueIndexCell(runtime, space, list).key("entries").push({
+            run: record,
+            host: "https://fabric.example",
+          });
+          await list.commit();
+        },
+      );
+
+      expect(record.get()?.state).toBe("queued");
+      expect(second.withTx().key("pending").get()).toBe(true);
+      expect(second.withTx().key("error").get()).toBeUndefined();
+    });
+
+    it("leaves a record a runner claimed while this node's listing failed", async () => {
+      // The claim is made with no entry listing the record, as when the
+      // queue is rewritten after a runner has claimed it.
+      const { record, second } = await restartWithListingRejected(
+        "agent-claimed-unlisted",
+        async (record) => {
+          const claim = runtime.edit();
+          record.withTx(claim).key("state").set("claimed");
+          await claim.commit();
+        },
+      );
+
+      expect(record.get()?.state).toBe("claimed");
+      expect(second.withTx().key("pending").get()).toBe(true);
+    });
+
+    it("lists the record on a later run after the release check refused a listing", async () => {
+      setUp();
+      const id = "agent-listing-release-refused";
+      const first = runAgentPattern(id);
+      rejectEffectWrite([2, 3]);
+      await tx.commit();
+      const record = await waitForRecord(first);
+      const queue = agentQueueIndexCell(runtime, space);
+
+      // The release check compares the staged request with the policy input
+      // the committed transaction prepared. Handing the first listing effect
+      // a committed transaction that prepared none is how it is refused.
+      let refusals = 1;
+      const edit = runtime.edit.bind(runtime);
+      runtime.edit = ((...args: Parameters<typeof runtime.edit>) => {
+        const editTx = edit(...args);
+        const enqueue = editTx.enqueuePostCommitEffect.bind(editTx);
+        editTx.enqueuePostCommitEffect = (effect) =>
+          enqueue(
+            effect.kind !== "agent-list" || refusals-- <= 0 ? effect : {
+              ...effect,
+              flush: () =>
+                effect.flush(
+                  {
+                    getCfcState: () => ({
+                      writePolicyInputs: [],
+                      prepare: {
+                        status: "prepared",
+                        input: { writePolicyInputs: [] },
+                      },
+                    }),
+                  } as unknown as IExtendedStorageTransaction,
+                ),
+            },
+          );
+        return editTx;
+      }) as typeof runtime.edit;
+      const second = await restart(id, first);
+      expect(queue.key("entries").get()).toEqual([]);
+
+      // A change to the record runs the node again.
+      const cancelDemand = second.sink(() => {});
+      const touch = runtime.edit();
+      record.withTx(touch).key("stateSince").set("2026-09-25T00:00:01.000Z");
+      await touch.commit();
+      await runtime.settled();
+      cancelDemand();
+
+      expect(
+        (queue.key("entries").get() ?? []).map((entry) =>
+          entry.run.getAsNormalizedFullLink().id
+        ),
+      ).toEqual([record.getAsNormalizedFullLink().id]);
+      expect(second.withTx().key("error").get()).toBeUndefined();
+    });
+
     it("leaves the cell to a newer request staged while the refusal waited", async () => {
       setUp();
       const { pattern, agent } = commonfabric;
@@ -814,6 +959,23 @@ describe("agent builtin", () => {
 
       expect(entries?.length).toBe(1);
     });
+  });
+
+  it("leaves a listed record as it is when the piece starts again", async () => {
+    setUp();
+    const id = "agent-listed-restart";
+    const first = runAgentPattern(id);
+    await tx.commit();
+    const record = await waitForRecord(first);
+    const before = record.getRaw();
+
+    const second = await restart(id, first);
+
+    expect(record.getRaw()).toEqual(before);
+    expect(agentQueueIndexCell(runtime, space).key("entries").get()?.length)
+      .toBe(1);
+    expect(second.withTx().key("pending").get()).toBe(true);
+    expect(second.withTx().key("error").get()).toBeUndefined();
   });
 
   describe("the tool check against the registered runner", () => {

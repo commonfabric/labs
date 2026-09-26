@@ -10,9 +10,10 @@
  * read a served result back). The explicit-env ON lanes never exercised
  * this unset-flag path; the flip changes exactly it.
  *
- * Runs only in the "Deployed Topology Posture Gates" CI job (deno.yml),
- * which sets API_URL; it is in `integration/`, which the package's `test`
- * task does not match, so the workspace Test job never runs it. Locally:
+ * Runs only in the test topology's `deployed-topology` suite, whose
+ * `toolshed` capability starts a server and sets API_URL; it is in
+ * `integration/`, which the package's `deno-test` task does not match, so
+ * the workspace unit suite never runs it. Locally:
  *   API_URL=http://localhost:8000 deno test --allow-env --allow-net \
  *     --allow-read --allow-write --allow-ffi --allow-run \
  *     integration/fabric-session-posture-gate.test.ts

@@ -1,19 +1,20 @@
 # Choosing which tests a pull request runs
 
-Status: in progress. Part one is built. Part two is built apart from its
-continuous-integration configuration, the coverage work and the full run's
-treatment of flaky tests; part three has the reporter and nothing else.
-[The work](#the-work) carries the detail. The record store this plan
-consumes is live and holds the data the design needs, apart from what
-[What the store is missing](#what-the-store-is-missing) names.
+Status: in progress. All three parts are built, and `deno.yml` runs the lanes.
+What remains is the proof that needs a pushed branch: `plan --verify` against a
+`main` run, a green `ci: full` run on the branch, and `plan --dry-run` over the
+reference records. Then the plan is archived. [The work](#the-work) carries the
+detail. The record store this plan consumes is live and holds the data the
+design needs, apart from what [What the store is
+missing](#what-the-store-is-missing) names.
 
-Continuous integration for a pull request currently runs 67 jobs and every
-test in the repository. This plan replaces that with five jobs that run a
-chosen subset, chosen from what the test-record store already knows about
-which tests have caught real regressions, refreshed every few hours, and
-packed so that each of the five jobs finishes in about the same time and
-within five minutes. A push to `main` still runs everything, and a label
-on a pull request runs everything there too.
+In the reference build this plan measures against, continuous integration for a
+pull request ran 67 jobs and every test in the repository. This plan replaces
+that with five jobs that run a chosen subset, chosen from what the test-record
+store already knows about which tests have caught real regressions, refreshed
+every few hours, and packed so that each of the five jobs finishes in about the
+same time and within five minutes. A push to `main` still runs everything, and a
+label on a pull request runs everything there too.
 
 Selecting a subset breaks two things that depend on running the whole
 suite, so the plan carries their replacements rather than leaving them
@@ -98,16 +99,18 @@ has landed, archive it under
 
 ## The problem
 
-The repository already measures everything this needs and throws none of
-it away. What it does not do is act on it.
+The record store measures everything this design needs. The reference
+build is the workflow this design replaced, and it ran every test on every
+pull request whatever that data said.
 
 A successful `deno.yml` push build on 2026-08-25, [run
 32899488580](https://github.com/commonfabric/labs/actions/runs/32899488580)
-at commit `c8893b3a8`, is the reference throughout this plan. The workflow
+at commit `c8893b3a8`, is the reference throughout this plan. Its workflow
 contained 67 jobs. 66 ran and the pull-request `Status` job skipped. The
 jobs consumed 181 minutes of runner time and took 15 minutes and 23
-seconds of wall time from first start to last finish. Every pull request
-pays nearly all of that, and pays it again on every push to the branch.
+seconds of wall time from first start to last finish. Under that workflow,
+every pull request paid nearly all of that, and paid it again on every push
+to the branch.
 
 The same build's 59 stored test-record objects describe the recorded test
 work. They hold 17,999 test executions under 17,995 distinct complete
@@ -148,14 +151,14 @@ most of the tests. Running the valuable tests is the requirement and
 carrying the tail is the bonus. [What the census can
 project](#what-the-census-can-project) treats them that way.
 
-The second half of the problem is that the jobs themselves are hand-wired.
-67 jobs come from about 18 job definitions in `deno.yml`, each with its
-own setup steps, its own sharding scheme, its own artifact names, and its
-own entry in three `needs:` lists. Adding a test surface today means
-editing the workflow, the `Status` job's dependency list, the coverage
-gate's dependency list, and often a sharding weight table. That cost is
-what makes people put a new test in an existing job where it does not
-belong.
+The second half of the problem is that the reference build's jobs were
+wired by hand. Its 67 jobs came from about 18 job definitions in
+`deno.yml`, each with its own setup steps, its own sharding scheme, its own
+artifact names, and its own entry in three `needs:` lists. Adding a test
+surface to that workflow meant editing the workflow, the `Status` job's
+dependency list, the coverage gate's dependency list, and often a sharding
+weight table. That cost is what led people to put a new test in an
+existing job where it did not belong.
 
 ## What the design must satisfy
 
@@ -379,12 +382,12 @@ groups, gate names, or binaries maps the diff itself, and a suite that
 maps it wrongly runs too much or too little rather than reporting
 anything, so the answer errs toward running.
 
-### Today's jobs as suites
+### The reference build's jobs as suites
 
-The 18 job definitions in `deno.yml` become the following suites. This
-table is the migration's checklist.
+The reference build's `deno.yml` held 18 job definitions. This table maps each
+to the suite that runs its tests, and it is the migration's checklist.
 
-| Suite | Today's jobs | Record variant | Capabilities |
+| Suite | Reference build's jobs | Record variant | Capabilities |
 | --- | --- | --- | --- |
 | `repo-gates` | `Check` (all but the type check) | — | `deno`, `github-api` |
 | `repo-history-gates` | the two append-only gates in `Pattern Update State and Baseline Integrity` | — | `deno`, `git-history` |
@@ -550,10 +553,12 @@ run whole. Three task shapes are still read a file at a time. A task written as
 a dependency list is read through to the `deno test` it depends on. The one
 command substitution the workspace writes, which names the running Deno in an
 `--allow-run` list, is resolved rather than treated as a shell metacharacter. A
-task that runs the shard wrapper `tasks/run-sharded-test-files.ts` is read as
-the `deno test` that wrapper runs. The directory the wrapper walks gives the
-paths to enumerate, and the flags after its `--` are the flags the tests run
-under.
+task that runs the batch runner `tasks/run-test-batches.ts` is read as the `deno
+test` that runner runs. The directory the runner walks gives the paths to
+enumerate, and the flags after its `--` are the flags the tests run under. The
+runner exists for the members, `cli` and `dashboard`, that have files needing
+flags of their own: its `--serial` and `--all-access` options name those files,
+and the topology gives each of them the flags the runner would.
 
 Two things a member's own `deno test` would apply are applied during
 enumeration instead: the task's `--ignore` globs and the member's
@@ -563,35 +568,26 @@ argument would otherwise run in spite of being excluded.
 
 ### Sharding stops being written down
 
-Four packages are hand-sharded today, and one is lifted out of the
-workspace walk entirely, because a job can only be given a slice of work
-by somebody deciding in advance what the slices are.
-`INTERNALLY_SHARDED_PACKAGES` in `tasks/workspace-tests.ts` splits
-`agents-host` three ways, `cli` ten, `piece` three, and `tasks` three.
-`deno.yml` sets `TEST_DISABLED_PACKAGES: runner` on the workspace job and
-runs `packages/runner` as eight `Runner Tests` shards of its own, chosen
-by `tasks/select-runner-test-files.ts`. Each of those splits is balanced
-by a table of numbers somebody transcribed from a green build:
-`tasks/test-timing-weights.ts` holds five of them, one per sharded thing,
-164 lines of relative costs that go stale the moment a test gets slower.
+A job can be given a slice of work only by somebody deciding in advance what the
+slices are, and the reference build decided at two levels. Inside the workspace
+job, `INTERNALLY_SHARDED_PACKAGES` split `agents-host` three ways, `cli` ten,
+`piece` three, and `tasks` three, and `packages/runner` ran apart from the
+workspace as eight `Runner Tests` jobs, chosen by
+`tasks/select-runner-test-files.ts`. A table of numbers somebody transcribed
+from a green build balanced each split: `tasks/test-timing-weights.ts` held five
+of them, 164 lines of relative costs that go stale the moment a test gets
+slower. One level up, the shard matrices in `deno.yml` — eight for the workspace
+tests, ten for the pattern integration tests, three, four and two for the rest —
+were the same decision written in a different file.
 
 None of it survives the topology. An item's cost comes from the record
 store, measured on every run rather than transcribed from one, and the
 packer distributes items by that cost. A package with 675 test files is
-675 items, and where they land is arithmetic. So
-`tasks/test-timing-weights.ts`, `tasks/select-runner-test-files.ts`,
-`tasks/run-sharded-test-files.ts`, `INTERNALLY_SHARDED_PACKAGES`,
-`TEST_DISABLED_PACKAGES`, and the shard environment variables the
-packages' own runners read all go, and `packages/runner` becomes the
-`runner-unit` suite like any other. `tasks/weighted-shards.ts` is the one
-piece that stays, because it is the packing algorithm rather than a table
-of guesses, and the lane packer is its caller.
-
-The same thing happens one level up. The shard matrices in `deno.yml` —
-eight for the workspace tests, ten for the pattern integration tests,
-three, four and two for the rest — are the same decision written in a
-different file, and the full run's job matrix is computed from the
-topology instead.
+675 items, and where they land is arithmetic. Nothing in the tree is a timing
+table, a per-suite file selector, a shard parser, or a shard or disabled-package
+variable, and `packages/runner` is the `runner-unit` suite like any other. The
+packer in `tasks/test-selection/plan.ts` does its own longest-processing-time
+packing. The full run's job matrix is computed from the topology.
 
 That is the deletion the topology buys, and it is worth naming separately
 from the selection it enables. A repository that shards by hand pays a
@@ -755,8 +751,9 @@ that runs whole, a member's browser half, the reload directory, and a
 the last column of the table says why each is there.
 
 A member is in that group because of its test task. It leaves the group when the
-topology can point that task at files. Three large members are read a file at a
-time through the shard wrapper rather than through a plain `deno test`.
+topology can point that task at files. Two members, `cli` and `dashboard`, are
+read a file at a time through the batch runner rather than through a plain `deno
+test`.
 
 ### What it reaches, and what it does not
 
@@ -896,8 +893,9 @@ each unit a lane opens.
 The packer changes shape because of it. An identity's cost now depends on
 whether its unit is already being invoked: the first identity chosen from
 a file pays the overhead and every later one pays only itself. So the
-density pass wants to sort by marginal cost rather than by cost, and
-choosing one test from a file makes its siblings cheaper to add. That is a
+density pass sorts by marginal cost rather than by cost: choosing one test
+from a file makes its siblings cheaper to add, and moves them up the
+ordering. That is a
 better model of the machine than per-file items ever were, and it falls
 out rather than being imposed.
 
@@ -1093,7 +1091,7 @@ what a `beforeAll` that throws should do to the rest of its group.
 - [x] `cost` and the packing passes key on identities, with
       `unitOverhead(suite)` fitted from the lane runner's records and
       charged for each unit a lane opens.
-- [ ] The density pass sorting by marginal cost, so that choosing one test
+- [x] The density pass sorting by marginal cost, so that choosing one test
       from a file moves its siblings up the ordering rather than leaving
       them where their own cost puts them.
 - [x] `command()` returns one invocation per file with its skip list, and
@@ -1136,18 +1134,20 @@ The **workflow half** runs beside it, on the checkout alone, over the
 step definitions under `.github` — the workflows and the composite
 actions alike. A step can wrap a command in `deno task run-recorded
 <kind> <scope> <name>`. Those three words are the command's identity, and
-every record the command writes carries that identity. The topology is
-the other place an identity is written down. A lane builds its commands
-from the topology, so a step whose identity no suite holds runs while
-that step stands and stops when a lane takes over the job holding it.
-Nothing in the tree carries such an identity, which is what puts it out
-of the tree half's reach.
+every record the command writes carries that identity. The lanes run every test
+and gate the topology declares, so a step that records by hand is one of two
+things. Either a suite already holds the identity, and the step records that
+check a second time against one commit, or no suite holds it, and it is a check
+no lane will ever run or select. The half fails every such step, and its message
+says which of the two it is: take the step out, or declare the check in the
+topology and then take the step out. Nothing in the tree carries such an
+identity, which is what puts it out of the tree half's reach.
 
 The half admits no exceptions, because there is nothing for one to
 cover. `docs/specs/test-records.md` says under "Recording" that a check
-no lane can be asked to run is not recorded, so a recording step whose
-identity no suite claims is a defect either way round: the step should
-be registered, or it should not be recording.
+no lane can be asked to run is not recorded. The workflows record nothing by
+hand, so the half passes, and it fails the first change that adds a recording
+step.
 
 The **store half** runs after a run's tests have finished, over that
 run's own records, on a pull request and on `main` alike. It fails if any recorded identity is one that no
@@ -1220,16 +1220,18 @@ The three ways of providing a Toolshed server are worth explaining,
 because the choice made among them is what keeps the five-minute budget
 reachable.
 
-**`toolshed` runs from source.** Today a job that needs a server downloads
-a compiled binary produced by a separate build job. On a pull request that
-costs a build job on the critical path — 58 seconds, including its own
-setup — plus 17 seconds of download in each consumer. Running the server
-from source with `deno run` skips both. The dependency graph is already in
-the Deno cache that the `deno` capability restores, so starting from
-source costs a few seconds. The full run on `main` keeps the
-compiled-binary path, because it needs the binary anyway for attestation
-and deployment. A suite that only talks to the server's API takes this
-one, which is why the CLI suites and the deployed-topology gate do.
+**`toolshed` runs from source.** A server from a compiled binary built by a
+separate job costs that build job on the critical path — 58 seconds in the
+reference build, including its own setup — plus 17 seconds of download in each
+consumer. Running the server from source with `deno run` skips both. The
+dependency graph is already in the Deno cache that the `deno` capability
+restores, so starting from source costs a few seconds. The full run on `main`
+starts it the same way. The baked servers its lanes start are built by the lanes
+from the same sources and the same build task as the release binaries, without
+the commit and the shell endpoints the release binaries carry; the release
+binaries are built by jobs of their own, beside the lanes, whose steps check
+what those add. A suite that only talks to the server's API takes this one,
+which is why the CLI suites and the deployed-topology gate do.
 
 **The baked capabilities cannot.** The browser shell is a bundle compiled
 into the binary, so a server run from source answers the API and serves no
@@ -1239,21 +1241,25 @@ not available. `toolshed-baked` is the server for the default arm.
 a compile-time define baked into that same shell whichever way it goes.
 Both have a different provider: restore the binary from the Actions cache
 if the key hits, and build it in place if it does not. The lane workflow
-carries one fixed `actions/cache` step covering `.ci-cache`, under an exact
-key with no restore prefix. A capability that finds a binary there uses it
-without asking what it was built from, so the key has to change whenever
-anything a binary is built from does. `tasks/binary-cache-key.ts` computes
-it as a digest of the git object id of every tracked file under
-`BINARY_SOURCES` in `tasks/build-binaries.ts`. The tests in
-`tasks/build-binaries.test.ts` hold the list to every path the build reads
-and to every local module the binaries' import graphs reach. A change to the
-shell's service worker, to the Deno release that `mise.toml` pins, or to a
-JSON file an import reaches therefore moves the key like a change to any
-other source. Those graphs start from each entry point and from each module
-in a path the compile embeds with `--include`, because `deno compile`
-follows the imports of both. The toolshed binary leaves out the patterns'
-integration tests, so the test harness modules only those tests import are
-not embedded either.
+carries a fixed `actions/cache` step for each of the two binaries, covering
+`.ci-cache/binaries/<name>` under the exact key `lane-binary-<name>-<binary
+cache key>` with no restore prefix. Each binary has an entry of its own because
+a lane builds only the ones it needs, and one entry holding both would keep
+whichever the first lane to save happened to build. A capability that finds a
+binary there uses it without asking what it was built from, so the key has to
+change whenever anything a binary is built from does.
+`tasks/binary-cache-key.ts` computes it as a digest of the git object id of
+every tracked file under `BINARY_SOURCES` in `tasks/build-binaries.ts`. The
+tests in `tasks/build-binaries.test.ts` hold the list to every path the build
+reads and to every local module the binaries' import graphs reach. A change to
+the shell's service worker, to the Deno release that `mise.toml` pins, or to a
+JSON file an import reaches therefore moves the key like a change to any other
+source. Those graphs start from each entry point and from each module in a path
+the compile embeds with `--include`, because `deno compile` follows the imports
+of both. The toolshed binary leaves out the files in the pattern trees that it
+never serves: the integration tests, the recorded compatibility baselines,
+every other test file, and every iframe guest source. The modules only those
+files import are not embedded either.
 
 A binary is also made from the environment it is built in, because the
 shell bundle bakes environment variables in as compile-time defines. So a
@@ -1271,13 +1277,21 @@ given. A variable set in the lane's own environment cannot reach a cached
 binary. Nothing sets `COMMIT_SHA` in a cached build, because a binary built
 at one commit serves every later commit with the same sources.
 
-Everything a lane wants to keep between runs sits under that one
-directory — the built binaries, and the pattern compile byte cache —
-because one step covering one directory is what keeps the workflow
-independent of what the lane turns out to need. That step is in the
-workflow rather than in the runner because the cache service is only
-reachable through the action, and it is written once and never touched
-again.
+Everything a lane wants to keep between runs sits under `.ci-cache`, with a
+cache step for each thing kept, because they want different keys. The built
+binaries are under `.ci-cache/binaries`, keyed by the binary cache key. The
+pattern compile byte cache is under `.ci-cache/compile`, keyed
+`cc-lane-<fingerprint>-<job>-<lane>-<hash of the pattern sources>` with the
+restore prefix `cc-lane-<fingerprint>-`, where the fingerprint is the compiler's
+own (`tasks/compile-cache-key.ts`). A compiled pattern is reused only where its
+source is unchanged, so a cache another lane or an earlier commit left costs
+nothing but the time to restore it, and the prefix lets a lane take any of them.
+The hash of the pattern sources is what makes a lane that restored an older
+entry save a fresher one, since an entry an exact key hits is never saved again.
+Every cache step runs whatever the lane turns out to need, which is what keeps
+the workflow independent of it. They are in the workflow rather than in the
+runner because the cache service is only reachable through the action, and they
+are written once and never touched again.
 
 That split is the argument for having capabilities at all. Three ways of
 providing "a Toolshed server" coexist, suites say which one they need, and
@@ -1290,21 +1304,38 @@ The lane job's steps are fixed and do not vary with what the lane runs:
 1. Check out the repository at full depth.
 2. Set up Deno.
 3. Verify the lock file and install dependencies.
-4. Restore the binary cache.
-5. Run `deno run -A tasks/ci-lane.ts --lane N --of 5`.
-6. Upload what a failing lane left behind.
-7. Ship test records.
+4. Plan the lane: `deno run -A tasks/ci-lane.ts` with the lane's arguments and
+   `--dry-run`, which prints the lane's share, what it is projected to take,
+   and what was withheld.
+5. Resolve the binary cache key and the compiler fingerprint.
+6. Restore the two built binaries and the pattern compile byte cache.
+7. Run the lane: the same command with `--described`, which packs the same plan
+   again, names it in one line, and runs it.
+8. Upload what a failing lane left behind.
+9. Upload the lane's coverage reports.
+10. Ship test records.
 
-Everything conditional happens inside step 5. That is what makes the
-workflow independent of the topology. The one cost is that a capability
-which genuinely needs a GitHub Action — and today only the binary cache
-does — has to be represented by a fixed step that runs unconditionally and
-cheaply.
+Everything conditional happens inside steps 4 and 7. That is what makes the
+workflow independent of the topology. The one cost is that a capability which
+genuinely needs a GitHub Action — the two caches are the only ones that do — has
+to be represented by a fixed step that runs unconditionally and cheaply.
 
-Step 6 uploads what a lane leaves behind for somebody to read. A lane that
+Step 8 uploads what a lane leaves behind for somebody to read. A lane that
 failed keeps its own working directory, where a server's log is, and that
-directory sits under the job's temporary directory so the upload can reach
-it; a lane that passed removes it.
+directory sits under the job's temporary directory so the upload can reach it; a
+lane that passed removes it. Step 7 also runs with `ulimit -c unlimited` and
+puts the core of any process in the lane that crashes natively under
+`$RUNNER_TEMP/ci-lane-cores`, which the same upload carries.
+
+Step 9 uploads the lane's coverage directory without its raw profiles, as
+`lane-coverage-<job>-<lane>`. An artifact is rooted at the directory its paths
+share, and the readers find a set's report by its place under that directory, at
+`lcov/sets/<suite>/<member>/coverage.lcov`, so the upload names the coverage
+directory rather than the reports' own. A measured set the lane saw fail is
+marked by a file beside its report, and the file saying whether the compile
+cache was restored sits beside the reports, and a glob over one extension would
+drop both. A re-run of the lane overwrites what the attempt before it uploaded,
+so `Status` reads each lane once.
 
 ## What the store gives us and what it is missing
 
@@ -1515,7 +1546,10 @@ publisher computes:
   arrives in combine into the percentile of the whole. Only passing
   executions are measured: a failure ended where the failure was
   reached, and where a wait's safety net ended it, its duration is that
-  net's bound. A day records the set of cost rules that sealed it, or
+  net's bound. Only executions on continuous-integration runners are
+  measured, too: a workstation is another machine, faster or slower by
+  however it differs from a lane's runner, so its records count as
+  evidence about the test and not about its cost. A day records the set of cost rules that sealed it, or
   carries no record where it was sealed before any were kept, and a day
   an earlier set sealed answers only until the rules in force have
   sealed one for that test.
@@ -2116,9 +2150,9 @@ the cost model charges every one its invocation rather than charging the
 file once. Most of the cost then arrives as more lanes, which the search
 `--lane-count` runs finds by packing what the lanes will actually be
 packed against. Not all of it: one identity's runs go in one lane, so an
-expensive identity multiplied past the bound its job is killed at cannot
-be helped by adding lanes. The mandatory pass gives up runs until what
-is left fits, down to one, which is what the discretionary passes do.
+expensive identity multiplied past a lane's bound cannot be helped by adding
+lanes. The mandatory pass gives up runs until what is left fits, down to one,
+which is what the discretionary passes do.
 
 **A failure of an excluded test does not fail the run.** This is the
 second rule and it is a different question, which is what a `main` failure
@@ -2199,11 +2233,10 @@ often for tests nobody can act on, which is the thing this is being asked
 to stop. That is the trade, stated plainly, and the second rule is the
 side of it this design takes.
 
-The second rule gives up more than whether the build is red. The build,
-attestation, coverage and deploy jobs depend on `full-tests`, so a full run
-that stays green ships. A test that is both too flaky for pull
-requests and genuinely broken therefore deploys, where its failure would
-otherwise have held the deploy.
+The second rule gives up more than whether the build is red. The attestation and
+deploy jobs depend on `tests`, so a full run that stays green ships. A test that
+is both too flaky for pull requests and genuinely broken therefore deploys,
+where its failure would otherwise have held the deploy.
 
 The reporter is what carries that case to a person: an excluded identity
 that failed every one of its runs at this commit and passed every one at
@@ -2308,7 +2341,10 @@ batch <suite>` and `ci-lane units batch <suite>`, because neither what its
 tests took between them nor how many units it opened can be recovered
 from the records the batch produced: a reader of a report cannot tell
 which of its records came from which batch, and a unit whose tests all
-recorded nothing leaves no trace of having been opened.
+recorded nothing leaves no trace of having been opened. A lane also writes
+`ci-lane excused <identity>`, carrying no figure, for each identity whose
+failures it did not fail the run for, so what a run excused can be read from
+that run's own records.
 
 The tests' own time, rather than what the packer expected it to be. The
 two differ by however wrong the manifest's costs are, and a unit nothing
@@ -2317,7 +2353,7 @@ Fitting against the expectation puts that error in the intercept, which
 is charged once to every lane that holds the suite and kept for the whole
 window. An intercept past the planned budget already costs a whole lane
 for each identity of the suite that runs, since a lane holding two things
-stops at that budget; past the hard bound, which is what an identity's
+stops at that budget; past the lane's bound, which is what an identity's
 lone cost is weighed against, the suite places no discretionary identity
 at all. So an expectation that was briefly wrong takes the lanes away
 from everything else, and then holds a whole suite out of every pull
@@ -2327,13 +2363,15 @@ count travels in that field as a count, and the measurement's name is what
 says which of the three figures it is. A batch run
 with coverage on carries `with coverage` on the end of its name, because
 instrumenting a run costs it time and how much is a property of the
-suite. A calibration is keyed by suite alone, so the two are fitted
-together for now and an uninstrumented batch is charged what an
-instrumented one cost; telling them apart wants a calibration keyed by
-both. They ship in the lane's normal test-records artifact, the relay
-stores them like anything else, and the publisher reads them with the
-same reader it uses for everything else. No new pipeline, and the
-numbers show up in the existing dashboards for free.
+suite. The publisher fits those batches apart from what the suite's batches cost
+without coverage, into a map of their own in the manifest's calibration,
+`suitesWithCoverage`, beside `suites`. A run charges each suite the fit for how
+it runs that suite's batches (see [What a pull request
+does](#what-a-pull-request-does)), and where no lane has run a suite that way
+yet, the other fit. They ship in the lane's normal test-records artifact, the
+relay stores them like anything else, and the publisher reads them with the same
+reader it uses for everything else. No new pipeline, and the numbers show up in
+the existing dashboards for free.
 
 ### The budget, and why it is derived rather than chosen
 
@@ -2342,7 +2380,7 @@ and the budget the packer fills is what is left after the parts the packer
 does not control.
 
 ```text
-LANE_BOUND_SECONDS      300   the hard bound on the work step
+LANE_BOUND_SECONDS      300   what a pull-request lane is packed to finish in
 LANE_PROLOGUE_SECONDS    40   checkout, Deno, cache restore, ship, job overhead
 LANE_SAFETY_SECONDS      30   headroom for a slower-than-usual runner
 
@@ -2357,17 +2395,18 @@ is charged against it as the initial load when the lanes are packed, so a
 lane that opens the Toolshed server has 40 fewer seconds for tests than
 one that does not, and the packer knows that while it is choosing.
 
-The prologue is measured rather than assumed. The lane records it the same
-way it records everything else, and the publisher feeds the observed value
-back, so a slower checkout narrows the budget rather than silently eating
-the safety margin.
+The prologue is a chosen dial, and nothing measures it. A prologue longer than
+`LANE_PROLOGUE_SECONDS` takes its extra time out of the safety margin until
+someone raises the dial.
 
-The three numbers are the only place the five-minute promise lives. Raise
-`LANE_BOUND_SECONDS` and the workflow's timeout anchors have to move with
-it — `LANE_WORK_TIMEOUT_MINUTES`, and `LANE_JOB_TIMEOUT_MINUTES` ten
-minutes above it, both checked by `tasks/ci-workflow.test.ts` — so the
-dial's comment says so and the publisher refuses to emit a manifest whose
-budget does not fit its bound.
+The three numbers are the only place the five-minute promise lives. The promise
+is kept by packing rather than by a timeout. A lane's work step carries the
+workflow's ordinary `*work-timeout` bound of 30 minutes, and its job the
+`*job-timeout` bound of 40, like every bounded job in `deno.yml`. Those bounds
+only stop a lane that hangs, and are not the budget. A lane whose mandatory set
+is larger than the budget runs long and says by how much, rather than being
+stopped part way through with its later batches unrun and unmeasured. So raising
+`LANE_BOUND_SECONDS` moves nothing in the workflow.
 
 ### Choosing what to run
 
@@ -2392,12 +2431,19 @@ lanes times 230 seconds each, it fills in four passes.
    descending order of value, ignoring cost. This is what gets the
    expensive, genuinely broken integration test into the run.
 3. **Density, 25 percent.** Items in descending order of value divided by
-   cost. Because of the value floor, this pass sweeps up the cheap tail:
-   thousands of sub-second tests at a value-per-second that nothing
-   expensive can match.
+   what one run of the item would cost the lane it would go in: its own
+   corrected time, plus whichever of its suite's overhead, its unit's
+   overhead and its capabilities' setup that lane has not paid yet.
+   Taking an item lowers what its lane charges for everything sharing its
+   unit, its suite or a capability, so the order is worked out again as
+   the pass takes items rather than fixed when it starts, and the identity
+   key breaks a tie. Because of the value floor, this pass sweeps up the
+   cheap tail: thousands of sub-second tests at a value-per-second that
+   nothing expensive can match.
 4. **Exploration, 15 percent.** The draw described above.
 
-Passes 2 and 3 both account for the setup a choice would open. An item
+Passes 2 and 3 both account for the setup a choice would open, and pass 3
+orders by it as well. An item
 whose suite needs a capability no lane has opened is charged the
 capability's setup cost the first time it is picked, so a lone cheap test
 behind 40 seconds of setup correctly loses to 40 seconds of tests that
@@ -2411,13 +2457,12 @@ beats none.
 ### Filling the lanes
 
 Once the set is chosen it is packed into five lanes by longest-processing-
-time scheduling, which is what `tasks/weighted-shards.ts` already
-implements and what the existing shard selectors already use. Batches are
-the units being packed and capability setup costs go in as the initial
-loads, so a lane that has already opened the Toolshed server is the
-cheapest place to put the next batch that needs it. That is the mechanism
-by which "tests needing the same environment are grouped together" falls
-out of the packing rather than being a special case in it.
+time scheduling, which `tasks/test-selection/plan.ts` implements itself. Batches
+are the units being packed and capability setup costs go in as the initial
+loads, so a lane that has already opened the Toolshed server is the cheapest
+place to put the next batch that needs it. That is the mechanism by which "tests
+needing the same environment are grouped together" falls out of the packing
+rather than being a special case in it.
 
 The cheapest lane is chosen from among the lanes that can still hold the
 work, which is what makes the 230 seconds a constraint on the packing
@@ -2443,7 +2488,7 @@ one.
 A batch that on its own exceeds a lane's budget is split, paying its
 suite's setup twice. A single *item* cannot be split, so an item costing
 more than the planned budget is given a lane to itself and allowed to run
-up to the hard five-minute bound rather than the planned 230 seconds. The
+up to the five-minute bound rather than the planned 230 seconds. The
 lane carrying it carries nothing else, because everything else would have
 to fit in what is left under the planned budget and there is nothing left.
 Repeats get no such lane, since a repeat is what an item gives up to fit:
@@ -2452,7 +2497,7 @@ planned budget rather than three times inside the bound.
 
 The refreshed census finds one item that does not fit. The `piece-call`
 dispatch section of `packages/cli/integration/integration.sh` took 386
-seconds in the test step, 86 seconds past the hard bound. Its eight
+seconds in the test step, 86 seconds past the lane's bound. Its eight
 recorded steps are already separate identities, and the slowest took 87
 seconds.
 
@@ -2784,30 +2829,39 @@ direction for a system nothing should gate on.
 
 ## The lane job
 
-Nothing runs before the lanes. Each one resolves the manifest from the
-commit it has checked out, so five lanes reach the same answer without a
-job to tell them what it is:
+Nothing runs before a pull request's lanes. Each one resolves the manifest
+from the commit it has checked out, so five lanes reach the same answer
+without a job to tell them what it is. One job, `tests`, runs the lanes of
+every run. On a pull request `plan-full` is skipped at once, and `tests` falls
+back to five lanes over a selection against the base branch. In
+[the full run](#the-full-run-on-main) `plan-full` supplies the lane count, the
+lane list and `--full`. This is the job in `deno.yml`, abridged:
 
 ```yaml
-pr-tests:
-  name: "PR Tests (${{ matrix.lane }}/5)"
+tests:
+  name: "Tests (${{ matrix.lane }}/${{ needs.plan-full.outputs.of || 5 }})"
+  needs: plan-full
   if: >-
-    github.event_name == 'pull_request' &&
-    !contains(github.event.pull_request.labels.*.name, 'ci: full')
+    !cancelled() &&
+    (needs.plan-full.result == 'success' || needs.plan-full.result == 'skipped')
   runs-on: ubuntu-latest
-  timeout-minutes: *lane-job-timeout
-  env:
-    CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
-    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  timeout-minutes: *job-timeout
   permissions:
     contents: read
+  env:
+    CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
+    LANE_ARGS: >-
+      --lane ${{ matrix.lane }} --of ${{ needs.plan-full.outputs.of || 5 }}
+      ${{ needs.plan-full.outputs.args ||
+      format('--base origin/{0}', github.base_ref) }}
+    LANE_JOB: Tests (${{ matrix.lane }}/${{ needs.plan-full.outputs.of || 5 }})
   strategy:
     fail-fast: false
     matrix:
-      lane: [1, 2, 3, 4, 5]
+      lane: ${{ fromJSON(needs.plan-full.outputs.lanes || '[1, 2, 3, 4, 5]') }}
   steps:
     - name: 📥 Checkout repository
-      uses: actions/checkout@v7
+      uses: actions/checkout
       with:
         fetch-depth: 0
         persist-credentials: false
@@ -2815,49 +2869,103 @@ pr-tests:
       uses: ./.github/actions/deno-setup
     - name: 🔍 Verify lock file & install dependencies
       uses: ./.github/actions/deno-install
-    - name: ♻️ Restore the built-binary cache
-      uses: actions/cache@v4
-      with: { path: .ci-cache, key: ... }
+    - name: 🗺️ Plan the lane
+      timeout-minutes: *work-timeout
+      run: deno run -A tasks/ci-lane.ts $LANE_ARGS --dry-run
+    - name: 🧮 Resolve what the lanes' binaries are built from
+      id: binary-cache-key
+      run: |
+        key=$(deno run --allow-read --allow-run=git tasks/binary-cache-key.ts)
+        if [ -z "$key" ]; then exit 1; fi
+        echo "key=$key" >> "$GITHUB_OUTPUT"
+    - name: 🧮 Resolve the compiler fingerprint
+      id: compile-cache-key
+      uses: ./.github/actions/compile-cache-key
+    - name: ♻️ Restore/save the lanes' default-posture Toolshed binary
+      uses: actions/cache
+      with:
+        path: .ci-cache/binaries/toolshed-baked-default
+        key: lane-binary-toolshed-baked-default-${{ steps.binary-cache-key.outputs.key }}
+    - name: ♻️ Restore/save the lanes' opposite-posture Toolshed binary
+      uses: actions/cache
+      with:
+        path: .ci-cache/binaries/toolshed-baked-opposite
+        key: lane-binary-toolshed-baked-opposite-${{ steps.binary-cache-key.outputs.key }}
+    - name: ♻️ Restore/save the lanes' pattern compile byte cache
+      uses: actions/cache
+      with:
+        path: .ci-cache/compile
+        key: cc-lane-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ github.job }}-${{ matrix.lane }}-${{ hashFiles('packages/patterns/**', 'packages/generated-patterns/**') }}
+        restore-keys: |
+          cc-lane-${{ steps.compile-cache-key.outputs.fingerprint }}-
     - name: 🧪 Run the lane
-      timeout-minutes: *lane-work-timeout
-      run: >-
-        deno run -A tasks/ci-lane.ts
-        --lane ${{ matrix.lane }} --of 5
-        --base origin/${{ github.base_ref }}
+      timeout-minutes: *work-timeout
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/ci-lane-cores"
+        ulimit -c unlimited
+        sudo sysctl -w kernel.core_pattern="$RUNNER_TEMP/ci-lane-cores/core.%e.%p"
+        deno run -A tasks/ci-lane.ts $LANE_ARGS --described
     - name: 📋 Upload what a failing lane left behind
       if: ${{ failure() }}
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact
       with:
-        name: lane-failure-${{ matrix.lane }}-a${{ github.run_attempt }}
+        name: lane-failure-${{ github.job }}-${{ matrix.lane }}-a${{ github.run_attempt }}
         path: ${{ runner.temp }}/ci-lane-*
+        if-no-files-found: ignore
+    - name: 📤 Upload the lane's coverage reports
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact
+      with:
+        name: lane-coverage-${{ github.job }}-${{ matrix.lane }}
+        path: |
+          coverage/
+          !coverage/raw/
+        overwrite: true
         if-no-files-found: ignore
     - name: 📤 Ship test records
       if: always()
       uses: ./.github/actions/test-records-ship
       with:
-        artifact: pr-lane-${{ matrix.lane }}
-        job: PR Tests (${{ matrix.lane }}/5)
+        artifact: ${{ github.job }}-${{ matrix.lane }}
+        job: ${{ env.LANE_JOB }}
 ```
 
-The full-depth checkout and the `origin/<base>` spelling are what the
-`pattern-vintage` job already does to diff against the merge base, so the
-mechanism is proven in this workflow rather than newly invented here.
+`LANE_JOB` is the job name the lane's test records carry. One job rather than
+one for each kind of run means its name, condition, matrix and arguments are
+written once. Everything that varies with what a lane runs happens inside
+`tasks/ci-lane.ts`, so one list of steps serves every run.
 
-The token in the job's environment is what the `github-api` capability
-distributes. A job may not name a secret per step here the way the
-`Check` job does, because which step a gate runs in is a fact about the
-lane's packing rather than about the workflow, so the token arrives
-job-wide and the runner narrows it: it takes the token out of its own
-environment before it opens anything, and only a suite that declared
-`github-api` is given it back. The `contents: read` permission bounds
-what the token can do to reading this repository, which is what
+The lane plans in a step of its own, with `--dry-run`, so its plan heads a
+step a reader of a running job can find. GitHub folds away the top of a step
+thousands of lines long, which the lane's own step becomes. The lane's step
+then packs the same plan again with `--described`, and names it in one line
+rather than printing it twice.
+
+The full-depth checkout and the `origin/<base>` spelling are what a lane needs
+to diff against the merge base, and what the append-only gates need to read the
+base revision.
+
+The token in the environment of the step that runs the lane is what the
+`github-api` capability distributes. No other step of the `tests` job holds it,
+and `tasks/ci-workflow.test.ts` fails a workflow in which one does. Which suite
+needs the token is a fact about the lane's packing rather than about the
+workflow, so the lane step holds it and the runner narrows it further: it takes
+the token out of its own environment before it opens anything, and only a suite
+that declared `github-api` is given it back. The `contents: read` permission
+bounds what the token can do to reading this repository, which is what
 `check-action-pins` asks the service for.
 
-Two new timeout anchors join the block at the top of the file:
-`LANE_WORK_TIMEOUT_MINUTES` at five and `LANE_JOB_TIMEOUT_MINUTES` at 15,
-satisfying the repository's rule that a job's bound is at least ten
-minutes above its work step's. `tasks/ci-workflow.test.ts` enforces that
-rule and needs the new anchors added to it.
+The lanes use the same timeout anchors as every other bounded job in the file:
+`*work-timeout`, 30 minutes, on the step that runs the lane, and `*job-timeout`,
+40, on the job, which satisfies the repository's rule that a job's bound is at
+least ten minutes above its work step's. `tasks/ci-workflow.test.ts` enforces
+that rule. A lane packs against its budget, which is derived from
+`LANE_BOUND_SECONDS` for a pull request and `FULL_LANE_BOUND_SECONDS` for the
+full run. The step bound only stops a lane that hangs. [The
+budget](#the-budget-and-why-it-is-derived-rather-than-chosen) says why the two
+are kept apart.
 
 The ship step carries neither a `variant` nor a `--junit` specification,
 which is the last piece of per-suite knowledge to leave the workflow. A
@@ -2933,8 +3041,8 @@ What the runner does, in order:
    described JUnit outputs into the lane spool through the shared gather
    function. Validate record surfaces and apply the suite's optional
    variant before another execution can reuse any runner-owned path. Then
-   convert the coverage this lane produced into one report per workspace
-   member and upload it for `Status` to join.
+   convert the coverage this lane produced into one report per suite and
+   workspace member, which the job uploads for `Status` to join.
 10. Exit non-zero if any batch failed, or if any repeat of any item
     failed. A failure the full run's non-gating rule covers is left out
     of that, and a batch that did not account for every identity it was
@@ -2947,18 +3055,21 @@ What the runner does, in order:
 What a lane costs beyond its tests is fitted from the lane's own
 measurements, and [The cost model](#the-cost-model) says how. What that
 section leaves to here is the order a lane takes its batches in, which
-decides which suites the model can ever learn. A lane killed part way
-through is killed with its later batches unrun, so they record nothing,
-and a suite the model cannot price is one that makes lanes over-run.
+decides which suites the model can ever learn. A lane that the 30-minute step
+timeout or a cancellation stops part way through leaves its later batches unrun,
+so they record nothing, and a suite the model cannot price is one that makes
+lanes over-run.
 
-Two keys answer that. A suite nothing has measured goes ahead of one
-something has, because it is the one worth measuring. Within each group
-the largest share of the lane goes first, because a lane that is going to
-be cut short should have spent its time on the batch most worth knowing
-about and dropped the cheap ones. A share is what the packer charged the
-lane for the suite's tests, `ownLoad` summed over the suite's selections,
-so a suite running slower than it was measured at, or running its tests
-several times, is as large here as it was when the lane was filled.
+Two keys answer that. A suite whose charge was not fitted the way this run runs
+it goes ahead of one whose charge was, because it is the one worth measuring: a
+suite nothing has measured, and a suite this run measures with coverage on that
+no lane has yet run that way. Within each group the largest share of the lane
+goes first, because a lane that is going to be cut short should have spent its
+time on the batch most worth knowing about and dropped the cheap ones. A share
+is what the packer charged the lane for the suite's tests, `ownLoad` summed over
+the suite's selections, so a suite running slower than it was measured at, or
+running its tests several times, is as large here as it was when the lane was
+filled.
 
 Both keys are a function of the plan, and the suite identifier settles a
 tie, so every attempt at a lane runs its batches in the same order
@@ -2976,24 +3087,30 @@ still flaky keeps going while the test is out of pull requests. [An
 excluded test still runs on `main`](#an-excluded-test-still-runs-on-main)
 is the whole of that rule.
 
-`deno.yml` gains a small `plan-full` job that runs on push and emits one
-integer: how many lanes the run needs. It gets that from `deno run -A
-tasks/ci-lane.ts --full --lane-count`, which reads the working tree
-against the manifest and raises the lane count while that reduces the
-total by which the lanes are over the full run's budget. The total
-rather than the worst lane: one test costing more than a whole lane
-holds its own lane over budget at every count, so a search reading the
-worst lane would stop at the first step and leave every other lane
-packed far tighter than the budget it was given.
+`deno.yml` has a small `plan-full` job that runs on a push, on a run the next
+day's test-order workflow calls, and on a pull request labelled `ci: full`. It
+computes one integer: how many lanes the run needs. It gets that from `deno run
+-A tasks/ci-lane.ts --full --lane-count`, which reads the working tree against
+the manifest and raises the lane count while that reduces the total by which the
+lanes are over the full run's budget. The total rather than the worst lane: one
+test costing more than a whole lane holds its own lane over budget at every
+count, so a search reading the worst lane would stop at the first step and leave
+every other lane packed far tighter than the budget it was given. It then packs
+the run into that many lanes, the way the lanes will, and prints each lane's
+projected work and job time to its error stream and the job summary, so the
+step's log says how long the run should take before any lane starts.
 
-A `full-tests` job consumes the integer with `strategy.matrix:
-fromJSON(...)` and runs the same `tasks/ci-lane.ts` with `--full`. The
-build, attestation, coverage and deploy jobs keep their present shape
-and depend on `full-tests` in place of the long dependency lists they
-carry today.
+The step writes the integer as the output `of`, and beside it the list `[1, …,
+of]` as the output `lanes`. The job also outputs `--full` as `args`. The
+`tests` job takes its matrix from the list with `fromJSON(...)` and runs
+`tasks/ci-lane.ts` with `--lane N --of M` and those arguments. On a push, the
+jobs that build the binaries run beside the lanes, and the jobs that attest and
+deploy them depend on `tests` rather than on a list of test jobs:
+`attest-binaries` needs the two builds and `tests`, `deploy-shell-staging` needs
+`tests`, and `deploy-rapids` needs `attest-binaries`.
 
-An integer is deliberately the whole of what passes from the planning job
-to the lanes. Each lane reads the same tree against the same manifest and
+A count is deliberately the whole of the plan that passes from the planning
+job to the lanes. Each lane reads the same tree against the same manifest and
 computes the same packing for itself, exactly as the pull-request lanes
 do, so nothing about which tests run travels through a job output and
 there is no second packing anywhere to disagree with theirs. A planning
@@ -3018,9 +3135,9 @@ figure stands in for the ones nobody measured, and it is wrong by
 however wrong that figure is. Against this repository the stand-in
 figure puts the whole corpus at 2,403 seconds where the reference build
 measured 9,960, and the count that follows from it is five lanes for a
-run that today takes 67 jobs. The error is also in the direction that
-breaks a run: too few lanes means every one of them runs past the bound
-its job is killed at, where too many means some jobs finish early.
+run where the reference build ran 67 jobs. The error is also in the direction
+that breaks a run: too few lanes means every one of them runs past its bound,
+where too many means some jobs finish early.
 
 So a lane per suite with anything to run goes in as a floor. It needs no
 number nobody measured, and it grows as test surfaces are added.
@@ -3065,45 +3182,49 @@ pull request.
 
 ### Running everything on a pull request
 
-Label a pull request `ci: full` and the same `plan-full` and `full-tests`
-jobs run on it, so opting out of selection runs exactly what `main` runs
-rather than an approximation of it. A label rather than a phrase in the
-description, because a label can be added and removed without a push and
-re-runs pick it up.
+Label a pull request `ci: full` and `plan-full` runs on it, so its lanes run
+every test. Opting out of selection runs exactly what `main` runs rather than an
+approximation of it. A label rather than a phrase in the description, because a
+label can be added and removed without a push: `deno.yml` runs on a pull
+request's `labeled` and `unlabeled` events as well as on a push, so changing the
+label starts a run that reads the labels the pull request then carries. Any
+other label starts one too. A re-run reads the labels of the event it repeats,
+so it does not see a label changed since.
 
-**The five lanes do not run when the label is present.** One or the other,
-never both. Running both would contradict the five-job contract, and it
-would not be an opt-out at all — a pull request could still be blocked by
-the selection path it had just asked to be excused from, which is the
-opposite of what somebody reaching for the label wants. So `pr-tests`
-carries `if: !contains(...)` and the two full-run jobs carry the converse,
-and exactly one path runs.
+**The five selected lanes do not run when the label is present.** A run is
+one or the other, never both. Running both would contradict the five-job
+contract, and it would not be an opt-out at all. A pull request could still be
+blocked by the selection path it had just asked to be excused from, which is
+the opposite of what somebody reaching for the label wants. Only `plan-full`
+reads the label. Its condition is the one place a run is decided to be full,
+and `tests` runs every test when `plan-full` succeeded and a selection when it
+was skipped.
 
 The cost is that a labelled pull request stops exercising the selection
 path. That is acceptable because the label is rare, `main` exercises the
-lane runner continuously through `full-tests`, and `plan()` — the part
+lane runner continuously through `tests`, and `plan()` — the part
 that differs between the two — is a pure function with its own tests and a
 `--dry-run` mode.
 
-`Status` grows one piece of logic it does not have today. Its rule is
-currently "fail unless every dependency succeeded", and skipped counts as
-not-succeeded. It becomes:
+`Status` needs `plan-full` and `tests`, and on a pull request without the label
+`plan-full` is skipped. So its rule cannot be "fail unless every dependency
+succeeded", which would read the skipped job as a failure. Its last step fails
+unless:
 
 - every dependency is `success` or `skipped`, **and**
-- at least one of `pr-tests` and `full-tests` is `success`.
+- `tests` is `success`.
 
-The second clause is not tidiness. Without it, a state in which both are
-skipped — a mislabelled pull request, a workflow-level condition that
-excludes both, a future edit that gets an `if:` wrong — reports a green
-`Status` on a pull request that ran no tests at all. That is the one
-failure mode of this whole design that would be silent, so it is asserted
-directly rather than reasoned about.
+The second clause is not tidiness. Without it, a run in which `tests` is
+skipped — a workflow-level condition that excludes it, a future edit that gets
+an `if:` wrong — reports a green `Status` on a pull request that ran no tests
+at all. That is the one failure mode of this whole design that would be silent,
+so it is asserted directly rather than reasoned about.
 
 A labelled pull request gets the full run's treatment of a flaky test as
 well, since it is the same job: the excluded identities are run several
 times on it and cannot fail it. That follows from the label running what
-`main` runs, and it has one edge worth knowing about. The label runs the
-full jobs instead of the five lanes rather than beside them, so a change
+`main` runs, and it has one edge worth knowing about. The label runs every
+test instead of the five selected lanes rather than beside them, so a change
 that fixes a flaky test and also carries the label gets no gating run of
 the test it fixes. The ordinary five-lane path is where that fix proves
 itself, because there the exception for a change that edits a test makes
@@ -3115,10 +3236,10 @@ wants to know whether a lane failure is real.
 
 `Status` also joins what the lanes measured. Each lane uploads the
 coverage it produced, one report per [measured set](#the-measured-set),
-and `Status` downloads the five, adds them up per set, and runs the
-coverage gate over the totals. It is the only job in a position to do
-that, and it is a job that has to exist regardless, so the gate costs a
-download and an arithmetic pass rather than a job.
+and `Status` downloads every lane's upload, adds the reports up per set, and
+runs the coverage gate over the totals. It is the only job in a position to do
+that, and it is a job that has to exist regardless, so the gate costs a download
+and an arithmetic pass rather than a job.
 
 `Status` decides which sets the gate covers by running the same function
 the lanes run, over the same diff and the same topology, rather than by
@@ -3138,26 +3259,36 @@ which tests belong to which set.
 
 ### What moves to `main`, and what happens to coverage
 
-`Status` is a pull-request check and its `needs:` list becomes `pr-tests`
-and `full-tests`, with the two-clause rule above.
+`Status` runs on a pull request and on a push, unless the run was cancelled. It
+needs `plan-full` and `tests`. It fails unless every dependency is `success` or
+`skipped` and `tests` is `success`. It is the one job after the lanes, so every
+check over the whole run's records and coverage is a step of it rather than a
+job of its own:
+
+1. The store half of [the drift guard](#the-drift-guard) runs over every lane's
+   `test-records-*` artifact, held to the run's commit.
+2. On a pull request, the coverage gate runs over every lane's `lane-coverage-*`
+   artifact, with the pull request's description read as it stands through the
+   API rather than from the event, so an acceptance written after the push
+   counts on a re-run. It uploads the comment it wants posted as the
+   `coverage-comment` artifact, and writes none where the run's tests failed and
+   the gate passed.
+3. On a push, `tasks/coverage-report.ts` reads the same reports and writes the
+   run's coverage measurements, which the job ships to the record store with
+   `test-records-ship` under the artifact name `coverage`.
+4. The last step applies that rule and decides the job's result.
 
 Repository-wide coverage measurement moves to the full run and stops
 gating; the gate that stays on pull requests is over [measured
-sets](#the-measured-set), and it runs inside a lane rather than in a job
-of its own. Concretely: the
-`Coverage Check` job becomes push-only and reports rather than fails,
-which takes a job off every pull request. The barrier it sat behind does
-not go away, because `Status` is a barrier by construction, but what
-happens at that barrier shrinks from a 12-artifact download and a
-repository-wide metric to five small reports and an addition. The
-compile-cache state recording that feeds it moves with it. The full run
-converts each measured set's coverage directory separately, so the
-baselines come out of it. And `coverage-comment.yml` is
-generalized into the reporter described in [Telling a pull request what
-`main` found](#telling-a-pull-request-what-main-found) rather than deleted
-— it already does the hard part, which is posting to a pull request from a
-trusted context with a write token. It carries both comments now, and is
-named `pull-request-comments.yml` for it.
+sets](#the-measured-set). Step 3 is where the repository-wide figure is
+measured, and it fails nothing. Each lane that opens the pattern compile byte
+cache records whether it found the cache restored, at the top of its report
+directory, so the figure from a run with a cold cache can be told apart. The
+full run converts each measured set's coverage directory separately, so the
+baselines come out of it. `.github/workflows/pull-request-comments.yml` posts
+both this comment and the reporter's, from a trusted context with a write
+token. [Telling a pull request what `main`
+found](#telling-a-pull-request-what-main-found) describes the reporter.
 
 ## Coverage
 
@@ -3195,12 +3326,9 @@ the days in the window and so cannot be one bad day. And it reports on the
 system: no per-person anything, no ranking, nothing that could be read as
 a scoreboard.
 
-That tile is live, ahead of the rest of this plan. It reads the
-repository-wide `workspace` figure from the coverage measurements each
-`main` run writes into the record store, which the full run on `main` writes
-today and goes on writing under selection. The full run produces it by
-merging every report its lanes wrote, which is the same merge the present
-gate does over the present matrix's artifacts.
+That tile is live. It reads the repository-wide `workspace` figure from the
+coverage measurements each `main` run writes into the record store. The full run
+produces it in `Status`, by merging every report its lanes wrote.
 
 The `ACCEPT_COVERAGE_DEBT` markers stay. They are how somebody says "yes,
 knowingly", and they remain the right escape hatch whether or not anything
@@ -3313,11 +3441,11 @@ list is what it is today:
 
 | Excluded | Why |
 | --- | --- |
-| `packages/generated-patterns` | Its test task is `echo 'No tests defined.'`. Its test files run in the generated-patterns integration job. |
+| `packages/generated-patterns` | Its test task is `echo 'No tests defined.'`. Its test files run in the `generated-patterns` suite. |
 | `packages/home-schemas` | It has no tests. |
-| `packages/patterns` | Authored pattern code is measured by transformer instrumentation in the pattern unit and integration jobs. The package's own `deno test` ignores the pattern files deliberately. |
+| `packages/patterns` | Authored pattern code is measured by transformer instrumentation in the `pattern-unit` and `pattern-integration` suites. The package's own `deno test` ignores the pattern files deliberately. |
 | `packages/runner` | Its whole set is past what all five lanes hold together: about 1,600 seconds of test steps in the reference build, against a budget of 1,150. |
-| `packages/cli` | The command line's real coverage comes from the integration script rather than from these tests, so gating on them would ratchet the wrong number. |
+| `packages/cli` | The command line's real coverage comes from the integration script rather than from these tests, so a gate on them would fail a change whose lines only the integration script runs. |
 | `packages/identity` | Every one of its tests runs in a browser through `deno-web-test`. It has no Deno-only half to measure. |
 | `packages/deno-web-test` | Its tests drive the browser harness end to end. |
 | `packages/toolshed` | Its tests want the service's own environment and its initialized database. |
@@ -3326,68 +3454,80 @@ list is what it is today:
 That leaves 34 measured sets in the tree today, `packages/memory` among
 them, out of the 44 members `deno.jsonc` lists under `packages/`: the
 nine on the list, and one member with no Deno-only tests to measure.
-`packages/piece` is one of the 34: it is hand-sharded today, and being hand-sharded stops meaning anything once
-the packer does the sharding and `Status` joins what the lanes measured.
+`packages/piece` is one of the 34: the packer spreads a set's units over lanes,
+and `Status` joins what the lanes measured, so a member's set does not have to
+fit in one lane.
 
-One entry is there for size. Because `Status` joins the lanes' coverage, a
-set's tests do not have to land in one lane, or even in one batch — they
-are ordinary mandatory items that the packer distributes like any others,
-and the totals meet again afterwards. What a set has to fit inside is the
-whole run's budget rather than a lane's, which is five times the room.
-`packages/runner` still does not fit it, at around 1,600 seconds against
-about 1,150 for all five lanes together. Nothing else comes close to that.
+One entry is there for size, and says so: each entry carries a kind, `size` or
+`source`, beside its reason. Because `Status` joins the lanes' coverage, a set's
+tests do not have to land in one lane, or even in one batch — they are ordinary
+mandatory items that the packer distributes like any others, and the totals are
+added together afterwards. What a set has to fit inside is the whole run's
+budget rather than a lane's, which is five times the room. `packages/runner`
+still does not fit it, at around 1,600 seconds against about 1,150 for all five
+lanes together. Nothing else comes close to that.
 
-None of this is special to those packages any more either: [sharding stops
-being written down](#sharding-stops-being-written-down) in the same pull
-request, so `packages/runner` and the rest become ordinary suites whose
-items the packer distributes like every other. The numbers are from the
-reference build and are what the item-level dry run checks; a package
-listed for a size it no longer has comes off.
+None of this is special to those packages either: [sharding stops being written
+down](#sharding-stops-being-written-down), so `packages/runner` and the rest are
+ordinary suites whose items the packer distributes like every other. The numbers
+are from the reference build and are what the item-level dry run checks; a
+package listed for a size it no longer has comes off.
 
 The list is a starting position and is expected to shrink. The publisher
-reports which listed members would now fit the run's budget, the same way
-it reports a measured set that has grown expensive, so a line comes off
-because somebody read a measurement rather than because a threshold moved
-on its own. Two entries are there because the member has no Deno-only
-tests at all, and the moment one gains some, the same holds.
+reports which entries of kind `size` would now fit the run, charging a set the
+overheads and setup of every lane it would spread over, the same way it reports
+a measured set that has grown expensive, so a line comes off because somebody
+read a measurement rather than because a threshold moved on its own. Two entries
+are there because the member has no Deno-only tests at all, and the moment one
+gains some, the same holds.
 
 ### Adding a browser test must not cost a member its gate
 
 A package that mixes Deno-only tests with tests that need a browser should
-keep the gate over the Deno-only half rather than losing it. That is
-practical here, and the repository is already most of the way to it,
-because every package that mixes the two already separates them inside its
-test task. `packages/static` names them as two tasks, `deno-test` and
-`browser-test`, and joins them in `test`. `packages/ui` and
-`packages/iframe-sandbox` write the same split as one string: a `deno test`
-with the browser files listed in `--ignore`, then `&&`, then those same
-files handed to the browser harness.
+keep the gate over the Deno-only half rather than losing it. Every package that
+mixes the two names the halves as two tasks, `deno-test` and `browser-test`, and
+runs both from `test`: `packages/static`, `packages/ui`,
+`packages/iframe-sandbox` and `packages/dashboard` among them.
 
-So the convention is the one `packages/static` already follows. A member
-that has a Deno-only half names it `deno-test`. A member's measured set
-holds the units of that half and never its browser unit. The browser unit
-then writes no coverage into the set's directory either: it is not one of
-the set's units, so a lane that happened to select it would move a number
-a lane that did not select it would not, which is exactly what the set
-exists to rule out. A member with no `deno-test` is unchanged in every
-respect: its whole test task is its Deno-only half.
+So the convention is this. A member that has a Deno-only half names it
+`deno-test`. A member's measured set holds the units of that half and never its
+browser unit. The browser unit then writes no coverage into the set's directory
+either: it is not one of the set's units, so a lane that happened to select it
+would move a number a lane that did not select it would not, which is exactly
+what the set exists to rule out. A member with no `deno-test` is unchanged in
+every respect: its whole test task is its Deno-only half.
+`.claude/rules/workspace-packages.md` states the convention for whoever adds a
+package.
 
-`packages/ui` and `packages/iframe-sandbox` get their one-string tasks
-split into `deno-test` and `browser-test` the way `packages/static` writes
-it. Both keep the gate over their Deno-only halves, which is coverage the
-share-based rule this replaced would have taken away from them. Adding a
-browser test to any measured member is then an edit to `browser-test`, and
-the gate does not notice.
+Adding a browser test to any measured member is then an edit to `browser-test`,
+and the gate does not notice.
 
 ### What a measured set costs is reported, never enforced
 
-A set whose measured units grow past `LOCAL_COVERAGE_MAX_SECONDS` is named
-in the publisher's summary, and by the `coverage` operator mode below.
-Nothing happens to it automatically. Somebody then decides whether to
-split the member's tests, let the run carry the cost, or add a line to the
-exclusion list — all three being decisions about the repository rather
-than about one pull request, which is why they belong to a person and not
-to a threshold.
+A set whose cost with coverage on grows past `LOCAL_COVERAGE_MAX_SECONDS` is
+named in the publisher's summary, and by the `coverage` operator mode below.
+Nothing happens to it automatically. Somebody then decides whether to split the
+member's tests, let the run carry the cost, or add a line to the exclusion list
+— all three being decisions about the repository rather than about one pull
+request, which is why they belong to a person and not to a threshold. The same
+two places name each member excluded for its size whose tests now fit the run's
+budget.
+
+Both read what a set costs with coverage on, from the fits the lanes'
+coverage-on batches produce (see [the cost model](#the-cost-model)). What a set
+costs without coverage is no answer, being short by whatever instrumenting it
+costs, so until a lane has run a suite with coverage on the lines say that they
+cannot tell yet and name the suites.
+
+A set's cost is counted over the fewest of the run's lanes that hold it, since
+its units are packed across lanes like any other mandatory work. Each of those
+lanes pays the set's suites' overheads and its capabilities' setup. Each lane
+holding part of a unit pays that unit's overhead, and a unit is split over no
+more lanes than it holds entries, so that overhead is paid at most once per
+entry. Each entry's own cost is multiplied by how many times it runs. The units
+a set's suite declares unavailable are not run, so they are not charged. A set
+that no number of the run's lanes holds is named as costing more than those
+lanes hold.
 
 ### A change that reaches more than two measured sets forces none of them
 
@@ -3472,12 +3612,15 @@ All of one identity's runs go in one lane, so a lane cannot be added to
 make room for them, and the mandatory pass gives up runs until what is
 left fits, down to one.
 
-Coverage makes those tests slower, and the packer charges them what a run
-without it costs. That is an underestimate whose size nothing has measured
-yet, because no lane has run anything with coverage on. What closes it is
-a record surface of its own for a measured batch, so a with-coverage
-duration is fitted the way every other cost in this design is; until the
-lanes produce those durations there is nothing to fit.
+Coverage makes those tests slower, and the packer charges them for it.
+`pricedForRun` in `tasks/test-selection/census.ts` charges each suite the run
+measures what that suite's batches have cost with coverage on, fitted apart from
+its other batches, as [the cost model](#the-cost-model) describes, and every
+other suite what its batches cost without. The full run measures every suite; a
+pull request measures the suites of the sets its gate scores. A suite no lane
+has yet run the way this run runs it is charged the other fit: with coverage on
+that errs high, and without it is short by whatever instrumenting costs, but
+either is nearer than charging nothing.
 
 Each lane converts the profiles under each measured set's directory into
 one report and uploads it. `Status` adds the five together per set, scores
@@ -3493,8 +3636,13 @@ The marker names the member, and it accepts the rise for every measured
 set over that member. A marker that had to name a suite as well would ask
 an author to know which suite measured what before they could say "yes,
 knowingly". Where a member carries two sets, one marker therefore accepts
-a rise in both; no member carries two today, since the sets in the tree
-are the unit suites' and those divide the members between them.
+a rise in both; no member carries two, since the sets in the tree are the unit
+suites' and those divide the members between them.
+
+A marker naming anything but a workspace member fails the gate, because nothing
+consults it. A marker was written to have an effect, and one naming a source
+group such as `packages/connectors`, which holds members but is none, would
+otherwise pass for one that worked.
 
 ### What `main` does
 
@@ -3519,9 +3667,9 @@ The manifest carries the per-set numbers for every full `main` run in the
 last `LOCAL_COVERAGE_BASELINE_DAYS`, each against its commit. The gate
 takes the newest of them the branch contains, and which one that is comes
 from git: it reads the branch's own history back from the tip and takes
-the first of those commits it meets. That is the walk the present ratchet
-does over downloaded artifacts, done here over data the newest manifest
-already holds.
+the first of those commits it finds. The data it walks over is in the manifest
+current at the tested commit's committer date, so the gate downloads nothing
+from earlier runs.
 
 The branch's history rather than the moment each run was created. A
 re-run of an older commit is created after the run of a newer one, so run
@@ -3558,12 +3706,12 @@ set with no baseline is reported rather than gated.
 
 Both sides run the same complete set of tests over the same member's
 lines. Selection cannot skew it, because within that set nothing is
-selected. Sharding cannot skew it, because the profiles are joined by the
-set they belong to rather than by the job that produced them. Another
-suite cannot skew it, because another suite's profiles are in another
-directory. The count moves when the member's own source or the set's own
-tests change, which is the change the author is looking at. That is the
-whole of the argument, and it is why this gate keeps its teeth while the
+selected. How the packer spreads it over lanes cannot skew it, because the
+profiles are joined by the set they belong to rather than by the lane that
+produced them. Another suite cannot skew it, because another suite's profiles
+are in another directory. The count moves when the member's own source or the
+set's own tests change, which is the change the author is looking at. That is
+the whole of the argument, and it is why this gate keeps its teeth while the
 repository-wide one gives them up.
 
 ## Telling a pull request what `main` found
@@ -3590,11 +3738,15 @@ pull request's own run could not have:
   somebody else broke something.
 - **What the pull request's own run did with that test.** Its records say
   whether it ran the test; the manifest it resolved says why it did not,
-  which only this system can answer. The answer changes what to do. Not
-  selected is the expected cost of selection, and the failure will raise
-  the test's score so the next change in that area runs it. Ran and
-  passing is a flake or an interaction between changes, and it is a
-  different conversation.
+  which only this system can answer. That manifest is the one current at the
+  committer date of the commit the run tested, which for a pull request is the
+  merge commit its records name, and never the branch's tip. Where the report
+  cannot establish that commit or its date, it says the run did not run the test
+  and gives no reason. The same holds for a pull request whose run did not run
+  in lanes, since no manifest chose what it ran. The answer changes what to do. Not selected is the
+  expected cost of selection, and the failure will raise the test's score so the
+  next change in that area runs it. Ran and passing is a flake or an interaction
+  between changes, and it is a different conversation.
 - **A coverage debt increase above the threshold**, naming the source
   groups the change touched that rose as well, which is as near as this
   gets to saying where a test would go. Never as a failure — the run is
@@ -3615,9 +3767,17 @@ pull request's own run could not have:
   at this commit and passed every one at the parent.** Those failures do
   not fail the run, so the lane's job summary is the only other place they
   appear, and nobody reads the summary of a run that passed. It says the
-  test is a known flaky one, that the run stayed green, and that the same
-  record is what one bad runner produces, since every run of an identity at
-  a commit shares a lane. Weak evidence, named as weak, is what there is.
+  test is a known flaky one, that this run did not fail because of it, and that
+  the same record is what one bad runner produces, since every run of an
+  identity at a commit shares a lane. It gives the run counts at the commit and
+  at the parent, and the store's flake counts. Weak evidence, named as weak, is
+  what there is. Such a test is not also listed as a first failure. Which
+  failures a run excused is a fact about that run: a lane excuses a flaky test's
+  failure only where its batch accounted for every identity it was asked to run,
+  and a run that did not apply the rule excused nothing. The lanes record each
+  identity they excused, and the report reads those records; the manifest
+  supplies only the store's flake counts, and a report that cannot read it
+  gives the note without them.
 - **A rename that discarded history**, with the alias line to append and
   the number of catches it would bring back. See [Renames, and the alias
   file](#renames-and-the-alias-file).
@@ -3750,18 +3910,18 @@ is pinned to the commit's date. And if none of that settles it,
 | The manifest is malformed or a newer schema | Rejected whole and treated as absent, the same path as a store holding none. |
 | A selected item no longer exists in the tree | Dropped with a line in the summary. A renamed test is simultaneously an unknown item, so it runs anyway. |
 | A new test surface nobody registered | `check-test-topology` fails on the next `main` run and names the unclaimed identities. |
-| A gate wired into a workflow job and into no suite | The workflow half of the drift guard fails on the pull request that adds the step, before the gate has ever run. |
+| A workflow step that records a check by hand | The workflow half of the drift guard fails on the pull request that adds the step, whether or not a suite claims the check, and says which: a check a suite holds would be recorded twice, and one no suite holds would never be run or selected by a lane. |
 | A record's variant or record surface contradicts its batch | Kept as written and named in the lane summary. The identity then belongs to no suite, so the store half of the drift guard fails on that `main` run. |
 | A test is deleted | Nothing has to be declared. The topology stops enumerating it, so the manifest leaves it out and the reconciliation against the tree drops the entry a manifest published earlier still names. The store keeps its records, and the publisher's aggregate stops carrying its state once no run has recorded it inside the longest window a state keeps counters for. The store half of the drift guard judges the run's own records, so the deletion is not read as a disagreement. |
 | A suite gains a new variant with no records | Every available item in that variant is mandatory until a successful full `main` run accounts for every enumerated item under that exact variant, the store drift guard passes, and the next publisher cycle includes the run. Other variants do not stand in for it. |
 | A variant deliberately skips a file or leaf | The topology reads the existing skip registry and the manifest reports the test as unavailable with its phase and reason. It is not unknown. Removing the skip makes it mandatory until `main` records it. |
-| One item is bigger than a lane's planned budget | It gets a lane to itself, up to the hard five-minute bound. Bigger than that, a mandatory item is still placed and its lane over-runs, while a discretionary one is listed as unschedulable in the manifest and reported; the 60-second ratchet is the fix. |
-| The mandatory set alone exceeds the budget | The lane runs it anyway and over-runs, past the five-minute step bound where the set demands it. The summary says by how much, which is what argues for raising the bound. |
+| One item is bigger than a lane's planned budget | It gets a lane to itself, up to the five-minute bound. Bigger than that, a mandatory item is still placed and its lane over-runs, while a discretionary one is listed as unschedulable in the manifest and reported; the 60-second ratchet is the fix. |
+| The mandatory set alone exceeds the budget | The lane runs it anyway and over-runs, past the five-minute bound where the set demands it. The work step's own timeout is 30 minutes and only stops a lane that hangs, so the lane finishes and is measured rather than stopped. Its job log says how far its plan was projected past the budget, which is what argues for raising the bound. |
 | A measured set has no baseline, or none from an ancestor of the merge base | `Status` reports the comparison and does not fail. The next full `main` run supplies one. |
 | A measured member gains a test needing a browser or a server | It goes in the member's `browser-test` half, which no measured set holds, so the Deno-only half keeps its gate. A member with no such half yet names one. |
 | A measured set grows expensive | Reported in the publisher's summary and by `deno task test-selection coverage`. Nothing is excluded automatically; somebody splits the member's tests or adds a line to the exclusion list. |
 | A test in a measured set fails | Every set a lane's report measured is reported rather than gated. Coverage measured through a failing run says nothing about whether the change was tested, and the failure is the thing to fix. |
-| A change reaches more than two measured sets | The gate does not run at all, and `Status` says so. The full run on `main` still measures every set, and a rise it finds is reported back to the pull request. |
+| A change reaches more than two measured sets | None is forced, and `Status` says so. A set some run measured anyway is still scored, and a set the cap left unforced that nothing measured is reported rather than failed. The full run on `main` still measures every set, and a rise it finds is reported back to the pull request. |
 | No lane's report measuring a forced set reaches the gate: a lane dies before uploading, an upload or the download carries nothing, or a lane writes an empty report | That set fails the gate, whether or not any lane failed, because the change was made to measure those sets and a rise in them cannot be ruled out. A set the cap left unforced is reported rather than failed. |
 | Two measured sets over one member disagree | Nothing joins them. Each carries its own baseline and its own verdict, and an `ACCEPT_COVERAGE_DEBT` marker naming the member accepts a rise in either. |
 | A lane exceeds five minutes repeatedly | The correction factors rise on the next publisher run and less is packed. If it persists, the publisher's summary shows the miss and somebody looks. |
@@ -3769,8 +3929,8 @@ is pinned to the commit's date. And if none of that settles it,
 | A fork pull request | Works unchanged. The manifest is world-readable, and the existing member gate decides whether the fork's records ship. |
 | A re-run of one failed lane | Runs the same set, because the manifest is resolved by the commit's date, which no attempt changes. |
 | A lane cannot read the date of the commit it is testing | The lane fails and says why, and so does the job counting the full run's lanes. Reading the date can fail in one lane and not the next, and no other moment is one the lanes are sure to share, so this fails for the reason an unreachable store does. |
-| Both `pr-tests` and `full-tests` skip | `Status` fails. Its second clause requires one of them to have succeeded, so a pull request that ran no tests can never report green. |
-| A test too flaky for pull requests fails on `main` | The run stays green and the job summary names the failure and its identity. The records are scored as any others, so the failure feeds the share, the dashboard, and the deflake work queue. |
+| `tests` is skipped | `Status` fails. Its second clause requires `tests` to have succeeded, so a pull request that ran no tests can never report green. |
+| A test too flaky for pull requests fails on `main` | Where its batch accounted for every identity it was asked to run, the failure does not fail the run, and the job summary names the failure and its identity. The records are scored as any others, so the failure feeds the share, the dashboard, and the deflake work queue. |
 | A batch on `main` does not account for every identity it was asked to run | The lane fails. Nothing has shown the failures it did record to be the whole of what went wrong, and missing evidence is read as a real failure. |
 | A test too flaky for pull requests genuinely regresses | `main` stays green and the change ships. The regression is found when somebody deflakes the test, or from the reporter's comment where every run failed at the commit and every run passed at its parent. That comment says a bad runner produces the same record. |
 | A repository gate goes above the flake threshold | It leaves pull requests as any test does, and it goes on failing `main`. The non-gating rule is for tests, so a gate never stops gating the branch it is a gate on. |
@@ -3862,23 +4022,22 @@ and proves that records from every execution reach the lane spool.
 The coverage gate is tested from recorded profile directories rather than
 by running tests. A fixture holding one measured set's coverage directory
 proves that converting it alone gives that set's own figure, and that
-merging it with its siblings gives today's shard figure, so the two series
-are shown to be the two readings of one set of profiles. A fixture holding
-two suites' directories over one member proves that neither suite's
-coverage moves the other's number. A workspace fixture proves that every
-member under `packages/` carries a set at whatever depth it sits, that a
-member added to the fixture's workspace array carries one without any
-other edit, and that only the members in `EXCLUDED_FROM_COVERAGE_GATE` are
-left out. A member defining `deno-test` proves that the set holds that
-task's units, that its coverage directory is separate from the rest of
-`test`, and that a test added to `browser-test` moves neither the measured
-half nor the member's place in the gate. The packer gets a fixture proving
-that a measured set's items are not reachable by the value, density, or
-exploration pass, and are not repeated. The join gets a fixture of five
-lanes' reports for one set split across them, proving that the total
-equals the same tests measured in one run, and that a set whose items
-landed in three lanes is scored once. A diff reaching one, two, and three
-measured sets proves the cap: gated, gated, and not gated at all rather
+merging it with its siblings gives the repository-wide figure, so the two series
+are shown to be the two readings of one set of profiles. A fixture holding two
+suites' directories over one member proves that neither suite's coverage moves
+the other's number. A workspace fixture proves that every member under
+`packages/` carries a set at whatever depth it sits, that a member added to the
+fixture's workspace array carries one without any other edit, and that only the
+members in `EXCLUDED_FROM_COVERAGE_GATE` are left out. A member defining
+`deno-test` proves that the set holds that task's units, that its coverage
+directory is separate from the rest of `test`, and that a test added to
+`browser-test` moves neither the measured half nor the member's place in the
+gate. The packer gets a fixture proving that a measured set's items are not
+reachable by the value, density, or exploration pass, and are not repeated. The
+join gets a fixture of five lanes' reports for one set split across them,
+proving that the total equals the same tests measured in one run, and that a set
+whose items landed in three lanes is scored once. A diff reaching one, two, and
+three measured sets proves the cap: gated, gated, and not gated at all rather
 than gated for two of the three. And the baseline walk is tested against
 recorded chains of `main` commits: a rise against an ancestor fails, a
 rise against a run the merge base does not contain reports, and a set with
@@ -3937,7 +4096,9 @@ test-selection`. Its modes are also how the system is tested by hand.
   the task the set measures, and the baseline the checked-out commit's
   manifest holds for it, and beside them every workspace member that
   carries no set and the reason it does not. This is what somebody uses to answer "why is my
-  package not gated?" and "what am I being compared against?".
+  package not gated?" and "what am I being compared against?". Where it resolves
+  a manifest it also prints the publisher's lines about what the measured sets
+  cost with coverage on.
 
 `tasks/ci-lane.ts` keeps a `--dry-run` of its own, because that is how
 continuous integration asks the same question from inside a job.
@@ -4007,8 +4168,8 @@ is only really proven by running, so it should carry `main` for a while
 before any pull request depends on it. That argument does not survive
 contact with the design, because the design already has the mechanism.
 
-A pull request labelled `ci: full` runs `plan-full` and `full-tests`, the
-same two jobs a push to `main` runs. So the branch can run exactly what
+A pull request labelled `ci: full` runs `plan-full` and every test, as a push
+to `main` does. So the branch can run exactly what
 `main` would run, against its own tree, as many times as it takes, before
 anything merges. That is the proof the extra pull request was there to
 buy, and it costs a label.
@@ -4153,9 +4314,10 @@ exercised on the branch on its own.
         stand alone, so `cli-fuse` becomes an item suite like its sibling.
         A section is a group of phases over one mount, and the
         dependencies deciding where the boundaries fall are named in
-        [today's jobs as suites](#todays-jobs-as-suites).
-        `packages/cli/test/fuse-sections.test.ts` holds the dispatch table
-        to the properties that make a section schedulable, the way
+        [the reference build's jobs as
+        suites](#the-reference-builds-jobs-as-suites).
+        `packages/cli/test/fuse-sections.test.ts` holds the dispatch table to
+        the properties that make a section schedulable, the way
         `integration-sections.test.ts` holds its sibling's.
 - [x] Split the `piece-call` CLI integration dispatch into its eight
       recorded steps. Seven already had an arm of their own; the missing
@@ -4189,42 +4351,36 @@ exercised on the branch on its own.
       JUnit paths, gathers it before any repeat, and combines all records
       into the unmarked lane spool. It also includes `--full`, `--dry-run`,
       and repeats.
-- [ ] `deno.yml`: `plan-full` and `full-tests` on push, with the build,
-      attestation, coverage and deploy jobs repointed at them. The lane's
-      coverage upload carries the whole of the lane's coverage directory
-      rather than its `.lcov` files: a measured set the lane saw fail is
-      marked by a file beside the report, and a glob over one extension
-      would drop it and publish the baseline anyway.
+- [x] `deno.yml`: `plan-full` on a push, a called run, and a pull request
+      labelled `ci: full`, and one `tests` job running the lanes of every run,
+      with the attestation and deploy jobs repointed at `tests` and the builds
+      running on a push only. The lane's coverage upload carries the whole of
+      the lane's coverage directory rather than its `.lcov` files: a measured
+      set the lane saw fail is marked by a file beside the report, and a glob
+      over one extension would drop it and publish the baseline anyway.
 - [x] The store half of the drift guard runs over the records every job
       of a run shipped, against that run's commit. It cannot be a gate
       inside a lane: a lane's records have not shipped when its gates
       run, so the half would be reading an earlier build's records and
-      failing on every test this run deleted. The
-      `Test Topology Store Check` job waits for every job that ships
-      records and downloads their artifacts. A gathered artifact is a
-      run's records without the context a report opens with, so the
-      commit each is held to is read from the facts its own job wrote
-      beside them, and one that names none stays nameless for the store
-      half to refuse. When one job ships the whole run's records, the job
-      collapses into that one.
-- [x] That job runs on a pull request as well as on the default branch.
-      What this drift is introduced by is a change to a suite, a runner,
-      or a test's name, and that change has a run of its own to fail; the
-      default branch is left catching the pair of changes that were each
-      claimed separately and are not together. Turning it on cost nobody
-      a blocked pull request, the half passing over the runs of both at
-      the time it was wired.
-- [ ] Both post-test checks become steps of the one job that ships the
-      run's records. `Coverage Check` and `Test Topology Store Check` are
-      separate jobs because each reads what every test job produced and
-      there are fifteen of them, so each keeps a list of jobs to wait for
-      and pays a checkout, a Deno setup, an install and a download to read
-      a file. Once one job ships the whole run's records, neither needs a
-      runner of its own, and the two dependency lists go with them. What
-      makes that happen rather than being remembered is the
-      `one-post-test-job` tripwire: it holds that more than one job ships
-      records, so the change that makes one of them do it fails the build
-      and is handed the rest of the work.
+      failing on every test this run deleted. It is a step of `Status`, which
+      waits for every lane and downloads every lane's `test-records-*` artifact.
+      A gathered artifact is a run's records without the context a report opens
+      with, so the commit each is held to is read from the facts its own job
+      wrote beside them, and one that names none stays nameless for the store
+      half to refuse.
+- [x] That step runs on a pull request as well as on the default branch. What
+      this drift is introduced by is a change to a suite, a runner, or a test's
+      name, and that change has a run of its own to fail; the default branch is
+      left catching the pair of changes that were each claimed separately and
+      are not together. Turning it on cost nobody a blocked pull request, the
+      half passing over the runs of both at the time it was wired.
+- [x] Both post-test checks are steps of `Status`, the one job after the lanes,
+      rather than jobs of their own that each keep a list of jobs to wait for
+      and pay a checkout, a Deno setup, an install and a download to read a
+      file. The records are not shipped by one job: each lane ships its own
+      artifact, because the calibration fit reads one lane's measurements of
+      itself per report. `Status` downloads them all, so it is the one job that
+      reads the whole run. The `one-post-test-job` tripwire is deleted.
 - [x] The full run's treatment of a test too flaky for pull requests.
       The count is placed already: `tasks/test-selection/plan.ts` gives
       every mandatory identity the count `executionsFor` returns for its
@@ -4264,42 +4420,51 @@ exercised on the branch on its own.
       gate already reports a run with a failing test.
 - [x] `explain <identity>` gains the runs it is given and whether it is
       withheld, replacing the three-way answer that no longer partitions.
-- [ ] Repository-wide coverage measurement moves to the full run and stops
-      failing anything.
+- [x] Repository-wide coverage measurement moves to the full run and stops
+      failing anything. The repository-wide ratchet, `tasks/coverage-check.ts`,
+      is deleted, and with it the per-group gating, `NEW_COVERAGE_BASELINE`, the
+      `perf-metrics` baselines, the run listing, and the parts of
+      `tasks/ci-check-lib.ts` only it used.
 - [x] Each suite writes its coverage profiles into a directory of its
       own, one level per suite and one per member below it, and the lane
       converts every one of them into a report named for the measured
       set. `tasks/write-coverage-lcov.ts` carries the conversion as a
       function `tasks/ci-lane.ts` calls as well as a command. No test
       changes how it runs.
-- [ ] Delete the hand-maintained sharding: `tasks/test-timing-weights.ts`,
-      `tasks/select-runner-test-files.ts`,
-      `tasks/run-sharded-test-files.ts`, `INTERNALLY_SHARDED_PACKAGES` and
-      the shard environment variables the packages' own runners read, and
-      `TEST_DISABLED_PACKAGES: runner` with the separate `Runner Tests`
-      matrix. `tasks/weighted-shards.ts` stays and the lane packer calls
-      it. Nothing may be balanced by a transcribed number afterwards, and
-      `check-test-topology` is what proves the items are all still there.
-- [ ] `packages/ui` and `packages/iframe-sandbox` split their one-string
-      test tasks the way `packages/static` already writes the same split,
-      so each keeps a measured set over its Deno-only half. The topology
-      already reads `deno-test` where a member defines one, so this is an
-      edit to two manifests and nothing else.
+- [x] Delete the hand-maintained sharding: `tasks/test-timing-weights.ts`, the
+      per-suite file selectors, `tasks/shard-utils.ts`,
+      `INTERNALLY_SHARDED_PACKAGES` and every shard and disabled-package
+      variable the packages' own runners read, and `TEST_DISABLED_PACKAGES:
+      runner` with the separate `Runner Tests` matrix.
+      `tasks/weighted-shards.ts` goes too, since the packer in
+      `tasks/test-selection/plan.ts` does its own packing. The shard wrapper
+      survives as `tasks/run-test-batches.ts`, reduced to splitting a member's
+      files by the flags they need, because `cli` and `dashboard` still have
+      files that must run alone or with every permission. Nothing is balanced by
+      a transcribed number, and `check-test-topology` is what proves the items
+      are all still there.
+- [x] `packages/ui` and `packages/iframe-sandbox` split their one-string test
+      tasks the way `packages/static` writes the same split, so each keeps a
+      measured set over its Deno-only half. This landed on `main` separately
+      (#7371).
 - [x] The publisher carries each measured set's figure and its commit in
       the manifest, read from the coverage measurements of the `main` runs it
       folds and carried forward from the previous manifest for the rest of
       the window. It reads them from the record store, so it needs no
       GitHub credential for them.
-- [ ] The publisher's summary names the exclusion-list entries that would
-      now fit the run's budget, and the measured sets past
-      `LOCAL_COVERAGE_MAX_SECONDS`. Both read the fitted costs of the
-      lanes, which have none until the lanes run.
-- [ ] A measured batch records its duration under a surface of its own, so
-      that what a unit costs with coverage on is fitted separately from
-      what it costs without. Until then the packer charges a measured
-      unit what an unmeasured run of it costs, which is an underestimate
-      of unknown size; there is nothing to fit until the lanes have run
-      something with coverage on.
+- [x] The publisher's summary names the exclusion-list entries that would now
+      fit the run's budget, and the measured sets past
+      `LOCAL_COVERAGE_MAX_SECONDS`, and so does `deno task test-selection
+      coverage`. Both read the lanes' coverage-on fits, and until a lane has run
+      a suite with coverage on they say they cannot tell yet and name the
+      suites.
+- [x] A measured batch's measurements carry `with coverage` on their names, and
+      the calibration fits them apart from what the suite's batches cost without
+      coverage, into `suitesWithCoverage` beside `suites`. `pricedForRun`
+      charges each suite the fit for how the run runs it — the coverage-on fit
+      for every suite of the full run, and for the gate's sets' suites on a pull
+      request — falling back to the other fit, and a lane runs first the batches
+      of a suite whose charge was not fitted the way it runs them.
 - [ ] Before merging: `plan --verify` against the last `main` run, proving
       the manifest accounts for every item the topology enumerates under
       its exact variant, apart from explicitly unavailable skip entries.
@@ -4319,10 +4484,10 @@ exercised on the branch on its own.
 
 ### Part three — the pull-request path
 
-- [ ] `deno.yml`: five `pr-tests` lanes replace every pull-request job;
-      `Status` depends on `pr-tests` and `full-tests`, with `skipped`
-      counting as success for the latter.
-- [ ] The `ci: full` label.
+- [x] `deno.yml`: five selected lanes of `tests` replace every pull-request
+      job; `Status` depends on `plan-full` and `tests`, with `skipped` counting
+      as success, and fails unless `tests` succeeded.
+- [x] The `ci: full` label.
 - [x] `coverage-comment.yml` generalized into the reporter, with the
       first-failure attribution, the selected-or-not line, the coverage
       note, the measured-set rise note naming which of the three routes
@@ -4340,18 +4505,24 @@ exercised on the branch on its own.
       from the store, and the run under report's from its own artifacts,
       which are readable before the relay has shipped them. Whether the
       pull request ran a test is settled by its own run's records, and the
-      manifest it resolved answers why it did not; the two together are
-      honest both before and after the lanes land. The measured-set rise
-      reads a set's figure out of the run's own coverage artifact, so it
-      reads the quantity the gate compares rather than the source group over
-      the same member that a selected run only samples. The full run
-      publishes those figures, so the note is silent until it does and needs
-      nothing further then.
-- [ ] The reporter's note for a test too flaky for pull requests that
-      failed every one of its runs at this commit and passed every one at
-      the parent. It needs the full run's extra runs to exist before it can
-      say anything, and it says the test is a known flaky one and that the
-      run stayed green.
+      manifest it resolved answers why it did not. That manifest is resolved at
+      the committer date of the commit the run tested, which is the merge commit
+      its records name and never the branch's tip, and where that date cannot be
+      established the report gives no reason. The measured-set rise reads a
+      set's figure out of the run's own coverage artifact, so it reads the
+      quantity the gate compares rather than the source group over the same
+      member that a selected run only samples. The full run publishes those
+      figures.
+- [x] The reporter's note for a test too flaky for pull requests that failed
+      every one of its runs at this commit and passed every one at the parent.
+      It needs the full run's extra runs to exist before it can say anything,
+      and it says the test is a known flaky one and that this run did not fail
+      because of it, with both run counts and the store's flake counts. Such a
+      test is not also listed as a first failure. Which failures a run excused
+      comes from the `ci-lane excused` records its lanes wrote. The manifest
+      supplies only the counts: it is read only when the note is written, at
+      the commit's date from the checkout, and the report never fails for lack
+      of it.
 - [x] The coverage gate, in two halves. `tasks/ci-lane.ts` makes every
       unit of a measured set the diff reaches mandatory, keeps those
       units out of later passes, runs each of them as many times as its
@@ -4367,36 +4538,36 @@ exercised on the branch on its own.
       lane's report measured, a forced set no lane's report measured
       fails, and a change over the cap forces no set, with a line saying
       so, and still scores any set some run measured anyway.
-- [ ] The gate's workflow half, which only the lanes can carry. Each
-      `pr-tests` lane uploads what is under its coverage directory as an
-      artifact, `Status` downloads all five into one directory, and
-      `Status` runs `deno run -A tasks/coverage-gate.ts --base <merge
-      base> --reports <that directory> --body <the pull request's
-      description>`, passing `--tests-failed` when any lane did not
-      succeed. Nothing else has to change: which sets are gated, what
-      each is scored over, and what the baseline is are all decided
-      inside that command. Its checkout has to hold the commits the
-      baselines name, because it asks git whether the branch contains
-      one; a checkout too shallow to answer reports every set as having
-      no baseline, which turns the gate off without failing anything.
-- [ ] The full run's half of the same, which only the lanes can carry. Each
-      `full-tests` lane uploads its coverage the same way, and the job that
+- [x] The gate's workflow half, which only the lanes can carry. Each lane
+      uploads what is under its coverage directory as an artifact, `Status`
+      downloads every lane's into one directory, and `Status` runs `deno run -A
+      tasks/coverage-gate.ts --base origin/<base branch> --reports <that
+      directory> --body <the pull request's description> --comment
+      coverage-comment.json --pr <number>`, passing `--tests-failed` unless
+      `tests` succeeded. The gate diffs `<base>...HEAD`, so git
+      works out the merge base. It reads the description through the API, since
+      a re-run repeats the event it was started by and an acceptance written
+      after the push is what a re-run is for. Nothing else has to change: which
+      sets are gated, what each is scored over, and what the baseline is are all
+      decided inside that command. Its checkout has to hold the commits the
+      baselines name, because it asks git whether the branch contains one; a
+      checkout too shallow to answer reports every set as having no baseline,
+      which turns the gate off without failing anything.
+- [x] The full run's half of the same, which only the lanes can carry. Each
+      lane of the full run uploads its coverage the same way, and the step that
       writes the run's coverage measurements merges every report for the
-      repository-wide figure and reads each set's report for that set's
-      figure. Both come out of the same reports; the merge is what the
-      present `Coverage Check` job already does over the present matrix's
-      artifacts.
-- [ ] That job, `Coverage Report`, writes its measurements into a spool
-      named by `CF_TEST_RECORDS_DIR` and ships them from a push through
-      `test-records-ship` with `artifact: coverage`, the step the
-      `Coverage Check` job carries today, and uploads no `perf-metrics`.
-      `tasks/coverage-report.ts` takes `--reports` alone. Deleting
-      `tasks/coverage-check.ts` removes the last reader of that artifact,
-      and the run-listing and artifact code in `tasks/ci-check-lib.ts` that
-      only it used goes with it.
-- [ ] `tasks/ci-workflow.test.ts` updated for the new anchors and shapes,
+      repository-wide figure and reads each set's report for that set's figure.
+      Both come out of the same reports.
+- [x] The coverage report is steps of `Status` rather than a job of its own. On
+      a push, `tasks/coverage-report.ts --reports lane-coverage` writes its
+      measurements into the spool `CF_TEST_RECORDS_DIR` names, and
+      `test-records-ship` ships them with `artifact: coverage`. No
+      `perf-metrics` artifact is uploaded, since deleting
+      `tasks/coverage-check.ts` removed its last reader, and the run-listing and
+      artifact code in `tasks/ci-check-lib.ts` that only it used goes with it.
+- [x] `tasks/ci-workflow.test.ts` updated for the `tests` job and `Status`,
       including that the shared lane ship step carries no job-wide variant.
-- [ ] Documentation, in the same pull request rather than after it:
+- [x] Documentation, in the same pull request rather than after it:
       `docs/specs/test-selection.md` for the contract,
       `docs/development/test-selection.md` for the operating guide, the
       trust-boundary amendment and new dataset area in
@@ -4410,18 +4581,11 @@ exercised on the branch on its own.
       convention: a package that mixes Deno-only tests with tests needing
       a browser names the Deno-only half `deno-test`, and that half is
       what its measured set holds.
-- [ ] The workflow half turned around, once the lanes carry the gates.
-      It asks today whether every recording step's identity is in the
-      topology, which is the right question while the workflows and the
-      topology both name gates. When a lane runs them, the question
-      becomes whether a recording step is one the topology could not run:
-      the declarations become the whole list of steps a workflow may
-      write, and a step outside that list fails whether or not a suite
-      claims it. That form also catches a gate a leftover step runs a
-      second time, which the current form passes over. Four recording
-      steps survive the switch, so the half does not go quiet on its own;
-      if a later change leaves none, the declarations fail as stale and
-      the half is then dead and should go.
+- [x] The workflow half fails every recording step, whether or not a suite
+      claims it, and says which of the two it is, because the lanes run every
+      test and gate the topology declares. That form also catches a gate a
+      leftover step runs a second time. No workflow records by hand, so the
+      half passes, and it fails the first change that adds such a step.
 - [ ] This plan archived.
 
 ### What would force a split, and what to split first

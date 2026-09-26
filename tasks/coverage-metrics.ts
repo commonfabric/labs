@@ -2,7 +2,6 @@
 import * as path from "@std/path";
 import { hasExecutableCode } from "./executable-source.ts";
 import { type LcovFileCoverage, parseLcovReports } from "./lcov.ts";
-import { readUnlaunchedMembers } from "./unlaunched-members.ts";
 import { normalizeLcovInstancePaths } from "./write-coverage-lcov.ts";
 
 export const COVERAGE_PROFILE_ARTIFACT_PREFIX = "coverage-profile-";
@@ -47,14 +46,6 @@ export interface CoverageDebtMetricsOptions {
 export interface CoverageDebtMetricsFromLcovOptions {
   rootDir: string;
   lcov: string;
-
-  /**
-   * Workspace members that no run of this measurement launched, as the root
-   * manifest lists them. Every metric group holding one goes unscored, and so
-   * does the workspace total; see
-   * {@link collectCoverageDebtMetricsFromLcov}.
-   */
-  unlaunchedMembers?: Iterable<string>;
 }
 
 export interface CoverageDebtMetric {
@@ -69,62 +60,28 @@ interface SourceFile {
   trackedLineCount: number;
 }
 
-/**
- * The debt metrics for a coverage profile directory, which is scored against
- * the record of unlaunched members the directory carries when the run that
- * wrote it stopped before launching everything it selected.
- */
+/** The debt metrics for a coverage profile directory. */
 export async function collectCoverageDebtMetrics(
   options: CoverageDebtMetricsOptions,
 ): Promise<CoverageDebtMetric[]> {
-  const lcov = await lcovFromCoverageProfile(options.coverageProfileDir);
   return await collectCoverageDebtMetricsFromLcov({
     rootDir: options.rootDir,
-    lcov,
-    unlaunchedMembers: await readUnlaunchedMembers(options.coverageProfileDir),
+    lcov: await lcovFromCoverageProfile(options.coverageProfileDir),
   });
 }
 
 /**
- * The metric groups a measurement cannot speak for, given the workspace
- * members it never launched. A member is named the way the root manifest names
- * it, `./packages/shell` or `./tasks`, and the group it falls in is the one a
- * source file under it would be counted toward.
- *
- * A group is unscorable whole. One member of it going unlaunched leaves the
- * group's count short by whatever that member's own tests would have covered,
- * and nothing in the report says by how much, so the other members of the
- * group are no more scorable than the missing one.
- */
-export function unscoredMetricGroups(
-  unlaunchedMembers: Iterable<string>,
-): Set<string> {
-  return new Set(
-    [...unlaunchedMembers].map((member) =>
-      metricGroupFor(toPosix(member).replace(/^\.\//, ""))
-    ),
-  );
-}
-
-/**
  * The debt metrics for one joined LCOV report: the uncovered line count of
- * every metric group the report speaks for, and their total.
+ * every metric group, and their total.
  *
  * A file the report has no record for is charged by
  * `debtWithoutCoverageRecord()`, which reads the absence as a file no test
- * loaded. That reading holds only where every package ran, so a group named by
- * `options.unlaunchedMembers` is left out of the result rather than counted,
- * and so is the workspace total, which no longer totals the workspace. A
- * consumer of these metrics gates what it is given; a group it is not given a
- * count for is one this run cannot report on.
+ * loaded. That reading holds only where every package ran.
  */
 export async function collectCoverageDebtMetricsFromLcov(
   options: CoverageDebtMetricsFromLcovOptions,
 ): Promise<CoverageDebtMetric[]> {
-  const unscored = unscoredMetricGroups(options.unlaunchedMembers ?? []);
-  const sourceFiles = (await collectSourceFiles(options.rootDir)).filter(
-    (source) => !unscored.has(source.metricGroup),
-  );
+  const sourceFiles = await collectSourceFiles(options.rootDir);
   const lcovCoverage = parseLcov(options.lcov);
 
   let workspaceUncovered = 0;
@@ -144,13 +101,10 @@ export async function collectCoverageDebtMetricsFromLcov(
     );
   }
 
-  const metrics: CoverageDebtMetric[] = [];
-  if (unscored.size === 0) {
-    metrics.push({
-      name: `${COVERAGE_METRIC_PREFIX} workspace uncovered lines`,
-      uncoveredLines: workspaceUncovered,
-    });
-  }
+  const metrics: CoverageDebtMetric[] = [{
+    name: `${COVERAGE_METRIC_PREFIX} workspace uncovered lines`,
+    uncoveredLines: workspaceUncovered,
+  }];
 
   for (const group of [...groupNames].sort()) {
     metrics.push({

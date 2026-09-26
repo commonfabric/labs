@@ -1244,6 +1244,122 @@ describe("stage G SpaceServer recovery seams", () => {
     }
   });
 
+  it("holds W below a terminal root's re-arming input while the shadow floor defers its retry, then covers it once the retry runs", async () => {
+    // The floor is stubbed as in the clamp case above, and sits ABOVE the
+    // re-arming input: the replica has applied the creation commit, and
+    // shadows only a later, unrelated write. The floor alone would let W
+    // cover the creation commit before the retry loads the piece.
+
+    const stats = emptyServingLoopStats();
+    const rootName = "rearm-held-root";
+    const created = newSpaceServer({ stats });
+    expect(await created.activate()).toBe(true);
+    const runtime = servingRuntime!;
+    const replica = runtime.storageManager.open(space)
+      .replica as unknown as {
+        unappliedForeignSeqFloor?: () => number | undefined;
+        shadowFlipObserver?: () => void;
+      };
+    const rootId = runtime.getCell<{ total?: number }>(
+      space,
+      rootName,
+      undefined,
+    ).getAsNormalizedFullLink().id;
+    const derivedCommitted = () => {
+      const row = engine.database.prepare(
+        `SELECT c.class AS class FROM revision r
+           JOIN "commit" c ON c.seq = r.commit_seq
+           WHERE r.id LIKE 'computed:%' ORDER BY r.seq DESC LIMIT 1`,
+      ).get() as { class: string } | undefined;
+      return row?.class === "derived";
+    };
+
+    const originalWatched = server.demandForSpace.bind(server);
+    (server as { demandForSpace: unknown }).demandForSpace = () =>
+      sessionDemandOf(demandRowsFor([{ id: rootId }]));
+    try {
+      await awaitEach(cycles, () => {
+        created.noteDemandChanged();
+        return stats.structureLoadTerminal === 1;
+      });
+
+      const creatorManager = EmulatedStorageManager.connectTo(server, {
+        as: spaceSigner,
+      });
+      const creator = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: creatorManager,
+      });
+      try {
+        const compiled = await creator.patternManager.compilePattern({
+          main: "/main.tsx",
+          files: [{
+            name: "/main.tsx",
+            contents: [
+              "import { computed, pattern } from 'commonfabric';",
+              "export default pattern<{ n: number }, { total: number }>(",
+              "  ({ n }) => ({ total: computed(() => n + 7) }),",
+              ");",
+            ].join("\n"),
+          }],
+        }, { space });
+        const argument = creator.getCell<{ n: number }>(
+          space,
+          "rearm-held-arg",
+          undefined,
+        );
+        const creatorRoot = creator.getCell<{ total?: number }>(
+          space,
+          rootName,
+          undefined,
+        );
+        await argument.sync();
+        await creatorRoot.sync();
+        const tx = creator.edit();
+        argument.withTx(tx).set({ n: 1 });
+        creator.run(tx, compiled, argument, creatorRoot);
+        expect((await tx.commit()).error).toBeUndefined();
+        await creator.idle();
+        await creator.storageManager.synced();
+      } finally {
+        await creator.dispose();
+        await creatorManager.close();
+      }
+      const creationSeq = Engine.serverSeq(engine);
+      const shadowedSeq =
+        (await server.writeDocument(space, "of:rearm-held-shadow", { n: 1 }))
+          .seq;
+      let floor: number | undefined = shadowedSeq;
+      replica.unappliedForeignSeqFloor = () => floor;
+      created.enqueueCommit({
+        space,
+        seq: creationSeq,
+        class: "authored",
+        sessionId: "session:rearm-held-creator",
+        writes: [{ id: rootId, scopeKey: "space" }],
+      });
+      created.enqueueCommit({
+        space,
+        seq: shadowedSeq,
+        class: "system",
+        sessionId: "session:rearm-held-shadow",
+        writes: [{ id: "of:rearm-held-shadow", scopeKey: "space" }],
+      });
+
+      await awaitEach(cycles, () => stats.structureLoadRearmed === 1);
+      expect(created.watermark).toBeLessThan(creationSeq);
+      expect(derivedCommitted()).toBe(false);
+
+      floor = undefined;
+      replica.shadowFlipObserver?.();
+      await awaitEach(cycles, () => created.watermark >= shadowedSeq);
+      expect(derivedCommitted()).toBe(true);
+      expect(stats.structureLoadFailures).toBe(0);
+    } finally {
+      (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
+    }
+  });
+
   //
   // Stage P2-F: the argument-doc demand → owning-piece run supply
   //

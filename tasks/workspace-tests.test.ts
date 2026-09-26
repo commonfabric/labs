@@ -15,25 +15,14 @@ import {
   leafTask,
   memberRecordingArguments,
   memberTestTask,
-  parseDisabledPackageList,
   readWorkspaceMembers,
   recordingSpool,
   runTests,
-  selectShardMembers,
   testConcurrency,
   testPackage,
 } from "./workspace-tests.ts";
 import * as path from "@std/path";
 import { preloadArgument } from "@commonfabric/test-support/records";
-import { WORKSPACE_TEST_WEIGHTS } from "./test-timing-weights.ts";
-import {
-  readUnlaunchedMembers,
-  UNLAUNCHED_MEMBERS_FILE,
-} from "./unlaunched-members.ts";
-
-const WORKSPACE_SHARDS = 8;
-const AGENTS_HOST_SHARDS = 5;
-const CLI_SHARDS = 10;
 
 // Write a minimal workspace under `dir`: a root deno.jsonc listing the
 // members, and one directory per package whose `test` task records that it
@@ -74,202 +63,6 @@ async function ranPackages(
   }
   return ran;
 }
-
-Deno.test("parseDisabledPackageList parses comma and whitespace separated names", () => {
-  assertEquals(parseDisabledPackageList("runner, ui\nshell\tcli"), [
-    "runner",
-    "ui",
-    "shell",
-    "cli",
-  ]);
-});
-
-Deno.test("parseDisabledPackageList ignores empty entries", () => {
-  assertEquals(parseDisabledPackageList(" runner, ,ui "), ["runner", "ui"]);
-  assertEquals(parseDisabledPackageList(undefined), []);
-});
-
-function unitNames(units: { packageName: string }[]): string[] {
-  return units.map((unit) => unit.packageName);
-}
-
-Deno.test("selectShardMembers returns every enabled member without a shard", () => {
-  assertEquals(
-    selectShardMembers(
-      ["./packages/b", "./packages/a", "./tasks"],
-      ["a"],
-      undefined,
-    ),
-    [
-      { memberPath: "./packages/b", packageName: "b" },
-      { memberPath: "./tasks", packageName: "tasks" },
-    ],
-  );
-});
-
-Deno.test("selectShardMembers balances enabled members by weight", () => {
-  const members = [
-    "./packages/d",
-    "./packages/b",
-    "./packages/a",
-    "./packages/c",
-    "./packages/e",
-  ];
-  assertEquals(
-    unitNames(selectShardMembers(members, [], { index: 1, total: 2 })),
-    ["a", "c", "e"],
-  );
-  assertEquals(
-    unitNames(selectShardMembers(members, [], { index: 2, total: 2 })),
-    ["b", "d"],
-  );
-});
-
-Deno.test("selectShardMembers excludes disabled members before assigning shards", () => {
-  const members = ["./packages/a", "./packages/b", "./packages/c"];
-  assertEquals(
-    unitNames(selectShardMembers(members, ["a"], { index: 1, total: 2 })),
-    ["b"],
-  );
-  assertEquals(
-    unitNames(selectShardMembers(members, ["a"], { index: 2, total: 2 })),
-    ["c"],
-  );
-});
-
-Deno.test("selectShardMembers expands the cli package into internal shards when sharded", () => {
-  const members = ["./packages/a", "./packages/cli", "./packages/z"];
-
-  // Without a workspace shard, cli stays a single unit with no shard env.
-  assertEquals(selectShardMembers(members, [], undefined), [
-    { memberPath: "./packages/a", packageName: "a" },
-    { memberPath: "./packages/cli", packageName: "cli" },
-    { memberPath: "./packages/z", packageName: "z" },
-  ]);
-
-  const selections = Array.from(
-    { length: WORKSPACE_SHARDS },
-    (_, offset) =>
-      selectShardMembers(members, [], {
-        index: offset + 1,
-        total: WORKSPACE_SHARDS,
-      }),
-  );
-  const units = selections.flat();
-  const cliUnits = units.filter((unit) => unit.packageName.startsWith("cli "))
-    .toSorted((a, b) => {
-      const slice = (name: string) => Number(name.match(/\((\d+)\//)?.[1]);
-      return slice(a.packageName) - slice(b.packageName);
-    });
-  assertEquals(
-    cliUnits,
-    Array.from({ length: CLI_SHARDS }, (_, offset) => ({
-      memberPath: "./packages/cli",
-      packageName: `cli (${offset + 1}/${CLI_SHARDS})`,
-      env: { CLI_TEST_SHARD: `${offset + 1}/${CLI_SHARDS}` },
-    })),
-  );
-  assertEquals(unitNames(units).filter((name) => name === "a"), ["a"]);
-  assertEquals(unitNames(units).filter((name) => name === "z"), ["z"]);
-});
-
-Deno.test("selectShardMembers expands agents-host into internal shards", () => {
-  const members = ["./packages/connectors/agents/host"];
-  const units = Array.from(
-    { length: AGENTS_HOST_SHARDS },
-    (_, offset) =>
-      selectShardMembers(members, [], {
-        index: offset + 1,
-        total: AGENTS_HOST_SHARDS,
-      }),
-  ).flat();
-
-  assertEquals(
-    units,
-    Array.from({ length: AGENTS_HOST_SHARDS }, (_, offset) => ({
-      memberPath: "./packages/connectors/agents/host",
-      packageName: `connectors/agents/host (${
-        offset + 1
-      }/${AGENTS_HOST_SHARDS})`,
-      env: {
-        AGENTS_HOST_TEST_SHARD: `${offset + 1}/${AGENTS_HOST_SHARDS}`,
-      },
-    })),
-  );
-});
-
-Deno.test("selectShardMembers expands piece and tasks into internal shards", () => {
-  const members = ["./packages/piece", "./tasks"];
-  const units = Array.from(
-    { length: 3 },
-    (_, offset) =>
-      selectShardMembers(members, [], { index: offset + 1, total: 3 }),
-  ).flat();
-
-  assertEquals(
-    unitNames(units).sort(),
-    [
-      "piece (1/3)",
-      "piece (2/3)",
-      "piece (3/3)",
-      "tasks (1/3)",
-      "tasks (2/3)",
-      "tasks (3/3)",
-    ],
-  );
-});
-
-Deno.test("real workspace timing weights limit two-worker makespans", async () => {
-  const expectedAgentsHostUnits = Array.from(
-    { length: AGENTS_HOST_SHARDS },
-    (_, offset) =>
-      `connectors/agents/host (${offset + 1}/${AGENTS_HOST_SHARDS})`,
-  );
-  const profiledAgentsHostUnits = Object.keys(WORKSPACE_TEST_WEIGHTS)
-    .filter((name) => name.startsWith("connectors/agents/host ("))
-    .toSorted((a, b) => {
-      const slice = (name: string) => Number(name.match(/\((\d+)\//)?.[1]);
-      return slice(a) - slice(b);
-    });
-  assertEquals(profiledAgentsHostUnits, expectedAgentsHostUnits);
-
-  const expectedCliUnits = Array.from(
-    { length: CLI_SHARDS },
-    (_, offset) => `cli (${offset + 1}/${CLI_SHARDS})`,
-  );
-  const profiledCliUnits = Object.keys(WORKSPACE_TEST_WEIGHTS)
-    .filter((name) => name.startsWith("cli ("))
-    .toSorted((a, b) => {
-      const slice = (name: string) => Number(name.match(/\((\d+)\//)?.[1]);
-      return slice(a) - slice(b);
-    });
-  assertEquals(profiledCliUnits, expectedCliUnits);
-
-  const members = await readWorkspaceMembers(
-    new URL("../deno.jsonc", import.meta.url),
-  );
-  const makespans = Array.from(
-    { length: WORKSPACE_SHARDS },
-    (_, offset) => {
-      const workerLoads = [0, 0];
-      const units = selectShardMembers(members, ["runner"], {
-        index: offset + 1,
-        total: WORKSPACE_SHARDS,
-      });
-      for (const unit of units) {
-        const worker = workerLoads[0] <= workerLoads[1] ? 0 : 1;
-        workerLoads[worker] += WORKSPACE_TEST_WEIGHTS[unit.packageName] ?? 1;
-      }
-      return Math.max(...workerLoads);
-    },
-  );
-
-  assertEquals(
-    Math.max(...makespans) < 80,
-    true,
-    `modeled workspace two-worker makespans: ${makespans.join(", ")}`,
-  );
-});
 
 Deno.test("readWorkspaceMembers reads the workspace list from a JSONC manifest", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-members-" });
@@ -324,53 +117,48 @@ Deno.test("assertTaskTestsIncluded requires tasks in the root workspace", () => 
   );
 });
 
-// Run `fn` with TEST_CONCURRENCY set or cleared, then restore the caller's
-// value. This keeps each test independent of the ambient environment.
-async function withTestConcurrency<T>(
-  value: string | undefined,
+// Run `fn` with each variable in `values` set, or cleared where its value is
+// `undefined`, then restore the caller's values. This keeps each test
+// independent of the ambient environment, a coverage run's included.
+async function withEnv<T>(
+  values: Record<string, string | undefined>,
   fn: () => T | Promise<T>,
 ): Promise<T> {
-  const saved = Deno.env.get("TEST_CONCURRENCY");
-  if (value === undefined) {
-    Deno.env.delete("TEST_CONCURRENCY");
-  } else {
-    Deno.env.set("TEST_CONCURRENCY", value);
-  }
+  const saved = Object.keys(values).map((name) =>
+    [name, Deno.env.get(name)] as const
+  );
+  const apply = (name: string, value: string | undefined) => {
+    if (value === undefined) Deno.env.delete(name);
+    else Deno.env.set(name, value);
+  };
+  for (const [name, value] of Object.entries(values)) apply(name, value);
   try {
     return await fn();
   } finally {
-    if (saved === undefined) {
-      Deno.env.delete("TEST_CONCURRENCY");
-    } else {
-      Deno.env.set("TEST_CONCURRENCY", saved);
-    }
+    for (const [name, value] of saved) apply(name, value);
   }
 }
 
-// Run `fn` with DENO_COVERAGE_DIR pointing at a fresh directory under `dir`,
-// then restore the caller's value, and hand `fn` the directory so it can read
-// what the run left there.
-async function withCoverageDir<T>(
-  dir: string,
-  fn: (coverageDir: string) => T | Promise<T>,
-): Promise<T> {
-  const coverageDir = `${dir}/coverage/raw`;
-  const saved = Deno.env.get("DENO_COVERAGE_DIR");
-  Deno.env.set("DENO_COVERAGE_DIR", coverageDir);
+// Run `fn` with the console's errors captured rather than printed, and
+// return them alongside `fn`'s result.
+async function capturingErrors<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; errors: string[] }> {
+  const errors: string[] = [];
+  const originalError = console.error;
+  console.error = (...values: unknown[]) => {
+    errors.push(values.map(String).join(" "));
+  };
   try {
-    return await fn(coverageDir);
+    return { result: await fn(), errors };
   } finally {
-    if (saved === undefined) {
-      Deno.env.delete("DENO_COVERAGE_DIR");
-    } else {
-      Deno.env.set("DENO_COVERAGE_DIR", saved);
-    }
+    console.error = originalError;
   }
 }
 
 Deno.test("testConcurrency parses the override and defaults to half the cores", async () => {
   assertEquals(testConcurrency("3"), 3);
-  await withTestConcurrency(undefined, () => {
+  await withEnv({ TEST_CONCURRENCY: undefined }, () => {
     assertEquals(
       testConcurrency(),
       Math.max(2, Math.floor(navigator.hardwareConcurrency / 2)),
@@ -389,8 +177,8 @@ Deno.test("runTests drains every package with a concurrency limit of one", async
   const dir = await Deno.makeTempDir({ prefix: "ws-serialpool-" });
   try {
     await makeWorkspace(dir, ["a", "b", "c"]);
-    await withTestConcurrency("1", async () => {
-      const passed = await runTests([], undefined, dir);
+    await withEnv({ TEST_CONCURRENCY: "1" }, async () => {
+      const passed = await runTests(dir);
       assertEquals(passed, true);
     });
     assertEquals(await ranPackages(dir, ["a", "b", "c"]), ["a", "b", "c"]);
@@ -399,34 +187,30 @@ Deno.test("runTests drains every package with a concurrency limit of one", async
   }
 });
 
-Deno.test("runTests reports a failure and stops scheduling packages", async () => {
+// A workspace of `a`, `b` and `c` whose first package fails.
+async function makeFailingWorkspace(dir: string): Promise<void> {
+  await makeWorkspace(dir, ["a", "b", "c"]);
+  await Deno.writeTextFile(
+    `${dir}/packages/a/deno.jsonc`,
+    JSON.stringify({
+      tasks: {
+        test:
+          "echo started > ran.txt && echo upstream package download failed >&2 && exit 1",
+      },
+    }),
+  );
+}
+
+Deno.test("runTests without a coverage directory reports a failure and stops scheduling packages", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-fail-fast-" });
   try {
-    await makeWorkspace(dir, ["a", "b", "c"]);
-    await Deno.writeTextFile(
-      `${dir}/packages/a/deno.jsonc`,
-      JSON.stringify({
-        tasks: {
-          test:
-            "echo started > ran.txt && echo upstream package download failed >&2 && exit 1",
-        },
-      }),
+    await makeFailingWorkspace(dir);
+    const { result: passed, errors } = await capturingErrors(() =>
+      withEnv(
+        { TEST_CONCURRENCY: "1", DENO_COVERAGE_DIR: undefined },
+        () => runTests(dir),
+      )
     );
-
-    const errors: string[] = [];
-    const originalError = console.error;
-    console.error = (...values: unknown[]) => {
-      errors.push(values.map(String).join(" "));
-    };
-    let passed: boolean;
-    try {
-      passed = await withTestConcurrency(
-        "1",
-        () => runTests([], undefined, dir),
-      );
-    } finally {
-      console.error = originalError;
-    }
 
     assertEquals(passed, false);
     assertEquals(await ranPackages(dir, ["a", "b", "c"]), ["a"]);
@@ -442,154 +226,46 @@ Deno.test("runTests reports a failure and stops scheduling packages", async () =
   }
 });
 
-Deno.test("runTests records the packages it selected and never started", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "ws-unlaunched-" });
+Deno.test("runTests without a coverage directory names the packages it never started", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-unstarted-" });
   try {
-    await makeWorkspace(dir, ["a", "b", "c"]);
-    await Deno.writeTextFile(
-      `${dir}/packages/a/deno.jsonc`,
-      JSON.stringify({
-        tasks: { test: "echo started > ran.txt && exit 1" },
-      }),
+    await makeFailingWorkspace(dir);
+    const { errors } = await capturingErrors(() =>
+      withEnv(
+        { TEST_CONCURRENCY: "1", DENO_COVERAGE_DIR: undefined },
+        () => runTests(dir),
+      )
     );
-
-    const errors: string[] = [];
-    const originalError = console.error;
-    console.error = (...values: unknown[]) => {
-      errors.push(values.map(String).join(" "));
-    };
-    let unlaunched: string[];
-    try {
-      unlaunched = await withCoverageDir(
-        dir,
-        (coverageDir) =>
-          withTestConcurrency("1", async () => {
-            await runTests([], undefined, dir);
-            return await readUnlaunchedMembers(coverageDir);
-          }),
-      );
-    } finally {
-      console.error = originalError;
-    }
 
     // `a` is the only package that started, so `b` and `c` are the ones the
     // run has nothing to say about.
     assertEquals(await ranPackages(dir, ["a", "b", "c"]), ["a"]);
-    assertEquals(unlaunched, ["./packages/b", "./packages/c"]);
-    assertEquals(
-      errors.filter((message) => message === "- ./packages/b").length,
-      1,
-    );
+    const listed = errors.indexOf("Packages this run never started:");
+    assertEquals(listed >= 0, true);
+    assertEquals(errors.slice(listed + 1), [
+      "- ./packages/b",
+      "- ./packages/c",
+    ]);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
 });
 
-Deno.test("runTests writes no record when every package it selected started", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "ws-all-launched-" });
+Deno.test("runTests with a coverage directory runs every package after a failure and still fails", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-coverage-" });
   try {
-    await makeWorkspace(dir, ["a", "b", "c"]);
-    const recordPath = await withCoverageDir(
-      dir,
-      (coverageDir) =>
-        withTestConcurrency("1", async () => {
-          assertEquals(await runTests([], undefined, dir), true);
-          return `${coverageDir}/${UNLAUNCHED_MEMBERS_FILE}`;
-        }),
-    );
-
-    // The file's absence is the signal, not an empty file: a reader of the
-    // coverage profile takes any record it finds as a run that left something
-    // unmeasured.
-    await assertRejects(() => Deno.stat(recordPath), Deno.errors.NotFound);
-  } finally {
-    await Deno.remove(dir, { recursive: true });
-  }
-});
-
-Deno.test("runTests clears the record an earlier run left in the same coverage directory", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "ws-stale-record-" });
-  try {
-    await makeWorkspace(dir, ["a", "b", "c"]);
-    await Deno.writeTextFile(
-      `${dir}/packages/a/deno.jsonc`,
-      JSON.stringify({ tasks: { test: "exit 1" } }),
+    await makeFailingWorkspace(dir);
+    const { result: passed, errors } = await capturingErrors(() =>
+      withEnv(
+        { TEST_CONCURRENCY: "1", DENO_COVERAGE_DIR: `${dir}/coverage` },
+        () => runTests(dir),
+      )
     );
 
-    const originalError = console.error;
-    console.error = () => {};
-    let records: string[][];
-    try {
-      records = await withCoverageDir(
-        dir,
-        (coverageDir) =>
-          withTestConcurrency("1", async () => {
-            await runTests([], undefined, dir);
-            const stopped = await readUnlaunchedMembers(coverageDir);
-            await Deno.writeTextFile(
-              `${dir}/packages/a/deno.jsonc`,
-              JSON.stringify({ tasks: { test: "echo ok > ran.txt" } }),
-            );
-            assertEquals(await runTests([], undefined, dir), true);
-            return [stopped, await readUnlaunchedMembers(coverageDir)];
-          }),
-      );
-    } finally {
-      console.error = originalError;
-    }
-
-    // The second run started every package it selected, so nothing left in the
-    // directory may still say otherwise.
-    assertEquals(records, [["./packages/b", "./packages/c"], []]);
-  } finally {
-    await Deno.remove(dir, { recursive: true });
-  }
-});
-
-Deno.test("runTests runs every enabled package's test task", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "ws-run-" });
-  try {
-    await makeWorkspace(dir, ["a", "b", "c"]);
-    const passed = await runTests(["b"], undefined, dir);
-    assertEquals(passed, true);
-    assertEquals(await ranPackages(dir, ["a", "b", "c"]), ["a", "c"]);
-  } finally {
-    await Deno.remove(dir, { recursive: true });
-  }
-});
-
-Deno.test("runTests runs only the selected shard's packages", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "ws-shard-" });
-  try {
-    await makeWorkspace(dir, ["a", "b", "c", "d"]);
-    const passed = await runTests([], { index: 2, total: 2 }, dir);
-    assertEquals(passed, true);
-    assertEquals(await ranPackages(dir, ["a", "b", "c", "d"]), ["b", "d"]);
-  } finally {
-    await Deno.remove(dir, { recursive: true });
-  }
-});
-
-Deno.test("runTests passes internal shard environment to expanded packages", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "ws-clishard-" });
-  try {
-    await makeWorkspace(dir, ["a", "cli", "z"]);
-    await Deno.writeTextFile(
-      `${dir}/packages/cli/deno.jsonc`,
-      JSON.stringify({
-        tasks: { test: "echo shard=$CLI_TEST_SHARD > ran.txt" },
-      }),
-    );
-    const shard = { index: 1, total: WORKSPACE_SHARDS };
-    const expected = selectShardMembers(
-      ["./packages/a", "./packages/cli", "./packages/z"],
-      [],
-      shard,
-    ).find((unit) => unit.packageName.startsWith("cli "));
-    const passed = await runTests([], shard, dir);
-    assertEquals(passed, true);
-    const ran = await Deno.readTextFile(`${dir}/packages/cli/ran.txt`);
-    assertEquals(ran.trim(), `shard=${expected?.env?.CLI_TEST_SHARD}`);
+    assertEquals(passed, false);
+    assertEquals(await ranPackages(dir, ["a", "b", "c"]), ["a", "b", "c"]);
+    assertEquals(errors.includes("One or more tests failed."), true);
+    assertEquals(errors.includes("Packages this run never started:"), false);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -636,25 +312,16 @@ Deno.test("initializeDb returns false when the task fails", async () => {
   }
 });
 
-Deno.test("runTests reports a failure when every member is disabled", async () => {
+Deno.test("runTests reports a failure for a workspace with no members", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-empty-" });
   try {
-    await makeWorkspace(dir, ["a", "b"]);
-    const errors: string[] = [];
-    const originalError = console.error;
-    console.error = (...values: unknown[]) => {
-      errors.push(values.map(String).join(" "));
-    };
-    let passed: boolean;
-    try {
-      passed = await runTests(["a", "b"], undefined, dir);
-    } finally {
-      console.error = originalError;
-    }
+    await makeWorkspace(dir, []);
+    const { result: passed, errors } = await capturingErrors(() =>
+      runTests(dir)
+    );
     // A run that tested nothing is a misconfiguration, not a pass.
     assertEquals(passed, false);
-    assertEquals(errors, ["No workspace packages selected to test."]);
-    assertEquals(await ranPackages(dir, ["a", "b"]), []);
+    assertEquals(errors, ["No workspace packages to test."]);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -719,17 +386,17 @@ Deno.test("acceptsJUnitPath refuses a task whose flag would land elsewhere", () 
 });
 
 Deno.test("acceptsJUnitPath takes a runner only when it is known to forward", () => {
-  // The sharded runner hands appended flags to its `deno test` runs and
+  // The batch runner hands appended flags to its `deno test` runs and
   // leaves one report; a script of a package's own shows nothing of what
   // it does with them. Which member runs the task does not enter into it.
   assertEquals(
     acceptsJUnitPath(
-      "deno run -A ../../tasks/run-sharded-test-files.ts X cli . -- -A",
+      "deno run -A ../../tasks/run-test-batches.ts . -- -A",
     ),
     true,
   );
   assertEquals(
-    acceptsJUnitPath("deno run -A ./run-sharded-test-files.ts X tasks . -- -A"),
+    acceptsJUnitPath("deno run -A ./run-test-batches.ts . -- -A"),
     true,
   );
   assertEquals(acceptsJUnitPath("deno run -A test/runner.ts"), false);
@@ -737,7 +404,7 @@ Deno.test("acceptsJUnitPath takes a runner only when it is known to forward", ()
   // flag reaches.
   assertEquals(
     acceptsJUnitPath(
-      "deno run -A ./run-sharded-test-files.ts X tasks . -- -A && echo done",
+      "deno run -A ./run-test-batches.ts . -- -A && echo done",
     ),
     false,
   );
@@ -913,7 +580,7 @@ Deno.test("a forwarding runner is read by the flags it hands its leaf", () => {
   // whole line would answer from the runner's.
   assertEquals(
     leafFlags(
-      "deno run --allow-read run-sharded-test-files.ts x y . -- --no-check -A",
+      "deno run --allow-read run-test-batches.ts . -- --no-check -A",
     ),
     ["--no-check", "-A"],
   );
@@ -960,7 +627,7 @@ Deno.test("a recording leaf is given the preload and a write it needs", async ()
   // write is what makes the preload take the class names, and the read
   // is what finds the files that replace them.
   assertEquals(recording.get("./packages/utils"), [preload]);
-  // A member behind the sharded runner is read by the flags its leaf takes,
+  // A member behind the batch runner is read by the flags its leaf takes,
   // which here grant a write anywhere.
   assertEquals(recording.get("./packages/cli"), [preload]);
   assertEquals(recording.get("./packages/dashboard"), [preload]);
@@ -1071,7 +738,7 @@ Deno.test("runTests refuses a workspace whose member defines no test task", asyn
     );
 
     await assertRejects(
-      () => runTests([], undefined, dir),
+      () => runTests(dir),
       Error,
       "Missing from: `./packages/b/deno.jsonc`",
     );

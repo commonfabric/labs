@@ -201,11 +201,13 @@ record on their own. Four consequences worth knowing while writing one:
   registered as ignored. A test that passes only after a neighbor has
   run fails there, and fails by waiting out the five-minute safety net
   rather than by asserting. A test charged five minutes is charged more
-  than the hard bound on a whole lane, so it then runs nowhere. "Every
+  than the bound a whole lane is packed to finish inside, so it then runs
+  nowhere. "Every
   test has to pass on its own" in `docs/development/TESTING.md` covers
   the rest, including how to run one test that way locally.
 
-A new test *surface* (a new CI job, script, or harness) does need wiring —
+A new test *surface* (a new script, harness, or kind of test) is a new suite in
+`tasks/test-topology/`, never a new CI job, and does need wiring —
 `docs/development/test-records.md` under "Covering a new test surface".
 
 Your own runs are recorded too, and are marked as an agent's: with

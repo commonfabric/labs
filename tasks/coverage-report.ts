@@ -38,10 +38,6 @@ import {
   parseLcov,
 } from "./coverage-metrics.ts";
 import { collectSetReports } from "./coverage-gate.ts";
-import {
-  parseUnlaunchedMembers,
-  UNLAUNCHED_MEMBERS_FILE,
-} from "./unlaunched-members.ts";
 import { appendSummary } from "./step-summary.ts";
 import { readWorkspaceMembers } from "./workspace-tests.ts";
 import { loadTopology } from "./test-topology.ts";
@@ -98,9 +94,6 @@ export interface LaneReports {
   /** The content of every LCOV report found, one entry per file. */
   lcov: string[];
 
-  /** Workspace members some lane selected and never launched. */
-  unlaunchedMembers: string[];
-
   /**
    * Whether a lane that opened the pattern compile byte cache found it not
    * restored. False where no lane opened it.
@@ -109,19 +102,11 @@ export interface LaneReports {
 }
 
 /**
- * Every LCOV report under a directory, the record each lane left of what
- * it selected and never launched, and the record each lane that opened
+ * Every LCOV report under a directory, and the record each lane that opened
  * the compile byte cache left of whether it found the cache restored.
- *
- * The record travels with the report it qualifies, and
- * `tasks/unlaunched-members.ts` puts the obligation to read it back on
- * whatever scores that report. A member that never started has unknown
- * coverage rather than none, so scoring its source without the record
- * would charge every line of it as uncovered.
  */
 export async function collectReports(at: string): Promise<LaneReports> {
   const lcov: string[] = [];
-  const unlaunchedMembers = new Set<string>();
   const cacheStates = new Set<string>();
   try {
     for await (const entry of walk(at, { includeDirs: false })) {
@@ -129,14 +114,6 @@ export async function collectReports(at: string): Promise<LaneReports> {
         lcov.push(await Deno.readTextFile(entry.path));
       } else if (path.basename(entry.path) === COMPILE_CACHE_STATE_FILE) {
         cacheStates.add((await Deno.readTextFile(entry.path)).trim());
-      } else if (path.basename(entry.path) === UNLAUNCHED_MEMBERS_FILE) {
-        for (
-          const member of parseUnlaunchedMembers(
-            await Deno.readTextFile(entry.path),
-          )
-        ) {
-          unlaunchedMembers.add(member);
-        }
       }
     }
   } catch (error) {
@@ -149,7 +126,6 @@ export async function collectReports(at: string): Promise<LaneReports> {
   // cold run's figure through.
   return {
     lcov,
-    unlaunchedMembers: [...unlaunchedMembers].sort(),
     cold: [...cacheStates].some((state) => state !== "warm"),
   };
 }
@@ -183,9 +159,6 @@ function measuresAnything(lcov: string): boolean {
  * holds no record charges every tracked line as uncovered, which states a
  * measurement the run did not make; the dashboard charts this series, so
  * one run's spike and the next run's recovery would both be invented.
- * What a run measured part of is scored against the members no lane
- * launched, which is what withholds those members' groups and the
- * workspace total with them.
  */
 export async function repositoryFigures(
   options: ReportOptions,
@@ -196,7 +169,6 @@ export async function repositoryFigures(
   return await collectCoverageDebtMetricsFromLcov({
     rootDir: options.root,
     lcov,
-    unlaunchedMembers: reports.unlaunchedMembers,
   });
 }
 
@@ -215,14 +187,7 @@ function memberName(member: string): string {
  * figure standing, where a zero-coverage figure would tell every later
  * pull request that the member's whole source had gone uncovered.
  *
- * So is a set over a member some lane never launched. A set is compared
- * between runs on the understanding that it ran whole, and a run that
- * started only part of the member's tests reaches fewer of its lines, so
- * the figure is above what the set measures. Published, it becomes the
- * bar every later pull request is held to, and the gate stops catching a
- * rise it would have caught.
- *
- * And so is a set a lane marked as measured through a failing test. That
+ * So is a set a lane marked as measured through a failing test. That
  * run stayed green because a flake rate excused the failure, and the
  * number is short by whatever the failing test would have reached, so
  * publishing it holds every later pull request to a bar this run did not
@@ -230,18 +195,15 @@ function memberName(member: string): string {
  */
 export async function measuredSetFigures(
   options: ReportOptions,
-  laneReports: LaneReports,
 ): Promise<CoverageDebtMetric[]> {
   const suites = await loadTopology(options.root);
   const members = (await readWorkspaceMembers(
     path.join(options.root, "deno.jsonc"),
   )).map(memberName);
-  const unlaunched = new Set(laneReports.unlaunchedMembers.map(memberName));
   const reports = await collectSetReports(reportsDirectory(options));
   const marked = await markedSets(reportsDirectory(options));
   const figures: CoverageDebtMetric[] = [];
   for (const ref of measuredSets(suites)) {
-    if (unlaunched.has(ref.set.member)) continue;
     if (marked.has(measuredSetDirectory(ref))) continue;
     const found = reports.get(measuredSetDirectory(ref));
     if (found === undefined || found.length === 0) continue;
@@ -295,17 +257,8 @@ export async function markedSets(reportsDir: string): Promise<Set<string>> {
   return marked;
 }
 
-/**
- * Says what this run measured, in the job summary.
- *
- * A missing workspace total has two causes that call for different words.
- * Nothing reported at all, and a member no lane launched, which withholds
- * the total and names itself as the reason.
- */
-export function summarize(
-  figures: readonly CoverageDebtMetric[],
-  unlaunchedMembers: readonly string[] = [],
-): string {
+/** Says what this run measured, in the job summary. */
+export function summarize(figures: readonly CoverageDebtMetric[]): string {
   const workspace = figures.find((figure) =>
     figure.name === coverageMetricForGroup("workspace")
   );
@@ -313,11 +266,6 @@ export function summarize(
   if (workspace !== undefined) {
     lines.push(
       `The workspace holds ${workspace.uncoveredLines} uncovered lines.`,
-    );
-  } else if (unlaunchedMembers.length > 0) {
-    lines.push(
-      `Nothing launched ${unlaunchedMembers.join(", ")}, so this run ` +
-        `carries no measurement of the workspace.`,
     );
   } else {
     lines.push("No lane reported coverage.");
@@ -337,14 +285,14 @@ export async function report(
   const reports = await collectReports(reportsDirectory(options));
   const figures = [
     ...await repositoryFigures(options, reports),
-    ...await measuredSetFigures(options, reports),
+    ...await measuredSetFigures(options),
   ];
   recordCoverage(
     figures.map((figure) => [figure.name, figure.uncoveredLines]),
     reports.cold,
     env,
   );
-  return summarize(figures, reports.unlaunchedMembers);
+  return summarize(figures);
 }
 
 /**

@@ -1,5 +1,5 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --allow-run
-import { exists } from "@std/fs";
+import { exists, walkSync } from "@std/fs";
 import * as path from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
 import {
@@ -8,6 +8,7 @@ import {
   renderVersionModule,
 } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 import { CONNECTOR_PATTERN_SOURCES } from "../packages/connectors/pattern-sources.ts";
+import { BASELINES_DIR, isIframeGuestSource } from "./pattern-files.ts";
 
 export interface BuildConfigInitializer {
   root: string;
@@ -22,7 +23,8 @@ export type BinaryName = (typeof BINARY_NAMES)[number];
 /**
  * Everything a built binary is made from, as repository-relative files and
  * directories (a directory ends in `/`): the Deno release `mise.toml` pins,
- * which `deno compile` embeds in every binary; this script; the workspace
+ * which `deno compile` embeds in every binary; this script and the pattern
+ * file classification it imports; the workspace
  * manifest and lockfile; the port table the servers import; and the trees
  * that the entry points' module graphs and every `--include` reach. A CI lane
  * keys the binaries it caches on the tracked contents of these, so a change
@@ -32,6 +34,7 @@ export type BinaryName = (typeof BINARY_NAMES)[number];
 export const BINARY_SOURCES = [
   "mise.toml",
   "tasks/build-binaries.ts",
+  "tasks/pattern-files.ts",
   "deno.jsonc",
   "deno.lock",
   "ports.json",
@@ -278,13 +281,30 @@ export class BuildConfig {
    * Returns the paths within `includePaths()` that `deno compile` does not
    * embed in `binary` on their own account. A module among them is still
    * embedded when an embedded module imports it. The toolshed leaves out the
-   * patterns' integration tests, with their helpers and fixtures, which are
-   * test code rather than patterns the toolshed is asked to serve.
+   * files in the pattern trees that it never serves to a runtime: the
+   * integration tests with their helpers and fixtures, the recorded
+   * compatibility baselines, every other test file, and every iframe guest
+   * source. Those files are the ones in the pattern trees that import
+   * npm packages, which `deno compile` would otherwise embed too.
    */
   excludePaths(binary: BinaryName): string[] {
-    return binary === "toolshed"
-      ? [this.#path("packages", "patterns", "integration")]
-      : [];
+    if (binary !== "toolshed") return [];
+    const directories = [
+      this.#path("packages", "patterns", "integration"),
+      this.#path(...BASELINES_DIR.split("/")),
+    ];
+    const files = this.patternPaths().flatMap((tree) =>
+      Array.from(
+        walkSync(tree, { includeDirs: false }),
+        (entry) => entry.path,
+      ).filter((file) =>
+        (/\.test\.tsx?$/.test(file) || isIframeGuestSource(file, tree)) &&
+        !directories.some((directory) =>
+          file.startsWith(`${directory}${path.SEPARATOR}`)
+        )
+      )
+    );
+    return [...directories, ...files.sort()];
   }
 
   distDir() {
@@ -491,6 +511,11 @@ function lockedCompileArgs(config: BuildConfig): string[] {
     "--lock",
     config.workspaceLockPath(),
     "--frozen=true",
+    // Embed only the npm packages the binary's module graph reaches, rather
+    // than every npm package in the lockfile. A package that a binary loads
+    // only through a specifier the compile cannot read statically must be
+    // named with `--include npm:<package>`.
+    "--exclude-unused-npm",
   ];
 }
 

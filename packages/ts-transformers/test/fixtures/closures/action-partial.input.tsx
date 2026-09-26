@@ -9,9 +9,10 @@ interface BaseState {
 type PartState = Partial<BaseState>;
 
 // FIXTURE: action-partial
-// Verifies: Partial<BaseState> produces optional (anyOf undefined|type) capture schemas in handlers
-//   action(() => console.log(a)) → handler(false, { a: { anyOf: [undefined, string] } }, ...)({ a })
-// Context: Partial<> makes properties optional; capture schemas reflect this with anyOf union
+// Verifies: Partial<BaseState> produces optional capture schemas in handlers
+//   action(() => console.log(a)) → handler(false, { a: { type: ["string", "undefined"], asCell: ["readonly"] } }, ...)({ a })
+// Context: Partial<> makes properties optional; capture schemas reflect this
+//   with `undefined` in the property's type list
 export default pattern<PartState>(({ a, b }) => {
   return {
     readA: action(() => console.log(a)),

@@ -131,7 +131,6 @@ function snapshot(state: Awaited<ReturnType<typeof openFixture>>["state"]) {
       missesOf: [...graph.missesOf].map(([key, values]) => [key, [...values]]),
       memo: [...graph.memo],
       schemaRefs: [...graph.schemaRefs],
-      schemaRefCounts: [...graph.schemaRefCounts],
       loaded: graph.manager.loadedAddresses(),
     })),
   };

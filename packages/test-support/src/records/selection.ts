@@ -248,19 +248,33 @@ export interface UnschedulableEntry {
   cost: number;
 }
 
+/**
+ * What one suite's batches were fitted to cost: the intercept, the slope
+ * on what its own tests take, and what one more of its units costs a
+ * batch already running others.
+ */
+export interface SuiteFit {
+  overhead: number;
+  correction: number;
+  unitOverhead: number;
+}
+
 /** The fitted numbers a lane's own timing records produced. */
 export interface Calibration {
   /** Seconds each capability's setup takes. */
   setupCost: Record<string, number>;
 
+  /** Per suite, what its batches run without coverage cost. */
+  suites: Record<string, SuiteFit>;
+
   /**
-   * Per suite: the intercept, the slope on what its own tests take, and
-   * what one more of its units costs a batch already running others.
+   * Per suite, what its batches run with coverage on cost, which is
+   * fitted apart because instrumenting a run costs it time and how much
+   * is a property of the suite. A suite no lane has run with coverage on
+   * has no entry, and a manifest carrying no map at all is read as
+   * having no such suite.
    */
-  suites: Record<
-    string,
-    { overhead: number; correction: number; unitOverhead: number }
-  >;
+  suitesWithCoverage?: Record<string, SuiteFit>;
 
   /** Seconds a lane spends outside its batches. */
   prologue: number;
@@ -552,10 +566,25 @@ function parseCalibration(
   };
   const setupCost = numbers(value.setupCost);
   if (setupCost === undefined) return undefined;
-  if (!isRecord(value.suites)) return undefined;
   if (!isFiniteNumber(value.prologue) || value.prologue < 0) return undefined;
-  const suites: Calibration["suites"] = {};
-  for (const [suite, fitted] of Object.entries(value.suites)) {
+  const suites = parseFits(value.suites, schema);
+  if (suites === undefined) return undefined;
+  if (value.suitesWithCoverage === undefined) {
+    return { setupCost, suites, prologue: value.prologue };
+  }
+  const suitesWithCoverage = parseFits(value.suitesWithCoverage, schema);
+  if (suitesWithCoverage === undefined) return undefined;
+  return { setupCost, suites, suitesWithCoverage, prologue: value.prologue };
+}
+
+/** Reads a map of suites to their fits, failing whole if any fails. */
+function parseFits(
+  value: unknown,
+  schema: number,
+): Record<string, SuiteFit> | undefined {
+  if (!isRecord(value)) return undefined;
+  const suites: Record<string, SuiteFit> = {};
+  for (const [suite, fitted] of Object.entries(value)) {
     if (!isRecord(fitted)) return undefined;
     if (
       !isFiniteNumber(fitted.overhead) || fitted.overhead < 0 ||
@@ -584,7 +613,7 @@ function parseCalibration(
       unitOverhead,
     };
   }
-  return { setupCost, suites, prologue: value.prologue };
+  return suites;
 }
 
 function parseLane(value: unknown): LanePlan | undefined {

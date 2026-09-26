@@ -83,7 +83,8 @@ cf_test_step_begin() {
   cf_test_step_close 0
   # The step's identity is the script's name and the step's, and carries
   # no section: which section scheduled a step is run context, and the
-  # same step must join across a CI section leg and a local `all` run.
+  # same step must join across a lane's run of one section and a local
+  # `all` run.
   CF_TEST_STEP_NAME="$CF_TEST_RECORD_NAME $1"
   CF_TEST_STEP_START_MS=$(cf_test_now_ms || echo 0)
 }

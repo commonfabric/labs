@@ -101,10 +101,10 @@ that span the package (shared helpers such as `test/vnode-helpers.ts`, sibling
 patterns, `cfc/` modules) resolve without a flag. A config file with no `name`,
 such as a workspace member stub that only defines tasks, does not anchor the
 root. Pass `--root` to anchor somewhere else; an import that climbs above the
-root fails naming the import and the importing file. The CI "Pattern Unit
-Tests" job (the `pattern-tests` target in `tasks/integration.ts`) passes
-`--root packages/patterns` explicitly, so a bare local run resolves imports
-the same way CI does.
+root fails naming the import and the importing file. CI's `pattern-unit` suite
+(the `pattern-tests` target in `tasks/integration.ts`) passes `--root
+packages/patterns` explicitly, so a bare local run resolves imports the same way
+CI does.
 
 ## Test Step Format
 
@@ -527,5 +527,6 @@ const assert_total_correct = assert(() => {
 
 - [Testing Handlers via CLI](./handlers-cli-testing.md) - Manual CLI testing workflow
 - [Pattern Testing Spec](../../specs/PATTERN_TESTING_SPEC.md) - Technical specification
-- [Coverage in CI](../../development/COVERAGE.md) - How the pattern unit tests run here feed the coverage-debt gate
+- [Coverage in CI](../../development/COVERAGE.md) - How the pattern unit tests
+  run here feed the repository-wide coverage figure
 - [Patterns package test lanes](../../../packages/patterns/deno.jsonc) - Where each kind of test (plain Deno unit test, pattern test, integration test) lives in the patterns package and how each is discovered and run

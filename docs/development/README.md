@@ -75,9 +75,8 @@ mapped in [`../README.md`](../README.md).
   installing it commits you to, and the questions a local clone answers more
   cheaply
 - [`CI_PERFORMANCE.md`](CI_PERFORMANCE.md) — how continuous-integration wall
-  time is tracked, and when to start or stop work on splitting and
-  rebalancing jobs
-- [`COVERAGE.md`](COVERAGE.md) — the two coverage mechanisms, which job
+  time is tracked, the dials that govern the lanes, and when to move them
+- [`COVERAGE.md`](COVERAGE.md) — the two coverage mechanisms, which suite
   collects which, and how to read the resulting numbers
 - [`test-records.md`](test-records.md) — the record of every test execution:
   what gets recorded, the environment surface, opting a workstation in with

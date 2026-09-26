@@ -215,10 +215,11 @@ test again. A check reading what the run around it produced exists only
 as part of that run, so there is nothing to select and no suite in the
 test topology to claim its identity. Three checks are of this shape: the
 pull request coverage gate, which reads the coverage artifacts of every
-job in its own run; the store half of the test topology's drift guard,
-which reads those jobs' records; and the nightly audit over the CFC
-property corpus, which reads what the step before it wrote. A gate
-resolving a merge base against a base ref is not, and records normally.
+lane in its own run; the store half of the test topology's drift guard, which
+reads those lanes' records; and the CFC Property Suite's audit step, which
+reads the corpus the step before it wrote. The first two are steps of `Status`,
+the job in `deno.yml` that waits for every lane. A gate resolving a merge base
+against a base ref is not, and records normally.
 
 One thing that is not a test is recorded anyway: a lane measuring
 itself. A lane measures its own setup and each of its batches through
@@ -237,17 +238,17 @@ by its name.
 A batch that ended badly is written as a failure, and a test in it
 failing is enough to end it badly.
 
-The job that scores a run's coverage writes what the run's tests covered
-the same way. It is a check no lane can be asked to run, since it reads
-what every lane produced, so it records no test; what it writes are
-measurements, like a lane's, rather than records of a check. Each figure is a record named
-`ci-lane coverage group <group>` or `ci-lane coverage set <suite>/<member>`
-whose `durationMs` holds a count of uncovered lines, and a run whose
-pattern compile cache was not restored also carries
-`ci-lane coverage cold`. The job ships them only from a push, under the
-artifact name `coverage` (`COVERAGE_ARTIFACT`), so that a reader finds a
-day's figures by listing for the objects the relay names after it.
-`coverageRecords` and `coverageFiguresOf` in
+`Status` writes what a push run's tests covered the same way, in the step that
+scores the run's coverage. That step is a check no lane can be asked to run,
+since it reads what every lane produced, so it records no test; what it writes
+are measurements, like a lane's, rather than records of a check. Each figure is
+a record named `ci-lane coverage group <group>` or `ci-lane coverage set
+<suite>/<member>` whose `durationMs` holds a count of uncovered lines, and a run
+whose pattern compile cache was not restored also carries `ci-lane coverage
+cold`. `Status` ships them only from a push, under the artifact suffix
+`coverage` (`COVERAGE_ARTIFACT`), which the shipping action uploads as
+`test-records-coverage-a<attempt>`, so that a reader finds a day's figures by
+listing for the objects the relay names after it. `coverageRecords` and `coverageFiguresOf` in
 `@commonfabric/test-support/records` write and read them.
 
 A consumer that builds anything per test excludes them first: pass
@@ -454,28 +455,41 @@ make if a closed partition is ever shown to have lost something.
 
 ## CI movement
 
-Test jobs hold no credentials. Each recording job — which is every job
-running tests that "Recording" above does not exempt — spools records
-(and its JUnit
-XML: leaf cases become records, container cases — one per describe level,
-with overlapping times — are dropped by a name-prefix rule) and uploads
-one credential-free `test-records-<job>-a<attempt>` artifact,
-`if: always()`. The artifact holds `records.ndjson` — always written,
-zero records or not — and `job.json`; an artifact without a readable
-`records.ndjson` is truncated, and the relay fails it visibly rather
-than ship a context-only object that would read as a run with no tests.
-The attempt lives in the artifact name because artifacts are scoped to
-the run. The artifact also needs the immutable start of the attempt that
-produced it. Under the planned relay contract, a re-run re-ships earlier
-attempts' artifacts using their own attempt numbers and start times, so
-those objects collide with their first shipment, while the new attempt's
-artifacts create new objects. The current relay instead uses the workflow
-run's mutable `run_started_at` for all of them. That can move an earlier
-artifact to another date and create a second copy instead of a collision.
+Test jobs hold no record-store credential. Each recording job — which is every
+job running tests that "Recording" above does not exempt — spools records
+and uploads one credential-free `test-records-<job>-a<attempt>` artifact, `if:
+always()`. JUnit XML becomes records as it is gathered: leaf cases become
+records, and container cases — one per describe level, with overlapping times —
+are dropped by a name-prefix rule.
+
+In `deno.yml` the recording jobs are the lanes of the `tests` job. Each lane
+ships one artifact, `test-records-tests-<lane>-a<attempt>`, and its shipping
+step names no variant and no JUnit specification. The lane runner
+(`tasks/ci-lane.ts`) gathers each batch's direct records and JUnit reports into
+the lane's spool as the batch finishes, marking each with its suite's variant.
+Each suite declares its JUnit outputs in the topology, so the lane knows where
+they are without the workflow saying. A lane that ran default and non-default
+batches therefore ships records the job-wide inputs could not have described.
+`Status` ships one more artifact, `test-records-coverage-a<attempt>`, holding
+only the coverage measurements `Status` writes, and only from a push. The
+artifact holds `records.ndjson` — always written, zero records or not — and
+`job.json`; an artifact without a readable `records.ndjson` is truncated, and
+the relay fails it visibly rather than ship a context-only object that would
+read as a run with no tests. The attempt lives in the artifact name because
+artifacts are scoped to the run. The artifact also needs the immutable start of
+the attempt that produced it. Under the planned relay contract, a re-run
+re-ships earlier attempts' artifacts using their own attempt numbers and start
+times, so those objects collide with their first shipment, while the new
+attempt's artifacts create new objects. The current relay instead uses the
+workflow run's mutable `run_started_at` for all of them. That can move an
+earlier artifact to another date and create a second copy instead of a
+collision.
 
 The shared shipping action's optional `variant` input stamps every spooled
-and JUnit-derived record gathered by that job. Jobs omit it for the default
-configuration.
+and JUnit-derived record gathered by that job, and its optional `junit` input
+names the JUnit reports to ingest. A job that gathers its own records, as a lane
+does, passes neither, and a job running only the default configuration omits
+`variant`.
 
 The relay checks out its implementation from the default branch, not from
 the triggering test run. A new optional record field therefore rolls out in

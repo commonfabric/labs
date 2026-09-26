@@ -1,11 +1,12 @@
-#!/usr/bin/env -S deno run --allow-env --allow-read --allow-write --allow-run
+#!/usr/bin/env -S deno run --allow-read --allow-write --allow-run
 
 /**
- * Runs the share of a workspace member's test files that one shard holds.
+ * Runs a workspace member's test files as the `deno test` runs their flags
+ * need.
  *
- *     run-sharded-test-files.ts VARIABLE PROFILE ROOT [OPTION]... -- FLAGS...
+ *     run-test-batches.ts ROOT [OPTION]... -- FLAGS...
  *
- * `readShardedRunnerArguments()` in the test topology reads those arguments
+ * `readBatchRunnerArguments()` in the test topology reads those arguments
  * for this runner and for a lane pointed at the same files, so the two agree
  * on which files the member has and which flags each of them runs under.
  * The files a `--serial` or `--all-access` option names run apart from the
@@ -15,75 +16,13 @@
  * run under the wrong flags.
  */
 
-import { parseShard, type Shard } from "./shard-utils.ts";
 import {
   memberTestFiles,
-  type ParsedTestTask,
-  readShardedRunnerArguments,
+  readBatchRunnerArguments,
   type TestBatch,
   testBatches,
   unmatchedGlobs,
 } from "./test-topology/deno-task.ts";
-import {
-  AGENTS_HOST_TEST_WEIGHTS,
-  PIECE_TEST_WEIGHTS,
-  TASK_TEST_WEIGHTS,
-} from "./test-timing-weights.ts";
-import { assignWeightedShards } from "./weighted-shards.ts";
-
-const PROFILES = {
-  "agents-host": { weights: AGENTS_HOST_TEST_WEIGHTS, defaultWeight: 0.4 },
-  piece: { weights: PIECE_TEST_WEIGHTS, defaultWeight: 0.2 },
-  tasks: { weights: TASK_TEST_WEIGHTS, defaultWeight: 0.2 },
-  cli: { weights: {}, defaultWeight: 1 },
-  dashboard: { weights: {}, defaultWeight: 1 },
-} as const;
-
-type ProfileName = keyof typeof PROFILES;
-
-/**
- * Lists the test modules the runner's arguments name in the member at
- * `memberDir`, as stable slash-separated paths relative to the member. With
- * no arguments, that is every test module in the member.
- *
- * The list comes from the topology's own `memberTestFiles`, including the
- * `--ignore` globs and the member's `exclude` lists. The runner and the
- * topology therefore list the same files, so every test the runner runs
- * belongs to a unit a lane can ask for.
- */
-export async function collectTestFiles(
-  memberDir: string,
-  task: Pick<ParsedTestTask, "paths" | "ignores"> = {
-    paths: ["."],
-    ignores: [],
-  },
-): Promise<string[]> {
-  return (await memberTestFiles(memberDir, task))
-    .map((file) => file.replaceAll("\\", "/"));
-}
-
-/** Selects the files assigned to one weighted shard. */
-export function selectShardedTestFiles(
-  files: string[],
-  shard: Shard | undefined,
-  weights: Readonly<Record<string, number>>,
-  defaultWeight: number,
-): string[] {
-  if (!shard) return [...files].sort();
-  if (shard.total > files.length) {
-    throw new Error(
-      `Shard count ${shard.total} exceeds test file count ${files.length}.`,
-    );
-  }
-  const assignments = assignWeightedShards(
-    files.map((name) => ({
-      name,
-      weight: weights[name] ?? defaultWeight,
-    })),
-    shard.total,
-  );
-  return files.filter((name) => assignments.get(name) === shard.index).sort();
-}
 
 /** The flag that names where `deno test` writes its JUnit report. */
 const JUNIT_PATH_FLAG = "--junit-path=";
@@ -189,29 +128,25 @@ export async function runTestBatches(
 }
 
 /**
- * Runs the runner over the member at `memberDir`, given its arguments, and
- * returns the exit code of the first `deno test` that failed, or zero when
- * none did. `shardOf` reads the environment variable the arguments name for
- * the shard, and a shard is taken only where it gives one.
+ * Runs every test file of the member at `memberDir` that the runner's
+ * arguments name, and returns the exit code of the first `deno test` that
+ * failed, or zero when none did.
  *
  * Throws on arguments it cannot read, on a `--serial`, `--all-access` or
- * `--ignore` glob that names no test file, and on a shard holding no file.
+ * `--ignore` glob that names no test file, and on a member holding no test
+ * file.
  */
-export async function runShardedTests(
+export async function runMemberBatches(
   args: readonly string[],
   memberDir: string,
-  shardOf: (variable: string) => string | undefined = (variable) =>
-    Deno.env.get(variable),
 ): Promise<number> {
-  const read = readShardedRunnerArguments(args);
-  if (read === undefined || !(read.profile in PROFILES)) {
+  const test = readBatchRunnerArguments(args);
+  if (test === undefined) {
     throw new Error(
-      "Usage: run-sharded-test-files.ts VARIABLE PROFILE ROOT " +
+      "Usage: run-test-batches.ts ROOT " +
         "[--serial=GLOBS] [--all-access=GLOBS] -- TEST_FLAGS...",
     );
   }
-  const profile = PROFILES[read.profile as ProfileName];
-  const { test } = read;
   const unmatched = await unmatchedGlobs(memberDir, test.paths, [
     ...test.serial,
     ...test.allAccess,
@@ -224,28 +159,13 @@ export async function runShardedTests(
       }.`,
     );
   }
-  const shardRaw = shardOf(read.shardVariable);
-  const shard = shardRaw ? parseShard(shardRaw) : undefined;
-  const files = selectShardedTestFiles(
-    await collectTestFiles(memberDir, test),
-    shard,
-    profile.weights,
-    profile.defaultWeight,
-  );
-  if (files.length === 0) {
-    throw new Error(
-      `No test files selected${shardRaw ? ` for ${shardRaw}` : ""}.`,
-    );
-  }
-
-  const label = shardRaw ? ` shard ${shardRaw}` : "";
-  console.log(`Running ${read.profile} test${label} files:`);
-  for (const file of files) console.log(`  ${file}`);
+  const files = await memberTestFiles(memberDir, test);
+  if (files.length === 0) throw new Error("No test file to run.");
   return await runTestBatches(testBatches(test, files), memberDir);
 }
 
 async function main(): Promise<void> {
-  const code = await runShardedTests(Deno.args, Deno.cwd());
+  const code = await runMemberBatches(Deno.args, Deno.cwd());
   if (code !== 0) Deno.exit(code);
 }
 

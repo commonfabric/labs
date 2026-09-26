@@ -12,7 +12,6 @@ import {
   type Finding,
   incompatibilityPaths,
   parseArgs,
-  parseShard,
   partitionAcceptedBreaks,
   type PatternContract,
   readBaselines,
@@ -183,22 +182,6 @@ describe("parseArgs", () => {
 
   it("refuses a filter with no value rather than checking everything", () => {
     expect(() => parseArgs(["--only"])).toThrow("--only needs a value");
-  });
-});
-
-describe("parseShard", () => {
-  it("treats an absent shard as the whole set", () => {
-    expect(parseShard(undefined)).toEqual({ index: 0, count: 1 });
-  });
-
-  it("parses 1-based i/n into a 0-based index", () => {
-    expect(parseShard("3/4")).toEqual({ index: 2, count: 4 });
-  });
-
-  it("rejects a malformed or out-of-range shard", () => {
-    expect(() => parseShard("3")).toThrow(/expected/);
-    expect(() => parseShard("5/4")).toThrow(/out of range/);
-    expect(() => parseShard("0/4")).toThrow(/out of range/);
   });
 });
 
@@ -414,32 +397,21 @@ describe("selectItems", () => {
     "packages/patterns/notes/note.tsx",
     "packages/patterns/notes/other.tsx",
   ];
-  const WHOLE = { index: 0, count: 1 };
 
-  it("selects every item when unsharded and unfiltered", () => {
-    expect(selectItems(ITEMS, [], WHOLE)).toEqual(ITEMS);
+  it("selects every item when unfiltered", () => {
+    expect(selectItems(ITEMS, [])).toEqual(ITEMS);
   });
 
   it("selects the items --only names", () => {
     expect(
-      selectItems(ITEMS, ["notes/gone.tsx", "notes/other.tsx"], WHOLE),
+      selectItems(ITEMS, ["notes/gone.tsx", "notes/other.tsx"]),
     ).toEqual([
       "packages/patterns/notes/gone.tsx",
       "packages/patterns/notes/other.tsx",
     ]);
-    expect(selectItems(ITEMS, ["notes/note.tsx"], WHOLE)).toEqual([
+    expect(selectItems(ITEMS, ["notes/note.tsx"])).toEqual([
       "packages/patterns/notes/note.tsx",
     ]);
-  });
-
-  it("gives each item to exactly one shard", () => {
-    for (const count of [2, 3, 4, 5]) {
-      const shards = Array.from(
-        { length: count },
-        (_, index) => selectItems(ITEMS, [], { index, count }),
-      );
-      expect(shards.flat().sort()).toEqual(ITEMS);
-    }
   });
 });
 

@@ -2136,6 +2136,18 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   setCfcTrustSnapshot(snapshot: TrustSnapshot | undefined): void;
 
   /**
+   * Marks the values the runtime initializes in this transaction as
+   * attributed to the acting principal (`CfcTxState.attributedInitialization`):
+   * the runner marks the transaction of a handler run the principal invoked,
+   * and a start deferred from one. Pattern code reaches the transaction its
+   * cells are bound to, so the mark takes the runtime's authorization and a
+   * call without it does nothing.
+   */
+  markCfcAttributedInitialization(
+    authorization: RuntimeWritePolicyAuthorization,
+  ): void;
+
+  /**
    * Sets (or clears) the implementation identity that will be folded
    * into the CFC digest for this transaction. See ownership note above.
    */
@@ -3244,6 +3256,12 @@ export interface ISpaceReplica extends ISpace {
 }
 
 /**
+ * Why a wave withdrew a sealed contribution. A contribution drop is retryable
+ * in place; an explicit wave abandon is expected enclosing-lifecycle teardown.
+ */
+export type WaveWithdrawalCause = "contribution-dropped" | "wave-abandoned";
+
+/**
  * The wave commit step's per-sealed-commit disposition (serving-loop.md
  * §3d). `committed` carries the wave commit's accepted store seq — the
  * sealed commit's pending writes promote to confirmed at that seq.
@@ -3268,9 +3286,8 @@ export type SealedCommitVerdict =
       message: string;
       superseded?: true;
       /** Structured withdrawal classification for consumers that must not
-       * parse diagnostic prose. A contribution drop is retryable in place;
-       * an explicit wave abandon is expected enclosing-lifecycle teardown. */
-      cause?: "contribution-dropped" | "wave-abandoned";
+       * parse diagnostic prose. */
+      cause?: WaveWithdrawalCause;
     };
   };
 

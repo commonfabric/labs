@@ -3,7 +3,7 @@
   "tasks": {
     "start": "deno run -A ./main.ts",
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../../../tasks/run-member-tests.ts deno-test",
-    "deno-test": "deno run --allow-env --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../../../tasks/run-sharded-test-files.ts AGENTS_HOST_TEST_SHARD agents-host . -- --no-check --allow-env --allow-read --allow-write --allow-run --allow-ffi --allow-sys=homedir,uid --shuffle=$(deno task -q test-seed)"
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-env --allow-read --allow-write --allow-run --allow-ffi --allow-sys=homedir,uid"
   },
   "exports": {
     ".": "./mod.ts",

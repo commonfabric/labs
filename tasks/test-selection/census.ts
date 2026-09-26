@@ -17,10 +17,12 @@ import {
   unavailableUnits,
   type Unit,
 } from "../test-topology/suite.ts";
+import { pricedCalibration } from "./calibrate.ts";
 import {
   coverageGateFor,
   type CoverageGateSelection,
   measuredUnitKeys,
+  measuresSuite,
 } from "./coverage.ts";
 import {
   emptyManifest,
@@ -322,5 +324,55 @@ export function census(
     mandatory,
     unmeasured,
     coverage,
+  };
+}
+
+/**
+ * A manifest as one run prices it: each suite's calibration entry is what
+ * this run charges it, and `fitted` says which of those charges were
+ * fitted from batches run the way this run runs them.
+ */
+export interface PricedManifest extends Manifest {
+  /**
+   * The suites whose charge was fitted from batches run the way this run
+   * runs them. What the rest cost run this way is not yet known.
+   */
+  fitted: ReadonlySet<string>;
+}
+
+/** A census as one run prices it. */
+export interface PricedCensus extends Census {
+  manifest: PricedManifest;
+}
+
+/**
+ * The census as a run prices it. A suite whose batches the run measures
+ * is charged what its batches have cost with coverage on, and every
+ * other suite what they cost without, so that everything reading the
+ * census — packing the lanes, ordering their batches, counting the full
+ * run's lanes, and a report saying what a run would have chosen — prices
+ * one suite alike. `pricedCalibration()` says what a suite no lane has
+ * run that way is charged.
+ */
+export function pricedForRun(
+  seen: Census,
+  suites: readonly Suite[],
+  full: boolean,
+): PricedCensus {
+  const priced = pricedCalibration(
+    seen.manifest.calibration,
+    new Map(
+      suites.map((
+        suite,
+      ) => [suite.id, measuresSuite(seen.coverage, suite.id, full)]),
+    ),
+  );
+  return {
+    ...seen,
+    manifest: {
+      ...seen.manifest,
+      calibration: priced.calibration,
+      fitted: priced.fitted,
+    },
   };
 }

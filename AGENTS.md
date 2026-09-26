@@ -175,9 +175,10 @@ If you are developing runtime code, start with:
   polling: the primitives to reach for, and the specific cases where a bounded
   poll is the honest tool
 - `docs/development/COVERAGE.md` - The two coverage mechanisms (V8 runtime
-  coverage and transformer-based pattern coverage), which CI job collects which,
-  and why only one of the two pattern integration arms collects authored-pattern
-  coverage
+  coverage and transformer-based pattern coverage), which suite collects which,
+  why only one of the two pattern integration arms collects authored-pattern
+  coverage, and the measured-set gate, the only coverage check that fails a pull
+  request
 - `docs/development/debugging/` - Runtime errors, type errors, and
   troubleshooting
 - `docs/development/DEPENDENCIES.md` - Adding and rolling dependencies, required
@@ -323,7 +324,7 @@ Patterns are the exception `deno task check` does not own. It lists some pattern
 directories and checks them through the automatic-JSX environment the rest of
 the tree uses, but patterns compile under a different (classic-`h`) JSX runtime,
 and the two disagree on some advanced pattern types. `deno task cfcheck` (the
-"CFC Pattern Check" CI job) type-checks every pattern in the JSX and
+`cfcheck` suite of the test topology) type-checks every pattern in the JSX and
 runtime-type environment they actually compile under, and is the authoritative
 pattern type-check. Run `deno task test` in every package you touched, and
 `deno task check` alongside it: a package's `test` task runs its tests and does

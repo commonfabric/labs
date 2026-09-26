@@ -393,13 +393,29 @@ describe("SpaceServer", () => {
                 cancelLeftover = runtime.scheduler.addEventHandler(() => {
                   leftoverRuns++;
                 }, leftover);
+                // The settle probes the scheduler after its idle wait too,
+                // ahead of the barrier. The probe guarding the deadline
+                // decision is the one after the barrier.
+                let barrierCrossed = false;
+                const inputSynced = manager.inputSynced.bind(manager);
+                manager.inputSynced = async () => {
+                  await inputSynced();
+                  barrierCrossed = true;
+                };
+                const idle = runtime.idle.bind(runtime);
+                runtime.idle = async () => {
+                  await idle();
+                  barrierCrossed = false;
+                };
                 const isIdle = runtime.scheduler.isIdle.bind(runtime.scheduler);
                 runtime.scheduler.isIdle = () => {
+                  const afterBarrier = barrierCrossed;
+                  barrierCrossed = false;
                   // The settle loop reaches this probe with the re-armed retry
                   // already spent. The copy lands and the clock steps in the
                   // same synchronous stretch as the deadline decision the probe
                   // guards, so the wave is cut with the copy still queued.
-                  if (!deadlineStepped && rearmQueued()) {
+                  if (afterBarrier && !deadlineStepped && rearmQueued()) {
                     runtime.scheduler.queueEvent(
                       leftover,
                       {},

@@ -4378,8 +4378,17 @@ export class SpaceReplica
    * seqs from its W advance via `unappliedForeignSeqFloor`, with the
    * shadow-flip notification in `#confirmPending` registering the
    * dirtiness the moment the parked overlay leaves.
+   *
+   * Arrival includes the transport handing over every frame it holds when
+   * this is called; frames the server sends later do not extend the wait. The
+   * serving runtime's loopback transport delivers one frame per event-loop
+   * turn, so a frame the server has already sent — the authored commit a
+   * wave is about to claim among it — can sit queued behind others for
+   * several turns. Handing a frame over is not processing it, so this wait
+   * cannot park behind a sealed commit.
    */
   async inputSynced(): Promise<void> {
+    await this.#sessionClient?.delivered();
     await Promise.all([...this.#syncPromises]);
   }
 

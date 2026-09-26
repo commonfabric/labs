@@ -19,10 +19,6 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import {
-  currentPatternIntegrationShard,
-  selectPatternIntegrationShard,
-} from "./pattern-integration-shard.ts";
 import { initializeCapabilityGateController } from "./capability-gate-controller.ts";
 import { moduleByteCache } from "./pieces-controller.ts";
 
@@ -146,11 +142,7 @@ const CAPABILITY_CASES: CapabilityCase[] = [
 ];
 
 describe("capability gate (W1): patterns read the clock only in handlers", () => {
-  const cases = selectPatternIntegrationShard(
-    CAPABILITY_CASES,
-    currentPatternIntegrationShard(),
-  );
-  for (const testCase of cases) {
+  for (const testCase of CAPABILITY_CASES) {
     it(testCase.name, testCase.run);
   }
 });

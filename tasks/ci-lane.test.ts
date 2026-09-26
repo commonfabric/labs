@@ -40,11 +40,15 @@ import {
   describeWithheld,
   fullLanes,
   type LaneDeps,
+  type LaneOptions,
+  lanePlan,
   main,
   manifestMoment,
   markMeasuredFailures,
   measuredSetOfReport,
   parseLaneArgs,
+  PATTERN_COVERAGE_DIR,
+  planOver,
   runBatch,
   runInvocation,
   runLane,
@@ -54,9 +58,15 @@ import {
 import {
   batchMeasurement,
   batchMeasurementName,
+  excusedMeasurement,
   MEASURED_BATCH_SUFFIX,
 } from "./lane-measurement.ts";
-import { census, standIn } from "./test-selection/census.ts";
+import {
+  census,
+  pricedForRun,
+  type PricedManifest,
+  standIn,
+} from "./test-selection/census.ts";
 import type { CommandContext, Suite } from "./test-topology/suite.ts";
 import {
   plan,
@@ -73,9 +83,11 @@ import {
   FULL_LANE_BUDGET_SECONDS,
   FULL_LANES_MAX,
   LANE_BUDGET_SECONDS,
+  LANE_PROLOGUE_SECONDS,
   UNMEASURED_COST_SECONDS,
 } from "./test-selection/policy.ts";
 import { repositoryCommittedAt } from "./test-selection/testing.ts";
+import { duration } from "./test-selection/duration.ts";
 
 /**
  * The repository, found from this file rather than from the process's
@@ -125,6 +137,27 @@ function manifestOf(entries: readonly Partial<ManifestEntry>[]): Manifest {
     known: { count: 0, digest: "" },
     coverageBaselines: [],
   };
+}
+
+/**
+ * `manifest` as a run over `suites` prices it, where the run measures
+ * every suite if it is the full run and none otherwise.
+ */
+function pricedFor(
+  suites: readonly Suite[],
+  manifest: Manifest,
+  full = false,
+): PricedManifest {
+  return pricedForRun(
+    {
+      manifest,
+      mandatory: new Map(),
+      unmeasured: 0,
+      coverage: { sets: [], reached: [] },
+    },
+    suites,
+    full,
+  ).manifest;
 }
 
 /**
@@ -211,6 +244,13 @@ describe("reading the lane's command line", () => {
 
   it("refuses a flag it does not know", () => {
     expect(parseLaneArgs(["--shard", "1/5"])).toBeUndefined();
+  });
+
+  it("takes a plan described already only for a lane that runs", () => {
+    expect(parseLaneArgs(["--described"])?.described).toBe(true);
+    expect(parseLaneArgs(["--dry-run"])?.described).toBeUndefined();
+    // A dry run does nothing but describe.
+    expect(parseLaneArgs(["--described", "--dry-run"])).toBeUndefined();
   });
 });
 
@@ -333,7 +373,7 @@ describe("turning a lane's selections into batches", () => {
       {},
       { test: { k: "unit", s: "bakery", n: "glaze > browns" } },
     ]);
-    const batches = batchesOf([bakery], manifest, [{
+    const batches = batchesOf([bakery], pricedFor([bakery], manifest), [{
       entry: manifest.entries[0]!,
       reason: "value",
       repeats: 1,
@@ -361,7 +401,7 @@ describe("turning a lane's selections into batches", () => {
         unit: "packages/bakery",
       },
     ]);
-    const batches = batchesOf([member], manifest, [{
+    const batches = batchesOf([member], pricedFor([member], manifest), [{
       entry: manifest.entries[0]!,
       reason: "value",
       repeats: 1,
@@ -371,7 +411,7 @@ describe("turning a lane's selections into batches", () => {
 
   it("skips nothing when every identity of a unit was chosen", () => {
     const manifest = manifestOf([{}]);
-    const batches = batchesOf([bakery], manifest, [{
+    const batches = batchesOf([bakery], pricedFor([bakery], manifest), [{
       entry: manifest.entries[0]!,
       reason: "value",
       repeats: 1,
@@ -381,7 +421,7 @@ describe("turning a lane's selections into batches", () => {
 
   it("takes the most runs any identity in the batch asked for", () => {
     const manifest = manifestOf([{}]);
-    const batches = batchesOf([bakery], manifest, [{
+    const batches = batchesOf([bakery], pricedFor([bakery], manifest), [{
       entry: manifest.entries[0]!,
       reason: "value",
       repeats: 3,
@@ -396,7 +436,7 @@ describe("turning a lane's selections into batches", () => {
       {},
       { test: { k: "unit", s: "bakery", n: "glaze > browns" } },
     ]);
-    const batches = batchesOf([bakery], manifest, [
+    const batches = batchesOf([bakery], pricedFor([bakery], manifest), [
       { entry: manifest.entries[0]!, reason: "value", repeats: 3 },
       { entry: manifest.entries[1]!, reason: "value", repeats: 1 },
     ]);
@@ -417,7 +457,7 @@ describe("turning a lane's selections into batches", () => {
         unit: "packages/bakery/ice.test.ts",
       },
     ]);
-    const batches = batchesOf([twoUnits], manifest, [
+    const batches = batchesOf([twoUnits], pricedFor([twoUnits], manifest), [
       { entry: manifest.entries[0]!, reason: "value", repeats: 4 },
       { entry: manifest.entries[1]!, reason: "value", repeats: 2 },
     ]);
@@ -439,7 +479,7 @@ describe("turning a lane's selections into batches", () => {
 
   it("runs a unit nothing asked to repeat exactly once", () => {
     const manifest = manifestOf([{}]);
-    const batches = batchesOf([bakery], manifest, [{
+    const batches = batchesOf([bakery], pricedFor([bakery], manifest), [{
       entry: manifest.entries[0]!,
       reason: "coverage-gate",
       repeats: 1,
@@ -466,7 +506,7 @@ function unitsPerLane(
     ...(policy === undefined ? {} : { policy }),
   });
   return laid.lanes.map((lane) =>
-    batchesOf(suites, seen.manifest, lane.selections)
+    batchesOf(suites, pricedFor(suites, seen.manifest), lane.selections)
       .flatMap((batch) => batch.units.map((unit) => unit.unit))
       .toSorted()
   );
@@ -488,7 +528,7 @@ describe("the order a runner is handed its work in", () => {
   /** The units of one batch, in the order `batchesOf` returns them. */
   function handed(selections: readonly Selection[]): string[] {
     const seen = census(bakery, undefined, new Set());
-    return batchesOf(bakery, seen.manifest, selections)
+    return batchesOf(bakery, pricedFor(bakery, seen.manifest), selections)
       .flatMap((batch) => batch.units.map((unit) => unit.unit));
   }
 
@@ -517,7 +557,9 @@ describe("the order a runner is handed its work in", () => {
       repeats: 1,
     }));
     const suiteIds = (chosen: readonly Selection[]) =>
-      batchesOf(bakery, seen.manifest, chosen).map((batch) => batch.suite.id);
+      batchesOf(bakery, pricedFor(bakery, seen.manifest), chosen).map((batch) =>
+        batch.suite.id
+      );
     expect(suiteIds(selections).toSorted()).toEqual([
       "repo-gates",
       "workspace-unit",
@@ -527,10 +569,11 @@ describe("the order a runner is handed its work in", () => {
 });
 
 describe("the order a lane runs its batches in", () => {
-  // A lane that runs out of time is killed with its later batches unrun
-  // and unmeasured, so the order decides which suites the cost model can
-  // learn. Each case turns on one ordering key, and its second assertion
-  // shows that key is what decides it.
+  // A lane that the step timeout or a cancellation stops part way
+  // through leaves its later batches unrun and unmeasured, so the order
+  // decides which suites the cost model can learn. Each case turns on one
+  // ordering key, and its second assertion shows that key is what decides
+  // it.
 
   /**
    * What each of one suite's identities costs, what the suite is
@@ -545,13 +588,19 @@ describe("the order a lane runs its batches in", () => {
   /**
    * The suites a lane would run, in the order it would run them, of
    * `alpha` and `zebra` (one identity costing a second each unless
-   * `shares` says otherwise), with the `fitted` ones measured, and the selections
-   * listed in reverse where `reversed` says.
+   * `shares` says otherwise), with the `fitted` ones measured without
+   * coverage and the `covered` ones with it, and the selections listed
+   * in reverse where `reversed` says. The lane belongs to a pull request
+   * measuring nothing, or to the full run, which measures everything.
    */
   function order(
     fitted: readonly string[],
     shares: Readonly<Record<string, Share>> = {},
     reversed = false,
+    { full = false, covered = [] }: {
+      full?: boolean;
+      covered?: readonly string[];
+    } = {},
   ): string[] {
     const made = manifestOf(
       ["zebra", "alpha"].flatMap((id) =>
@@ -563,13 +612,17 @@ describe("the order a lane runs its batches in", () => {
         }))
       ),
     );
-    for (const id of fitted) {
-      made.calibration.suites[id] = {
-        overhead: 5,
-        correction: shares[id]?.correction ?? 1,
-        unitOverhead: 0,
-      };
-    }
+    const fit = (id: string) => ({
+      overhead: 5,
+      correction: shares[id]?.correction ?? 1,
+      unitOverhead: 0,
+    });
+    made.calibration.suites = Object.fromEntries(
+      fitted.map((id) => [id, fit(id)]),
+    );
+    made.calibration.suitesWithCoverage = Object.fromEntries(
+      covered.map((id) => [id, fit(id)]),
+    );
     const topology = ["zebra", "alpha"].map((id) =>
       suite({
         id,
@@ -584,7 +637,7 @@ describe("the order a lane runs its batches in", () => {
     }));
     return batchesOf(
       topology,
-      made,
+      pricedFor(topology, made, full),
       reversed ? selections.toReversed() : selections,
     ).map((batch) => batch.suite.id);
   }
@@ -594,6 +647,20 @@ describe("the order a lane runs its batches in", () => {
     expect(order(["alpha"], { alpha: { costs: [90] } }))
       .toEqual(["zebra", "alpha"]);
     expect(order(["alpha", "zebra"], { alpha: { costs: [90] } }))
+      .toEqual(["alpha", "zebra"]);
+  });
+
+  it("runs a suite the full run has not measured with coverage on first", () => {
+    // Both suites have been measured without coverage, which says
+    // nothing about what they cost with it on, and only `alpha` has been
+    // run that way.
+    const both = ["alpha", "zebra"];
+    const shares = { alpha: { costs: [90] } };
+    expect(order(both, shares, false, { full: true, covered: ["alpha"] }))
+      .toEqual(["zebra", "alpha"]);
+    expect(order(both, shares, false, { full: true, covered: both }))
+      .toEqual(["alpha", "zebra"]);
+    expect(order(both, shares, false, { full: true }))
       .toEqual(["alpha", "zebra"]);
   });
 
@@ -945,7 +1012,7 @@ describe("how many lanes the full run asks for", () => {
     // what the units it lost cost onto every stand-in, so the units cost
     // far more than the bare unmeasured figure. A count that assumed the
     // figure would be out by that whole multiple, and each lane would
-    // run past the bound its job is killed at.
+    // run past the bound it is packed to finish inside.
     const units = Array.from({ length: 300 }, (_, i) => `new/u-${i}.test.ts`);
     const suites = [suite({ id: "pattern-integration", units })];
     const renamed = manifestOf(
@@ -978,7 +1045,7 @@ describe("how many lanes the full run asks for", () => {
   it("takes the topology's shape when there is no manifest", async () => {
     // Nothing has a measured cost, so a projection from costs would be
     // arithmetic over an invented figure, and being wrong downward means
-    // every lane runs past the bound its job is killed at.
+    // every lane runs past the bound it is packed to finish inside.
     const suites = [
       suite({ id: "workspace-unit", units: ["a.test.ts", "b.test.ts"] }),
       suite({ id: "repo-gates", units: ["deno-fmt"] }),
@@ -1023,6 +1090,129 @@ describe("how many lanes the full run asks for", () => {
     }
     expect(status).toBe(0);
     expect(lines).toEqual(["1"]);
+  });
+
+  it("says what each lane it asks for is projected to take, off the answer", async () => {
+    // The integer is read by the job ahead of the full run, so the table
+    // goes to the error stream and the summary. Its figures are the ones
+    // the lanes will project for themselves, so the plan here is packed
+    // the way a lane packs it, at the count the answer gives.
+    const deps = awkward();
+    const summary = await Deno.makeTempFile({ prefix: "summary-" });
+    const previous = Deno.env.get("GITHUB_STEP_SUMMARY");
+    Deno.env.set("GITHUB_STEP_SUMMARY", summary);
+    const out: string[] = [];
+    const err: string[] = [];
+    const log = console.log;
+    const error = console.error;
+    console.log = (line: string) => out.push(line);
+    console.error = (line: string) => err.push(line);
+    let status: number;
+    try {
+      status = await main(["--full", "--lane-count"], REPOSITORY, deps);
+    } finally {
+      console.log = log;
+      console.error = error;
+      if (previous === undefined) Deno.env.delete("GITHUB_STEP_SUMMARY");
+      else Deno.env.set("GITHUB_STEP_SUMMARY", previous);
+    }
+    const held = await Deno.readTextFile(summary);
+    await Deno.remove(summary);
+    expect(status).toBe(0);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatch(/^\d+$/);
+    const lanes = Number(out[0]);
+
+    const seen = pricedForRun(
+      census(deps.suites, (await deps.manifest()).manifest, new Set()),
+      deps.suites,
+      true,
+    );
+    const laid = plan({
+      manifest: seen.manifest,
+      mandatory: seen.mandatory,
+      capabilities: capabilitiesBySuite(deps.suites),
+      wholeUnits: wholeUnits(deps.suites),
+      policy: "everything",
+      lanes,
+    });
+    const prologue = seen.manifest.calibration.prologue;
+    // Without a prologue the two columns would agree, and a table that
+    // left it out would pass.
+    expect(prologue).toBeGreaterThan(0);
+    expect(laid.lanes).toHaveLength(lanes);
+    const expected = laid.lanes.map((lane) => [
+      String(lane.lane),
+      String(lane.selections.length),
+      duration(lane.projectedSeconds),
+      duration(lane.projectedSeconds + prologue),
+    ]);
+
+    const drawn = err.join("\n").split("\n")
+      .filter((line) => line.startsWith("│"))
+      .map((line) => line.split("│").slice(1, -1).map((cell) => cell.trim()));
+    expect(drawn).toEqual([
+      ["Lane", "Tests", "Projected work", "Projected job"],
+      ...expected,
+    ]);
+    const longest = Math.max(...laid.lanes.map((l) => l.projectedSeconds));
+    const told = err.join("\n");
+    expect(told).toContain(`## The full run's ${lanes} lane(s)`);
+    expect(told).toContain(
+      `The longest is projected to take ${duration(longest + prologue)}`,
+    );
+    // The summary renders Markdown, so it holds the table undrawn.
+    expect(held).toContain(`## The full run's ${lanes} lane(s)`);
+    for (const row of expected) {
+      expect(held).toContain(`| ${row.join(" | ")} |`);
+    }
+  });
+
+  it("charges each lane the policy's prologue where there is no manifest", async () => {
+    // Nothing was calibrated, so the calibration's prologue is zero; the
+    // lanes' budget was still derived from the policy's, which is what a
+    // job pays around its lane.
+    const deps = awkward();
+    const err: string[] = [];
+    const error = console.error;
+    console.error = (text: string) => err.push(text);
+    let lanes: number;
+    try {
+      lanes = await fullLanes(options, {
+        topology: deps.topology,
+        manifest: () =>
+          Promise.resolve({ absent: "the store holds no manifest" }),
+      });
+    } finally {
+      console.error = error;
+    }
+    const seen = pricedForRun(
+      census(deps.suites, undefined, new Set()),
+      deps.suites,
+      true,
+    );
+    expect(seen.manifest.calibration.prologue).toBe(0);
+    const laid = plan({
+      manifest: seen.manifest,
+      mandatory: seen.mandatory,
+      capabilities: capabilitiesBySuite(deps.suites),
+      wholeUnits: wholeUnits(deps.suites),
+      policy: "everything",
+      lanes,
+    });
+    const told = err.join("\n");
+    expect(told).toContain(
+      `takes about ${duration(LANE_PROLOGUE_SECONDS)} more`,
+    );
+    for (const lane of laid.lanes) {
+      expect(told).toMatch(
+        new RegExp(
+          `│ ${lane.lane} +│ ${lane.selections.length} +│ ` +
+            `${duration(lane.projectedSeconds)} +│ ` +
+            `${duration(lane.projectedSeconds + LANE_PROLOGUE_SECONDS)} +│`,
+        ),
+      );
+    }
   });
 });
 
@@ -1162,6 +1352,7 @@ describe("running a lane's work", () => {
     );
     expect(given?.coverageDir).toBe("/cov/workspace-unit");
     expect([...(given?.measuredMembers ?? [])]).toEqual(["packages/bakery"]);
+    expect(given?.patternCoverageDir).toBeUndefined();
     await Deno.remove(workDir, { recursive: true });
   });
 
@@ -1191,10 +1382,11 @@ describe("running a lane's work", () => {
       workDir,
       undefined,
       {},
-      { dir: "/cov/workspace-unit" },
+      { dir: "/cov/workspace-unit", patternDir: "/cov/pattern/workspace-unit" },
     );
     expect(given?.coverageDir).toBe("/cov/workspace-unit");
     expect(given?.measuredMembers).toBeUndefined();
+    expect(given?.patternCoverageDir).toBe("/cov/pattern/workspace-unit");
     await Deno.remove(workDir, { recursive: true });
   });
 
@@ -1333,7 +1525,7 @@ describe("running a lane's work", () => {
       console.log = log;
     }
     const printed = lines.join("\n");
-    expect(printed).toContain("workspace-unit costs 705.0s before it runs");
+    expect(printed).toContain("workspace-unit costs 11m45s before it runs");
     expect(printed).toContain("21889 tests");
     expect(printed).not.toContain("glaze > sets");
     // A suite a lane can hold still names the test that cannot fit in it.
@@ -1408,8 +1600,8 @@ describe("running a lane's work", () => {
       console.log = log;
     }
     const printed = lines.join("\n");
-    expect(printed).toContain("Projected: 96s");
-    expect(printed).toContain("3.0s");
+    expect(printed).toContain("Projected: 1m36s");
+    expect(printed).toContain("│ 3s ");
     expect(printed).toContain("value 1");
     // Every cost in this lane was measured, so the projection stands on
     // nothing but measurements and the line says only what it comes to.
@@ -1486,7 +1678,7 @@ describe("running a lane's work", () => {
         { entry: unmeasured("knead", [25]), reason: "unknown", repeats: 1 },
       ], 1),
     ).toBe(
-      "Projected: 96s of 230s, 85s of it charged to 2 units " +
+      "Projected: 1m36s of 3m50s, 1m25s of it charged to 2 units " +
         "nothing has measured",
     );
   });
@@ -1499,7 +1691,7 @@ describe("running a lane's work", () => {
     expect(projectionLine([
       { entry: unmeasured("proof", [40]), reason: "unknown", repeats: 2 },
     ], 0.25)).toBe(
-      "Projected: 96s of 230s, 20s of it charged to 1 unit " +
+      "Projected: 1m36s of 3m50s, 20s of it charged to 1 unit " +
         "nothing has measured",
     );
   });
@@ -1547,7 +1739,7 @@ describe("running a lane's work", () => {
     // The change reaches one of them, which is very likely a fix, so it
     // runs in spite of being withheld.
     expect(printed).toContain("yes, the change reaches it");
-    expect(printed).toContain("| no |");
+    expect(printed).toMatch(/│ no +│/);
   });
 
   it("prints the end of a capability's log, saying what it dropped", async () => {
@@ -1645,6 +1837,44 @@ describe("running a lane's work", () => {
 });
 
 describe("planning a lane without running it", () => {
+  /** What lane 2 of the full run prints, as `options` asks. */
+  async function printed(options: Partial<LaneOptions>): Promise<string> {
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      await runLane({
+        lane: 2,
+        of: 5,
+        full: true,
+        dryRun: true,
+        laneCount: false,
+        root: REPOSITORY,
+        ...options,
+      }, {
+        manifest: ({ at }) =>
+          Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
+      });
+    } finally {
+      console.log = log;
+    }
+    return lines.join("\n");
+  }
+
+  it("names a plan described already in one line, with its projection", async () => {
+    const described = await printed({ described: true });
+    const projected = /Projected: (\S+) of ([^\s,]+)/.exec(await printed({}));
+    expect(projected).not.toBeNull();
+    expect(described).toContain("ci-lane: running lane 2 of 5 as described: ");
+    expect(described).toContain("workspace-unit");
+    expect(described).toContain(
+      `projected at ${projected![1]} of ${projected![2]}, unselected: `,
+    );
+    expect(described).not.toContain("Lane 2 of 5");
+    expect(described).not.toContain("| Suite |");
+    expect(described.split("\n")).toHaveLength(1);
+  });
+
   it("plans the full run against the working tree", async () => {
     // What this reaches is the topology and the packing. Selection is
     // off, but the manifest is read either way for what things cost, so
@@ -1676,7 +1906,7 @@ describe("planning a lane without running it", () => {
     // measured against the full run's own budget rather than a pull
     // request's.
     expect(printed).toContain("workspace-unit");
-    expect(printed).toContain(`of ${FULL_LANE_BUDGET_SECONDS}s`);
+    expect(printed).toContain(`of ${duration(FULL_LANE_BUDGET_SECONDS)}`);
     expect(FULL_LANE_BUDGET_SECONDS).toBeLessThan(FULL_LANE_BOUND_SECONDS);
   });
 });
@@ -1751,7 +1981,7 @@ describe("planning a lane the manifest chose", () => {
     // rather than by anything coordinating them.
     const counted = (printed: string): number =>
       printed.split("\n")
-        .map((line) => /^\| \S+ \| (\d+) \| /.exec(line))
+        .map((line) => /^│ \S+ +│ (\d+) +│ /.exec(line))
         .reduce((total, row) => total + (row === null ? 0 : Number(row[1])), 0);
     let placed = 0;
     for (const lane of [1, 2, 3, 4, 5]) {
@@ -1976,7 +2206,7 @@ describe("the lane's own housekeeping", () => {
     const named = held.split("\n").filter((line) => line.startsWith("- work"));
     expect(named).toHaveLength(10);
     expect(named[0]).toContain("test 24");
-    expect(named[0]).toContain("924s");
+    expect(named[0]).toContain("15m24s");
     expect(named.at(-1)).toContain("test 15");
     expect(held).toContain("- and 15 more");
     await Deno.remove(summary);
@@ -2601,7 +2831,7 @@ describe("what a lane records about itself", () => {
     } finally {
       console.log = log;
     }
-    expect(lines.join("\n")).toContain("past the");
+    expect(lines.join("\n")).toContain("past its");
   });
 });
 
@@ -2617,7 +2847,7 @@ describe("the last corners of a lane's bookkeeping", () => {
     });
     const batches = batchesOf(
       [bakery],
-      manifest,
+      pricedFor([bakery], manifest),
       manifest.entries.map((entry) => ({
         entry,
         reason: "value" as const,
@@ -2636,7 +2866,7 @@ describe("the last corners of a lane's bookkeeping", () => {
     // manifest written before the suite was renamed or removed.
     const manifest = manifestOf([{ suite: "a-suite-that-left" }]);
     expect(
-      batchesOf([], manifest, [{
+      batchesOf([], pricedFor([], manifest), [{
         entry: manifest.entries[0]!,
         reason: "value",
         repeats: 1,
@@ -3043,6 +3273,17 @@ describe("what a lane does with the batches it was given", () => {
     )?.outcome;
   }
 
+  /** The identities the lane recorded excusing. */
+  function excusedIn(measured: readonly TestRecord[]): string[] {
+    return measured.flatMap((record) => {
+      const key = excusedMeasurement(record.test.n);
+      return key === undefined ? [] : [key];
+    });
+  }
+
+  /** The one identity the manifests here hold, as a canonical key. */
+  const glaze = testIdentityKey({ k: "unit", s: "bakery", n: "glaze > sets" });
+
   it("passes when every batch passed", async () => {
     const { ok, measured } = await run(recording(""));
     expect(ok).toBe(true);
@@ -3194,17 +3435,21 @@ describe("what a lane does with the batches it was given", () => {
     expect(ok).toBe(true);
     // And the batch still recorded what it saw.
     expect(batchOutcome(measured)).toBe("fail");
+    // And that it excused the failure, which is what a report of the run
+    // reads to say the run was not failed by it.
+    expect(excusedIn(measured)).toEqual([glaze]);
   });
 
   it("fails for that same failure on a pull request", async () => {
     // A pull request has no excused set at all: a test this flaky is
     // held back rather than run, so a failure reaching a lane here is
     // one nothing excuses.
-    const { ok } = await run(
+    const { ok, measured } = await run(
       recording("Deno.exit(1);", "fail"),
       { manifest: manifestOf([{ unit: UNIT }]) },
     );
     expect(ok).toBe(false);
+    expect(excusedIn(measured)).toEqual([]);
   });
 
   it("fails when one execution of a repeated unit died having run nothing", async () => {
@@ -3295,11 +3540,13 @@ describe("what a lane does with the batches it was given", () => {
       test: { k: "unit", s: "bakery", n: "glaze > cools" },
       flakeRate: 0,
     });
-    const { ok } = await run(
+    const { ok, measured } = await run(
       recording("Deno.exit(1);", "fail"),
       { full: true, manifest },
     );
     expect(ok).toBe(false);
+    // So nothing says the run did not fail for it.
+    expect(excusedIn(measured)).toEqual([]);
   });
 
   it("fails when a unit it was asked to run recorded nothing", async () => {
@@ -3360,6 +3607,20 @@ describe("what a lane measures", () => {
     expect(coverage?.members).toBeUndefined();
     expect(coverage?.dir)
       .toBe(`/repo/coverage/${COVERAGE_PROFILE_DIR}/runner-unit`);
+    // The authored-pattern instrumentation writes its reports where the
+    // lane's upload carries them to the repository-wide figure.
+    expect(coverage?.patternDir)
+      .toBe(`/repo/coverage/${PATTERN_COVERAGE_DIR}/runner-unit`);
+  });
+
+  it("collects no authored-pattern coverage for a pull request", () => {
+    // Only the full run publishes the figure it would feed.
+    const coverage = batchCoverage(
+      options,
+      "workspace-unit",
+      gated("packages/bakery"),
+    );
+    expect(coverage?.patternDir).toBeUndefined();
   });
 
   it("puts coverage where the command line said", () => {
@@ -3370,6 +3631,156 @@ describe("what a lane measures", () => {
     );
     expect(coverage?.dir)
       .toBe(`/repo/elsewhere/${COVERAGE_PROFILE_DIR}/runner-unit`);
+  });
+
+  describe("what it charges a suite it measures", () => {
+    const WITHOUT = { overhead: 5, correction: 1, unitOverhead: 0 };
+    const WITH = { overhead: 20, correction: 2, unitOverhead: 0 };
+    const suites = [
+      suite({
+        id: "workspace-unit",
+        units: ["packages/bakery/one.test.ts"],
+        measured: [{
+          member: "packages/bakery",
+          reachedBy: ["packages/bakery/"],
+          units: ["packages/bakery/one.test.ts"],
+        }],
+      }),
+      suite({ id: "runner-unit", units: ["packages/oven/one.test.ts"] }),
+    ];
+    const manifest = manifestOf([
+      {
+        test: { k: "unit", s: "bakery", n: "one" },
+        unit: "packages/bakery/one.test.ts",
+        cost: 10,
+      },
+      {
+        test: { k: "unit", s: "oven", n: "one" },
+        suite: "runner-unit",
+        unit: "packages/oven/one.test.ts",
+        cost: 10,
+      },
+    ]);
+    manifest.calibration.suites = {
+      "workspace-unit": WITHOUT,
+      "runner-unit": WITHOUT,
+    };
+    manifest.calibration.suitesWithCoverage = {
+      "workspace-unit": WITH,
+      "runner-unit": WITH,
+    };
+    const deps = { manifest: () => Promise.resolve({ manifest }) };
+    const planning = {
+      ...options,
+      of: 1,
+      dryRun: true,
+      at: "2026-09-01T00:00:00.000Z",
+    };
+
+    it("charges every suite of a full run what it costs with coverage on", async () => {
+      const { seen, laid } = await lanePlan(
+        { ...planning, full: true },
+        suites,
+        deps,
+      );
+      expect(seen.manifest.calibration.suites["workspace-unit"]).toEqual(WITH);
+      expect(seen.manifest.calibration.suites["runner-unit"]).toEqual(WITH);
+      // Each suite's overhead and twice its one test's ten seconds.
+      expect(laid.lanes[0]!.projectedSeconds).toBe(80);
+    });
+
+    it("charges a pull request's gated suite with coverage on, and the rest without", async () => {
+      const repo = await Deno.makeTempDir({ prefix: "lane-charged-" });
+      const git = (...args: string[]) =>
+        new Deno.Command("git", {
+          args,
+          cwd: repo,
+          env: {
+            ...Deno.env.toObject(),
+            GIT_AUTHOR_NAME: "A",
+            GIT_AUTHOR_EMAIL: "a@example.com",
+            GIT_COMMITTER_NAME: "A",
+            GIT_COMMITTER_EMAIL: "a@example.com",
+          },
+          stdout: "null",
+          stderr: "null",
+        }).output();
+      try {
+        await git("init", "-q");
+        await Deno.writeTextFile(`${repo}/kept.ts`, "a");
+        await git("add", ".");
+        await git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "one");
+        await git("branch", "base");
+        await Deno.mkdir(`${repo}/packages/bakery`, { recursive: true });
+        await Deno.writeTextFile(`${repo}/packages/bakery/glaze.ts`, "b");
+        await git("add", ".");
+        await git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "two");
+        const { seen } = await lanePlan(
+          { ...planning, root: repo, base: "base" },
+          suites,
+          deps,
+        );
+        expect(seen.manifest.calibration.suites["workspace-unit"])
+          .toEqual(WITH);
+        expect(seen.manifest.calibration.suites["runner-unit"])
+          .toEqual(WITHOUT);
+      } finally {
+        await Deno.remove(repo, { recursive: true });
+      }
+    });
+
+    it("charges a pull request that measures nothing what it costs without", async () => {
+      const { seen, laid } = await lanePlan(planning, suites, deps);
+      expect(seen.manifest.calibration.suites["workspace-unit"])
+        .toEqual(WITHOUT);
+      // Each suite's overhead and its one test's ten seconds.
+      expect(laid.lanes[0]!.projectedSeconds).toBe(30);
+    });
+  });
+});
+
+describe("planOver()", () => {
+  const suites = [
+    suite({ id: "workspace-unit", units: ["packages/bakery/glaze.test.ts"] }),
+  ];
+
+  /** A manifest holding its one identity back as too flaky. */
+  function withholding(): Manifest {
+    const manifest = manifestOf([{ flakeRate: 0.9 }]);
+    manifest.withheld = [{
+      test: manifest.entries[0]!.test,
+      suite: "workspace-unit",
+      reason: "flaky",
+    }];
+    return manifest;
+  }
+
+  const over = (full: boolean, lanes: number) =>
+    planOver({
+      suites,
+      manifest: withholding(),
+      changed: new Set(),
+      full,
+      lanes,
+    });
+
+  it("packs into as many lanes as it is given", () => {
+    expect(over(false, 3).laid.lanes.length).toBe(3);
+    expect(over(false, 1).laid.lanes.length).toBe(1);
+  });
+
+  it("holds a flaky test back from a pull request, which excuses nothing", () => {
+    const { laid } = over(false, 5);
+    expect(laid.withheld.map((held) => held.test.n)).toEqual(["glaze > sets"]);
+    expect(laid.nonGating).toEqual([]);
+  });
+
+  it("runs a flaky test in the full run without failing for it", () => {
+    const { laid } = over(true, 5);
+    expect(laid.withheld).toEqual([]);
+    expect(laid.nonGating.map((held) => held.test.n)).toEqual([
+      "glaze > sets",
+    ]);
   });
 });
 

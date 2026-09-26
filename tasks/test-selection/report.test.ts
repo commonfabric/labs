@@ -11,11 +11,14 @@ import {
   aliasLineFor,
   buildReport,
   coverageRise,
+  excusedFailures,
+  excusedIn,
   firstFailures,
   flakyNewTests,
   MAIN_REPORT_MARKER,
   measuredSetRises,
   nameSimilarity,
+  type Outcome,
   outcomesOf,
   partsOf,
   type PullRequestView,
@@ -29,7 +32,9 @@ import {
   shownIdentity,
   unknownPullRequest,
   type Verdict,
+  verdictOf,
 } from "./report.ts";
+import { excusedMeasurementName } from "../lane-measurement.ts";
 import {
   COVERAGE_COMMENT_LINES,
   EXCLUDED_FROM_COVERAGE_GATE,
@@ -60,11 +65,28 @@ const laneBatch: TestIdentity = {
   n: "ci-lane batch bakery-unit",
 };
 
+/** The runs one identity took that come to a verdict, one of each kind. */
+const ONCE: Readonly<Record<Verdict, Outcome>> = {
+  pass: { passed: 1, failed: 0 },
+  fail: { passed: 0, failed: 1 },
+  mixed: { passed: 1, failed: 1 },
+  skip: { passed: 0, failed: 0 },
+};
+
 /** One run's verdicts, written as a name-to-verdict list. */
 function run(
   entries: readonly (readonly [string, Verdict])[],
 ): RunOutcomes {
-  return new Map(entries.map(([name, verdict]) => [key(name), verdict]));
+  return new Map(entries.map(([name, verdict]) => [key(name), ONCE[verdict]]));
+}
+
+/** One run's outcomes, written as how often each name passed and failed. */
+function counted(
+  entries: readonly (readonly [string, number, number])[],
+): RunOutcomes {
+  return new Map(
+    entries.map(([name, passed, failed]) => [key(name), { passed, failed }]),
+  );
 }
 
 /** A source-group figure set: a package measured by every test in the run. */
@@ -136,6 +158,7 @@ function input(partial: Partial<ReportInput> = {}): ReportInput {
     current: new Map(),
     previous: new Map(),
     pullRequest: unknownPullRequest(),
+    nonGating: new Map(),
     coverage: figures([]),
     coverageBefore: figures([]),
     touched: new Set(),
@@ -163,8 +186,20 @@ describe("report", () => {
         record("kneads", "pass"),
         record("proves", "fail"),
       ]);
-      expect(outcomes.get(key("kneads"))).toBe("pass");
-      expect(outcomes.get(key("proves"))).toBe("fail");
+      expect(verdictOf(outcomes.get(key("kneads")))).toBe("pass");
+      expect(verdictOf(outcomes.get(key("proves")))).toBe("fail");
+    });
+
+    it("counts each record of one identity as one of its runs", () => {
+      const outcomes = outcomesOf([
+        record("kneads", "fail"),
+        record("kneads", "fail"),
+        record("kneads", "fail"),
+        record("kneads", "skip"),
+        record("proves", "pass"),
+      ]);
+      expect(outcomes.get(key("kneads"))).toEqual({ passed: 0, failed: 3 });
+      expect(outcomes.get(key("proves"))).toEqual({ passed: 1, failed: 0 });
     });
 
     it("reports a pass and a failure at one commit as disagreement", () => {
@@ -172,12 +207,13 @@ describe("report", () => {
         record("kneads", "pass"),
         record("kneads", "fail"),
       ]);
-      expect(outcomes.get(key("kneads"))).toBe("mixed");
+      expect(verdictOf(outcomes.get(key("kneads")))).toBe("mixed");
     });
 
     it("reports a skipped test as skipped rather than as a pass", () => {
-      expect(outcomesOf([record("kneads", "skip")]).get(key("kneads")))
-        .toBe("skip");
+      expect(
+        verdictOf(outcomesOf([record("kneads", "skip")]).get(key("kneads"))),
+      ).toBe("skip");
     });
 
     // A lane writes what its setup and each of its batches cost through
@@ -194,8 +230,89 @@ describe("report", () => {
           durationMs: 391_400,
         },
       ]);
-      expect(outcomes.get(key("kneads"))).toBe("fail");
+      expect(verdictOf(outcomes.get(key("kneads")))).toBe("fail");
       expect(outcomes.has(testIdentityKey(laneBatch))).toBe(false);
+    });
+  });
+
+  describe("excusedIn()", () => {
+    /** A record a report holds, under the identity given. */
+    const named = (
+      test: TestIdentity,
+      outcome: TestRecord["outcome"] = "pass",
+    ): TestRecord => ({ line: "record", test, outcome, durationMs: 0 });
+
+    /** The record a lane writes for a test whose failures it excused. */
+    const excusing = (name: string): TestRecord =>
+      named({ ...laneBatch, n: excusedMeasurementName(key(name)) });
+
+    it("returns every identity a lane recorded excusing", () => {
+      expect(excusedIn([[
+        excusing("kneads"),
+        excusing("proves"),
+        named(laneBatch),
+        named(test("kneads"), "fail"),
+      ]])).toEqual(new Set([key("kneads"), key("proves")]));
+    });
+
+    it("returns nothing from a test that happens to carry the name", () => {
+      // Only a lane writes about itself, and it writes under its own
+      // surface.
+
+      expect(excusedIn([[
+        named(test(excusedMeasurementName(key("kneads")))),
+      ]])).toEqual(new Set());
+    });
+
+    it("returns an identity every report that failed it excused", () => {
+      // Two lanes both ran `kneads`, and a third report never failed it.
+
+      expect(excusedIn([
+        [excusing("kneads"), named(test("kneads"), "fail")],
+        [excusing("kneads"), named(test("kneads"), "fail")],
+        [named(test("kneads"))],
+      ])).toEqual(new Set([key("kneads")]));
+    });
+
+    it("leaves out an identity one report failed without excusing", () => {
+      // The second lane failed the run for `kneads`, whatever the first
+      // did.
+
+      expect(excusedIn([
+        [excusing("kneads"), named(test("kneads"), "fail")],
+        [named(test("kneads"), "fail"), excusing("proves")],
+      ])).toEqual(new Set([key("proves")]));
+    });
+
+    it("leaves out an identity a re-run attempt of a lane failed without excusing, in either order", () => {
+      // Each attempt of a lane job writes a report of its own, so a re-run
+      // is two reports of one lane.
+
+      const excusedAttempt = [
+        excusing("kneads"),
+        named(test("kneads"), "fail"),
+      ];
+      const failedAttempt = [named(test("kneads"), "fail")];
+      expect(excusedIn([excusedAttempt, failedAttempt])).toEqual(new Set());
+      expect(excusedIn([failedAttempt, excusedAttempt])).toEqual(new Set());
+    });
+
+    it("returns an identity one attempt excused and a re-run passed", () => {
+      expect(excusedIn([
+        [excusing("kneads"), named(test("kneads"), "fail")],
+        [named(test("kneads"))],
+      ])).toEqual(new Set([key("kneads")]));
+    });
+  });
+
+  describe("verdictOf()", () => {
+    it("returns nothing for an identity the run holds no record of", () => {
+      expect(verdictOf(undefined)).toBeUndefined();
+    });
+
+    it("returns `fail` however many runs failed, and `mixed` for one pass among them", () => {
+      expect(verdictOf({ passed: 0, failed: 5 })).toBe("fail");
+      expect(verdictOf({ passed: 1, failed: 5 })).toBe("mixed");
     });
   });
 
@@ -270,8 +387,8 @@ describe("report", () => {
     it("refuses a key that is not a test identity", () => {
       expect(() =>
         firstFailures(input({
-          previous: new Map([["not a key", "pass"]]),
-          current: new Map([["not a key", "fail"]]),
+          previous: new Map([["not a key", ONCE.pass]]),
+          current: new Map([["not a key", ONCE.fail]]),
         }))
       ).toThrow("not a test identity key");
     });
@@ -299,9 +416,9 @@ describe("report", () => {
     // this commit is said to have broken is that test, once.
     it("names the test a batch failed on rather than the batch", () => {
       const failures = firstFailures(input({
-        previous: new Map<string, Verdict>([
+        previous: new Map<string, Outcome>([
           ...run([["kneads", "pass"]]),
-          [testIdentityKey(laneBatch), "pass"],
+          [testIdentityKey(laneBatch), ONCE.pass],
         ]),
         current: outcomesOf([
           {
@@ -375,6 +492,114 @@ describe("report", () => {
       }));
       expect(failures[0]?.selection).toBe("passed-there");
       expect(failures[0]?.flakes).toEqual({ flakes: 4, runs: 100 });
+    });
+
+    it("leaves out a test this run did not fail for", () => {
+      // A failure of a test the run excused is reported as that, with
+      // what it means for the run, rather than as a failure of the run.
+
+      const failures = firstFailures(input({
+        previous: run([["kneads", "pass"], ["proves", "pass"]]),
+        current: run([["kneads", "fail"], ["proves", "fail"]]),
+        nonGating: new Map([[key("kneads"), { flakes: 7, runs: 900 }]]),
+      }));
+      expect(failures.map((failure) => failure.test.n)).toEqual(["proves"]);
+    });
+  });
+
+  describe("excusedFailures()", () => {
+    const heldBack = new Map([[key("kneads"), { flakes: 7, runs: 900 }]]);
+
+    it("names a held-back test that failed every run here and passed every run before", () => {
+      expect(excusedFailures(input({
+        previous: counted([["kneads", 4, 0]]),
+        current: counted([["kneads", 0, 3]]),
+        nonGating: heldBack,
+      }))).toEqual([{
+        test: test("kneads"),
+        failed: 3,
+        passed: 4,
+        flakes: { flakes: 7, runs: 900 },
+      }]);
+    });
+
+    it("says nothing about a test the run failed for", () => {
+      // That is an ordinary first failure, and saying the run was not
+      // failed by it would be false.
+
+      const failing = input({
+        previous: counted([["kneads", 4, 0]]),
+        current: counted([["kneads", 0, 3]]),
+      });
+      expect(excusedFailures(failing)).toEqual([]);
+      expect(firstFailures(failing).map((failure) => failure.test.n))
+        .toEqual(["kneads"]);
+    });
+
+    it("says nothing about a held-back test that also passed here", () => {
+      // A pass beside the failures is the test disagreeing with itself,
+      // which is what it is held back for, and not a statement about
+      // this commit.
+
+      const mixed = input({
+        previous: counted([["kneads", 4, 0]]),
+        current: counted([["kneads", 1, 2]]),
+        nonGating: heldBack,
+      });
+      expect(excusedFailures(mixed)).toEqual([]);
+      expect(firstFailures(mixed)).toEqual([]);
+    });
+
+    it("says nothing about a held-back test the parent did not pass throughout", () => {
+      expect(excusedFailures(input({
+        previous: counted([["kneads", 3, 1]]),
+        current: counted([["kneads", 0, 3]]),
+        nonGating: heldBack,
+      }))).toEqual([]);
+      expect(excusedFailures(input({
+        previous: counted([["kneads", 0, 4]]),
+        current: counted([["kneads", 0, 3]]),
+        nonGating: heldBack,
+      }))).toEqual([]);
+    });
+
+    it("says nothing about a held-back test the parent did not judge", () => {
+      expect(excusedFailures(input({
+        previous: counted([["proves", 4, 0], ["kneads", 0, 0]]),
+        current: counted([["kneads", 0, 3]]),
+        nonGating: heldBack,
+      }))).toEqual([]);
+      expect(excusedFailures(input({
+        previous: counted([["proves", 4, 0]]),
+        current: counted([["kneads", 0, 3]]),
+        nonGating: heldBack,
+      }))).toEqual([]);
+    });
+
+    it("says nothing about a held-back test the pull request's own run failed", () => {
+      expect(excusedFailures(input({
+        previous: counted([["kneads", 4, 0]]),
+        current: counted([["kneads", 0, 3]]),
+        nonGating: heldBack,
+        pullRequest: ranThere([["kneads", "fail"]]),
+      }))).toEqual([]);
+    });
+
+    it("carries no counts where the manifest holds none for the test", () => {
+      const failures = excusedFailures(input({
+        previous: counted([["kneads", 4, 0], ["proves", 2, 0]]),
+        current: counted([["kneads", 0, 3], ["proves", 0, 2]]),
+        nonGating: new Map([
+          [key("kneads"), undefined],
+          [key("proves"), { flakes: 0, runs: 40 }],
+        ]),
+      }));
+      expect(failures.map((failure) => failure.test.n)).toEqual([
+        "kneads",
+        "proves",
+      ]);
+      expect(failures.every((failure) => failure.flakes === undefined))
+        .toBe(true);
     });
   });
 
@@ -777,8 +1002,8 @@ describe("report", () => {
         v: "off",
       });
       expect(renames(input({
-        previous: new Map([[gone, "pass" as const]]),
-        current: new Map([[arrived, "pass" as const]]),
+        previous: new Map([[gone, ONCE.pass]]),
+        current: new Map([[arrived, ONCE.pass]]),
         pullRequest: {
           ...unknownPullRequest(),
           manifest: true,
@@ -828,10 +1053,10 @@ describe("report", () => {
     it("does not pair across scopes", () => {
       const gone = testIdentityKey(test("kneads the dough", "oven"));
       expect(renames(input({
-        previous: new Map([[gone, "pass" as const]]),
+        previous: new Map([[gone, ONCE.pass]]),
         current: new Map([[
           testIdentityKey(test("kneads the dough", "mill")),
-          "pass" as const,
+          ONCE.pass,
         ]]),
         pullRequest: {
           ...unknownPullRequest(),
@@ -932,17 +1157,24 @@ describe("report", () => {
     /** A report holding one of each note, which is what the prose is read on. */
     function everything(): ReportInput {
       return input({
-        previous: run([
-          ["kneads the dough", "pass"],
-          ["proves", "pass"],
-          ["bakes", "pass"],
+        previous: new Map([
+          ...run([
+            ["kneads the dough", "pass"],
+            ["proves", "pass"],
+            ["bakes", "pass"],
+          ]),
+          ...counted([["glazes", 3, 0]]),
         ]),
-        current: run([
-          ["kneads the dougk", "pass"],
-          ["proves", "fail"],
-          ["bakes", "pass"],
-          ["scores the loaf", "mixed"],
+        current: new Map([
+          ...run([
+            ["kneads the dougk", "pass"],
+            ["proves", "fail"],
+            ["bakes", "pass"],
+            ["scores the loaf", "mixed"],
+          ]),
+          ...counted([["glazes", 0, 3]]),
         ]),
+        nonGating: new Map([[key("glazes"), { flakes: 7, runs: 900 }]]),
         pullRequest: knows(["proves", "bakes"], {
           catches: new Map([[key("kneads the dough"), 6]]),
           flakes: new Map([
@@ -972,6 +1204,9 @@ describe("report", () => {
     it("carries every note the run found", () => {
       const body = renderReport(buildReport(everything()), context)!;
       expect(body).toContain("Failing for the first time at this commit");
+      expect(body).toContain(
+        "A known flaky test that failed every time it ran",
+      );
       expect(body).toContain("Coverage debt");
       expect(body).toContain("packages/memory");
       expect(body).toContain("A new test that turned out to be flaky");
@@ -1003,6 +1238,8 @@ describe("report", () => {
       expect(first.firstFailures.length).toBeGreaterThan(0);
       expect(second.firstFailures.map((failure) => failure.test.n))
         .toEqual(["slices"]);
+      expect(first.excusedFailures.length).toBeGreaterThan(0);
+      expect(second.excusedFailures).toEqual([]);
       expect(second.renames).toEqual([]);
       expect(second.coverageRise).toBeUndefined();
       expect(buildReport(everything())).toEqual(first);
@@ -1100,9 +1337,88 @@ describe("report", () => {
         context,
       )!;
       expect(body).toContain("too flaky to judge a change by");
-      // And that the branch stayed green for it, which a reader of a
-      // failure list would otherwise assume the other way.
-      expect(body).toContain("does not fail the run on that branch");
+      // This run failed for it, whatever the pull request's manifest
+      // said, since a test it did not fail for is an excused failure.
+      expect(body).not.toMatch(/fails? the run/);
+    });
+
+    describe("a known flaky test that failed every time it ran", () => {
+      /** The comment for one held-back test's runs here and at the parent. */
+      function excused(
+        passed: number,
+        failed: number,
+        flakes?: { flakes: number; runs: number },
+      ): string {
+        return renderReport(
+          buildReport(input({
+            previous: counted([["glazes", passed, 0]]),
+            current: counted([["glazes", 0, failed]]),
+            nonGating: new Map([[key("glazes"), flakes]]),
+          })),
+          context,
+        )!;
+      }
+
+      it("says the test is a known flaky one and the run was not failed by it", () => {
+        const body = excused(4, 3, { flakes: 7, runs: 900 });
+        expect(body).toContain(
+          "A known flaky test that failed every time it ran",
+        );
+        expect(body).toContain("too flaky to judge a change by");
+        expect(body).toContain("its failures never fail the run");
+        expect(body).not.toContain("Failing for the first time");
+      });
+
+      it("carries the counts behind the label", () => {
+        // It is accurate about flakes: the runs this commit and its
+        // parent took, and what the store has seen of the test, so
+        // nobody is asked to take the label on trust.
+
+        const body = excused(4, 3, { flakes: 7, runs: 900 });
+        expect(body).toContain(
+          "`[unit] bakery: glazes` failed all 3 of its runs at this commit " +
+            "and passed all 4 of its runs at the commit before.",
+        );
+        expect(body).toContain(
+          "The store has seen it disagree with itself 7 times in 900 runs",
+        );
+      });
+
+      it("counts one run as its one run", () => {
+        expect(excused(1, 1, { flakes: 1, runs: 1 })).toContain(
+          "failed its one run at this commit and passed its one run at " +
+            "the commit before.",
+        );
+      });
+
+      it("names the evidence as weak and says what to do", () => {
+        const body = excused(4, 3);
+        expect(body).toContain("one bad runner");
+        expect(body).toContain("weak evidence");
+        expect(body).toContain("Look at the failures in the run");
+      });
+
+      it("says nothing of the store's counts where there are none", () => {
+        expect(excused(4, 3)).not.toContain("The store has seen it");
+      });
+
+      it("heads several of them in the plural", () => {
+        const body = renderReport(
+          buildReport(input({
+            previous: counted([["glazes", 2, 0], ["proves", 2, 0]]),
+            current: counted([["glazes", 0, 2], ["proves", 0, 2]]),
+            nonGating: new Map([
+              [key("glazes"), undefined],
+              [key("proves"), undefined],
+            ]),
+          })),
+          context,
+        )!;
+        expect(body).toContain(
+          "### Known flaky tests that failed every time they ran",
+        );
+        expect(body).not.toContain("A known flaky test");
+      });
     });
 
     it("says no run of a withheld test saw it pass and fail at once", () => {

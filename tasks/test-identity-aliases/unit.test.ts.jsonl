@@ -1,1 +1,2 @@
 {"date":"2026-09-22","from":{"k":"unit","s":"tasks","n":"running a member that cannot be handed a subset > hands the run's seed to every `deno test` it builds"},"to":{"k":"unit","s":"tasks","n":"the workspace unit suites > hands the run's seed to every `deno test` it builds"}}
+{"date":"2026-09-25","from":{"k":"unit","s":"tasks","n":"running a member that cannot be handed a subset > enumerates a member whose task runs the sharded runner"},"to":{"k":"unit","s":"tasks","n":"running a member that cannot be handed a subset > enumerates a member whose task runs the batch runner"}}

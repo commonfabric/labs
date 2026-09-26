@@ -21,7 +21,16 @@ import {
   cfcLabelViewFromMetadata,
   cfcLabelViewSourceForCell,
   cfcLabelViewSymbol,
+  getCarriedCfcLabelView,
 } from "../src/cfc/mod.ts";
+import {
+  cfcLabelViewOriginSpaces,
+  cfcLabelViewsEqual,
+  cloneCfcLabelView,
+  mergeCfcLabelViews,
+  rebaseCfcLabelView,
+  withCfcLabelViewOrigins,
+} from "../src/cfc/label-view-core.ts";
 import { stripSigilCfcLabelViews } from "../src/cfc/link-label-view.ts";
 import { cfcLabelViewFromSchema } from "../src/cfc/schema-label-view.ts";
 import type { CfcMetadata } from "../src/cfc/types.ts";
@@ -31,6 +40,36 @@ import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 describe("CFC label view helpers", () => {
+  it("carries a view's origin spaces through clone, merge and rebase, outside its data", () => {
+    const fromS = withCfcLabelViewOrigins({
+      version: 1,
+      entries: [{ path: ["a"], label: { confidentiality: ["s-label"] } }],
+    }, ["did:key:s"]);
+    const fromE = withCfcLabelViewOrigins({
+      version: 1,
+      entries: [{ path: ["b"], label: { confidentiality: ["e-label"] } }],
+    }, ["did:key:e"]);
+    expect(cfcLabelViewOriginSpaces(cloneCfcLabelView(fromS))).toEqual([
+      "did:key:s",
+    ]);
+    const merged = mergeCfcLabelViews([fromS, undefined, fromE]);
+    expect(cfcLabelViewOriginSpaces(merged)).toEqual([
+      "did:key:s",
+      "did:key:e",
+    ]);
+    expect(cfcLabelViewOriginSpaces(rebaseCfcLabelView(merged, ["a"])))
+      .toEqual(["did:key:s", "did:key:e"]);
+    // Origins are not label data: they neither serialize nor distinguish
+    // two views carrying the same labels.
+    const bare = {
+      version: 1 as const,
+      entries: [{ path: ["a"], label: { confidentiality: ["s-label"] } }],
+    };
+    expect(cfcLabelViewOriginSpaces(bare)).toEqual([]);
+    expect(JSON.stringify(fromS)).toEqual(JSON.stringify(bare));
+    expect(cfcLabelViewsEqual(fromS, bare)).toBe(true);
+  });
+
   it("collects labels that apply to a logical value path", () => {
     const metadata: CfcMetadata = {
       version: 1,
@@ -445,6 +484,46 @@ describe("CFC label view helpers", () => {
       expect(cfcLabelViewSourceForCell(labeledHolder.key("detail")).spaces)
         .toEqual([signer.did(), elsewhere]);
       expect(cfcLabelViewSourceForCell(source).spaces).toEqual([elsewhere]);
+
+      // A carried view names the spaces it was read from wherever it was
+      // first read. Resolving the holder's link carries the holder's stored
+      // label onto a cell in the target's space; the label, and so its
+      // manifest, lives in the holder's space, which the cell's own link and
+      // its resolution never name.
+      const bareSource = await seedIn(elsewhere, "spaces-bare", "open", []);
+      const crossHolder = await seedIn(signer.did(), "spaces-cross", {
+        detail: bareSource.getAsLink(),
+      }, [{ path: ["detail"], label: { confidentiality: ["holder-conf"] } }]);
+      const resolved = crossHolder.key("detail").resolveAsCell();
+      expect(resolved.getAsNormalizedFullLink().space).toEqual(elsewhere);
+      expect(cfcLabelViewSourceForCell(resolved).spaces).toEqual([
+        signer.did(),
+      ]);
+      // The same through the child and schema cells the view is carried on.
+      expect(
+        cfcLabelViewSourceForCell(resolved.asSchema({ type: "string" }))
+          .spaces,
+      ).toEqual([signer.did()]);
+      // A schema traversal slices the carried view per field through its
+      // rebaser, and a cell it mints below the link keeps the same origins.
+      const objectSource = await seedIn(elsewhere, "spaces-object", {
+        text: "open",
+      }, []);
+      const objectHolder = await seedIn(signer.did(), "spaces-object-holder", {
+        detail: objectSource.getAsLink(),
+      }, [{ path: ["detail"], label: { confidentiality: ["holder-conf"] } }]);
+      const minted = objectHolder.key("detail").asSchema({
+        type: "object",
+        properties: { text: { type: "string", asCell: ["cell"] } },
+      }).get().text as unknown;
+      expect(
+        getCarriedCfcLabelView(minted)?.entries.map((entry) =>
+          entry.label.confidentiality
+        ),
+      ).toEqual([["holder-conf"]]);
+      expect(cfcLabelViewSourceForCell(minted).spaces).toEqual([
+        signer.did(),
+      ]);
     } finally {
       await runtime.dispose();
       await storageManager.close();

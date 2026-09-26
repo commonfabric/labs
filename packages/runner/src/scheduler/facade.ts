@@ -203,6 +203,15 @@ const logger = getLogger("scheduler", {
 
 type FilterStatsState = { filtered: number; executed: number };
 
+/** What the scheduler's quiescence barrier waits on before checking again. */
+type QuiescenceBlocker =
+  /** Work whose settling is observed through `settled`. */
+  | { readonly kind: "settle"; readonly settled: () => Promise<unknown> }
+  /** Work that only the execute loop's drain of `#idlePromises` releases. */
+  | { readonly kind: "drain" }
+  /** Runnable pull work, which needs an execution pass queued to drain it. */
+  | { readonly kind: "pull" };
+
 type SchedulerRegistrationInput = ReactivityLog;
 type SchedulerRegisterOptions = {
   /** Request initial currency from the server plan for this bound source. */
@@ -990,6 +999,17 @@ export class Scheduler {
   }
 
   /**
+   * Returns whether `idleWithPendingCommits()` has nothing to wait on right
+   * now, which is exactly when a call to it would resolve without waiting. A
+   * caller that awaits that barrier and then awaits something else checks this
+   * afterwards: work queued during the second wait is work the barrier had
+   * already stopped watching.
+   */
+  isIdleWithPendingCommits(): boolean {
+    return this.#quiescenceBlocker(true) === undefined;
+  }
+
+  /**
    * Whether the scheduler is quiescent RIGHT NOW (server-execution v2
    * stage F): nothing running, nothing scheduled, no queued events, no
    * held wakes, no background tasks, no runnable pull work. The serving
@@ -1018,6 +1038,12 @@ export class Scheduler {
 
   #waitForQuiescence(awaitPendingCommits: boolean): Promise<void> {
     return new Promise<void>((resolve) => {
+      const blocker = this.#quiescenceBlocker(awaitPendingCommits);
+      if (blocker === undefined) {
+        this.#resetConvergenceHoldPasses();
+        resolve();
+        return;
+      }
       // Re-evaluate every condition from scratch once the thing we are waiting
       // on settles.
       const recheck = () =>
@@ -1040,104 +1066,123 @@ export class Scheduler {
         if (this.#backgroundTasks.size === 0) resolve();
         else queueMicrotask(recheck);
       };
-      if (this.runningPromise) {
-        // Something is currently running - wait for it then check again
-        this.runningPromise.then(recheck);
-      } else if (this.#backgroundTasks.size > 0) {
-        // Async scheduler work, such as event-triggered auto-start, is still in
-        // flight. Wait for it to settle and then re-check the scheduler state.
-        Promise.allSettled([...this.#backgroundTasks]).then(recheck);
-      } else if (this.#wakeShaper.hasPending()) {
-        // Input events (W3) or cell-flip notifications (plan B) are being held
-        // for wake shaping. Wait for them to release (which re-queues the
-        // events and delivers the notifications) and then re-check. Draining
-        // before the pending-commit branch means idleWithPendingCommits()
-        // releases the held wakes first, then awaits the commits they produce.
-        this.#wakeShaper.whenDrained().then(recheck);
-      } else if (
-        awaitPendingCommits && this.runtime.storageManager.hasPendingCommits()
-      ) {
-        // In-flight commits. Wait for them to settle (server confirmation or
-        // terminal failure) and then re-check: a landed commit can dirty
-        // readers and re-trigger scheduler work.
-        this.runtime.storageManager.pendingCommitsSettled().then(recheck);
-      } else if (
-        awaitPendingCommits &&
-        this.runtime.patternManager.hasPendingPatternWork()
-      ) {
-        // In-flight PATTERN work: a by-identity load (whose cold-load
-        // arm recompiles and re-persists a space's program docs) or a
-        // compile-cache write-back — the program-materialization
-        // commit itself (verification-coverage.md OW45, seat S-B).
-        // This barrier is the client's "safe to navigate or reload"
-        // checkpoint, and a program commit issued from a post-arrival
-        // load chain is exactly a write a reload would otherwise kill:
-        // the home-profile create's program commit died with the
-        // reload, nothing re-issued it, and the created space served
-        // nothing forever. Same recheck-from-scratch structure as
-        // pending commits — a load that registers its write-back
-        // mid-await is seen by the next pass, and the write-back's own
-        // storage commits land in the pending-commit branch above.
-        // Commit-aware callers only: plain idle() stays reactive-only
-        // (the serving loop's settle probes must not chase client
-        // persistence).
-        this.runtime.patternManager.pendingPatternWorkSettled().then(recheck);
-      } else if (this.#disposed) {
-        // Every branch below parks on `#idlePromises`, which only the execute
-        // loop drains — and `#execute()` returns immediately once disposed. So
-        // parking here would park FOREVER, which is how a caller that disposed
-        // the scheduler by hand made `Runtime.dispose()` hang: its teardown
-        // awaits `scheduler.idle()`. A disposed scheduler will never run
-        // anything again, so quiescence is already final and resolving is the
-        // honest answer rather than the convenient one.
-        //
-        // Below the branches with a wake source of their own, deliberately: a
-        // running execute, background tasks, held wakes and in-flight commits
-        // all resolve off their own promise and re-check, so they still settle
-        // on a disposed scheduler and this cannot cut them short.
-        //
-        // Note this covers the parking branches WHOLESALE rather than fixing
-        // the reachable one. Clearing `scheduled` in dispose() would let the
-        // "nothing scheduled" branch resolve most of these, but only while
-        // `#hasRunnablePullWork()` is false — that branch re-queues execution
-        // and parks when it is true, so the hang would come back for a
-        // scheduler disposed with pull work outstanding.
-        resolve();
-      } else if (
-        this.#gates.hasWakeTimer() &&
-        ((this.#eventQueue.length > 0 &&
-          isHeadEventParkedState({ eventQueue: this.#eventQueue })) ||
-          this.#hasIdleBlockingDeferredPullWork())
-      ) {
-        // A queued event or idle-blocking pull node is parked behind a time
-        // gate. Wait for the wake timer to re-schedule the queue and re-check.
-        this.#idlePromises.push(park);
-      } else if (
-        this.#hasPendingLineageHeadEvent() || this.#hasLoadParkedHeadEvent() ||
-        this.#eventQueue[0]?.retryReadinessPending === true
-      ) {
-        // A cross-space lineage head has no timer — its origin commit callback
-        // is the wake source; a load-parked head wakes on load completion or
-        // drops on an explicit load failure; a head requeued by a stale-basis
-        // retry wakes once the retry's readiness resolves. Either way idle
-        // must stay open until the callback re-queues execution.
-        this.#idlePromises.push(park);
-      } else if (!this.#scheduled) {
-        if (this.#hasRunnablePullWork()) {
+      switch (blocker.kind) {
+        case "settle":
+          blocker.settled().then(recheck);
+          break;
+        case "pull":
           this.queueExecution();
           this.#idlePromises.push(park);
-          return;
-        }
-        // Nothing is scheduled to run - we're idle.
-        // In pull mode, pending computations won't run without an effect to pull them,
-        // so we don't wait for them.
-        this.#resetConvergenceHoldPasses();
-        resolve();
-      } else {
-        // Execution is scheduled - wait for it to complete
-        this.#idlePromises.push(park);
+          break;
+        case "drain":
+          this.#idlePromises.push(park);
+          break;
       }
     });
+  }
+
+  /**
+   * Helper for `#waitForQuiescence()` and `isIdleWithPendingCommits()`, which
+   * returns what the barrier has to wait on before it can resolve, or
+   * `undefined` when it has nothing to wait on. `awaitPendingCommits` adds
+   * in-flight commits and pattern work to what it waits on. A disposed
+   * scheduler has nothing to wait on once its running pass, background tasks,
+   * held wakes and those commits are done, even with work still queued, since
+   * it never runs anything again. Pending computations with no effect to pull
+   * them do not count either, since in pull mode they do not run.
+   */
+  #quiescenceBlocker(
+    awaitPendingCommits: boolean,
+  ): QuiescenceBlocker | undefined {
+    const running = this.runningPromise;
+    if (running) {
+      // Something is currently running - wait for it then check again
+      return { kind: "settle", settled: () => running };
+    }
+    if (this.#backgroundTasks.size > 0) {
+      // Async scheduler work, such as event-triggered auto-start, is still in
+      // flight. Wait for it to settle and then re-check the scheduler state.
+      return {
+        kind: "settle",
+        settled: () => Promise.allSettled([...this.#backgroundTasks]),
+      };
+    }
+    if (this.#wakeShaper.hasPending()) {
+      // Input events (W3) or cell-flip notifications (plan B) are being held
+      // for wake shaping. Wait for them to release (which re-queues the
+      // events and delivers the notifications) and then re-check. Draining
+      // before the pending-commit branch means idleWithPendingCommits()
+      // releases the held wakes first, then awaits the commits they produce.
+      return { kind: "settle", settled: () => this.#wakeShaper.whenDrained() };
+    }
+    if (
+      awaitPendingCommits && this.runtime.storageManager.hasPendingCommits()
+    ) {
+      // In-flight commits. Wait for them to settle (server confirmation or
+      // terminal failure) and then re-check: a landed commit can dirty
+      // readers and re-trigger scheduler work.
+      return {
+        kind: "settle",
+        settled: () => this.runtime.storageManager.pendingCommitsSettled(),
+      };
+    }
+    if (
+      awaitPendingCommits &&
+      this.runtime.patternManager.hasPendingPatternWork()
+    ) {
+      // In-flight PATTERN work: a by-identity load (whose cold-load
+      // arm recompiles and re-persists a space's program docs) or a
+      // compile-cache write-back — the program-materialization
+      // commit itself (verification-coverage.md OW45, seat S-B).
+      // This barrier is the client's "safe to navigate or reload"
+      // checkpoint, and a program commit issued from a post-arrival
+      // load chain is exactly a write a reload would otherwise kill:
+      // the home-profile create's program commit died with the
+      // reload, nothing re-issued it, and the created space served
+      // nothing forever. Same recheck-from-scratch structure as
+      // pending commits — a load that registers its write-back
+      // mid-await is seen by the next pass, and the write-back's own
+      // storage commits land in the pending-commit branch above.
+      // Commit-aware callers only: plain idle() stays reactive-only
+      // (the serving loop's settle probes must not chase client
+      // persistence).
+      return {
+        kind: "settle",
+        settled: () => this.runtime.patternManager.pendingPatternWorkSettled(),
+      };
+    }
+    // Everything below waits on `#idlePromises`, which only the execute loop
+    // drains, and `#execute()` returns immediately once disposed. Each check
+    // above has a wake source of its own, so it still settles on a disposed
+    // scheduler. This is what keeps `Runtime.dispose()` from hanging on
+    // `scheduler.idle()` after a caller disposed the scheduler by hand.
+    if (this.#disposed) return undefined;
+    if (
+      this.#gates.hasWakeTimer() &&
+      ((this.#eventQueue.length > 0 &&
+        isHeadEventParkedState({ eventQueue: this.#eventQueue })) ||
+        this.#hasIdleBlockingDeferredPullWork())
+    ) {
+      // A queued event or idle-blocking pull node is parked behind a time
+      // gate. Wait for the wake timer to re-schedule the queue and re-check.
+      return { kind: "drain" };
+    }
+    if (
+      this.#hasPendingLineageHeadEvent() || this.#hasLoadParkedHeadEvent() ||
+      this.#eventQueue[0]?.retryReadinessPending === true
+    ) {
+      // A cross-space lineage head has no timer — its origin commit callback
+      // is the wake source; a load-parked head wakes on load completion or
+      // drops on an explicit load failure; a head requeued by a stale-basis
+      // retry wakes once the retry's readiness resolves. Either way idle
+      // must stay open until the callback re-queues execution.
+      return { kind: "drain" };
+    }
+    // Execution is scheduled - wait for it to complete
+    if (this.#scheduled) return { kind: "drain" };
+    if (this.#hasRunnablePullWork()) return { kind: "pull" };
+    // Nothing is scheduled to run - we're idle.
+    return undefined;
   }
 
   /**
@@ -2481,14 +2526,14 @@ export class Scheduler {
     }
     this.#triggerIndex.clear();
     this.#wakeShaper.dispose();
-    // Release waiters already parked when dispose arrived. The branch in
-    // waitForQuiescence covers idle() calls made AFTER this point; it cannot
-    // reach these, and nothing else will — `#execute()` is the only other drain
-    // and it is now a no-op. Same contract the wake shaper's own dispose keeps
-    // for its drain waiters, one line up. Drained in place rather than by
-    // reassigning the field: createExecuteContinuationState() hands this exact
-    // array out, so a swap would leave any live continuation state draining the
-    // detached one.
+    // Release waiters already parked when dispose arrived. The disposed check
+    // in `#quiescenceBlocker()` covers idle() calls made AFTER this point; it
+    // cannot reach these, and nothing else will — `#execute()` is the only
+    // other drain and it is now a no-op. Same contract the wake shaper's own
+    // dispose keeps for its drain waiters, one line up. Drained in place
+    // rather than by reassigning the field: createExecuteContinuationState()
+    // hands this exact array out, so a swap would leave any live continuation
+    // state draining the detached one.
     //
     // Routed back through waitForQuiescence rather than resolved here, because
     // dispose does NOT cancel a run already under way — `#execute()` tests
@@ -2496,9 +2541,9 @@ export class Scheduler {
     // `runningPromise` unset, so a waiter parked while execution was merely
     // SCHEDULED is still parked once the run begins; resolving it directly
     // would report quiescence with an action, and its commit, still going. The
-    // re-check waits on that promise and only then takes the disposed branch,
-    // which is exactly the guarantee the branch documents. It cannot re-park:
-    // the disposed branch sits above every push to this list.
+    // re-check waits on that promise and only then reaches the disposed check,
+    // which is exactly the guarantee the check documents. It cannot re-park:
+    // the disposed check comes before every blocker that pushes to this list.
     const parked = this.#idlePromises.splice(0);
     if (parked.length > 0) {
       this.#waitForQuiescence(false).then(() => {

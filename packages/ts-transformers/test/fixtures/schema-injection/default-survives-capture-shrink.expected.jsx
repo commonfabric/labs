@@ -41,7 +41,7 @@ interface Input {
 }
 const __cfLift_1 = __cfHelpers.lift<{
     items: {
-        done: boolean | (false & { readonly [DEFAULT_MARKER]: false; });
+        done: boolean | Default<false>;
     }[];
 }, boolean>(({ items }) => items[0]?.done === true, {
     type: "object",
@@ -66,7 +66,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
 const __cfLift_2 = __cfHelpers.lift<{
     items: {
-        label: string | (string & { readonly [DEFAULT_MARKER]: ""; });
+        label: Default<string, "">;
     }[];
 }, boolean>(({ items }) => items[0]?.label === "", {
     type: "object",

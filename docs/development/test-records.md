@@ -26,14 +26,13 @@ roles. `default` follows the first-party constant and stays unmarked;
 `server-execution-off` when it resolves OFF. Which posture is unmarked
 follows the constant (the registry's summary table states it); each marker
 is the continuous history of its posture whenever that posture is not the
-default, across flips in either direction. The single-process default jobs (the unit
-suites, `cf test`, the
-no-server pattern-unit lane) never read that default and stay ambient-OFF,
-so they are unmarked for the older reason: the flip does not reach them
-(`docs/specs/test-records.md`). One record is one JSON line; one uploaded
-object is a run's
-context line followed by its record lines. The schema, the line codecs, and
-their validators live in `packages/test-support/src/records/`.
+default, across flips in either direction. The single-process default suites
+(the unit suites, `cf test`, the no-server `pattern-unit` suite) never read that
+default and stay ambient-OFF, so they are unmarked for the older reason: the
+flip does not reach them (`docs/specs/test-records.md`). One record is one JSON
+line; one uploaded object is a run's context line followed by its record lines.
+The schema, the line codecs, and their validators live in
+`packages/test-support/src/records/`.
 
 Records carry only public-repository material: names, hashes, durations. No
 usernames, hostnames, tokens, or log text — that discipline is what makes
@@ -68,9 +67,10 @@ lines belong in the files inside. The same rename applies to every variant.
 
 - `CF_TEST_RECORDS_DIR` — the active run's spool directory. Producers
   append record fragments here; when it is unset, recording is off
-  everywhere. CI jobs set it to a workspace directory; local entry points
-  set it themselves when they own a run. Never point two concurrent runs
-  at one directory by hand — each run owns its own spool.
+  everywhere. A CI lane job sets it to a workspace directory, and the lane gives
+  each batch execution a spool of its own in the lane's working directory; local
+  entry points set it themselves when they own a run. Never point two concurrent
+  runs at one directory by hand — each run owns its own spool.
 - `CF_TEST_RECORDS_KEY_FILE` — a personal reporting key (see below), put in
   the shell's profile and in each agent harness's configuration by `deno
   task test-records-key setup`. Its presence is the local opt-in: with it,
@@ -237,24 +237,29 @@ if it fails. Every opted-in run also sweeps the spool root and ships any
 spool whose owner's lock is free. Object names are deterministic, so
 shipping twice collides on create and duplicates never come into being.
 
-In CI, jobs hold no credentials: each test job ends with a credential-free
-step that gathers the spool and the job's JUnit files into a
-`test-records-*` artifact, and the Test Records Relay workflow — the only
-CI principal that can write to the store — composes each artifact's context
-from the trusted event payload and creates one object per artifact.
-Same-repository runs always ship. A fork run ships only when its actor
-is on the infra-managed team member list, which is what lets team
-members' personal-fork pull requests report while the store accepts
-nothing authored by anyone else; other fork runs still run their tests
-normally and simply ship no records. Re-running the relay, or
-dispatching it with a run id, re-ships idempotently.
+In CI, jobs hold no record-store credential. A lane gathers each batch's records
+and JUnit reports into its spool as the batch finishes, marking each record with
+its suite's variant. Each suite declares its JUnit outputs in the topology, so
+the lane finds them itself, and its ship step names no JUnit files. The lane
+ends with that credential-free step, which packs the spool into a
+`test-records-tests-<lane>-a<attempt>` artifact. The Test Records Relay
+workflow — the only CI principal that can write to the store — composes each
+artifact's context from the trusted event payload and creates one object per
+artifact.
+Same-repository runs always ship. A fork run ships only when its actor is on the
+infra-managed team member list, which is what lets team members' personal-fork
+pull requests report while the store accepts nothing authored by anyone else;
+other fork runs still run their tests normally and ship no records. Re-running
+the relay, or dispatching it with a run id, re-ships idempotently.
 
 The shared `test-records-ship` action accepts an optional `variant` input and
 also reads the CI-only `CF_TEST_RECORDS_VARIANT` fallback. An explicit input
 wins. This lets a workflow resolve a stable role to a variant once at job scope
 without duplicating that expression at every shipping step. The action applies
 the resolved value to every spooled and JUnit-derived record in that job; leave
-both surfaces unset for the default configuration.
+both surfaces unset for the default configuration. The lanes set neither, since
+a lane's batches can run in different configurations and the lane has already
+marked each one.
 
 The relay runs its parser from the default branch. Land parser, relay, reader,
 and action support for a new optional record field before any test workflow
@@ -316,15 +321,15 @@ fold and the topology check all do this. Leaving them in does more than
 add an identity to the output. The figures are not all durations: of the
 three a lane writes per batch, one says what the batch was packed to
 spend and one counts the units it opened, so a sum over them is a number
-that means nothing. The job that scores a run's coverage writes its
-figures as measurements too, named `ci-lane coverage …`, each holding a
-count of uncovered lines, and three things read them back: the
-test-selection publisher's coverage baselines, the dashboard's coverage
-debt tile, and the report a `main` run posts on its pull request.
-["Coverage figures in the record store"](COVERAGE.md#coverage-figures-in-the-record-store)
-says how. `tasks/lane-measurement.ts` composes the lane's names this
-recognizes. The normative account is
-["Recording" in the specification](../specs/test-records.md#recording).
+that means nothing. `Status`, the job that scores a push run's coverage, writes
+its figures as measurements too, named `ci-lane coverage …`, each holding a
+count of uncovered lines, and three things read them back: the test-selection
+publisher's coverage baselines, the dashboard's coverage debt tile, and the
+report a `main` run posts on its pull request. ["Coverage figures in the record
+store"](COVERAGE.md#coverage-figures-in-the-record-store) says how.
+`tasks/lane-measurement.ts` composes the lane's names this recognizes. The
+normative account is ["Recording" in the
+specification](../specs/test-records.md#recording).
 
 Consumers that feed decisions read only `submissions/ci/`, whose writer
 credential never exists as key material. The relay's member gate means
@@ -349,12 +354,15 @@ is the record of who minted what for whom.
 
 ## Covering a new test surface
 
-A runner that already emits JUnit needs nothing but a `--junit`
-specification on its job's ship step, and a `--preload` naming
-`packages/test-support/src/records/preload.ts` where the surface is
-`deno test`. `preloadArgument()` from `@commonfabric/test-support/records`
-spells that flag; Deno resolves `--preload` as a path rather than through
-the import map, so it must be absolute and no caller writes it out.
+A new test surface is a suite of the test topology, `tasks/test-topology.ts` and
+the modules under `tasks/test-topology/`, and never a new job: the lanes run
+what the topology declares and ship its records. A suite whose runner emits
+JUnit declares each report, with its kind, scope and file prefix, in the
+invocations its `command()` returns, and passes a `--preload` naming
+`packages/test-support/src/records/preload.ts` where the surface is `deno test`.
+`preloadArgument()` from `@commonfabric/test-support/records` returns that flag;
+Deno resolves `--preload` as a path rather than through the import map, so it
+must be absolute and no caller writes it out.
 
 The preload does two things, and it only installs itself when it has one
 of them to do: it captures the test file each test belongs to and
@@ -447,14 +455,15 @@ Anything else wraps its command:
 deno task run-recorded <kind> <scope> <name> -- <command...>
 ```
 
-A wrapped command in a workflow step also has its identity registered in
-the test topology. A lane runs what a suite enumerates, so the topology
-is what keeps the command running once a lane takes over the job. `deno
-task check-test-topology` reads every such step and fails on one no suite
-claims, which settles it on the pull request that adds the step. A
-command with no suite to register it under is one to leave unwrapped:
-["Recording" in the specification](../specs/test-records.md#recording)
-says that a check no lane can be asked to run is not recorded.
+A wrapped command runs in a suite of the test topology, never in a workflow
+step. The lanes run every test and gate the topology declares, so a step that
+records by hand either records a check a suite already runs a second time
+against one commit, or records one no lane will ever run or select. `deno task
+check-test-topology` fails every such step, and says which of the two it is, on
+the pull request that adds it. A command with no suite to register it under is
+one to leave unwrapped: ["Recording" in the
+specification](../specs/test-records.md#recording) says that a check no lane can
+be asked to run is not recorded.
 
 A harness that is also a library — one this repository's own tests drive
 over fixture files — takes the decision to record from its caller, not

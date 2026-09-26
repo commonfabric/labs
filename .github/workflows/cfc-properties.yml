@@ -5,11 +5,11 @@ name: CFC Property Suite
 #
 # Nightly rather than per-PR on purpose. The suite stands up real runtimes and
 # real prompt loops, and the point of it is to produce evidence deliberately
-# rather than to gate a diff; the per-PR job already runs the same tests as
-# part of the cf-harness package suite, where they are fast because each one
-# audits only its own run.
+# rather than to gate a diff; the CI workflow's lanes already run the same
+# tests on a pull request, as the cf-harness part of the `workspace-unit`
+# suite, where they are fast because each one audits only its own run.
 #
-# What this job adds is the second step. The per-PR run audits each property's
+# What this job adds is the second step. A lane's run audits each property's
 # own artifacts; here the whole suite writes into one root and the corpus
 # checks read that root as a population — AUD-16's refusal count and AUD-18's
 # posture uniformity are corpus questions, and a single run cannot answer

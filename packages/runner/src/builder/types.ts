@@ -99,6 +99,7 @@ export type {
   FabricExecArray,
   FabricExecFunction,
   FabricExecPlainObject,
+  FabricExecPlusType,
   FabricExecValue,
   FabricValue,
   FactoryInput,

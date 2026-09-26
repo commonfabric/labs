@@ -56,6 +56,7 @@ import type {
   TransactionSealDestination,
   Unit,
   URI,
+  WaveWithdrawalCause,
 } from "../storage/interface.ts";
 import { parsePointer, pathsOverlap } from "../../../memory/v2/path.ts";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -352,6 +353,30 @@ export function waveRunContextOf(
   return undefined;
 }
 
+/**
+ * A delegated carriage (protocol.md §2b): the acting identity a write crossing
+ * into another space is made for, and the grant it is admitted under.
+ */
+export type DelegatedCarriage = {
+  acting: { user: string; session?: string };
+  capabilityRef: string;
+};
+
+/**
+ * The delegated carriage a run lends a bookkeeping write it triggers after it
+ * is over: the run's settled acting identity and grant, or none for a run that
+ * acted as nobody.
+ */
+export function delegatedCarriageOf(
+  context: WaveRunContext | undefined,
+): DelegatedCarriage | undefined {
+  const acting = context?.acting;
+  const capabilityRef = context?.capabilityRef;
+  return acting !== undefined && capabilityRef !== undefined
+    ? { acting, capabilityRef }
+    : undefined;
+}
+
 // The DURABLE-acceptance settlement of a tx sealed into a wave: the seal
 // resolves the tx's commit() (acceptance into the wave), but the writes
 // become durable only at the wave commit — and a conflict there can
@@ -364,6 +389,9 @@ type WaveSettlement = Result<
   StorageTransactionRejected & {
     /** This run read a contribution whose optimistic state was withdrawn. */
     readDependencyWithdrawn?: true;
+
+    /** Why the wave withdrew this transaction's contribution. */
+    waveWithdrawalCause?: WaveWithdrawalCause;
   }
 >;
 
@@ -1688,7 +1716,7 @@ export class WaveAccumulator
   #withdraw(
     contribution: WaveContribution,
     message: string,
-    cause?: "contribution-dropped" | "wave-abandoned",
+    cause?: WaveWithdrawalCause,
   ): void {
     contribution.emptySettlement?.resolve({
       error: {
@@ -3062,15 +3090,14 @@ export class WaveAccumulator
     actingSession?: string;
     capabilityRef: string;
   } | undefined {
-    return context.acting !== undefined && context.capabilityRef !== undefined
-      ? {
-        actingPrincipal: context.acting.user,
-        ...(context.acting.session !== undefined
-          ? { actingSession: context.acting.session }
-          : {}),
-        capabilityRef: context.capabilityRef,
-      }
-      : undefined;
+    const carriage = delegatedCarriageOf(context);
+    return carriage === undefined ? undefined : {
+      actingPrincipal: carriage.acting.user,
+      ...(carriage.acting.session !== undefined
+        ? { actingSession: carriage.acting.session }
+        : {}),
+      capabilityRef: carriage.capabilityRef,
+    };
   }
 
   /** The foreign-batch grouping key — (space, acting identity, grant).

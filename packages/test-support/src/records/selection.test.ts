@@ -75,6 +75,38 @@ describe("selection", () => {
       }
     });
 
+    it("round-trips what suites cost with coverage on", () => {
+      const manifest = sampleManifest();
+      manifest.calibration.suitesWithCoverage = {
+        unit: { overhead: 9, correction: 2, unitOverhead: 1 },
+      };
+      expect(parseManifest(serializeManifest(manifest))).toEqual(manifest);
+    });
+
+    it("reads a manifest carrying no coverage fits as having none", () => {
+      const parsed = parseManifest(serializeManifest(sampleManifest()));
+      expect(parsed).toBeDefined();
+      expect(Object.hasOwn(parsed!.calibration, "suitesWithCoverage"))
+        .toBe(false);
+    });
+
+    it("refuses a coverage fit it cannot read", () => {
+      // What a lane measuring the suite is charged comes from here, so a
+      // figure that will not read is a body this reader cannot read.
+      for (
+        const suitesWithCoverage of [
+          [],
+          { unit: 7 },
+          { unit: { overhead: 3, correction: 0, unitOverhead: 0 } },
+          { unit: { overhead: 3, correction: 1 } },
+        ]
+      ) {
+        const object = JSON.parse(serializeManifest(sampleManifest()));
+        object.calibration.suitesWithCoverage = suitesWithCoverage;
+        expect(parseManifest(JSON.stringify(object))).toBeUndefined();
+      }
+    });
+
     it("refuses a suite of this shape carrying no unit overhead", () => {
       // Absent from the shape that introduced it is a body this reader
       // cannot read. Reading it as charging nothing would hide the

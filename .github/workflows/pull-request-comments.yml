@@ -7,8 +7,9 @@ name: Pull Request Comments
 # read-only token there. Each job names the workflow it follows, because
 # both triggers reach both jobs.
 #
-# The coverage comment carries what the Coverage Check gate found on the
-# pull request's own run, handed over as the `coverage-comment` artifact.
+# The coverage comment carries what the coverage gate in the CI workflow's
+# `Status` job found on the pull request's own run, handed over as the
+# `coverage-comment` artifact.
 #
 # The run report carries what a later run on the default branch found that
 # the pull request's own run could not have found for itself: a test that
@@ -47,10 +48,10 @@ permissions:
 jobs:
   post-coverage-comment:
     name: "Post Coverage Comment"
-    # Runs on both outcomes of a PR run: a failed run may carry a coverage
-    # regression to post, and a passing run may need to update an earlier
-    # regression comment to its resolved state. Other conclusions (cancelled,
-    # skipped) carry nothing to do.
+    # Runs on both outcomes of a pull request's run: a failed run may carry
+    # a coverage gate failure to post, and a passing run may need to turn an
+    # earlier failure's comment into its resolved state. Other conclusions
+    # (cancelled, skipped) carry nothing to do.
     if: >-
       github.event.workflow_run.event == 'pull_request' &&
       (github.event.workflow_run.conclusion == 'failure' ||
@@ -76,6 +77,7 @@ jobs:
       - name: 💬 Post coverage comment
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: deno run --allow-net --allow-env --allow-read tasks/post-coverage-comment.ts
 
   post-main-report:

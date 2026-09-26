@@ -40,6 +40,12 @@ export type ServingLoopStats = {
   /** Exhausted cycles, including zero-delta cycles that close no wave. */
   wavesBudgetExhausted: number;
 
+  /** Exhausted cycles whose committed wave still advanced W, to the input
+   * head the cut settle had proven covered (serving-loop.md §3's prefix
+   * coverage). A subset of `wavesBudgetExhausted`: the rest carried no
+   * watermark movement. */
+  exhaustedAdvances: number;
+
   supersededWrites: number;
   authoredSeen: number;
   effectAcks: number;
@@ -642,12 +648,28 @@ export type ServingLoopStats = {
     runs: number;
     failures: number;
   };
+
+  /**
+   * Serving runtimes kept across an idle park (serving-loop.md §1,
+   * "Parking"). `retained` counts runtimes kept as their tenure parked,
+   * `reused` those a successor tenure served with, and `discarded` those
+   * disposed unused: expired, evicted, tainted while parked, or turned
+   * down at a successor's activation because the store had moved. `held`
+   * is how many are kept now.
+   */
+  parkedRuntimes: {
+    retained: number;
+    reused: number;
+    discarded: number;
+    held: number;
+  };
 };
 
 export const emptyServingLoopStats = (): ServingLoopStats => ({
   activeSpaces: 0,
   waves: 0,
   wavesBudgetExhausted: 0,
+  exhaustedAdvances: 0,
   supersededWrites: 0,
   authoredSeen: 0,
   effectAcks: 0,
@@ -746,6 +768,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     failures: 0,
   },
   lifecycleVerbs: { runs: 0, failures: 0 },
+  parkedRuntimes: { retained: 0, reused: 0, discarded: 0, held: 0 },
 });
 
 type ActiveDeliveryCheckpointStat = {
