@@ -751,6 +751,39 @@ export class VisitInProgress<
   }
 
   /**
+   * Converts a `#visitValue()` result from a `recurse`-induced sub-value
+   * iteration as appropriate, based on `#mapMode`. Specifically, a
+   * `mainResult` is always returned as-is. Other than that, this always returns
+   * a `mapTo` result when mapping (furthermore validating the result as
+   * necessary), and always returns `undefined` when _not_ mapping.
+   */
+  #handleMappingAsAppropriate(
+    original: FabricValuePlus<PlusType>,
+    visitResult: MainVisitResult<PlusType, ResultType>,
+  ): MainVisitResult<PlusType, ResultType> {
+    if (!this.#mapMode) {
+      return (visitResult?.type === "mainResult") ? visitResult : undefined;
+    }
+
+    switch (visitResult?.type) {
+      case "mainResult":
+      case "mapTo": {
+        return visitResult;
+      }
+
+      case undefined: {
+        return { type: "mapTo", value: this.#assertResultType(original) };
+      }
+
+      default: {
+        // deno-coverage-ignore-start
+        this.#throwShouldntHappenResultType(visitResult);
+      }
+        // deno-coverage-ignore-stop
+    }
+  }
+
+  /**
    * Converts a `#visitValue()` result being used as a plain object key, from a
    * `recurse`-induced sub-value iteration, as appropriate, based on `#mapMode`.
    */
@@ -777,39 +810,6 @@ export class VisitInProgress<
           type: "mapTo",
           value: this.#assertValidPlainObjectKey(original, original),
         };
-      }
-
-      default: {
-        // deno-coverage-ignore-start
-        this.#throwShouldntHappenResultType(visitResult);
-      }
-        // deno-coverage-ignore-stop
-    }
-  }
-
-  /**
-   * Converts a `#visitValue()` result from a `recurse`-induced sub-value
-   * iteration as appropriate, based on `#mapMode`. Specifically, a
-   * `mainResult` is always returned as-is. Other than that, this always returns
-   * a `mapTo` result when mapping (furthermore validating the result as
-   * necessary), and always returns `undefined` when _not_ mapping.
-   */
-  #handleMappingAsAppropriate(
-    original: FabricValuePlus<PlusType>,
-    visitResult: MainVisitResult<PlusType, ResultType>,
-  ): MainVisitResult<PlusType, ResultType> {
-    if (!this.#mapMode) {
-      return (visitResult?.type === "mainResult") ? visitResult : undefined;
-    }
-
-    switch (visitResult?.type) {
-      case "mainResult":
-      case "mapTo": {
-        return visitResult;
-      }
-
-      case undefined: {
-        return { type: "mapTo", value: this.#assertResultType(original) };
       }
 
       default: {
