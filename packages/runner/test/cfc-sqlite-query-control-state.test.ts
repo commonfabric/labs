@@ -383,6 +383,66 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       .toBe(false);
   });
 
+  it("declares nothing on the control paths when a query refreshes over labeled rows", async () => {
+    // A refresh — only `reactOn` moved — claims through `/pending` and
+    // `/requestHash` and leaves the rows it found where they are. The result
+    // is shared, so its `/result` membership declares the projected column's
+    // `BODY_CLAUSE`, and the parameter is a literal: the issuing transaction
+    // reads nothing labeled unless the claim reads the stored value, and any
+    // clause on the request hash came from there.
+
+    const db = labeledDb();
+    await seedMessages(db);
+    const { commonfabric: cf } = createTrustedBuilder(runtime);
+    const testPattern = cf.pattern<{ tick: number }>(({ tick }) => ({
+      bodies: cf.sqliteQuery(
+        {
+          db,
+          reactOn: tick,
+          sql: BODIES_SQL,
+          params: ["c-alpha"],
+          // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
+        } as any,
+      ),
+    }));
+    const tx = runtime.edit();
+    const tick = runtime.getCell<number>(space, "refresh-tick", {
+      type: "number",
+    }, tx);
+    tick.set(0);
+    const resultCell = runtime.getCell(
+      space,
+      "refresh-labeled-rows",
+      testPattern.resultSchema,
+      tx,
+    );
+    const result = runtime.run(tx, testPattern, { tick }, resultCell);
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit()).error).toBeUndefined();
+    // deno-lint-ignore no-explicit-any -- the builtin's state, as it writes it
+    const bodies = result.key("bodies") as Cell<any>;
+    const first = await waitForCellValue<QueryState<BodyRow>>(
+      runtime,
+      bodies,
+      (value) => (value?.result ?? []).length === 2,
+    );
+
+    const bump = runtime.edit();
+    tick.withTx(bump).set(1);
+    runtime.prepareTxForCommit(bump);
+    expect((await bump.commit()).error).toBeUndefined();
+    const refreshed = await waitForCellValue<QueryState<BodyRow>>(
+      runtime,
+      bodies,
+      (value) =>
+        value?.pending === false && value.requestHash !== first.requestHash,
+    );
+    expect(refreshed.error).toBeUndefined();
+    expect(refreshed.result).toEqual([{ body: "first" }, { body: "second" }]);
+    expect(hasClause(declaredAt(bodies, ["requestHash"]), BODY_CLAUSE))
+      .toBe(false);
+  });
+
   describe("a shared result", () => {
     // Space scope, where one materialization serves every reader of the
     // space. A session-scoped result is per-reader, so its membership tells
