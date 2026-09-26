@@ -523,7 +523,7 @@ export class VisitInProgress<
           codec,
           recurseResult.value,
         );
-        return this.#makeRecurseResult(instance, instanceResult, false);
+        return this.#makeRecurseResult(instance, instanceResult, true);
       }
     } finally {
       this.#stack.popExpect(instance);
