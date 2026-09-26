@@ -1,0 +1,156 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Brief": {
+        "properties": {
+          "vote": {
+            "enum": [
+              "approve",
+              "reject"
+            ]
+          }
+        },
+        "required": [
+          "vote"
+        ],
+        "type": "object"
+      },
+      "Committed": {
+        "properties": {
+          "votes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "votes"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "briefs": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Brief",
+          "ifc": {
+            "confidentiality": [
+              {
+                "moduleIdentity": "W0NrvZV4n5d3Z512CyvD5CEd0d5aNT3Qf66KZWZWyUs",
+                "policyDigest": "yUc-GOwqRXXZAwKlDlQs66-tu-lFgTbhPj_ZC4Eox2o",
+                "policyRefKind": "module",
+                "subject": {
+                  "__ctOwningSpace": true
+                },
+                "symbol": "ballotRules",
+                "type": "https://commonfabric.org/cfc/atom/Policy"
+              }
+            ]
+          }
+        },
+        "type": "array"
+      },
+      "committed": {
+        "$ref": "#/$defs/Committed",
+        "asCell": [
+          "cell"
+        ],
+        "default": {
+          "votes": []
+        },
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "W0NrvZV4n5d3Z512CyvD5CEd0d5aNT3Qf66KZWZWyUs",
+              "policyDigest": "yUc-GOwqRXXZAwKlDlQs66-tu-lFgTbhPj_ZC4Eox2o",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "ballotRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        }
+      }
+    },
+    "required": [
+      "briefs",
+      "committed"
+    ],
+    "type": "object"
+  },
+  "pattern": "cfc-exchange-rules/witnessed-chain.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Brief": {
+        "properties": {
+          "vote": {
+            "enum": [
+              "approve",
+              "reject"
+            ]
+          }
+        },
+        "required": [
+          "vote"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "append": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "commit": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "forge": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "relayTally": {
+        "type": "string"
+      },
+      "submit": {
+        "$ref": "#/$defs/Brief",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "tally": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tally",
+      "relayTally",
+      "submit",
+      "commit",
+      "forge",
+      "append",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}
