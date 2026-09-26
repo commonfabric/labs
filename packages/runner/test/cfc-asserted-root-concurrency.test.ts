@@ -118,5 +118,11 @@ describe("a whole-value stamp over a destination a peer changed", () => {
     await server.flushSessions([space]);
     await clock.settle();
     await writer.storageManager.synced();
+
+    // Nothing of the refused set landed: the peer's member is still there.
+    const settled = writer.getCell(space, "committed", undefined);
+    await settled.sync();
+    await settled.pull();
+    expect(settled.get()).toEqual({ votes: ["reject"], extra: "planted" });
   });
 });
