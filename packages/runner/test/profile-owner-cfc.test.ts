@@ -6,6 +6,7 @@ import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
   type NormalizedFullLink,
@@ -827,7 +828,7 @@ describe("profile owner CFC policy", () => {
             id: target.id,
             path,
           }],
-        });
+        }, runtimeWritePolicyAuthorization);
       }
       tx.prepareCfc();
       const result = await tx.commit();
@@ -838,21 +839,25 @@ describe("profile owner CFC policy", () => {
     }
   });
 
-  it("rejects the same owner-protected write without a setup-projection marker", async () => {
-    // Negative twin of the test above: identical write under a non-writer
-    // identity, but WITHOUT recording the setup-projection marker. Proves the
-    // marker is load-bearing — the exemption is not an unconditional bypass.
+  it("counts a setup-projection marker only when the runtime recorded it", async () => {
+    // Pattern code reaches the transaction its cells are bound to, so it can
+    // record a marker through the public interface. The same write under the
+    // same non-writer identity is refused with a marker recorded that way,
+    // and admitted with one recorded as the runtime records it.
     const { runtime, storageManager } = createRuntime();
-    try {
+    const attempt = async (
+      name: string,
+      authorization?: typeof runtimeWritePolicyAuthorization,
+    ) => {
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: "no-marker", actingPrincipal: alice.did() });
+      tx.setCfcTrustSnapshot({ id: name, actingPrincipal: alice.did() });
       tx.setCfcImplementationIdentity({
         kind: "builtin",
         builtinId: "system.not-the-profile-writer",
       });
       const cell = runtime.getCell(
         alice.did(),
-        "owner-init-no-marker",
+        name,
         profileSchema(alice.did()),
         tx,
       );
@@ -861,10 +866,43 @@ describe("profile owner CFC policy", () => {
       recordTrustedEdit(tx, target, ["name"]);
       recordTrustedEdit(tx, target, ["avatar"]);
       recordTrustedEdit(tx, target, ["elements"]);
-      // No setup-projection marker recorded.
+      const resultTarget = runtime.getCell(
+        alice.did(),
+        `${name}-result`,
+        undefined,
+        tx,
+      ).getAsNormalizedFullLink();
+      for (const path of [["name"], ["avatar"], ["elements"]]) {
+        tx.recordCfcWritePolicyInput({
+          kind: "structural-provenance",
+          target: {
+            space: resultTarget.space,
+            scope: resultTarget.scope,
+            id: resultTarget.id,
+            path,
+          },
+          claim: "runtime.setup.result-projection",
+          sources: [{
+            space: target.space,
+            scope: target.scope,
+            id: target.id,
+            path,
+          }],
+        }, authorization);
+      }
       tx.prepareCfc();
-      const result = await tx.commit();
-      expect(result.error?.message).toContain("writeAuthorizedBy");
+      return (await tx.commit()).error?.message;
+    };
+    try {
+      expect(await attempt("owner-init-unauthorized-marker")).toContain(
+        "writeAuthorizedBy",
+      );
+      expect(
+        await attempt(
+          "owner-init-authorized-marker",
+          runtimeWritePolicyAuthorization,
+        ),
+      ).toBeUndefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();

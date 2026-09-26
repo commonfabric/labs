@@ -1109,6 +1109,7 @@ const structuralProvenanceForPath = (
     input,
   ): input is StructuralProvenanceInput =>
     input.kind === "structural-provenance" &&
+    tx.isRuntimeWritePolicyInput(input) &&
     input.claim === claim &&
     input.target.space === target.space &&
     input.target.id === target.id &&
@@ -1172,10 +1173,12 @@ const setupProjectionSourceMatchesValue = (
 // when it is the redirect *source* of a setup-projection marker recorded in this
 // transaction, covering the field path.
 //
-// This is safe because the marker is recorded ONLY by the runtime's result
-// projection — never by an arbitrary `cell.set` — and only when the projection
-// STRUCTURE is established (instantiation), not on value edits (which leave the
-// projection unchanged and so record no marker). What the exemption follows is
+// This is safe because the marker counts only with the runtime's authorization
+// (`isRuntimeWritePolicyInput`), which the runtime's result projection records
+// it with and pattern code, reaching the transaction through its cells, cannot
+// supply — and only when the projection STRUCTURE is established
+// (instantiation), not on value edits (which leave the projection unchanged and
+// so record no marker). What the exemption follows is
 // the marker, not the presence of a write: a setup replayed over a document
 // that already holds the projected redirect writes nothing and is still the
 // trusted creation step, while a write bearing no marker — a direct untrusted
@@ -1194,6 +1197,7 @@ const writeIsPatternSetupInitialization = (
   const logicalPath = canonicalizeLogicalPath(path);
   return tx.getCfcState().writePolicyInputs.some((input) =>
     input.kind === "structural-provenance" &&
+    tx.isRuntimeWritePolicyInput(input) &&
     input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
     input.sources.some((source) => {
       if (
@@ -1382,7 +1386,8 @@ const pathHoldsUnattributedInitialization = (
         // A setup projection names the result field it projects and the
         // internal cell holding the field's value; both are the pattern's own
         // initialization (`writeIsPatternSetupInitialization`).
-        return input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
+        return tx.isRuntimeWritePolicyInput(input) &&
+          input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
           [input.target, ...input.sources].some(covers);
       }
       return input.kind === "initialization" &&

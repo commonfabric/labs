@@ -801,6 +801,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       tx.recordCfcWritePolicyInput(
         setupProjectionMarker(projectedLink, sourceId(runtime)),
+        runtimeWritePolicyAuthorization,
       );
       tx.prepareCfc();
       expect((await tx.commit()).error).toBeUndefined();
@@ -836,6 +837,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         replay(runtime, tx, projectedLink, redirect);
         tx.recordCfcWritePolicyInput(
           setupProjectionMarker(projectedLink, sourceId(runtime)),
+          runtimeWritePolicyAuthorization,
         );
         tx.prepareCfc();
         expect((await tx.commit()).error).toBeUndefined();
@@ -861,6 +863,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         diffAndUpdate(runtime, tx, projectedLink, {}, projectedLink);
         tx.recordCfcWritePolicyInput(
           setupProjectionMarker(projectedLink, sourceId(runtime)),
+          runtimeWritePolicyAuthorization,
         );
         tx.prepareCfc();
         expect((await tx.commit()).error?.message).toContain(
@@ -881,6 +884,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         replay(runtime, tx, projectedLink, redirect);
         tx.recordCfcWritePolicyInput(
           setupProjectionMarker(projectedLink, "of:elsewhere" as URI),
+          runtimeWritePolicyAuthorization,
         );
         tx.prepareCfc();
         expect((await tx.commit()).error?.message).toContain(
