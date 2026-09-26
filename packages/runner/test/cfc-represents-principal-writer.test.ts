@@ -14,6 +14,10 @@ import {
 import { writeResultSchemaMeta } from "../src/result-schema-meta.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import type { CfcEnforcementMode } from "../src/cfc/types.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "../src/storage/extended-storage-transaction.ts";
 
 const alice = await Identity.fromPassphrase(
   "runner-represents-principal-writer-alice",
@@ -76,11 +80,11 @@ const actAsPatternFor = (
   mode: CfcEnforcementMode = "enforce-strict",
 ) => {
   tx.setCfcEnforcementMode(mode);
-  tx.setCfcTrustSnapshot({
+  setCfcTrustSnapshot(tx, {
     id: `trust-${actingPrincipal}`,
     actingPrincipal,
   });
-  tx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(tx, {
     kind: "verified",
     moduleIdentity: "attacker-module",
     sourceFile: "/attacker.tsx",
