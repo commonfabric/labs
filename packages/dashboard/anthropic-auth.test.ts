@@ -122,10 +122,26 @@ Deno.test("without federation, the Admin key is sent as x-api-key", async () => 
   assertEquals(result, { "x-api-key": "sk-ant-admin01-k", "anthropic-version": "2023-06-01" });
 });
 
-Deno.test("a partial federation setting counts as unconfigured", () => {
-  const { ANTHROPIC_SERVICE_ACCOUNT_ID: _dropped, ...partial } = FED;
-  assertEquals(anthropicAdminConfigured(envWith(partial)), false);
-  assertEquals(anthropicAdminConfigured(envWith(FED)), true);
-  assertEquals(anthropicAdminConfigured(envWith({ ANTHROPIC_ADMIN_KEY: "k" })), true);
+Deno.test("any federation setting selects federation, and the missing ones are named", async () => {
+  const { ANTHROPIC_SERVICE_ACCOUNT_ID: _a, ANTHROPIC_ORGANIZATION_ID: _o, ...partial } = FED;
+  const env = envWith({ ...partial, ANTHROPIC_ADMIN_KEY: "sk-ant-admin01-old" });
+  assertEquals(anthropicAdminConfigured(env), true);
+  const { calls } = await withFetch(() => new Response("unexpected", { status: 500 }), () =>
+    assertRejects(
+      () => anthropicAdminHeaders(env),
+      Error,
+      "Anthropic federation is missing ANTHROPIC_ORGANIZATION_ID, ANTHROPIC_SERVICE_ACCOUNT_ID",
+    ));
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("with neither route configured, nothing is configured and asking for headers rejects", async () => {
   assertEquals(anthropicAdminConfigured(envWith({})), false);
+  assertEquals(anthropicAdminConfigured(envWith({ ANTHROPIC_ADMIN_KEY: "k" })), true);
+  assertEquals(anthropicAdminConfigured(envWith(FED)), true);
+  await assertRejects(
+    () => anthropicAdminHeaders(envWith({})),
+    Error,
+    "no Anthropic Admin API credential configured",
+  );
 });

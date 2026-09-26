@@ -13,9 +13,11 @@
  *   - ANTHROPIC_ADMIN_KEY, a long-lived `sk-ant-admin01-` key sent as
  *     `x-api-key`. This is the local-development path.
  *
- * Federation wins when both are configured, so a key left behind in the
- * environment cannot quietly keep the tile working after the move to
- * federation, and a broken federation setup shows up as a gray tile.
+ * Setting any of the three federation variables selects federation, even
+ * when ANTHROPIC_ADMIN_KEY is also set. A key left behind in the environment
+ * therefore cannot quietly keep the tile working after the move to
+ * federation. A broken or half-finished federation setup shows up as a gray
+ * tile, and the logged error names any variable still missing.
  *
  * The Admin API offers no read-only scope: a federated token for the cost
  * report carries `org:admin`, the same reach as an Admin key. What federation
@@ -54,14 +56,24 @@ interface Federation {
   workspace_id?: string;
 }
 
-// The federation settings, or null unless all three required ones are set. A
-// partial set is treated as absent, not as an error, so the tile names what to
-// set rather than failing on a half-configured deployment.
-function federation(env: Env): Federation | null {
-  const rule = env("ANTHROPIC_FEDERATION_RULE_ID");
-  const org = env("ANTHROPIC_ORGANIZATION_ID");
-  const account = env("ANTHROPIC_SERVICE_ACCOUNT_ID");
-  if (!rule || !org || !account) return null;
+/** The variables that together select and configure federation. */
+export const FEDERATION_VARS = [
+  "ANTHROPIC_FEDERATION_RULE_ID",
+  "ANTHROPIC_ORGANIZATION_ID",
+  "ANTHROPIC_SERVICE_ACCOUNT_ID",
+] as const;
+
+const federationChosen = (env: Env) => FEDERATION_VARS.some((k) => env(k));
+
+// The federation settings. Called only once federation is chosen, so a missing
+// variable is a half-finished setup and an error that names it, not a reason
+// to fall back to the Admin key.
+function federation(env: Env): Federation {
+  const missing = FEDERATION_VARS.filter((k) => !env(k));
+  if (missing.length > 0) throw new Error(`Anthropic federation is missing ${missing.join(", ")}`);
+  const rule = env("ANTHROPIC_FEDERATION_RULE_ID")!;
+  const org = env("ANTHROPIC_ORGANIZATION_ID")!;
+  const account = env("ANTHROPIC_SERVICE_ACCOUNT_ID")!;
   const workspace = env("ANTHROPIC_WORKSPACE_ID");
   return {
     federation_rule_id: rule,
@@ -75,7 +87,7 @@ function federation(env: Env): Federation | null {
 
 /** Whether either Anthropic Admin API credential route is configured. */
 export function anthropicAdminConfigured(env: Env): boolean {
-  return federation(env) !== null || !!env("ANTHROPIC_ADMIN_KEY");
+  return federationChosen(env) || !!env("ANTHROPIC_ADMIN_KEY");
 }
 
 async function identityToken(): Promise<string> {
@@ -124,9 +136,8 @@ async function exchange(fed: Federation): Promise<string> {
  * until the next collection.
  */
 export async function anthropicAdminHeaders(env: Env): Promise<Record<string, string>> {
-  const fed = federation(env);
-  if (fed) {
-    return { authorization: `Bearer ${await exchange(fed)}`, "anthropic-version": ANTHROPIC_VERSION };
+  if (federationChosen(env)) {
+    return { authorization: `Bearer ${await exchange(federation(env))}`, "anthropic-version": ANTHROPIC_VERSION };
   }
   const key = env("ANTHROPIC_ADMIN_KEY");
   if (key) return { "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION };

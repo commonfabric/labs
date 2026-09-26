@@ -799,9 +799,10 @@ The pod reads these settings, which are identifiers, not secrets:
 | `ANTHROPIC_SERVICE_ACCOUNT_ID` | the rule's target service account, `svac_…` |
 | `ANTHROPIC_WORKSPACE_ID` | optional; only when the rule is enabled in more than one workspace |
 
-When all three required settings are present, federation is used even if
-`ANTHROPIC_ADMIN_KEY` is also set, so a leftover key cannot mask a broken
-federation setup. A failed exchange shows `Anthropic $???` and grays the tile.
+Setting any of the three required settings selects federation, even if
+`ANTHROPIC_ADMIN_KEY` is also set, so a leftover key cannot mask a broken or
+half-finished federation setup. A failed exchange or a missing setting shows
+`Anthropic $???` and grays the tile, and the server log names the cause.
 
 To set it up, an organization admin creates the rule in the Claude Console.
 Anthropic allows `org:admin` rules to be created only there, not through the

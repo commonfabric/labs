@@ -38,7 +38,7 @@ import {
   summarizeDailySpend,
 } from "../spend.ts";
 import { themedChartSeries } from "../theme.ts";
-import { anthropicAdminConfigured, anthropicAdminHeaders } from "../anthropic-auth.ts";
+import { anthropicAdminConfigured, anthropicAdminHeaders, FEDERATION_VARS } from "../anthropic-auth.ts";
 
 // The provider billing APIs are slow — OpenAI's costs endpoint alone takes ~12-16s
 // for a 46-day query and slows further under repeated calls — and this tile pages
@@ -164,7 +164,7 @@ export const modelSpend: Tile = {
     const anKey = anthropicAdminConfigured(ctx.env);
     const orKey = ctx.env("OPENROUTER_KEY");
     if (!oaKey && !anKey && !orKey) {
-      return { status: "unknown", value: "—", sub: "set OPENAI_ADMIN_KEY / ANTHROPIC_FEDERATION_RULE_ID / OPENROUTER_KEY" };
+      return { status: "unknown", value: "—", sub: `set OPENAI_ADMIN_KEY / ${FEDERATION_VARS.join(" + ")} or ANTHROPIC_ADMIN_KEY / OPENROUTER_KEY` };
     }
 
     const now = new Date();

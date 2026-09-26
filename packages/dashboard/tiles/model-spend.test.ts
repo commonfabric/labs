@@ -272,7 +272,11 @@ Deno.test("model spend: no keys at all -> gray, naming the keys to set", async (
   const v = await modelSpend.collect(ctx({}));
   assertEquals(v.status, "unknown");
   assertEquals(v.value, "—");
-  assertEquals(v.sub, "set OPENAI_ADMIN_KEY / ANTHROPIC_FEDERATION_RULE_ID / OPENROUTER_KEY");
+  assertEquals(
+    v.sub,
+    "set OPENAI_ADMIN_KEY / ANTHROPIC_FEDERATION_RULE_ID + ANTHROPIC_ORGANIZATION_ID + " +
+      "ANTHROPIC_SERVICE_ACCOUNT_ID or ANTHROPIC_ADMIN_KEY / OPENROUTER_KEY",
+  );
 });
 
 // In-cluster, Anthropic is read with a federated token: the metadata server
@@ -315,9 +319,12 @@ Deno.test("model spend: Anthropic federation exchanges an identity token and rea
   );
 });
 
-Deno.test("model spend: a denied Anthropic exchange grays the tile instead of reading as $0", async () => {
+// OpenAI still reads, so the tile renders rather than returning early: the
+// Anthropic line itself must show $???, and the total must not count it as $0.
+Deno.test("model spend: a denied Anthropic exchange marks Anthropic $??? and grays the tile", async () => {
   await withFetch(
     {
+      "api.openai.com": openaiPaged,
       "metadata.google.internal": () => new Response("google-jwt"),
       "api.anthropic.com": (url) =>
         url.pathname === "/v1/oauth/token"
@@ -325,9 +332,29 @@ Deno.test("model spend: a denied Anthropic exchange grays the tile instead of re
           : json({ data: [] }),
     },
     async () => {
-      const v = await modelSpend.collect(ctx(FEDERATION));
+      const v = await modelSpend.collect(ctx({ ...FEDERATION, OPENAI_ADMIN_KEY: "oa" }));
       assertEquals(v.status, "unknown");
-      assertEquals(v.sub, "model spend unavailable");
+      assert(v.value?.startsWith("≥"), `a total missing a provider is a lower bound, got ${v.value}`);
+      assertEquals(v.aside, `<span class="hfacet" title="$${DOM} MTD">$${DOM} MTD</span>`); // OpenAI alone
+      assertStringIncludes(
+        v.extra ?? "",
+        `<p class="sub" title="OpenAI • Anthropic $???">${themedSwatch("#10a37f")} OpenAI • Anthropic $???</p>`,
+      );
     },
   );
+});
+
+// A half-finished federation setup still counts Anthropic as configured, so the
+// tile grays with Anthropic $??? instead of dropping the provider silently, and
+// the Admin key beside it is not used.
+Deno.test("model spend: a partial federation setup shows Anthropic $??? and sends nothing to Anthropic", async () => {
+  await withFetch({ "api.openai.com": openaiPaged }, async () => {
+    const v = await modelSpend.collect(ctx({
+      ANTHROPIC_FEDERATION_RULE_ID: "fdrl_x",
+      ANTHROPIC_ADMIN_KEY: "stray",
+      OPENAI_ADMIN_KEY: "oa",
+    }));
+    assertEquals(v.status, "unknown");
+    assertStringIncludes(v.extra ?? "", "Anthropic $???");
+  });
 });
