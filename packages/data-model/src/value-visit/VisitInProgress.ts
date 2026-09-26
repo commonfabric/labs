@@ -186,17 +186,22 @@ export class VisitInProgress<
       }
 
       case "recurseOf": {
+        let recurseResult: MainVisitResult<PlusType, ResultType>;
+
         switch (result.containerTag) {
           case VALUE_TAGS.Array: {
-            return this.#recurseFabricArray(result);
+            recurseResult = this.#recurseFabricArray(result);
+            break;
           }
 
           case VALUE_TAGS.FabricInstance: {
-            return this.#recurseFabricInstance(result);
+            recurseResult = this.#recurseFabricInstance(result);
+            break;
           }
 
           case VALUE_TAGS.Object: {
-            return this.#recurseFabricPlainObject(result);
+            recurseResult = this.#recurseFabricPlainObject(result);
+            break;
           }
 
           default: {
@@ -211,6 +216,18 @@ export class VisitInProgress<
           }
             // deno-coverage-ignore-stop
         }
+
+        const { container } = result;
+        if (
+          (recurseResult === undefined) && this.#doMap &&
+          !Object.is(container, value)
+        ) {
+          // The recursion found no changes, but it was a recursion into a
+          // `replace`ment, which stands in place of the original value.
+          return { type: "mapTo", value: this.#assertResultType(container) };
+        }
+
+        return recurseResult;
       }
 
       default: {
@@ -230,7 +247,9 @@ export class VisitInProgress<
 
   /**
    * Iteratively calls `visitValue()` and `visitCycle()` on the visitor, until
-   * the visitor returns something other than a `replace` result.
+   * the visitor returns something other than a `replace` result. When doing a
+   * structural-map operation, an `undefined` ("no change") result for a
+   * replacement becomes a `mapTo` of the replacement.
    */
   #visitResolvingCyclesAndReplacement(
     value: FabricValuePlus<PlusType>,
@@ -242,6 +261,7 @@ export class VisitInProgress<
       ReplaceForm<PlusType> | RecurseForm
     > {
     const vis = this.#visitor;
+    const original = value;
 
     for (;;) {
       let result;
@@ -272,6 +292,15 @@ export class VisitInProgress<
         }
 
         default: {
+          if (
+            (result === undefined) && this.#doMap &&
+            !Object.is(value, original)
+          ) {
+            // "No change" to a `replace`ment means that the replacement stands
+            // in place of the original value.
+            return { type: "mapTo", value: this.#assertResultType(value) };
+          }
+
           return result;
         }
       }
