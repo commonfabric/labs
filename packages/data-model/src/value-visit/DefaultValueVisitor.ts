@@ -234,7 +234,7 @@ export abstract class DefaultValueVisitor<
    *
    * **Note:** The choice to `throw` here rather than return `undefined` is
    * meant to recognize that common subclass implementation patterns -- which
-   * would typically specify hand handle a `PlusType` -- don't have to write
+   * would typically specifically handle a `PlusType` -- don't have to write
    * code to specifically disclaim out-of-domain values.
    */
   visitUnrecognizedValue(
@@ -257,8 +257,8 @@ export abstract class DefaultValueVisitor<
    *
    * **Note:** The choice to `throw` here rather than return `undefined` is so
    * that common subclass implementation patterns -- where a certain set of
-   * types/kinds of value are specfically handled -- don't have to write code to
-   * specifically disclaim what they don't handle.
+   * types/kinds of value are specifically handled -- don't have to write code
+   * to specifically disclaim what they don't handle.
    */
   visitUnhandledValue(
     value: FabricValuePlus<PlusType>,
