@@ -156,7 +156,7 @@ export class VisitInProgress<
 
         default: {
           // deno-coverage-ignore-start
-          this.#throwShouldntHappenResultType(result as never);
+          this.#throwShouldntHappenResultType(result);
         }
           // deno-coverage-ignore-stop
       }
@@ -581,7 +581,7 @@ export class VisitInProgress<
 
           default: {
             // deno-coverage-ignore-start
-            this.#throwShouldntHappenResultType(keyResult as never);
+            this.#throwShouldntHappenResultType(keyResult);
           }
             // deno-coverage-ignore-stop
         }
@@ -609,7 +609,7 @@ export class VisitInProgress<
 
           default: {
             // deno-coverage-ignore-start
-            this.#throwShouldntHappenResultType(valueResult as never);
+            this.#throwShouldntHappenResultType(valueResult);
           }
             // deno-coverage-ignore-stop
         }
@@ -780,7 +780,7 @@ export class VisitInProgress<
 
       default: {
         // deno-coverage-ignore-start
-        this.#throwShouldntHappenResultType(visitResult as never);
+        this.#throwShouldntHappenResultType(visitResult);
       }
         // deno-coverage-ignore-stop
     }
@@ -812,7 +812,7 @@ export class VisitInProgress<
 
       default: {
         // deno-coverage-ignore-start
-        this.#throwShouldntHappenResultType(visitResult as never);
+        this.#throwShouldntHappenResultType(visitResult);
       }
         // deno-coverage-ignore-stop
     }
@@ -822,10 +822,13 @@ export class VisitInProgress<
   /**
    * Throws a "shouldn't happen" error, used in `default` cases of `switch`
    * statements that should never end up called by virtue of all the possible
-   * result types being handled.
+   * result types being handled. `result` is typed `never` so that a `switch`
+   * which fails to handle one of its result types is a compile-time error at
+   * the call site.
    */
-  #throwShouldntHappenResultType(result: { type: string }): never {
-    throw new Error(`Shouldn't happen: Got result type \`${result.type}\`.`);
+  #throwShouldntHappenResultType(result: never): never {
+    const type = (result as { type: string }).type;
+    throw new Error(`Shouldn't happen: Got result type \`${type}\`.`);
   }
   // deno-coverage-ignore-stop
 }
