@@ -736,20 +736,23 @@ export const releaseRequiresSealWitness = (
 /**
  * Whether a `TransformedBy` guard's `identity` names one piece of code
  * outright. Guards match by subset, so an identity left out, held in a
- * variable, or missing the field that picks out the code (a verified
- * identity's module or symbol, a builtin's id) matches any code of that kind,
- * and a witness on such a guard vouches for nothing the rule releases.
+ * variable, or missing the fields that pick out the code (a verified
+ * identity's module and symbol, or its code hash; a builtin's id) matches any
+ * code of that kind, and a witness on such a guard vouches for nothing the
+ * rule releases.
  * `THIS_POLICY.moduleIdentity` names the policy's own module, so it counts.
  */
 const namesConcreteCode = (identity: unknown): boolean => {
   if (!isObjectNotArray(identity) || containsVariable(identity)) return false;
   switch (identity.kind) {
     case "verified":
-      return typeof identity.symbol === "string" &&
-        (typeof identity.moduleIdentity === "string" ||
-          deepEqual(identity.moduleIdentity, {
-            thisPolicyField: "moduleIdentity",
-          }));
+      return (typeof identity.codeHash === "string" &&
+        identity.codeHash.length > 0) ||
+        (typeof identity.symbol === "string" &&
+          (typeof identity.moduleIdentity === "string" ||
+            deepEqual(identity.moduleIdentity, {
+              thisPolicyField: "moduleIdentity",
+            })));
     case "builtin":
       return typeof identity.builtinId === "string";
     default:

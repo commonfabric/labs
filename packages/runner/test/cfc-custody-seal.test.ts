@@ -2284,6 +2284,14 @@ describe("cfc-custody-seal", () => {
           }])])),
         ).toBe(false);
       }
+      // A code hash names one piece of code outright, exported or not.
+      expect(
+        releaseRequiresSealWitness(template([rule([{
+          type: CFC_ATOM_TYPE.TransformedBy,
+          identity: { kind: "verified", codeHash: "fid1:projector" },
+          inputWitness: sealedBy,
+        }])])),
+      ).toBe(true);
       // THIS_POLICY's module identity names the policy's own module.
       expect(
         releaseRequiresSealWitness(template([rule([{
