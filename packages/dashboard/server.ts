@@ -26,7 +26,7 @@
  */
 
 import { isObjectNotArray } from "@commonfabric/utils/types";
-import { CI_WORKFLOW, PORT, REPO } from "./config.ts";
+import { CI_WORKFLOW, PORT, REPO, TICK_MS } from "./config.ts";
 import { TILES } from "./registry.ts";
 import { makeCtx } from "./ctx.ts";
 import { escapeHtml, friendlyError, githubOperationsInProgress } from "./lib.ts";
@@ -34,7 +34,8 @@ import { faviconPng, faviconStatus } from "./favicon.ts";
 import type { FaviconStatus } from "./favicon.ts";
 import { renderTile, shell } from "./render.ts";
 import type { Ctx, Run, RunSource, Tile, TileView } from "./types.ts";
-import { dashboardVersion } from "./version.ts";
+import { livePages } from "./live-page.ts";
+import { SERVING_VERSION } from "./version.ts";
 import {
   DASHBOARD_MESSAGE_MAX_LENGTH,
   type DashboardMessage,
@@ -114,7 +115,7 @@ function dashboardUpdate(currentViews: ReadonlyMap<string, TileView> = views): D
     gridHtml: grid.join(""),
     wideHtml: wide.join(""),
     ageSeconds,
-    shellVersion: SHELL_VERSION,
+    shellVersion: SERVING_VERSION,
     faviconStatus: faviconStatus(statuses),
     faviconRedSince,
     faviconRedAgeMs: faviconRedSince === null
@@ -347,7 +348,6 @@ function publishIntermediateView(tile: Tile, view: TileView): void {
 
 // One ticker collects every tile that is due (respecting each tile's interval).
 // Later ticks skip work that is still running and collect the other due tiles.
-const TICK_MS = 15_000;
 export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
   const now = Date.now();
   grayStaleTileUpdates(now);
@@ -523,6 +523,7 @@ export function resetBoardForTest(): void {
 
 // Collect drill-down routes declared by tiles.
 const routes = TILES.flatMap((t) => t.routes ?? []);
+const pages = livePages(routes);
 
 // How often the page actually updates, which the client colors the "updated"
 // indicator against (fresh up to this, then stale). The server broadcasts when a
@@ -531,7 +532,6 @@ const routes = TILES.flatMap((t) => t.routes ?? []);
 // the real cadence for the fastest tile is its interval plus a tick, not the bare
 // interval.
 const REFRESH_MS = Math.min(...TILES.map((t) => t.intervalMs)) + TICK_MS;
-const SHELL_VERSION = dashboardVersion();
 
 export function page(currentViews: ReadonlyMap<string, TileView> = views): string {
   const update = dashboardUpdate(currentViews);
@@ -540,7 +540,7 @@ export function page(currentViews: ReadonlyMap<string, TileView> = views): strin
     update.wideHtml,
     update.ageSeconds,
     REFRESH_MS,
-    SHELL_VERSION,
+    SERVING_VERSION,
     update.faviconStatus,
     update.faviconRedSince,
     update.faviconRedAgeMs,
@@ -599,6 +599,9 @@ export async function handle(req: Request): Promise<Response> {
     broadcast(dashboardUpdate());
     return Response.json(dashboardMessage);
   }
+  if (url.pathname === "/events" && url.searchParams.has("page")) {
+    return pages.open(url);
+  }
   if (url.pathname === "/events") {
     await refreshDashboardMessage();
     let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -624,13 +627,14 @@ export async function handle(req: Request): Promise<Response> {
 }
 
 // One turn of the server's clock: tell every connected browser the server is
-// still there, then collect whatever tiles are due.
+// still there, then collect whatever tiles are due while every open live page
+// is rendered again.
 export async function serveTick(
   collect: () => void | Promise<void> = tick,
 ): Promise<void> {
   heartbeat();
   if (await refreshDashboardMessage()) broadcast(dashboardUpdate());
-  await collect();
+  await Promise.all([collect(), pages.tick()]);
 }
 
 // The side effects: collect once, keep collecting, and serve. Running the file

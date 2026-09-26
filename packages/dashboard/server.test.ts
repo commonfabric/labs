@@ -1535,6 +1535,32 @@ boardTest("broadcast: a client whose stream is gone is dropped rather than throw
   assertEquals(clients.size, 0);
 });
 
+boardTest("sse: every serving tick reaches the open live pages, and only live pages have a stream", async () => {
+  const refused = await handle(req(`/events?page=${encodeURIComponent("/not-a-route")}`));
+  assertEquals(refused.status, 404);
+  await refused.body?.cancel();
+
+  // The test selection page reads an empty manifest store.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = () => Promise.resolve(Response.json({ items: [] }));
+  try {
+    const res = await handle(req(`/events?page=${encodeURIComponent("/test-selection")}`));
+    assertEquals(res.headers.get("content-type"), "text/event-stream");
+    const reader = res.body!.getReader();
+    assertEquals(await chunk(reader), ": connected\n\n");
+    const opened = await chunk(reader);
+    assertStringIncludes(opened, "event: page\n");
+    assertStringIncludes(opened, "No selection manifest has been published yet.");
+    assertEquals(clients.size, 0, "a page's stream is not the dashboard's");
+
+    await serveTick(() => {});
+    assertStringIncludes(await chunk(reader), "event: ping\n");
+    await reader.cancel();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 boardTest("routes: a tile's drill-down path wins over the page; anything else is the page", async () => {
   const gantt = await handle(req("/bench?view=gantt&repo=loom"));
   assertEquals(gantt.status, 200);

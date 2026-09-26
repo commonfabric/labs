@@ -12,6 +12,10 @@ export const REPO = Deno.env.get("DASHBOARD_REPO") ?? "commonfabric/labs";
 export const CI_WORKFLOW = "deno.yml";
 export const TEST_SELECTION_WORKFLOW = "test-selection.yml";
 
+// How often the server looks for tiles that are due and tells every open page
+// it is still there.
+export const TICK_MS = 15_000;
+
 // The service.name production reports under in SigNoz. The tiles that read traces
 // scope to it by name: the same SigNoz also holds staging and one-off perf runs,
 // whose spans are not production's and whose error rates are nothing like it.

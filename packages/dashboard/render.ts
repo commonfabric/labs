@@ -24,7 +24,7 @@ import {
 } from "./palette.ts";
 import { faviconHref, faviconLink, type FaviconStatus } from "./favicon.ts";
 import { paintStatusFavicon } from "./favicon-client.ts";
-import { liveUpdateStream } from "./stream-client.ts";
+import { followUpdates, liveUpdateStream } from "./stream-client.ts";
 import { paintDashboardMessageInput } from "./dashboard-message-client.ts";
 import { reconcileTiles } from "./tiles-client.ts";
 import {
@@ -50,6 +50,7 @@ const FAVICON_PNG_HREFS = JSON.stringify({
 });
 const PAINT_STATUS_FAVICON = paintStatusFavicon.toString();
 const LIVE_UPDATE_STREAM = liveUpdateStream.toString();
+const FOLLOW_UPDATES = followUpdates.toString();
 const DASHBOARD_MESSAGE_OPACITY = dashboardMessageOpacity.toString();
 const PAINT_DASHBOARD_MESSAGE_INPUT = paintDashboardMessageInput.toString();
 const RECONCILE_TILES = reconcileTiles.toString();
@@ -287,6 +288,7 @@ ${DASHBOARD_THEME_CLIENT}
   const paintDashboardMessageInput = ${PAINT_DASHBOARD_MESSAGE_INPUT};
   const reconcileTiles = ${RECONCILE_TILES};
   const liveUpdateStream = ${LIVE_UPDATE_STREAM};
+  const followUpdates = ${FOLLOW_UPDATES};
   const badge = document.getElementById('livebadge');
   const dot = document.getElementById('freshdot');
   const agotext = document.getElementById('agotext');
@@ -406,17 +408,9 @@ ${DASHBOARD_THEME_CLIENT}
     formatViewerTimes(template.content.querySelectorAll('time[data-viewer-time][datetime]'));
     reconcileTiles(container, Array.from(template.content.children));
   }
-  const updates = liveUpdateStream(RED_AFTER, () => {
-    const es = new EventSource('/events');
-    // The connection's own events repaint, so the badge follows the connection
-    // as it changes.
-    const alive = () => { updates.heard(Date.now()); paint(); };
-    es.addEventListener('open', alive);
-    es.addEventListener('ping', alive);
-    es.addEventListener('error', () => { updates.lost(); paint(); });
-    es.addEventListener('update', (e) => {
-      updates.heard(Date.now());
-      const update = JSON.parse(e.data);
+  const updates = followUpdates(() => new EventSource('/events'), RED_AFTER, paint, {
+    update: (data) => {
+      const update = JSON.parse(data);
       if (update.shellVersion !== SHELL_VERSION) { location.reload(); return; }
       updateTiles(grid, update.gridHtml);
       updateTiles(wide, update.wideHtml);
@@ -426,9 +420,7 @@ ${DASHBOARD_THEME_CLIENT}
       faviconServerRedAgeMs = update.faviconRedAgeMs;
       faviconStartedAt = performance.now();
       applyDashboardMessage(update.message);
-      paint();
-    });
-    return es;
+    },
   });
   paint();
   setInterval(paint, 1000);
