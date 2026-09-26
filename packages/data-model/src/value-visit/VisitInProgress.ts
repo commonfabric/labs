@@ -428,7 +428,9 @@ export class VisitInProgress<
         }
       }
 
-      return this.#makeRecurseResult(array, mapResult, anyChanges);
+      return mapResult
+        ? this.#makeRecurseResult(array, mapResult, anyChanges)
+        : undefined;
     } finally {
       this.#stack.popExpect(array);
     }
@@ -648,7 +650,9 @@ export class VisitInProgress<
         }
       }
 
-      return this.#makeRecurseResult(plainObj, mapResult, anyChanges);
+      return mapResult
+        ? this.#makeRecurseResult(plainObj, mapResult, anyChanges)
+        : undefined;
     } finally {
       this.#stack.popExpect(plainObj);
     }
@@ -821,30 +825,23 @@ export class VisitInProgress<
   }
 
   /**
-   * Makes the result value for one of the `recurse*()` methods.
+   * Makes the result value for one of the `recurse*()` methods, when performing
+   * a structural-map operation. See the main docs for `mapValue()` and
+   * `mutableMapValue()` in re when `undefined` can be returned and when copies
+   * of containers must be made.
    */
   #makeRecurseResult(
     originalValue: FabricValuePlus<PlusType>,
-    resultValue: FabricValuePlus<ResultType> | undefined,
+    resultValue: FabricValuePlus<ResultType>,
     anyChanges: boolean,
   ): MapToForm<ResultType> | undefined {
-    if (resultValue === undefined) {
-      // We're not in `#mapMode`. Checking `resultValue === undefined` is the
-      // equivalent check, while also letting TS narrow its type.
-      return undefined;
-    }
-
-    // We're doing a structural map. See the main docs for `mapValue()` and
-    // `mutableMapValue()` in re when `undefined` can be returned and when
-    // copies of containers must be made.
-
     if (this.#freezeMappedContainers) {
       if (!anyChanges && Object.isFrozen(originalValue)) {
         return undefined;
       }
 
       Object.freeze(resultValue);
-      // ...and continue below, producing a `mapTo` result.
+      // ...and continue below.
     }
 
     return { type: "mapTo", value: this.#assertResultType(resultValue) };
