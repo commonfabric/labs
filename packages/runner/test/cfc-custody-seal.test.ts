@@ -1448,6 +1448,98 @@ describe("cfc-custody-seal", () => {
       }
     });
 
+    it("resolves seat cells labeled for the room's readers or its policy", async () => {
+      const fixture = await setup();
+      try {
+        const bobSeat = await fixture.attestation(
+          [bob.did()],
+          "seat-b",
+          undefined,
+          [cfcAtom.space(S)],
+        );
+        const carolSeat = await fixture.attestation(
+          [carol.did()],
+          "seat-c",
+          undefined,
+          [P],
+        );
+        const runtime = fixture.runtimes.get(alice)!;
+        const tx = runtime.edit();
+        runtime.getCellFromLink(fixture.terms, undefined, tx).setRaw({
+          ...TERMS,
+          seats: [alice.did(), bobSeat.getAsLink(), carolSeat.getAsLink()],
+        } as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        const draft = await fixture.draft(alice, honestStance);
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        expect((prepared.terms as { seats: string[] }).seats).toEqual(
+          TERMS.seats,
+        );
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("reads a seat cell's attestation and its clauses from the same entries", async () => {
+      const cases: [unknown[], RegExp][] = [
+        // An attestation a link carries from the document it points to says
+        // whom that document represents, not whom the seat cell does.
+        [[{
+          path: [],
+          observes: "followRef",
+          label: {
+            integrity: [{ kind: "represents-principal", subject: carol.did() }],
+          },
+        }], /attests no principal/],
+        // A private clause on the cell's shape is as much the cell's as one
+        // on its value.
+        [[{
+          path: [],
+          label: {
+            integrity: [{ kind: "represents-principal", subject: carol.did() }],
+          },
+        }, {
+          path: [],
+          observes: "shape",
+          label: { confidentiality: [cfcAtom.user(bob.did())] },
+        }], /the room's readers do not hold/],
+      ];
+      for (const [entries, refusal] of cases) {
+        const fixture = await setup();
+        try {
+          const runtime = fixture.runtimes.get(alice)!;
+          const tx = runtime.edit();
+          const seat = runtime.getCell(S, "seat-entries", undefined, tx);
+          writeSeedEnvelopeDoc(tx, S);
+          seedStoredEnvelope(tx, {
+            space: S,
+            scope: "space",
+            id: seat.getAsNormalizedFullLink().id,
+            path: [],
+          }, {
+            value: {},
+            cfc: {
+              version: 1,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: { version: 1, entries },
+            },
+          } as FabricValue);
+          expect((await tx.commit()).error).toBeUndefined();
+          const write = runtime.edit();
+          runtime.getCellFromLink(fixture.terms, undefined, write).setRaw({
+            ...TERMS,
+            seats: [alice.did(), bob.did(), seat.withTx(undefined).getAsLink()],
+          } as never);
+          expect((await write.commit()).error).toBeUndefined();
+          const draft = await fixture.draft(alice, honestStance);
+          await expect(prepareCustodySeal(draft, fixture.room(alice)))
+            .rejects.toThrow(refusal);
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
     it("refuses a seat cell whose attesting field the room's readers do not hold", async () => {
       // The attestation sits on a top-level field, as a profile's does, and
       // that field alone is private.

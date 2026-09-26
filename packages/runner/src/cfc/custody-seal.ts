@@ -1149,13 +1149,13 @@ const resolveSeats = async (
       // The seal writes the DID into terms every reader of the room sees, so
       // the cell must already be one they hold, whether or not its label
       // traveled into the terms with the reference.
-      // The attestation is read from the root and from top-level fields, so
-      // those are the entries the room's readers must hold.
+      // The attestation is read from these entries, so they are the ones the
+      // room's readers must hold, whatever their observation class. The
+      // attestation's subject is itself public metadata (a
+      // `represents-principal` subject is classified public for invariant
+      // 12), so no label-metadata clause governs the DID.
       const withheld = clauseWithheldFromRoom(
         principalClaimEntries(view)
-          .filter((entry) =>
-            entry.observes === undefined || entry.observes === "value"
-          )
           .flatMap((entry) =>
             (entry.label.confidentiality ?? []) as CfcConfClause[]
           ),

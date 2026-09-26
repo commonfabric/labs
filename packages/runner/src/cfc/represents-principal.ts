@@ -129,21 +129,31 @@ export const representsPrincipalSubjects = (
  */
 export const authorPrincipalCandidates = (
   view: CfcLabelView | undefined,
-): string[] => [
-  ...new Set(representsPrincipalSubjects(principalClaimEntries(view))),
-];
+): string[] =>
+  view === undefined ? [] : [
+    ...new Set(
+      representsPrincipalSubjects(
+        view.entries.filter((entry) => entry.path.length <= 1),
+      ),
+    ),
+  ];
 
 /**
  * The entries of `view` a principal claim is read from: those at the root and
  * on top-level fields, where a profile's owner-protected fields carry their
- * owner's atom. Entries deeper down come from documents the value links.
+ * owner's atom. Entries deeper down come from documents the value links, and
+ * so does an entry a link carries from the document it points to (`observes`
+ * of `followRef`): it says whom that document represents, not whom the one
+ * holding the link does.
  */
 export const principalClaimEntries = (
   view: CfcLabelView | undefined,
 ): CfcLabelView["entries"] =>
   view === undefined
     ? []
-    : view.entries.filter((entry) => entry.path.length <= 1);
+    : view.entries.filter((entry) =>
+      entry.path.length <= 1 && entry.observes !== "followRef"
+    );
 
 /**
  * The principals `view` attests in exactly the form a runtime mints, read
