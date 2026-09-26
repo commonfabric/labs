@@ -586,6 +586,32 @@ export const canonicalizePreparedDigestInput = (
       ),
     }
     : {}),
+  // Whole-value roots decide where the flow stamp lands: an order-insensitive
+  // set of (address, recording identity). Empty collapses to absent, so a
+  // transaction that recorded none keeps its digest.
+  ...(input.assertedValueRoots !== undefined &&
+      input.assertedValueRoots.length > 0
+    ? {
+      assertedValueRoots: [...input.assertedValueRoots]
+        .map((root) => ({
+          address: canonicalizeAttemptedWrite(root.address),
+          identity: root.identity,
+        }))
+        .map((root) => ({
+          ...root,
+          identityHash: hashStringOf(root.identity ?? null),
+        }))
+        .sort((left, right) =>
+          compareAddress(left.address, right.address) ||
+          (left.identityHash < right.identityHash
+            ? -1
+            : left.identityHash > right.identityHash
+            ? 1
+            : 0)
+        )
+        .map(({ address, identity }) => ({ address, identity })),
+    }
+    : {}),
 });
 
 const cfcLogger = getLogger("cfc", { enabled: false });

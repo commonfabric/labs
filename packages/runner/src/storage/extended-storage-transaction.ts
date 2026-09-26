@@ -2456,6 +2456,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       dereferenceTraces: [...this.#cfcState.dereferenceTraces],
       triggerReads: [...this.#cfcState.triggerReads],
       writePolicyInputs: [...this.#cfcState.writePolicyInputs],
+      ...(this.#cfcState.assertedValueRoots.length > 0
+        ? { assertedValueRoots: [...this.#cfcState.assertedValueRoots] }
+        : {}),
       implementationIdentity: this.#cfcState.implementationIdentity,
       trustSnapshot: this.#cfcState.trustSnapshot,
       ...(this.#cfcState.moduleDelegations.size > 0

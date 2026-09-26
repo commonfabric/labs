@@ -10,6 +10,7 @@ import {
   setCfcTrustSnapshot,
 } from "../../src/storage/extended-storage-transaction.ts";
 import { Runtime } from "../../src/runtime.ts";
+import { runtimeWritePolicyAuthorization } from "../../src/cfc/types.ts";
 
 const signer = await Identity.fromPassphrase("prepared-digest-test");
 const address = (id: string) => ({
@@ -143,6 +144,42 @@ describe("prepared digest transaction binding", () => {
     };
     expect(digest(false)).toBe(digest(true));
     expect(digest(false)).not.toBe(digest(true, "different"));
+  });
+
+  it("binds each whole-value root and the identity that recorded it", () => {
+    // A recorded root decides where prepare stamps the writer's flow label
+    // (`assertedValueRootPaths`), so two transactions that differ only in
+    // their roots must not share a digest, nor one whose root was recorded
+    // under a different identity.
+    const writer = (symbol: string) => ({
+      kind: "verified" as const,
+      moduleIdentity: "module:digest",
+      symbol,
+      bindingPath: [symbol],
+    });
+    const digest = (roots: readonly { path: string[]; by: string }[]) => {
+      const tx = runtime.edit() as ExtendedStorageTransaction;
+      try {
+        tx.writeValueOrThrow({ ...address("output"), path: ["a", "b"] }, 1);
+        for (const root of roots) {
+          setCfcImplementationIdentity(tx, writer(root.by));
+          tx.recordCfcAssertedValueRoot(
+            { ...address("output"), path: root.path },
+            runtimeWritePolicyAuthorization,
+          );
+        }
+        setCfcImplementationIdentity(tx, writer("commit"));
+        return tx.accessForTestingOnly.preparedDigest();
+      } finally {
+        tx.abort();
+      }
+    };
+    const none = digest([]);
+    const atA = digest([{ path: ["a"], by: "commit" }]);
+    expect(atA).not.toBe(none);
+    expect(digest([{ path: [], by: "commit" }])).not.toBe(atA);
+    expect(digest([{ path: ["a"], by: "other" }])).not.toBe(atA);
+    expect(digest([{ path: ["a"], by: "commit" }])).toBe(atA);
   });
 
   it("retires the memo for writes and policy records before preparation", () => {
