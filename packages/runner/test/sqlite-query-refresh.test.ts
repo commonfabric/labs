@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
@@ -8,6 +9,13 @@ import type { SqliteDbRef } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { createBuilder } from "../src/builder/factory.ts";
+import {
+  SQLITE_UNSENT_REFUSAL,
+  sqliteAsksQuestion,
+  sqliteQuery,
+  sqliteQueryMemoDecision,
+  sqliteRequestHash,
+} from "../src/builtins/sqlite-builtins.ts";
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
@@ -73,9 +81,12 @@ describe("sqlite-query-refresh", () => {
 
   /**
    * Holds every later server read until `release()` is called, so a case can
-   * look at the result cell while its query is in flight.
+   * look at the result cell while its query is in flight. A held read then
+   * either answers or, given `"reject"`, fails.
    */
-  function holdReads(): { release: () => void } {
+  function holdReads(
+    outcome: "answer" | "reject" = "answer",
+  ): { release: () => void } {
     const provider = runtime.storageManager.open(space) as unknown as {
       sqliteQuery: (...args: unknown[]) => Promise<unknown>;
     };
@@ -86,6 +97,7 @@ describe("sqlite-query-refresh", () => {
     });
     provider.sqliteQuery = async (...args) => {
       await gate;
+      if (outcome === "reject") throw new Error("sqlite read failed");
       return await original.apply(provider, args);
     };
     restoreReads = () => {
@@ -175,6 +187,158 @@ describe("sqlite-query-refresh", () => {
       expect(after.pending).toBe(false);
       expect(after.error).toBeUndefined();
       expect(after.result).toEqual([{ body: "soup" }, { body: "salad" }]);
+    });
+
+    it("keeps the previous rows through a second refresh issued while the first is pending", async () => {
+      const { result, tick } = await runQuery("refresh-twice");
+      await insertNote("lunch", "salad");
+      const { release } = holdReads();
+
+      await write(tick, 1);
+      await runtime.idle();
+      const firstRefresh = result.get().requestHash;
+      await write(tick, 2);
+      await runtime.idle();
+      const during = result.get();
+      expect(during.pending).toBe(true);
+      expect(during.requestHash).not.toBe(firstRefresh);
+      expect(during.result).toEqual([{ body: "soup" }]);
+
+      release();
+      await runtime.settled();
+      const after = result.get();
+      expect(after.pending).toBe(false);
+      expect(after.requestHash).toBe(during.requestHash);
+      expect(after.result).toEqual([{ body: "soup" }, { body: "salad" }]);
+    });
+
+    it("replaces the previous rows with the error when the refreshed query fails", async () => {
+      const { result, tick } = await runQuery("refresh-fails");
+      const { release } = holdReads("reject");
+
+      await write(tick, 1);
+      await runtime.idle();
+      expect(result.get().result).toEqual([{ body: "soup" }]);
+
+      release();
+      await runtime.settled();
+      const after = result.get();
+      expect(after.pending).toBe(false);
+      expect(after.error).toBeDefined();
+      expect(after.result).toBeUndefined();
+    });
+  });
+
+  describe("a new question, where the parameters changed", () => {
+    it("clears the previous rows while the new query is pending", async () => {
+      const { result, topic, first } = await runQuery("new-question");
+      await insertNote("dinner", "steak");
+      const { release } = holdReads();
+
+      await write(topic, "dinner");
+      await runtime.idle();
+      const during = result.get();
+      expect(during.pending).toBe(true);
+      expect(during.requestHash).not.toBe(first.requestHash);
+      expect(during.result).toBeUndefined();
+
+      release();
+      await runtime.settled();
+      expect(result.get().result).toEqual([{ body: "steak" }]);
+    });
+  });
+
+  describe("a refresh whose request is refused after its claim commits", () => {
+    // The node is driven directly, which is what hands the case the refresh's
+    // own transaction: its release check is made to fail by the prepared
+    // state the commit reads, after the claim has landed.
+
+    it("settles the refusal rather than staying pending", async () => {
+      const setup = runtime.edit();
+      const parent = runtime.getCell(space, "refused-parent", undefined, setup);
+      parent.set({});
+      const inputs = runtime.getCell<Record<string, unknown>>(
+        space,
+        "refused-inputs",
+        undefined,
+        setup,
+      );
+      inputs.set({ db, sql: NOTES_SQL, params: ["lunch"], reactOn: 0 });
+      expect((await setup.commit()).error).toBeUndefined();
+
+      let result: Cell<QueryState> | undefined;
+      const builtin = sqliteQuery(
+        inputs,
+        (_tx, cell) => result = cell,
+        () => {},
+        [parent],
+        parent,
+        runtime,
+      );
+
+      const issue = runtime.edit();
+      builtin.action(issue);
+      runtime.prepareTxForCommit(issue);
+      expect((await issue.commit()).error).toBeUndefined();
+      await runtime.settled();
+      expect(result!.get().result).toEqual([{ body: "soup" }]);
+
+      const bump = runtime.edit();
+      inputs.withTx(bump).key("reactOn").set(1);
+      expect((await bump.commit()).error).toBeUndefined();
+
+      const refresh = runtime.edit();
+      builtin.action(refresh);
+      refresh.prepareCfc();
+      const state = refresh.getCfcState();
+      const prepared = state.prepare;
+      if (prepared.status !== "prepared") {
+        throw new Error("the refresh's sink request was not prepared");
+      }
+      using _refused = stub(refresh, "getCfcState", () => ({
+        ...state,
+        prepare: {
+          ...prepared,
+          input: { ...prepared.input, writePolicyInputs: [] },
+        },
+      }));
+      expect((await refresh.commit()).error).toBeUndefined();
+      await runtime.settled();
+      expect(result!.get()).toEqual({
+        pending: false,
+        error: SQLITE_UNSENT_REFUSAL,
+      });
+    });
+  });
+
+  describe("sqliteAsksQuestion()", () => {
+    it("returns `true` for a request hash recording the question under another `reactOn`", () => {
+      expect(sqliteAsksQuestion(sqliteRequestHash("q1", "r1"), "q1")).toBe(
+        true,
+      );
+    });
+
+    it("returns `false` for a question whose digest begins with the other one's", () => {
+      expect(sqliteAsksQuestion(sqliteRequestHash("q12", "r1"), "q1")).toBe(
+        false,
+      );
+    });
+
+    it("returns `false` when no request hash is stored", () => {
+      expect(sqliteAsksQuestion(undefined, "q1")).toBe(false);
+    });
+  });
+
+  describe("sqliteQueryMemoDecision()", () => {
+    it('returns `"issue"` for a refresh claim that keeps rows and has no request in flight here', () => {
+      const hash = sqliteRequestHash("q1", "r2");
+      const stored = { pending: true, requestHash: hash, result: [] };
+      expect(sqliteQueryMemoDecision({
+        stored,
+        hash,
+        inFlightHere: false,
+        speculativeRun: false,
+      })).toBe("issue");
     });
   });
 });
