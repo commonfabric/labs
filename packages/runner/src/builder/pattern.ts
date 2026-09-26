@@ -594,8 +594,8 @@ function factoryFromPattern<T, R>(
     // getter, or drop a symbol or non-enumerable key, so the value walk gets it
     // and refuses it. A node whose module is a pattern or a reactive (the
     // dynamic-module arm, which no builder makes yet) binds it as the value it
-    // is, which the serialized `Node.module` type does not yet say (see the
-    // note on `Node`'s `module`).
+    // is: a graph for a pattern, an alias for a reactive. The serialized
+    // `Node.module` type does not yet say so, hence the assertion.
     const module = (isInertPlainObject(node.module) && isModule(node.module))
       ? moduleWithAliasBindings(node.module, resolveCellAlias, false)
       : withAliasBindings(
