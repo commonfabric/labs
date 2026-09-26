@@ -180,6 +180,35 @@ describe("prepared digest transaction binding", () => {
     expect(digest([{ path: [], by: "commit" }])).not.toBe(atA);
     expect(digest([{ path: ["a"], by: "other" }])).not.toBe(atA);
     expect(digest([{ path: ["a"], by: "commit" }])).toBe(atA);
+    // Recorded twice, a root stamps once, and the digest says the same.
+    expect(
+      digest([{ path: ["a"], by: "commit" }, { path: ["a"], by: "commit" }]),
+    ).toBe(atA);
+  });
+
+  it("retires the memo when a whole-value root or structure container is recorded", () => {
+    // Both decide where preparation stamps the flow label, so recording one
+    // after a digest was taken must not leave the memoized digest standing.
+    const recorders = [
+      (tx: ExtendedStorageTransaction) =>
+        tx.recordCfcAssertedValueRoot(
+          { ...address("output"), path: ["a"] },
+          runtimeWritePolicyAuthorization,
+        ),
+      (tx: ExtendedStorageTransaction) =>
+        tx.recordCfcStructureContainer({ ...address("output"), path: ["a"] }),
+    ];
+    for (const record of recorders) {
+      const tx = runtime.edit() as ExtendedStorageTransaction;
+      try {
+        tx.writeValueOrThrow({ ...address("output"), path: ["a", "b"] }, 1);
+        const before = tx.accessForTestingOnly.preparedDigest();
+        record(tx);
+        expect(tx.accessForTestingOnly.preparedDigest()).not.toBe(before);
+      } finally {
+        tx.abort();
+      }
+    }
   });
 
   it("retires the memo for writes and policy records before preparation", () => {

@@ -1884,6 +1884,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   recordCfcStructureContainer(address: CfcAddress): void {
+    // A container decides where preparation stamps membership, so recording
+    // one retires the digest memo and aborts a preparation it interrupts.
+    this.#noteCfcActivity();
     this.#cfcState.structureContainers.push(deepFreeze(address));
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("structure-container-added");
@@ -1898,6 +1901,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // runtime's mark is dropped: pattern code reaches this transaction, and
     // a root it named could re-stamp values it never wrote.
     if (!runtimeWritePolicyAuthorized(authorization)) return;
+    // A root decides where preparation stamps the writer's flow label, so
+    // recording one retires the digest memo and aborts a preparation it
+    // interrupts.
+    this.#noteCfcActivity();
     this.#cfcState.assertedValueRoots.push(deepFreeze({
       address,
       identity: this.#cfcState.implementationIdentity,
@@ -2458,6 +2465,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       writePolicyInputs: [...this.#cfcState.writePolicyInputs],
       ...(this.#cfcState.assertedValueRoots.length > 0
         ? { assertedValueRoots: [...this.#cfcState.assertedValueRoots] }
+        : {}),
+      ...(this.#cfcState.structureContainers.length > 0
+        ? { structureContainers: [...this.#cfcState.structureContainers] }
         : {}),
       implementationIdentity: this.#cfcState.implementationIdentity,
       trustSnapshot: this.#cfcState.trustSnapshot,

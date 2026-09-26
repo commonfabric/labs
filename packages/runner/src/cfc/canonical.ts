@@ -609,7 +609,27 @@ export const canonicalizePreparedDigestInput = (
             ? 1
             : 0)
         )
+        // A root recorded twice stamps once (`assertedValueRootPaths` keeps
+        // the first of each path), so a repeat is not digest content.
+        .filter((root, index, sorted) =>
+          index === 0 ||
+          compareAddress(root.address, sorted[index - 1].address) !== 0 ||
+          root.identityHash !== sorted[index - 1].identityHash
+        )
         .map(({ address, identity }) => ({ address, identity })),
+    }
+    : {}),
+  // List-coordinator containers: a deduplicated address set, absent when
+  // empty so a transaction that declared none keeps its digest.
+  ...(input.structureContainers !== undefined &&
+      input.structureContainers.length > 0
+    ? {
+      structureContainers: dedupeSorted(
+        [...input.structureContainers].map(canonicalizeAttemptedWrite).sort(
+          compareAddress,
+        ),
+        compareAddress,
+      ),
     }
     : {}),
 });

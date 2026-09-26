@@ -725,6 +725,12 @@ export type PreparedDigestInput = {
    * keeps the established prepared-digest spelling.
    */
   readonly assertedValueRoots?: CfcTxState["assertedValueRoots"];
+
+  /**
+   * List-coordinator containers whose membership preparation re-stamps
+   * (`CfcTxState.structureContainers`). Absent when empty, like the roots.
+   */
+  readonly structureContainers?: readonly CfcAddress[];
 };
 
 /**
