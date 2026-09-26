@@ -1898,9 +1898,6 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // runtime's mark is dropped: pattern code reaches this transaction, and
     // a root it named could re-stamp values it never wrote.
     if (!runtimeWritePolicyAuthorized(authorization)) return;
-    // A privileged write is bookkeeping, not authorship (see
-    // `#noteWriteIdentity`), so it asserts no value either.
-    if (this.#privilegedSystemWriteDepth > 0) return;
     this.#cfcState.assertedValueRoots.push(deepFreeze({
       address,
       identity: this.#cfcState.implementationIdentity,

@@ -2977,7 +2977,6 @@ const assertedValueRootPaths = (
     scope: ReturnType<typeof normalizeCellScope>;
   },
   writtenPaths: readonly (readonly string[])[],
-  linkWritePaths: ReadonlySet<string>,
   fitsCeilingsFrom: (root: readonly string[]) => boolean,
   previousPresence: ReadonlyMap<string, boolean> | undefined,
 ): (readonly string[])[] => {
@@ -3026,7 +3025,6 @@ const assertedValueRootPaths = (
     const rootKey = pathKey(root);
     if (seen.has(rootKey)) continue;
     seen.add(rootKey);
-    if (linkWritePaths.has(rootKey)) continue;
     if (!writtenPaths.some((written) => isPrefix(root, written))) continue;
     const value = tx.readValueOrThrow({ ...target, path: root }, {
       meta: INTERNAL_VERIFIER_META,
@@ -8856,7 +8854,6 @@ export function* prepareBoundaryCommitSteps(
         tx,
         { space, id, scope },
         flowWrittenPaths,
-        currentLinkWritePaths,
         (root) => {
           if (flowConfidentiality.length === 0) return true;
           // The declared entries this write re-mints and those the document
