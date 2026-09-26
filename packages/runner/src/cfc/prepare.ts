@@ -6060,13 +6060,11 @@ function bindLinkCurrentPrincipalClauses<Clause>(
 /**
  * `label` with every principal claim removed from its integrity. A link write
  * applies this to what the link value itself carries, its schema and its label
- * view, and to the label it derives from the source's schema (the one this
- * transaction writes it under, or its setup result schema), because pattern
- * code chooses all of them and the write check
- * `currentPrincipalIntegrityReason` sees only the schema entries a write
- * reaches. A link takes its principal claims only from the source's label as
- * the runtime stores it, this transaction's writes to the source included,
- * which that check did see.
+ * view, because pattern code chooses both and the write check
+ * `currentPrincipalIntegrityReason` never sees either. A link takes principal
+ * claims only from its source's stored label and, for a source this
+ * transaction writes, from the schema entries those writes reach
+ * (`checkedSchemaPrincipalClaims`).
  */
 const withoutPrincipalClaims = (label: IFCLabel): IFCLabel => {
   const integrity = label.integrity;
@@ -6076,6 +6074,86 @@ const withoutPrincipalClaims = (label: IFCLabel): IFCLabel => {
   );
   if (kept.length === integrity.length) return label;
   return { ...label, integrity: kept.length > 0 ? kept : undefined };
+};
+
+/** The document a link write's source or target address names. */
+const linkDocument = (address: LinkWritePolicyInput["source"]) => ({
+  space: address.space,
+  id: address.id as URI,
+  scope: normalizeCellScope(address.scope),
+});
+
+/**
+ * The principal claims a link may take from `schema`, a schema this
+ * transaction holds for a document it has not persisted yet: the claims the
+ * deepest schema entry covering `path` declares itself, resolved against the
+ * acting principal, when a write in this transaction reaches that entry, and
+ * none otherwise. `currentPrincipalIntegrityReason` checks an entry only when a
+ * write reaches it, so an entry no write reaches holds claims nothing checked.
+ * A claim another entry contributes, through a copy or projection, is not
+ * taken either.
+ */
+const checkedSchemaPrincipalClaims = (
+  tx: IExtendedStorageTransaction,
+  schema: JSONSchema,
+  document: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): readonly CfcAtom[] => {
+  const logicalPath = canonicalizeLogicalPath(path);
+  let match: ReturnType<typeof cfcSchemaEntries>[number] | undefined;
+  for (const entry of cfcSchemaEntries(schema)) {
+    if (
+      isPrefix(entry.path, logicalPath) &&
+      (match === undefined || match.path.length < entry.path.length)
+    ) {
+      match = entry;
+    }
+  }
+  if (
+    match === undefined || !isObjectOrArray(match.schema) ||
+    !isObjectOrArray(match.schema.ifc) ||
+    !ifcEntryAppliesToAttemptedWrite(
+      tx,
+      document,
+      match.path,
+      match.schema,
+      match.root,
+    )
+  ) {
+    return [];
+  }
+  const ifc = match.schema.ifc;
+  const declared = [
+    ...(Array.isArray(ifc.integrity) ? ifc.integrity : []),
+    ...(Array.isArray(ifc.addIntegrity) ? ifc.addIntegrity : []),
+  ];
+  return (resolveCurrentPrincipalLabelValues(
+    declared,
+    tx.getCfcState().trustSnapshot?.actingPrincipal,
+  ) ?? []).filter((atom) => principalClaimSpelling(atom) !== undefined);
+};
+
+/**
+ * `label`, derived from a schema this transaction holds for a link's source,
+ * with only the principal claims `checkedSchemaPrincipalClaims` allows.
+ */
+const withCheckedPrincipalClaims = (
+  label: IFCLabel,
+  checked: readonly CfcAtom[],
+): IFCLabel => {
+  const stripped = withoutPrincipalClaims(label);
+  const kept = (label.integrity ?? []).filter((atom) =>
+    principalClaimSpelling(atom) !== undefined &&
+    checked.some((claim) => deepEqual(claim, atom))
+  );
+  return kept.length === 0 ? stripped : {
+    ...stripped,
+    integrity: [...(stripped.integrity ?? []), ...kept],
+  };
 };
 
 /** Derives the link's root label and its authoritative source view. */
@@ -6124,18 +6202,25 @@ const derivePersistedLinkLabel = (
       tx.getCfcState().trustSnapshot?.actingPrincipal,
     );
   }
+  // Only a schema this transaction's writes to the source are checked
+  // against can vouch for a principal claim; a setup result schema is not.
+  const sourceCandidate = candidateSchemas.get(targetKey(input.source));
   // A source that is itself a reference staged in this transaction, or a
   // value initialized on nobody's behalf, mints nothing for the acting
   // principal, as its own slot does not.
   let pendingSourceLabel = pendingSourceSchema !== undefined
-    ? persistedLabelFromSchemaAtPath(
-      tx,
-      pendingSourceSchema,
-      input.source.path,
-      input.source.space,
-      labelMintOptionsAt(
+    ? withCheckedPrincipalClaims(
+      persistedLabelFromSchemaAtPath(
         tx,
-        input.source,
+        pendingSourceSchema,
+        input.source.path,
+        input.source.space,
+        labelMintOptionsAt(tx, input.source, input.source.path),
+      ) ?? {},
+      sourceCandidate === undefined ? [] : checkedSchemaPrincipalClaims(
+        tx,
+        sourceCandidate,
+        linkDocument(input.source),
         input.source.path,
       ),
     )
@@ -6168,14 +6253,18 @@ const derivePersistedLinkLabel = (
         // value this derivation stands for, so it mints nothing for the
         // principal staging it; nor does a value the runtime initialized
         // there on nobody's behalf.
-        pendingSourceLabel = persistedLabelFromSchemaAtPath(
-          tx,
-          pendingSourceSchema,
-          input.target.path,
-          input.target.space,
-          labelMintOptionsAt(
+        pendingSourceLabel = withCheckedPrincipalClaims(
+          persistedLabelFromSchemaAtPath(
             tx,
-            input.target,
+            pendingSourceSchema,
+            input.target.path,
+            input.target.space,
+            labelMintOptionsAt(tx, input.target, input.target.path),
+          ) ?? {},
+          checkedSchemaPrincipalClaims(
+            tx,
+            targetCandidate,
+            linkDocument(input.target),
             input.target.path,
           ),
         );
@@ -6253,9 +6342,7 @@ const derivePersistedLinkLabel = (
       sourceMetadata,
       canonicalizeLogicalPath(input.source.path),
     ) ?? {},
-    pendingSourceLabel === undefined
-      ? undefined
-      : withoutPrincipalClaims(pendingSourceLabel),
+    pendingSourceLabel,
     metadataResolver.cover(pendingSourceView, [], undefined),
   ]);
   // The source/link-schema integrity is author-influenceable (a link value can
