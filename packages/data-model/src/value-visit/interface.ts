@@ -300,8 +300,7 @@ export interface ValueVisitor<
    * call which immediately follows it, nor is there a post-visit `visited*()`
    * call (hence the visit was "nominal"). `start` is the start index of the gap
    * (integer `>= 0`), and `count` is the number of holes in the gap (integer
-   * `>= 1`). This method is called as a result of the visitor returning a
-   * `recurse` result for a visited array.
+   * `>= 1`).
    */
   visitingFabricArrayGap(
     array: FabricArrayPlus<PlusType>,
