@@ -862,6 +862,37 @@ export function sqliteQueryMemoDecision(options: {
   return "issue";
 }
 
+/**
+ * The request hash a sqliteQuery evaluation records: the digest of its
+ * question, then `.`, then the digest of its `reactOn`. The question is every
+ * request input except `reactOn` — the database, statement, parameters,
+ * reader and ceilings that decide which rows answer it — so two requests that
+ * differ only in `reactOn` ask the same question again. Neither digest can
+ * contain `.`, since both are base64url.
+ *
+ * Exported for unit testing only — not part of the builtin surface.
+ */
+export function sqliteRequestHash(
+  questionHash: string,
+  reactOnHash: string,
+): string {
+  return `${questionHash}.${reactOnHash}`;
+}
+
+/**
+ * Whether the request hash `stored` asks the question `questionHash`: a
+ * request that does is a refresh of it, whose claim leaves the rows answering
+ * it readable until its own answer lands.
+ *
+ * Exported for unit testing only — not part of the builtin surface.
+ */
+export function sqliteAsksQuestion(
+  stored: string | undefined,
+  questionHash: string,
+): boolean {
+  return stored?.startsWith(`${questionHash}.`) === true;
+}
+
 /** sqliteQuery: reactive server-side read. */
 export function sqliteQuery(
   inputsCell: Cell<any>,
@@ -1123,7 +1154,7 @@ export function sqliteQuery(
         ifc?: { maxConfidentiality?: CfcConfClause[] };
       } | undefined)?.ifc?.maxConfidentiality,
     );
-    const hash = computeInputHashFromValue({
+    const questionHash = computeInputHashFromValue({
       databaseSpace,
       reader: crossSpace ? (actingReader ?? null) : null,
       readerSession: crossSpace && scope === "session"
@@ -1132,7 +1163,6 @@ export function sqliteQuery(
       db,
       sql: inputs.sql,
       params: params ?? null,
-      reactOn: reactOn ?? null,
       // Shared materializations include their shape-label contract in the
       // identity so a memo without that protection cannot stand as a hit.
       ...(scope !== "session" ? { sharedResultLabelVersion: 1 } : {}),
@@ -1165,6 +1195,10 @@ export function sqliteQuery(
         }
         : {}),
     });
+    const hash = sqliteRequestHash(
+      questionHash,
+      computeInputHashFromValue({ reactOn: reactOn ?? null }),
+    );
     // Dedup against COMMITTED state (and, stage G, against this node's
     // own in-flight RPC): the claim marker commits with the REQUESTING
     // run, so it survives an abort+retry — but under the serving
@@ -1278,10 +1312,28 @@ export function sqliteQuery(
     const requestLabel = scope === "session" ? [] : requestConfidentiality();
     // Diffing the pending publication likewise observes only its destination.
     // The query's inputs, read above, are what schedule another request.
-    result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set({
-      pending: true,
-      requestHash: hash,
-    });
+    const claimTarget = result.withTx(
+      new TransactionWrapper(tx, { nonReactive: true }),
+    );
+    // A refresh — the stored rows answer this same question, and only
+    // `reactOn` moved — claims through the two control paths alone, so those
+    // rows stay readable beside `pending` until this request's answer
+    // replaces them. Any other request claims the whole value, which clears
+    // what a different question returned. Each path is written on its own
+    // rather than through `update()`, whose read of the whole value would
+    // carry the kept rows' labels into this transaction's join.
+    const refresh = storedBeforeClaim?.result !== undefined &&
+      sqliteAsksQuestion(storedBeforeClaim.requestHash, questionHash);
+    if (refresh) {
+      claimTarget.key("pending").set(true);
+      claimTarget.key("requestHash").set(hash);
+    } else {
+      claimTarget.set({ pending: true, requestHash: hash });
+    }
+    // The value the claim leaves stored, for the abandonment ending below.
+    const claimed: QueryState = refresh
+      ? { ...storedBeforeClaim, pending: true, requestHash: hash }
+      : { pending: true, requestHash: hash };
 
     const sql = inputs.sql;
     requestStaged = true;
@@ -1362,10 +1414,7 @@ export function sqliteQuery(
               storedBeforeClaim as FabricValue,
               stored as FabricValue,
             ) &&
-              !valueEqual(
-                { pending: true, requestHash: hash } as FabricValue,
-                stored as FabricValue,
-              );
+              !valueEqual(claimed as FabricValue, stored as FabricValue);
             if (running || writtenSinceStaged) {
               return;
             }
