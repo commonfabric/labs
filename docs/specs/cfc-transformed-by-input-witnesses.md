@@ -260,9 +260,10 @@ not rely on the witness without them.
   releases it (pinned in `cfc-transformed-by-input-witness.test.ts`). A rule
   that must not trust the step's inputs pins one more level. That needs the
   step's inputs to carry their writer's stamp too: a list of objects is stored
-  as references, which retain no witness, and a list whose container another transaction created, such as the runtime's
-  setup writing a `Default`, keeps no writer on its container node, so a
-  two-level guard over such a list releases nothing.
+  as references, which retain no witness, and a list whose container another
+  transaction created, such as the runtime's setup writing a `Default`, keeps
+  no writer on its container node, so a two-level guard over such a list
+  releases nothing.
 - **Selection among committed values.** A transformation fed a subset of
   honestly committed inputs computes over a choice. References are refused
   above; a selection made by endorsed code is that code's semantics.
