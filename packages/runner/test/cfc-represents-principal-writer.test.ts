@@ -13,6 +13,7 @@ import {
 } from "../src/cfc/represents-principal.ts";
 import { writeResultSchemaMeta } from "../src/result-schema-meta.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
+import type { CfcEnforcementMode } from "../src/cfc/types.ts";
 
 const alice = await Identity.fromPassphrase(
   "runner-represents-principal-writer-alice",
@@ -23,11 +24,14 @@ const bob = await Identity.fromPassphrase(
 
 const CURRENT_PRINCIPAL = { __ctCurrentPrincipal: true };
 
-const createRuntime = () => {
+const createRuntime = (
+  cfcEnforcementMode: CfcEnforcementMode = "enforce-strict",
+) => {
   const storageManager = StorageManager.emulate({ as: alice });
   const runtime = new Runtime({
     apiUrl: new URL("https://example.com"),
     storageManager,
+    cfcEnforcementMode,
   });
   return { runtime, storageManager };
 };
@@ -69,8 +73,9 @@ const claimSchema = (
 const actAsPatternFor = (
   tx: IExtendedStorageTransaction,
   actingPrincipal: string,
+  mode: CfcEnforcementMode = "enforce-strict",
 ) => {
-  tx.setCfcEnforcementMode("enforce-strict");
+  tx.setCfcEnforcementMode(mode);
   tx.setCfcTrustSnapshot({
     id: `trust-${actingPrincipal}`,
     actingPrincipal,
@@ -491,11 +496,12 @@ describe("represents-principal writer check", () => {
       ) => SameTransactionSource,
       linkPath: string,
       order: "source first" | "link first",
+      mode: CfcEnforcementMode = "enforce-strict",
     ) => {
-      const { runtime, storageManager } = createRuntime();
+      const { runtime, storageManager } = createRuntime(mode);
       try {
         const tx = runtime.edit();
-        actAsPatternFor(tx, alice.did());
+        actAsPatternFor(tx, alice.did(), mode);
         const { source, write } = prepare(tx, runtime);
         const target = runtime.getCell(
           alice.did(),
@@ -576,6 +582,10 @@ describe("represents-principal writer check", () => {
         expect(subjects).not.toContain(bob.did());
       });
 
+      // Source first, the link reads the source's label as this transaction
+      // stages it; link first, the source is not staged yet and the claim
+      // comes from `checkedSchemaPrincipalClaims`, which only the link-first
+      // case exercises.
       it(`carries a same-transaction source's checked self-attestation, ${order}`, async () => {
         const { error, subjects } = await linkSameTransactionAsAlice(
           "represents-principal-link-pending-genuine",
@@ -603,6 +613,52 @@ describe("represents-principal writer check", () => {
         expect(error).toBeUndefined();
         expect(subjects).toContain(alice.did());
         expect(subjects).not.toContain(bob.did());
+      });
+
+      // Under `observe` a failed check does not abort the commit; it only
+      // keeps the source's declared label from persisting. A link must not
+      // carry the claims that label would have held.
+      it(`stores no claim from a source schema entry that failed its check under observe, ${order}`, async () => {
+        const { error, subjects } = await linkSameTransactionAsAlice(
+          "represents-principal-link-observe-forged",
+          (tx, runtime) => {
+            const source = runtime.getCell(
+              alice.did(),
+              "represents-principal-link-observe-forged-source",
+              unwrittenForgery,
+              tx,
+            );
+            return { source, write: () => source.set({ q: "x", p: "y" }) };
+          },
+          "p",
+          order,
+          "observe",
+        );
+        expect(error).toBeUndefined();
+        expect(subjects).not.toContain(bob.did());
+      });
+
+      it(`stores no self-attestation whose trusted edit is missing under observe, ${order}`, async () => {
+        const { error, subjects } = await linkSameTransactionAsAlice(
+          "represents-principal-link-observe-untrusted",
+          (tx, runtime) => {
+            const source = runtime.getCell(
+              alice.did(),
+              "represents-principal-link-observe-untrusted-source",
+              claimSchema([{
+                kind: "represents-principal",
+                subject: CURRENT_PRINCIPAL,
+              }]),
+              tx,
+            );
+            return { source, write: () => source.set({ name: "Ada" }) };
+          },
+          "name",
+          order,
+          "observe",
+        );
+        expect(error).toBeUndefined();
+        expect(subjects).not.toContain(alice.did());
       });
     }
 
