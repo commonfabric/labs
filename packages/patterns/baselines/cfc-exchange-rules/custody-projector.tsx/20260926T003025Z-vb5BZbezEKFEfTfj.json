@@ -154,7 +154,7 @@
           "cell"
         ],
         "default": {},
-        "description": "Receives a link to the instance's box from the host once a seat seals.\nIt declares no label of its own: every entry of the box already carries\nthe room's policy, and a read through the link carries it."
+        "description": "Receives a link to the instance's box from the host once a seat seals.\nIt declares no label of its own: every entry of the box already carries\nthe room's policy, and a read through the link carries it.\n\nTODO(custody-box-link): declaring `Record<string, Sealed<BoxEntry>>` here\nis refused. Repro: give `box` that type, then write a link to the sealed\nbox into it as `cf-custody-seal` does, a blind UI write\n(`runtime.commitUiCellWrite(cell, link, { blind: true })`); commit\npreparation crashes with `type changed incompatibly at /box: [\"object\"]\n-> [\"array\"]`, as the schema merge sets the input's record schema\nagainst an array schema. `integration/cfc-custody-projector.test.ts`\nmakes that write; change this type back to reproduce."
       },
       "policy": {
         "asCell": [
@@ -164,8 +164,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "j5RkScuOEOBNiuz8r0mc51Hz2aanoUM83SmoKUKMI_8",
-              "policyDigest": "C8-EKJ4JNvTPyUiL-_GHhF2TeOu9iQmJCB6aKkePsHk",
+              "moduleIdentity": "LbLTovRxB3anussS6YyFFqP_9uMA7mfKcqFu6WQn2VU",
+              "policyDigest": "vEAAHDOJDz5ER_QzPoVzJNaVGiCm359QoxPEEksx8_8",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -366,8 +366,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "j5RkScuOEOBNiuz8r0mc51Hz2aanoUM83SmoKUKMI_8",
-              "policyDigest": "C8-EKJ4JNvTPyUiL-_GHhF2TeOu9iQmJCB6aKkePsHk",
+              "moduleIdentity": "LbLTovRxB3anussS6YyFFqP_9uMA7mfKcqFu6WQn2VU",
+              "policyDigest": "vEAAHDOJDz5ER_QzPoVzJNaVGiCm359QoxPEEksx8_8",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
