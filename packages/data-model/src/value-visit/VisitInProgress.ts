@@ -746,7 +746,7 @@ export class VisitInProgress<
   }
 
   /**
-   * Converts a converted plain object key result of `#visitValue()`, from a
+   * Converts a `#visitValue()` result being used as a plain object key, from a
    * `recurse`-induced sub-value iteration, as appropriate, based on the
    * `#doMap` mode.
    */
