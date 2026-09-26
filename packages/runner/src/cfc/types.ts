@@ -716,6 +716,24 @@ export type PreparedDigestInput = {
    */
   readonly externalContentObservations?:
     readonly CfcExternalContentObservation[];
+
+  /**
+   * Whole-value write destinations and the identity that recorded each
+   * (`CfcTxState.assertedValueRoots`). They decide where preparation stamps
+   * the writer's flow label, so a transaction whose roots change must not
+   * keep its digest. Absent when empty, so a transaction that recorded none
+   * keeps the established prepared-digest spelling.
+   */
+  readonly assertedValueRoots?: readonly {
+    readonly address: CfcAddress;
+    readonly identity: ImplementationIdentity | undefined;
+  }[];
+
+  /**
+   * List-coordinator containers whose membership preparation re-stamps
+   * (`CfcTxState.structureContainers`). Absent when empty, like the roots.
+   */
+  readonly structureContainers?: readonly CfcAddress[];
 };
 
 /**
