@@ -261,6 +261,82 @@ describe("sqlite shared read ceiling", () => {
     }
   });
 
+  it("withholds the rows a pending refresh keeps from a narrower reader", async () => {
+    // A refresh leaves the previous rows readable beside `pending` until its
+    // own answer lands, so the shared result holds rows for the whole of the
+    // request. The read held on the gate is what makes the pending window
+    // last long enough to be observed from a second reader.
+
+    const runtime = reader([signer.did(), BOB]);
+    const { commonfabric: cf } = createTrustedBuilder(runtime);
+    const tx = runtime.edit();
+    const tick = runtime.getCell<number>(
+      signer.did(),
+      "held refresh tick",
+      undefined,
+      tx,
+    );
+    tick.set(0);
+    const pattern = cf.pattern<{ tick: number }>(({ tick }) =>
+      // deno-lint-ignore no-explicit-any
+      cf.sqliteQuery({ db, sql: SQL, reactOn: tick } as any)
+    );
+    const result = runtime.run(
+      tx,
+      pattern,
+      { tick },
+      runtime.getCell(
+        signer.did(),
+        "held refresh result",
+        pattern.resultSchema,
+        tx,
+      ),
+    );
+    expect((await tx.commit()).error).toBeUndefined();
+    const cancel = result.key("pending").sink(() => {});
+    const provider = storage.open(signer.did()) as unknown as {
+      sqliteQuery: (...args: unknown[]) => Promise<unknown>;
+    };
+    const original = provider.sqliteQuery;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      await runtime.settled();
+      expect(result.key("pending").get()).toBe(false);
+      provider.sqliteQuery = async (...args) => {
+        await gate;
+        return await original.apply(provider, args);
+      };
+      const refresh = runtime.edit();
+      tick.withTx(refresh).set(1);
+      expect((await refresh.commit()).error).toBeUndefined();
+      await runtime.idle();
+      expect(result.key("pending").get()).toBe(true);
+      expect(
+        (result.key("result").get() as Array<{ body: string }>).map((row) =>
+          row.body
+        ),
+      ).toEqual(["mine", "private message"]);
+
+      const narrowed = reader([signer.did()]).getCellFromLink(
+        result.getAsNormalizedFullLink(),
+      );
+      await narrowed.sync();
+      expect(narrowed.key("pending").get()).toBe(true);
+      expect(() => narrowed.key("result").get()).toThrow(/read ceiling/);
+      expect(() => narrowed.key("result").key("length").get()).toThrow(
+        /read ceiling/,
+      );
+    } finally {
+      release();
+      provider.sqliteQuery = original;
+      await runtime.settled();
+      cancel();
+    }
+  });
+
   it("withholds an aggregate value under a narrower observation ceiling", async () => {
     const result = await run(
       reader([BOB]),
