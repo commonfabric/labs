@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { deepFreeze } from "@/deep-freeze.ts";
 import {
   DefaultValueVisitor,
   makeMapValueFunction,
@@ -9,6 +10,10 @@ import {
   type VisitResult,
   visitValue,
 } from "@/value-visit";
+import {
+  makeMutableMapValueFunction,
+  mutableMapValue,
+} from "@/value-visit/impl.ts";
 
 import { mainResult, mapTo, Recorder } from "./Recorder.ts";
 
@@ -29,10 +34,17 @@ describe("value-visit/impl", () => {
       ]);
     });
 
-    it("returns the value itself when the visitor changes nothing", () => {
-      const value = { a: [1] };
+    it("returns the value itself when the visitor changes nothing and the value is deeply frozen", () => {
+      const value = deepFreeze({ a: [1] });
 
       expect(mapValue(value, new Recorder())).toBe(value);
+    });
+
+    it("returns a deeply frozen result", () => {
+      const result = mapValue({ a: [1] }, new Recorder()) as { a: unknown };
+
+      expect(Object.isFrozen(result)).toBe(true);
+      expect(Object.isFrozen(result.a)).toBe(true);
     });
   });
 
@@ -44,6 +56,57 @@ describe("value-visit/impl", () => {
 
       expect(map([1])).toEqual(["one"]);
       expect(map({ a: 2 })).toEqual({ a: "one" });
+    });
+
+    it("returns a function whose results are frozen", () => {
+      const map = makeMapValueFunction(new Recorder());
+
+      expect(Object.isFrozen(map([1]))).toBe(true);
+    });
+  });
+
+  describe("mutableMapValue()", () => {
+    it("maps the value with the given visitor", () => {
+      const rec = new Recorder();
+      rec.onPrimitive = () => mapTo("one");
+
+      expect(mutableMapValue([1], rec)).toEqual(["one"]);
+      expect(rec.names).toEqual([
+        "value",
+        "array",
+        "visitingFabricArrayElement",
+        "value",
+        "primitive",
+        "mappedFabricArrayElement",
+      ]);
+    });
+
+    it("returns an unfrozen copy of each container when the visitor changes nothing, even when the value is deeply frozen", () => {
+      const value = deepFreeze({ a: [1] });
+      const result = mutableMapValue(value, new Recorder()) as { a: unknown };
+
+      expect(result).not.toBe(value);
+      expect(result).toEqual(value);
+      expect(Object.isFrozen(result)).toBe(false);
+      expect(result.a).not.toBe(value.a);
+      expect(Object.isFrozen(result.a)).toBe(false);
+    });
+  });
+
+  describe("makeMutableMapValueFunction()", () => {
+    it("returns a function that maps with the bound visitor", () => {
+      const rec = new Recorder();
+      rec.onPrimitive = () => mapTo("one");
+      const map = makeMutableMapValueFunction(rec);
+
+      expect(map([1])).toEqual(["one"]);
+      expect(map({ a: 2 })).toEqual({ a: "one" });
+    });
+
+    it("returns a function whose results are not frozen", () => {
+      const map = makeMutableMapValueFunction(new Recorder());
+
+      expect(Object.isFrozen(map(Object.freeze([1])))).toBe(false);
     });
   });
 
@@ -69,6 +132,10 @@ describe("value-visit/impl", () => {
       class FirstNumber extends DefaultValueVisitor<never, number> {
         override visitNumber(value: number): VisitResult<never, number> {
           return mainResult(value);
+        }
+
+        override visitUnhandledValue(): VisitResult<never, number> {
+          return undefined;
         }
       }
 

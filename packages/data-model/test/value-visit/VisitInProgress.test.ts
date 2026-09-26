@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 
 import type { FabricValue, PrimitiveValueTag } from "@";
 import { CODEC, type NonterminalCodec } from "@/codec-interface/interface.ts";
+import { deepFreeze } from "@/deep-freeze.ts";
 import { FabricError, FabricLink, FabricMap } from "@/fabric-instances";
 import { FabricBytes } from "@/fabric-primitives";
 import {
@@ -23,12 +24,26 @@ import {
 
 /** Runs a fresh visit of `value` with `vis`. */
 function visit(value: unknown, vis: ValueVisitor<unknown, unknown>): unknown {
-  return new VisitInProgress(vis).visit(value);
+  return new VisitInProgress(vis, { mode: "visit" }).visit(value);
 }
 
-/** Runs a fresh structural-map of `value` with `vis`. */
+/**
+ * Runs a fresh structural-map of `value` with `vis`, freezing the containers
+ * it produces.
+ */
 function map(value: unknown, vis: ValueVisitor<unknown, unknown>): unknown {
-  return new VisitInProgress(vis).map(value);
+  return new VisitInProgress(vis, { mode: "map", freeze: true }).visit(value);
+}
+
+/**
+ * Runs a fresh structural-map of `value` with `vis`, leaving the containers it
+ * produces mutable.
+ */
+function mutableMap(
+  value: unknown,
+  vis: ValueVisitor<unknown, unknown>,
+): unknown {
+  return new VisitInProgress(vis, { mode: "map", freeze: false }).visit(value);
 }
 
 /**
@@ -962,7 +977,9 @@ describe("VisitInProgress", () => {
       describe("re-entry", () => {
         it("throws when a visitor starts another top-level visit on the same instance mid-visit", () => {
           const rec = new Recorder();
-          const inProgress = new VisitInProgress<unknown, unknown>(rec);
+          const inProgress = new VisitInProgress<unknown, unknown>(rec, {
+            mode: "visit",
+          });
           rec.onPrimitive = () => {
             inProgress.visit(2);
             return undefined;
@@ -975,7 +992,9 @@ describe("VisitInProgress", () => {
 
         it("accepts a second top-level visit once the first has completed", () => {
           const rec = new Recorder();
-          const inProgress = new VisitInProgress<unknown, unknown>(rec);
+          const inProgress = new VisitInProgress<unknown, unknown>(rec, {
+            mode: "visit",
+          });
 
           expect(inProgress.visit([1])).toBeUndefined();
           expect(inProgress.visit({ a: 2 })).toBeUndefined();
@@ -987,7 +1006,9 @@ describe("VisitInProgress", () => {
 
         it("accepts a second top-level visit after the first threw", () => {
           const rec = new Recorder();
-          const inProgress = new VisitInProgress<unknown, unknown>(rec);
+          const inProgress = new VisitInProgress<unknown, unknown>(rec, {
+            mode: "visit",
+          });
           rec.onPrimitive = (v) => (v === 1) ? DO_RECURSE_VALUES : undefined;
 
           expect(() => inProgress.visit([1])).toThrow(/non-container/);
@@ -996,7 +1017,9 @@ describe("VisitInProgress", () => {
 
         it("throws when a visitor re-enters from the root value, before anything is on the stack", () => {
           const rec = new Recorder();
-          const inProgress = new VisitInProgress<unknown, unknown>(rec);
+          const inProgress = new VisitInProgress<unknown, unknown>(rec, {
+            mode: "visit",
+          });
           rec.onValue = (v) => {
             if (v === "root") {
               inProgress.visit(2);
@@ -1011,7 +1034,9 @@ describe("VisitInProgress", () => {
 
         it("continues the outer visit, and accepts a later one, when a visitor swallows a re-entry error", () => {
           const rec = new Recorder();
-          const inProgress = new VisitInProgress<unknown, unknown>(rec);
+          const inProgress = new VisitInProgress<unknown, unknown>(rec, {
+            mode: "visit",
+          });
           rec.onValue = (v) => {
             if (v === "root") {
               try {
@@ -1037,416 +1062,535 @@ describe("VisitInProgress", () => {
           expect(inProgress.visit(3)).toBeUndefined();
         });
       });
-    });
 
-    describe("map()", () => {
-      describe("results", () => {
-        it("returns a primitive the visitor leaves alone as itself", () => {
-          expect(map(5, new Recorder())).toBe(5);
-        });
-
-        it("returns the same array when no element changes", () => {
-          const array = [1, [2]];
-
-          expect(map(array, new Recorder())).toBe(array);
-        });
-
-        it("returns the same plain object when no entry changes", () => {
-          const object = { a: 1, b: { c: 2 } };
-
-          expect(map(object, new Recorder())).toBe(object);
-        });
-
-        it("returns the same instance when its state does not change", () => {
-          const link = new FabricLink({ id: "fid1:abc" });
-
-          expect(map(link, new Recorder())).toBe(link);
-        });
-
-        it("returns the value of a `mapTo` from the root value", () => {
-          const rec = new Recorder();
-          rec.onValue = () => mapTo("mapped");
-
-          expect(map([1], rec)).toBe("mapped");
-          expect(rec.names).toEqual(["value"]);
-        });
-
-        it("returns the value of a `mainResult`, visiting nothing after it", () => {
-          const rec = new Recorder();
-          rec.onPrimitive = (v) => (v === 2) ? mainResult("stop") : mapTo(0);
-
-          expect(map([1, 2, 3], rec)).toBe("stop");
-          expect(rec.events.map((e) => e[1])).not.toContain(3);
-        });
-      });
-
-      describe("arrays", () => {
-        it("returns a new array of the elements' mapped values, leaving the original alone", () => {
-          const rec = new Recorder();
-          rec.onPrimitive = (v) => (v === 2) ? mapTo("two") : undefined;
-          const array = [1, 2, 3];
-          const result = map(array, rec);
-
-          expect(result).toEqual([1, "two", 3]);
-          expect(result).not.toBe(array);
-          expect(array).toEqual([1, 2, 3]);
-        });
-
-        it("keeps the holes of a mapped array", () => {
-          const rec = new Recorder();
-          rec.onPrimitive = () => mapTo("one");
-          // deno-lint-ignore no-sparse-arrays
-          const result = map([, 1, ,], rec) as unknown[];
-
-          expect(result.length).toBe(3);
-          expect(Object.keys(result)).toEqual(["1"]);
-          expect(result[1]).toBe("one");
-        });
-
-        it("reports each element's mapped value to `mappedFabricArrayElement()`, after visiting the element", () => {
-          const rec = new Recorder();
-          rec.onPrimitive = () => mapTo("one");
-          const array = [1];
-
-          map(array, rec);
-          expect(rec.events).toEqual([
-            ["value", array, "Array"],
-            ["array", array],
-            ["visitingFabricArrayElement", array, 0, 1],
-            ["value", 1, "number"],
-            ["primitive", 1, "number"],
-            ["mappedFabricArrayElement", array, 0, "one"],
-          ]);
-        });
-
-        it("ends the map from `mappedFabricArrayElement()`, visiting no later element", () => {
-          const rec = new Recorder();
-          rec.onMappedFabricArrayElement = (i) =>
-            (i === 0) ? mainResult("after 0") : undefined;
-
-          expect(map([10, 20], rec)).toBe("after 0");
-          expect(rec.events.map((e) => e[1])).not.toContain(20);
-        });
-
-        it("ends the map from `visitingFabricArrayGap()`", () => {
-          const rec = new Recorder();
-          rec.onVisitingFabricArrayGap = () => mainResult("gap");
-
-          // deno-lint-ignore no-sparse-arrays
-          expect(map([1, , 2], rec)).toBe("gap");
-          expect(rec.events.map((e) => e[1])).not.toContain(2);
-        });
-
-        it("counts `-0` mapped to `0` as a change", () => {
-          const rec = new Recorder();
-          rec.onPrimitive = (v) => Object.is(v, -0) ? mapTo(0) : undefined;
-          const array = [-0];
-          const result = map(array, rec) as number[];
-
-          expect(result).not.toBe(array);
-          expect(result[0]).toBe(0);
-        });
-
-        it("counts a `NaN` left alone as no change", () => {
-          const array = [NaN];
-
-          expect(map(array, new Recorder())).toBe(array);
-        });
-      });
-
-      describe("plain objects", () => {
-        it("returns a new object of the entries' mapped values, leaving the original alone", () => {
-          const rec = new Recorder();
-          rec.onPrimitive = (v) => (v === 2) ? mapTo("two") : undefined;
-          const object = { a: 1, b: 2 };
-          const result = map(object, rec);
-
-          expect(result).toEqual({ a: 1, b: "two" });
-          expect(result).not.toBe(object);
-          expect(object).toEqual({ a: 1, b: 2 });
-        });
-
-        it("returns a new object with mapped keys, for `DO_RECURSE_KEYS_VALUES`", () => {
-          const rec = new Recorder();
-          rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
-          rec.onPrimitive = (v) => (v === "a") ? mapTo("z") : undefined;
-
-          expect(map({ a: 1, b: 2 }, rec)).toEqual({ z: 1, b: 2 });
-        });
-
-        it("returns a new object with mapped keys and the original values, for `DO_RECURSE_KEYS`", () => {
-          const rec = new Recorder();
-          rec.onPlainObject = () => DO_RECURSE_KEYS;
-          rec.onPrimitive = (v) => (v === "a") ? mapTo("z") : undefined;
-          const inner = { c: 3 };
-          const result = map({ a: 1, b: inner }, rec) as Record<
-            string,
-            unknown
-          >;
-
-          expect(result).toEqual({ z: 1, b: inner });
-          expect(result.b).toBe(inner);
-          expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
-            ["primitive", "a", "string"],
-            ["primitive", "b", "string"],
-          ]);
-        });
-
-        it("returns the same object for `DO_RECURSE_KEYS` when no key changes", () => {
-          const rec = new Recorder();
-          rec.onPlainObject = () => DO_RECURSE_KEYS;
-          const object = { a: 1, b: { c: 3 } };
-
-          expect(map(object, rec)).toBe(object);
-        });
-
-        it("reports each entry's final key and mapped value to `mappedFabricPlainObjectEntry()`, after visiting the entry", () => {
-          const rec = new Recorder();
-          rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
-          rec.onPrimitive = (v) => mapTo((v === "a") ? "z" : "one");
-          const object = { a: 1 };
-
-          map(object, rec);
-          expect(rec.events).toEqual([
-            ["value", object, "Object"],
-            ["object", object],
-            ["visitingFabricPlainObjectEntry", object, "a", 1],
-            ["value", "a", "string"],
-            ["primitive", "a", "string"],
-            ["value", 1, "number"],
-            ["primitive", 1, "number"],
-            ["mappedFabricPlainObjectEntry", object, "z", "one"],
-          ]);
-        });
-
-        it("ends the map from `mappedFabricPlainObjectEntry()`, visiting no later entry", () => {
-          const rec = new Recorder();
-          rec.onMappedFabricPlainObjectEntry = () => mainResult("first");
-
-          expect(map({ a: 1, b: 2 }, rec)).toBe("first");
-          expect(rec.events.map((e) => e[1])).not.toContain(2);
-        });
-
-        it("ends the map from a key's recursion", () => {
-          const rec = new Recorder();
-          rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
-          rec.onPrimitive = (v) => (v === "a") ? mainResult("key") : undefined;
-
-          expect(map({ a: 1 }, rec)).toBe("key");
-          expect(rec.events.map((e) => e[1])).not.toContain(1);
-        });
-
-        it("throws for a key mapped to a non-string", () => {
-          const rec = new Recorder();
-          rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
-          rec.onPrimitive = (v) => (v === "a") ? mapTo(5) : undefined;
-
-          expect(() => map({ a: 1 }, rec)).toThrow(
-            /Visit of key `"a"` mapped to non-string: `5`/,
-          );
-        });
-
-        it("throws for a key mapped to an unsafe key", () => {
-          const rec = new Recorder();
-          rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
-          rec.onPrimitive = (v) => (v === "a") ? mapTo("__proto__") : undefined;
-
-          expect(() => map({ a: 1 }, rec)).toThrow(
-            /Visit of key `"a"` mapped to unsafe key: `"__proto__"`/,
-          );
-        });
-
-        it("throws for an unsafe key left as it is", () => {
-          const object = JSON.parse('{ "__proto__": 1 }');
-
-          expect(() => map(object, new Recorder())).toThrow(
-            /Visit of unsafe key `"__proto__"` mapped to itself/,
-          );
-        });
-
-        it("throws for two keys mapped to the same key", () => {
-          const rec = new Recorder();
-          rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
-          rec.onPrimitive = (_v, tag) =>
-            (tag === "string") ? mapTo("k") : undefined;
-
-          expect(() => map({ a: 1, b: 2 }, rec)).toThrow(
-            /Visit of key `"b"` mapped to already-mapped key: `"k"`/,
-          );
-        });
-
-        it("does not put a key to `isResultType()`", () => {
-          const rec = new Recorder();
-          rec.onIsDomainAssignableToResultType = () => false;
-          rec.onIsResultType = (v) => typeof v !== "string";
-          rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
-          const object = { a: 1 };
-
-          expect(map(object, rec)).toBe(object);
-          expect(rec.resultTypeChecks).not.toContain("a");
-        });
-      });
-
-      describe("`FabricInstance`s", () => {
-        /** Returns a `FabricError` with the given message. */
-        function error(message: string): FabricError {
-          return new FabricError({
-            type: "Error",
-            message,
-            stack: undefined,
-            cause: undefined,
+      describe("when mapping", () => {
+        describe("results", () => {
+          it("returns a primitive the visitor leaves alone as itself", () => {
+            expect(map(5, new Recorder())).toBe(5);
           });
-        }
 
-        it("returns a new instance decoded from the mapped state", () => {
-          const rec = new Recorder();
-          rec.onPrimitive = (v) => (v === "boom") ? mapTo("bang") : undefined;
-          const original = error("boom");
-          const result = map(original, rec);
+          it("returns the same array when no element changes and the array is deeply frozen", () => {
+            const array = deepFreeze([1, [2]]);
 
-          expect(result).toBeInstanceOf(FabricError);
-          expect(result).not.toBe(original);
-          expect((result as FabricError).message).toBe("bang");
-          expect(original.message).toBe("boom");
+            expect(map(array, new Recorder())).toBe(array);
+          });
+
+          it("returns the same plain object when no entry changes and the object is deeply frozen", () => {
+            const object = deepFreeze({ a: 1, b: { c: 2 } });
+
+            expect(map(object, new Recorder())).toBe(object);
+          });
+
+          it("returns the same instance when its state does not change and the instance is deeply frozen", () => {
+            const link = deepFreeze(new FabricLink({ id: "fid1:abc" }));
+
+            expect(map(link, new Recorder())).toBe(link);
+          });
+
+          it("returns the value of a `mapTo` from the root value", () => {
+            const rec = new Recorder();
+            rec.onValue = () => mapTo("mapped");
+
+            expect(map([1], rec)).toBe("mapped");
+            expect(rec.names).toEqual(["value"]);
+          });
+
+          it("returns the value of a `mainResult`, visiting nothing after it", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = (v) => (v === 2) ? mainResult("stop") : mapTo(0);
+
+            expect(map([1, 2, 3], rec)).toBe("stop");
+            expect(rec.events.map((e) => e[1])).not.toContain(3);
+          });
         });
 
-        it("reports the mapped state to `mappedFabricInstanceState()`, after visiting the state", () => {
-          const rec = new Recorder();
-          rec.onPrimitive = (v) => (v === "boom") ? mapTo("bang") : undefined;
-          const original = error("boom");
+        describe("arrays", () => {
+          it("returns a new array of the elements' mapped values, leaving the original alone", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = (v) => (v === 2) ? mapTo("two") : undefined;
+            const array = [1, 2, 3];
+            const result = map(array, rec);
 
-          map(original, rec);
-          expect(rec.names.slice(-1)).toEqual(["mappedFabricInstanceState"]);
-          expect(rec.events.slice(-1)).toEqual([
-            ["mappedFabricInstanceState", original, {
+            expect(result).toEqual([1, "two", 3]);
+            expect(result).not.toBe(array);
+            expect(array).toEqual([1, 2, 3]);
+          });
+
+          it("keeps the holes of a mapped array", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = () => mapTo("one");
+            // deno-lint-ignore no-sparse-arrays
+            const result = map([, 1, ,], rec) as unknown[];
+
+            expect(result.length).toBe(3);
+            expect(Object.keys(result)).toEqual(["1"]);
+            expect(result[1]).toBe("one");
+          });
+
+          it("reports each element's mapped value to `mappedFabricArrayElement()`, after visiting the element", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = () => mapTo("one");
+            const array = [1];
+
+            map(array, rec);
+            expect(rec.events).toEqual([
+              ["value", array, "Array"],
+              ["array", array],
+              ["visitingFabricArrayElement", array, 0, 1],
+              ["value", 1, "number"],
+              ["primitive", 1, "number"],
+              ["mappedFabricArrayElement", array, 0, "one"],
+            ]);
+          });
+
+          it("ends the map from `mappedFabricArrayElement()`, visiting no later element", () => {
+            const rec = new Recorder();
+            rec.onMappedFabricArrayElement = (i) =>
+              (i === 0) ? mainResult("after 0") : undefined;
+
+            expect(map([10, 20], rec)).toBe("after 0");
+            expect(rec.events.map((e) => e[1])).not.toContain(20);
+          });
+
+          it("ends the map from `visitingFabricArrayGap()`", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricArrayGap = () => mainResult("gap");
+
+            // deno-lint-ignore no-sparse-arrays
+            expect(map([1, , 2], rec)).toBe("gap");
+            expect(rec.events.map((e) => e[1])).not.toContain(2);
+          });
+
+          it("counts `-0` mapped to `0` as a change", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = (v) => Object.is(v, -0) ? mapTo(0) : undefined;
+            const array = [-0];
+            const result = map(array, rec) as number[];
+
+            expect(result).not.toBe(array);
+            expect(result[0]).toBe(0);
+          });
+
+          it("counts a `NaN` left alone as no change", () => {
+            const array = Object.freeze([NaN]);
+
+            expect(map(array, new Recorder())).toBe(array);
+          });
+        });
+
+        describe("plain objects", () => {
+          it("returns a new object of the entries' mapped values, leaving the original alone", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = (v) => (v === 2) ? mapTo("two") : undefined;
+            const object = { a: 1, b: 2 };
+            const result = map(object, rec);
+
+            expect(result).toEqual({ a: 1, b: "two" });
+            expect(result).not.toBe(object);
+            expect(object).toEqual({ a: 1, b: 2 });
+          });
+
+          it("returns a new object with mapped keys, for `DO_RECURSE_KEYS_VALUES`", () => {
+            const rec = new Recorder();
+            rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
+            rec.onPrimitive = (v) => (v === "a") ? mapTo("z") : undefined;
+
+            expect(map({ a: 1, b: 2 }, rec)).toEqual({ z: 1, b: 2 });
+          });
+
+          it("returns a new object with mapped keys and the original values, for `DO_RECURSE_KEYS`", () => {
+            const rec = new Recorder();
+            rec.onPlainObject = () => DO_RECURSE_KEYS;
+            rec.onPrimitive = (v) => (v === "a") ? mapTo("z") : undefined;
+            const inner = { c: 3 };
+            const result = map({ a: 1, b: inner }, rec) as Record<
+              string,
+              unknown
+            >;
+
+            expect(result).toEqual({ z: 1, b: inner });
+            expect(result.b).toBe(inner);
+            expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
+              ["primitive", "a", "string"],
+              ["primitive", "b", "string"],
+            ]);
+          });
+
+          it("returns the same object for `DO_RECURSE_KEYS` when no key changes and the object is frozen", () => {
+            const rec = new Recorder();
+            rec.onPlainObject = () => DO_RECURSE_KEYS;
+            const object = Object.freeze({ a: 1, b: { c: 3 } });
+
+            expect(map(object, rec)).toBe(object);
+          });
+
+          it("reports each entry's final key and mapped value to `mappedFabricPlainObjectEntry()`, after visiting the entry", () => {
+            const rec = new Recorder();
+            rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
+            rec.onPrimitive = (v) => mapTo((v === "a") ? "z" : "one");
+            const object = { a: 1 };
+
+            map(object, rec);
+            expect(rec.events).toEqual([
+              ["value", object, "Object"],
+              ["object", object],
+              ["visitingFabricPlainObjectEntry", object, "a", 1],
+              ["value", "a", "string"],
+              ["primitive", "a", "string"],
+              ["value", 1, "number"],
+              ["primitive", 1, "number"],
+              ["mappedFabricPlainObjectEntry", object, "z", "one"],
+            ]);
+          });
+
+          it("ends the map from `mappedFabricPlainObjectEntry()`, visiting no later entry", () => {
+            const rec = new Recorder();
+            rec.onMappedFabricPlainObjectEntry = () => mainResult("first");
+
+            expect(map({ a: 1, b: 2 }, rec)).toBe("first");
+            expect(rec.events.map((e) => e[1])).not.toContain(2);
+          });
+
+          it("ends the map from a key's recursion", () => {
+            const rec = new Recorder();
+            rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
+            rec.onPrimitive = (v) =>
+              (v === "a") ? mainResult("key") : undefined;
+
+            expect(map({ a: 1 }, rec)).toBe("key");
+            expect(rec.events.map((e) => e[1])).not.toContain(1);
+          });
+
+          it("throws for a key mapped to a non-string", () => {
+            const rec = new Recorder();
+            rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
+            rec.onPrimitive = (v) => (v === "a") ? mapTo(5) : undefined;
+
+            expect(() => map({ a: 1 }, rec)).toThrow(
+              /Visit of key `"a"` mapped to non-string: `5`/,
+            );
+          });
+
+          it("throws for a key mapped to an unsafe key", () => {
+            const rec = new Recorder();
+            rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
+            rec.onPrimitive = (v) =>
+              (v === "a") ? mapTo("__proto__") : undefined;
+
+            expect(() => map({ a: 1 }, rec)).toThrow(
+              /Visit of key `"a"` mapped to unsafe key: `"__proto__"`/,
+            );
+          });
+
+          it("throws for an unsafe key left as it is", () => {
+            const object = JSON.parse('{ "__proto__": 1 }');
+
+            expect(() => map(object, new Recorder())).toThrow(
+              /Visit of unsafe key `"__proto__"` mapped to itself/,
+            );
+          });
+
+          it("throws for two keys mapped to the same key", () => {
+            const rec = new Recorder();
+            rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
+            rec.onPrimitive = (_v, tag) =>
+              (tag === "string") ? mapTo("k") : undefined;
+
+            expect(() => map({ a: 1, b: 2 }, rec)).toThrow(
+              /Visit of key `"b"` mapped to already-mapped key: `"k"`/,
+            );
+          });
+
+          it("does not put a key to `isResultType()`", () => {
+            const rec = new Recorder();
+            rec.onIsDomainAssignableToResultType = () => false;
+            rec.onIsResultType = (v) => typeof v !== "string";
+            rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
+            const object = { a: 1 };
+
+            expect(map(object, rec)).toEqual(object);
+            expect(rec.resultTypeChecks).not.toContain("a");
+          });
+        });
+
+        describe("`FabricInstance`s", () => {
+          /** Returns a `FabricError` with the given message. */
+          function error(message: string): FabricError {
+            return new FabricError({
               type: "Error",
-              name: null,
-              message: "bang",
-            }],
-          ]);
-        });
+              message,
+              stack: undefined,
+              cause: undefined,
+            });
+          }
 
-        it("ends the map from `mappedFabricInstanceState()`", () => {
-          const rec = new Recorder();
-          rec.onMappedFabricInstanceState = () => mainResult("after");
+          it("returns a new instance decoded from the mapped state", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = (v) => (v === "boom") ? mapTo("bang") : undefined;
+            const original = error("boom");
+            const result = map(original, rec);
 
-          expect(map([error("boom"), 1], rec)).toBe("after");
-          expect(rec.events.map((e) => e[1])).not.toContain(1);
-        });
-
-        it("throws when the codec refuses the mapped state", () => {
-          const rec = new Recorder();
-          rec.onPrimitive = (v) => (v === "boom") ? mapTo(5) : undefined;
-
-          expect(() => map(error("boom"), rec)).toThrow(
-            /Codec of .* refused replacement state /,
-          );
-        });
-
-        it("throws when the codec fails while checking the mapped state", () => {
-          const rec = new Recorder();
-          rec.onPrimitive = (v) => (v === "boom") ? mapTo("bang") : undefined;
-          const instance = errorWithCodec("boom", {
-            canDecode: () => {
-              throw new Error("canDecode failed");
-            },
+            expect(result).toBeInstanceOf(FabricError);
+            expect(result).not.toBe(original);
+            expect((result as FabricError).message).toBe("bang");
+            expect(original.message).toBe("boom");
           });
 
-          expect(() => map(instance, rec)).toThrow(
-            /Codec of .* failed while checking replacement state /,
-          );
-        });
+          it("reports the mapped state to `mappedFabricInstanceState()`, after visiting the state", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = (v) => (v === "boom") ? mapTo("bang") : undefined;
+            const original = error("boom");
 
-        it("throws when the codec fails when asked for a tag", () => {
-          const rec = new Recorder();
-          rec.onPrimitive = (v) => (v === "boom") ? mapTo("bang") : undefined;
-          const instance = errorWithCodec("boom", {
-            tagForValue: () => {
-              throw new Error("tagForValue failed");
-            },
+            map(original, rec);
+            expect(rec.names.slice(-1)).toEqual(["mappedFabricInstanceState"]);
+            expect(rec.events.slice(-1)).toEqual([
+              ["mappedFabricInstanceState", original, {
+                type: "Error",
+                name: null,
+                message: "bang",
+              }],
+            ]);
           });
 
-          expect(() => map(instance, rec)).toThrow(
-            /Codec of .* failed when asked for a tag/,
-          );
-        });
+          it("ends the map from `mappedFabricInstanceState()`", () => {
+            const rec = new Recorder();
+            rec.onMappedFabricInstanceState = () => mainResult("after");
 
-        it("throws when the codec accepts but then fails to decode the mapped state", () => {
-          const rec = new Recorder();
-          rec.onPrimitive = (v) => (v === "boom") ? mapTo("bang") : undefined;
-          const instance = errorWithCodec("boom", {
-            decode: () => {
-              throw new Error("decode failed");
-            },
+            expect(map([error("boom"), 1], rec)).toBe("after");
+            expect(rec.events.map((e) => e[1])).not.toContain(1);
           });
 
-          expect(() => map(instance, rec)).toThrow(
-            /Codec of .* accepted but then failed to decode replacement state /,
-          );
-        });
-      });
+          it("throws when the codec refuses the mapped state", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = (v) => (v === "boom") ? mapTo(5) : undefined;
 
-      describe("`replace` results", () => {
-        it("returns the replacement for a value whose replacement the visitor leaves alone", () => {
-          const rec = new Recorder();
-          rec.onValue = (v) => (v === 1) ? replace("one") : DO_DISPATCH;
+            expect(() => map(error("boom"), rec)).toThrow(
+              /Codec of .* refused replacement state /,
+            );
+          });
 
-          expect(map(1, rec)).toBe("one");
-          expect(map([1, 2], rec)).toEqual(["one", 2]);
-        });
+          it("throws when the codec fails while checking the mapped state", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = (v) => (v === "boom") ? mapTo("bang") : undefined;
+            const instance = errorWithCodec("boom", {
+              canDecode: () => {
+                throw new Error("canDecode failed");
+              },
+            });
 
-        it("returns a replacement container that is left unchanged as that same container", () => {
-          const two = [2];
-          const rec = new Recorder();
-          rec.onValue = (v) => (v === 1) ? replace(two) : DO_DISPATCH;
+            expect(() => map(instance, rec)).toThrow(
+              /Codec of .* failed while checking replacement state /,
+            );
+          });
 
-          expect(map(1, rec)).toBe(two);
-          expect((map({ a: 1 }, rec) as { a: unknown }).a).toBe(two);
-        });
+          it("throws when the codec fails when asked for a tag", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = (v) => (v === "boom") ? mapTo("bang") : undefined;
+            const instance = errorWithCodec("boom", {
+              tagForValue: () => {
+                throw new Error("tagForValue failed");
+              },
+            });
 
-        it("reports the mapped replacement, not the original, to `mappedFabricArrayElement()`", () => {
-          const rec = new Recorder();
-          rec.onValue = (v) => (v === "x") ? replace(42) : DO_DISPATCH;
-          const array = ["x"];
+            expect(() => map(instance, rec)).toThrow(
+              /Codec of .* failed when asked for a tag/,
+            );
+          });
 
-          map(array, rec);
-          expect(
-            rec.events.filter((e) => e[0] === "mappedFabricArrayElement"),
-          ).toEqual([
-            ["mappedFabricArrayElement", array, 0, 42],
-          ]);
-        });
-      });
+          it("throws when the codec accepts but then fails to decode the mapped state", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = (v) => (v === "boom") ? mapTo("bang") : undefined;
+            const instance = errorWithCodec("boom", {
+              decode: () => {
+                throw new Error("decode failed");
+              },
+            });
 
-      describe("result types", () => {
-        it("puts unchanged elements and the new container to `isResultType()` when `isDomainAssignableToResultType()` returns `false`", () => {
-          const rec = new Recorder();
-          rec.onIsDomainAssignableToResultType = () => false;
-          rec.onPrimitive = (v) => (v === 2) ? mapTo("two") : undefined;
-
-          expect(map([1, 2], rec)).toEqual([1, "two"]);
-          expect(rec.resultTypeChecks).toStrictEqual([1, [1, "two"]]);
-        });
-
-        it("throws when `isResultType()` returns `false` for a new container", () => {
-          const rec = new Recorder();
-          rec.onIsDomainAssignableToResultType = () => false;
-          rec.onIsResultType = (v) => !Array.isArray(v);
-          rec.onPrimitive = () => mapTo("one");
-
-          expect(() => map([1], rec)).toThrow(
-            /Not a `ResultType` value: `\["one"\]`/,
-          );
+            expect(() => map(instance, rec)).toThrow(
+              /Codec of .* accepted but then failed to decode replacement state /,
+            );
+          });
         });
 
-        it("calls `isDomainAssignableToResultType()` at most once per instance", () => {
-          const rec = new Recorder();
-          rec.onIsDomainAssignableToResultType = () => false;
-          const inProgress = new VisitInProgress<unknown, unknown>(rec);
+        describe("`replace` results", () => {
+          it("returns the replacement for a value whose replacement the visitor leaves alone", () => {
+            const rec = new Recorder();
+            rec.onValue = (v) => (v === 1) ? replace("one") : DO_DISPATCH;
 
-          inProgress.map([1, [2]]);
-          inProgress.map({ a: 3 });
-          expect(rec.domainAssignableChecks).toBe(1);
+            expect(map(1, rec)).toBe("one");
+            expect(map([1, 2], rec)).toEqual(["one", 2]);
+          });
+
+          it("returns a frozen replacement container that is left unchanged as that same container", () => {
+            const two = Object.freeze([2]);
+            const rec = new Recorder();
+            rec.onValue = (v) => (v === 1) ? replace(two) : DO_DISPATCH;
+
+            expect(map(1, rec)).toBe(two);
+            expect((map({ a: 1 }, rec) as { a: unknown }).a).toBe(two);
+          });
+
+          it("reports the mapped replacement, not the original, to `mappedFabricArrayElement()`", () => {
+            const rec = new Recorder();
+            rec.onValue = (v) => (v === "x") ? replace(42) : DO_DISPATCH;
+            const array = ["x"];
+
+            map(array, rec);
+            expect(
+              rec.events.filter((e) => e[0] === "mappedFabricArrayElement"),
+            ).toEqual([
+              ["mappedFabricArrayElement", array, 0, 42],
+            ]);
+          });
+        });
+
+        describe("result types", () => {
+          it("puts unchanged elements and the new container to `isResultType()` when `isDomainAssignableToResultType()` returns `false`", () => {
+            const rec = new Recorder();
+            rec.onIsDomainAssignableToResultType = () => false;
+            rec.onPrimitive = (v) => (v === 2) ? mapTo("two") : undefined;
+
+            expect(map([1, 2], rec)).toEqual([1, "two"]);
+            expect(rec.resultTypeChecks).toStrictEqual([1, [1, "two"]]);
+          });
+
+          it("throws when `isResultType()` returns `false` for a new container", () => {
+            const rec = new Recorder();
+            rec.onIsDomainAssignableToResultType = () => false;
+            rec.onIsResultType = (v) => !Array.isArray(v);
+            rec.onPrimitive = () => mapTo("one");
+
+            expect(() => map([1], rec)).toThrow(
+              /Not a `ResultType` value: `\["one"\]`/,
+            );
+          });
+
+          it("calls `isDomainAssignableToResultType()` at most once per instance", () => {
+            const rec = new Recorder();
+            rec.onIsDomainAssignableToResultType = () => false;
+            const inProgress = new VisitInProgress<unknown, unknown>(rec, {
+              mode: "map",
+              freeze: true,
+            });
+
+            inProgress.visit([1, [2]]);
+            inProgress.visit({ a: 3 });
+            expect(rec.domainAssignableChecks).toBe(1);
+          });
+        });
+
+        describe("freezing", () => {
+          it("freezes the array it makes from mapped elements", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = () => mapTo("one");
+
+            expect(Object.isFrozen(map([1], rec))).toBe(true);
+          });
+
+          it("returns a frozen copy of an unchanged array that is not frozen, leaving the original unfrozen", () => {
+            const array = [1, 2];
+            const result = map(array, new Recorder());
+
+            expect(result).not.toBe(array);
+            expect(result).toEqual(array);
+            expect(Object.isFrozen(result)).toBe(true);
+            expect(Object.isFrozen(array)).toBe(false);
+          });
+
+          it("returns a frozen copy of an unchanged plain object that is not frozen, leaving the original unfrozen", () => {
+            const object = { a: 1 };
+            const result = map(object, new Recorder());
+
+            expect(result).not.toBe(object);
+            expect(result).toEqual(object);
+            expect(Object.isFrozen(result)).toBe(true);
+            expect(Object.isFrozen(object)).toBe(false);
+          });
+
+          it("returns a frozen copy of an unfrozen container, holding the same unchanged frozen child", () => {
+            const child = Object.freeze([2]);
+            const parent = [1, child];
+            const result = map(parent, new Recorder()) as unknown[];
+
+            expect(result).not.toBe(parent);
+            expect(Object.isFrozen(result)).toBe(true);
+            expect(result[1]).toBe(child);
+          });
+
+          it("returns frozen copies of the unfrozen containers inside a frozen container", () => {
+            const child = [2];
+            const parent = Object.freeze([1, child]);
+            const result = map(parent, new Recorder()) as unknown[];
+
+            expect(result).not.toBe(parent);
+            expect(Object.isFrozen(result)).toBe(true);
+            expect(result[1]).not.toBe(child);
+            expect(Object.isFrozen(result[1])).toBe(true);
+            expect(Object.isFrozen(child)).toBe(false);
+          });
+
+          it("returns a new frozen instance for an unfrozen instance whose state does not change", () => {
+            const original = new FabricError({
+              type: "Error",
+              message: "boom",
+              stack: undefined,
+              cause: undefined,
+            });
+            const result = map(original, new Recorder());
+
+            expect(result).toBeInstanceOf(FabricError);
+            expect(result).not.toBe(original);
+            expect((result as FabricError).message).toBe("boom");
+            expect(Object.isFrozen(result)).toBe(true);
+            expect(Object.isFrozen(original)).toBe(false);
+          });
+        });
+
+        describe("without freezing", () => {
+          it("returns an unfrozen copy of an unchanged frozen array", () => {
+            const array = Object.freeze([1, 2]);
+            const result = mutableMap(array, new Recorder());
+
+            expect(result).not.toBe(array);
+            expect(result).toEqual(array);
+            expect(Object.isFrozen(result)).toBe(false);
+          });
+
+          it("returns an unfrozen copy of an unchanged frozen plain object", () => {
+            const object = Object.freeze({ a: 1 });
+            const result = mutableMap(object, new Recorder());
+
+            expect(result).not.toBe(object);
+            expect(result).toEqual(object);
+            expect(Object.isFrozen(result)).toBe(false);
+          });
+
+          it("returns unfrozen copies of the unchanged containers inside a container", () => {
+            const child = deepFreeze({ b: 2 });
+            const parent = deepFreeze({ a: child });
+            const result = mutableMap(parent, new Recorder()) as {
+              a: unknown;
+            };
+
+            expect(result.a).not.toBe(child);
+            expect(result.a).toEqual(child);
+            expect(Object.isFrozen(result.a)).toBe(false);
+          });
+
+          it("leaves the array it makes from mapped elements unfrozen", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = () => mapTo("one");
+
+            expect(Object.isFrozen(mutableMap([1], rec))).toBe(false);
+          });
+
+          it("returns a new instance for a deeply frozen instance whose state does not change", () => {
+            const link = deepFreeze(new FabricLink({ id: "fid1:abc" }));
+            const result = mutableMap(link, new Recorder());
+
+            expect(result).toBeInstanceOf(FabricLink);
+            expect(result).not.toBe(link);
+          });
         });
       });
     });
