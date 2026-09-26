@@ -280,6 +280,50 @@ describe("CFCFCAuthorship", () => {
     }
   });
 
+  it("reads the author's resolved label past a principal a link carried", async () => {
+    // A slot holding a link carries the linked document's atoms as `followRef`
+    // entries; they name no principal here, so the resolved cell is read.
+    const resolved = unloadedCell();
+    const element = connectedElement();
+
+    try {
+      element.value = {
+        getCfcLabel: () =>
+          Promise.resolve(authoredByLabel("did:example:alice")),
+      };
+      element.author = {
+        get: () => ({ name: "Alice" }),
+        getCfcLabel: () =>
+          Promise.resolve({
+            version: 1 as const,
+            entries: [{
+              path: [],
+              label: {
+                integrity: [{
+                  kind: "represents-principal",
+                  subject: "did:example:bob",
+                }],
+              },
+              observes: "followRef" as const,
+            }],
+          }),
+        resolveAsCell: () => Promise.resolve(resolved),
+      };
+
+      await element.refreshLabel();
+      await element.refreshAuthorClaim();
+      expect(resolved.allAskedForLabels()).toBe(true);
+
+      await resolved.load(
+        linkedProfileLabel("did:example:alice", "did:example:alice"),
+      );
+
+      expect(element.authorshipState).toBe("verified");
+    } finally {
+      element.disconnectedCallback();
+    }
+  });
+
   it("keeps one watch across reads while the resolved cell is unloaded", async () => {
     const resolved = unloadedCell();
     const element = connectedElement();
