@@ -2081,6 +2081,35 @@ describe("canBranchMatch", () => {
 
     expect(canBranchMatch({ type: "array", items: false }, [])).toBe(true);
   });
+
+  // A branch reaches the pre-check as authored, so one written as a `$ref`
+  // into the branch's own `$defs` arrives with no type and no required list of
+  // its own. The type check has to run against what the ref resolves to.
+  it("returns whether the value matches the type behind a `$ref`", () => {
+    const branch: JSONSchema = {
+      $ref: "#/$defs/Name",
+      $defs: { Name: { type: "string" } },
+    };
+    expect(canBranchMatch(branch, "Alice")).toBe(true);
+    expect(canBranchMatch(branch, 42)).toBe(false);
+  });
+
+  it("returns whether a property required behind a `$ref` is present", () => {
+    const branch: JSONSchema = {
+      $ref: "#/$defs/Person",
+      $defs: { Person: { type: "object", required: ["name"] } },
+    };
+    expect(canBranchMatch(branch, { name: "Alice" })).toBe(true);
+    expect(canBranchMatch(branch, { age: 30 })).toBe(false);
+  });
+
+  it("returns `true` for a `$ref` that resolves to nothing", () => {
+    // A ref whose target is absent tells us nothing about the value, and the
+    // traversal that follows raises the unresolved ref on its own.
+    expect(canBranchMatch({ $ref: "#/$defs/Absent" }, 42)).toBe(true);
+    expect(canBranchMatch({ $ref: "#/$defs/Absent" }, { any: "shape" }))
+      .toBe(true);
+  });
 });
 
 describe("SchemaObjectTraverser number/integer type pruning", () => {
