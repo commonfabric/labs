@@ -20,6 +20,7 @@ import type { JSONSchema } from "../src/builder/types.ts";
 import type { ImplementationIdentity } from "../src/cfc/types.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase("cfc-asserted-root-concurrency");
@@ -104,7 +105,7 @@ describe("a whole-value stamp over a destination a peer changed", () => {
     // note alone. Its destination is one it did not read, so prepare would
     // stamp it whole; the peer's member must not end up beneath that stamp.
     const tx = writer.edit();
-    tx.setCfcImplementationIdentity(COMMIT);
+    setCfcImplementationIdentity(tx, COMMIT);
     writer.getCell(space, "note", SECRET_SCHEMA, tx).get();
     writer.getCell(space, "committed", undefined, tx).set({
       votes: ["approve", "reject"],

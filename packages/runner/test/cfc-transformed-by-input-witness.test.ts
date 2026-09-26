@@ -619,7 +619,7 @@ describe("TransformedBy input witnesses", () => {
       set: (committed: ReturnType<Runtime["getCell"]>) => void,
     ): Promise<void> => {
       const tx = runtime.edit();
-      tx.setCfcImplementationIdentity(COMMIT);
+      setCfcImplementationIdentity(tx, COMMIT);
       runtime.getCell(space, "alice-note", undefined, tx).getRaw();
       set(runtime.getCell(space, "committed", undefined, tx));
       tx.prepareCfc();
@@ -676,7 +676,7 @@ describe("TransformedBy input witnesses", () => {
           ([value]) => value as FabricValue,
         );
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity(COMMIT);
+        setCfcImplementationIdentity(tx, COMMIT);
         runtime.getCell(space, "alice-note", undefined, tx).getRaw();
         const previous = (runtime.getCell(space, "mirror", undefined, tx)
           .get() as { votes?: string[] })?.votes ?? [];
@@ -708,7 +708,7 @@ describe("TransformedBy input witnesses", () => {
           }),
         );
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity(COMMIT);
+        setCfcImplementationIdentity(tx, COMMIT);
         runtime.getCell(space, "alice-note", undefined, tx).getRaw();
         const committed = runtime.getCell(space, "committed", undefined, tx);
         const { id } = committed.getAsNormalizedFullLink();
@@ -722,7 +722,7 @@ describe("TransformedBy input witnesses", () => {
         expect((await tx.commit()).error).toBeUndefined();
 
         const tallyTx = runtime.edit();
-        tallyTx.setCfcImplementationIdentity(TALLY);
+        setCfcImplementationIdentity(tallyTx, TALLY);
         const ballot = runtime.getCell(space, "committed", undefined, tallyTx)
           .key("ballot" as never).getRaw();
         const ballotId = runtime.getCell(space, "ballot", undefined, tallyTx)
@@ -780,7 +780,7 @@ describe("TransformedBy input witnesses", () => {
       } = {},
     ): Promise<void> => {
       const tx = runtime.edit();
-      tx.setCfcImplementationIdentity(options.recordedBy ?? COMMIT);
+      setCfcImplementationIdentity(tx, options.recordedBy ?? COMMIT);
       runtime.getCell(space, "alice-note", undefined, tx).getRaw();
       const id = committedId(runtime, tx);
       tx.recordCfcAssertedValueRoot(
@@ -789,7 +789,7 @@ describe("TransformedBy input witnesses", () => {
           ? undefined
           : runtimeWritePolicyAuthorization,
       );
-      tx.setCfcImplementationIdentity(COMMIT);
+      setCfcImplementationIdentity(tx, COMMIT);
       tx.writeOrThrow(
         {
           space,
@@ -806,7 +806,7 @@ describe("TransformedBy input witnesses", () => {
     /** The tally over the committed votes alone. */
     const tallyVotes = async (runtime: Runtime): Promise<void> => {
       const tx = runtime.edit();
-      tx.setCfcImplementationIdentity(TALLY);
+      setCfcImplementationIdentity(tx, TALLY);
       const votes = runtime.getCell(space, "committed", undefined, tx)
         .key("votes" as never).getRaw();
       const ballotId = runtime.getCell(space, "ballot", undefined, tx)
@@ -860,7 +860,7 @@ describe("TransformedBy input witnesses", () => {
       expect(
         await released({}, async (runtime) => {
           const tx = runtime.edit();
-          tx.setCfcImplementationIdentity(ATTACKER);
+          setCfcImplementationIdentity(tx, ATTACKER);
           runtime.getCell(space, "committed", undefined, tx).key(
             "ref" as never,
           ).set(runtime.getCell(space, "bob-note", undefined, tx) as never);
@@ -895,7 +895,7 @@ describe("TransformedBy input witnesses", () => {
           for (const commitStep of [false, true]) {
             const tx = runtime.edit();
             if (commitStep) {
-              tx.setCfcImplementationIdentity(COMMIT);
+              setCfcImplementationIdentity(tx, COMMIT);
               runtime.getCell(space, "alice-note", undefined, tx).getRaw();
             }
             runtime.getCell(space, "committed", schema, tx).set({
@@ -939,7 +939,7 @@ describe("TransformedBy input witnesses", () => {
           ["votes", "0"],
         );
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity(COMMIT);
+        setCfcImplementationIdentity(tx, COMMIT);
         runtime.getCell(space, "alice-note", undefined, tx).getRaw();
         runtime.getCell(space, "committed", undefined, tx).set({
           votes: ["reject", "approve"],
@@ -967,7 +967,7 @@ describe("TransformedBy input witnesses", () => {
           ["extra"],
         );
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity(COMMIT);
+        setCfcImplementationIdentity(tx, COMMIT);
         runtime.getCell(space, "alice-note", undefined, tx).getRaw();
         runtime.getCell(space, "committed", undefined, tx).set({
           votes: ["approve", "reject"],
@@ -997,7 +997,7 @@ describe("TransformedBy input witnesses", () => {
         value: FabricValue,
       ) => {
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity(identity);
+        setCfcImplementationIdentity(tx, identity);
         runtime.getCell(space, "alice-note", undefined, tx).getRaw();
         runtime.getCell(space, "members", schema, tx).key(member).set(
           value as never,
@@ -1056,7 +1056,7 @@ describe("TransformedBy input witnesses", () => {
         await seedRoom(runtime);
         await bitOfAlicesNote(runtime, "committed");
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity(COMMIT);
+        setCfcImplementationIdentity(tx, COMMIT);
         runtime.getCell(space, "alice-note", undefined, tx).getRaw();
         const committed = runtime.getCell(space, "committed", undefined, tx);
         committed.set({ votes: ["approve"] });
