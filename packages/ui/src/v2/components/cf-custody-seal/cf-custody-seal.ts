@@ -374,6 +374,10 @@ export class CFCustodySeal extends BaseElement {
   override render() {
     const preview = this.#preview;
     const summary = preview ? summarizeCustodyTerms(preview.terms) : undefined;
+    // The bound on what an answer reveals is shown only when the worker found
+    // the room's release witnessed. A preview that does not say so, including
+    // one from a worker that predates the field, gets the warning instead.
+    const bounded = preview?.witnessedRelease === true;
     return html`
       <button type="button" ?disabled=${this.#busy || !this.#bound() ||
         !this.runtime}
@@ -429,7 +433,7 @@ export class CFCustodySeal extends BaseElement {
             }</ul>`
             : "These terms do not list the answers the room can give."}</dd>
         </dl>
-        ${preview && !preview.witnessedRelease
+        ${preview && !bounded
           ? html`
             <p class="warning" role="note">${UNWITNESSED_RELEASE_WARNING}</p>
           `

@@ -2311,9 +2311,80 @@ describe("cfc-custody-seal", () => {
     });
 
     it("previews whether the room's policy witnesses its release", async () => {
+      // A policy whose one rule releases what its projector computes, named
+      // by identity alone or with the seal's witness.
+      const policyReleasing = (witnessed: boolean) =>
+        buildCfcPolicyArtifactManifest({
+          formatVersion: 1,
+          moduleIdentity: MODULE,
+          symbol: "custodyRules",
+          template: {
+            templateVersion: 1,
+            exchangeRules: [{
+              name: "releaseBallot",
+              preCondition: {
+                confidentiality: [{ thisPolicy: true }],
+                integrity: [{
+                  type: CFC_ATOM_TYPE.TransformedBy,
+                  identity: {
+                    kind: "verified",
+                    moduleIdentity: { thisPolicyField: "moduleIdentity" },
+                    symbol: "projectBallot",
+                  },
+                  ...(witnessed ? { inputWitness: sealedBy } : {}),
+                }],
+              },
+              postCondition: { confidentiality: [], integrity: [] },
+            }],
+            dependencies: { authorityOnly: [], dataBearing: [] },
+            integrityRequirements: {},
+          },
+        } as never);
+      for (const witnessed of [false, true]) {
+        const artifact = policyReleasing(witnessed);
+        const policy = policyOf(artifact);
+        const fixture = await setup({
+          trust: {
+            ...TRUST,
+            statements: [{
+              ...TRUST.statements![0],
+              concrete: {
+                ...TRUST.statements![0].concrete as object,
+                policyDigest: artifact.policyDigest,
+              },
+            }],
+          },
+        });
+        try {
+          const runtime = fixture.runtimes.get(alice)!;
+          runtime.registerCfcPolicyManifests(undefined, [artifact]);
+          // A room document declaring the policy installs its manifest.
+          const tx = runtime.edit();
+          runtime.getCell(S, "rule-room-state", {
+            type: "object",
+            ifc: {
+              confidentiality: [{
+                ...policy,
+                subject: { __ctOwningSpace: true },
+              }],
+            },
+          } as never, tx).set({ open: true } as never);
+          expect((await tx.commit()).error).toBeUndefined();
+          const draft = await fixture.draft(alice, honestStance);
+          const prepared = await prepareCustodySeal(
+            draft,
+            fixture.room(alice, policy),
+          );
+          expect(prepared.witnessedRelease).toBe(witnessed);
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
+    it("previews a policy with no rules as releasing nothing unwitnessed", async () => {
       const fixture = await setup();
       try {
-        // The fixture's policy has no rules, so it releases nothing.
         const draft = await fixture.draft(alice, honestStance);
         const prepared = await prepareCustodySeal(draft, fixture.room(alice));
         expect(prepared.witnessedRelease).toBe(true);

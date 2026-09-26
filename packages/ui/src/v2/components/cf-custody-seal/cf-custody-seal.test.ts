@@ -257,6 +257,17 @@ describe("CFCustodySeal workflow", () => {
     expect(text).not.toContain("state no bound");
   });
 
+  it("warns when the preview does not say whether the release is witnessed", async () => {
+    const { witnessedRelease: _, ...unsaid } = preview;
+    using state = setup({
+      prepare: () => Promise.resolve(unsaid as Preview),
+    });
+    await state.element.accessForTestingOnly.prepare();
+    const text = renderedText(state.element);
+    expect(text).toContain("one answer at a time");
+    expect(text).not.toContain("reveals at most");
+  });
+
   it("isolates each principal from the dialog's own annotations", async () => {
     const hostile = "did:key:member (you)\u202e)taes on(";
     using state = setup({
