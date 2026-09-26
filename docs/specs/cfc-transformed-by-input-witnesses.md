@@ -135,7 +135,11 @@ included. A destination qualifies only when all of these hold:
   it, nor recursively above it. A writer that read its destination can carry a
   value it found there into what it sets, and the diff leaves that value in
   place. The diff's own reads of the destination, and the reference probe that
-  resolves it, do not count.
+  resolves it, do not count, nor does a shallow read above it, which observes
+  keys rather than the value. Only a direct read of the destination counts: a
+  value that reaches the set through a copy of the destination in another
+  document is the writer's input like any other (see "A one-level guard trusts
+  every input the endorsed step read" below).
 
 A peer that adds a member beneath the destination after the writer read its
 replica makes the writer's commit a conflict, so the retry sets over the
@@ -243,17 +247,22 @@ not rely on the witness without them.
   commit a stance computed from another member's note. The stance is then
   witnessed exactly like an honest one. What separates the two is the event's
   provenance, which is the proof-of-gesture work, not this.
-- **A one-level guard trusts what the endorsed step read.** The innermost step
-  a rule pins stamps whatever it writes as its own, so a value it copied from
-  an input another writer crafted passes as its output. Re-setting its own
-  destination is the exception: a step that read the document it sets is not
-  stamped over it whole, so a crafted value it carried through unchanged keeps
-  the crafted writer's stamp. A rule that must not trust the step's other
-  inputs pins one more level. That needs the step's inputs to carry their
-  writer's stamp too: a list of objects is stored as references, which retain
-  no witness, and a list another transaction created, a `Default` among them,
-  keeps no writer on its container node, so a two-level guard over such a
-  list releases nothing.
+- **A one-level guard trusts every input the endorsed step read.** The
+  innermost step a rule pins stamps whatever it writes as its own, so a value it
+  took from an input another writer crafted passes as its output, whether it
+  read that input directly or through any copy derived from it. The skip for a
+  step that read its own destination catches only a direct read of that
+  destination, at or beneath it or recursively above it; it is not a
+  protection against crafted input. Where other code copies the committed
+  document into a mirror and the step appends to what it reads from the
+  mirror, the crafted vote arrives through a set whose destination the step
+  never read, the destination is stamped whole, and a one-level guard
+  releases it (pinned in `cfc-transformed-by-input-witness.test.ts`). A rule
+  that must not trust the step's inputs pins one more level. That needs the
+  step's inputs to carry their writer's stamp too: a list of objects is stored
+  as references, which retain no witness, and a list another transaction
+  created, a `Default` among them, keeps no writer on its container node, so a
+  two-level guard over such a list releases nothing.
 - **Selection among committed values.** A transformation fed a subset of
   honestly committed inputs computes over a choice. References are refused
   above; a selection made by endorsed code is that code's semantics.

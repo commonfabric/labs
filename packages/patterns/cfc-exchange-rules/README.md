@@ -37,11 +37,14 @@ the module's `commit` step. Public inputs do not constrain the witness, so it
 does not prove that every value the tally read came from `commit`. A relay
 between the two, a vote planted beside the committed ones, and a vote list
 written by other code are refused, though the tally's own identity would release
-each of them. The guard pins one level, so it trusts whatever `commit` read.
-Pinning `commit`'s own inputs to `submit` would release nothing here: the briefs
-are objects in a list, which the runtime stores as references, and a reference
-retains no witness. `docs/specs/cfc-transformed-by-input-witnesses.md` says what
-the witness covers and what it does not.
+each of them. The guard pins one level, so it trusts every input `commit` read,
+directly or through any copy: if other code mirrors the committed votes into
+another document and `commit` appended to the mirror, a vote planted there would
+be released. Pinning `commit`'s own inputs to `submit` would release nothing
+here: the briefs are objects in a list, which the runtime stores as references,
+and a reference retains no witness.
+`docs/specs/cfc-transformed-by-input-witnesses.md` says what the witness covers
+and what it does not.
 
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space

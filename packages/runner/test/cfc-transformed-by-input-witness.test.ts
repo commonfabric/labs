@@ -655,6 +655,88 @@ describe("TransformedBy input witnesses", () => {
       });
     });
 
+    it("releases a crafted value the commit step read through a copy (documented)", async () => {
+      // Documented behaviour, not a guarantee: the destination skip catches
+      // only a direct read of the destination. Here other code copies the
+      // committed document into `mirror`, and the commit step reads the copy
+      // and appends to it. The crafted vote reaches the destination through
+      // the commit step's set, whose destination it never read, so the set is
+      // stamped whole and a one-level guard releases it, as it trusts every
+      // input the commit step read. A guard pinning the commit step's own
+      // inputs is what refuses this. If this starts refusing, the documented
+      // behaviour changed: update the spec and the pattern README with it.
+      await withRuntime(WITNESSED_GUARD, async ({ runtime }) => {
+        await seedRoom(runtime);
+        await bitOfAlicesNote(runtime, "committed");
+        await transform(
+          runtime,
+          OTHER,
+          ["committed"],
+          "mirror",
+          ([value]) => value as FabricValue,
+        );
+        const tx = runtime.edit();
+        tx.setCfcImplementationIdentity(COMMIT);
+        runtime.getCell(space, "alice-note", undefined, tx).getRaw();
+        const previous = (runtime.getCell(space, "mirror", undefined, tx)
+          .get() as { votes?: string[] })?.votes ?? [];
+        runtime.getCell(space, "committed", undefined, tx).set({
+          votes: [...previous, "approve", "reject"],
+        });
+        tx.prepareCfc();
+        expect((await tx.commit()).error).toBeUndefined();
+        await transform(runtime, TALLY, ["committed"], "ballot", tally);
+        expect(publish(runtime, "ballot")).toEqual([]);
+      });
+    });
+
+    it("stamps a member set whole beside a shallow read of its parent", async () => {
+      // A shallow read of the parent observes its keys, not the member's
+      // value, so it carries nothing into the set; only a recursive read above
+      // the destination counts as reading it.
+      await withRuntime(WITNESSED_GUARD, async ({ runtime }) => {
+        await seedRoom(runtime);
+        await transform(
+          runtime,
+          ATTACKER,
+          ["alice-note"],
+          "committed",
+          ([alice]) => ({
+            ballot: {
+              votes: [(alice as { note: string }).note.slice(0, 1)],
+            },
+          }),
+        );
+        const tx = runtime.edit();
+        tx.setCfcImplementationIdentity(COMMIT);
+        runtime.getCell(space, "alice-note", undefined, tx).getRaw();
+        const committed = runtime.getCell(space, "committed", undefined, tx);
+        const { id } = committed.getAsNormalizedFullLink();
+        tx.readOrThrow({ space, scope: "space", id, path: ["value"] }, {
+          nonRecursive: true,
+        });
+        committed.key("ballot" as never).set({
+          votes: ["approve", "reject"],
+        } as never);
+        tx.prepareCfc();
+        expect((await tx.commit()).error).toBeUndefined();
+
+        const tallyTx = runtime.edit();
+        tallyTx.setCfcImplementationIdentity(TALLY);
+        const ballot = runtime.getCell(space, "committed", undefined, tallyTx)
+          .key("ballot" as never).getRaw();
+        const ballotId = runtime.getCell(space, "ballot", undefined, tallyTx)
+          .getAsNormalizedFullLink().id;
+        tallyTx.writeOrThrow(
+          { space, scope: "space", id: ballotId, path: ["value"] },
+          tally([ballot]),
+        );
+        tallyTx.prepareCfc();
+        expect((await tallyTx.commit()).error).toBeUndefined();
+        expect(publish(runtime, "ballot")).toEqual([]);
+      });
+    });
+
     it("refuses a crafted value a failed set left beside a write of its own", async () => {
       await withRuntime(WITNESSED_GUARD, async ({ runtime }) => {
         await seedRoom(runtime);
@@ -894,6 +976,75 @@ describe("TransformedBy input witnesses", () => {
         expect((await tx.commit()).error).toBeUndefined();
         await transform(runtime, TALLY, ["committed"], "ballot", tally);
         expect(publish(runtime, "ballot")).toEqual([]);
+      });
+    });
+
+    it("keeps a member's stamp where its schema declares a label until a write covers it", async () => {
+      // Each member path carries a declared entry. A member set whole is
+      // stamped at its own path; a write to another member leaves that
+      // stamp, and a write at the member replaces it.
+      const schema = {
+        type: "object",
+        properties: {
+          a: { type: "object", ifc: { confidentiality: [ROOM] } },
+          b: { type: "object", ifc: { confidentiality: [ROOM] } },
+        },
+      } as const satisfies JSONSchema;
+      const setMember = async (
+        runtime: Runtime,
+        identity: ImplementationIdentity,
+        member: "a" | "b",
+        value: FabricValue,
+      ) => {
+        const tx = runtime.edit();
+        tx.setCfcImplementationIdentity(identity);
+        runtime.getCell(space, "alice-note", undefined, tx).getRaw();
+        runtime.getCell(space, "members", schema, tx).key(member).set(
+          value as never,
+        );
+        tx.prepareCfc();
+        expect((await tx.commit()).error).toBeUndefined();
+      };
+      const writersAtA = (runtime: Runtime): unknown[] => {
+        const tx = runtime.edit();
+        const metadata = readStoredCfcMetadata(
+          tx,
+          runtime.getCell(space, "members", undefined, tx)
+            .getAsNormalizedFullLink(),
+        );
+        tx.abort();
+        return (metadata?.labelMap.entries ?? [])
+          .filter((entry) =>
+            entry.path.length === 1 && entry.path[0] === "a" &&
+            entry.origin === "derived" && entry.observes === "value"
+          )
+          .flatMap((entry) => entry.label.integrity ?? [])
+          .filter((atom) =>
+            (atom as { inputWitness?: unknown }).inputWitness === undefined
+          );
+      };
+      await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
+        await seedRoom(runtime);
+        // Created by a transaction that read nothing labeled, so the members
+        // start with no value stamp.
+        const setup = runtime.edit();
+        runtime.getCell(space, "members", schema, setup).set({
+          a: { vote: "none" },
+          b: { vote: "none" },
+        } as never);
+        setup.prepareCfc();
+        expect((await setup.commit()).error).toBeUndefined();
+        await setMember(runtime, COMMIT, "a", { vote: "approve" });
+        await setMember(runtime, COMMIT, "b", { vote: "reject" });
+        expect(writersAtA(runtime)).toEqual([{
+          type: CFC_ATOM_TYPE.TransformedBy,
+          identity: COMMIT,
+        }]);
+        await setMember(runtime, ATTACKER, "a", { vote: "reject" });
+        expect(writersAtA(runtime)).toEqual([{
+          type: CFC_ATOM_TYPE.TransformedBy,
+          identity: ATTACKER,
+        }]);
       });
     });
 
