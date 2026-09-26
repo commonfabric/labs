@@ -359,7 +359,7 @@ export class VisitInProgress<
             // `!` is valid, because we'll only see `mapTo` when we're actually
             // mapping.
             mapResult![idxNumber] = mappedTo;
-            anyChanges ||= (element !== mappedTo);
+            anyChanges ||= !Object.is(element, mappedTo);
 
             const result = vis.visitedFabricArrayElement(
               array,
@@ -461,7 +461,7 @@ export class VisitInProgress<
         return result;
       }
 
-      if (mappedTo === state) {
+      if (Object.is(mappedTo, state)) {
         // The state visit returned the original state value, so we in turn
         // return the original `FabricInstance`.
         return undefined;
@@ -626,7 +626,7 @@ export class VisitInProgress<
           }
 
           mapResult[finalKey] = valueMappedTo;
-          anyChanges ||= (key !== finalKey) || (value !== valueMappedTo);
+          anyChanges ||= !Object.is(key, finalKey) || !Object.is(value, valueMappedTo);
         }
       }
 
