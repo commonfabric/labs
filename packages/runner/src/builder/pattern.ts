@@ -5,6 +5,7 @@ import {
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { isInertPlainObject } from "@commonfabric/utils/objects";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
   ARRAY_SUBSCHEMA_KEYS,
@@ -588,11 +589,14 @@ function factoryFromPattern<T, R>(
   const resultSchema = resultSchemaArg ?? {};
 
   const serializedNodes = Array.from(allNodes).map((node) => {
-    // A module binds through its members. A node whose module is a pattern or
-    // a reactive (the dynamic-module arm, which no builder makes yet) binds it
-    // as the value it is, which the serialized `Node.module` type does not yet
-    // say (see the TODO on `Node`).
-    const module = isModule(node.module)
+    // A module binds through its members, once it is known to be an inert
+    // plain object; rebuilding any other one member by member would run a
+    // getter, or drop a symbol or non-enumerable key, so the value walk gets it
+    // and refuses it. A node whose module is a pattern or a reactive (the
+    // dynamic-module arm, which no builder makes yet) binds it as the value it
+    // is, which the serialized `Node.module` type does not yet say (see the
+    // note on `Node`'s `module`).
+    const module = (isInertPlainObject(node.module) && isModule(node.module))
       ? moduleWithAliasBindings(node.module, resolveCellAlias, false)
       : withAliasBindings(
         node.module,

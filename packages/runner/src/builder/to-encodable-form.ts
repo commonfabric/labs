@@ -318,8 +318,9 @@ export function moduleWithAliasBindings(
  *
  * What is only asserted by position is checked before it is relied on: a
  * `nodes` that is not an inert array, a node that is not an inert plain object,
- * and a `module` that `isModule()` does not accept are each walked as the
- * value they are, as they were before a graph's nodes had a walk of their own.
+ * and a `module` that is not both an inert plain object and one `isModule()`
+ * accepts are each walked as the value they are, which refuses what is not
+ * inert rather than rebuilding it member by member.
  */
 function nodesWithAliasBindings(
   nodes: unknown,
@@ -354,7 +355,7 @@ function nodesWithAliasBindings(
       node,
       ancestors,
       (key, member) =>
-        ((key === "module") && isModule(member))
+        ((key === "module") && isInertPlainObject(member) && isModule(member))
           ? moduleWithAliasBindings(
             member,
             resolveCellAlias,

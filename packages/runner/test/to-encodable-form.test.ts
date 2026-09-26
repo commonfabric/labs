@@ -334,6 +334,29 @@ describe("to-encodable-form", () => {
       expect(out.nodes[0].inputs).toEqual({ x: 1 });
     });
 
+    it("refuses a graph node's module that is not an inert plain object, rather than rebuilding it", () => {
+      // Rebuilt member by member, a getter would run and be stored as a data
+      // property. The node's `module` goes to the module binding only once it
+      // is known to be inert; anything else is walked as a value, which
+      // refuses it.
+      let reads = 0;
+      const module = {
+        type: "javascript",
+        get live() {
+          reads++;
+          return 1;
+        },
+      };
+      const graph = {
+        argumentSchema: {},
+        resultSchema: {},
+        nodes: [{ module, inputs: {}, outputs: {} }],
+      };
+
+      expect(() => withAliasBindings(graph)).toThrow("Not representable");
+      expect(reads).toBe(0);
+    });
+
     it("leaves ordinary containers alone", () => {
       // The conversion above must not reach an inert plain object or an array;
       // those are already `FabricValue`s and are walked, not converted.
@@ -349,17 +372,22 @@ describe("to-encodable-form", () => {
 
   describe("moduleWithAliasBindings", () => {
     it("keeps a module's function members as themselves and binds the rest", () => {
+      // `bound` is a member the walk visibly changes: binding an alias
+      // record raises its `defer`, where a member merely copied would not.
+
       const implementation = () => 1;
       const toJSON = () => ({});
-      const module: Module & { toJSON: () => unknown } = {
+      const module: Module & { toJSON: () => unknown; bound: unknown } = {
         type: "javascript",
         implementation,
         toJSON,
         argumentSchema: { type: "object" },
+        bound: { $alias: { cell: "argument", path: ["a"] } },
       };
 
       const out = moduleWithAliasBindings(module) as Module & {
         toJSON?: unknown;
+        bound?: unknown;
       };
 
       expect(out).not.toBe(module);
@@ -367,6 +395,9 @@ describe("to-encodable-form", () => {
       expect(out.toJSON).toBe(toJSON);
       expect(out.type).toBe("javascript");
       expect(out.argumentSchema).toEqual({ type: "object" });
+      expect(out.bound).toEqual({
+        $alias: { cell: "argument", path: ["a"], defer: 1 },
+      });
     });
   });
 });
