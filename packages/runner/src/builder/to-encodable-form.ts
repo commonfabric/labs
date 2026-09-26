@@ -1,3 +1,4 @@
+import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
 import { isObjectOrArray, isPrimitive } from "@commonfabric/utils/types";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isInertArray } from "@commonfabric/utils/arrays";
@@ -72,7 +73,7 @@ export function withAliasBindings(
   resolveCellAlias?: CellAliasResolver,
   ignoreSelfAliases: boolean = false,
   path: readonly PropertyKey[] = [],
-  seen?: WeakMap<object, number>,
+  ancestors?: IndexTrackingStack<object>,
 ): FabricExecValue {
   // Turn strongly typed builder values into the serialized binding structure:
   // cell references become `$alias` records, and data leaves come through as
@@ -152,7 +153,7 @@ export function withAliasBindings(
       withAliasBindings(v, resolveCellAlias, ignoreSelfAliases, [
         ...path,
         i,
-      ], seen)
+      ], ancestors)
     );
   }
 
@@ -214,8 +215,9 @@ export function withAliasBindings(
   // see `nodesWithAliasBindings()`.
   if (isObjectOrArray(value) || isPattern(value)) {
     // Guard against circular object references (e.g. schema objects with
-    // shared identity between $defs and sibling properties).
-    const seenMap = seen ?? new WeakMap();
+    // shared identity between $defs and sibling properties); see
+    // `recordWithAliasBindings()`.
+    const ancestorStack = ancestors ?? new IndexTrackingStack<object>();
 
     // If this is a pattern, serialize it through the INTERNAL graph
     // serializer (its toJSON under the internal-serialization context): this
@@ -230,7 +232,7 @@ export function withAliasBindings(
     return recordWithAliasBindings(
       value,
       record,
-      seenMap,
+      ancestorStack,
       (key, member) =>
         (isGraph && key === "nodes")
           ? nodesWithAliasBindings(
@@ -238,14 +240,14 @@ export function withAliasBindings(
             resolveCellAlias,
             ignoreSelfAliases,
             [...path, key],
-            seenMap,
+            ancestorStack,
           )
           : withAliasBindings(
             member,
             resolveCellAlias,
             ignoreSelfAliases,
             [...path, key],
-            seenMap,
+            ancestorStack,
           ),
     );
   }
@@ -284,14 +286,14 @@ export function moduleWithAliasBindings(
   resolveCellAlias?: CellAliasResolver,
   ignoreSelfAliases: boolean = false,
   path: readonly PropertyKey[] = [],
-  seen: WeakMap<object, number> = new WeakMap(),
+  ancestors: IndexTrackingStack<object> = new IndexTrackingStack(),
 ): Module {
   // A module is read by key here, which its declared type does not offer.
   const members = module as unknown as Readonly<Record<string, unknown>>;
   const result = recordWithAliasBindings(
     module,
     members,
-    seen,
+    ancestors,
     (key, member) =>
       ((typeof member === "function") && !isPattern(member))
         ? member
@@ -300,7 +302,7 @@ export function moduleWithAliasBindings(
           resolveCellAlias,
           ignoreSelfAliases,
           [...path, key],
-          seen,
+          ancestors,
         ),
   );
 
@@ -324,7 +326,7 @@ function nodesWithAliasBindings(
   resolveCellAlias: CellAliasResolver | undefined,
   ignoreSelfAliases: boolean,
   path: readonly PropertyKey[],
-  seen: WeakMap<object, number>,
+  ancestors: IndexTrackingStack<object>,
 ): FabricExecValue {
   if (!isInertArray(nodes)) {
     return withAliasBindings(
@@ -332,7 +334,7 @@ function nodesWithAliasBindings(
       resolveCellAlias,
       ignoreSelfAliases,
       path,
-      seen,
+      ancestors,
     );
   }
 
@@ -344,13 +346,13 @@ function nodesWithAliasBindings(
         resolveCellAlias,
         ignoreSelfAliases,
         nodePath,
-        seen,
+        ancestors,
       );
     }
     return recordWithAliasBindings(
       node,
       node,
-      seen,
+      ancestors,
       (key, member) =>
         ((key === "module") && isModule(member))
           ? moduleWithAliasBindings(
@@ -358,14 +360,14 @@ function nodesWithAliasBindings(
             resolveCellAlias,
             ignoreSelfAliases,
             [...nodePath, key],
-            seen,
+            ancestors,
           )
           : withAliasBindings(
             member,
             resolveCellAlias,
             ignoreSelfAliases,
             [...nodePath, key],
-            seen,
+            ancestors,
           ),
     );
   });
@@ -375,32 +377,33 @@ function nodesWithAliasBindings(
  * Helper for the binding walks, which rebuilds a record key by key through
  * `bindMember`, dropping a member that binds to `undefined`.
  *
- * `original` is what circularity is keyed on, and what a pattern's derivation
- * link is carried from: the record walked may be a pattern's serialized graph
- * rather than the pattern itself. A record reached again while it is being
- * rebuilt is a cycle, and binds to `{}`; one reached again afterward is shared
- * structure, and is rebuilt at each site.
+ * `original` is what goes onto `ancestors`, and what a pattern's derivation link
+ * is carried from: the record walked may be a pattern's serialized graph rather
+ * than the pattern itself. `ancestors` holds the records being rebuilt above
+ * this one, each only for as long as it is being rebuilt. So a record reached
+ * again while it is on `ancestors` closes a cycle, and binds to `{}`; one
+ * reached again afterward is shared structure, and is rebuilt at each site.
  */
 function recordWithAliasBindings<Member>(
   original: object,
   record: Readonly<Record<string, unknown>>,
-  seen: WeakMap<object, number>,
+  ancestors: IndexTrackingStack<object>,
   bindMember: (key: string, member: unknown) => Member,
 ): Record<string, Member> {
-  const depth = seen.get(original) ?? 0;
-  if (depth > 0) return {}; // Actually circular
-  seen.set(original, depth + 1);
+  if (ancestors.has(original)) return {};
+  ancestors.push(original);
 
   const result: Record<string, Member> = {};
-  for (const key in record) {
-    const bound = bindMember(key, record[key]);
-    if (bound !== undefined) {
-      result[key] = bound;
+  try {
+    for (const key in record) {
+      const bound = bindMember(key, record[key]);
+      if (bound !== undefined) {
+        result[key] = bound;
+      }
     }
+  } finally {
+    ancestors.popExpect(original);
   }
-
-  // Restore depth so shared references can be re-serialized
-  seen.set(original, depth);
 
   // Register the copy's derivation link so trust and the content-addressed
   // entry ref carry to the serialized copy (side table; symbol keys would be
