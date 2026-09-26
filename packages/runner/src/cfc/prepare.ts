@@ -697,15 +697,9 @@ const entriesResolvingAtLocation = (
 };
 
 /** `entries` arranged as a {@link WitnessTrieNode} trie. */
-const witnessTrie = (
-  entries: readonly LabelMapEntry[],
-  stripTemplateIntegrity: boolean,
-): WitnessTrieNode => {
+const witnessTrie = (entries: readonly LabelMapEntry[]): WitnessTrieNode => {
   const root = witnessTrieNode();
   for (const [ordinal, entry] of entries.entries()) {
-    const kept = stripTemplateIntegrity && isRuntimeMintedTemplate(entry)
-      ? { ...entry, label: { confidentiality: entry.label.confidentiality } }
-      : entry;
     let node = root;
     for (const segment of entry.path) {
       let child = node.children.get(segment);
@@ -715,31 +709,32 @@ const witnessTrie = (
       }
       node = child;
     }
-    node.entries.push({ entry: kept, ordinal });
+    node.entries.push({ entry, ordinal });
   }
   return root;
 };
 
 /**
- * The entries a shallow read's locations resolve their witnesses over: those
- * a value read of the location consumes, less the runtime's concrete
- * existence stamps. An existence stamp is minted once, when its path is first
- * stamped, and carried through every later overwrite; it never carries
- * integrity. Left in, one would shadow the value stamp of whatever later
- * wrote over its path whole, and refuse a location that writer's stamp
- * covers. Leaving it out cannot expose a stale `TransformedBy`: a stamp
- * naming a writer keeps it only while nothing else writes at, above, or
- * below its path (`carriedStampLabel`).
+ * Whether an entry counts as witness evidence where it resolves: every entry
+ * but the runtime's concrete existence stamps. An existence stamp is minted
+ * once, when its path is first stamped, and carried through every later
+ * overwrite; it never carries integrity. Left in, one would shadow the value
+ * stamp of whatever later wrote over its path whole, and refuse a location
+ * that writer's stamp covers. Leaving it out cannot expose a stale
+ * `TransformedBy`: a stamp naming a writer keeps it only while nothing else
+ * writes at, above, or below its path (`carriedStampLabel`).
  */
-const witnessEvidenceEntries = (
-  entries: readonly LabelMapEntry[],
-): LabelMapEntry[] =>
-  entries.filter((entry) =>
-    !(
-      (entry.origin === "derived" || entry.origin === "structure") &&
-      entry.observes === "shape" && !isRuntimeMintedTemplate(entry)
-    )
+const isWitnessEvidence = (entry: LabelMapEntry): boolean =>
+  !(
+    (entry.origin === "derived" || entry.origin === "structure") &&
+    entry.observes === "shape" && !isRuntimeMintedTemplate(entry)
   );
+
+/** An entry as witness evidence: a `*` template's integrity witnesses nothing. */
+const asWitnessEvidence = (entry: LabelMapEntry): LabelMapEntry =>
+  isRuntimeMintedTemplate(entry)
+    ? { ...entry, label: { confidentiality: entry.label.confidentiality } }
+    : entry;
 
 /**
  * The input witnesses one observation holds: the retained atoms common to
@@ -781,21 +776,27 @@ const observationInputWitnesses = (
       locations.set(pathKey(entry.path), entry.path);
     }
   }
-  const consumed = witnessTrie(entries, false);
-  const held = evidence === undefined
-    ? witnessTrie(entries, true)
-    : witnessTrie(evidence, true);
+  const consumed = witnessTrie(entries);
+  const held = evidence === undefined ? undefined : witnessTrie(evidence);
   let witnesses: CfcAtom[] | undefined;
   for (const location of locations.values()) {
-    const confidentiality = labelForEntriesAtPath(
-      entriesResolvingAtLocation(consumed, location),
-      location,
-    )?.confidentiality;
-    if ((confidentiality?.length ?? 0) === 0) continue;
-    const integrity = labelForEntriesAtPath(
-      entriesResolvingAtLocation(held, location),
-      location,
-    )?.integrity;
+    const resolved = entriesResolvingAtLocation(consumed, location);
+    const label = labelForEntriesAtPath(resolved, location);
+    if ((label?.confidentiality?.length ?? 0) === 0) continue;
+    // The consumed label is the evidence too unless something it resolved
+    // is not evidence as it stands, which is the uncommon case.
+    const evidenceAt = held === undefined
+      ? resolved
+      : entriesResolvingAtLocation(held, location);
+    const integrity = held === undefined &&
+        evidenceAt.every((entry) =>
+          isWitnessEvidence(entry) && !isRuntimeMintedTemplate(entry)
+        )
+      ? label?.integrity
+      : labelForEntriesAtPath(
+        evidenceAt.filter(isWitnessEvidence).map(asWitnessEvidence),
+        location,
+      )?.integrity;
     const retained = retainedInputWitnesses(integrity);
     witnesses = witnesses === undefined
       ? retained
@@ -3550,18 +3551,14 @@ const deriveFlowJoinImpl = (
               // its own entries: the pointer at a slot is labeled by the
               // link write that put it there, which carries no
               // `TransformedBy`, so a reference still retains no witness.
-              observation.shape === "followRef"
-                ? undefined
-                : witnessEvidenceEntries(
-                  observation.shape === "value"
-                    ? entries
-                    : consumedEntriesForRead(
-                      document.metadata!,
-                      logicalPath,
-                      { nonRecursive: true, consumes: "value", ...exclusion },
-                      indexFor("value"),
-                    ),
-                ),
+              observation.shape === "shape"
+                ? consumedEntriesForRead(
+                  document.metadata!,
+                  logicalPath,
+                  { nonRecursive: true, consumes: "value", ...exclusion },
+                  indexFor("value"),
+                )
+                : undefined,
             ),
         );
       }
@@ -8848,6 +8845,9 @@ export function* prepareBoundaryCommitSteps(
     // stamp overlapping them is withdrawn, as for a write of the whole value.
     // They are not written paths for the re-creation probe: the diff's own
     // writes beneath them are, with the before-values that probe needs.
+    let rootCeilings:
+      | { paths: (readonly string[])[]; index: PathIndex }
+      | undefined;
     const assertedRoots = flowPersist && flowTransformedBy.length > 0 &&
         flowWrittenPaths.length > 0
       ? assertedValueRootPaths(
@@ -8858,25 +8858,36 @@ export function* prepareBoundaryCommitSteps(
           if (flowConfidentiality.length === 0) return true;
           // The declared entries this write re-mints and those the document
           // already stores: a ceiling beneath the root need not apply to any
-          // path this transaction wrote.
-          const declared = [
-            ...persistedLabelEntries,
-            ...(existing?.labelMap.entries ?? []),
-          ].filter((entry) =>
-            (entry.origin === undefined || entry.origin === "declared") &&
-            readConsumesEntry("value", entry)
-          );
-          const measured = [
-            root,
-            ...declared.map((entry) => canonicalizeLogicalPath(entry.path))
-              .filter((path) =>
-                path.length > root.length && isPrefix(root, path)
+          // path this transaction wrote. Indexed once per document, so each
+          // measured path resolves by walking its own segments.
+          rootCeilings ??= (() => {
+            const entries = [
+              ...persistedLabelEntries,
+              ...(existing?.labelMap.entries ?? []),
+            ].filter((entry) =>
+              (entry.origin === undefined || entry.origin === "declared") &&
+              readConsumesEntry("value", entry)
+            );
+            return {
+              paths: entries.map((entry) =>
+                canonicalizeLogicalPath(entry.path)
               ),
-          ];
-          return measured.every((path) =>
+              index: pathIndexOf(entries),
+            };
+          })();
+          const { paths, index } = rootCeilings;
+          const measured = new Map<string, readonly string[]>([
+            [pathKey(root), root],
+          ]);
+          for (const path of paths) {
+            if (path.length > root.length && isPrefix(root, path)) {
+              measured.set(pathKey(path), path);
+            }
+          }
+          return [...measured.values()].every((path) =>
             atomsOutsideCeiling(flowConfidentiality, [
-              ...(labelForEntriesAtPath(declared, path)?.confidentiality ??
-                []) as readonly CfcConfClause[],
+              ...(labelForEntriesAtPath(indexedEntriesAt(index, path), path)
+                ?.confidentiality ?? []) as readonly CfcConfClause[],
               cfcAtom.space(space),
             ]).length === 0
           );
