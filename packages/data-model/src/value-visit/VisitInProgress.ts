@@ -71,11 +71,6 @@ export type VisitInProgressConfig =
  *
  * This class is _intentionally_ omitted from the barrel `export` file for the
  * submodule.
- *
- * TODO(danfuzz): (1) `mapped*()` methods should take both "before" and "after"
- * values. (2) `visiting*()` methods should be able to return `mapTo`. (3)
- * `visiting*()` methods should be able to return `omit`. On `FabricInstance`
- * this gets interpreted as a request to reconstruct with state `undefined`.
  */
 export class VisitInProgress<
   PlusType = never,
