@@ -897,7 +897,7 @@ describe("VisitInProgress", () => {
           expect(visit([1], rec)).toBeUndefined();
         });
 
-        it("does not call any `visited*()` method", () => {
+        it("does not call any `mapped*()` method", () => {
           const rec = new Recorder();
 
           visit([1, { a: new FabricLink({ id: "fid1:abc" }) }], rec);
@@ -1103,7 +1103,7 @@ describe("VisitInProgress", () => {
           expect(result[1]).toBe("one");
         });
 
-        it("reports each element's mapped value to `visitedFabricArrayElement()`, after visiting the element", () => {
+        it("reports each element's mapped value to `mappedFabricArrayElement()`, after visiting the element", () => {
           const rec = new Recorder();
           rec.onPrimitive = () => mapTo("one");
           const array = [1];
@@ -1115,13 +1115,13 @@ describe("VisitInProgress", () => {
             ["visitingFabricArrayElement", array, 0, 1],
             ["value", 1, "number"],
             ["primitive", 1, "number"],
-            ["visitedFabricArrayElement", array, 0, "one"],
+            ["mappedFabricArrayElement", array, 0, "one"],
           ]);
         });
 
-        it("ends the map from `visitedFabricArrayElement()`, visiting no later element", () => {
+        it("ends the map from `mappedFabricArrayElement()`, visiting no later element", () => {
           const rec = new Recorder();
-          rec.onVisitedFabricArrayElement = (i) =>
+          rec.onMappedFabricArrayElement = (i) =>
             (i === 0) ? mainResult("after 0") : undefined;
 
           expect(map([10, 20], rec)).toBe("after 0");
@@ -1200,7 +1200,7 @@ describe("VisitInProgress", () => {
           expect(map(object, rec)).toBe(object);
         });
 
-        it("reports each entry's final key and mapped value to `visitedFabricPlainObjectEntry()`, after visiting the entry", () => {
+        it("reports each entry's final key and mapped value to `mappedFabricPlainObjectEntry()`, after visiting the entry", () => {
           const rec = new Recorder();
           rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
           rec.onPrimitive = (v) => mapTo((v === "a") ? "z" : "one");
@@ -1215,13 +1215,13 @@ describe("VisitInProgress", () => {
             ["primitive", "a", "string"],
             ["value", 1, "number"],
             ["primitive", 1, "number"],
-            ["visitedFabricPlainObjectEntry", object, "z", "one"],
+            ["mappedFabricPlainObjectEntry", object, "z", "one"],
           ]);
         });
 
-        it("ends the map from `visitedFabricPlainObjectEntry()`, visiting no later entry", () => {
+        it("ends the map from `mappedFabricPlainObjectEntry()`, visiting no later entry", () => {
           const rec = new Recorder();
-          rec.onVisitedFabricPlainObjectEntry = () => mainResult("first");
+          rec.onMappedFabricPlainObjectEntry = () => mainResult("first");
 
           expect(map({ a: 1, b: 2 }, rec)).toBe("first");
           expect(rec.events.map((e) => e[1])).not.toContain(2);
@@ -1310,15 +1310,15 @@ describe("VisitInProgress", () => {
           expect(original.message).toBe("boom");
         });
 
-        it("reports the mapped state to `visitedFabricInstanceState()`, after visiting the state", () => {
+        it("reports the mapped state to `mappedFabricInstanceState()`, after visiting the state", () => {
           const rec = new Recorder();
           rec.onPrimitive = (v) => (v === "boom") ? mapTo("bang") : undefined;
           const original = error("boom");
 
           map(original, rec);
-          expect(rec.names.slice(-1)).toEqual(["visitedFabricInstanceState"]);
+          expect(rec.names.slice(-1)).toEqual(["mappedFabricInstanceState"]);
           expect(rec.events.slice(-1)).toEqual([
-            ["visitedFabricInstanceState", original, {
+            ["mappedFabricInstanceState", original, {
               type: "Error",
               name: null,
               message: "bang",
@@ -1326,9 +1326,9 @@ describe("VisitInProgress", () => {
           ]);
         });
 
-        it("ends the map from `visitedFabricInstanceState()`", () => {
+        it("ends the map from `mappedFabricInstanceState()`", () => {
           const rec = new Recorder();
-          rec.onVisitedFabricInstanceState = () => mainResult("after");
+          rec.onMappedFabricInstanceState = () => mainResult("after");
 
           expect(map([error("boom"), 1], rec)).toBe("after");
           expect(rec.events.map((e) => e[1])).not.toContain(1);
@@ -1404,16 +1404,16 @@ describe("VisitInProgress", () => {
           expect((map({ a: 1 }, rec) as { a: unknown }).a).toBe(two);
         });
 
-        it("reports the mapped replacement, not the original, to `visitedFabricArrayElement()`", () => {
+        it("reports the mapped replacement, not the original, to `mappedFabricArrayElement()`", () => {
           const rec = new Recorder();
           rec.onValue = (v) => (v === "x") ? replace(42) : DO_DISPATCH;
           const array = ["x"];
 
           map(array, rec);
           expect(
-            rec.events.filter((e) => e[0] === "visitedFabricArrayElement"),
+            rec.events.filter((e) => e[0] === "mappedFabricArrayElement"),
           ).toEqual([
-            ["visitedFabricArrayElement", array, 0, 42],
+            ["mappedFabricArrayElement", array, 0, 42],
           ]);
         });
       });

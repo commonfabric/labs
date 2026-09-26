@@ -238,14 +238,14 @@ describe("DefaultValueVisitor", () => {
       });
     });
 
-    describe("the `visited*()` methods", () => {
+    describe("the `mapped*()` methods", () => {
       it("return `undefined`", () => {
         const vis = new Tracing();
 
-        expect(vis.visitedFabricArrayElement([1], 0, 1)).toBeUndefined();
-        expect(vis.visitedFabricInstanceState(new FabricMap(new Map()), {}))
+        expect(vis.mappedFabricArrayElement([1], 0, 1)).toBeUndefined();
+        expect(vis.mappedFabricInstanceState(new FabricMap(new Map()), {}))
           .toBeUndefined();
-        expect(vis.visitedFabricPlainObjectEntry({}, "k", 1)).toBeUndefined();
+        expect(vis.mappedFabricPlainObjectEntry({}, "k", 1)).toBeUndefined();
       });
     });
 

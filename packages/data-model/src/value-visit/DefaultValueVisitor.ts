@@ -236,7 +236,6 @@ export abstract class DefaultValueVisitor<
    * meant to recognize that common subclass implementation patterns -- which
    * would typically specify hand handle a `PlusType` -- don't have to write
    * code to specifically disclaim out-of-domain values.
-
    */
   visitUnrecognizedValue(
     value: unknown,
@@ -321,6 +320,44 @@ export abstract class DefaultValueVisitor<
   //
   // Instance methods
   //
+
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `undefined`.
+   */
+  override mappedFabricArrayElement(
+    _array: FabricArrayPlus<PlusType>,
+    _index: number,
+    _value: FabricValuePlus<ResultType>,
+  ): VisitedResult<ResultType> {
+    return undefined;
+  }
+
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `undefined`.
+   */
+  override mappedFabricInstanceState(
+    _instance: FabricInstancePlus<PlusType>,
+    _state: FabricValuePlus<ResultType>,
+  ): VisitedResult<ResultType> {
+    return undefined;
+  }
+
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `undefined`.
+   */
+  override mappedFabricPlainObjectEntry(
+    _container: FabricPlainObjectPlus<PlusType>,
+    _key: string,
+    _value: FabricValuePlus<ResultType>,
+  ): VisitedResult<ResultType> {
+    return undefined;
+  }
 
   /**
    * Calls through to the most type-specific `visit*()` method, returning
@@ -425,44 +462,6 @@ export abstract class DefaultValueVisitor<
       }
         // deno-coverage-ignore-stop
     }
-  }
-
-  /**
-   * @inheritDoc
-   *
-   * If not overridden, this returns `undefined`.
-   */
-  override visitedFabricArrayElement(
-    _array: FabricArrayPlus<PlusType>,
-    _index: number,
-    _value: FabricValuePlus<ResultType>,
-  ): VisitedResult<ResultType> {
-    return undefined;
-  }
-
-  /**
-   * @inheritDoc
-   *
-   * If not overridden, this returns `undefined`.
-   */
-  override visitedFabricInstanceState(
-    _instance: FabricInstancePlus<PlusType>,
-    _state: FabricValuePlus<ResultType>,
-  ): VisitedResult<ResultType> {
-    return undefined;
-  }
-
-  /**
-   * @inheritDoc
-   *
-   * If not overridden, this returns `undefined`.
-   */
-  override visitedFabricPlainObjectEntry(
-    _container: FabricPlainObjectPlus<PlusType>,
-    _key: string,
-    _value: FabricValuePlus<ResultType>,
-  ): VisitedResult<ResultType> {
-    return undefined;
   }
 
   /**

@@ -25,7 +25,7 @@ describe("value-visit/impl", () => {
         "visitingFabricArrayElement",
         "value",
         "primitive",
-        "visitedFabricArrayElement",
+        "mappedFabricArrayElement",
       ]);
     });
 

@@ -385,7 +385,7 @@ export class VisitInProgress<
             mapResult![idxNumber] = mappedTo;
             anyChanges ||= !Object.is(element, mappedTo);
 
-            const result = vis.visitedFabricArrayElement(
+            const result = vis.mappedFabricArrayElement(
               array,
               idxNumber,
               mappedTo,
@@ -494,7 +494,7 @@ export class VisitInProgress<
       }
 
       const mappedTo = stateResult.value;
-      const result = vis.visitedFabricInstanceState(instance, mappedTo);
+      const result = vis.mappedFabricInstanceState(instance, mappedTo);
       if (result?.type === "mainResult") {
         return result;
       }
@@ -665,7 +665,7 @@ export class VisitInProgress<
           // `keyMappedTo!` is safe, because if we made it here, it necessarily
           // got set to a `string`.
           const finalKey: string = keyMappedTo!;
-          const result = vis.visitedFabricPlainObjectEntry(
+          const result = vis.mappedFabricPlainObjectEntry(
             plainObj,
             finalKey,
             valueMappedTo,
