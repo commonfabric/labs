@@ -529,7 +529,7 @@ describe("represents-principal writer check", () => {
 
     for (const order of ["source first", "link first"] as const) {
       it(`stores no claim from a same-transaction source schema entry the write check skipped, ${order}`, async () => {
-        const { subjects } = await linkSameTransactionAsAlice(
+        const { error, subjects } = await linkSameTransactionAsAlice(
           "represents-principal-link-pending",
           (tx, runtime) => {
             const source = runtime.getCell(
@@ -543,11 +543,14 @@ describe("represents-principal writer check", () => {
           "p",
           order,
         );
+        // The link commits, without the claim; a refusal would store nothing
+        // and prove nothing.
+        expect(error).toBeUndefined();
         expect(subjects).not.toContain(bob.did());
       });
 
       it(`stores no claim from a source's setup result schema, ${order}`, async () => {
-        const { subjects } = await linkSameTransactionAsAlice(
+        const { error, subjects } = await linkSameTransactionAsAlice(
           "represents-principal-link-setup",
           (tx, runtime) => {
             const source = runtime.getCell(
@@ -567,6 +570,9 @@ describe("represents-principal writer check", () => {
           "p",
           order,
         );
+        // The link commits, without the claim; a refusal would store nothing
+        // and prove nothing.
+        expect(error).toBeUndefined();
         expect(subjects).not.toContain(bob.did());
       });
 

@@ -120,8 +120,10 @@ export const representsPrincipalSubjects = (
  * as an author claim is checked against: each distinct DID a
  * `represents-principal` atom names at the root or on a top-level field, in
  * order of first appearance. A profile's owner-protected fields carry their
- * owner's atom at their own top-level paths; atoms deeper down come from
- * documents the value links, and are not counted. One DID is the principal.
+ * owner's atom at their own top-level paths. Atoms deeper down come from
+ * documents the value links, and an entry a link carried (`followRef`) at any
+ * path describes the linked document; neither is counted. One DID is the
+ * principal.
  * None means the label names no principal. More than one means it names no
  * single principal, and a claim resting on it must not verify.
  */
