@@ -434,5 +434,7 @@ If semantic locators are not finding your element:
 
 - [TESTING.md](TESTING.md) — running the suites and the general unit and
   integration test structure.
-- [COVERAGE.md](COVERAGE.md) — how CI measures coverage and feeds the
-  coverage-debt gate.
+- [COVERAGE.md](COVERAGE.md) — how CI measures coverage. A member's measured set
+  counts the V8 coverage of the member's Deno-only half, its `deno-test` task,
+  so its browser tests never feed it. The authored-pattern coverage the browser
+  worker collects feeds the repository-wide trend, not a measured set.

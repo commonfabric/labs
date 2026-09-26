@@ -3185,8 +3185,11 @@ stage gated on a harness-supplied option rather than on source content: its
 `filter` requires `TransformationOptions.patternCoverage` to be set and the
 file not to be a declaration file, and a filtered-out stage returns the source
 file untouched (`Transformer.toFactory`, `src/core/transformers.ts`). Nothing
-inside this package ever sets the option; it exists for the runner's `cf test`
-pattern-coverage mechanism described in `docs/development/COVERAGE.md`.
+inside this package ever sets the option; it exists for the authored-pattern
+coverage mechanism described in `docs/development/COVERAGE.md`. In the full
+run, that coverage comes from three suites: `pattern-unit`, through `cf test`,
+and `pattern-reload` and the arm of `pattern-integration` with server execution
+off, through the browser worker's runtime.
 
 ### 16.1 Enablement and plumbing
 
@@ -3201,10 +3204,15 @@ The option is constructed end-to-end by the runner/CLI chain:
 
 1. `cf test` resolves a coverage directory from the `--pattern-coverage-dir`
    flag, falling back to the `CF_PATTERN_COVERAGE_DIR` environment variable
-   (`packages/cli/commands/test.ts`). Per `docs/development/COVERAGE.md`, that
-   variable is read in exactly this one place — jobs running plain `deno test`
-   or talking to a Toolshed server never reach this code, so setting it there
-   has no effect.
+   (`packages/cli/commands/test-command.ts`). The browser-driven integration
+   suites do not run through `cf test`. Their harness,
+   `packages/integration/pattern-coverage.ts`, reads the same variable to turn
+   the browser worker's collector on. The worker's runtime takes its collector
+   through `RuntimeOptions.patternCoverage`, as `docs/development/COVERAGE.md`
+   describes. Two pattern integration tests also read it, since they run a
+   pattern in the test process: `recommend-a-book.test.ts` builds a collector
+   of its own, and `agent-book-inputs.test.ts` hands the directory to
+   `runTestPattern`.
 2. The test runner builds one `PatternCoverageCollector` per test file and
    passes it as the `patternCoverage` harness option to
    `engine.compileAndEvaluateModules` (`packages/cli/lib/test-runner.ts`; the
@@ -3435,10 +3443,10 @@ end_of_record
 `<url-encoded relative test path>[--<participant>].pattern-coverage.lcov`
 file per test into the coverage directory (`patternCoverageOutputPath`;
 `packages/cli/lib/test-runner.ts`). Per `docs/development/COVERAGE.md`, those
-files feed the CI coverage-debt gate as the sole source of covered-line data
-for authored pattern files (currently only the `pattern-unit-test` job), and
-`DA` records exist only for lines the instrumentation could name — the
-denominator caveat documented there.
+files feed the repository-wide coverage figure as a source of covered-line data
+for authored pattern files (the `pattern-unit` suite), and `DA` records exist
+only for lines the instrumentation could name — the denominator caveat
+documented there.
 
 Test inventory for this stage: transformer unit suite
 `test/pattern-coverage-transformer.test.ts`; end-to-end line mapping and LCOV

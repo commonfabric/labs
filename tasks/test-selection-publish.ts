@@ -34,6 +34,7 @@
  * direction for a system nothing should gate on.
  */
 
+import { duration } from "./test-selection/duration.ts";
 import { join } from "@std/path";
 import { ulid } from "@std/ulid";
 import {
@@ -74,6 +75,7 @@ import {
   wholeUnits,
 } from "./test-topology.ts";
 import { baselinesOf, mergeBaselines } from "./test-selection/baselines.ts";
+import { measuredCostLines } from "./test-selection/coverage.ts";
 import type { Suite } from "./test-topology/suite.ts";
 import {
   fetchManifest,
@@ -828,7 +830,8 @@ export async function publish(
     // What a lane costs beyond the tests it runs, from what lanes have
     // spent. Without it the packer charges nothing for opening a
     // capability, starting a runner, or loading a module, and a lane
-    // packed to its budget runs past the bound it is killed at.
+    // packed to its budget runs past the bound it is packed to finish
+    // inside.
     calibration: calibrate(
       laneObservations(folded.aggregate.lanes ?? []),
     ),
@@ -877,6 +880,7 @@ export async function publish(
 
   summarize(
     manifest,
+    suites,
     reference,
     folded.observations,
     unplaced,
@@ -953,6 +957,7 @@ export function namingSurfaces(keys: readonly string[]): string {
 /** What the job summary says: the shape of what this run decided. */
 function summarize(
   manifest: ReturnType<typeof buildManifest>,
+  topology: readonly Suite[],
   reference: ReturnType<typeof plan>,
   observations: number,
   unplaced: Unplaced,
@@ -968,23 +973,30 @@ function summarize(
   // from different records: a lane writes one per capability it opens,
   // and a pair per batch, and a lane killed part way through a batch
   // leaves the pair unmatched and contributes a setup cost alone.
-  const suites = Object.keys(manifest.calibration.suites).length;
+  const withCoverage = Object.keys(
+    manifest.calibration.suitesWithCoverage ?? {},
+  );
+  const suites = new Set([
+    ...Object.keys(manifest.calibration.suites),
+    ...withCoverage,
+  ]).size;
+  const measured = withCoverage.length;
   console.log(
     `test selection: the cost model holds ${suites} suite(s) and ` +
       `${Object.keys(manifest.calibration.setupCost).length} ` +
-      `capability setup(s)`,
+      `capability setup(s), and ${measured} of those suite(s) have a ` +
+      `cost with coverage on`,
   );
-  // A suite's own figures are what a lane is charged for holding the
-  // suite and for opening each of its units, so a model with no suite in
-  // it charges nothing for either and a lane packed to its budget runs
-  // past the bound it is killed at. A capability setup is measured from
-  // a lane's own records and is unaffected, and the prologue is a fixed
-  // dial rather than a measurement, so it is there either way; this
-  // names the suites rather than everything a lane is charged. Four
-  // things end here — no
-  // lane has run, none recorded what it measured, the fold declines the
-  // records of the ones that did, or the fold stopped reading a figure
-  // it used to read — and the empty map alone says none of them.
+  // A suite's own figures are what a lane is charged for holding the suite and
+  // for opening each of its units, so a model with no suite in it charges
+  // nothing for either and a lane packed to its budget runs past the bound it
+  // is packed to finish inside. A capability setup is measured from a lane's
+  // own records and is unaffected, and the prologue is a fixed dial rather than
+  // a measurement, so it is there either way; this names the suites rather than
+  // everything a lane is charged. Four things end here — no lane has run, none
+  // recorded what it measured, the fold declines the records of the ones that
+  // did, or the fold stopped reading a figure it used to read — and the empty
+  // map alone says none of them.
   if (suites === 0) {
     console.log(
       `test selection: no suite has a measured cost in the last ` +
@@ -1003,6 +1015,9 @@ function summarize(
           `fitted without them.`,
       );
     }
+  }
+  for (const line of measuredCostLines(manifest, topology)) {
+    console.log(`test selection: ${line}`);
   }
   if (unplaced.suiteLevel.length > 0) {
     console.log(
@@ -1064,13 +1079,15 @@ function summarize(
     console.log(
       `test selection: lane ${lane.lane} would run ` +
         `${lane.selections.length} test(s) in ` +
-        `${lane.projectedSeconds.toFixed(1)}s of ${LANE_BUDGET_SECONDS}s`,
+        `${duration(lane.projectedSeconds)} of ${
+          duration(LANE_BUDGET_SECONDS)
+        }`,
     );
   }
   if (times.length > 0) {
     const spread = Math.max(...times) - Math.min(...times);
     console.log(
-      `test selection: ${LANES} lanes, spread ${spread.toFixed(1)}s`,
+      `test selection: ${LANES} lanes, spread ${duration(spread)}`,
     );
   }
   const selected = reference.lanes.reduce(
@@ -1085,7 +1102,7 @@ function summarize(
   const { named, rest } = costliestUnschedulable(reference.unschedulable);
   for (const entry of named) {
     console.log(
-      `test selection: unschedulable, ${entry.cost.toFixed(1)}s: ` +
+      `test selection: unschedulable, ${duration(entry.cost)}: ` +
         JSON.stringify(entry.test),
     );
   }

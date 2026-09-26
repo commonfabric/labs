@@ -3721,8 +3721,9 @@ discharge OW28. The flip's changes and validation record follow:
   CONSEQUENCE through the soak: `coverage-check` now `needs` the OFF
   pattern lane, so ANY red in that lane also SKIPS Coverage Check and
   reds Status — board 33239003881 shows exactly that shape behind the
-  owned-elsewhere firebreak red. The coupling retires when the OWED
-  re-homing above lands. (3) CLI
+  owned-elsewhere firebreak red. The coupling retired with the lane
+  refactor (commonfabric/labs#8108): the coverage gate is a step of
+  `Status`, which runs it whatever the lanes did. (3) CLI
   `core-piece-values`: the "cannot project in a fresh session"
   refusal DISSOLVES under ON by design (the serving loop
   materializes the session-derived result; a fresh session projects

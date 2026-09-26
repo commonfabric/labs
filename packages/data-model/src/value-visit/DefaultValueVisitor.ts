@@ -31,6 +31,7 @@ import { BaseValueVisitor } from "./BaseValueVisitor.ts";
 import {
   DO_RECURSE_VALUES,
   type VisitedResult,
+  type VisitingResult,
   type VisitResult,
 } from "./interface.ts";
 
@@ -45,8 +46,8 @@ import {
  * documentation on each method for information about default implementations
  * and category structure.
  *
- * This class also provides a default no-op implementation for all the
- * `visited*()` methods.
+ * This class also provides a default no-op implementation for all the methods
+ * used during recursive visits of sub-values.
  *
  * **Note:** This class is marked `abstract` not because it has `abstract`
  * members but instead because it's simply not useful if directly instantiated.
@@ -424,7 +425,7 @@ export abstract class DefaultValueVisitor<
   override visitedFabricArrayElement(
     _array: FabricArrayPlus<PlusType>,
     _index: number,
-    _value: FabricValuePlus<PlusType>,
+    _value: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType> {
     return undefined;
   }
@@ -434,22 +435,9 @@ export abstract class DefaultValueVisitor<
    *
    * If not overridden, this returns `undefined`.
    */
-  override visitedFabricArrayGap(
-    _array: FabricArrayPlus<PlusType>,
-    _start: number,
-    _count: number,
-  ): VisitedResult<ResultType> {
-    return undefined;
-  }
-
-  /**
-   * @inheritDoc
-   *
-   * If not overridden, this returns `undefined`.
-   */
-  override visitedFabricInstance(
+  override visitedFabricInstanceState(
     _instance: FabricInstancePlus<PlusType>,
-    _state: FabricValuePlus<PlusType>,
+    _state: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType> {
     return undefined;
   }
@@ -461,9 +449,60 @@ export abstract class DefaultValueVisitor<
    */
   override visitedFabricPlainObjectEntry(
     _container: FabricPlainObjectPlus<PlusType>,
-    _key: FabricValuePlus<PlusType>,
-    _value: FabricValuePlus<PlusType>,
+    _key: string,
+    _value: FabricValuePlus<ResultType>,
   ): VisitedResult<ResultType> {
+    return undefined;
+  }
+
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `undefined`.
+   */
+  override visitingFabricArrayElement(
+    _array: FabricArrayPlus<PlusType>,
+    _index: number,
+    _value: FabricValuePlus<PlusType>,
+  ): VisitingResult<ResultType> {
+    return undefined;
+  }
+
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `undefined`.
+   */
+  override visitingFabricArrayGap(
+    _array: FabricArrayPlus<PlusType>,
+    _start: number,
+    _count: number,
+  ): VisitingResult<ResultType> {
+    return undefined;
+  }
+
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `undefined`.
+   */
+  override visitingFabricInstanceState(
+    _instance: FabricInstancePlus<PlusType>,
+    _state: FabricValuePlus<PlusType>,
+  ): VisitingResult<ResultType> {
+    return undefined;
+  }
+
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `undefined`.
+   */
+  override visitingFabricPlainObjectEntry(
+    _container: FabricPlainObjectPlus<PlusType>,
+    _key: string,
+    _value: FabricValuePlus<PlusType>,
+  ): VisitingResult<ResultType> {
     return undefined;
   }
 }

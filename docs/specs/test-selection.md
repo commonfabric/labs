@@ -181,9 +181,9 @@ Only executions that passed are measured. A cost predicts what a lane
 will spend running the test again, and a failure measures something else.
 It ended where the failure was reached. Where a wait's safety net ended
 it, its duration is that net's bound. The bound a safety net carries and
-the bound a lane is killed at are the same order of magnitude, so a test
-that hits one is otherwise reported as fitting no lane and held out of
-every pull request that does not touch it.
+a lane's bound are the same order of magnitude, so a test that hits one is
+otherwise reported as fitting no lane and held out of every pull request that
+does not touch it.
 
 A day records which set of these rules sealed it, and a day carrying no
 such record was sealed before any set was recorded, which reads as
@@ -480,13 +480,12 @@ how it runs there.
 **A mandatory identity runs, whatever it costs.** Nothing weighs it
 against a budget, a lane's capacity, or the time the run is trying to
 hold to, and no rule anywhere takes one out. An identity whose own cost
-is past what a lane is killed at is placed in a lane regardless, and what
-that produces is a lane that runs long and says by how much. The
-alternative is a run that reports a pass over a test it decided not to
-run, which is the one failure this design will not have: a consumer is
-told a test did not run, never left to infer it from a green result.
-Weighing cost is for the identities nothing requires, and the list of
-work no lane can hold names those alone.
+is past a lane's bound is placed in a lane regardless, and what that produces is
+a lane that runs long and says by how much. The alternative is a run that
+reports a pass over a test it decided not to run, which is the one failure this
+design will not have: a consumer is told a test did not run, never left to infer
+it from a green result. Weighing cost is for the identities nothing requires,
+and the list of work no lane can hold names those alone.
 
 The count of runs is the one thing that bends. An identity that would be
 repeated and fits nowhere runs fewer times, down to once, since all of
@@ -496,14 +495,18 @@ to once and never to nothing.
 A plan says what a suite costs it, as well as what a test does. A lane
 pays a suite's overhead, what one of its units costs to open, and its
 capabilities' setup before it runs anything of that suite, and that
-charge is the same for every identity the suite has. Where it alone passes what a lane holding
-two things may take, nothing can share a lane with one of the suite's
-identities, so the suite takes a whole lane for each one it places; where
-it passes what a lane is killed at, no lane can hold the suite and every
-discretionary identity it has fits nowhere. Both are reported once for
-the suite, and the identities of a suite in the second case are left out
-of the report that names identities, since the suite's line says what
-every one of them would.
+charge is the same for every identity the suite has. A lane that runs a suite
+with coverage on pays what that suite's batches have cost with coverage on,
+where such a fit exists, and otherwise its fit without coverage. The two are
+fitted apart, since instrumenting a run costs it time and how much is a
+property of the suite. Where it alone passes
+what a lane holding two things may take, nothing can share a lane with one of
+the suite's identities, so the suite takes a whole lane for each one it places;
+where it passes a lane's bound, no lane can hold the suite and every
+discretionary identity it has fits nowhere. Both are reported once for the
+suite, and the identities of a suite in the second case are left out of the
+report that names identities, since the suite's line says what every one of them
+would.
 
 **A unit that runs whole is one choice.** Some units have a runner that
 runs every identity in them, whatever it is asked. The topology lists
@@ -633,8 +636,8 @@ A rise is accepted by an `ACCEPT_COVERAGE_DEBT` marker in the change's
 description, which names the member and the lines, and accepts the rise
 for every measured set over that member. Two markers naming one thing
 are refused, since the author meant one number and would be given the
-other. A marker naming neither a workspace member nor a coverage source
-group fails, because nothing would ever consult it.
+other. A marker naming anything but a workspace member fails, because nothing
+consults it.
 
 ## The manifest
 
@@ -814,23 +817,32 @@ it is not a first failure. An excluded identity that failed every one of
 its runs at a commit and passed every one at the parent is the one
 statement about such a test that several runs at one commit make
 available, and a consumer reporting it says that the test is a known flaky
-one and that the run was not failed by it. That a test is new is likewise
-a claim about the store rather than about one run: an identity the store
-has never seen is new, and an identity absent from one run's records is
-only absent from that run.
+one and that the run was not failed by it. Whether a run excused an identity is
+a fact about that run, and a consumer reads it from what the run recorded rather
+than working it out again from the manifest. A run that did not apply the rule
+excused nothing, and one that did withdraws an excusal wherever an invocation
+left an identity it was asked to run unaccounted for. That a
+test is new is likewise a claim about the store rather than about one run: an
+identity the store has never seen is new, and an identity absent from one run's
+records is only absent from that run.
 
 Whether a change's own run ran a test is settled by that run's records
 and by nothing else. The manifest it resolved answers the next question,
 which is why it did not: held back as too flaky, or passed over by the
-packing. Only a resolved manifest that holds the identity can support
-that last answer, and a report without one says the run did not run the
-test rather than crediting the selector with a decision nothing made.
-Where the manifest says the test was to have run — the packing reached
-it, or the store has never seen it, which makes it mandatory — a run
-with no record of it recorded less than it ran, and that is a different
-statement from a run that did not reach it. A test the packing did not
-reach is coverage this design traded away rather than something the
-change missed, and it must be described that way. The failure raises the
+packing. That manifest is the one resolved at the moment the run's lanes
+resolved it, which is when the commit the run tested was made. For a pull
+request that commit is the merge its records name, and not the tip of its
+branch, since a manifest published between the two would explain a selection the
+lanes never made. A report that cannot establish that moment has no resolved
+manifest. Nor does a run whose tests did not run in lanes, since no manifest
+chose what it ran. Only a resolved manifest that holds the identity can support that last
+answer, and a report without one says the run did not run the test rather than
+crediting the selector with a decision nothing made. Where the manifest says the
+test was to have run — the packing reached it, or the store has never seen it,
+which makes it mandatory — a run with no record of it recorded less than it ran,
+and that is a different statement from a run that did not reach it. A test the
+packing did not reach is coverage this design traded away rather than something
+the change missed, and it must be described that way. The failure raises the
 test's score, so the next change in that area runs it.
 
 A report addresses the change and never a person. No author is named, no

@@ -15,4 +15,9 @@ export * from "./interface.ts";
 export { BaseValueVisitor } from "./BaseValueVisitor.ts";
 export { DefaultValueVisitor } from "./DefaultValueVisitor.ts";
 
-export { makeVisitValueFunction, visitValue } from "./impl.ts";
+export {
+  makeMapValueFunction,
+  makeVisitValueFunction,
+  mapValue,
+  visitValue,
+} from "./impl.ts";

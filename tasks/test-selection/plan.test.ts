@@ -527,6 +527,199 @@ describe("plan", () => {
     });
   });
 
+  describe("the density pass", () => {
+    // One lane of 111 seconds unless a case says otherwise. A mandatory
+    // test opens `open.test.ts` for eleven of them, leaving 100 for the
+    // three discretionary passes, and a test worth more than anything
+    // else takes 59.5 of the value pass's 60. The density pass then has
+    // 25.5 seconds, and what the rest cost the lane decides what it
+    // spends them on. Opening a file costs ten seconds.
+    const perFile: Calibration = {
+      setupCost: { toolshed: 10 },
+      suites: {
+        "workspace-unit": { overhead: 0, correction: 1, unitOverhead: 10 },
+        "runner-unit": { overhead: 10, correction: 1, unitOverhead: 5 },
+        "cli-deno": { overhead: 0, correction: 1, unitOverhead: 0 },
+        "cli-core": { overhead: 0, correction: 1, unitOverhead: 0 },
+      },
+      prologue: 0,
+    };
+
+    function test(
+      name: string,
+      unit: string,
+      fields: Partial<ManifestEntry> = {},
+    ): ManifestEntry {
+      return sampleEntry({ k: "unit", s: "memory", n: name }, {
+        unit,
+        cost: 1,
+        score: 0.05,
+        ...fields,
+      });
+    }
+
+    const opener = test("opener", "open.test.ts");
+    const opened = new Map([[
+      testIdentityKey(opener.test),
+      "changed" as const,
+    ]]);
+
+    function packed(
+      rest: ManifestEntry[],
+      overrides: Partial<PlanInput> = {},
+    ): ReturnType<typeof plan> {
+      const proven = test("proven", "proven.test.ts", {
+        cost: 49.5,
+        score: 0.9,
+      });
+      return run(
+        sampleManifest({
+          entries: [opener, proven, ...rest],
+          calibration: perFile,
+        }),
+        { lanes: 1, budgetSeconds: 111, mandatory: opened, ...overrides },
+      );
+    }
+
+    function reasons(result: ReturnType<typeof plan>): Map<string, string> {
+      return new Map(
+        selected(result).map((s) => [s.entry.test.n, s.reason]),
+      );
+    }
+
+    it("takes the tests of a file a lane has opened ahead of files it has not", () => {
+      // Every candidate is worth the same and takes a second. Each of the
+      // four strangers opens a file of its own, so it costs the lane
+      // eleven, where each sibling of the mandatory test costs one. The
+      // strangers are listed first.
+      const strangers = [1, 2, 3, 4].map((i) =>
+        test(`stranger ${i}`, `stranger-${i}.test.ts`)
+      );
+      const siblings = [2, 3, 4, 5].map((i) =>
+        test(`sibling ${i}`, "open.test.ts")
+      );
+      const chosen = reasons(packed([...strangers, ...siblings]));
+      for (const sibling of siblings) {
+        expect(chosen.get(sibling.test.n)).toBe("density");
+      }
+      expect(
+        strangers.filter((s) => chosen.get(s.test.n) === "density").length,
+      ).toBe(1);
+    });
+
+    it("charges a test the overhead of a suite its lane is not holding", () => {
+      // The runner test shares the opened file's path and takes half a
+      // second of its own. Its suite is not in the lane, so it costs the
+      // lane that suite's ten seconds and its own unit's five. The
+      // stranger costs eleven. There is room for one of the two.
+      const other = test("other suite", "open.test.ts", {
+        suite: "runner-unit",
+        cost: 0.5,
+      });
+      const stranger = test("stranger", "stranger.test.ts");
+      const chosen = reasons(packed([other, stranger]));
+      expect(chosen.get("stranger")).toBe("density");
+      expect(chosen.get("other suite")).not.toBe("density");
+    });
+
+    it("moves a suite up once its lane has set up a capability it needs", () => {
+      // Two suites with no overheads need one capability, which costs ten
+      // seconds to set up. The first suite's test is worth enough to be
+      // taken first, and its lane sets the capability up. The other
+      // suite's test then costs the lane its own second, where the
+      // stranger, which the identity key puts first between equals, still
+      // costs eleven.
+      const stranger = test("stranger", "stranger.test.ts");
+      const first = test("first", "first.test.ts", {
+        suite: "cli-deno",
+        score: 0.5,
+      });
+      const then = test("then", "then.test.ts", { suite: "cli-core" });
+      const lane = packed([stranger, then, first], {
+        capabilities: new Map([
+          ["cli-deno", ["toolshed"]],
+          ["cli-core", ["toolshed"]],
+        ]),
+      }).lanes[0]!;
+      expect(
+        lane.selections
+          .filter((s) => s.reason === "density")
+          .map((s) => s.entry.test.n),
+      ).toEqual(["first", "then", "stranger"]);
+    });
+
+    it("charges a test what the next lane costs once its file's lane is full", () => {
+      // Three lanes of 31.5 seconds. The mandatory test fills the first to
+      // thirty and the proven test has the second to itself, so the
+      // density pass has 16.825 seconds. One sibling fits beside the
+      // mandatory test; the other then costs eleven in the third lane,
+      // which the test of a suite with no overheads beats at five.
+      // Taking both is past what the pass may spend.
+      const siblings = [2, 3].map((i) => test(`sibling ${i}`, "open.test.ts"));
+      const cheap = test("cheap", "cheap.test.ts", {
+        suite: "cli-deno",
+        cost: 5,
+      });
+      const result = run(
+        sampleManifest({
+          entries: [
+            test("opener", "open.test.ts", { cost: 20 }),
+            test("proven", "proven.test.ts", { cost: 28, score: 0.9 }),
+            ...siblings,
+            cheap,
+          ],
+          calibration: perFile,
+        }),
+        { lanes: 3, budgetSeconds: 31.5, mandatory: opened },
+      );
+      const chosen = reasons(result);
+      expect(chosen.get("sibling 2")).toBe("density");
+      expect(chosen.get("cheap")).toBe("density");
+      expect(chosen.get("sibling 3")).not.toBe("density");
+      expect(
+        result.lanes[0]!.selections.map((s) => s.entry.test.n),
+      ).toEqual(["opener", "sibling 2"]);
+    });
+
+    it("gives the same plan whatever order the manifest lists its tests in", () => {
+      // Three lanes of 100 seconds, the proven test filling the value
+      // pass's share in a lane to itself. Sixty tests in fifteen files,
+      // at two values and two costs, tie with each other in many places,
+      // which the identity key decides. What follows the density pass is
+      // a draw seeded by position, so it is left out.
+      const corpus = [
+        opener,
+        test("proven", "proven.test.ts", { cost: 163, score: 0.9 }),
+        ...Array.from(
+          { length: 60 },
+          (_, i) =>
+            test(`case ${i}`, `file-${i % 15}.test.ts`, {
+              score: [0.05, 0.1][i % 2]!,
+              cost: [1, 2][(i >> 1) % 2]!,
+            }),
+        ),
+      ];
+      const chosen = (entries: ManifestEntry[]) =>
+        run(sampleManifest({ entries, calibration: perFile }), {
+          lanes: 3,
+          budgetSeconds: 100,
+          mandatory: opened,
+        }).lanes.map((lane) =>
+          lane.selections
+            .filter((s) => s.reason !== "exploration")
+            .map((s) => [s.entry.test.n, s.reason])
+        );
+      const inOrder = chosen(corpus);
+      expect(
+        inOrder.flat().filter(([, reason]) => reason === "density").length,
+      ).toBeGreaterThan(10);
+      expect(chosen([...corpus].reverse())).toEqual(inOrder);
+      expect(
+        chosen(seededOrder("shuffle", corpus.length).map((i) => corpus[i]!)),
+      ).toEqual(inOrder);
+    });
+  });
+
   describe("capabilities", () => {
     it("charges a lane for setup it has not opened yet", () => {
       const manifest = sampleManifest({
@@ -1171,6 +1364,23 @@ describe("an identity a manifest carries twice", () => {
     const key = testIdentityKey(twice.test);
     const placed = keysOf(run(manifest)).filter((k) => k === key);
     expect(placed.length).toBe(1);
+  });
+
+  it("places it as the last of its rows, whatever the first one scores", () => {
+    // The value pass orders by score, so a first row scoring far above
+    // the last would be the one it reached, where the density pass would
+    // reach the last.
+
+    const first = sampleEntry({ k: "unit", s: "memory", n: "case 0" }, {
+      unit: "packages/memory/test/case-0.test.ts",
+      score: 0.9,
+    });
+    const last = { ...first, score: 0.01 };
+    const placed = selected(
+      run(sampleManifest({ entries: [first, ...entries(3).slice(1), last] })),
+    ).filter((s) => s.entry.test.n === "case 0");
+    expect(placed.length).toBe(1);
+    expect(placed[0]!.entry).toBe(last);
   });
 });
 

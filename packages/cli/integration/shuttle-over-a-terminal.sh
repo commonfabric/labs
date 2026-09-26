@@ -58,9 +58,9 @@
 # Run standalone against any host:
 #   API_URL=http://localhost:8000 packages/cli/integration/shuttle-over-a-terminal.sh
 #
-# CI runs it through integration.sh's `piece-call` section (the
-# cli-integration matrix in .github/workflows/deno.yml); the `shuttle` section
-# is the standalone selector for running just this script by hand.
+# CI runs it through integration.sh's `shuttle` section, which the test
+# topology's `cli-core` suite makes a unit of. The `piece-call` section runs it
+# too, among the other steps a person running that group by hand gets.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -3,6 +3,8 @@
  * queued in the requester's home-space index, whether that home space is the
  * space being served or another one. A wave that drops the index write has it
  * issued again once, and the request ends `refused` if the wave drops it again.
+ * A request whose index write was lost with its space's tenure is indexed when
+ * the space is served again.
  */
 
 import { expect } from "@std/expect";
@@ -149,6 +151,38 @@ describe("agent-served", () => {
     expect(result.get()?.error).toBeUndefined();
     expect(result.get()?.run?.state).toBe("queued");
     expect(queue.get()?.entries?.length).toBe(1);
+  });
+
+  it("indexes a request whose index write was abandoned with the space's tenure once the space is served again", async () => {
+    const home = alice.did() as MemorySpace;
+    const realSeal = WaveAccumulator.prototype.seal;
+    const parks: Promise<void>[] = [];
+    using _sealStub = stub(
+      WaveAccumulator.prototype,
+      "seal",
+      async function (this: WaveAccumulator, tx) {
+        const sealed = await realSeal.call(this, tx);
+        // The first index write parks the space while it sits in the open
+        // wave, which abandons the wave and ends that tenure.
+        if (
+          parks.length === 0 &&
+          waveRunContextOf(tx)?.actionId.startsWith("agent/index/") === true
+        ) {
+          parks.push(host.spaceServer(home)!.park("test-tenure-ends"));
+        }
+        return sealed;
+      },
+    );
+
+    const { result, queue } = await request(home);
+    await Promise.all(parks);
+
+    expect(parks.length).toBe(1);
+    expect(result.get()?.error).toBeUndefined();
+    expect(result.get()?.run?.state).toBe("queued");
+    expect(queue.get()?.entries?.map((entry) => entry.host)).toEqual([
+      "https://fabric.example",
+    ]);
   });
 
   describe("when the wave drops the index write", () => {

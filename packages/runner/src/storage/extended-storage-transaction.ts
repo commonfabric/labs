@@ -528,6 +528,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     writePolicyInputs: [],
     writePolicyInputIdentities: new Map(),
     writeIdentity: { sawWrite: false, multiple: false },
+    attributedInitialization: false,
     moduleDelegations: new Map(),
     outbox: [],
     diagnostics: [],
@@ -1884,6 +1885,20 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.#cfcState.implementationIdentity = deepFreeze(identity);
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("implementation-identity-changed");
+    }
+  }
+
+  markCfcAttributedInitialization(
+    authorization: RuntimeWritePolicyAuthorization,
+  ): void {
+    // The mark is what lets an initialization claim the acting principal, so
+    // a call without the runtime's authorization changes nothing.
+    if (!runtimeWritePolicyAuthorized(authorization)) return;
+    if (this.#cfcState.attributedInitialization) return;
+    this.#noteCfcActivity();
+    this.#cfcState.attributedInitialization = true;
+    if (this.#cfcState.prepare.status === "prepared") {
+      this.invalidateCfc("attributed-initialization-marked");
     }
   }
 
@@ -4121,6 +4136,12 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     identity: ImplementationIdentity | undefined,
   ): void {
     this.#wrapped.setCfcImplementationIdentity(identity);
+  }
+
+  markCfcAttributedInitialization(
+    authorization: RuntimeWritePolicyAuthorization,
+  ): void {
+    this.#wrapped.markCfcAttributedInitialization(authorization);
   }
 
   recordCfcWritePolicyInput(

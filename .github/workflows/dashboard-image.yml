@@ -53,8 +53,8 @@ jobs:
       - name: 🔍 Install dependencies
         uses: ./.github/actions/deno-install
 
-      # This runs the same task on the same commit as CI's `Test` job, which
-      # is where the dashboard's tests are recorded. Repeating that recording
+      # The CI workflow's lanes run these tests on the same commit, in the
+      # `workspace-unit` suite, and record them there. Repeating that recording
       # here would file each of those tests twice against one commit, so this
       # job writes no test records: it sets no spool directory, wraps nothing
       # in `run-recorded`, and ships no artifact. The relay does not follow

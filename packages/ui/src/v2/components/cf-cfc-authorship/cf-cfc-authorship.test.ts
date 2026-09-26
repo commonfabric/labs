@@ -280,6 +280,50 @@ describe("CFCFCAuthorship", () => {
     }
   });
 
+  it("reads the author's resolved label past a principal a link carried", async () => {
+    // A slot holding a link carries the linked document's atoms as `followRef`
+    // entries; they name no principal here, so the resolved cell is read.
+    const resolved = unloadedCell();
+    const element = connectedElement();
+
+    try {
+      element.value = {
+        getCfcLabel: () =>
+          Promise.resolve(authoredByLabel("did:example:alice")),
+      };
+      element.author = {
+        get: () => ({ name: "Alice" }),
+        getCfcLabel: () =>
+          Promise.resolve({
+            version: 1 as const,
+            entries: [{
+              path: [],
+              label: {
+                integrity: [{
+                  kind: "represents-principal",
+                  subject: "did:example:bob",
+                }],
+              },
+              observes: "followRef" as const,
+            }],
+          }),
+        resolveAsCell: () => Promise.resolve(resolved),
+      };
+
+      await element.refreshLabel();
+      await element.refreshAuthorClaim();
+      expect(resolved.allAskedForLabels()).toBe(true);
+
+      await resolved.load(
+        linkedProfileLabel("did:example:alice", "did:example:alice"),
+      );
+
+      expect(element.authorshipState).toBe("verified");
+    } finally {
+      element.disconnectedCallback();
+    }
+  });
+
   it("keeps one watch across reads while the resolved cell is unloaded", async () => {
     const resolved = unloadedCell();
     const element = connectedElement();
@@ -946,12 +990,66 @@ describe("CFCFCAuthorship integrity matching", () => {
     )).toBe(false);
   });
 
-  it("matches canonical string atoms without treating arbitrary author ids as proof", () => {
+  it("matches no kind the runtime does not guard", () => {
+    // A pattern sets `kind` and may write any atom of a kind outside the
+    // principal claims, so such an atom proves nothing about its author.
+    const view = {
+      version: 1 as const,
+      entries: [{
+        path: [],
+        label: { integrity: [{ kind: "x-auth", subject: "alice" }] },
+      }],
+    };
+    expect(integrityAtomMatchesAuthor(
+      { kind: "x-auth", subject: "alice" },
+      "alice",
+      "x-auth",
+    )).toBe(false);
+    expect(authorshipStateForLabel(view, "alice", "x-auth")).toBe("unknown");
+  });
+
+  it("matches a represents-principal claim only when its subject is a DID", () => {
+    // Without an owner, a pattern may write a represents-principal subject
+    // that is not a DID; no reader takes that for a principal.
+    expect(integrityAtomMatchesAuthor(
+      { kind: "represents-principal", subject: "alice" },
+      "alice",
+      "represents-principal",
+    )).toBe(false);
+  });
+
+  it("counts no string atom as authorship integrity", () => {
+    // A spelling no reader matches is not a claim, verified or otherwise.
+    const view = {
+      version: 1 as const,
+      entries: [{
+        path: [],
+        label: { integrity: ["authored-by:bob"] },
+      }],
+    };
+    expect(authorshipStateForLabel(view, "alice", "authored-by")).toBe(
+      "unknown",
+    );
+  });
+
+  it("matches no string atom and no author field but the subject", () => {
+    // The runtime refuses a pattern-authored claim spelled any other way, so
+    // these are claims nothing checked.
     expect(integrityAtomMatchesAuthor(
       "authored-by:alice",
       "alice",
       "authored-by",
-    )).toBe(true);
+    )).toBe(false);
+    expect(integrityAtomMatchesAuthor(
+      { kind: "authored-by", subject: "bob", author: "alice" },
+      "alice",
+      "authored-by",
+    )).toBe(false);
+    expect(integrityAtomMatchesAuthor(
+      { kind: "authored-by", subject: " alice" },
+      "alice",
+      "authored-by",
+    )).toBe(false);
     expect(integrityAtomMatchesAuthor(
       "alice",
       "alice",

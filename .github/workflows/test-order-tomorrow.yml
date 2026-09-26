@@ -13,10 +13,11 @@ name: Tomorrow's Test Order
 # way it is early on a Pacific day, so one schedule entry serves the whole
 # year, and a run that starts hours late still asks for the same next day.
 #
-# The suites are the CI workflow's own, called with the seed. The CI workflow
-# skips its coverage, topology, attestation and deploy jobs when called. The
-# records relay follows this workflow, and the records carry the seed they
-# ran under, which keeps them apart from the commit's own runs.
+# The suites are the CI workflow's own, called with the seed, which runs every
+# test the way a push to main does. The CI workflow skips the job that gates
+# coverage and topology, and its build, attestation and deploy jobs, when
+# called. The records relay follows this workflow, and the records carry the
+# seed they ran under, which keeps them apart from the commit's own runs.
 on:
   schedule:
     - cron: "0 11 * * *" # Daily, 11:00 UTC

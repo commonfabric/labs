@@ -1,15 +1,13 @@
 /** Tests the stable server-execution CI role mapping. */
 
 import { expect } from "@std/expect";
-import { fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import {
   assertServerExecutionCiPosture,
-  runServerExecutionCiCommand,
-  serverExecutionCiEnvironment,
   serverExecutionCiLane,
+  verifyServerExecutionPosture,
 } from "./server-execution-ci.ts";
 
 describe("server-execution-ci", () => {
@@ -44,35 +42,6 @@ describe("server-execution-ci", () => {
     );
   });
 
-  it("runs as the program the workflow invokes, with no permissions", async () => {
-    // CI's resolve and probe steps run the adapter as a program
-    // (`deno run tasks/server-execution-ci-command.ts …`, no flags), so it is
-    // exercised the same way: it needs no permission, prints exactly the
-    // library's lines, and turns a bad role into a failing step.
-    const adapter = fromFileUrl(
-      new URL("./server-execution-ci-command.ts", import.meta.url),
-    );
-    const run = (...args: string[]) =>
-      new Deno.Command(Deno.execPath(), {
-        args: ["run", adapter, ...args],
-        cwd: fromFileUrl(new URL("..", import.meta.url)),
-        stdout: "piped",
-        stderr: "piped",
-      }).output();
-
-    const env = await run("env", "opposite");
-    expect(env.success).toBe(true);
-    expect(new TextDecoder().decode(env.stdout)).toBe(
-      `${serverExecutionCiEnvironment("opposite").join("\n")}\n`,
-    );
-
-    const bad = await run("env", "sideways");
-    expect(bad.code).toBe(1);
-    expect(new TextDecoder().decode(bad.stderr)).toContain(
-      "Expected server-execution CI role",
-    );
-  });
-
   for (const defaultEnabled of [false, true]) {
     describe(`with the default ${defaultEnabled ? "ON" : "OFF"}`, () => {
       it("leaves the default role implicit and selects its opposite explicitly", () => {
@@ -96,24 +65,6 @@ describe("server-execution-ci", () => {
             : "server-execution",
           experimentalValue: defaultEnabled ? "false" : "true",
         });
-      });
-
-      it("exports the actual arm and only makes the opposite role explicit", () => {
-        expect(
-          serverExecutionCiEnvironment("default", defaultEnabled),
-        ).toEqual([
-          `SERVER_EXECUTION_ENABLED=${defaultEnabled}`,
-          "CF_TEST_RECORDS_VARIANT=",
-        ]);
-        expect(
-          serverExecutionCiEnvironment("opposite", defaultEnabled),
-        ).toEqual([
-          `SERVER_EXECUTION_ENABLED=${!defaultEnabled}`,
-          `CF_TEST_RECORDS_VARIANT=${
-            defaultEnabled ? "server-execution-off" : "server-execution"
-          }`,
-          `EXPERIMENTAL_SERVER_EXECUTION=${!defaultEnabled}`,
-        ]);
       });
 
       it("accepts a uniform server and baked-shell posture", () => {
@@ -171,28 +122,8 @@ describe("server-execution-ci", () => {
     ).toThrow("shell define is true");
   });
 
-  it("runs the environment command and rejects malformed commands", async () => {
-    const logged: string[] = [];
-    await runServerExecutionCiCommand(
-      ["env", "opposite"],
-      fetch,
-      (message) => logged.push(message),
-    );
-    expect(logged).toEqual([
-      serverExecutionCiEnvironment("opposite").join("\n"),
-    ]);
-
-    await expect(
-      runServerExecutionCiCommand(["env", "sideways"]),
-    ).rejects.toThrow("Expected server-execution CI role");
-    await expect(
-      runServerExecutionCiCommand(["probe", "default"]),
-    ).rejects.toThrow("Expected `env <role>` or `probe <role> <toolshed-url>`");
-  });
-
   it("probes both roles and reports HTTP failures", async () => {
     const requested: string[] = [];
-    const logged: string[] = [];
     for (const role of ["default", "opposite"] as const) {
       const lane = serverExecutionCiLane(role);
       const fetcher = (input: string | URL | Request): Promise<Response> => {
@@ -206,10 +137,10 @@ describe("server-execution-ci", () => {
           : { servingLoop: lane.enabled ? {} : null };
         return Promise.resolve(Response.json(body));
       };
-      await runServerExecutionCiCommand(
-        ["probe", role, "https://example.test/"],
+      await verifyServerExecutionPosture(
+        role,
+        "https://example.test/",
         fetcher,
-        (message) => logged.push(message),
       );
     }
     expect(requested).toEqual([
@@ -218,15 +149,6 @@ describe("server-execution-ci", () => {
       "https://example.test/api/meta",
       "https://example.test/api/health/stats",
     ]);
-    expect(logged).toEqual([
-      `Verified default server-execution lane (${
-        serverExecutionCiLane("default").label
-      }).`,
-      `Verified opposite server-execution lane (${
-        serverExecutionCiLane("opposite").label
-      }).`,
-    ]);
-
     const failedFetch = (input: string | URL | Request): Promise<Response> =>
       Promise.resolve(
         new Response(null, {
@@ -234,8 +156,9 @@ describe("server-execution-ci", () => {
         }),
       );
     await expect(
-      runServerExecutionCiCommand(
-        ["probe", "default", "https://example.test"],
+      verifyServerExecutionPosture(
+        "default",
+        "https://example.test",
         failedFetch,
       ),
     ).rejects.toThrow("meta=503, stats=500");

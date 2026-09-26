@@ -19,15 +19,27 @@ describe("BaseValueVisitor", () => {
       return undefined;
     }
 
-    override visitedFabricArrayGap(): undefined {
-      return undefined;
-    }
-
-    override visitedFabricInstance(): undefined {
+    override visitedFabricInstanceState(): undefined {
       return undefined;
     }
 
     override visitedFabricPlainObjectEntry(): undefined {
+      return undefined;
+    }
+
+    override visitingFabricArrayElement(): undefined {
+      return undefined;
+    }
+
+    override visitingFabricArrayGap(): undefined {
+      return undefined;
+    }
+
+    override visitingFabricInstanceState(): undefined {
+      return undefined;
+    }
+
+    override visitingFabricPlainObjectEntry(): undefined {
       return undefined;
     }
   }

@@ -3,8 +3,8 @@
 `docs/check.sh` (which runs `docs/check.ts`) type-checks the TypeScript and TSX
 code blocks embedded in the Markdown under `docs/`, except `docs/history/` —
 archived documents keep the API of their era and are not kept compiling. It
-runs in CI as the "Type-check docs code blocks" step of the `check` job. Run
-it locally with:
+runs in CI as the `check-docs` gate of the `repo-gates` suite in the test
+topology. Run it locally with:
 
 ```text
 deno task check-docs            # all of docs/ (minus history/)

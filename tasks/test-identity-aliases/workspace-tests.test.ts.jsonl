@@ -1,0 +1,2 @@
+{"date":"2026-09-25","from":{"k":"unit","s":"tasks","n":"runTests records the packages it selected and never started"},"to":{"k":"unit","s":"tasks","n":"runTests without a coverage directory names the packages it never started"}}
+{"date":"2026-09-25","from":{"k":"unit","s":"tasks","n":"runTests reports a failure and stops scheduling packages"},"to":{"k":"unit","s":"tasks","n":"runTests without a coverage directory reports a failure and stops scheduling packages"}}

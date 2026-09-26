@@ -243,10 +243,21 @@ describe("DefaultValueVisitor", () => {
         const vis = new Tracing();
 
         expect(vis.visitedFabricArrayElement([1], 0, 1)).toBeUndefined();
-        expect(vis.visitedFabricArrayGap([], 0, 1)).toBeUndefined();
-        expect(vis.visitedFabricInstance(new FabricMap(new Map()), {}))
+        expect(vis.visitedFabricInstanceState(new FabricMap(new Map()), {}))
           .toBeUndefined();
         expect(vis.visitedFabricPlainObjectEntry({}, "k", 1)).toBeUndefined();
+      });
+    });
+
+    describe("the `visiting*()` methods", () => {
+      it("return `undefined`", () => {
+        const vis = new Tracing();
+
+        expect(vis.visitingFabricArrayElement([1], 0, 1)).toBeUndefined();
+        expect(vis.visitingFabricArrayGap([], 0, 1)).toBeUndefined();
+        expect(vis.visitingFabricInstanceState(new FabricMap(new Map()), {}))
+          .toBeUndefined();
+        expect(vis.visitingFabricPlainObjectEntry({}, "k", 1)).toBeUndefined();
       });
     });
   });

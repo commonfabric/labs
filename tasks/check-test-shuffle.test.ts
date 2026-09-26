@@ -140,15 +140,15 @@ describe("check-test-shuffle", () => {
     it("refuses a runner that forwards its flags and is given none", () => {
       expect(
         problemWith(
-          "deno run -A ../../tasks/run-sharded-test-files.ts X piece . -- -A",
+          "deno run -A ../../tasks/run-test-batches.ts . -- -A",
         ),
-      ).toContain("run-sharded-test-files.ts");
+      ).toContain("run-test-batches.ts");
     });
 
     it("accepts that same runner once it is given one", () => {
       expect(
         problemWith(
-          `deno run -A ../../tasks/run-sharded-test-files.ts X piece . -- ${SHUFFLE}`,
+          `deno run -A ../../tasks/run-test-batches.ts . -- ${SHUFFLE}`,
         ),
       ).toBeUndefined();
     });
@@ -231,7 +231,7 @@ describe("check-test-shuffle", () => {
     // What the real tree holds, so a case can take one thing away from
     // it and see only that thing reported.
     const TRACKED = [
-      "tasks/run-sharded-test-files.ts",
+      "tasks/run-test-batches.ts",
       "packages/deno-web-test/runner.ts",
       "packages/cli/lib/test-runner.ts",
       "packages/cli/integration/integration.sh",
@@ -239,7 +239,7 @@ describe("check-test-shuffle", () => {
       "packages/cli/integration/fuse-exec.sh",
     ];
     const WRITTEN = [
-      "run-sharded-test-files.ts deno-web-test/cli.ts cf test",
+      "run-test-batches.ts deno-web-test/cli.ts cf test",
     ];
 
     it("says nothing while every record still describes the tree", () => {
@@ -252,7 +252,7 @@ describe("check-test-shuffle", () => {
         ["deno-web-test/cli.ts cf test"],
       );
       expect(stale).toHaveLength(1);
-      expect(stale[0]!.command).toBe("run-sharded-test-files.ts");
+      expect(stale[0]!.command).toBe("run-test-batches.ts");
     });
 
     it("names a runner whose implementation has moved", () => {

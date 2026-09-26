@@ -4,7 +4,7 @@
  *
  * The half read is a member's `deno-test` task where it declares one and
  * its `test` task otherwise, followed by that half's own dependencies,
- * taking the first that reads as a single `deno test` or as the sharded
+ * taking the first that reads as a single `deno test` or as the batch
  * runner's wrapper around one. A dependency of a dependency is not
  * reached. A member with one is
  * enumerated a file at a time, so a lane can be asked for a few files out

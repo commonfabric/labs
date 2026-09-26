@@ -72,12 +72,36 @@ describe("represents-principal", () => {
       expect(authorPrincipalCandidates(label)).toEqual([DID]);
     });
 
-    it("returns the DID of a string-form atom", () => {
+    it("returns no DID for a string-form atom", () => {
+      // The runtime refuses the string form from a pattern, so a reader that
+      // accepted it would trust a claim nothing checked.
       const label = view([
         {
           path: ["name"],
           label: { integrity: [`represents-principal:${DID}`] },
         },
+      ]);
+      expect(authorPrincipalCandidates(label)).toEqual([]);
+    });
+
+    it("returns no DID for a subject that is not a DID as written", () => {
+      const label = view([
+        representsAt(["name"], ` ${DID}`),
+        representsAt(["avatar"], `${DID}\n`),
+        representsAt(["bio"], DID.replace("did:", "DID:")),
+        representsAt(["elements"], "alice"),
+      ]);
+      expect(authorPrincipalCandidates(label)).toEqual([]);
+    });
+
+    it("does not count an entry a link carries from another document", () => {
+      // A document linking Bob's profile at a top-level field holds a copy of
+      // that profile's label there, marked as a link's; it says what the link
+      // points to, not whom this document represents.
+      const label = view([
+        representsAt(["name"], DID),
+        { ...representsAt(["friend"], OTHER_DID), observes: "followRef" },
+        { ...representsAt([], OTHER_DID), observes: "followRef" },
       ]);
       expect(authorPrincipalCandidates(label)).toEqual([DID]);
     });

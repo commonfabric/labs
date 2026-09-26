@@ -72,7 +72,7 @@ describe("to-encodable-form", () => {
         ],
       };
 
-      const result = withAliasBindings(tree as any) as any;
+      const result = withAliasBindings(tree) as any;
 
       // All 5 children should have the full style object
       for (let i = 0; i < 5; i++) {
@@ -88,7 +88,7 @@ describe("to-encodable-form", () => {
       const circular: any = { name: "root", child: {} };
       circular.child.parent = circular; // true circular reference
 
-      const result = withAliasBindings(circular as any) as any;
+      const result = withAliasBindings(circular) as any;
 
       // The root should serialize, but the circular back-reference should be {}
       expect(result.name).toEqual("root");
@@ -105,7 +105,7 @@ describe("to-encodable-form", () => {
         ],
       };
 
-      const result = withAliasBindings(tree as any) as any;
+      const result = withAliasBindings(tree) as any;
 
       expect(result.items[0].meta).toEqual({ author: "test", version: 1 });
       expect(result.items[1].meta).toEqual({ author: "test", version: 1 });
@@ -123,7 +123,7 @@ describe("to-encodable-form", () => {
       });
 
       const result = withAliasBindings(
-        cellWithFalseSchema as any,
+        cellWithFalseSchema,
         (cell) => {
           const { schema, scope } = cell.export();
           return {
@@ -158,7 +158,7 @@ describe("to-encodable-form", () => {
       // pass through unchanged.
       const bytes = new FabricBytes(new Uint8Array([1, 2, 3]));
 
-      const result = withAliasBindings({ payload: bytes } as any) as any;
+      const result = withAliasBindings({ payload: bytes }) as any;
 
       expect(result.payload).toBe(bytes);
     });
@@ -169,15 +169,15 @@ describe("to-encodable-form", () => {
       // plain object and so passes `isValidFabricValue()`. That is the hazard:
       // not a lost value, but a legal one meaning something else, stored with
       // no trace of what it was. A `Date` goes the same way, to `{}`.
-      const fromBytes = withAliasBindings(new Uint8Array([7, 9]) as any) as any;
+      const fromBytes = withAliasBindings(new Uint8Array([7, 9])) as any;
       expect(fromBytes).toBeInstanceOf(FabricBytes);
       expect([...fromBytes.slice()]).toEqual([7, 9]);
 
-      const fromDate = withAliasBindings(new Date(0) as any) as any;
+      const fromDate = withAliasBindings(new Date(0)) as any;
       expect(fromDate).toBeInstanceOf(FabricEpochNsec);
 
       const nested = withAliasBindings(
-        { v: new Uint8Array([4, 5]) } as any,
+        { v: new Uint8Array([4, 5]) },
       ) as any;
       expect(nested.v).toBeInstanceOf(FabricBytes);
       expect([...nested.v.slice()]).toEqual([4, 5]);
@@ -189,11 +189,11 @@ describe("to-encodable-form", () => {
       // enumerable own-props as `{}`, so it refuses instead -- the same
       // disposition the sibling binding walk uses.
       const err = FabricError.fromNativeError(new Error("boom"));
-      expect(() => withAliasBindings(err as any)).toThrow("FabricError");
-      expect(() => withAliasBindings({ e: err } as any)).toThrow("FabricError");
+      expect(() => withAliasBindings(err)).toThrow("FabricError");
+      expect(() => withAliasBindings({ e: err })).toThrow("FabricError");
 
       // ...including one the conversion itself mints, from a JS `Error`.
-      expect(() => withAliasBindings({ e: new Error("x") } as any)).toThrow(
+      expect(() => withAliasBindings({ e: new Error("x") })).toThrow(
         "FabricError",
       );
     });
@@ -212,7 +212,7 @@ describe("to-encodable-form", () => {
       };
       tree.self = tree;
 
-      const out = withAliasBindings(tree as any) as any;
+      const out = withAliasBindings(tree) as any;
 
       // the native converted...
       expect(out.blob).toBeInstanceOf(FabricBytes);
@@ -233,7 +233,7 @@ describe("to-encodable-form", () => {
       // `isValidFabricValue()` while meaning something else, with nothing
       // downstream able to notice. They must be refused here.
       const sym = Symbol("s");
-      expect(() => withAliasBindings({ a: 1, [sym]: "x" } as any)).toThrow(
+      expect(() => withAliasBindings({ a: 1, [sym]: "x" })).toThrow(
         "Not representable",
       );
       expect(() =>
@@ -242,16 +242,16 @@ describe("to-encodable-form", () => {
           get live() {
             return 42;
           },
-        } as any)
+        })
       ).toThrow("Not representable");
       expect(() =>
         withAliasBindings(
-          Object.assign(Object.create(null), { a: 1 }) as any,
+          Object.assign(Object.create(null), { a: 1 }),
         )
       ).toThrow("Not representable");
 
       // ...while an ordinary inert plain object still walks through untouched.
-      expect(withAliasBindings({ a: 1 } as any)).toEqual({ a: 1 });
+      expect(withAliasBindings({ a: 1 })).toEqual({ a: 1 });
     });
 
     it("throws given an array that is not inert, rather than laundering it", () => {
@@ -267,38 +267,36 @@ describe("to-encodable-form", () => {
       // shared with the plain-object refusal, so it would still pass if one of
       // these were classified as an object instead -- which is exactly the
       // regression that would make the reported reason wrong.
-      expect(() =>
-        withAliasBindings(Object.assign([1, 2], { extra: "x" }) as any)
-      ).toThrow("array that is not an inert array");
+      expect(() => withAliasBindings(Object.assign([1, 2], { extra: "x" })))
+        .toThrow("array that is not an inert array");
       const accessorIndexed = [1, 2];
       Object.defineProperty(accessorIndexed, 0, {
         get: () => 42,
         enumerable: true,
         configurable: true,
       });
-      expect(() => withAliasBindings(accessorIndexed as any)).toThrow(
+      expect(() => withAliasBindings(accessorIndexed)).toThrow(
         "array that is not an inert array",
       );
       class Subclassed extends Array {}
-      expect(() => withAliasBindings(Subclassed.from([1, 2]) as any)).toThrow(
+      expect(() => withAliasBindings(Subclassed.from([1, 2]))).toThrow(
         "array that is not an inert array",
       );
-      expect(() =>
-        withAliasBindings(Object.setPrototypeOf([1, 2], null) as any)
-      ).toThrow("array that is not an inert array");
+      expect(() => withAliasBindings(Object.setPrototypeOf([1, 2], null)))
+        .toThrow("array that is not an inert array");
 
       // ...while an ordinary inert array still walks through untouched.
-      expect(withAliasBindings([1, 2] as any)).toEqual([1, 2]);
+      expect(withAliasBindings([1, 2])).toEqual([1, 2]);
     });
 
     it("leaves ordinary containers alone", () => {
       // The conversion above must not reach an inert plain object or an array;
       // those are already `FabricValue`s and are walked, not converted.
-      const obj = withAliasBindings({ a: 1, b: "x" } as any) as any;
+      const obj = withAliasBindings({ a: 1, b: "x" }) as any;
       expect(obj).toEqual({ a: 1, b: "x" });
       expect(obj.constructor).toBe(Object);
 
-      const arr = withAliasBindings([1, "x"] as any) as any;
+      const arr = withAliasBindings([1, "x"]) as any;
       expect(arr).toEqual([1, "x"]);
       expect(Array.isArray(arr)).toBe(true);
     });

@@ -44,21 +44,6 @@ export function serverExecutionCiLane(
   };
 }
 
-/** Returns the lines a workflow writes to `$GITHUB_ENV` for `role`. */
-export function serverExecutionCiEnvironment(
-  role: ServerExecutionCiRole,
-  defaultEnabled = SERVER_EXECUTION_DEFAULT_ENABLED,
-): string[] {
-  const lane = serverExecutionCiLane(role, defaultEnabled);
-  return [
-    `SERVER_EXECUTION_ENABLED=${lane.enabled}`,
-    `CF_TEST_RECORDS_VARIANT=${lane.recordVariant ?? ""}`,
-    ...(lane.experimentalValue === undefined
-      ? []
-      : [`EXPERIMENTAL_SERVER_EXECUTION=${lane.experimentalValue}`]),
-  ];
-}
-
 /** Verifies the server and baked shell both carry the requested lane posture. */
 export function assertServerExecutionCiPosture(
   role: ServerExecutionCiRole,
@@ -118,32 +103,4 @@ export async function verifyServerExecutionPosture(
   const meta = await metaResponse.json() as Record<string, unknown>;
   const stats = await statsResponse.json() as Record<string, unknown>;
   assertServerExecutionCiPosture(role, meta, stats);
-}
-
-/** Runs the small workflow-facing CLI. Exported so its error paths stay tested. */
-export async function runServerExecutionCiCommand(
-  args: readonly string[],
-  fetcher: typeof fetch = fetch,
-  log: (message: string) => void = console.log,
-): Promise<void> {
-  const [command, role, baseUrl] = args;
-  if (role !== "default" && role !== "opposite") {
-    throw new Error(
-      "Expected server-execution CI role `default` or `opposite`.",
-    );
-  }
-  if (command === "env") {
-    log(serverExecutionCiEnvironment(role).join("\n"));
-  } else if (command === "probe" && baseUrl !== undefined) {
-    await verifyServerExecutionPosture(role, baseUrl, fetcher);
-    log(
-      `Verified ${role} server-execution lane (${
-        serverExecutionCiLane(role).label
-      }).`,
-    );
-  } else {
-    throw new Error(
-      "Expected `env <role>` or `probe <role> <toolshed-url>`.",
-    );
-  }
 }

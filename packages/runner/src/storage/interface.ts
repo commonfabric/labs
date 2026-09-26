@@ -2136,6 +2136,18 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   setCfcTrustSnapshot(snapshot: TrustSnapshot | undefined): void;
 
   /**
+   * Marks the values the runtime initializes in this transaction as
+   * attributed to the acting principal (`CfcTxState.attributedInitialization`):
+   * the runner marks the transaction of a handler run the principal invoked,
+   * and a start deferred from one. Pattern code reaches the transaction its
+   * cells are bound to, so the mark takes the runtime's authorization and a
+   * call without it does nothing.
+   */
+  markCfcAttributedInitialization(
+    authorization: RuntimeWritePolicyAuthorization,
+  ): void;
+
+  /**
    * Sets (or clears) the implementation identity that will be folded
    * into the CFC digest for this transaction. See ownership note above.
    */

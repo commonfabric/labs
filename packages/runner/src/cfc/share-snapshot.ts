@@ -26,6 +26,7 @@ import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import { cfcObservationFitsCeiling } from "./observation.ts";
 import { collectConsumedLabel } from "./prepare.ts";
+import { representsPrincipalSubject } from "./represents-principal.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { isRendererTrustedEvent } from "./ui-contract.ts";
 
@@ -130,13 +131,14 @@ function resolveAudience(
   const metadata = readStoredCfcMetadata(tx, destination);
   const view = cfcLabelViewFromMetadata(metadata, destination.path);
   const subjects = new Set(
-    view?.entries.filter((entry) => entry.path.length === 0)
+    view?.entries.filter((entry) =>
+      entry.path.length === 0 && entry.observes !== "followRef"
+    )
       .flatMap((entry) => entry.label.integrity ?? [])
-      .filter((atom) =>
-        isObjectNotArray(atom) && atom.kind === "represents-principal" &&
-        isDID(atom.subject)
-      )
-      .map((atom) => (atom as { subject: string }).subject),
+      .flatMap((atom) => {
+        const subject = representsPrincipalSubject(atom);
+        return subject === undefined ? [] : [subject];
+      }),
   );
   if (subjects.size !== 1) {
     throw new Error(

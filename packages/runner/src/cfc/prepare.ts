@@ -13,7 +13,7 @@ import {
 } from "@commonfabric/data-model-schema";
 import { walkSchemaDocumentClosure } from "@commonfabric/data-model-schema/schema-closure";
 import { anySchema } from "@commonfabric/data-model-schema/schema-walk";
-import { isDID } from "@commonfabric/identity/did";
+import { isWellFormedDID } from "@commonfabric/identity/did";
 import {
   containsExternalSchemaRef,
   formatExternalSchemaRef,
@@ -99,6 +99,12 @@ import {
 } from "../storage/transaction-inspection.ts";
 import { atomPropagationClass } from "./atom-classes.ts";
 import {
+  PRINCIPAL_CLAIM_KINDS,
+  principalClaimSpelling,
+  representsPrincipalSubject,
+  subjectResemblesPrincipal,
+} from "./represents-principal.ts";
+import {
   canonicalizeCfcMetadata,
   canonicalizeLogicalPath,
 } from "./canonical.ts";
@@ -182,6 +188,7 @@ import {
 } from "./schema-refs.ts";
 import { createTrustResolver } from "./trust.ts";
 import {
+  CFC_ENFORCING_STRICTNESS,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
   cfcEnforcementStrictness,
@@ -815,10 +822,6 @@ const hasLabelValues = (label: IFCLabel): boolean =>
   (label.integrity?.length ?? 0) > 0;
 
 const CURRENT_PRINCIPAL_PLACEHOLDER_KEY = "__ctCurrentPrincipal";
-const CURRENT_PRINCIPAL_CLAIM_KINDS = new Set([
-  "authored-by",
-  "represents-principal",
-]);
 
 const isCurrentPrincipalPlaceholder = (value: unknown): boolean =>
   isObjectOrArray(value) && value[CURRENT_PRINCIPAL_PLACEHOLDER_KEY] === true;
@@ -889,44 +892,59 @@ const isCurrentPrincipalClaimAtom = (value: unknown): value is {
 } =>
   isObjectOrArray(value) &&
   typeof value.kind === "string" &&
-  CURRENT_PRINCIPAL_CLAIM_KINDS.has(value.kind);
+  PRINCIPAL_CLAIM_KINDS.has(value.kind);
 
-const hasLiteralDidCurrentPrincipalClaim = (value: unknown): boolean => {
-  if (Array.isArray(value)) {
-    return value.some(hasLiteralDidCurrentPrincipalClaim);
-  }
-  if (isCurrentPrincipalClaimAtom(value)) {
-    return isDID(value.subject);
-  }
-  if (isObjectOrArray(value)) {
-    return Object.values(value).some(hasLiteralDidCurrentPrincipalClaim);
-  }
-  return false;
-};
-
-const literalDidSubjectsForPrincipalClaim = (
+/**
+ * Why `value`, a schema's authored integrity, holds a principal claim a pattern
+ * may not write, or `undefined` when it holds none. Every spelling
+ * `principalClaimSpelling` recognizes, at any depth, must be the canonical
+ * object of exactly `kind` and `subject`, and its subject must be the runtime
+ * placeholder, `owner` when the schema declares one, or, without an owner, a
+ * literal that does not resemble a principal. So no reader of the canonical
+ * form, and no reader that normalizes some other spelling into it, resolves a
+ * pattern-written claim to a principal the runtime did not put there.
+ */
+const forgedPrincipalClaimReason = (
   value: unknown,
-  kind: string,
-  subjects: string[] = [],
-): string[] => {
+  owner: string | undefined,
+  path: readonly string[],
+): string | undefined => {
   if (Array.isArray(value)) {
     for (const entry of value) {
-      literalDidSubjectsForPrincipalClaim(entry, kind, subjects);
+      const reason = forgedPrincipalClaimReason(entry, owner, path);
+      if (reason !== undefined) return reason;
     }
-    return subjects;
+    return undefined;
   }
-  if (isCurrentPrincipalClaimAtom(value) && value.kind === kind) {
-    if (isDID(value.subject)) {
-      subjects.push(value.subject);
+  const spelling = principalClaimSpelling(value);
+  if (spelling === "string") {
+    return `current-principal integrity must be an object of kind and subject at /${
+      path.join("/")
+    }`;
+  }
+  if (spelling === "object") {
+    const claim = value as Record<string, unknown>;
+    if (Object.keys(claim).some((key) => key !== "kind" && key !== "subject")) {
+      return `current-principal integrity must carry only kind and subject at /${
+        path.join("/")
+      }`;
     }
-    return subjects;
+    const subject = claim.subject;
+    if (
+      isCurrentPrincipalPlaceholder(subject) ||
+      (owner !== undefined && subject === owner) ||
+      (owner === undefined && !subjectResemblesPrincipal(subject))
+    ) {
+      return undefined;
+    }
+    return `current-principal integrity subject must be runtime resolved at /${
+      path.join("/")
+    }`;
   }
   if (isObjectOrArray(value)) {
-    for (const entry of Object.values(value)) {
-      literalDidSubjectsForPrincipalClaim(entry, kind, subjects);
-    }
+    return forgedPrincipalClaimReason(Object.values(value), owner, path);
   }
-  return subjects;
+  return undefined;
 };
 
 const metadataAppliesToAnyPath = (
@@ -1394,6 +1412,118 @@ const attemptsOnlyApplicationsAt = (
   }
   return unmatched.length === 0;
 };
+
+/**
+ * Whether `path` lies at or under a value the runtime initialized on nobody's
+ * behalf, so that a claim its schema would add about the current principal —
+ * that the value represents or was authored by them — describes nothing the
+ * acting principal did.
+ *
+ * A value initialized in this transaction — a constructed cell's seed, the
+ * reference that exposes it, a new field's default, a cell a pattern's setup
+ * projects a result field to — is the pattern's default; the principal whose
+ * runtime constructed the cell chose nothing of it. The transaction of a
+ * handler run is the exception (`CfcTxState.attributedInitialization`): the
+ * principal invoked the handler, and what it initializes is theirs as any
+ * write of theirs is.
+ *
+ * A preserved runtime output and a replayed argument slot leave their path as
+ * it stands, in any transaction, and are nobody's act: the claim a stored
+ * label makes there is carried forward (`persistedLabelEntries`). A path the
+ * transaction does change at, a handler's write over a replayed slot among
+ * them, is no replay and is attributed as the transaction is.
+ */
+const pathHoldsUnattributedInitialization = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  const logicalPath = canonicalizeLogicalPath(path);
+  const covers = (address: {
+    space: MemorySpace;
+    id: string;
+    scope?: ReturnType<typeof normalizeCellScope>;
+    path: readonly string[];
+  }): boolean =>
+    address.space === target.space && address.id === target.id &&
+    normalizeCellScope(address.scope) === normalizeCellScope(target.scope) &&
+    concretePathHasPrefix(logicalPath, canonicalizeLogicalPath(address.path));
+  const inputs = tx.getCfcState().writePolicyInputs;
+  if (
+    !tx.getCfcState().attributedInitialization &&
+    inputs.some((input) => {
+      if (input.kind === "structural-provenance") {
+        // A setup projection names the result field it projects and the
+        // internal cell holding the field's value; both are the pattern's own
+        // initialization (`writeIsPatternSetupInitialization`).
+        return input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
+          [input.target, ...input.sources].some(covers);
+      }
+      return input.kind === "initialization" &&
+        (input.mode === "seed" || input.mode === "projection" ||
+          input.mode === "default") &&
+        tx.isRuntimeWritePolicyInput(input) && covers(input.target) &&
+        valueEqual(
+          tx.readValueOrThrow({
+            space: target.space,
+            id: target.id as URI,
+            scope: target.scope,
+            path: [...input.target.path],
+          }, { meta: INTERNAL_VERIFIER_META }),
+          input.value,
+        );
+    })
+  ) {
+    return true;
+  }
+  const unchangedTarget = { ...target, id: target.id as URI };
+  return inputs.some((input) =>
+    tx.isRuntimeWritePolicyInput(input) &&
+    ((input.kind === "preserved-output" && covers(input.target) &&
+      writePreservesRuntimeOutput(tx, unchangedTarget)) ||
+      (input.kind === "initialization" && input.mode === "replay" &&
+        covers(input.target) &&
+        writeLeavesPathUnchanged(tx, unchangedTarget, path)))
+  );
+};
+
+/**
+ * What a label derived from a schema mints for the acting principal.
+ * `mintSchemaIntegrity` false leaves out every integrity atom the schema adds;
+ * `attributeCurrentPrincipal` false leaves out only the atoms that name the
+ * current principal — the `represents-principal` and `authored-by` claims —
+ * and keeps the rest.
+ */
+type LabelMintOptions = {
+  mintSchemaIntegrity?: boolean;
+  attributeCurrentPrincipal?: boolean;
+};
+
+/**
+ * The mint options for the label persisted at `path`: no schema integrity
+ * over a reference the runtime staged, and no claim about the current
+ * principal over a value the runtime initialized on nobody's behalf.
+ */
+const labelMintOptionsAt = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): LabelMintOptions => ({
+  mintSchemaIntegrity: !pathHoldsStagedReference(tx, target, path),
+  attributeCurrentPrincipal: !pathHoldsUnattributedInitialization(
+    tx,
+    target,
+    path,
+  ),
+});
 
 /** A single runtime output attempt may preserve an existing root reference. */
 const writePreservesRuntimeOutput = (
@@ -3991,18 +4121,27 @@ const currentPrincipalIntegrityReason = (
     const ownerPrincipal = isCurrentPrincipalPlaceholder(ownerPrincipalSpec)
       ? trustSnapshot.actingPrincipal
       : ownerPrincipalSpec;
-    if (!isDID(ownerPrincipal)) {
+    if (!isWellFormedDID(ownerPrincipal)) {
       return `ownerPrincipal must be a DID at /${path.join("/")}`;
+    }
+    const forgedOwnerClaim = forgedPrincipalClaimReason(
+      currentPrincipalValues,
+      ownerPrincipal,
+      path,
+    );
+    if (forgedOwnerClaim !== undefined) {
+      return forgedOwnerClaim;
     }
     const resolvedCurrentPrincipalValues = resolveCurrentPrincipalLabelValues(
       currentPrincipalValues,
       trustSnapshot.actingPrincipal,
     ) ?? currentPrincipalValues;
-    const representedOwners = literalDidSubjectsForPrincipalClaim(
-      resolvedCurrentPrincipalValues,
-      "represents-principal",
+    // Only an atom the label holds directly counts, since that is all a
+    // reader reads.
+    const representsOwner = resolvedCurrentPrincipalValues.some((atom) =>
+      representsPrincipalSubject(atom) === ownerPrincipal
     );
-    if (!representedOwners.some((subject) => subject === ownerPrincipal)) {
+    if (!representsOwner) {
       return `ownerPrincipal requires matching represents-principal integrity at /${
         path.join("/")
       }`;
@@ -4018,10 +4157,13 @@ const currentPrincipalIntegrityReason = (
   if (currentPrincipalValues.length === 0) {
     return undefined;
   }
-  if (hasLiteralDidCurrentPrincipalClaim(currentPrincipalValues)) {
-    return `current-principal integrity subject must be runtime resolved at /${
-      path.join("/")
-    }`;
+  const forgedClaim = forgedPrincipalClaimReason(
+    currentPrincipalValues,
+    undefined,
+    path,
+  );
+  if (forgedClaim !== undefined) {
+    return forgedClaim;
   }
   if (!currentPrincipalValues.some(hasCurrentPrincipalPlaceholder)) {
     return undefined;
@@ -5713,11 +5855,16 @@ const derivePersistedLabel = (
   schemaLabel: IFCLabel,
   sourceEntryLabels?: Map<string, IFCLabel>,
   owningSpace?: MemorySpace,
-  options: { mintSchemaIntegrity?: boolean } = {},
+  options: LabelMintOptions = {},
 ): IFCLabel => {
   const mintSchemaIntegrity = options.mintSchemaIntegrity ?? true;
   const ifc = isObjectOrArray(schema) ? schema.ifc : undefined;
-  const actingPrincipal = tx.getCfcState().trustSnapshot?.actingPrincipal;
+  // A claim the schema makes about the current principal resolves to the
+  // acting principal, or, where the value is one they are not attributed
+  // (`attributeCurrentPrincipal: false`), to nobody and is left out.
+  const actingPrincipal = options.attributeCurrentPrincipal === false
+    ? undefined
+    : tx.getCfcState().trustSnapshot?.actingPrincipal;
   const copiedInputLabel = sourceEntryLabels && exactCopySourcePath(schema)
     ? sourceEntryLabels.get(pathKey(exactCopySourcePath(schema)!))
     : undefined;
@@ -6014,7 +6161,7 @@ const persistedLabelFromSchemaAtPath = (
   schema: JSONSchema,
   path: readonly string[],
   owningSpace: MemorySpace,
-  options: { mintSchemaIntegrity?: boolean } = {},
+  options: LabelMintOptions = {},
 ): IFCLabel | undefined => {
   const logicalPath = canonicalizeLogicalPath(path);
   const entries = cfcSchemaEntries(schema);
@@ -6079,7 +6226,7 @@ const rootLabelFromSchema = (
   tx: IExtendedStorageTransaction,
   schema: JSONSchema | undefined,
   owningSpace: MemorySpace,
-  options: { mintSchemaIntegrity?: boolean } = {},
+  options: LabelMintOptions = {},
 ): IFCLabel => {
   if (schema === undefined) {
     return {};
@@ -6156,6 +6303,119 @@ function bindLinkCurrentPrincipalClauses<Clause>(
   return bound;
 }
 
+/**
+ * `label` with every principal claim removed from its integrity. A link write
+ * applies this to what the link value itself carries, its schema and its label
+ * view, because pattern code chooses both and the write check
+ * `currentPrincipalIntegrityReason` never sees either. A link takes principal
+ * claims only from its source's stored label and, for a source this
+ * transaction writes, from the schema entries those writes reach
+ * (`checkedSchemaPrincipalClaims`).
+ */
+const withoutPrincipalClaims = (label: IFCLabel): IFCLabel => {
+  const integrity = label.integrity;
+  if (integrity === undefined) return label;
+  const kept = integrity.filter((atom) =>
+    principalClaimSpelling(atom) === undefined
+  );
+  if (kept.length === integrity.length) return label;
+  return { ...label, integrity: kept.length > 0 ? kept : undefined };
+};
+
+/** The document a link write's source or target address names. */
+const linkDocument = (address: LinkWritePolicyInput["source"]) => ({
+  space: address.space,
+  id: address.id as URI,
+  scope: normalizeCellScope(address.scope),
+});
+
+/**
+ * The principal claims a link may take from `schema`, a schema this
+ * transaction holds for a document it has not persisted yet: the claims the
+ * deepest schema entry covering `path` declares itself, resolved against the
+ * acting principal, when a write in this transaction reaches that entry, and
+ * none otherwise. `currentPrincipalIntegrityReason` checks an entry only when a
+ * write reaches it, so an entry no write reaches holds claims nothing checked.
+ * A claim another entry contributes, through a copy or projection, is not
+ * taken either.
+ *
+ * Reaching the entry means the check ran, not that it passed. Only an
+ * enforcing mode aborts the commit when a check fails; under `observe` or
+ * `disabled` a failed check only keeps the source's own declared label from
+ * persisting, so there this returns none. It cannot ask whether the source's
+ * check passed instead: link labels are derived while the documents of the
+ * transaction are verified one at a time, and the source may not have been
+ * verified yet.
+ */
+const checkedSchemaPrincipalClaims = (
+  tx: IExtendedStorageTransaction,
+  schema: JSONSchema,
+  document: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): readonly CfcAtom[] => {
+  if (
+    cfcEnforcementStrictness(tx.getCfcState().enforcementMode) <
+      CFC_ENFORCING_STRICTNESS
+  ) {
+    return [];
+  }
+  const logicalPath = canonicalizeLogicalPath(path);
+  let match: ReturnType<typeof cfcSchemaEntries>[number] | undefined;
+  for (const entry of cfcSchemaEntries(schema)) {
+    if (
+      isPrefix(entry.path, logicalPath) &&
+      (match === undefined || match.path.length < entry.path.length)
+    ) {
+      match = entry;
+    }
+  }
+  if (
+    match === undefined || !isObjectOrArray(match.schema) ||
+    !isObjectOrArray(match.schema.ifc) ||
+    !ifcEntryAppliesToAttemptedWrite(
+      tx,
+      document,
+      match.path,
+      match.schema,
+      match.root,
+    )
+  ) {
+    return [];
+  }
+  const ifc = match.schema.ifc;
+  const declared = [
+    ...(Array.isArray(ifc.integrity) ? ifc.integrity : []),
+    ...(Array.isArray(ifc.addIntegrity) ? ifc.addIntegrity : []),
+  ];
+  return (resolveCurrentPrincipalLabelValues(
+    declared,
+    tx.getCfcState().trustSnapshot?.actingPrincipal,
+  ) ?? []).filter((atom) => principalClaimSpelling(atom) !== undefined);
+};
+
+/**
+ * `label`, derived from a schema this transaction holds for a link's source,
+ * with only the principal claims `checkedSchemaPrincipalClaims` allows.
+ */
+const withCheckedPrincipalClaims = (
+  label: IFCLabel,
+  checked: readonly CfcAtom[],
+): IFCLabel => {
+  const stripped = withoutPrincipalClaims(label);
+  const kept = (label.integrity ?? []).filter((atom) =>
+    principalClaimSpelling(atom) !== undefined &&
+    checked.some((claim) => deepEqual(claim, atom))
+  );
+  return kept.length === 0 ? stripped : {
+    ...stripped,
+    integrity: [...(stripped.integrity ?? []), ...kept],
+  };
+};
+
 /** Derives the link's root label and its authoritative source view. */
 const derivePersistedLinkLabel = (
   tx: IExtendedStorageTransaction,
@@ -6202,21 +6462,27 @@ const derivePersistedLinkLabel = (
       tx.getCfcState().trustSnapshot?.actingPrincipal,
     );
   }
-  // A source that is itself a reference staged in this transaction mints
-  // nothing for the principal staging it, as its own slot does not.
+  // Only a schema this transaction's writes to the source are checked
+  // against can vouch for a principal claim; a setup result schema is not.
+  const sourceCandidate = candidateSchemas.get(targetKey(input.source));
+  // A source that is itself a reference staged in this transaction, or a
+  // value initialized on nobody's behalf, mints nothing for the acting
+  // principal, as its own slot does not.
   let pendingSourceLabel = pendingSourceSchema !== undefined
-    ? persistedLabelFromSchemaAtPath(
-      tx,
-      pendingSourceSchema,
-      input.source.path,
-      input.source.space,
-      {
-        mintSchemaIntegrity: !pathHoldsStagedReference(
-          tx,
-          input.source,
-          input.source.path,
-        ),
-      },
+    ? withCheckedPrincipalClaims(
+      persistedLabelFromSchemaAtPath(
+        tx,
+        pendingSourceSchema,
+        input.source.path,
+        input.source.space,
+        labelMintOptionsAt(tx, input.source, input.source.path),
+      ) ?? {},
+      sourceCandidate === undefined ? [] : checkedSchemaPrincipalClaims(
+        tx,
+        sourceCandidate,
+        linkDocument(input.source),
+        input.source.path,
+      ),
     )
     : undefined;
   if (pendingSourceSchema === undefined && sourceMetadata === undefined) {
@@ -6245,38 +6511,43 @@ const derivePersistedLinkLabel = (
         );
         // A reference the runtime staged at the target is not the inline
         // value this derivation stands for, so it mints nothing for the
-        // principal staging it.
-        pendingSourceLabel = persistedLabelFromSchemaAtPath(
-          tx,
-          pendingSourceSchema,
-          input.target.path,
-          input.target.space,
-          {
-            mintSchemaIntegrity: !pathHoldsStagedReference(
-              tx,
-              input.target,
-              input.target.path,
-            ),
-          },
+        // principal staging it; nor does a value the runtime initialized
+        // there on nobody's behalf.
+        pendingSourceLabel = withCheckedPrincipalClaims(
+          persistedLabelFromSchemaAtPath(
+            tx,
+            pendingSourceSchema,
+            input.target.path,
+            input.target.space,
+            labelMintOptionsAt(tx, input.target, input.target.path),
+          ) ?? {},
+          checkedSchemaPrincipalClaims(
+            tx,
+            targetCandidate,
+            linkDocument(input.target),
+            input.target.path,
+          ),
         );
       }
     }
   }
-  const linkSchemaLabel = rootLabelFromSchema(
+  const linkSchemaLabel = withoutPrincipalClaims(rootLabelFromSchema(
     tx,
     input.linkSchema,
     input.source.space,
-    {
-      mintSchemaIntegrity: !pathHoldsStagedReference(
-        tx,
-        input.target,
-        input.target.path,
-      ),
-    },
-  );
+    labelMintOptionsAt(
+      tx,
+      input.target,
+      input.target.path,
+    ),
+  ));
+  // Counted without the principal claims `persistedLinkEntries` strips from
+  // the view, so a view carrying only those does not stand in for the
+  // source's labels.
   const hasCarriedLabel =
-    input.cfcLabelView?.entries.some((entry) => hasLabelValues(entry.label)) ??
-      false;
+    input.cfcLabelView?.entries.some((entry) =>
+      hasLabelValues(withoutPrincipalClaims(entry.label))
+    ) ?? false;
   if (
     sourceMetadata === undefined && pendingSourceSchema === undefined &&
     !hasLabelValues(linkSchemaLabel) && !hasCarriedLabel &&
@@ -6426,10 +6697,10 @@ const persistedLinkEntries = (
     );
   };
   for (const entry of input.cfcLabelView?.entries ?? []) {
-    const gated = gateRuntimeMintedIntegrity(
+    const gated = withoutPrincipalClaims(gateRuntimeMintedIntegrity(
       cloneLabel(entry.label),
       linkIdentity,
-    );
+    ));
     if (!hasLabelValues(gated)) {
       continue;
     }
@@ -8104,13 +8375,11 @@ const verifyWriteFloor = (
         entry.label,
         entryLabels,
         target.space,
-        {
-          mintSchemaIntegrity: !pathHoldsStagedReference(
-            tx,
-            target,
-            entry.path,
-          ),
-        },
+        labelMintOptionsAt(
+          tx,
+          target,
+          entry.path,
+        ),
       ),
       ctx.identityForPath(entry.path),
     ).integrity ?? [];
@@ -8847,6 +9116,24 @@ export function* prepareBoundaryCommitSteps(
     // When an ingest target failed verification we keep the runtime's mark
     // (appended below) but drop the payload's declared policy label — a
     // non-rejecting commit must not store claims that didn't verify.
+    // A value initialized on nobody's behalf (`labelMintOptionsAt`) leaves
+    // the claim the stored label makes at its path about a principal: the
+    // claim is carried forward as it stands, so a replayed setup or a
+    // preserved output changes no attribution, and a source update by another
+    // principal strips none.
+    const existingPrincipalClaims = new Map<string, readonly CfcAtom[]>();
+    for (const e of existing?.labelMap.entries ?? []) {
+      if (e.origin !== "declared" && e.origin !== undefined) continue;
+      const claims = (e.label.integrity ?? []).filter((atom) =>
+        isCurrentPrincipalClaimAtom(atom) && typeof atom.subject === "string"
+      );
+      if (claims.length > 0) {
+        existingPrincipalClaims.set(
+          pathKey(canonicalizeLogicalPath(e.path)),
+          claims as readonly CfcAtom[],
+        );
+      }
+    }
     const remintedDeclaredPaths = new Map<string, readonly string[]>();
     const persistedLabelEntries: LabelMapEntry[] = ingestVerificationFailed
       ? []
@@ -8875,6 +9162,7 @@ export function* prepareBoundaryCommitSteps(
           ) {
             remintedDeclaredPaths.set(pathKey(entry.path), entry.path);
           }
+          const mint = labelMintOptionsAt(tx, target, entry.path);
           const derived = gateRuntimeMintedIntegrity(
             derivePersistedLabel(
               tx,
@@ -8882,16 +9170,15 @@ export function* prepareBoundaryCommitSteps(
               entry.label,
               mergedSchemaEntryLabels,
               target.space,
-              {
-                mintSchemaIntegrity: !pathHoldsStagedReference(
-                  tx,
-                  target,
-                  entry.path,
-                ),
-              },
+              mint,
             ),
             identityForSchemaPath(writeAuthorIdentities.get(key), entry.path),
           );
+          const carriedClaims = mint.attributeCurrentPrincipal === false
+            ? existingPrincipalClaims.get(
+              pathKey(canonicalizeLogicalPath(entry.path)),
+            )
+            : undefined;
           // Store confidentiality is grow-only (§8.12.1): a re-write of a path must
           // not drop confidentiality the labelMap already carried beyond the schema
           // (e.g. link-derived or carried-view atoms). Reads use longest-prefix
@@ -8902,12 +9189,22 @@ export function* prepareBoundaryCommitSteps(
           const prior = existingConfidentiality
             .filter((e) => isPrefix(e.path, entry.path))
             .flatMap((e) => e.confidentiality);
-          const label = prior.length > 0
-            ? {
-              ...derived,
-              confidentiality: mergeLabelValues(derived.confidentiality, prior),
-            }
-            : derived;
+          const label = {
+            ...derived,
+            ...(prior.length > 0
+              ? {
+                confidentiality: mergeLabelValues(
+                  derived.confidentiality,
+                  prior,
+                ),
+              }
+              : {}),
+            ...(carriedClaims !== undefined
+              ? {
+                integrity: mergeLabelValues(derived.integrity, carriedClaims),
+              }
+              : {}),
+          };
           // C5: an authored `ifc.observes` classes the declared entry (the
           // sqlite null-origin merge declares `observes:"value"` this way).
           // Anything but the four class values — including the absent

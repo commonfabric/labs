@@ -1,8 +1,9 @@
 /**
  * The `case "$SECTION"` table at the end of integration/fuse-exec.sh chooses
- * which phases a run executes, and each phase records as its own test. CI
- * dispatches the table through `CF_FUSE_INTEGRATION_SECTION` on the FUSE step
- * of the cli-integration-test job, and a run with no section dispatches `all`.
+ * which phases a run executes, and each phase records as its own test. A
+ * lane dispatches the table through `CF_FUSE_INTEGRATION_SECTION`, one unit of
+ * the test topology's `cli-fuse` suite per section, and a run with no section
+ * dispatches `all`.
  *
  * The script brings up one FUSE mount and one daemon and then works through a
  * piece on it, so a phase that reached for what a phase in another section
@@ -12,23 +13,31 @@
  * dispatches; the prelude every section depends on runs whichever section was
  * asked for; and the orderings the script's phases depend on survive.
  *
- * What they read is the text of the table, of the phase functions, and of the
- * workflow. Whether a section really stands alone is settled by running it,
- * which only CI can do.
+ * What they read is the text of the table and of the phase functions, and the
+ * topology's units. Whether a section really stands alone is settled by
+ * running it, which only CI can do.
  */
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+
+import { loadCliSuites } from "../../../tasks/test-topology/cli.ts";
 
 /** The FUSE integration script, whose tail holds the dispatch table. */
 const SCRIPT = await Deno.readTextFile(
   new URL("../integration/fuse-exec.sh", import.meta.url),
 );
 
-/** The CI workflow, whose cli-integration-test job dispatches a section. */
-const WORKFLOW = await Deno.readTextFile(
-  new URL("../../../.github/workflows/deno.yml", import.meta.url),
-);
+/**
+ * The sections a lane may be asked for: the units of the topology's
+ * `cli-fuse` suite, each named for this script and one section of it.
+ */
+const CI_SECTIONS = (await loadCliSuites(
+  new URL("../../..", import.meta.url).pathname.replace(/\/$/, ""),
+))
+  .find((suite) => suite.id === "cli-fuse")?.units
+  .filter((unit) => unit.startsWith("fuse-exec.sh "))
+  .map((unit) => unit.slice("fuse-exec.sh ".length)) ?? [];
 
 /** The shell function that runs a phase, by the script's naming rule. */
 function phaseFunction(phase: string): string {
@@ -108,24 +117,6 @@ function recordedBy(script: string, fn: string): string[] {
   });
 }
 
-/** The cli-integration-test job's block of the workflow. */
-function ciJobBlock(workflow: string): string {
-  const start = workflow.indexOf("\n  cli-integration-test:\n");
-  if (start < 0) throw new Error("deno.yml has no cli-integration-test job");
-  const rest = workflow.slice(start + 1);
-  const next = rest.search(/\n {2}[a-z][a-z0-9-]*:\n/);
-  return next < 0 ? rest : rest.slice(0, next + 1);
-}
-
-/** The sections that job dispatches, one per step that runs the script. */
-function ciSections(workflow: string): string[] {
-  return [
-    ...ciJobBlock(workflow).matchAll(
-      /^ +CF_FUSE_INTEGRATION_SECTION: (\S+)$/gm,
-    ),
-  ].map((m) => m[1]);
-}
-
 const { arms, malformed } = parseDispatchTable(SCRIPT);
 const byArm = new Map(arms.map((arm) => [arm.section, arm.phases]));
 const prelude = shellArray(SCRIPT, "PRELUDE");
@@ -159,7 +150,7 @@ describe("fuse-sections", () => {
   });
 
   it("runs every selectable phase under a section CI dispatches", () => {
-    const sections = ciSections(WORKFLOW);
+    const sections = CI_SECTIONS;
     expect(sections.length).toBeGreaterThan(0);
     expect(sections.filter((section) => !byArm.has(section))).toEqual([]);
     const covered = new Set(

@@ -31,7 +31,7 @@ import {
 } from "@commonfabric/api/cfc";
 import { sha256 } from "@commonfabric/content-hash";
 import { debugStr, deepFreeze, hashStringOf } from "@commonfabric/data-model";
-import { isDID } from "@commonfabric/identity/did";
+import { isDID, isWellFormedDID } from "@commonfabric/identity/did";
 import {
   aclDocId,
   ANYONE_USER,
@@ -795,29 +795,6 @@ const trustsAsDeclassifier = (
   return createTrustResolver({ ...config, statements: pinning })
     .conceptSatisfied(TRUSTED_DECLASSIFIER_CONCEPT, [policy], actor);
 };
-
-/**
- * The DID syntax of the W3C DID Core specification (section 3.1): a lowercase
- * method name, then a method-specific identifier of letters, digits, `.`, `-`,
- * `_`, percent-escapes, and `:` separators, not ending in `:`. The
- * confirmation shows seats and readers as facts the runtime checked, and
- * `isDID` admits any string after `did:`, spaces, parentheses, and
- * direction-override characters included, which lets a room make a principal
- * read as `… (you)` or reorder the text around it.
- */
-const WELL_FORMED_DID =
-  /^did:[a-z0-9]+:(?:[A-Za-z0-9._:-]|%[0-9A-Fa-f]{2})*(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})$/;
-
-/**
- * The longest DID the confirmation names, in characters. A `did:key` over any
- * key type this repository signs with is under 60.
- */
-const MAX_DID_LENGTH = 256;
-
-/** Whether `value` is a DID the confirmation can show as it is. */
-const isWellFormedDID = (value: unknown): value is string =>
-  typeof value === "string" && value.length <= MAX_DID_LENGTH &&
-  WELL_FORMED_DID.test(value);
 
 const ROLE_OF = { OWNER: "owner", WRITE: "writer", READ: "reader" } as const;
 

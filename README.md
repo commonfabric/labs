@@ -56,11 +56,13 @@ can run their own spaces or use hosted versions.
      [Installing `cf` on PATH](./packages/cli/README.md#installing-cf-on-path).
 5. Start local dev servers: `./scripts/start-local-dev.sh`
 6. Access the application at <http://localhost:8000>
-7. Team members: get a test-reporting key (`deno task test-records-key setup`)
-   so your local test runs feed the shared flake and duration history — see
-   [test-records.md](./docs/development/test-records.md). Contributing without
-   commit access? Then there is nothing to set up here: tests run identically
-   without a key, and CI records your pull requests' runs on its own.
+7. If you're contributing regularly, consider setting up a test-reporting key
+   (`deno task test-records-key setup`), so your local test runs add to the
+   shared history of test durations and flaky tests. There is no rush: a key
+   stays active while you have recent pull-request activity, and everything
+   works the same without one, so set one up whenever it suits you. Without
+   commit access, a team member will start the key workflow for you. See
+   [test-records.md](./docs/development/test-records.md#getting-a-key).
 
 Installing
 [Deno 2 directly](https://docs.deno.com/runtime/getting_started/installation/)

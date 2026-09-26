@@ -1186,4 +1186,11 @@ different policy, and avoid cell-backed `$author` for purely decorative author
 names.
 
 The component itself checks its value's `authored-by` against the same
-principal, and marks the content verified when they match.
+principal, and marks the content verified when they match. When either check
+matches a principal claim, it reads the atom only as the object the runtime
+writes, `{ kind, subject }`, taking the subject exactly as written and ignoring
+any other field; a `represents-principal` subject counts only when it is a
+well-formed DID, and the `authored-by:<subject>` string form is not read. The
+component's own badge verifies only the kinds `authored-by` and
+`represents-principal`; an explicit `requiredTextIntegrity` or
+`requiredIntegrity` list is matched as given.

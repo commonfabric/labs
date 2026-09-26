@@ -3,389 +3,75 @@ import {
   assertExists,
   assertFalse,
   assertRejects,
-  assertStringIncludes,
   assertThrows,
 } from "@std/assert";
 import {
   acceptedCoverageDebt,
-  acceptsCoverageDebt,
-  aggregateCacheStates,
   type Artifact,
-  type BaselineSample,
-  buildCoverageDebtSuggestionComment,
-  buildCoverageDebtUnattributedComment,
-  buildCoverageNotGatedComment,
-  buildCoverageResolvedComment,
-  type CompileCacheStates,
-  COVERAGE_BASELINE_RESET_MARKER,
-  COVERAGE_SUGGESTION_MARKER,
   coverageGroupsForChangedFiles,
-  coverageListingNotCurrent,
   coverageMetricForGroup,
   coverageMetricGroupName,
   coverageMetricMeasuredSet,
-  coverageNotGatedNotice,
   downloadAndExtractArtifact,
-  downloadAndParseCoverageBaseline,
   fetchArtifactsForRun,
-  fetchCurrentPRBody,
   fetchIssueComments,
-  fetchPRBody,
-  fetchPRFiles,
-  formatOverrideSuggestion,
   githubGet,
   githubPatch,
   githubPost,
   GitHubRateLimitError,
-  isBaselineCandidateRun,
-  isGitHubRateLimitError,
   isNotFound,
   measuredSetCoverageMetric,
-  newestArtifactsByName,
-  parseAddedLinesFromPatch,
-  parseBaselineOverrides,
-  parseCacheStateFiles,
-  parseCoverageBaselineDetailed,
-  PERF_METRICS_FILE,
-  REPO,
-  serializeCoverageBaseline,
-  shouldGateCoverageDebtMetric,
-  unknownAcceptedMetrics,
-  WORKFLOW_RUNS_PAGE_SIZE,
-  workflowRunsPagePath,
 } from "./ci-check-lib.ts";
 import { buildZip } from "./zip-testing.ts";
 
-Deno.test("coverage baseline files round-trip stable metric samples", () => {
-  const metrics = new Map<string, BaselineSample>([
-    ["coverage-debt: packages/runner uncovered lines", {
-      runId: 123,
-      sha: "abc123",
-      createdAt: "2026-01-01T00:00:00Z",
-      uncoveredLines: 42,
-    }],
-    ["coverage-debt: packages/memory uncovered lines", {
-      runId: 123,
-      sha: "abc123",
-      createdAt: "2026-01-01T00:00:00Z",
-      uncoveredLines: 60,
-    }],
-  ]);
-
-  const serialized = serializeCoverageBaseline(metrics);
+Deno.test("acceptedCoverageDebt reads a name's line increment", () => {
   assertEquals(
-    serialized.metrics.map((metric) => metric.name),
-    [
-      "coverage-debt: packages/memory uncovered lines",
-      "coverage-debt: packages/runner uncovered lines",
-    ],
+    acceptedCoverageDebt(
+      "ACCEPT_COVERAGE_DEBT: packages/runner  +123 lines\n" +
+        "ACCEPT_COVERAGE_DEBT: workspace +7 lines",
+    ),
+    new Map([["packages/runner", 123], ["workspace", 7]]),
   );
+});
 
-  // The file keeps the keys it has always carried, so a run whose checkout
-  // predates the in-memory rename still reads a file this run writes.
-  assertEquals(serialized.metrics[0].durationSeconds, 60);
+Deno.test("acceptedCoverageDebt reads a one-line increment", () => {
   assertEquals(
-    serialized.metrics[0].runUrl,
-    `https://github.com/${REPO}/actions/runs/123`,
-  );
-
-  assertEquals(
-    parseCoverageBaselineDetailed(JSON.stringify(serialized)).metrics,
-    metrics,
+    acceptedCoverageDebt("ACCEPT_COVERAGE_DEBT: tasks +1 line"),
+    new Map([["tasks", 1]]),
   );
 });
 
-Deno.test("coverage baseline files read a file the performance gate wrote", () => {
-  // Written when the artifact also carried CI timing metrics: the file names
-  // the run's page, and the uncovered-line count sits under `durationSeconds`.
-
-  const legacy = JSON.stringify({
-    version: 1,
-    generatedAt: "2026-01-01T00:00:00Z",
-    metrics: [
-      {
-        name: "coverage-debt: packages/runner uncovered lines",
-        runId: 7,
-        runUrl: "https://example.test/run/7",
-        sha: "abc123",
-        createdAt: "2026-01-01T00:00:00Z",
-        durationSeconds: 5740,
-      },
-      {
-        name: "job: Check",
-        runId: 7,
-        runUrl: "https://example.test/run/7",
-        sha: "abc123",
-        createdAt: "2026-01-01T00:00:00Z",
-        durationSeconds: 61.5,
-      },
-    ],
-  });
-
-  const parsed = parseCoverageBaselineDetailed(legacy);
-  assertEquals(
-    parsed.metrics.get("coverage-debt: packages/runner uncovered lines"),
-    {
-      runId: 7,
-      sha: "abc123",
-      createdAt: "2026-01-01T00:00:00Z",
-      uncoveredLines: 5740,
-    },
-  );
-  assertEquals(parsed.compileCacheStates, null);
-});
-
-Deno.test("coverage baseline files round-trip compile cache states", () => {
-  const metrics = new Map<string, BaselineSample>([
-    [
-      "job: Check",
-      {
-        runId: 123,
-        sha: "abc123",
-        createdAt: "2026-01-01T00:00:00Z",
-        uncoveredLines: 60,
-      },
-    ],
-  ]);
-  const states: CompileCacheStates = {
-    "generated-patterns": "cold",
-    "pattern-unit": "warm",
-  };
-
-  const serialized = JSON.stringify(serializeCoverageBaseline(metrics, states));
-
-  const detailed = parseCoverageBaselineDetailed(serialized);
-  assertEquals(detailed.metrics, metrics);
-  assertEquals(detailed.compileCacheStates, states);
-});
-
-Deno.test("parseCoverageBaselineDetailed treats legacy files as untagged", () => {
-  const legacy = JSON.stringify(serializeCoverageBaseline(new Map()));
-  assertFalse(legacy.includes("compileCacheStates"));
-
-  const detailed = parseCoverageBaselineDetailed(legacy);
-  assertEquals(detailed.compileCacheStates, null);
-  assertEquals(detailed.metrics.size, 0);
-
-  // Empty states are omitted too, so an all-unknown run stays untagged.
-  assertFalse(
-    JSON.stringify(serializeCoverageBaseline(new Map(), {}))
-      .includes("compileCacheStates"),
-  );
-});
-
-Deno.test("parseCoverageBaselineDetailed drops invalid compile cache states", () => {
-  const file = JSON.stringify({
-    version: 1,
-    generatedAt: "2026-01-01T00:00:00Z",
-    metrics: [],
-    compileCacheStates: {
-      "generated-patterns": "lukewarm",
-      "runner": "cold",
-      "pattern-unit": "warm",
-    },
-  });
-
-  assertEquals(parseCoverageBaselineDetailed(file).compileCacheStates, {
-    "pattern-unit": "warm",
-  });
-});
-
-/** A coverage baseline metric record carrying every field the file needs. */
-const BASELINE_RECORD = {
-  name: "coverage-debt: packages/runner uncovered lines",
-  runId: 7,
-  sha: "abc123",
-  createdAt: "2026-01-01T00:00:00Z",
-  durationSeconds: 42,
-};
-
-/** A coverage baseline file holding `metrics`, with `fields` over the rest. */
-function baselineFile(
-  metrics: unknown,
-  fields: Record<string, unknown> = {},
-): string {
-  return JSON.stringify({
-    version: 1,
-    generatedAt: "2026-01-01T00:00:00Z",
-    metrics,
-    ...fields,
-  });
-}
-
-Deno.test("parseCoverageBaselineDetailed refuses a file in a format it does not know", () => {
-  assertEquals(
-    parseCoverageBaselineDetailed(baselineFile([BASELINE_RECORD])).metrics
-      .get(BASELINE_RECORD.name)?.uncoveredLines,
-    42,
-  );
-  for (
-    const file of [
-      baselineFile([BASELINE_RECORD], { version: 2 }),
-      baselineFile({ [BASELINE_RECORD.name]: BASELINE_RECORD }),
-    ]
-  ) {
-    assertThrows(
-      () => parseCoverageBaselineDetailed(file),
-      Error,
-      "Unsupported coverage baseline file format.",
-    );
-  }
-});
-
-Deno.test("parseCoverageBaselineDetailed refuses a metric record missing a field", () => {
-  for (const field of Object.keys(BASELINE_RECORD)) {
-    const partial = Object.fromEntries(
-      Object.entries(BASELINE_RECORD).filter(([name]) => name !== field),
-    );
-    assertThrows(
-      () => parseCoverageBaselineDetailed(baselineFile([partial])),
-      Error,
-      "Invalid coverage baseline metric record.",
-    );
-  }
-});
-
-Deno.test("cache state aggregation treats any restore hit as warm", () => {
-  const records = parseCacheStateFiles([
-    '{"family":"generated-patterns","shard":"1","matchedKey":"compile-abc-1","exactHit":true}',
-    // A restore-key hit (exactHit false) still implies an unchanged compiler
-    // fingerprint, so the family is warm.
-    '{"family":"generated-patterns","shard":"2","matchedKey":"compile-abc","exactHit":false}',
-    '{"family":"pattern-integration","shard":"1","matchedKey":"compile-abc-1","exactHit":true}',
-  ]);
-  assertExists(records);
-
-  // pattern-unit has no records, so its state stays absent (unknown).
-  assertEquals(aggregateCacheStates(records), {
-    "generated-patterns": "warm",
-    "pattern-integration": "warm",
-  });
-});
-
-Deno.test("cache state aggregation marks a family cold on any full miss", () => {
-  const records = parseCacheStateFiles([
-    '{"family":"pattern-unit","shard":"1","matchedKey":"compile-abc-1","exactHit":true}',
-    '{"family":"pattern-unit","shard":"2","matchedKey":"","exactHit":false}',
-    // A warm shard after the miss must not flip the family back to warm.
-    '{"family":"pattern-unit","shard":"3","matchedKey":"compile-abc-3","exactHit":true}',
-  ]);
-  assertExists(records);
-
-  assertEquals(aggregateCacheStates(records), { "pattern-unit": "cold" });
-});
-
-Deno.test("cache state parsing poisons the collection on any bad record", () => {
-  // A record that fails to parse could be the cold shard; surviving records
-  // must not tag its family warm, so the whole parse degrades to null
-  // (unknown) — same policy as an artifact download failure.
-
-  const originalWarn = console.warn;
-  const warnings: string[] = [];
-  try {
-    console.warn = (...args: unknown[]) => {
-      warnings.push(args.join(" "));
-    };
-
-    const records = parseCacheStateFiles([
-      "not json {",
-      '{"family":"pattern-integration","shard":"1"}',
-      '{"family":"pattern-integration","shard":"2","matchedKey":"compile-abc","exactHit":false}',
-    ]);
-
-    assertEquals(records, null);
-    assertEquals(warnings.length, 2);
-    assertStringIncludes(warnings[0], "malformed cache-state file");
-    assertStringIncludes(warnings[1], "invalid cache-state record");
-  } finally {
-    console.warn = originalWarn;
-  }
-});
-
-Deno.test("cache state parsing keeps valid unknown-family records inert", () => {
-  // An unknown family name is forward-compatible data, not corruption: it
-  // parses cleanly and aggregation simply never assigns it a state.
-
-  const records = parseCacheStateFiles([
-    '{"family":"runner","shard":"1","matchedKey":"","exactHit":false}',
-    '{"family":"pattern-integration","shard":"2","matchedKey":"compile-abc","exactHit":false}',
-  ]);
-  assertExists(records);
-  assertEquals(records.length, 2);
-
-  assertEquals(aggregateCacheStates(records), {
-    "pattern-integration": "warm",
-  });
-});
-
-Deno.test("coverage debt metrics format and parse line units", () => {
-  const metric = "coverage-debt: workspace uncovered lines";
-  assertEquals(formatOverrideSuggestion(12.2), "13 lines");
-  assertEquals(formatOverrideSuggestion(1), "1 line");
-
-  const overrides = parseBaselineOverrides(
-    "ACCEPT_COVERAGE_DEBT: workspace +7 lines",
-  );
-  assertEquals(overrides.metrics.get(metric), 7);
-  assertEquals(overrides.coverageBaselineReset, false);
-});
-
-Deno.test("baseline override parser accepts a group's line increment", () => {
-  const overrides = parseBaselineOverrides(
-    "ACCEPT_COVERAGE_DEBT: packages/runner  +123 lines",
-  );
-
-  assertEquals(
-    overrides.metrics.get("coverage-debt: packages/runner uncovered lines"),
-    123,
-  );
-  assertEquals(overrides.coverageBaselineReset, false);
-});
-
-Deno.test("baseline override parser reads a one-line increment", () => {
-  const overrides = parseBaselineOverrides(
-    "ACCEPT_COVERAGE_DEBT: tasks +1 line",
-  );
-
-  assertEquals(
-    overrides.metrics.get("coverage-debt: tasks uncovered lines"),
-    1,
-  );
-});
-
-Deno.test("baseline override parser rejects a total in place of an increment", () => {
+Deno.test("acceptedCoverageDebt rejects a total in place of an increment", () => {
   // An acceptance naming a total says nothing about how much debt the pull
   // request adds, and means something different against every baseline, so it
   // is rejected rather than read as though it were an increment.
 
   assertThrows(
     () =>
-      parseBaselineOverrides(
-        "ACCEPT_COVERAGE_DEBT: packages/runner = 123 lines",
-      ),
+      acceptedCoverageDebt("ACCEPT_COVERAGE_DEBT: packages/runner = 123 lines"),
     Error,
-    "<source group or workspace member> +N lines",
+    "<workspace member> +N lines",
   );
 });
 
-Deno.test("baseline override parser rejects a metric name in place of a group", () => {
+Deno.test("acceptedCoverageDebt rejects a metric name in place of a name", () => {
   assertThrows(
     () =>
-      parseBaselineOverrides(
+      acceptedCoverageDebt(
         "ACCEPT_COVERAGE_DEBT: coverage-debt: packages/runner uncovered lines +7 lines",
       ),
     Error,
-    "<source group or workspace member> +N lines",
+    "<workspace member> +N lines",
   );
 });
 
-Deno.test("baseline override parser rejects a name nothing could measure", () => {
+Deno.test("acceptedCoverageDebt rejects a name nothing could measure", () => {
   // Only `packages` splits below its top level, so a path below any other
-  // top-level directory names neither a source group nor a member.
+  // top-level directory cannot name a member.
   assertThrows(
-    () => parseBaselineOverrides("ACCEPT_COVERAGE_DEBT: tasks/foo +7 lines"),
+    () => acceptedCoverageDebt("ACCEPT_COVERAGE_DEBT: tasks/foo +7 lines"),
     Error,
-    "name a coverage source group",
+    "name a workspace member",
   );
 });
 
@@ -401,749 +87,53 @@ Deno.test("two acceptances of one name are refused", () => {
     Error,
     "Two ACCEPT_COVERAGE_DEBT acceptances",
   );
-  // A merged body cannot be rewritten, so the larger stands there.
-  assertEquals(
-    acceptedCoverageDebt(
-      "ACCEPT_COVERAGE_DEBT: packages/runner +12 lines\n" +
-        "ACCEPT_COVERAGE_DEBT: packages/runner +3 lines",
-      true,
-    ).get("packages/runner"),
-    12,
-  );
 });
 
-Deno.test("a workspace member deeper than a group is not one of this ratchet's", () => {
-  // The coverage gate reads it, and this ratchet measures nothing for it,
-  // so taking it as a group would fail the run for an acceptance that
-  // names no group.
-  const overrides = parseBaselineOverrides(
-    "ACCEPT_COVERAGE_DEBT: packages/connectors/github +7 lines",
-  );
-  assertEquals(overrides.metrics.size, 0);
+Deno.test("acceptedCoverageDebt reads a workspace member nested below packages", () => {
+  const name = "packages/connectors/github/connector";
   assertEquals(
-    acceptedCoverageDebt(
-      "ACCEPT_COVERAGE_DEBT: packages/connectors/github +7 lines",
-    )
-      .get("packages/connectors/github"),
+    acceptedCoverageDebt(`ACCEPT_COVERAGE_DEBT: ${name} +7 lines`).get(name),
     7,
   );
 });
 
-Deno.test("unknownAcceptedMetrics names an accepted group nothing measured", () => {
-  const overrides = parseBaselineOverrides(
-    "ACCEPT_COVERAGE_DEBT: packages/nonexistent +7 lines\n" +
-      "ACCEPT_COVERAGE_DEBT: tasks +2 lines",
-  );
-  const measured = new Set([
-    "coverage-debt: tasks uncovered lines",
-    "coverage-debt: workspace uncovered lines",
-  ]);
-
-  // A shape a group could have is not a group this run has: the acceptance
-  // would otherwise sit in the description having no effect on anything.
-  assertEquals(unknownAcceptedMetrics(overrides, measured), [
-    "coverage-debt: packages/nonexistent uncovered lines",
-  ]);
-
-  measured.add("coverage-debt: packages/nonexistent uncovered lines");
-  assertEquals(unknownAcceptedMetrics(overrides, measured), []);
-});
-
-Deno.test("baseline override parser reads only a marker starting a line", () => {
+Deno.test("acceptedCoverageDebt reads only a marker starting a line", () => {
   // A description explaining the mechanism carries no acceptance, and is not a
   // malformed one either.
   const prose =
     "Rebasing changes what an ACCEPT_COVERAGE_DEBT: total means, so it " +
     "accepts a rise instead.";
-  assertEquals(parseBaselineOverrides(prose).metrics.size, 0);
+  assertEquals(acceptedCoverageDebt(prose).size, 0);
 
-  // An indented example of the marker is an example. A description showing the
-  // form — as this change's own does — accepts nothing by showing it, and says
-  // so, so an author who indented one by mistake can see why it did nothing.
-  const warnings: string[] = [];
-  const example = parseBaselineOverrides(
-    "Accept a rise above the baseline instead:\n\n" +
-      "    ACCEPT_COVERAGE_DEBT: packages/runner +12 lines\n",
-    false,
-    (message) => warnings.push(message),
+  // An indented example of the marker is an example, and accepts nothing by
+  // showing the form.
+  assertEquals(
+    acceptedCoverageDebt(
+      "Accept a rise above the baseline instead:\n\n" +
+        "    ACCEPT_COVERAGE_DEBT: packages/runner +12 lines\n",
+    ).size,
+    0,
   );
-  assertEquals(example.metrics.size, 0);
-  assertEquals(warnings.length, 1);
-  assertStringIncludes(warnings[0], "is indented, so it is read as an example");
-
-  // A merged description is read for its acceptances alone, so the examples it
-  // carries are passed over without comment.
-  const merged: string[] = [];
-  parseBaselineOverrides(
-    "    ACCEPT_COVERAGE_DEBT: packages/runner +12 lines\n",
-    true,
-    (message) => merged.push(message),
-  );
-  assertEquals(merged, []);
 
   // Flush against the left margin, the same line is an acceptance.
-  const accepted = parseBaselineOverrides(
-    "Accepting the flapping lines:\n\nACCEPT_COVERAGE_DEBT: tasks +3 lines\n",
-  );
-  assertEquals(accepted.metrics.get("coverage-debt: tasks uncovered lines"), 3);
-});
-
-Deno.test("baseline override parser reads legacy coverage-debt acceptance only when asked", () => {
-  const body =
-    "NEW_PERF_BASELINE: coverage-debt: packages/runner uncovered lines = 123 lines";
-
-  // New PRs must use ACCEPT_COVERAGE_DEBT: the legacy form is ignored by default.
-  assertEquals(parseBaselineOverrides(body).metrics.size, 0);
-
-  // Merged baseline PRs from before the rename still count, so their
-  // acceptance truncates the baseline timeline.
-  const legacy = parseBaselineOverrides(body, true);
   assertEquals(
-    legacy.metrics.get("coverage-debt: packages/runner uncovered lines"),
-    123,
-  );
-});
-
-Deno.test("a merged PR's acceptance counts whatever form it was written in", () => {
-  const body =
-    "ACCEPT_COVERAGE_DEBT: coverage-debt: packages/runner uncovered lines = 123 lines\n" +
-    "ACCEPT_COVERAGE_DEBT: packages/memory +4 lines";
-
-  const merged = parseBaselineOverrides(body, true);
-  assertEquals(
-    acceptsCoverageDebt(
-      merged,
-      "coverage-debt: packages/memory uncovered lines",
+    acceptedCoverageDebt(
+      "Accepting the flapping lines:\n\nACCEPT_COVERAGE_DEBT: tasks +3 lines\n",
     ),
-    true,
-  );
-  // The pre-increment form no longer names an amount the ratchet can use, so
-  // the metric it accepted is passed over rather than failing the whole body.
-  assertEquals(
-    acceptsCoverageDebt(
-      merged,
-      "coverage-debt: packages/runner uncovered lines",
-    ),
-    false,
+    new Map([["tasks", 3]]),
   );
 });
 
-Deno.test("legacy override parsing ignores the defunct timing form", () => {
-  // NEW_PERF_BASELINE once accepted timing regressions too; those gate nothing
-  // now, so a legacy timing line is ignored rather than rejected — a merged PR
-  // that carried one must still yield its coverage-debt acceptance.
-
-  const overrides = parseBaselineOverrides(
-    "NEW_PERF_BASELINE: job: Check = 7s\n" +
-      "NEW_PERF_BASELINE: coverage-debt: packages/runner uncovered lines = 9 lines",
-    true,
-  );
-  assertEquals(overrides.metrics.size, 1);
-  assertEquals(
-    overrides.metrics.get("coverage-debt: packages/runner uncovered lines"),
-    9,
-  );
-});
-
-Deno.test("coverage baseline reset marker parses from PR body", () => {
-  const overrides = parseBaselineOverrides(
-    `Reset coverage debt for one cycle\n${COVERAGE_BASELINE_RESET_MARKER}\n`,
-  );
-
-  assertEquals(overrides.coverageBaselineReset, true);
-  assertEquals(overrides.metrics.size, 0);
-});
-
-Deno.test("a merged reset accepts coverage-debt metrics only", () => {
-  const reset = { metrics: new Map(), coverageBaselineReset: true };
-
-  assertEquals(
-    acceptsCoverageDebt(reset, "coverage-debt: workspace uncovered lines"),
-    true,
-  );
-  assertEquals(acceptsCoverageDebt(reset, "job: Check"), false);
-
-  const perMetric = {
-    metrics: new Map([["coverage-debt: packages/runner uncovered lines", 12]]),
-    coverageBaselineReset: false,
-  };
-  assertEquals(
-    acceptsCoverageDebt(
-      perMetric,
-      "coverage-debt: packages/runner uncovered lines",
-    ),
-    true,
-  );
-  assertEquals(
-    acceptsCoverageDebt(
-      perMetric,
-      "coverage-debt: packages/memory uncovered lines",
-    ),
-    false,
-  );
-});
-
-Deno.test("coverage debt gating follows changed source groups", () => {
+Deno.test("coverageGroupsForChangedFiles names the source group of each changed source file", () => {
   const groups = coverageGroupsForChangedFiles([
     "packages/runner/src/cell.ts",
     "packages/patterns/README.md",
     "packages/ui/src/button.test.tsx",
-    "tasks/coverage-check.ts",
+    "tasks\\coverage-gate.ts",
     "scripts/build.ts",
   ]);
 
   assertEquals([...groups].sort(), ["packages/runner", "packages/ui", "tasks"]);
-  assertEquals(
-    coverageMetricGroupName("coverage-debt: packages/runner uncovered lines"),
-    "packages/runner",
-  );
-  assertEquals(
-    shouldGateCoverageDebtMetric(
-      "coverage-debt: packages/runner uncovered lines",
-      groups,
-    ),
-    true,
-  );
-  assertEquals(
-    shouldGateCoverageDebtMetric(
-      "coverage-debt: packages/patterns uncovered lines",
-      groups,
-    ),
-    false,
-  );
-  assertEquals(
-    shouldGateCoverageDebtMetric(
-      "coverage-debt: workspace uncovered lines",
-      groups,
-    ),
-    false,
-  );
-  assertEquals(
-    shouldGateCoverageDebtMetric(
-      "coverage-debt: packages/patterns uncovered lines",
-      undefined,
-    ),
-    true,
-  );
-});
-
-Deno.test("parseAddedLinesFromPatch maps added lines to their new line numbers", () => {
-  const patch = [
-    "@@ -1,3 +1,5 @@",
-    " const a = 1;",
-    "-const b = 2;",
-    "+const b = 20;",
-    "+const c = 3;",
-    " const d = 4;",
-    "+const e = 5;",
-    "\\ No newline at end of file",
-  ].join("\n");
-
-  const added = parseAddedLinesFromPatch(patch);
-
-  assertEquals([...added.entries()], [
-    [2, "const b = 20;"],
-    [3, "const c = 3;"],
-    [5, "const e = 5;"],
-  ]);
-});
-
-Deno.test("parseAddedLinesFromPatch tracks line numbers across multiple hunks", () => {
-  const patch = [
-    "@@ -10,2 +10,3 @@",
-    " keep;",
-    "+added at 11;",
-    " keep;",
-    "@@ -40,1 +41,2 @@",
-    " keep;",
-    "+added at 42;",
-  ].join("\n");
-
-  const added = parseAddedLinesFromPatch(patch);
-
-  assertEquals(added.get(11), "added at 11;");
-  assertEquals(added.get(42), "added at 42;");
-  assertEquals(added.size, 2);
-});
-
-Deno.test("parseAddedLinesFromPatch keeps added lines whose content starts with +", () => {
-  const patch = [
-    "@@ -1,1 +1,4 @@",
-    " context;",
-    "+++count;", // added source line "++count;"
-    "+ leading-space kept;",
-    "+normal;",
-  ].join("\n");
-
-  const added = parseAddedLinesFromPatch(patch);
-
-  assertEquals([...added.entries()], [
-    [2, "++count;"],
-    [3, " leading-space kept;"],
-    [4, "normal;"],
-  ]);
-});
-
-Deno.test("parseAddedLinesFromPatch ignores file headers before the first hunk", () => {
-  const patch = [
-    "diff --git a/f.ts b/f.ts",
-    "index 1111111..2222222 100644",
-    "--- a/f.ts",
-    "+++ b/f.ts",
-    "@@ -1,1 +1,2 @@",
-    " keep;",
-    "+added;",
-  ].join("\n");
-
-  const added = parseAddedLinesFromPatch(patch);
-
-  assertEquals([...added.entries()], [[2, "added;"]]);
-});
-
-Deno.test("buildCoverageDebtSuggestionComment lists files (not lines), command, and targets", () => {
-  const comment = buildCoverageDebtSuggestionComment({
-    groups: [
-      { group: "packages/runner", target: 12, current: 15 },
-    ],
-    files: [
-      {
-        relativePath: "packages/runner/src/cell.ts",
-        group: "packages/runner",
-        uncoveredCount: 2,
-      },
-    ],
-  });
-
-  // Marker so a later run can detect and update it.
-  assertStringIncludes(comment, COVERAGE_SUGGESTION_MARKER);
-  // The body is wrapped in an open <details> summarizing the over-by total
-  // (15 - 12 = 3 lines), with no standalone header.
-  assertStringIncludes(comment, "<details open>");
-  assertStringIncludes(
-    comment,
-    "<summary><h3>🕵🏻‍♀️ Test coverage regressed by 3 lines</h3></summary>",
-  );
-  assertStringIncludes(comment, "</details>");
-  assertFalse(comment.includes("## 🧪 Test coverage regressed"));
-  // The regressed group with its target and current value.
-  assertStringIncludes(comment, "`packages/runner`");
-  assertStringIncludes(comment, "| 12 | 15 | +3 |");
-  // The affected file with its uncovered-line count, but no per-line code dump.
-  assertStringIncludes(comment, "`packages/runner/src/cell.ts` — 2 lines");
-  // The prompt block still carries the command and the metric target.
-  assertStringIncludes(comment, "tasks/coverage-metrics.ts");
-  assertStringIncludes(
-    comment,
-    "coverage-debt: packages/runner uncovered lines  <=  12",
-  );
-  // A failed workspace run yields a partial coverage profile. The agent is
-  // told to get a passing run, with temporary skips allowed only while
-  // collecting local coverage.
-  assertStringIncludes(
-    comment,
-    "make it pass or temporarily skip it for\nthe coverage run",
-  );
-  assertStringIncludes(
-    comment,
-    "Do not\ninclude temporary test skips in the PR",
-  );
-  assertStringIncludes(
-    comment,
-    "code in packages it never\nruns is counted as fully uncovered",
-  );
-  // The comment ends at the prompt block — no verify/footer sections.
-  assertFalse(comment.includes("### Verify locally"));
-});
-
-Deno.test("buildCoverageDebtSuggestionComment handles a regression with no pinned lines", () => {
-  const comment = buildCoverageDebtSuggestionComment({
-    groups: [
-      { group: "tasks", target: 0, current: 4 },
-    ],
-    files: [],
-  });
-
-  assertStringIncludes(comment, COVERAGE_SUGGESTION_MARKER);
-  assertStringIncludes(comment, "Could not tie the regression");
-  assertStringIncludes(
-    comment,
-    "coverage-debt: tasks uncovered lines  <=  0",
-  );
-});
-
-Deno.test("buildCoverageDebtSuggestionComment sums Over by across groups in the summary", () => {
-  const comment = buildCoverageDebtSuggestionComment({
-    groups: [
-      { group: "packages/runner", target: 12, current: 15 },
-      { group: "tasks", target: 4, current: 8 },
-    ],
-    files: [],
-  });
-
-  // 3 + 4 = 7 over baseline.
-  assertStringIncludes(
-    comment,
-    "<summary><h3>🕵🏻‍♀️ Test coverage regressed by 7 lines</h3></summary>",
-  );
-});
-
-Deno.test("buildCoverageDebtSuggestionComment uses the singular for a one-line regression", () => {
-  const comment = buildCoverageDebtSuggestionComment({
-    groups: [
-      { group: "tasks", target: 4, current: 5 },
-    ],
-    files: [],
-  });
-
-  assertStringIncludes(
-    comment,
-    "<summary><h3>🕵🏻‍♀️ Test coverage regressed by 1 line</h3></summary>",
-  );
-});
-
-Deno.test("buildCoverageResolvedComment collapses the details and summarizes the reduction", () => {
-  const resolved = buildCoverageResolvedComment(5, [
-    { group: "packages/runner", baseline: 15, current: 12 },
-  ]);
-
-  // The disclosure stays collapsed (no `open`) and the summary celebrates the
-  // reduction; none of the stale regression copy survives.
-  assertFalse(resolved.includes("<details open>"));
-  assertStringIncludes(resolved, "<details>");
-  assertStringIncludes(
-    resolved,
-    "<summary><strong>🕵🏻‍♀️ Code coverage debt reduced by 5 lines!</strong></summary>",
-  );
-  assertFalse(resolved.includes("Test coverage regressed by"));
-  assertFalse(resolved.includes("Prompt for an AI coding agent"));
-  // The body keeps the marker and summarizes the per-group before-and-after.
-  assertStringIncludes(resolved, COVERAGE_SUGGESTION_MARKER);
-  assertStringIncludes(
-    resolved,
-    "| Source group | Baseline (`main`) | This PR | Change |",
-  );
-  assertStringIncludes(
-    resolved,
-    "| `packages/runner` | 15 | 12 | 3 lines fewer |",
-  );
-});
-
-Deno.test("buildCoverageResolvedComment notes resolution when there is no net reduction", () => {
-  const resolved = buildCoverageResolvedComment(0, [
-    { group: "tasks", baseline: 8, current: 8 },
-  ]);
-
-  assertFalse(resolved.includes("<details open>"));
-  assertStringIncludes(
-    resolved,
-    "<summary><strong>🕵🏻‍♀️ Code coverage debt is within the ratchet.</strong></summary>",
-  );
-  assertStringIncludes(resolved, "| `tasks` | 8 | 8 | no change |");
-});
-
-Deno.test("buildCoverageNotGatedComment names each ungated group and why", () => {
-  const baseSha = "c4a5de3346126594d6b9f1ea5cdace119a302a52";
-  const comment = buildCoverageNotGatedComment({
-    groups: [
-      { group: "packages/shell", reason: "no-baseline" },
-      {
-        group: "tasks",
-        reason: "base-branch-moved",
-        baselineSha: "ec849c4c00000000000000000000000000000000",
-      },
-    ],
-    measurement: {
-      runUrl: "https://github.com/commonfabric/labs/actions/runs/7",
-      baseSha,
-    },
-  });
-
-  // The one coverage comment, left open so the state is read without a click.
-  assertEquals(comment.split("\n")[0], COVERAGE_SUGGESTION_MARKER);
-  assertStringIncludes(comment, "<details open>");
-  assertStringIncludes(comment, "Test coverage was NOT gated on this run");
-  assertStringIncludes(
-    comment,
-    "did not hold `packages/shell`, `tasks` against a baseline",
-  );
-  assertStringIncludes(
-    comment,
-    "| `packages/shell` | No successful `main` run within reach measured " +
-      "base-branch commit `c4a5de33` or an ancestor of it. |",
-  );
-  assertStringIncludes(
-    comment,
-    "| `tasks` | `main` changed this group between the nearest measured " +
-      "ancestor (`ec849c4c`) and base-branch commit `c4a5de33`. |",
-  );
-  assertStringIncludes(comment, "A later run of this pull request gates");
-  assertStringIncludes(
-    comment,
-    "Measured by https://github.com/commonfabric/labs/actions/runs/7.",
-  );
-});
-
-Deno.test("buildCoverageNotGatedComment says a listing that is not current failed the job", () => {
-  const comment = buildCoverageNotGatedComment({
-    groups: [{ group: "tasks", reason: "listing-not-current" }],
-  });
-
-  assertStringIncludes(
-    comment,
-    "The **Coverage Check** job failed because it could not find a baseline " +
-      "to hold `tasks` against.",
-  );
-  assertStringIncludes(
-    comment,
-    "| `tasks` | GitHub's listing of this workflow's runs left out this run",
-  );
-  assertStringIncludes(comment, "Re-run the **Coverage Check** job");
-  assertFalse(comment.includes("Measured by"));
-});
-
-Deno.test("buildCoverageNotGatedComment sends a rate-limited run back to GitHub", () => {
-  const comment = buildCoverageNotGatedComment({
-    groups: [{ group: "tasks", reason: "rate-limited" }],
-  });
-
-  // The job passed, so the comment reads as the ungated-but-passing one, and
-  // the remedy waits on the limit rather than on a `main` run.
-  assertStringIncludes(
-    comment,
-    "The **Coverage Check** job did not hold `tasks` against a baseline",
-  );
-  assertStringIncludes(
-    comment,
-    "| `tasks` | GitHub's API rate limit stopped this run reading the " +
-      "baseline data, so nothing was compared. |",
-  );
-  assertStringIncludes(
-    comment,
-    "Re-run the **Coverage Check** job once GitHub's API rate limit has reset.",
-  );
-  assertFalse(comment.includes("A later run of this pull request gates"));
-});
-
-Deno.test("coverageNotGatedNotice names no commit for a checkout that had none", () => {
-  const notice = coverageNotGatedNotice({
-    groups: [
-      { group: "packages/runner", reason: "no-base-commit" },
-      { group: "packages/ui", reason: "no-baseline" },
-    ],
-  }).join("\n");
-
-  assertStringIncludes(
-    notice,
-    "| `packages/runner` | The base-branch commit this run merges into could " +
-      "not be read from the checkout. |",
-  );
-  assertStringIncludes(
-    notice,
-    "| `packages/ui` | No successful `main` run within reach measured the " +
-      "base-branch commit or an ancestor of it. |",
-  );
-});
-
-Deno.test("coverageNotGatedNotice does not say how the job ended unless the listing decided it", () => {
-  // A group with no baseline passes on its own, and fails beside a regression
-  // in another group, so the notice claims neither.
-  const notice = coverageNotGatedNotice({
-    groups: [{ group: "tasks", reason: "base-branch-moved" }],
-  }).join("\n");
-
-  assertFalse(notice.includes("passed"));
-  assertFalse(notice.includes("failed"));
-  assertStringIncludes(
-    notice,
-    "The **Coverage Check** job did not hold `tasks` against a baseline",
-  );
-});
-
-Deno.test("coverageListingNotCurrent is true only of a listing that was not current", () => {
-  assertEquals(
-    coverageListingNotCurrent([
-      { group: "tasks", reason: "listing-not-current" },
-    ]),
-    true,
-  );
-  assertEquals(
-    coverageListingNotCurrent([
-      { group: "tasks", reason: "no-baseline" },
-      { group: "packages/ui", reason: "base-branch-moved" },
-    ]),
-    false,
-  );
-  assertEquals(coverageListingNotCurrent([]), false);
-});
-
-Deno.test("buildCoverageResolvedComment claims no comparison for a reset that compared nothing", () => {
-  const resolved = buildCoverageResolvedComment(0, [], true);
-
-  assertStringIncludes(
-    resolved,
-    "Code coverage debt accepted with an override.",
-  );
-  assertStringIncludes(
-    resolved,
-    "This run compared no source group against a baseline",
-  );
-  assertFalse(resolved.includes("at or below its `main` baseline"));
-});
-
-Deno.test("workflowRunsPagePath asks for one unfiltered page of the workflow's runs", () => {
-  const path = workflowRunsPagePath(3);
-  const query = new URLSearchParams(path.split("?")[1]);
-
-  assertStringIncludes(path, "/actions/workflows/deno.yml/runs?");
-  assertEquals(query.get("page"), "3");
-  assertEquals(query.get("per_page"), String(WORKFLOW_RUNS_PAGE_SIZE));
-  // Any of these sends the request to the search index that returns old runs.
-  for (const filter of ["branch", "status", "event", "created", "head_sha"]) {
-    assertEquals(query.get(filter), null);
-  }
-});
-
-Deno.test("isBaselineCandidateRun admits only a successful push to main", () => {
-  const push = { event: "push", head_branch: "main", conclusion: "success" };
-
-  assertEquals(isBaselineCandidateRun(push), true);
-  assertEquals(
-    isBaselineCandidateRun({ ...push, event: "pull_request" }),
-    false,
-  );
-  assertEquals(isBaselineCandidateRun({ ...push, head_branch: "fix" }), false);
-  assertEquals(
-    isBaselineCandidateRun({ ...push, conclusion: "failure" }),
-    false,
-  );
-  assertEquals(
-    isBaselineCandidateRun({ ...push, head_branch: undefined }),
-    false,
-  );
-});
-
-Deno.test("buildCoverageResolvedComment uses a single line of one uncovered line", () => {
-  const resolved = buildCoverageResolvedComment(1, [
-    { group: "tasks", baseline: 5, current: 4 },
-  ]);
-
-  assertStringIncludes(
-    resolved,
-    "<summary><strong>🕵🏻‍♀️ Code coverage debt reduced by 1 line!</strong></summary>",
-  );
-  assertStringIncludes(resolved, "| `tasks` | 5 | 4 | 1 line fewer |");
-});
-
-Deno.test("buildCoverageResolvedComment reports a group that gained uncovered lines", () => {
-  // A changed group can reach the resolved comment with more uncovered lines
-  // than `main` when the regression was accepted with a per-group acceptance or
-  // the coverage reset marker. The table reports the increase rather than
-  // hiding it.
-
-  const resolved = buildCoverageResolvedComment(0, [
-    { group: "packages/runner", baseline: 12, current: 15 },
-  ]);
-
-  assertStringIncludes(
-    resolved,
-    "| `packages/runner` | 12 | 15 | 3 lines more |",
-  );
-});
-
-Deno.test("buildCoverageResolvedComment says the debt was overridden, not improved", () => {
-  // The gate passed because the debt was accepted, so the summary must not
-  // imply the new code is covered, even when a group also improved.
-
-  const resolved = buildCoverageResolvedComment(
-    4,
-    [{ group: "packages/runner", baseline: 12, current: 15 }],
-    true,
-  );
-
-  assertStringIncludes(
-    resolved,
-    "<summary><strong>🕵🏻‍♀️ Code coverage debt accepted with an override.</strong></summary>",
-  );
-  assertStringIncludes(
-    resolved,
-    "accepted with an override rather than covered by new tests",
-  );
-  assertFalse(resolved.includes("Code coverage debt reduced by"));
-  assertFalse(resolved.includes("no test reached on"));
-  // The table still shows the real per-group numbers.
-  assertStringIncludes(
-    resolved,
-    "| `packages/runner` | 12 | 15 | 3 lines more |",
-  );
-  // Nothing was named, so the section that names files is left out entirely.
-  assertFalse(resolved.includes("### Files with new uncovered lines"));
-});
-
-Deno.test("buildCoverageResolvedComment names the files an accepted debt stands in for", () => {
-  const resolved = buildCoverageResolvedComment(
-    0,
-    [{ group: "tasks", baseline: 1846, current: 1857 }],
-    true,
-    [
-      { relativePath: "tasks/one.ts", group: "tasks", uncoveredCount: 11 },
-      { relativePath: "tasks/two.ts", group: "tasks", uncoveredCount: 1 },
-    ],
-  );
-
-  assertStringIncludes(resolved, "### Files with new uncovered lines");
-  assertStringIncludes(resolved, "- `tasks/one.ts` — 11 lines");
-  // A single line reads as a line, the same as it does in the regression body.
-  assertStringIncludes(resolved, "- `tasks/two.ts` — 1 line");
-});
-
-Deno.test("buildCoverageResolvedComment names no files when the debt was covered", () => {
-  // Coverage that improved has no acceptance to account for, so a file list
-  // would be describing debt that is not there.
-
-  const resolved = buildCoverageResolvedComment(
-    5,
-    [{ group: "tasks", baseline: 1857, current: 1852 }],
-    false,
-    [{ relativePath: "tasks/one.ts", group: "tasks", uncoveredCount: 11 }],
-  );
-
-  assertFalse(resolved.includes("### Files with new uncovered lines"));
-  assertFalse(resolved.includes("tasks/one.ts"));
-});
-
-Deno.test("buildCoverageResolvedComment falls back to a sentence with no groups", () => {
-  const resolved = buildCoverageResolvedComment(3, []);
-
-  assertStringIncludes(resolved, "<details>");
-  assertFalse(resolved.includes("| Source group |"));
-  assertStringIncludes(
-    resolved,
-    "Every changed source group is at or below its `main` baseline",
-  );
-});
-
-Deno.test("fetchPRBody reads the live pull request body from the GitHub API", async () => {
-  const originalFetch = globalThis.fetch;
-  let requestedUrl: string | undefined;
-  try {
-    globalThis.fetch = ((input, _init) => {
-      requestedUrl = input instanceof Request ? input.url : String(input);
-      return Promise.resolve(
-        new Response(JSON.stringify({ body: "LIVE PR BODY" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      );
-    }) as typeof fetch;
-
-    assertEquals(await fetchPRBody(3427), "LIVE PR BODY");
-    assertEquals(
-      requestedUrl,
-      "https://api.github.com/repos/commonfabric/labs/pulls/3427",
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
 });
 
 Deno.test("fetchIssueComments reads every page of a pull request's comments", async () => {
@@ -1183,50 +173,6 @@ Deno.test("fetchIssueComments reads every page of a pull request's comments", as
       "https://api.github.com/repos/commonfabric/labs/issues/5727/comments?per_page=100&page=1",
       "https://api.github.com/repos/commonfabric/labs/issues/5727/comments?per_page=100&page=2",
     ]);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-Deno.test("fetchCurrentPRBody prefers the live pull request body over stale event payloads", async () => {
-  const originalFetch = globalThis.fetch;
-  try {
-    globalThis.fetch = ((_input, _init) =>
-      Promise.resolve(
-        new Response(JSON.stringify({ body: "LIVE PR BODY" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      )) as typeof fetch;
-
-    const result = await fetchCurrentPRBody(3427, {
-      pull_request: { body: "STALE EVENT BODY" },
-    });
-
-    assertEquals(result, { body: "LIVE PR BODY", source: "live" });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-Deno.test("fetchCurrentPRBody falls back to the event body if the live request fails", async () => {
-  const originalFetch = globalThis.fetch;
-  try {
-    globalThis.fetch = ((_input, _init) =>
-      Promise.resolve(
-        new Response("rate limited", { status: 429 }),
-      )) as typeof fetch;
-
-    const result = await fetchCurrentPRBody(3427, {
-      pull_request: { body: "EVENT BODY" },
-    });
-
-    assertEquals(result.body, "EVENT BODY");
-    assertEquals(result.source, "event-fallback");
-    assertEquals(
-      result.errorMessage,
-      "GitHub API GET 429 (rate limit): /repos/commonfabric/labs/pulls/3427",
-    );
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1510,14 +456,13 @@ Deno.test("githubGet does not call an ordinary refusal a rate limit", async () =
         Error,
       );
       assertFalse(error instanceof GitHubRateLimitError);
-      assertFalse(isGitHubRateLimitError(error));
     },
   );
 });
 
 Deno.test("downloadAndExtractArtifact raises a rate limit rather than reporting no artifact", async () => {
-  // Reported as `null` the limit would read as a run that measured nothing,
-  // which is a verdict about coverage rather than about GitHub.
+  // Reported as `null` the limit would read as an artifact that is not
+  // there, which is a claim about the run rather than about GitHub.
   const calls = await withFetchAnswering(primaryRateLimitResponse, async () => {
     await assertRejects(
       () => downloadAndExtractArtifact(123, "rate-limited-artifact-"),
@@ -1665,37 +610,40 @@ Deno.test("fetchArtifactsForRun reads every artifact page", async () => {
   }
 });
 
-Deno.test("fetchPRFiles reads every changed-file page", async () => {
+Deno.test("fetchArtifactsForRun stops at a short or an empty page when GitHub gives no total", async () => {
+  const artifacts = (count: number): Artifact[] =>
+    Array.from({ length: count }, (_, index) => ({
+      id: index + 1,
+      name: `artifact-${index + 1}`,
+      size_in_bytes: 1,
+      expired: false,
+    }));
   const originalFetch = globalThis.fetch;
-  const requestedPages: string[] = [];
   try {
-    globalThis.fetch = ((input, _init) => {
-      const url = new URL(input instanceof Request ? input.url : String(input));
-      requestedPages.push(
-        `${url.searchParams.get("per_page")}:${url.searchParams.get("page")}`,
-      );
-      const page = Number(url.searchParams.get("page"));
-      const files = page === 1
-        ? Array.from({ length: 100 }, (_, index) => ({
-          filename: `packages/runner/src/file-${index}.ts`,
-        }))
-        : [{ filename: "packages/ui/src/card.ts" }];
-
-      return Promise.resolve(
-        new Response(JSON.stringify(files), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      );
-    }) as typeof fetch;
-
-    const files = await fetchPRFiles(123);
-    assertEquals(files.length, 101);
-    assertEquals(files.at(-1)?.filename, "packages/ui/src/card.ts");
-    assertEquals(requestedPages, ["100:1", "100:2"]);
+    for (
+      const [pages, read, requested] of [
+        [[artifacts(3)], 3, 1],
+        [[artifacts(100), []], 100, 2],
+      ] as const
+    ) {
+      let requests = 0;
+      globalThis.fetch = (() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ artifacts: pages[requests++] }), {
+            status: 200,
+          }),
+        )) as typeof fetch;
+      assertEquals((await fetchArtifactsForRun(123)).length, read);
+      assertEquals(requests, requested);
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+Deno.test("coverageMetricGroupName returns null for a name that is not a coverage metric", () => {
+  assertEquals(coverageMetricGroupName("job: Check"), null);
+  assertEquals(coverageMetricGroupName("coverage-debt: tasks"), null);
 });
 
 Deno.test("isNotFound tells a thing that is not there from an interface that could not answer", () => {
@@ -1725,7 +673,7 @@ Deno.test("a measured set's metric is not one of its member's source groups", ()
     "workspace-unit/packages/memory",
   );
   // The two carry the same package name, and reading one as the other
-  // would ratchet a figure the gate has no opinion about.
+  // would report a figure the gate has no opinion about.
   assertEquals(coverageMetricGroupName(metric), null);
   assertEquals(
     coverageMetricMeasuredSet(coverageMetricForGroup("packages/memory")),
@@ -1807,7 +755,7 @@ async function withArtifactZip<T>(
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (() =>
     Promise.resolve(
-      new Response(zip as BodyInit, { status: 200 }),
+      new Response(new Uint8Array(zip), { status: 200 }),
     )) as typeof fetch;
   try {
     return await read();
@@ -1816,214 +764,23 @@ async function withArtifactZip<T>(
   }
 }
 
-Deno.test("downloadAndParseCoverageBaseline reads the baseline file an artifact holds", async () => {
-  const metrics = new Map<string, BaselineSample>([
-    [coverageMetricForGroup("tasks"), {
-      runId: 5,
-      sha: "abc",
-      createdAt: "2026-01-01T00:00:00Z",
-      uncoveredLines: 42,
-    }],
-  ]);
+Deno.test("downloadAndExtractArtifact unpacks the artifact it downloads", async () => {
   const zip = await buildZip(
-    PERF_METRICS_FILE,
-    new TextEncoder().encode(
-      JSON.stringify(
-        serializeCoverageBaseline(metrics, { "pattern-unit": "cold" }),
-      ),
-    ),
+    "records.json",
+    new TextEncoder().encode('{"ok":true}'),
     0,
   );
-  const parsed = await withArtifactZip(
+  const directory = await withArtifactZip(
     zip,
-    () => downloadAndParseCoverageBaseline(7),
+    () => downloadAndExtractArtifact(7, "artifact-unpack-test-"),
   );
-  assertEquals(parsed?.metrics, metrics);
-  assertEquals(parsed?.compileCacheStates, { "pattern-unit": "cold" });
-});
-
-Deno.test("downloadAndParseCoverageBaseline returns null for an artifact holding no baseline file", async () => {
-  const zip = await buildZip(
-    "something-else.json",
-    new TextEncoder().encode("{}"),
-    0,
-  );
-  assertEquals(
-    await withArtifactZip(zip, () => downloadAndParseCoverageBaseline(7)),
-    null,
-  );
-});
-
-Deno.test("newestArtifactsByName keeps the latest re-run upload per name", () => {
-  const artifact = (id: number, name: string): Artifact => ({
-    id,
-    name,
-    size_in_bytes: 1,
-    expired: false,
-  });
-  // API order is newest-first; a naive last-write-wins iteration would let
-  // the stale attempt-1 artifact shadow the re-run's upload.
-  const result = newestArtifactsByName([
-    artifact(200, "test-timing-pattern-unit-4"),
-    artifact(150, "test-timing-pattern-unit-1"),
-    artifact(100, "test-timing-pattern-unit-4"),
-  ]);
-  assertEquals(
-    result.map((a) => [a.name, a.id]).sort(),
-    [
-      ["test-timing-pattern-unit-1", 150],
-      ["test-timing-pattern-unit-4", 200],
-    ],
-  );
-});
-
-Deno.test("buildCoverageDebtUnattributedComment names the lines and how to skip the check", () => {
-  const comment = buildCoverageDebtUnattributedComment({
-    groups: [{
-      group: "packages/runner",
-      target: 4612,
-      current: 4614,
-      baseline: {
-        runUrl: "https://github.com/commonfabric/labs/actions/runs/900",
-        sha: "b".repeat(40),
-      },
-    }],
-    files: [
-      {
-        relativePath: "packages/runner/src/scheduler/diagnosis.ts",
-        lines: [333, 334],
-      },
-    ],
-    measurement: {
-      runUrl: "https://github.com/commonfabric/labs/actions/runs/901",
-      baseSha: "a".repeat(40),
-    },
-  });
-
-  // Same marker as the other coverage comments, so the poster keeps updating
-  // the one comment rather than adding a second.
-  assertStringIncludes(comment, COVERAGE_SUGGESTION_MARKER);
-  assertStringIncludes(
-    comment,
-    "<summary><h3>🕵🏻‍♀️ Test coverage regressed by 2 lines</h3></summary>",
-  );
-  assertStringIncludes(comment, "not introduced by this PR");
-  assertStringIncludes(comment, "inconsistently covered");
-  assertStringIncludes(comment, "The following lines are affected:");
-  assertStringIncludes(
-    comment,
-    "`packages/runner/src/scheduler/diagnosis.ts`: 333, 334",
-  );
-  // The line to paste into the description, with the rise this PR measured
-  // rather than the total it reached, so a rebase leaves it saying the same.
-  assertStringIncludes(
-    comment,
-    "ACCEPT_COVERAGE_DEBT: packages/runner +2 lines",
-  );
-  // The agent prompt is about the flapping lines, not about this PR.
-  assertStringIncludes(comment, "### Prompt for an AI coding agent");
-  assertStringIncludes(comment, "covered on some runs");
-  assertStringIncludes(
-    comment,
-    "  packages/runner/src/scheduler/diagnosis.ts: 333, 334",
-  );
-  // The prompt says which run measured the lines, at which commit, and which
-  // baseline run each group was held against, so a fresh session can open the
-  // measurement rather than guess at how old the report is.
-  assertStringIncludes(comment, "Where this measurement came from:");
-  assertStringIncludes(
-    comment,
-    "  Measuring run: https://github.com/commonfabric/labs/actions/runs/901",
-  );
-  assertStringIncludes(comment, `  Base commit measured: ${"a".repeat(40)}`);
-  // The reader is handed the command that says what landed since.
-  assertStringIncludes(
-    comment,
-    `  git log ${"a".repeat(40)}.. -- <one of the files above>`,
-  );
-  assertStringIncludes(
-    comment,
-    `  Baseline for packages/runner: run https://github.com/commonfabric/labs/actions/runs/900, commit ${
-      "b".repeat(40)
-    }`,
-  );
-  assertStringIncludes(comment, "merged into that base commit");
-  assertStringIncludes(comment, "docs/development/COVERAGE.md");
-  // Repetition is not offered as evidence: the prompt asks for the new test to
-  // be measured on its own instead.
-  assertStringIncludes(comment, "Do not try to establish that a line is fixed");
-  assertStringIncludes(comment, "deno coverage --lcov coverage/raw/line-check");
-  assertStringIncludes(comment, "DA:<line>,<hits>");
-  assertFalse(comment.includes("twice from a clean profile directory"));
-  // None of the "this PR adds uncovered lines" copy survives.
-  assertFalse(comment.includes("This PR adds source lines"));
-  assertFalse(comment.includes("Could not tie the regression"));
-});
-
-Deno.test("buildCoverageDebtUnattributedComment omits run identity it does not have", () => {
-  // A local run of the checker has no workflow run behind it, and a group can
-  // reach the comment without a baseline run to name.
-
-  const local = buildCoverageDebtUnattributedComment({
-    groups: [{ group: "tasks", target: 0, current: 1 }],
-    files: [{ relativePath: "tasks/test-records.ts", lines: [90] }],
-  });
-
-  assertFalse(local.includes("Where this measurement came from:"));
-  assertFalse(local.includes("Measuring run:"));
-  assertFalse(local.includes("Baseline for tasks:"));
-  // The reader is still told to check that the report has not been overtaken,
-  // in the wording that names no commit.
-  assertStringIncludes(local, "it may no longer describe the");
-  assertStringIncludes(local, "read");
-  assertFalse(local.includes("merged into that base commit"));
-  assertFalse(local.includes("git log "));
-  assertStringIncludes(local, "since the measurement was taken");
-  assertStringIncludes(local, "Affected lines:");
-
-  // Half an identity is reported as far as it goes: the run page is named and
-  // no commit is invented for it.
-  const runOnly = buildCoverageDebtUnattributedComment({
-    groups: [{
-      group: "tasks",
-      target: 0,
-      current: 1,
-      baseline: {
-        runUrl: "https://github.com/commonfabric/labs/actions/runs/900",
-      },
-    }],
-    files: [{ relativePath: "tasks/test-records.ts", lines: [90] }],
-    measurement: {
-      runUrl: "https://github.com/commonfabric/labs/actions/runs/901",
-    },
-  });
-
-  assertStringIncludes(runOnly, "Where this measurement came from:");
-  assertStringIncludes(
-    runOnly,
-    "  Measuring run: https://github.com/commonfabric/labs/actions/runs/901",
-  );
-  assertStringIncludes(
-    runOnly,
-    "  Baseline for tasks: run https://github.com/commonfabric/labs/actions/runs/900\n",
-  );
-  assertFalse(runOnly.includes("Base commit measured:"));
-  assertFalse(runOnly.includes("merged into that base commit"));
-  assertStringIncludes(runOnly, "since the measurement was taken");
-});
-
-Deno.test("buildCoverageDebtUnattributedComment counts files and lines past the cap", () => {
-  const comment = buildCoverageDebtUnattributedComment({
-    groups: [{ group: "tasks", target: 0, current: 40 }],
-    files: Array.from({ length: 25 }, (_, index) => ({
-      relativePath: `tasks/file-${String(index).padStart(2, "0")}.ts`,
-      lines: Array.from({ length: 30 }, (_, line) => line + 1),
-    })),
-  });
-
-  // 20 files listed, 5 counted; 20 lines listed per file, 10 counted.
-  assertStringIncludes(comment, "`tasks/file-19.ts`");
-  assertFalse(comment.includes("`tasks/file-20.ts`"));
-  assertStringIncludes(comment, "…and 5 more file(s)._");
-  assertStringIncludes(comment, "…and 10 more");
+  assertExists(directory);
+  try {
+    assertEquals(
+      await Deno.readTextFile(`${directory}/records.json`),
+      '{"ok":true}',
+    );
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
 });

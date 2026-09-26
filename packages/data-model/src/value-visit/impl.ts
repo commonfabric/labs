@@ -8,6 +8,31 @@ import type { ValueVisitor } from "./interface.ts";
 import { VisitInProgress } from "./VisitInProgress.ts";
 
 /**
+ * Performs a one-off structural-map of a value, with the given visitor.
+ *
+ * See `visitValue()` in re `value` validation.
+ */
+export function mapValue<PlusType, ResultType>(
+  value: NoInfer<FabricValuePlus<PlusType>>,
+  visitor: ValueVisitor<PlusType, ResultType>,
+): ResultType {
+  const inProgress = new VisitInProgress<PlusType, ResultType>(visitor);
+  return inProgress.map(value);
+}
+
+/**
+ * Creates a structural-map function bound to the given visitor. The result is a
+ * single-argument `map(value)` function.
+ */
+export function makeMapValueFunction<PlusType, ResultType>(
+  visitor: ValueVisitor<PlusType, ResultType>,
+): (
+  value: FabricValuePlus<PlusType>,
+) => ResultType {
+  return (value: FabricValuePlus<PlusType>) => mapValue(value, visitor);
+}
+
+/**
  * Performs a one-off visit of a value, with the given visitor.
  *
  * The engine does not validate `value`; it trusts the static type. Each value

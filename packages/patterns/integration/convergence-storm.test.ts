@@ -44,8 +44,9 @@ const SERVER_EXECUTION_FROM_ENV = experimentalOptionsFromEnv(Deno.env.get)
  * a step listed there for this file is skipped ONLY when this process runs
  * the ON posture, loudly (the entry's reason is printed), and only while
  * the entry exists — the OFF arm and an unlisted step always run. Never a
- * silent filter: the CI step prints every entry, and the validator
- * requires this file to name each listed step and call this guard.
+ * silent filter: the test topology declares the entry's leaf unavailable,
+ * and the validator requires this file to name each listed step and call
+ * this guard.
  *
  * The registry is EMPTY, so this guard is inert everywhere today. Note the
  * key: it is the RAW env, while the on-skips module asks callers to resolve

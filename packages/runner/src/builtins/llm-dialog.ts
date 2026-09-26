@@ -3149,7 +3149,12 @@ async function handleInvoke(
     );
 
     if (pattern) {
-      runtime.run(tx, pattern, invocationArgs, result);
+      // The model's tool call instantiates the pattern, in a continuation of
+      // the dialog's action: no principal's act attributes what its setup
+      // initializes.
+      runtime.run(tx, pattern, invocationArgs, result, {
+        attributeInitialization: false,
+      });
     } else if (handler) {
       // Inject the result cell only when the caller's input does not carry a
       // `result` of its own. Overwriting would silently DISCARD caller data

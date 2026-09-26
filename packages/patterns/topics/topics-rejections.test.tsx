@@ -218,9 +218,8 @@ export default pattern(() => {
     foreignComment.get().body === "elsewhere"
   );
 
-  // The retraction verbs' own refusal arms. Each is a path the Coverage Check
-  // named as unexercised, and each is a way a caller can be wrong that must
-  // produce a value rather than a silent no-op.
+  // The retraction verbs' own refusal arms. Each is a way a caller can be
+  // wrong that must produce a value rather than a silent no-op.
   const action_remove_comment_unsigned = action(() => {
     seedTopic.removeComment.send({
       comment: foreignComment,

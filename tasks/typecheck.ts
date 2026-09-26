@@ -7,8 +7,8 @@
  * here.
  *
  * This list is the only type check a path gets whose tests run under
- * `--no-check`: those runs lean on this task, via the Check job's "Type
- * check codebase" step, for type safety. A package whose test task checks
+ * `--no-check`: those runs lean on this task, which the lanes run as the
+ * `typecheck` suite, for type safety. A package whose test task checks
  * its own files instead — `packages/patterns` among them — is reached both
  * ways. Before adding `--no-check` to a test invocation, make sure every
  * file it loads is under a path listed here, because that flag is what

@@ -16,6 +16,7 @@ import {
 } from "./check-test-topology.ts";
 import { AliasResolver } from "@commonfabric/test-support/records";
 import type { Suite } from "./test-topology/suite.ts";
+import { loadTopology } from "./test-topology.ts";
 
 /** A suite holding exactly what a case describes. */
 function suite(partial: Partial<Suite> & { id: string }): Suite {
@@ -218,6 +219,26 @@ describe("the store half of the drift guard", () => {
       'no suite claims the recorded identity ["unit","bakery","icing > ' +
       'sets"], recorded by test-records-test-3-a1 from ' +
       "packages/bakery/icing.test.ts",
+    ]);
+  });
+
+  it("says a test naming no file may share its name with another", () => {
+    // Two files in one run registering one name leave its records naming
+    // neither file, and a suite of files cannot then find it.
+    const findings = checkStore([bakery], [{
+      test: { k: "unit", s: "bakery", n: "icing > sets" },
+      commit: HERE,
+      from: "test-records-test-3-a1",
+    }], HERE);
+    expect(
+      findings.filter((finding) => finding.fails).map((finding) =>
+        finding.message
+      ),
+    ).toEqual([
+      'no suite claims the recorded identity ["unit","bakery","icing > ' +
+      'sets"], recorded by test-records-test-3-a1. It names no file, which ' +
+      "is what a test comes to when two files in one run register tests of " +
+      "its name, among other ways",
     ]);
   });
 
@@ -453,33 +474,36 @@ describe("the workflow half of the drift guard", () => {
     return { test: { k, s, n }, where: ".github/workflows/deno.yml" };
   }
 
-  it("passes a step exactly one suite claims", () => {
-    const findings = checkWorkflows([gates], [
-      step("gate", "repo", "check-icing"),
-    ]);
-    expect(findings).toEqual([]);
+  it("finds no step recording by hand in this repository's workflows", async () => {
+    // The lanes run every test and gate the topology declares, so the
+    // workflows this repository ships record nothing of their own.
+    const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+    const suites = await loadTopology(root);
+    expect(checkWorkflows(suites, await workflowRecords(root))).toEqual([]);
   });
 
   it("fails a step no suite claims", () => {
-    // A gate wired into a job and into no suite runs while its step
-    // stands and stops when a lane takes over the job.
+    // A gate wired into a job and into no suite is one no lane will run.
     const findings = checkWorkflows([gates], [
       step("gate", "repo", "check-glaze"),
     ]);
     expect(findings.map((finding) => finding.fails)).toEqual([true]);
     expect(findings[0]!.message).toContain(
-      'no suite claims ["gate","repo","check-glaze"], which ' +
-        ".github/workflows/deno.yml records",
+      '.github/workflows/deno.yml records ["gate","repo","check-glaze"] ' +
+        "by hand, and no suite claims it",
     );
   });
 
-  it("fails a step two suites claim", () => {
-    const findings = checkWorkflows(
-      [gates, { ...gates, id: "repo-gates" }],
-      [step("gate", "repo", "check-icing")],
-    );
+  it("fails a step a suite already runs in the lanes", () => {
+    // The lanes run the gate already, so the step would record it twice
+    // against one commit.
+    const findings = checkWorkflows([gates], [
+      step("gate", "repo", "check-icing"),
+    ]);
     expect(findings.map((finding) => finding.fails)).toEqual([true]);
-    expect(findings[0]!.message).toContain("both claim");
+    expect(findings[0]!.message).toContain(
+      "which repo-checks already runs in the lanes",
+    );
   });
 
   it("counts one identity once, however many steps write it", () => {

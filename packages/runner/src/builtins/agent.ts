@@ -155,6 +155,19 @@ export function agentRunRecordCell(
 }
 
 /**
+ * Helper for `agent()`, which reports whether `queue` lists the `AgentRun`
+ * record whose id is `recordId`.
+ */
+function listsRecord(
+  queue: Cell<AgentQueueIndex>,
+  recordId: string,
+): boolean {
+  return (queue.key("entries").get() ?? []).some((entry) =>
+    entry.run.getAsNormalizedFullLink().id === recordId
+  );
+}
+
+/**
  * Helper for `agent()`, which resolves what a pattern passed under `inputs`
  * to cell handles. The parameter schema reads every entry as a cell, so a
  * value a pattern wrote inline arrives as a handle to where it sits in the
@@ -370,6 +383,168 @@ export function agent(
 
     const host = runtime.hostForSpace(parentCell.space).origin;
 
+    /**
+     * Runs `step` with the staging run's delegated carriage once `committed`
+     * is durable. A serving runtime's wave can still withdraw an accepted
+     * commit, and a withdrawn commit runs nothing.
+     */
+    const afterCommit = (
+      committed: IExtendedStorageTransaction,
+      step: (carriage: ServerRunInfo["delegated"]) => Promise<void>,
+    ): void => {
+      const settlement = served
+        ? waveSettlementOf(committed) ?? waveSettlementOf(tx)
+        : undefined;
+      const carriage = delegatedCarriageOf(
+        waveRunContextOf(committed) ?? waveRunContextOf(tx),
+      );
+      const work = Promise.resolve(settlement).then((verdict) =>
+        verdict?.error ? undefined : step(carriage)
+      );
+      runtime.trackAsyncWork(work, parentCell);
+    };
+
+    /**
+     * Records that this node hands the request off, and returns the function
+     * that forgets it again. A handoff whose
+     * transaction does not become durable is not in flight, so the next run
+     * hands the request off again. On a serving runtime that includes a
+     * transaction the wave withdraws after accepting it. Handing a request
+     * off twice is harmless, since its record is found by its hash, created
+     * once, and listed once.
+     */
+    const takeHandoff = (): () => void => {
+      state.previousCallHash = hash;
+      const forgetRequest = () => {
+        if (state.previousCallHash === hash) state.previousCallHash = undefined;
+      };
+      tx.addCommitCallback((committedTx, commitResult) => {
+        if (commitResult.error) return forgetRequest();
+        const settlement = waveSettlementOf(committedTx) ??
+          waveSettlementOf(tx);
+        void settlement?.then(({ error }) => {
+          if (error) forgetRequest();
+        });
+      });
+      return forgetRequest;
+    };
+
+    /**
+     * Lists the record in the requester's home-space index, or ends it
+     * `refused` when it cannot be listed: a record no index names is a
+     * request nothing will ever claim, and the result cell derives the
+     * refusal from the record.
+     */
+    const listRecord = async (
+      homeSpace: MemorySpace,
+      carriage: ServerRunInfo["delegated"],
+    ): Promise<void> => {
+      /**
+       * Writes the record's index entry, and returns why it did not land.
+       * A serving runtime's wave can still withdraw the write after
+       * accepting it. A contribution the wave drops is retryable in place,
+       * and the write adds the entry only if it is not listed, so a first
+       * drop issues the write once more against the state that dropped it.
+       */
+      const index = async (reissue: boolean): Promise<Error | undefined> => {
+        const indexed = await runtime.editWithRetry((tx) => {
+          // The index write is the runtime's own bookkeeping, made after the
+          // request's run is over. Into a home space that is not the served
+          // one it crosses on the staging run's carriage, which a serving wave
+          // admits for an actor that owns or was granted the target space
+          // (serving-loop.md §3d, "Multi-space seals").
+          runtime.stampServerRun(tx, {
+            actionId: `${AGENT_SINK}/index/${effectKey}`,
+            kind: "bookkeeping",
+            ...runtime.delegationForWriteTo(homeSpace, carriage),
+          });
+          tx.tx.scopeKeyIdentity = identity;
+          const record = agentRunRecordCell(
+            runtime,
+            tx,
+            parentCell,
+            cause,
+            hash,
+          );
+          const recordId = record.getAsNormalizedFullLink().id;
+          const queue = agentQueueIndexCell(runtime, homeSpace, tx);
+          // A home space with no queue has nowhere to list the record, and
+          // writing the path anyway would leave a `defaultPattern` value where
+          // the home pattern's own creation expects none.
+          if (queue.withTx(tx).get() === undefined) {
+            throw new Error("the home space holds no agent queue");
+          }
+          if (listsRecord(queue.withTx(tx), recordId)) return tx;
+          const entries = queue.key("entries").withTx(tx);
+          // The record's id determines the entry's address, so concurrent
+          // index writes cannot reuse an element from the same list position.
+          // The stored array can carry a different item schema. The writer's
+          // canonical contract declares that each run resolves per user.
+          const entry = entries.elementById(recordId).asSchema(
+            AgentQueueIndexSchema.properties.entries.items,
+          ) as Cell<{ run: Cell<unknown>; host: string; address?: string }>;
+          entry.set({
+            run: record,
+            host,
+            address: renderCellReference(record.getAsNormalizedFullLink()),
+          });
+          entries.addUnique(entry);
+          return tx;
+        });
+        if (indexed.error) return indexed.error;
+        const withdrawn = (await waveSettlementOf(indexed.ok))?.error;
+        return reissue &&
+            withdrawn?.waveWithdrawalCause === "contribution-dropped"
+          ? index(false)
+          : withdrawn;
+      };
+      const indexError = await agentQueueIndexCell(runtime, homeSpace).sync()
+        .then(
+          () => index(true),
+          (error) => error instanceof Error ? error : new Error(String(error)),
+        );
+      if (indexError) {
+        reportRejection(
+          "Indexing the run record was rejected.",
+          hash,
+          indexError,
+        );
+        const refused = await runtime.editWithRetry((tx) => {
+          markEffectCompletion(tx, effectKey);
+          tx.tx.scopeKeyIdentity = identity;
+          const record = agentRunRecordCell(
+            runtime,
+            tx,
+            parentCell,
+            cause,
+            hash,
+          );
+          // A record another node has listed since, or a runner has claimed
+          // through that listing, is no longer this effect's to end.
+          const listed = listsRecord(
+            agentQueueIndexCell(runtime, homeSpace, tx),
+            record.getAsNormalizedFullLink().id,
+          );
+          if (listed || record.withTx(tx).key("state").get() !== "queued") {
+            return;
+          }
+          recordRuntimeOwnedStore(tx, parentCell, record);
+          const recordTx = record.withTx(tx);
+          recordTx.key("state").set("refused");
+          recordTx.key("stateSince").set(new Date().toISOString());
+          recordTx.key("outcome").set("refused");
+          recordTx.key("errorCode").set(REFUSED);
+        });
+        if (refused.error) {
+          reportRejection(
+            "Ending the unindexed record was rejected.",
+            hash,
+            refused.error,
+          );
+        }
+      }
+    };
+
     // The record's existence is the memo: reading it here is also what
     // re-runs this action when a runner moves it.
     const record = agentRunRecordCell(runtime, tx, parentCell, cause, hash);
@@ -379,6 +554,32 @@ export function agent(
     if (recordValue !== undefined && recordValue.state !== undefined) {
       runtime.effectMemoObserver?.({ kind: "hit", id: effectId });
       deriveFromRecord(fields, resultCell, record, recordValue, hash, host);
+      // The process that created a record can stop before listing it, so a
+      // node that finds one still `queued` without having handed it off
+      // lists it, or ends it. Listing a record already listed writes
+      // nothing.
+      const homeSpace = runtime.homeSpacePrincipalFor(tx);
+      if (
+        recordValue.state === "queued" && hash !== state.previousCallHash &&
+        homeSpace !== undefined
+      ) {
+        const forgetRequest = takeHandoff();
+        // A request the release check refuses is not listed, and the result
+        // cell keeps following the record. The node's next run tries again.
+        enqueueSinkRequestPostCommitEffect(
+          tx,
+          AGENT_SINK,
+          effectId,
+          requestSnapshot,
+          "agent-list",
+          (committedTx) =>
+            afterCommit(
+              committedTx,
+              (carriage) => listRecord(homeSpace, carriage),
+            ),
+          { idempotencyKey: effectKey, onReleaseRejected: forgetRequest },
+        );
+      }
       return;
     }
 
@@ -428,22 +629,8 @@ export function agent(
       }
     }
 
-    state.previousCallHash = hash;
+    takeHandoff();
     state.currentHash = hash;
-    // A request whose staging does not become durable is not in flight, so
-    // the next run stages it again. On a serving runtime that includes a
-    // staging the wave withdraws after accepting it. Staging a request twice
-    // is harmless, since its record is found by its hash and created once.
-    const forgetRequest = () => {
-      if (state.previousCallHash === hash) state.previousCallHash = undefined;
-    };
-    tx.addCommitCallback((committedTx, commitResult) => {
-      if (commitResult.error) return forgetRequest();
-      const settlement = waveSettlementOf(committedTx) ?? waveSettlementOf(tx);
-      void settlement?.then(({ error }) => {
-        if (error) forgetRequest();
-      });
-    });
 
     fields.pending.set(true);
     fields.result.set(undefined);
@@ -558,103 +745,7 @@ export function agent(
         );
         return;
       }
-      /**
-       * Writes the record's index entry, and returns why it did not land.
-       * A serving runtime's wave can still withdraw the write after
-       * accepting it. A contribution the wave drops is retryable in place,
-       * and the write adds the entry only if it is not listed, so a first
-       * drop issues the write once more against the state that dropped it.
-       */
-      const index = async (reissue: boolean): Promise<Error | undefined> => {
-        const indexed = await runtime.editWithRetry((tx) => {
-          // The index write is the runtime's own bookkeeping, made after the
-          // request's run is over. Into a home space that is not the served
-          // one it crosses on the staging run's carriage, which a serving wave
-          // admits for an actor that owns or was granted the target space
-          // (serving-loop.md §3d, "Multi-space seals").
-          runtime.stampServerRun(tx, {
-            actionId: `${AGENT_SINK}/index/${effectKey}`,
-            kind: "bookkeeping",
-            ...runtime.delegationForWriteTo(homeSpace, carriage),
-          });
-          tx.tx.scopeKeyIdentity = identity;
-          const record = agentRunRecordCell(
-            runtime,
-            tx,
-            parentCell,
-            cause,
-            hash,
-          );
-          const recordId = record.getAsNormalizedFullLink().id;
-          const queue = agentQueueIndexCell(runtime, homeSpace, tx);
-          // A home space with no queue has nowhere to list the record, and
-          // writing the path anyway would leave a `defaultPattern` value where
-          // the home pattern's own creation expects none.
-          if (queue.withTx(tx).get() === undefined) {
-            throw new Error("the home space holds no agent queue");
-          }
-          const entries = queue.key("entries").withTx(tx);
-          const listed = (entries.get() ?? []).some((entry) =>
-            entry.run.getAsNormalizedFullLink().id === recordId
-          );
-          if (listed) return tx;
-          // The record's id determines the entry's address, so concurrent
-          // index writes cannot reuse an element from the same list position.
-          // The stored array can carry a different item schema. The writer's
-          // canonical contract declares that each run resolves per user.
-          const entry = entries.elementById(recordId).asSchema(
-            AgentQueueIndexSchema.properties.entries.items,
-          ) as Cell<{ run: Cell<unknown>; host: string; address?: string }>;
-          entry.set({
-            run: record,
-            host,
-            address: renderCellReference(record.getAsNormalizedFullLink()),
-          });
-          entries.addUnique(entry);
-          return tx;
-        });
-        if (indexed.error) return indexed.error;
-        const withdrawn = (await waveSettlementOf(indexed.ok))?.error;
-        return reissue &&
-            withdrawn?.waveWithdrawalCause === "contribution-dropped"
-          ? index(false)
-          : withdrawn;
-      };
-      const indexError = await index(true);
-      if (indexError) {
-        // A record no index names is a request nothing will ever claim, so
-        // the effect, which still owns the record until it is indexed, ends
-        // it: the record reads `refused` and the result cell derives that.
-        reportRejection(
-          "Indexing the run record was rejected.",
-          hash,
-          indexError,
-        );
-        const refused = await runtime.editWithRetry((tx) => {
-          markEffectCompletion(tx, effectKey);
-          tx.tx.scopeKeyIdentity = identity;
-          const record = agentRunRecordCell(
-            runtime,
-            tx,
-            parentCell,
-            cause,
-            hash,
-          );
-          recordRuntimeOwnedStore(tx, parentCell, record);
-          const recordTx = record.withTx(tx);
-          recordTx.key("state").set("refused");
-          recordTx.key("stateSince").set(new Date().toISOString());
-          recordTx.key("outcome").set("refused");
-          recordTx.key("errorCode").set(REFUSED);
-        });
-        if (refused.error) {
-          reportRejection(
-            "Ending the unindexed record was rejected.",
-            hash,
-            refused.error,
-          );
-        }
-      }
+      await listRecord(homeSpace, carriage);
     };
 
     /**
@@ -692,20 +783,7 @@ export function agent(
       effectId,
       requestSnapshot,
       "agent-start",
-      (committedTx) => {
-        // A serving runtime's wave can still withdraw an accepted commit;
-        // a withdrawn request creates no record.
-        const settlement = served
-          ? waveSettlementOf(committedTx) ?? waveSettlementOf(tx)
-          : undefined;
-        const carriage = delegatedCarriageOf(
-          waveRunContextOf(committedTx) ?? waveRunContextOf(tx),
-        );
-        const work = Promise.resolve(settlement).then((verdict) =>
-          verdict?.error ? undefined : createRecord(carriage)
-        );
-        runtime.trackAsyncWork(work, parentCell);
-      },
+      (committedTx) => afterCommit(committedTx, createRecord),
       {
         idempotencyKey: effectKey,
         onRejected: (error) => {

@@ -5,7 +5,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { exec } from "../commands/exec.ts";
 import { test as testCommand } from "../commands/test-command.ts";
 import { cf, checkStderr, stripAnsi, withEnv } from "./utils.ts";
 import { COMMAND_SPELLING_END_DATE } from "../lib/deprecated-spelling.ts";
@@ -556,6 +555,10 @@ describe("main command", () => {
   });
 
   it("reports mounted exec errors without a stack", async () => {
+    // A copy of its own, like the command trees above: every copy of
+    // main.ts mounts the one `exec` its module exports, and a command
+    // mounted under a root nothing has parsed has no types to parse with.
+    const { exec } = await import("../commands/exec.ts?mounted-exec-errors");
     const errors = await withCapturedErrors(async () => {
       const code = await withMockExit(async () => {
         await exec.parse(["/tmp/not-mounted.handler"]);

@@ -1217,6 +1217,9 @@ export interface RunSyncedOptions {
    * caller-owned transaction, which keeps its owner's.
    */
   cfcTrustSnapshot?: TrustSnapshot;
+
+  /** See `RunnerRunOptions.attributeInitialization`. */
+  attributeInitialization?: boolean;
 }
 
 /** Options for a pattern setup whose fresh source revision proves a commit. */
@@ -1239,6 +1242,9 @@ type SetupValidationOptions = {
 
   /** See `RunnerRunOptions.referencedArgumentFields`. */
   referencedArgumentFields?: readonly string[];
+
+  /** See `RunnerRunOptions.attributeInitialization`. */
+  attributeInitialization?: boolean;
 
   /** Optional invariant over the argument stored before setup changes it. */
   validateCurrentArgument?: (argumentCell: Cell<unknown>) => void;
@@ -1566,7 +1572,7 @@ const LIST_OP_INPUT_SCHEMAS = {
 
 // Options shared by `run()`, `#startWithTx()`, and
 // `#startAfterSuccessfulCommit()`.
-type RunnerRunOptions = {
+export type RunnerRunOptions = {
   doNotUpdateOnPatternChange?: boolean;
   // Resumed-from-synced-state: hold each action's initial rehydration/run until
   // the space has finished syncing, so consumers don't race the data.
@@ -1589,6 +1595,14 @@ type RunnerRunOptions = {
   // alone: what a piece records after it exists is decided by a source
   // transition, never by another run of it.
   sourceOrigin?: string;
+  // Whether a piece this run brings into being outside any scheduled action
+  // is the acting principal's act, so that what its setup initializes is
+  // attributed to them (`CfcTxState.attributedInitialization`); `true` when
+  // absent. A builtin instantiating a pattern from a continuation of its
+  // action passes `false`: the piece is nobody's act. `false` declines the
+  // mark for this run's transaction and withdraws none the transaction
+  // carries, so such a run takes a transaction of its own.
+  attributeInitialization?: boolean;
 };
 
 // The relaxed copy of a handler's argument schema, built once per schema
@@ -3584,6 +3598,20 @@ export class Runner {
     }
 
     const { pattern, entryRef, resolvedPatternOrModule } = resolvedPattern;
+    // A piece brought into being outside any scheduled action — a deploy, a
+    // host creating one on the principal's behalf — is the acting principal's
+    // act, as a handler run is: what its setup initializes is attributed to
+    // them (`CfcTxState.attributedInitialization`). One a builtin instantiates
+    // is nobody's act: in an action, whose transaction names it, or from a
+    // continuation of one, which declines the mark. Nor is a run of a piece
+    // that is already there.
+    if (
+      previousIdentityRef === undefined && patternOrModule !== undefined &&
+      validationOptions.attributeInitialization !== false &&
+      tx.tx.sourceAction === undefined
+    ) {
+      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
+    }
     // The reuse arms below write the argument without reaching
     // `#applySetupState`, which names these stores for every other setup
     // write. Naming them twice on one transaction costs a second marker
@@ -5957,6 +5985,12 @@ export class Runner {
       if (ownership.isCancelled()) return;
 
       const startTx = this.#runtime.edit();
+      // A start deferred from a handler run initializes on that run's behalf.
+      if (tx.getCfcState().attributedInitialization) {
+        startTx.markCfcAttributedInitialization(
+          runtimeWritePolicyAuthorization,
+        );
+      }
       // Minted inside a commit callback — by definition outside any scheduler
       // run; the deferred start's node wiring is piece machinery, stamped
       // bookkeeping per serving-loop.md §3d. A flag-ON CLIENT's
@@ -6427,6 +6461,13 @@ export class Runner {
     const navigateContext = navigateEventContextFromRunInfo(
       waveRunContextOf(tx) ?? speculationContext,
     );
+    // Whether the setup is the principal's act was decided by the transaction
+    // the run was asked in — a handler run's, or one outside any scheduled
+    // action that did not decline it — and the transaction it runs in once
+    // the family has landed carries that decision, not one of its own.
+    const attributed = tx.getCfcState().attributedInitialization ||
+      (tx.tx.sourceAction === undefined &&
+        options.attributeInitialization !== false);
     const work = (async () => {
       let toName = named;
       let retriesLeft = PIECE_RUN_START_MAX_RETRIES;
@@ -6434,6 +6475,11 @@ export class Runner {
         await this.#nameFamilyBeforeRun(resultCell, toName, argument);
         if (ownership.isCancelled()) return;
         const startTx = this.#runtime.edit();
+        if (attributed) {
+          startTx.markCfcAttributedInitialization(
+            runtimeWritePolicyAuthorization,
+          );
+        }
         if (durableReads) markDurableReadTx(startTx);
         if (identity !== undefined) startTx.tx.scopeKeyIdentity = identity;
         // A speculative child's continuation keeps its origin across the
@@ -6478,7 +6524,7 @@ export class Runner {
             patternOrModule,
             argument,
             startCell,
-            options,
+            { ...options, attributeInitialization: false },
           );
           if (ownership.markInstalled(started.installedCancel)) {
             startTx.abort("Deferred runner start was cancelled");
@@ -6909,6 +6955,13 @@ export class Runner {
       if (ownership.isCancelled()) return;
 
       const startTx = this.#runtime.edit();
+      // A result pattern deferred from a handler run initializes on that
+      // run's behalf, as the deferred start above does.
+      if (tx.getCfcState().attributedInitialization) {
+        startTx.markCfcAttributedInitialization(
+          runtimeWritePolicyAuthorization,
+        );
+      }
       // Minted inside a commit callback — outside any scheduler run;
       // bookkeeping per serving-loop.md §3d, like the deferred start above (and
       // with the same §3d speculative-consequence stamp: a flag-ON client's
@@ -7158,6 +7211,7 @@ export class Runner {
       resultCell,
       {
         referencedArgumentFields: options.referencedArgumentFields,
+        attributeInitialization: options.attributeInitialization,
         ...(creatingPiece
           ? {
             initializePieceSourceHistory: true,
@@ -7437,6 +7491,7 @@ export class Runner {
           pieceSourceTransition: options?.pieceSourceTransition,
           validateCurrentArgument: options?.validateCurrentArgument,
           validateArgumentLinks: options?.validateArgumentLinks,
+          attributeInitialization: options?.attributeInitialization,
         },
       );
     } else {
@@ -7491,6 +7546,7 @@ export class Runner {
               sourceUpdate,
               validateCurrentArgument: options?.validateCurrentArgument,
               validateArgumentLinks: options?.validateArgumentLinks,
+              attributeInitialization: options?.attributeInitialization,
             },
           );
         },
@@ -10653,6 +10709,10 @@ export class Runner {
       if (policyFacingIdentity) {
         tx.setCfcImplementationIdentity(policyFacingIdentity);
       }
+      // The principal invoked this handler, so the values the run initializes
+      // — the protected defaults of a piece it creates among them — are theirs
+      // to be represented by. No other run's initializations are.
+      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
 
       let popFrameAfterReturn = true;
       try {

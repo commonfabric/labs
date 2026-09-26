@@ -1,4 +1,4 @@
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray, isPrimitive } from "@commonfabric/utils/types";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isInertArray } from "@commonfabric/utils/arrays";
 import { isInertPlainObject } from "@commonfabric/utils/objects";
@@ -11,9 +11,9 @@ import {
 } from "@commonfabric/data-model";
 import { type AliasBinding, isAliasBinding } from "../alias-binding.ts";
 import {
+  type FabricExecFunction,
   type FabricExecPlainObject,
   type FabricExecValue,
-  type FactoryInput,
   isPattern,
   type Module,
   type Pattern,
@@ -67,7 +67,7 @@ function refuseBoundFabricInstance(value: FabricInstance): never {
 }
 
 export function withAliasBindings(
-  value: FactoryInput<any>,
+  value: unknown,
   resolveCellAlias?: CellAliasResolver,
   ignoreSelfAliases: boolean = false,
   path: readonly PropertyKey[] = [],
@@ -147,7 +147,7 @@ export function withAliasBindings(
   // satisfies `isValidFabricValue()` while meaning something else; the last
   // produces one that does not satisfy it at all.
   if (isInertArray(value)) {
-    return (value as FactoryInput<any>).map((v: FactoryInput<any>, i: number) =>
+    return value.map((v, i) =>
       withAliasBindings(v, resolveCellAlias, ignoreSelfAliases, [
         ...path,
         i,
@@ -226,15 +226,13 @@ export function withAliasBindings(
     // serializer (its toJSON under the internal-serialization context): this
     // function builds the in-memory node representation, so embedded
     // sub-pattern graphs must stay bare — no boundary `$patternRef`.
-    const valueToProcess = (isPattern(value) && hasEncodableForm(value))
-      ? serializePatternGraph(value as unknown as Pattern) as Record<
-        string,
-        any
-      >
-      : (value as Record<string, any>);
+    const valueToProcess: Readonly<Record<string, unknown>> =
+      (isPattern(value) && hasEncodableForm(value))
+        ? serializePatternGraph(value)
+        : (value as Readonly<Record<string, unknown>>);
 
-    const result: any = {};
-    for (const key in valueToProcess as any) {
+    const result: Record<string, FabricExecValue> = {};
+    for (const key in valueToProcess) {
       const boundValue = withAliasBindings(
         valueToProcess[key],
         resolveCellAlias,
@@ -258,7 +256,19 @@ export function withAliasBindings(
     return result;
   }
 
-  return value;
+  // What remains is a leaf that is not an object: a primitive or a function.
+  if (isPrimitive(value)) return value;
+
+  // A function stands as itself. It is a builder artifact, or a member of a
+  // module this walk is rebuilding key by key: a JavaScript module's
+  // `implementation`, or an artifact's own serializers. That second kind is
+  // not an execution value, which this cast does not show, and which is why
+  // `pattern.ts` asserts a walked module back to a `Module`.
+  //
+  // TODO(danfuzz): bind a module, and a pattern graph's nodes, through their
+  // declared members rather than as records, at which point a function reaching
+  // here is always an artifact and neither assertion is needed.
+  return value as FabricExecFunction;
 }
 
 export function moduleToEncodableForm(module: Module): FabricExecPlainObject {
@@ -305,7 +315,7 @@ export function moduleToEncodableForm(module: Module): FabricExecPlainObject {
     module.type === "pattern" && implementation && isPattern(implementation)
   ) {
     implementation = withAliasBindings(
-      implementation as unknown as FactoryInput<any>,
+      implementation,
     ) as unknown as Pattern;
     return {
       ...rest,

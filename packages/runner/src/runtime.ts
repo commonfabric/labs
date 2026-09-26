@@ -134,6 +134,7 @@ import {
 import {
   type PieceSourceTransition,
   Runner,
+  type RunnerRunOptions,
   type RunSyncedCommitResult,
   type RunSyncedOptions,
   type RunSyncedWithCommitOptions,
@@ -4318,20 +4319,29 @@ export class Runtime {
     patternFactory: NodeFactory<T, R>,
     argument: T,
     resultCell: Cell<R>,
+    options?: RunnerRunOptions,
   ): Cell<R>;
   run<T, R = any>(
     tx: IExtendedStorageTransaction | undefined,
     pattern: Pattern | Module | undefined,
     argument: T,
     resultCell: Cell<R>,
+    options?: RunnerRunOptions,
   ): Cell<R>;
   run<T, R = any>(
     tx: IExtendedStorageTransaction | undefined,
     patternOrModule: Pattern | Module | undefined,
     argument: T,
     resultCell: Cell<R>,
+    options?: RunnerRunOptions,
   ): Cell<R> {
-    return this.runner.run<T, R>(tx, patternOrModule, argument, resultCell);
+    return this.runner.run<T, R>(
+      tx,
+      patternOrModule,
+      argument,
+      resultCell,
+      options,
+    );
   }
 
   /** Runs a pattern after synchronizing its stored dependencies. */

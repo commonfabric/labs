@@ -349,16 +349,16 @@ describe("running a member that cannot be handed a subset", () => {
     expect(suite.whole).toContain("packages/bakery");
   });
 
-  it("enumerates a member whose task runs the sharded runner", async () => {
-    // The runner walks a directory and runs the files assigned to its shard. A
-    // lane takes that directory and runs the files it chose, so the member is
-    // read a file at a time like any other.
+  it("enumerates a member whose task runs the batch runner", async () => {
+    // The runner walks a directory and runs the files it finds there. A lane
+    // takes that directory and runs the files it chose, so the member is read
+    // a file at a time like any other.
 
     const root = await workspace({
       "./packages/bakery": {
         tasks: {
           test: "deno run --allow-read " +
-            "../../tasks/run-sharded-test-files.ts BAKERY_SHARD piece . " +
+            "../../tasks/run-test-batches.ts . " +
             "-- --no-check -A",
         },
         files: ["test/glaze.test.ts", "test/proof.test.ts"],
@@ -382,7 +382,7 @@ describe("running a member that cannot be handed a subset", () => {
       "./packages/bakery": {
         tasks: {
           test: "deno run --allow-read " +
-            "../../tasks/run-sharded-test-files.ts BAKERY_SHARD cli . " +
+            "../../tasks/run-test-batches.ts . " +
             "--serial='**/*.serial.test.ts' --all-access=test/oven.test.ts " +
             "-- --no-check --parallel --allow-read",
         },
@@ -436,7 +436,7 @@ describe("running a member that cannot be handed a subset", () => {
       "./packages/bakery": {
         tasks: {
           test: "deno run --allow-read " +
-            "../../tasks/run-sharded-test-files.ts BAKERY_SHARD cli . " +
+            "../../tasks/run-test-batches.ts . " +
             "--serial=test/proof.serial.test.ts -- --no-check --parallel",
         },
         files: ["test/glaze.test.ts", "test/proof.test.ts"],
@@ -453,7 +453,7 @@ describe("running a member that cannot be handed a subset", () => {
       "./packages/bakery": {
         tasks: {
           test: "deno run --allow-read " +
-            "../../tasks/run-sharded-test-files.ts BAKERY_SHARD cli . " +
+            "../../tasks/run-test-batches.ts . " +
             "--serial='**/*.serial.test.ts' -- --no-check --parallel",
         },
         files: ["test/glaze.test.ts", "test/proof.serial.test.ts"],

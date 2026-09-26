@@ -118,6 +118,44 @@ transaction, which commits each document whole, receives no deferral. Any other
 write attempt at a protected field — pattern code setting a whole document with
 the field's own bytes among them — requires the field's ordinary writer.
 
+## Attribution of an initialized value
+
+An initialized value is the pattern's default, and the principal whose runtime
+constructed the cell chose nothing of it. A claim the field's schema makes
+about the current principal — `RepresentsCurrentUser`, `AuthoredByCurrentUser`
+— names a principal only when the initialization is their act: the
+transaction of a handler run they invoked, a piece start deferred from one,
+and the transaction that brings a piece into being outside any action — a
+deploy, a host creating a piece on the principal's behalf. The runtime marks
+those transactions (`CfcTxState.attributedInitialization`, set through the
+runtime's authorization); the piece a handler creates, its cross-space
+children included, is initialized in the handler's own transaction, and a
+served creation carries the requester's trust snapshot. A builtin that
+instantiates a pattern from a continuation of its action declines the mark
+(`attributeInitialization: false`): the piece is nobody's act.
+
+In any other transaction — a runtime starting a piece it finds set up, a
+collection builtin instantiating a sub-pattern over a new entry, a source
+update installing a new field's default — the seed, the reference that
+exposes it, the new field's default and the cells a setup projects result
+fields to are all persisted without a claim about the current principal.
+Other integrity the schema adds is minted as for any write. No owner is bound by such an initialization: the field's
+`ownerPrincipal` binding is established by the first write an acting
+principal makes through the field's writer, and that write mints the claim
+for its actor as every handler write does.
+
+An initialization that is nobody's act leaves the claim a stored label
+already makes at its path about a principal: the claim is carried forward as
+it stands. A preserved runtime output and a replayed argument slot write
+nothing and are nobody's act either, so what they store equals what was
+stored; a source update another principal's runtime performs re-projects the
+fields and strips no owner.
+
+A default computed at run time rather than declared — an initializer wrapped
+in a lift — is seeded in the reactive pass that first serializes it, which is
+no handler's transaction, so it is not attributed either. Declaring such
+defaults, and settling their attribution, is open work.
+
 ## Authorization and transaction evidence
 
 An initialization policy input is authoritative only when the runtime records it

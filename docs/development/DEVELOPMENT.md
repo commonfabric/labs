@@ -981,8 +981,9 @@ export const set = (cache: Cache, key: string, value: string) =>
 > changes.
 
 - For CI wall-time optimization, follow
-  [CI Performance Policy](CI_PERFORMANCE.md). Do not keep splitting jobs once
-  the required test jobs are already in the same rough timing band.
+  [CI Performance Policy](CI_PERFORMANCE.md). CI packs every test into lanes by
+  measured cost, so there are no jobs to split or rebalance by hand; a lane that
+  runs long calls for a split test or a moved dial.
 - Check typings with `deno task check`.
 - Run linter with `deno lint`.
 - Run all tests using `deno task test` (NOT `deno test`). It is not a

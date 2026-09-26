@@ -23,10 +23,9 @@
  *     Takes back everything setup put on the workstation: the key, the
  *     delivery identity, and the export it added to the profiles.
  *
- * Keys are a team-member workflow, and every part is self-service. A
- * person contributing without commit access needs no key: local tests run
- * identically without one, and CI records their pull requests' runs on
- * its own.
+ * With commit access every part is self-service. Without it, a team member
+ * dispatches the minting workflow with the requester's recipient and login,
+ * and the requester's own command collects the delivery as usual.
  */
 
 import { join } from "@std/path";
@@ -321,9 +320,9 @@ Open the minting workflow and run it with your recipient:
     Recipient: ${recipient}
 
 Dispatching the workflow takes repository write access — that click is
-the authorization step. If you do not have commit access, no key is
-needed: your local tests run the same without one, and CI records your
-pull requests' runs on its own.`;
+the authorization step. If you do not have commit access, send the
+recipient and your GitHub login to a team member, who will run the
+workflow with both filled in.`;
 }
 
 interface MintRun {

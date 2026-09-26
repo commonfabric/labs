@@ -34,6 +34,7 @@ import {
   serializeManifest,
 } from "./manifest.ts";
 import type { Suite } from "../test-topology/suite.ts";
+import { excusedMeasurementName } from "../lane-measurement.ts";
 import {
   COST_RULE,
   costSeconds,
@@ -312,6 +313,19 @@ describe("build", () => {
       expect(byDay.get("2026-08-20")).toEqual([10, 90]);
     });
 
+    it("keeps no duration from a workstation, and its observations all the same", () => {
+      // A lane's runner is the machine a cost predicts for; a workstation
+      // is faster or slower by however it differs from one.
+      const local = context({ env: "local", branch: "fix-writes" });
+      delete local.ci;
+      const read = readReport(
+        stored(LOCAL_NAME, local, [record({ durationMs: 10 })]),
+        NO_ALIASES,
+      );
+      expect(read.observations.map((seen) => seen.place)).toEqual(["local"]);
+      expect([...read.durations.keys()]).toEqual([]);
+    });
+
     it("keeps a failed execution as an observation all the same", () => {
       // Its duration is left out of the cost; the execution itself is
       // what the churn and flake terms are counted from.
@@ -365,6 +379,12 @@ describe("build", () => {
           record({
             test: { k: "gate", s: "ci", n: "ci-lane setup deno" },
           }),
+          // A lane's record of excusing the test beside it names that
+          // test, and is not a run of it.
+          record({
+            test: { k: "gate", s: "ci", n: excusedMeasurementName(KEY) },
+            durationMs: 0,
+          }),
         ]),
         NO_ALIASES,
       );
@@ -417,6 +437,7 @@ describe("build", () => {
       expect(read.lanes).toEqual([{
         day: "2026-08-20",
         suite: "workspace-unit",
+        measured: false,
         ran: 40,
         spent: 92,
         units: 17,
@@ -463,6 +484,7 @@ describe("build", () => {
         {
           day: "2026-08-20",
           suite: "workspace-unit",
+          measured: false,
           ran: 40,
           spent: 92,
           units: 17,
@@ -1090,15 +1112,24 @@ describe("build", () => {
     it("carries what lanes measured into the next run", () => {
       // The fit reads a week of them, and a publisher run folds a few
       // hours of objects, so they survive the aggregate rather than
-      // being read again each time.
+      // being read again each time. A batch stored without saying
+      // whether coverage was on for it is carried as it was.
       const aggregate = emptyAggregate("2026-08-20");
       aggregate.lanes = [
         { day: "2026-08-20", capability: "fuse", seconds: 14.8 },
         {
           day: "2026-08-20",
           suite: "runner-unit",
+          measured: true,
           ran: 10,
           spent: 30,
+          units: 4,
+        },
+        {
+          day: "2026-08-20",
+          suite: "runner-unit",
+          ran: 10,
+          spent: 20,
           units: 4,
         },
       ];
@@ -1910,6 +1941,7 @@ describe("the days a fold keeps a lane's measurements over", () => {
       {
         day: "2026-08-20",
         suite: "runner-unit",
+        measured: false,
         ran: 10,
         spent: 30,
         units: 4,
@@ -1969,6 +2001,7 @@ describe("the days a fold keeps a lane's measurements over", () => {
       {
         day: "2026-08-20",
         suite: "runner-unit",
+        measured: false,
         ran: 10,
         spent: 30,
         units: 4,
