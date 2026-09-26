@@ -985,19 +985,22 @@ describe("stage F serving loop", () => {
     // address-level blind write mints no watch root (the cell route
     // registers a watch), so the demanded-root set stays exactly the
     // three never-a-piece ids.
+    const kickId = "of:r2-exclusion-kick";
     for (const n of [1, 2, 3]) {
       const tx = clientRuntime.edit();
       tx.writeValueOrThrow(
-        {
-          space,
-          id: "of:r2-exclusion-kick" as never,
-          scope: "space",
-          path: ["n"],
-        },
+        { space, id: kickId as never, scope: "space", path: ["n"] },
         n,
       );
       expect((await tx.commit()).error).toBeUndefined();
-      const kickSeq = Engine.serverSeq(engine);
+      // The kick's own seq, read from its document's head rather than the
+      // space's: the commit resolves only once the client's view reflects
+      // it, so the wave commit that advances W over the kick can land
+      // first, and W never covers that advance-only commit.
+      const kickSeq = Engine.selectDocHead(engine, {
+        id: kickId as never,
+        scopeKey: "space",
+      });
       // Each kick gets its own cycle rather than sharing one, which is
       // what makes the deferral counter below a per-root observation.
       // The target is THIS kick's seq: a watermark that already covers an
