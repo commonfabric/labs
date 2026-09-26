@@ -27,6 +27,7 @@ import {
 import { debugStr } from "@/value-debug";
 
 import {
+  type MainResultForm,
   type MapToForm,
   type RecurseForm,
   type ReplaceForm,
@@ -558,7 +559,7 @@ export class VisitInProgress<
           return visitingResult;
         }
 
-        const keyResult = this.#handleMappingAsAppropriate(
+        const keyResult = this.#handlePlainObjectKeyMappingAsAppropriate(
           key,
           doKeys ? this.#visitValue(key) : undefined,
         );
@@ -737,6 +738,35 @@ export class VisitInProgress<
     value: FabricValuePlus<PlusType>,
   ): FabricValuePlusTag | null {
     return tagOfFabricValueElseNull(value, this.#isPlusType);
+  }
+
+  /**
+   * Converts a converted plain object key result of `#visitValue()`, from a
+   * `recurse`-induced sub-value iteration, as appropriate, based on the
+   * `#doMap` mode.
+   */
+  #handlePlainObjectKeyMappingAsAppropriate(
+    original: string,
+    visitResult: MainVisitResult<PlusType, ResultType>,
+  ): MainResultForm<ResultType> | MapToForm<string> | undefined {
+    if (!this.#doMap) {
+      return undefined;
+    }
+
+    switch (visitResult?.type) {
+      case "mainResult": {
+        return visitResult;
+      }
+
+      case "mapTo": {
+        this.#assertValidPlainObjectKey(original, visitResult.value);
+        return visitResult as MapToForm<string>;
+      }
+
+      case undefined: {
+        return { type: "mapTo", value: this.#assertValidPlainObjectKey(original, original) };
+      }
+    }
   }
 
   /**
