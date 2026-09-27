@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { spy } from "@std/testing/mock";
 
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
@@ -33,6 +34,53 @@ import { toURI } from "../src/uri-utils.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
+
+/**
+ * Commits a map of `size` entries, each holding a cell of its own, rewrites it
+ * whole with one entry changed, and returns how many transactions the
+ * rewrite's `set()` opened, along with the changed entry as read back after
+ * the rewrite commits.
+ *
+ * `Runtime.edit()` opens every transaction through the storage manager, so
+ * the count takes in a read transaction a cell opens for itself as well as one
+ * a caller asks for. A count that tracks `size` is a transaction opened per
+ * entry.
+ */
+const oneEntryRewrite = async (
+  runtime: Runtime,
+  storageManager: ReturnType<typeof StorageManager.emulate>,
+  size: number,
+): Promise<{ opened: number; changed: unknown }> => {
+  const people = Array.from(
+    { length: size },
+    (_, index) => runtime.getCell(space, `rewrite of ${size}: person ${index}`),
+  );
+  const entries = (changed: string) =>
+    Object.fromEntries(people.map((person, index) => [
+      `key-${index}`,
+      { person, fallbackName: index === 0 ? changed : `name-${index}` },
+    ]));
+  const map = runtime.getCell<Record<string, unknown>>(
+    space,
+    `rewrite of ${size}`,
+  );
+
+  const seed = runtime.edit();
+  map.withTx(seed).set(entries("before"));
+  expect((await seed.commit()).error).toBeUndefined();
+
+  const rewritten = entries("after");
+  const tx = runtime.edit();
+  let opened: number;
+  {
+    using edit = spy(storageManager, "edit");
+    map.withTx(tx).set(rewritten);
+    opened = edit.calls.length;
+  }
+  expect((await tx.commit()).error).toBeUndefined();
+
+  return { opened, changed: map.key("key-0").key("fallbackName").get() };
+};
 
 describe("data-updating", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -905,6 +953,48 @@ describe("data-updating", () => {
         reference: { name: "Referenced Cell", value: 100 },
         metadata: { description: "Contains a nested link" },
       });
+    });
+
+    it("opens one transaction to rewrite one entry of a map of cells, at 200 entries as at 20", async () => {
+      // No entry's cell carries a schema on its link, so the walk reads each
+      // one's schema from storage, and those reads share one transaction. The
+      // equality says the count does not grow with the map, which one
+      // transaction per entry would fail. The exact count says the walk did
+      // read, which a count that stayed at zero would not show.
+      const short = await oneEntryRewrite(runtime, storageManager, 20);
+      const long = await oneEntryRewrite(runtime, storageManager, 200);
+
+      expect(short.changed).toBe("after");
+      expect(long.changed).toBe("after");
+      expect(long.opened).toBe(short.opened);
+      expect(long.opened).toBe(1);
+    });
+
+    it("reads the schema of a cell from another runtime through that runtime's storage", async () => {
+      const otherStorageManager = StorageManager.emulate({ as: signer });
+      const other = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: otherStorageManager,
+      });
+      try {
+        const person = other.getCell(space, "a person of another runtime");
+        const map = runtime.getCell<Record<string, unknown>>(
+          space,
+          "a map holding a person of another runtime",
+          undefined,
+          tx,
+        );
+
+        using ownEdit = spy(storageManager, "edit");
+        using otherEdit = spy(otherStorageManager, "edit");
+        map.set({ key: { person, fallbackName: "name" } });
+
+        expect(ownEdit.calls.length).toBe(0);
+        expect(otherEdit.calls.length).toBe(1);
+      } finally {
+        await other.dispose();
+        await otherStorageManager.close();
+      }
     });
   });
 
