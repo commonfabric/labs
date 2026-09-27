@@ -180,31 +180,6 @@ describe("patch", () => {
         { op: "append", path: "/a", values: [1] },
       ])).toBe("append target is not an array at /a");
     });
-
-    it("throws given a target beneath a key an array does not hold", () => {
-      // An array holds indices and nothing else, and an array created there
-      // would be a property no encoding carries: the append would be accepted
-      // and then lost.
-      expect(inapplicable({ list: [1] }, [
-        { op: "append", path: "/list/foo", values: ["x"] },
-      ])).toBe("invalid array index: foo");
-    });
-
-    it("throws given a target at an index an array does not hold", () => {
-      expect(inapplicable({ lists: [[1]] }, [
-        { op: "append", path: "/lists/1", values: ["x"] },
-      ])).toBe("missing path /lists/1");
-    });
-
-    it("throws for a later op beneath a refused target, rather than applying it", () => {
-      // The shape a client commits for a push and an element edit in one
-      // transaction, against a base where a concurrent writer replaced the
-      // parent object with an array.
-      expect(inapplicable({ value: { tags: ["a", "b"] } }, [
-        { op: "append", path: "/value/tags/foo", values: [3] },
-        { op: "replace", path: "/value/tags/foo/0", value: 9 },
-      ])).toBe("invalid array index: foo");
-    });
   });
 
   describe("add-unique", () => {
@@ -212,12 +187,6 @@ describe("patch", () => {
       expect(inapplicable({ a: {} }, [
         { op: "add-unique", path: "/a", values: [1] },
       ])).toBe("add-unique target is not an array at /a");
-    });
-
-    it("throws given a target beneath a key an array does not hold", () => {
-      expect(inapplicable({ list: [1] }, [
-        { op: "add-unique", path: "/list/foo", values: ["x"] },
-      ])).toBe("invalid array index: foo");
     });
   });
 

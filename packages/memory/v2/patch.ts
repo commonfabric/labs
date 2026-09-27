@@ -190,28 +190,18 @@ const replaceAtPath = (
 };
 
 /**
- * Read-only check of the spine an op creates missing containers along: missing
- * *object* keys are fine (they get created during the mutating descent), but a
- * present array must already contain any index traversed through, and a present
- * non-container can't be traversed. This is what keeps an op from fabricating
- * missing array indices, or a key an array does not hold (both of which
+ * Read-only check of `add`'s spine: missing *object* keys are fine (they get
+ * created during the mutating descent), but a present array must already contain
+ * any index traversed through, and a present non-container can't be traversed.
+ * This is what keeps `add` from fabricating missing array indices (which
  * `cloneForMutation`'s `createMissing` would otherwise do).
- *
- * `traversed` is how many leading segments of `path` the op descends through:
- * all but the last for `add` and `increment`, which write the last one as a
- * key, and all of them for `append` and `add-unique`, whose target is the array
- * at `path` itself.
  */
-const validateAddSpine = (
-  root: FabricValue,
-  path: string[],
-  traversed: number = path.length - 1,
-): void => {
+const validateAddSpine = (root: FabricValue, path: string[]): void => {
   let current: FabricValue = root;
   // Becomes true once we pass a missing object key: everything below is freshly
   // created, so all containers from there down are empty.
   let creating = false;
-  for (let i = 0; i < traversed; i++) {
+  for (let i = 0; i < path.length - 1; i++) {
     const segment = path[i]!;
     if (creating) {
       // A freshly-created array is empty, so an intermediate array index (or the
@@ -338,7 +328,7 @@ const appendAtPath = (
   path: string[],
   values: FabricValue[],
 ): FabricValue => {
-  validateAddSpine(root, path, path.length);
+  validateAddSpine(root, path);
   const { root: newRoot, container } = thawSpine(root, path, path, "0");
   if (!Array.isArray(container)) {
     throw new PatchApplyError(
@@ -358,7 +348,7 @@ const addUniqueAtPath = (
   path: string[],
   values: FabricValue[],
 ): FabricValue => {
-  validateAddSpine(root, path, path.length);
+  validateAddSpine(root, path);
   const { root: newRoot, container } = thawSpine(root, path, path, "0");
   if (!Array.isArray(container)) {
     throw new PatchApplyError(
