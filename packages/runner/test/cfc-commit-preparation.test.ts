@@ -341,6 +341,58 @@ describe("CFC commit preparation", () => {
       }
     });
 
+    it("counts a labeled read after a root write carrying the stored label map forward returned to its starting value", async () => {
+      // A root write carrying the stored `cfc` record forward passes the
+      // forgery check, and one that ends where it started minted nothing, so
+      // the document's labels stay pre-existing ones a read consumes. The
+      // unlabeled write beside it is what puts the space among the written
+      // ones either way.
+
+      const { runtime, dispose } = makeRuntime();
+      try {
+        const id = runtime.getCell(space, "commit-prep-carried")
+          .getAsNormalizedFullLink().id;
+        const copyId = runtime.getCell(space, "commit-prep-copy")
+          .getAsNormalizedFullLink().id;
+        const seed = runtime.edit();
+        seedLabeledDoc(seed, id);
+        expect((await seed.commit()).error).toBeUndefined();
+
+        const tx = runtime.edit();
+        const note = tx.readOrThrow({
+          space,
+          scope: "space",
+          id,
+          path: ["value", "note"],
+        });
+        const envelope = (value: FabricValue) => ({
+          value,
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: ["note"],
+                label: { confidentiality: [spaceAtom] },
+              }],
+            },
+          },
+        } as unknown as FabricValue);
+        const root = { space, scope: "space", id, path: [] } as const;
+        tx.writeOrThrow(root, envelope({ note: "decoy" } as FabricValue));
+        tx.writeOrThrow(root, envelope({ note: "labeled" } as FabricValue));
+        tx.writeOrThrow(
+          { space, scope: "space", id: copyId, path: [] },
+          { value: { copied: note } } as unknown as FabricValue,
+        );
+        runtime.prepareTxForCommit(tx);
+        expect(tx.getCfcState().relevant).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
     it("replaces a reverted path's derived label whether or not another document in its space changed", async () => {
       for (const otherChange of [false, true]) {
         // `observe` lets the schema-less writes commit, so the label map

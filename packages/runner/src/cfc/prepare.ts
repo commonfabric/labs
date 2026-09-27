@@ -3894,11 +3894,14 @@ export const flowLabelWorkExists = (
   for (const space of getTransactionWrittenSpaces(tx)) {
     for (const write of tx.getWriteDetails?.(space) ?? []) {
       // Either a direct `["cfc"]` write or a whole-envelope root write whose
-      // value embeds a `cfc` record (the raw-seed idiom).
+      // value embeds a `cfc` record (the raw-seed idiom). A write that ended
+      // where it started minted nothing, so the metadata it touched is still
+      // the pre-existing kind.
       if (
-        write.address.path[0] === "cfc" ||
-        (write.address.path.length === 0 && isObjectOrArray(write.value) &&
-          isObjectOrArray((write.value as { cfc?: unknown }).cfc))
+        (write.address.path[0] === "cfc" ||
+          (write.address.path.length === 0 && isObjectOrArray(write.value) &&
+            isObjectOrArray((write.value as { cfc?: unknown }).cfc))) &&
+        !fabricAwareEqual(write.value, write.previousValue)
       ) {
         selfMintedDocs.add(targetKey({
           space: write.address.space,
