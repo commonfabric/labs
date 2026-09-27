@@ -267,7 +267,7 @@ describe("mutable-path-write", () => {
         expect(plan.previousValue).toBeUndefined();
       });
 
-      it("reports a missing root absent, for a write of the whole root and for one beneath it", () => {
+      it("reports a missing root as absent, for a write of the whole root and for one beneath it", () => {
         for (const path of [[], ["value", "b"]]) {
           const plan = planMutablePathWrite(undefined, at(path), 1).ok!;
 
@@ -314,15 +314,15 @@ describe("mutable-path-write", () => {
         expect(result.previousActivityValue).toEqual({ a: 1 });
         expect(root.value).toEqual({ a: 1, b: { c: 1 } });
       });
+    });
 
-      it("stores `-` as a plain key of a root the write creates", () => {
-        // Only a container created beneath the root is an array for `-`.
+    it("stores `-` as a plain key of a root the write creates", () => {
+      // Only a container created beneath the root is an array for `-`.
 
-        const result = planMutablePathWrite(undefined, at(["-"]), 5).ok!
-          .apply();
+      const result = planMutablePathWrite(undefined, at(["-"]), 5).ok!
+        .apply();
 
-        expect(result.root).toEqual({ "-": 5 });
-      });
+      expect(result.root).toEqual({ "-": 5 });
     });
 
     describe("over a corpus of roots and paths", () => {

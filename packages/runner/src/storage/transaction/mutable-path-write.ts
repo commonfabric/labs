@@ -60,6 +60,7 @@ export type MutableWriteResult = {
   previousActivityPresent: boolean;
 };
 
+/** Options for `planMutablePathWrite()`. */
 export type MutablePathWriteOptions = {
   /**
    * When true, the write removes the slot at the address path — deleting an
@@ -96,9 +97,10 @@ export interface PlannedPathWrite {
    * is changed in place where it is already mutable. A delete with nothing to
    * remove returns it unchanged.
    *
-   * No refusal can come from here. The one throw is `cloneIfNecessary()`
-   * refusing the value itself, one outside the `FabricValue` contract, and it
-   * comes before anything is changed.
+   * No refusal can come from here. It throws only where `cloneIfNecessary()`
+   * refuses the value it isolates -- the value planned, or the one it reports
+   * as `previousActivityValue` -- which is one outside the `FabricValue`
+   * contract, and before anything is changed.
    */
   apply(): MutableWriteResult;
 }
@@ -117,6 +119,11 @@ export interface PlannedPathWrite {
  * array can have it (`isOutOfRangeArrayLength()`). A delete is never refused:
  * a slot the path does not reach has nothing in it to remove. A delete of an
  * array's `length` empties the array, whatever value the call carries.
+ *
+ * Those refusals are exact for a `root` that honors the `FabricValue`
+ * contract. Past it the answer is best-effort: an array carrying a key other
+ * than an index, which no stored value can, may admit a write beneath that
+ * key.
  *
  * Writing `undefined` stores `undefined` (present-but-undefined is a real
  * state, distinct from absent) and creates missing containers like any other
@@ -207,9 +214,10 @@ const refusalOf = (
   const path = address.path;
   const containers = trace?.containers ?? [];
   if (trace?.end === "complete") {
-    // Every key names a slot its container holds, which in an array is an
-    // index or `length`; a `length` short of the leaf leads to a number, and
-    // would have ended the trace. So only the leaf's length can be refused.
+    // Every key names a slot its container holds, which in an array that
+    // honors the `FabricValue` contract is an index or `length`; a `length`
+    // short of the leaf leads to a number, and would have ended the trace.
+    // So only the leaf's length can be refused.
     const leaf = path.length - 1;
     return path[leaf] === "length" && Array.isArray(containers[leaf]) &&
         typeof value === "number" && isOutOfRangeArrayLength(value)
@@ -272,8 +280,8 @@ class Plan implements PlannedPathWrite {
   readonly #address: IMemoryAddress;
   readonly #value: FabricValue | undefined;
   readonly #isDelete: boolean;
-  // `undefined` for the empty path, a root the write creates, and a delete
-  // beneath a root that is not a container.
+  // `undefined` for the empty path, a missing root, and a delete beneath a
+  // root that is not a container.
   readonly #trace: PathTrace | undefined;
 
   /**

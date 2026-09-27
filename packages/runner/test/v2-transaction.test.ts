@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { isDeepFrozen } from "@commonfabric/data-model";
+import { type FabricValue, isDeepFrozen } from "@commonfabric/data-model";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type {
   IMemorySpaceAddress,
@@ -606,6 +606,84 @@ describe("v2-transaction", () => {
         ).toEqual({ arr: [1], x: 9 });
       } finally {
         await storage.close();
+      }
+    });
+
+    it("returns what separate writes return for the same list, and records the same write details", async () => {
+      // Each list is applied twice over the same document: as separate
+      // `write()`s, stopping at the first refusal as a batch does, and as one
+      // batch. Each starts by writing `value/e`, so the rest land on a working
+      // value the transaction already edits in place.
+
+      type Step = [path: string[], value: FabricValue, isDelete?: boolean];
+      const lists: Step[][] = [
+        [
+          [["value", "y"], 3],
+          [["value", "x", "name", "y"], undefined, true],
+          [["value", "z"], 4],
+        ],
+        [[["value", "y"], 3], [["value", "a", "-"], 5], [["value", "z"], 4]],
+        [[["value", "x", "0"], 9], [["value", "x", "length"], 1]],
+        [[["value", "n", "q"], undefined, true], [["value", "y"], 3]],
+        [
+          [["value", "new", "deep", "k"], 1],
+          [["value", "new", "deep", "j"], 2],
+        ],
+      ];
+
+      const outcome = async (steps: Step[], asBatch: boolean) => {
+        const storage = StorageManager.emulate({ as: signer });
+        try {
+          const address = {
+            space,
+            id: "of:v2-transaction-parity" as URI,
+            type,
+          };
+          const seed = storage.edit();
+          expect(
+            seed.write({ ...address, path: [] }, {
+              value: { x: [1, 2], n: 5 },
+            }).ok,
+          ).toBeTruthy();
+          expect((await seed.commit()).ok).toBeTruthy();
+
+          const tx = storage.edit();
+          expect(tx.write({ ...address, path: ["value", "e"] }, 1).ok)
+            .toBeTruthy();
+          let error: string | undefined;
+          if (asBatch) {
+            error = tx.writeBatch!(
+              steps.map(([path, value, isDelete]) => ({
+                address: { ...address, path },
+                value,
+                delete: isDelete,
+              })),
+            ).error?.name;
+          } else {
+            for (const [path, value, isDelete] of steps) {
+              error = tx.write(
+                { ...address, path },
+                value,
+                isDelete ? { delete: true } : undefined,
+              ).error?.name;
+              if (error !== undefined) break;
+            }
+          }
+          return {
+            error,
+            value: tx.read({ ...address, path: ["value"] }).ok?.value,
+            details: [...tx.getWriteDetails!(space)],
+          };
+        } finally {
+          await storage.close();
+        }
+      };
+
+      for (const steps of lists) {
+        const separate = await outcome(steps, false);
+        const batched = await outcome(steps, true);
+
+        expect({ steps, ...batched }).toEqual({ steps, ...separate });
       }
     });
 
