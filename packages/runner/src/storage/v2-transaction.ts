@@ -3557,8 +3557,9 @@ export class V2StorageTransaction implements IStorageTransaction {
       // large value takes the same shallow read of its root once per child.
       // A read whose value is still the one it was given passes in constant
       // time. One whose value moved is checked once per document and path,
-      // since checking it again gives the same answer, and comparing a large
-      // container once per copy of the read is what made this quadratic.
+      // since checking it again gives the same answer, where comparing a
+      // large container once per copy of the read would cost its size once
+      // per copy.
       const checked = new Map<DocumentEntry, Set<string>>();
       for (const address of reads) {
         const branch = this.#branches.get(address.space);

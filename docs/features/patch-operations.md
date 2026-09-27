@@ -90,10 +90,10 @@ compile error). Each descriptor owns:
   finds mutable is one an earlier op of the same call copied: an op mutates such
   a container in place and copies a frozen one. That is what keeps a patch of
   `K` ops beneath one `N`-key object to one copy of it rather than `K` (a `move`
-  re-inserts what it moves as a deep-frozen copy, so moving that object itself
-  copies it again), and it is why an op places a value only through a
-  deep-frozen copy, never a mutable container that could then be reached from
-  two places.
+  re-inserts what it moves as a deep-frozen copy, which copies that object again
+  when an earlier op of the same call has thawed it), and it is why an op places
+  a value only through a deep-frozen copy, never a mutable container that could
+  then be reached from two places.
 - `pointerFields` — which fields hold JSON Pointers (`["path"]`, or
   `["from", "path"]` for `move`). This is the single source for the op's changed
   leaf paths.

@@ -57,10 +57,10 @@ export const emptyEntityDocument = (): EntityDocument => ({});
 
 /**
  * `applyPatch` over a possibly-absent document: an absent base normalizes
- * to the empty envelope. The one entry point for "replay these ops over
- * whatever this document currently is" — server-side reconstruction and
- * client-side pending replay share it rather than each knowing the
- * absent-base rule.
+ * to the empty envelope. Like `applyPatch`, it deep-freezes `base` in place.
+ * The one entry point for "replay these ops over whatever this document
+ * currently is" — server-side reconstruction and client-side pending replay
+ * share it rather than each knowing the absent-base rule.
  */
 export const applyPatchToDocument = (
   base: EntityDocument | undefined,
@@ -98,8 +98,8 @@ export const applyPatchToDocument = (
  * the spine stay frozen-by-reference (structural sharing). So a container on
  * the ops' spines is copied once per call however many ops pass through it,
  * and `K` ops beneath one `N`-key object copy it once rather than `K` times. A
- * `move` is the exception: it re-inserts what it moves as a deep-frozen copy,
- * so moving the large object itself copies it again. The assembled tree is
+ * `move` re-inserts what it moves through `cloneValue()`, which copies it again
+ * when an earlier op of the same call has thawed it. The assembled tree is
  * deep-frozen at the `applyPatch` boundary as well, so callers can rely on the
  * return value being deeply frozen.
  */

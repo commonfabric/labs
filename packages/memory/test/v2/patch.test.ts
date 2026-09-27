@@ -87,6 +87,44 @@ const opsBeneathValue = {
 } satisfies Record<PatchOp["op"], (count: number) => PatchOp[]>;
 
 /**
+ * For each op kind that places a value, a batch that places an object and then
+ * edits inside what it placed: the edit a later op would make through a
+ * payload the tree held by reference.
+ */
+const placingThenEditing = {
+  replace: () => [
+    { op: "replace", path: "/value/key-0", value: { name: "placed" } },
+    { op: "replace", path: "/value/key-0/name", value: "edited" },
+  ],
+  add: () => [
+    { op: "add", path: "/value/added", value: { name: "placed" } },
+    { op: "replace", path: "/value/added/name", value: "edited" },
+  ],
+  splice: () => [
+    {
+      op: "splice",
+      path: "/value/key-0/tags",
+      index: 0,
+      remove: 0,
+      add: [{ name: "placed" }],
+    },
+    { op: "replace", path: "/value/key-0/tags/0/name", value: "edited" },
+  ],
+  append: () => [
+    { op: "append", path: "/value/key-0/tags", values: [{ name: "placed" }] },
+    { op: "replace", path: "/value/key-0/tags/1/name", value: "edited" },
+  ],
+  "add-unique": () => [
+    {
+      op: "add-unique",
+      path: "/value/key-0/tags",
+      values: [{ name: "placed" }],
+    },
+    { op: "replace", path: "/value/key-0/tags/1/name", value: "edited" },
+  ],
+} satisfies Partial<Record<PatchOp["op"], () => PatchOp[]>>;
+
+/**
  * Applies `ops` to `document`, whose `value` starts with `size` keys, and
  * reports how many times the application copied a container of at least half
  * that many.
@@ -187,6 +225,29 @@ describe("patch", () => {
       expect(result).toEqual({ value: { b: { v: 3 } } });
       expect(isDeepFrozen(result)).toBe(true);
     });
+
+    for (const [kind, batch] of Object.entries(placingThenEditing)) {
+      it(`places a copy of a \`${kind}\` op's payload, which a later op's edit leaves as it was`, () => {
+        // An op mutates in place any container it finds mutable, so a payload
+        // the tree held by reference would take the later edit, and be frozen
+        // with the result.
+        const ops = batch();
+        const payloads = ops.flatMap((op) =>
+          Object.values(op).filter((field) =>
+            field !== null && typeof field === "object"
+          )
+        );
+        const before = JSON.parse(JSON.stringify(payloads));
+
+        const result = applyPatch(documentOfSize(10), ops);
+
+        expect(JSON.stringify(result)).toContain('"edited"');
+        expect(payloads).toEqual(before);
+        for (const payload of payloads) {
+          expect(Object.isFrozen(payload)).toBe(false);
+        }
+      });
+    }
 
     for (const [kind, ops] of Object.entries(opsBeneathValue)) {
       it(`copies a large object as often for many \`${kind}\` ops beneath it as for few`, () => {
