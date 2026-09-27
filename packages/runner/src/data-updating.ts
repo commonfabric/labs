@@ -69,6 +69,7 @@ import {
   isWriteRedirectLink,
   type NormalizedFullLink,
   parseLink,
+  type PrimitiveCellLink,
   toMemorySpaceAddress,
 } from "./link-utils.ts";
 import {
@@ -501,7 +502,8 @@ export interface DiffWalkState {
   /**
    * The read-only transaction through which every cell of the walk's runtime
    * resolves a schema its link does not state, opened by the first cell that
-   * needs one. A cell with a ready transaction of its own resolves through
+   * needs one, and again should it stop being ready. A cell with a ready
+   * transaction of its own resolves through
    * that instead, and a cell of another runtime through one of its own
    * runtime's.
    *
@@ -1328,7 +1330,9 @@ export function normalizeAndDiff(
     // runtime reads that runtime's storage instead.
     const cellSchema =
       newValue instanceof CellImpl && newValue.runtime === runtime
-        ? newValue.schemaReadingThrough(() => state.readTx ??= runtime.readTx())
+        ? newValue.schemaReadingThrough(() =>
+          state.readTx = runtime.readTx(state.readTx)
+        )
         : newValue.schema;
     let initializedSeed = false;
     const seedDefault = isObjectOrArray(cellSchema)
@@ -1490,9 +1494,10 @@ export function normalizeAndDiff(
 
   // The incoming value's link, parsed once for every check below that asks
   // whether the value is a link or where it points, and `undefined` where it
-  // is not one. The two conversions above leave no cell or query result
-  // behind, so a value that parses here is a sigil link.
-  const newValueLink = parseLink(newValue, link);
+  // is not a sigil link.
+  const newValueLink = isPrimitiveCellLink(newValue)
+    ? parseLink(newValue, link)
+    : undefined;
 
   // Check for links that are data: URIs and inline them, by calling
   // normalizeAndDiff on the contents of the link. This re-entry REPLACES the
@@ -1540,18 +1545,19 @@ export function normalizeAndDiff(
     })
     : precomputedCurrent;
 
-  // The stored value's link, parsed once, and `undefined` where the slot holds
-  // none.
-  const currentValueLink = isPrimitiveCellLink(currentValue)
-    ? parseLink(currentValue, link)
-    : undefined;
+  // Whether the stored value is a link, asked once. Where it points is parsed
+  // only by a check that needs to know: a write redirect replaces a stored
+  // link without reading its target, even one whose path does not parse. The
+  // casts below lean on this answer, which the type of the reassignable
+  // `currentValue` cannot carry.
+  const currentValueIsLink = isPrimitiveCellLink(currentValue);
 
   // A new alias can overwrite a previous alias. No-op if the same.
   if (newValueLink?.overwrite === "redirect") {
     const carriedCfcLabelView = cfcLabelViewForPrimitiveLink(newValue);
     if (
-      currentValueLink?.overwrite === "redirect" &&
-      areNormalizedLinksSame(currentValueLink, newValueLink)
+      currentValueIsLink && isWriteRedirectLink(currentValue) &&
+      areNormalizedLinksSame(parseLink(currentValue, link), newValueLink)
     ) {
       diffLogger.debug(
         "diff",
@@ -1583,7 +1589,7 @@ export function normalizeAndDiff(
   }
 
   // Handle alias in current value (at this point: if newValue is not an alias)
-  if (currentValueLink?.overwrite === "redirect") {
+  if (currentValueIsLink && isWriteRedirectLink(currentValue)) {
     consumeSteeringSlot(tx, link, options);
     diffLogger.debug(
       "diff",
@@ -1594,7 +1600,7 @@ export function normalizeAndDiff(
     const redirectLink = resolveLink(
       runtime,
       tx,
-      currentValueLink,
+      parseLink(currentValue, link),
       "writeRedirect",
     );
     return normalizeAndDiff(
@@ -1621,20 +1627,21 @@ export function normalizeAndDiff(
   // per-session state at the shared base scope. Reference values are exempt:
   // writing a link re-binds the slot (and the schema-declared narrowing above
   // already handled scoped re-binds before reaching here).
-  if (currentValueLink !== undefined && newValueLink === undefined) {
-    if (scopeRank(currentValueLink.scope) > scopeRank(link.scope)) {
+  if (currentValueIsLink && newValueLink === undefined) {
+    const storedLink = parseLink(currentValue as PrimitiveCellLink, link);
+    if (scopeRank(storedLink.scope) > scopeRank(link.scope)) {
       consumeSteeringSlot(tx, link, options);
       diffLogger.debug(
         "diff",
         () =>
-          `[BRANCH_SCOPED_REDIRECT] Following narrower-scope stored link at path=${pathStr} (${link.scope} -> ${currentValueLink.scope})`,
+          `[BRANCH_SCOPED_REDIRECT] Following narrower-scope stored link at path=${pathStr} (${link.scope} -> ${storedLink.scope})`,
       );
       return normalizeAndDiff(
         runtime,
         tx,
-        currentValueLink.schema === undefined && link.schema !== undefined
-          ? { ...currentValueLink, schema: link.schema }
-          : currentValueLink,
+        storedLink.schema === undefined && link.schema !== undefined
+          ? { ...storedLink, schema: link.schema }
+          : storedLink,
         newValue,
         context,
         options,
@@ -1686,8 +1693,11 @@ export function normalizeAndDiff(
       );
     }
     if (
-      currentValueLink !== undefined &&
-      areNormalizedLinksSame(newValueLink, currentValueLink) &&
+      currentValueIsLink &&
+      areNormalizedLinksSame(
+        newValueLink,
+        parseLink(currentValue as PrimitiveCellLink, link),
+      ) &&
       scopeInitialization(newValue) === scopeInitialization(currentValue)
     ) {
       diffLogger.debug(
@@ -2111,7 +2121,7 @@ export function normalizeAndDiff(
     // slots whose stored parent is still the special object.
     if (
       !isKeyableObjectNotArray(currentValue) ||
-      currentValueLink !== undefined
+      currentValueIsLink
     ) {
       diffLogger.debug(
         "diff",

@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -38,8 +39,9 @@ const space = signer.did();
 /**
  * Commits a map of `size` entries, each holding a cell of its own, rewrites it
  * whole with one entry changed, and returns how many transactions the
- * rewrite's `set()` opened, along with the changed entry as read back after
- * the rewrite commits.
+ * rewrite's `set()` opened, how many reads of an entry cell's document it
+ * journaled on the rewrite's own transaction, and the changed entry as read
+ * back after the rewrite commits.
  *
  * `Runtime.edit()` opens every transaction through the storage manager, so
  * the count takes in a read transaction a cell opens for itself as well as one
@@ -50,7 +52,7 @@ const oneEntryRewrite = async (
   runtime: Runtime,
   storageManager: ReturnType<typeof StorageManager.emulate>,
   size: number,
-): Promise<{ opened: number; changed: unknown }> => {
+): Promise<{ opened: number; entryReads: number; changed: unknown }> => {
   const people = Array.from(
     { length: size },
     (_, index) => runtime.getCell(space, `rewrite of ${size}: person ${index}`),
@@ -77,9 +79,18 @@ const oneEntryRewrite = async (
     map.withTx(tx).set(rewritten);
     opened = edit.calls.length;
   }
+  const entryIds = new Set(
+    people.map((person) => person.getAsNormalizedFullLink().id),
+  );
+  const entryReads = [...tx.tx.getReadActivities!()]
+    .filter((read) => entryIds.has(read.id)).length;
   expect((await tx.commit()).error).toBeUndefined();
 
-  return { opened, changed: map.key("key-0").key("fallbackName").get() };
+  return {
+    opened,
+    entryReads,
+    changed: map.key("key-0").key("fallbackName").get(),
+  };
 };
 
 describe("data-updating", () => {
@@ -957,10 +968,13 @@ describe("data-updating", () => {
 
     it("opens one transaction to rewrite one entry of a map of cells, at 200 entries as at 20", async () => {
       // No entry's cell carries a schema on its link, so the walk reads each
-      // one's schema from storage, and those reads share one transaction. The
-      // equality says the count does not grow with the map, which one
-      // transaction per entry would fail. The exact count says the walk did
-      // read, which a count that stayed at zero would not show.
+      // one's schema from storage, and those reads share one read-only
+      // transaction. The equality says the count does not grow with the map,
+      // which one transaction per entry would fail. The exact count and the
+      // absence of entry reads on the rewrite's own transaction together say
+      // the reads went through that one transaction: reading through the
+      // rewrite's own would open none, and would put the reads into the
+      // commit's read set.
       const short = await oneEntryRewrite(runtime, storageManager, 20);
       const long = await oneEntryRewrite(runtime, storageManager, 200);
 
@@ -968,6 +982,60 @@ describe("data-updating", () => {
       expect(long.changed).toBe("after");
       expect(long.opened).toBe(short.opened);
       expect(long.opened).toBe(1);
+      expect(long.entryReads).toBe(0);
+    });
+
+    it("reads the schema of a cell holding a ready transaction through that transaction", () => {
+      const person = runtime.getCell(space, "a person bound to the write");
+      const map = runtime.getCell<Record<string, unknown>>(
+        space,
+        "a map holding a person bound to the write",
+        undefined,
+        tx,
+      );
+      const personId = person.getAsNormalizedFullLink().id;
+      const readsOfPerson = () =>
+        [...tx.tx.getReadActivities!()].filter((read) => read.id === personId)
+          .length;
+
+      const before = readsOfPerson();
+      using edit = spy(storageManager, "edit");
+      map.set({ key: { person: person.withTx(tx), fallbackName: "name" } });
+
+      expect(edit.calls.length).toBe(0);
+      expect(readsOfPerson()).toBeGreaterThan(before);
+    });
+
+    it("replaces a stored link whose path does not parse with a write redirect", () => {
+      const aliased = runtime.getCell<{ v: number }>(
+        space,
+        "the cell a write redirect names",
+        undefined,
+        tx,
+      );
+      aliased.set({ v: 1 });
+      const slot = runtime.getCell<Record<string, unknown>>(
+        space,
+        "a slot holding a link whose path does not parse",
+        undefined,
+        tx,
+      );
+      tx.writeValueOrThrow(slot.getAsNormalizedFullLink(), {
+        x: linkRefFrom({
+          id: aliased.getAsNormalizedFullLink().id,
+          path: [null],
+        }),
+      });
+
+      const changes = normalizeAndDiff(
+        runtime,
+        tx,
+        slot.key("x").getAsNormalizedFullLink(),
+        aliased.getAsWriteRedirectLink(),
+      );
+
+      expect(changes).toHaveLength(1);
+      expect(parseLink(changes[0].value)?.overwrite).toBe("redirect");
     });
 
     it("reads the schema of a cell from another runtime through that runtime's storage", async () => {
