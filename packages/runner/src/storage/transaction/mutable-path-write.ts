@@ -132,12 +132,8 @@ export const planMutablePathWrite = (
 ): Result<PlannedPathWrite, MutablePathWriteError> => {
   const isDelete = options?.delete === true;
   const path = address.path;
-  const plan = (found: PlanFacts) =>
-    new Plan(root, address, value, isDelete, found);
   if (path.length === 0) {
-    return {
-      ok: plan({ present: root !== undefined, previousValue: root }),
-    };
+    return { ok: new Plan(root, address, value, isDelete, undefined) };
   }
 
   let trace: PathTrace | undefined;
@@ -146,7 +142,7 @@ export const planMutablePathWrite = (
   } else if (isContainerValue(root)) {
     trace = tracePath(root, path);
   } else if (isDelete) {
-    return { ok: plan({ present: false, previousValue: undefined }) };
+    return { ok: new Plan(root, address, value, isDelete, undefined) };
   } else {
     return {
       error: TypeMismatchError(
@@ -157,34 +153,13 @@ export const planMutablePathWrite = (
     };
   }
 
-  const present = trace?.end === "complete";
-  const previousValue = trace?.end === "complete" ? trace.value : undefined;
-  if (isDelete) {
-    return { ok: plan({ present, previousValue }) };
+  if (!isDelete) {
+    const refusal = refusalOf(trace, address, value);
+    if (refusal !== undefined) {
+      return { error: refusal };
+    }
   }
-
-  const refusal = refusalOf(trace, address, value);
-  if (refusal !== undefined) {
-    return { error: refusal };
-  }
-
-  // A missing slot short of the leaf is where the write first changes the
-  // document; one at the leaf is an ordinary write into a parent already
-  // there.
-  if (trace === undefined) {
-    return { ok: plan({ present, previousValue, materializedAt: [] }) };
-  }
-  if (trace.end === "missing" && trace.at < path.length - 1) {
-    return {
-      ok: plan({
-        present,
-        previousValue,
-        materializedAt: path.slice(0, trace.at),
-        materializedValue: trace.containers[trace.at],
-      }),
-    };
-  }
-  return { ok: plan({ present, previousValue }) };
+  return { ok: new Plan(root, address, value, isDelete, trace) };
 };
 
 /**
@@ -231,6 +206,16 @@ const refusalOf = (
 ): MutablePathWriteError | undefined => {
   const path = address.path;
   const containers = trace?.containers ?? [];
+  if (trace?.end === "complete") {
+    // Every key names a slot its container holds, which in an array is an
+    // index or `length`; a `length` short of the leaf leads to a number, and
+    // would have ended the trace. So only the leaf's length can be refused.
+    const leaf = path.length - 1;
+    return path[leaf] === "length" && Array.isArray(containers[leaf]) &&
+        typeof value === "number" && isOutOfRangeArrayLength(value)
+      ? InvalidArrayLengthError(address, value)
+      : undefined;
+  }
   // `containers[index]` holds `path[index]` below this index; from it on,
   // each key lands in a container the write creates.
   const firstCreated = trace?.end === "missing"
@@ -278,58 +263,48 @@ const refusalOf = (
 const isOutOfRangeArrayLength = (value: number): boolean =>
   Number.isFinite(value) && value >= 2 ** 32;
 
-/** What `planMutablePathWrite()` found, for the plan it returns. */
-type PlanFacts = {
-  /** See `PlannedPathWrite.present`. */
-  readonly present: boolean;
-
-  /** See `PlannedPathWrite.previousValue`. */
-  readonly previousValue: FabricValue | undefined;
-
-  /**
-   * For a write that creates missing containers, the path of the deepest
-   * container already there, or the empty path where it creates the root.
-   */
-  readonly materializedAt?: readonly string[];
-
-  /**
-   * The container at `materializedAt`, which the write changes in place
-   * where it is mutable; `undefined` where the write creates the root.
-   */
-  readonly materializedValue?: FabricValue;
-};
-
-/** The plan `planMutablePathWrite()` returns. */
+/**
+ * The plan `planMutablePathWrite()` returns, which reads what it reports off
+ * the trace of the path it was planned along.
+ */
 class Plan implements PlannedPathWrite {
   readonly #root: FabricValue | undefined;
   readonly #address: IMemoryAddress;
   readonly #value: FabricValue | undefined;
   readonly #isDelete: boolean;
-  readonly #found: PlanFacts;
+  // `undefined` for the empty path, a root the write creates, and a delete
+  // beneath a root that is not a container.
+  readonly #trace: PathTrace | undefined;
 
-  /** Constructs an instance which writes `value`, or deletes, as `found`. */
+  /**
+   * Constructs an instance which writes `value`, or deletes, at
+   * `address.path` within `root`, as `trace` found that path.
+   */
   constructor(
     root: FabricValue | undefined,
     address: IMemoryAddress,
     value: FabricValue | undefined,
     isDelete: boolean,
-    found: PlanFacts,
+    trace: PathTrace | undefined,
   ) {
     this.#root = root;
     this.#address = address;
     this.#value = value;
     this.#isDelete = isDelete;
-    this.#found = found;
+    this.#trace = trace;
   }
 
   /** @inheritDoc */
   get present(): boolean {
-    return this.#found.present;
+    return this.#address.path.length === 0
+      ? this.#root !== undefined
+      : this.#trace?.end === "complete";
   }
 
   /** @inheritDoc */
   get previousValue(): FabricValue | undefined {
-    return this.#found.previousValue;
+    if (this.#address.path.length === 0) return this.#root;
+    return this.#trace?.end === "complete" ? this.#trace.value : undefined;
   }
 
   /** @inheritDoc */
@@ -337,21 +312,37 @@ class Plan implements PlannedPathWrite {
     const value = this.#isDelete || this.#value === undefined
       ? undefined
       : cloneIfNecessary(this.#value);
-    // Read before the write below, which changes the root, and with it
-    // the container at `materializedAt`, in place where it is mutable.
-    const { present, previousValue, materializedAt, materializedValue } =
-      this.#found;
-    const activityPath = materializedAt ?? this.#address.path;
-    const previousActivityValue = cloneIfNecessary(
-      materializedAt === undefined ? previousValue : materializedValue,
-    ) as FabricValue | undefined;
-    const previousActivityPresent = materializedAt === undefined
-      ? present
-      : materializedValue !== undefined;
+    // Read before the write below, which changes the root -- and with it the
+    // container the write first changes -- in place where it is mutable.
+    const { path } = this.#address;
+    const trace = this.#trace;
+    let activityPath = path;
+    let previousActivityValue = this.previousValue;
+    let previousActivityPresent = this.present;
+    if (!this.#isDelete && path.length > 0) {
+      if (this.#root === undefined) {
+        // The write creates the root, so that is where it first shows.
+        activityPath = [];
+        previousActivityValue = undefined;
+        previousActivityPresent = false;
+      } else if (trace?.end === "missing" && trace.at < path.length - 1) {
+        // A missing slot short of the leaf: the write first shows in the
+        // deepest container already there, which it creates the slot in.
+        activityPath = path.slice(0, trace.at);
+        previousActivityValue = trace.containers[trace.at];
+        previousActivityPresent = true;
+      }
+    }
+    // Isolated now, while it is still the value from before the write.
+    const previousActivityCopy = cloneIfNecessary(previousActivityValue) as
+      | FabricValue
+      | undefined;
+    const { root, changed } = this.#write(value);
     return {
-      ...this.#write(value),
+      root,
+      changed,
       activityPath,
-      previousActivityValue,
+      previousActivityValue: previousActivityCopy,
       previousActivityPresent,
     };
   }
