@@ -136,12 +136,10 @@ views:
 - `attemptedWrites`: the maybe-write target set, sourced from tx
   `markReadAsAttemptedWrite` reads performed while deciding whether a diff
   results in a write
-- `writes`: the recorded write set sourced from v2 transaction internals
-  (`getWrittenSpaces()` with `getWriteDetails()`): every write the transaction
-  recorded, including one whose value returned to where it started and an
-  authoritative write of an unchanged value, since each is an attempted write
-  (spec §8.10.2.1). The reactivity log's `writes` list only changed paths and
-  are not this set
+- `writes`: the recorded write set sourced from v2 transaction internals:
+  every write the transaction recorded, including one whose value returned to
+  where it started and an authoritative write of an unchanged value. The
+  reactivity log's `writes` list only changed paths and are not this set
 
 Boundary checking uses `attemptedWrites ∪ writes` as the target set for
 relevance and conservative target-side policy checks. Persisted output label-map

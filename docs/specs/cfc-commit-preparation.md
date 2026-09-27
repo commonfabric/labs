@@ -21,12 +21,13 @@ does two things before it reaches the CFC enforcement ladder:
      ([prepare.ts](../../packages/runner/src/cfc/prepare.ts)) asks whether the
      transaction observed or wrote a document carrying stored labels. A
      transaction that did is marked relevant. A write counts whatever value
-     it leaves: every write the transaction recorded
-     (`getWrittenSpaces()`, `getWriteDetails()`) is an attempted write under
-     spec §8.10.2.1, including one whose value returned to where it started
-     and an authoritative write of an unchanged value, which the reactivity
-     log's `writes` leave out. A write elided as equal to the current value is
-     never recorded, so it marks nothing here.
+     it leaves: every write the transaction recorded is an attempted write
+     under spec §8.10.2.1, including one whose value returned to where it
+     started and an authoritative write of an unchanged value, which the
+     reactivity log's `writes` leave out. A write elided as equal to the
+     current value is never recorded, so it marks nothing here. Nor does a
+     write that ended where it started make the document's stored labels
+     self-minted: it minted nothing.
    - **Probe the sink-request ceiling.** `gatedSinkRequestExists` asks whether
      the transaction assembled a request for a sink that declares a
      confidentiality ceiling.

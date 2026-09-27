@@ -177,43 +177,36 @@ export function getTransactionWriteDetails(
 }
 
 /**
- * The spaces `tx` recorded a write in (`IStorageTransaction.getWrittenSpaces`).
- * A transaction without the native list reports the spaces its journal's write
- * activities name. One whose journal cannot replay its activity either
- * reports the spaces its direct reactivity log names in `writes` or
- * `attemptedWrites`. The log's `writes` list only changed paths, so that
- * leaves out a space whose every write returned to where it started unless
- * one of those writes also recorded an attempted write, as a write through
- * the value diff does. A transaction offering none of the three throws the
- * journal's error. A V2 transaction always provides the list.
+ * The spaces `tx` recorded a write in, including one whose every write
+ * returned to where it started. A write elided as equal to the current value
+ * is never recorded and names no space. Throws when `tx` offers no record of
+ * its writes at all.
  */
 export function getTransactionWrittenSpaces(
   tx: TxLike,
 ): readonly MemorySpace[] {
-  const direct = tx.getWrittenSpaces?.() ?? unwrap(tx).getWrittenSpaces?.();
-  if (direct) {
-    return direct;
+  // Asked of the inner transaction: an extended one reports an empty attempt
+  // log where its inner transaction keeps none, which would read as "wrote
+  // nothing".
+  const attempts = getTransactionWriteAttempts(unwrap(tx));
+  if (attempts !== undefined) {
+    return [...new Set(attempts.map((attempt) => attempt.space))];
   }
-
-  const spaces = new Set<MemorySpace>();
-  try {
-    for (const activity of tx.journal.activity()) {
-      if ("write" in activity && activity.write) {
-        spaces.add(activity.write.space);
-      }
-    }
-  } catch (error) {
-    const log = getDirectTransactionReactivityLog(tx);
-    if (log === undefined) {
-      throw error;
-    }
-    return [
-      ...new Set(
-        [...log.writes, ...(log.attemptedWrites ?? [])].map((write) =>
-          write.space
-        ),
+  // The reactivity log is the remaining record. Its `writes` list only
+  // changed paths, so a space whose every write returned to where it started
+  // is missed unless one of them also recorded an attempted write.
+  const log = getDirectTransactionReactivityLog(tx);
+  if (log === undefined) {
+    throw new Error(
+      "The transaction keeps no write-attempt log, replayable journal or " +
+        "reactivity log, so the spaces it wrote cannot be known",
+    );
+  }
+  return [
+    ...new Set(
+      [...log.writes, ...(log.attemptedWrites ?? [])].map((write) =>
+        write.space
       ),
-    ];
-  }
-  return [...spaces];
+    ),
+  ];
 }

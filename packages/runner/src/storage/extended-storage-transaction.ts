@@ -2429,7 +2429,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     );
 
     const writes: AttemptedWrite[] = [];
-    for (const space of this.getWrittenSpaces()) {
+    for (const space of getTransactionWrittenSpaces(this)) {
       for (const write of this.getWriteDetails(space)) {
         writes.push(deepFreeze({
           ...write.address,
@@ -2587,7 +2587,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    */
   #materializeReferencedSchemaDocuments(): void {
     if (!getContentAddressedSchemasConfig()) return;
-    for (const space of this.getWrittenSpaces()) {
+    for (const space of getTransactionWrittenSpaces(this)) {
       for (const detail of this.getWriteDetails(space)) {
         this.#stageSchemaDocsForValue(space, detail.address, detail.value);
       }
@@ -3192,11 +3192,6 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }): Iterable<TransactionWriteDetail> {
     return this.tx.getWriteDetailsForTarget?.(target) ??
       this.getWriteDetails(target.space);
-  }
-
-  /** @inheritDoc */
-  getWrittenSpaces(): readonly MemorySpace[] {
-    return getTransactionWrittenSpaces(this.tx);
   }
 
   status(): StorageTransactionStatus {
@@ -4427,12 +4422,6 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
   }): Iterable<TransactionWriteDetail> {
     return this.#wrapped.getWriteDetailsForTarget?.(target) ??
       this.getWriteDetails(target.space);
-  }
-
-  /** @inheritDoc */
-  getWrittenSpaces(): readonly MemorySpace[] {
-    return this.#wrapped.getWrittenSpaces?.() ??
-      getTransactionWrittenSpaces(this.#wrapped.tx);
   }
 
   status(): StorageTransactionStatus {

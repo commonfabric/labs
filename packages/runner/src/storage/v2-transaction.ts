@@ -1540,20 +1540,6 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
   }
 
-  /** @inheritDoc */
-  getWrittenSpaces(): readonly MemorySpace[] {
-    const spaces: MemorySpace[] = [];
-    for (const [space, branch] of this.#branches.entries()) {
-      for (const entry of branch.docs.values()) {
-        if (isWritableDocument(entry) && entry.writeDetails.size > 0) {
-          spaces.push(space);
-          break;
-        }
-      }
-    }
-    return spaces;
-  }
-
   *getWriteDetailsForTarget(target: {
     space: MemorySpace;
     id: URI;

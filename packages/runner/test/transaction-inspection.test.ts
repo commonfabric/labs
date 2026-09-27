@@ -626,7 +626,7 @@ describe("transaction inspection", () => {
     }
   });
 
-  it("names the direct reactivity log's spaces as written when the journal cannot replay its activity", () => {
+  it("names the direct reactivity log's spaces as written when the transaction keeps no write-attempt log or replayable journal", () => {
     const journal = {
       activity: () => {
         throw new Error("no replay");
@@ -661,7 +661,7 @@ describe("transaction inspection", () => {
     ]);
   });
 
-  it("throws the journal's error when a transaction can report its written spaces no other way", () => {
+  it("throws when a transaction offers no record of its writes", () => {
     const tx = {
       journal: {
         activity: () => {
@@ -673,7 +673,7 @@ describe("transaction inspection", () => {
       tx: {} as any,
     } as unknown as IExtendedStorageTransaction;
 
-    expect(() => getTransactionWrittenSpaces(tx)).toThrow("no replay");
+    expect(() => getTransactionWrittenSpaces(tx)).toThrow("cannot be known");
   });
 
   it("leaves a space the transaction only read out of the written spaces", async () => {
