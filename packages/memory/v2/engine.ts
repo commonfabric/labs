@@ -1,6 +1,7 @@
 import { Database } from "@db/sqlite";
 import type { FabricValue, JSONSchema } from "@commonfabric/api";
 import {
+  debugStr,
   hashStringOf,
   taggedHashStringOf,
   valueEqual,
@@ -35,6 +36,7 @@ import {
   pathsOverlap,
 } from "./path.ts";
 import { replaceSchedulerBasisRows } from "./scheduler-basis.ts";
+import { TouchedPathIndex } from "./touched-path-index.ts";
 import {
   insertExecutionOutboxRows,
   type OutboxAppendRow,
@@ -5929,11 +5931,20 @@ const applyCommitTransaction = (
     }
     return true;
   };
+  // Every read's path is checked before any read's staleness is, so that a
+  // malformed path is refused as such whatever else the commit carries.
+  for (const read of commit.reads.confirmed) requireReadPath(read);
+  for (const read of commit.reads.pending) requireReadPath(read);
   let resolvedPendingReads: Array<{ localSeq: number; seq: number }>;
+  const conflictScans: ConflictScans = new Map();
   try {
-    validateConfirmedReads(engine, branch, commit, { principal, sessionId });
+    validateConfirmedReads(engine, conflictScans, branch, commit, {
+      principal,
+      sessionId,
+    });
     resolvedPendingReads = resolvePendingReads(
       engine,
+      conflictScans,
       sessionKey,
       sessionId,
       principal,
@@ -5954,6 +5965,7 @@ const applyCommitTransaction = (
     }
     resolvedPendingReads = resolvePendingReads(
       engine,
+      conflictScans,
       sessionKey,
       sessionId,
       principal,
@@ -6588,6 +6600,7 @@ const validateCommitPreconditions = (
 
 const validateConfirmedReads = (
   engine: Engine,
+  scans: ConflictScans,
   branch: BranchName,
   commit: ClientCommit,
   scopeContext: { principal?: string; sessionId: SessionId },
@@ -6611,6 +6624,7 @@ const validateConfirmedReads = (
     if (staleIds?.has(read.id)) continue;
     const conflictSeq = findConflictSeq(
       engine,
+      scans,
       readBranch,
       read.id,
       scopeKey,
@@ -6656,6 +6670,31 @@ const validateConfirmedReads = (
       preview.push(`${remaining} more conflict${remaining === 1 ? "" : "s"}`);
     }
     throw new ConflictError(preview.join("; "), conflicts);
+  }
+};
+
+/**
+ * Helper for `applyCommitTransaction()`, which throws `ProtocolError` unless
+ * `read` names the path its type declares: an array holding a string at every
+ * index. The conflict check matches a read's path against touched paths
+ * segment by segment, and a path of any other shape — a hole, a segment that
+ * is not a string, no array at all — matches by no rule it states.
+ */
+const requireReadPath = (
+  read: { id: string; path: readonly string[] },
+): void => {
+  const { path } = read;
+  if (!Array.isArray(path)) {
+    throw new ProtocolError(
+      debugStr`read of $quote${read.id} names a path that is not an array: $quote${path}`,
+    );
+  }
+  for (let index = 0; index < path.length; index++) {
+    if (typeof path[index] !== "string") {
+      throw new ProtocolError(
+        debugStr`read of $quote${read.id} names a path whose segment ${index} is not a string: $quote${path}`,
+      );
+    }
   }
 };
 
@@ -6713,6 +6752,7 @@ const pendingReadLayers = (
 
 const resolvePendingReads = (
   engine: Engine,
+  scans: ConflictScans,
   sessionKey: string,
   sessionId: SessionId,
   principal: string | undefined,
@@ -6772,6 +6812,7 @@ const resolvePendingReads = (
     const conflictSeq = trueBasis !== undefined
       ? findConflictSeq(
         engine,
+        scans,
         branch,
         read.id,
         resolveScopeKey(read.scope, { principal, sessionId }),
@@ -6782,6 +6823,7 @@ const resolvePendingReads = (
       )
       : findConflictSeq(
         engine,
+        scans,
         branch,
         read.id,
         resolveScopeKey(read.scope, { principal, sessionId }),
@@ -6808,8 +6850,108 @@ const resolvePendingReads = (
   return [...resolutions.values()].sort((a, b) => a.localSeq - b.localSeq);
 };
 
+/** A true-basis read's exclusion of the own-session layers it names. */
+type ConflictExclusion = {
+  /** The session whose layers the read names. */
+  readonly sessionKey: string;
+
+  /** The `localSeq` of each layer the read names. */
+  readonly namedLocalSeqs: readonly number[];
+};
+
+/** The patches after one basis, read to the last of them and indexed. */
+type PatchIndexes = {
+  /** Each patch op's leaf paths, tagged with its patch's `seq`. */
+  readonly leaves: TouchedPathIndex;
+
+  /** Each patch op's shape paths, tagged with its patch's `seq`. */
+  readonly shapes: TouchedPathIndex;
+};
+
+/**
+ * What one commit's read validation has learned of the writes to one
+ * document, less those one exclusion removes.
+ */
+type DocumentConflicts = {
+  /** The newest `set` or `delete` after each basis a read has named. */
+  readonly newestSetOrDelete: Map<number, number | null>;
+
+  /**
+   * Every patch after `basis`, indexed, once a read at `basis` has reached
+   * the last of them. It decides a read at `basis` or any later one, which
+   * conflicts with the newest patch it matches exactly when that patch is
+   * newer than its basis. A read at an earlier basis replaces it with the
+   * patches after its own.
+   */
+  patches?: { readonly basis: number; readonly indexes: PatchIndexes };
+};
+
+/**
+ * What one commit's read validation has learned, by document and exclusion:
+ * one entry per basis for the `set` or `delete` after it, and at most one
+ * patch index however many bases the reads name. Valid only while the
+ * `revision` table is unchanged, which holds from the first read validated to
+ * the commit's first write.
+ */
+type ConflictScans = Map<string, DocumentConflicts>;
+
+/**
+ * Helper for `findConflictSeq()`, which returns the key what it learns of one
+ * document and exclusion is kept under, or `undefined` for a read whose branch
+ * or entity is not a string. A key built from any other value could join two
+ * reads the statements tell apart, so such a read is decided on its own. The
+ * layers an exclusion names are keyed as a set, since the statements test
+ * membership in them.
+ */
+const conflictScanKey = (
+  branch: BranchName,
+  id: EntityId,
+  scopeKey: string,
+  exclude: ConflictExclusion | undefined,
+): string | undefined =>
+  typeof branch === "string" && typeof id === "string"
+    ? JSON.stringify([
+      branch,
+      id,
+      scopeKey,
+      exclude?.sessionKey ?? null,
+      exclude === undefined
+        ? null
+        : [...new Set(exclude.namedLocalSeqs)].sort((a, b) => a - b),
+    ])
+    : undefined;
+
+/**
+ * Helper for `findConflictSeq()`, which returns the newest `seq` among the
+ * patches in `indexes` that a read at `readPath` conflicts with, or `null`.
+ */
+const newestPatchConflict = (
+  indexes: PatchIndexes,
+  readPath: readonly string[],
+  nonRecursive: boolean,
+): number | null =>
+  (nonRecursive
+    ? indexes.shapes.newestPrefixOf(readPath)
+    : indexes.leaves.newestOverlapping(readPath)) ?? null;
+
+/**
+ * Returns the `seq` of the write a read at `readPath` on one document
+ * conflicts with, or `null` when none does: the newest `set` or `delete` after
+ * `afterSeq` when there is one, whatever the read's path, and otherwise the
+ * newest patch after `afterSeq` whose touched paths `patchOverlapsRead()` —
+ * or, for a shallow read, `patchOverlapsNonRecursiveRead()` — matches against
+ * the read.
+ *
+ * Patches are read newest first and indexed an op at a time, so a read stops
+ * at the op it conflicts with and decodes nothing older. A read that reaches
+ * the last patch leaves its indexes in `scans`, and every later read of the
+ * same document and exclusion at that basis or a later one is decided from
+ * them in time proportional to its path's depth, whatever the number of
+ * patches.
+ */
 const findConflictSeq = (
   engine: Engine,
+  scans: ConflictScans,
   branch: BranchName,
   id: EntityId,
   scopeKey: string,
@@ -6828,84 +6970,126 @@ const findConflictSeq = (
   // localSeq accepted out of submission order or an omitted predecessor
   // whose write is durable; see the comment on the *_EXCLUDING_SESSION
   // statements.
-  exclude?: { sessionKey: string; namedLocalSeqs: readonly number[] },
+  exclude?: ConflictExclusion,
 ): number | null => {
+  const key = conflictScanKey(branch, id, scopeKey, exclude);
+  let document = key === undefined ? undefined : scans.get(key);
+  if (key !== undefined && document === undefined) {
+    document = { newestSetOrDelete: new Map() };
+    scans.set(key, document);
+  }
+
   const setDeleteStatement = exclude === undefined
     ? engine.statements.selectSetDeleteConflict
     : engine.statements.selectSetDeleteConflictExcludingSession;
   const patchStatement = exclude === undefined
     ? engine.statements.selectPatchConflicts
     : engine.statements.selectPatchConflictsExcludingSession;
-  const exclusionParams = exclude === undefined ? {} : {
-    exclude_session: exclude.sessionKey,
-    named_local_seqs: JSON.stringify(exclude.namedLocalSeqs),
-  };
-  const setOrDeleteConflict = setDeleteStatement.get({
+  const params = {
     branch,
     id,
     scope_key: scopeKey,
     after_seq: afterSeq,
-    ...exclusionParams,
-  }) as { seq: number } | undefined;
-  if (setOrDeleteConflict !== undefined) {
-    return setOrDeleteConflict.seq;
+    ...(exclude === undefined ? {} : {
+      exclude_session: exclude.sessionKey,
+      named_local_seqs: JSON.stringify(exclude.namedLocalSeqs),
+    }),
+  };
+
+  let setOrDeleteSeq = document?.newestSetOrDelete.get(afterSeq);
+  if (setOrDeleteSeq === undefined) {
+    setOrDeleteSeq =
+      (setDeleteStatement.get(params) as { seq: number } | undefined)
+        ?.seq ?? null;
+    document?.newestSetOrDelete.set(afterSeq, setOrDeleteSeq);
+  }
+  if (setOrDeleteSeq !== null) {
+    return setOrDeleteSeq;
   }
 
+  // Kept patches decide a read by comparing `seq`s here, which agrees with the
+  // statements' `seq > :after_seq` for a finite numeric basis and not for
+  // every value a read can carry, so a read at any other basis is decided on
+  // its own.
+  const shared = Number.isFinite(afterSeq) ? document : undefined;
+  const kept = shared?.patches;
+  if (kept !== undefined && kept.basis <= afterSeq) {
+    const seq = newestPatchConflict(kept.indexes, readPath, nonRecursive);
+    return seq !== null && seq > afterSeq ? seq : null;
+  }
+
+  const indexes: PatchIndexes = {
+    leaves: new TouchedPathIndex(),
+    shapes: new TouchedPathIndex(),
+  };
   for (
-    const conflict of patchStatement.iter({
-      branch,
-      id,
-      scope_key: scopeKey,
-      after_seq: afterSeq,
-      ...exclusionParams,
-    }) as Iterable<{
+    const conflict of patchStatement.iter(params) as Iterable<{
       seq: number;
       data: string | null;
     }>
   ) {
-    const patches = decodeStoredPatchList(conflict.data);
-    const overlaps = nonRecursive
-      ? patchOverlapsNonRecursiveRead(patches, readPath)
-      : patchOverlapsRead(patches, readPath);
-    if (overlaps) {
-      return conflict.seq;
+    for (const patch of decodeStoredPatchList(conflict.data)) {
+      const leaves = touchedLeafPathsForPatch(patch);
+      for (const path of leaves) indexes.leaves.add(path, conflict.seq);
+      for (const path of touchedPathsForPatch(patch, leaves)) {
+        indexes.shapes.add(path, conflict.seq);
+      }
+      const seq = newestPatchConflict(indexes, readPath, nonRecursive);
+      if (seq !== null) {
+        return seq;
+      }
     }
   }
-
+  if (shared !== undefined) {
+    shared.patches = { basis: afterSeq, indexes };
+  }
   return null;
 };
 
-// The COMMIT conflict matcher uses LEAF-ONLY touched paths (no add/remove/move
-// parent-path injection) — the same discipline `touchedLeafPathsForPatch`
-// applies to the scheduler reader-dirty index (CT-1623), here extended to the
-// commit-conflict path. For a recursive read the injected parent is REDUNDANT
-// (bidirectional `pathsOverlap` already matches a container reader against the
-// leaf write, since the container read is a prefix of the leaf) and HARMFUL (the
-// parent prefix-matches every disjoint SIBLING reader — e.g. a distinct-key
-// writer's own-key/diff and link-resolution reads — manufacturing the
-// write-contention over-conflict). Same-key writes still conflict (the leaf
-// exactly matches an own-key read) and whole-container readers still conflict
-// (their read prefixes the leaf). Keyset/shape readers are matched separately by
-// the nonRecursive path, which keeps the parent injection.
+/**
+ * Returns whether an op of `patches` touches a leaf path overlapping
+ * `readPath`: the definition of a patch conflicting with a recursive read,
+ * which `findConflictSeq()` decides for a commit's reads.
+ *
+ * The touched paths are _leaf-only_ (no add/remove/move parent-path
+ * injection), the discipline `touchedLeafPathsForPatch()` applies to the
+ * scheduler reader-dirty index as well. For a recursive read the injected
+ * parent is _redundant_ (bidirectional `pathsOverlap()` already matches a
+ * container reader against the leaf write, since the container read is a
+ * prefix of the leaf) and _harmful_ (the parent prefix-matches every disjoint
+ * sibling reader — e.g. a distinct-key writer's own-key/diff and
+ * link-resolution reads — manufacturing a write-contention over-conflict).
+ * Same-key writes conflict (the leaf exactly matches an own-key read), and so
+ * do whole-container readers (their read prefixes the leaf). Keyset/shape
+ * readers are matched by `patchOverlapsNonRecursiveRead()`, which keeps the
+ * parent injection.
+ */
 export const patchOverlapsRead = (
   patches: readonly PatchOp[],
   readPath: readonly string[],
 ): boolean => {
+  // `findConflictSeq()` decides this, and the predicate below, from a
+  // `TouchedPathIndex` over the same touched paths rather than by calling
+  // either, so a change to one is a change to that index too. A test in
+  // `engine-conflicts.test.ts` holds the two together.
   return patches.some((patch) =>
     touchedLeafPathsForPatch(patch).some((path) => pathsOverlap(path, readPath))
   );
 };
 
-// Overlap test for a SHALLOW (nonRecursive / shape-only) read. A shape read at
-// `readPath` observed the container's key-set / existence but not its descendants'
-// deep values, so it conflicts only with a write touching `readPath` itself or an
-// ANCESTOR of it — `isPrefixPath(touched, readPath)`. Here we DO use the
-// parent-injecting `touchedPathsForPatch`: a key add/remove injects the patch's
-// parent path, which equals `readPath` for a direct child mutation, so a keyset
-// reader still conflicts with key add/remove (the shape it observed changed). A
-// disjoint deep-value `replace` strictly BELOW `readPath` touches no ancestor, so
-// it no longer over-conflicts. Strict subset of `patchOverlapsRead` ⇒ never a
-// false-negative. (Recursive reads use the leaf-only `patchOverlapsRead` above.)
+/**
+ * Returns whether an op of `patches` touches `readPath` or an ancestor of it:
+ * the definition of a patch conflicting with a _shallow_ (nonRecursive /
+ * shape-only) read, which `findConflictSeq()` decides for a commit's reads. A
+ * shape read at `readPath` observed the container's key-set / existence but
+ * not its descendants' deep values, so it conflicts only with a write touching
+ * `readPath` itself or an _ancestor_ of it: `isPrefixPath(touched, readPath)`.
+ * The touched paths are the parent-injecting `touchedPathsForPatch()`: a key
+ * add/remove injects the patch's parent path, which equals `readPath` for a
+ * direct child mutation, so a keyset reader conflicts with key add/remove (the
+ * shape it observed changed). A disjoint deep-value `replace` strictly _below_
+ * `readPath` touches no ancestor, so it does not conflict.
+ */
 export const patchOverlapsNonRecursiveRead = (
   patches: readonly PatchOp[],
   readPath: readonly string[],
@@ -6915,8 +7099,10 @@ export const patchOverlapsNonRecursiveRead = (
   );
 };
 
-const touchedPathsForPatch = (patch: PatchOp): string[][] => {
-  const leaves = touchedPointerPaths(patch);
+const touchedPathsForPatch = (
+  patch: PatchOp,
+  leaves: string[][] = touchedPointerPaths(patch),
+): string[][] => {
   // Ops that change the parent container's key-set — the structural ops
   // (add/remove/move) and a mergeable op that materialized a previously-absent
   // path (its `createsKey` flag) — also touch the parent, so a shape-only
@@ -6931,7 +7117,8 @@ const touchedPathsForPatch = (patch: PatchOp): string[][] => {
 // The EXACT changed leaf paths of a patch — without the ancestor/parent paths
 // that `touchedPathsForPatch` adds for add/remove/move. Used by BOTH the
 // scheduler reader-dirty index (`schedulerWriteAddressesForRevisions`) and the
-// commit-conflict matcher (`patchOverlapsRead`).
+// commit-conflict check (`patchOverlapsRead()`, and the index
+// `findConflictSeq()` decides it from).
 //
 // `touchedPathsForPatch` emits a patch's parent path so that whole-container
 // reads are invalidated when a key is added/removed. For structural-overlap

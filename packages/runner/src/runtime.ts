@@ -1,5 +1,6 @@
 import {
   cloneIfNecessary,
+  deepFreeze,
   fabricFromConvertibleJsValue,
   type FabricValue,
 } from "@commonfabric/data-model";
@@ -151,7 +152,11 @@ import {
 } from "./schema-doc-config.ts";
 import { isCellScope, normalizeCellScope, scopeRank } from "./scope.ts";
 import { SourceReconciler } from "./source-reconciler.ts";
-import { normalizeSpaceHost, SpaceHostValidationError } from "./space-host.ts";
+import {
+  normalizeSpaceHost,
+  type SpaceHostRegistration,
+  SpaceHostValidationError,
+} from "./space-host.ts";
 import { EffectsChannel } from "./speculation/effects-channel.ts";
 import {
   type EventIntentOutcome,
@@ -160,6 +165,7 @@ import {
 } from "./speculation/overlay-destination.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
 import {
+  type CfcInstrumentationHooks,
   ExtendedStorageTransaction,
   setCfcTrustSnapshot,
 } from "./storage/extended-storage-transaction.ts";
@@ -1339,6 +1345,17 @@ export class Runtime {
   #queues = new Map<string, AsyncSemaphoreQueue>();
   #writeDebugContext = new WriteDebugContextStorage<string>();
   #cfcStats: CfcRuntimeStats = initialCfcRuntimeStats();
+
+  /**
+   * The hooks every transaction `edit()` opens reports its CFC work through.
+   * Built once, in the constructor, after `cfcPrefixProvenanceStats`, which
+   * decides whether the prefix-provenance counter is among them. Each hook
+   * reads the runtime's fields when it is called rather than when it was
+   * built, and a hook that acts on a transaction is handed it, so one frozen
+   * object serves them all.
+   */
+  readonly #cfcInstrumentation: CfcInstrumentationHooks;
+
   readonly #policyManifests = new Map<string, PolicyArtifactManifestV1>();
   readonly #policyManifestSpaces = new Map<string, Set<MemorySpace>>();
 
@@ -1841,8 +1858,15 @@ export class Runtime {
       this.#trustRevision = this.cfcTrustConfig === undefined
         ? this.id
         : `${this.id}/trust:${this.cfcTrustConfig.digest}`;
+      // The principal and the revision are both fixed for the runtime's
+      // lifetime, so one frozen snapshot serves every transaction. Handing
+      // each the same object is what lets `edit()` attach it without
+      // freezing a copy per transaction.
+      const ambientTrustSnapshot = deepFreeze(
+        this.trustSnapshotForPrincipal(actingPrincipal),
+      );
       this.trustSnapshotProvider = options.trustSnapshotProvider ??
-        (() => this.trustSnapshotForPrincipal(actingPrincipal));
+        (() => ambientTrustSnapshot);
       this.userIdentityDID = options.storageManager.as.did() as DID;
       this.moduleRegistry = new ModuleRegistry(this);
       this.patternManager = new PatternManager(this);
@@ -1863,6 +1887,7 @@ export class Runtime {
       this.cfcLabelMetadataProtection = dials.cfcLabelMetadataProtection;
       this.cfcDeclaredMonotonicity = dials.cfcDeclaredMonotonicity;
       this.cfcPrefixProvenanceStats = options.cfcPrefixProvenanceStats ?? false;
+      this.#cfcInstrumentation = this.#buildCfcInstrumentation();
       // Deep-freeze: the ceiling is CFC enforcement config, so a caller must not
       // be able to mutate it (per-sink array or the map) after construction to
       // change what egresses are allowed (review on #3993).
@@ -2454,7 +2479,40 @@ export class Runtime {
     if (debugActionId) {
       (tx as { debugActionId?: string }).debugActionId = debugActionId;
     }
-    const wrapped = new ExtendedStorageTransaction(tx, {
+    const wrapped = new ExtendedStorageTransaction(
+      tx,
+      this.#cfcInstrumentation,
+    );
+    wrapped.setCfcEnforcementMode(this.cfcEnforcementMode);
+    wrapped.setCfcFlowLabelsMode(this.cfcFlowLabels);
+    wrapped.setCfcWriteFloorMode(this.cfcWriteFloor);
+    wrapped.setCfcTriggerReadGating(this.cfcTriggerReadGating);
+    wrapped.setCfcDecomposedEnvelopes(this.cfcDecomposedEnvelopes);
+    wrapped.setCfcContentAddressedLabels(this.cfcContentAddressedLabels);
+    wrapped.setCfcPolicyEvaluationMode(this.cfcPolicyEvaluation);
+    wrapped.setCfcLabelMetadataProtectionMode(this.cfcLabelMetadataProtection);
+    wrapped.setCfcDeclaredMonotonicityMode(this.cfcDeclaredMonotonicity);
+    wrapped.setCfcSinkMaxConfidentiality(this.cfcSinkMaxConfidentiality);
+    wrapped.setCfcPolicySnapshot(this.cfcPolicySnapshot);
+    wrapped.setCfcTrustConfig(this.cfcTrustConfig);
+    wrapped.setCfcModuleDelegations(
+      this.#moduleDelegationSnapshot(options.sourceUpdate),
+    );
+    setCfcTrustSnapshot(wrapped, this.trustSnapshotProvider());
+    wrapped.configureSealDestination(
+      this.#transactionSealDestination ?? this.#speculationDestination(),
+    );
+    wrapped.configureRuntimeOwnedStores(this.#runtimeOwnedStores);
+    this.#transactions.add(wrapped);
+    return wrapped;
+  }
+
+  /**
+   * Helper for the constructor, which builds the hooks `edit()` hands every
+   * transaction.
+   */
+  #buildCfcInstrumentation(): CfcInstrumentationHooks {
+    const hooks: CfcInstrumentationHooks = {
       checkReadCeiling: (readingTx, address, options) => {
         const carried = waveRunContextOf(readingTx)?.readCeiling;
         const ceiling = carried === undefined
@@ -2553,29 +2611,8 @@ export class Runtime {
           },
         }
         : {}),
-    });
-    wrapped.setCfcEnforcementMode(this.cfcEnforcementMode);
-    wrapped.setCfcFlowLabelsMode(this.cfcFlowLabels);
-    wrapped.setCfcWriteFloorMode(this.cfcWriteFloor);
-    wrapped.setCfcTriggerReadGating(this.cfcTriggerReadGating);
-    wrapped.setCfcDecomposedEnvelopes(this.cfcDecomposedEnvelopes);
-    wrapped.setCfcContentAddressedLabels(this.cfcContentAddressedLabels);
-    wrapped.setCfcPolicyEvaluationMode(this.cfcPolicyEvaluation);
-    wrapped.setCfcLabelMetadataProtectionMode(this.cfcLabelMetadataProtection);
-    wrapped.setCfcDeclaredMonotonicityMode(this.cfcDeclaredMonotonicity);
-    wrapped.setCfcSinkMaxConfidentiality(this.cfcSinkMaxConfidentiality);
-    wrapped.setCfcPolicySnapshot(this.cfcPolicySnapshot);
-    wrapped.setCfcTrustConfig(this.cfcTrustConfig);
-    wrapped.setCfcModuleDelegations(
-      this.#moduleDelegationSnapshot(options.sourceUpdate),
-    );
-    setCfcTrustSnapshot(wrapped, this.trustSnapshotProvider());
-    wrapped.configureSealDestination(
-      this.#transactionSealDestination ?? this.#speculationDestination(),
-    );
-    wrapped.configureRuntimeOwnedStores(this.#runtimeOwnedStores);
-    this.#transactions.add(wrapped);
-    return wrapped;
+    };
+    return Object.freeze(hooks);
   }
 
   /**
@@ -2762,11 +2799,11 @@ export class Runtime {
    * trust-config change invalidates per-run prepared digests exactly as
    * it does ambient ones. On a runtime constructed with a CUSTOM
    * `trustSnapshotProvider` this still composes the RUNTIME's revision,
-   * not the provider's. The DEFAULT provider routes every ordinary
-   * edit() transaction through this method; the run stamper is the
-   * ADDITIONAL serving-path caller, and a serving runtime refuses a
-   * custom provider at construction, so the two composition paths can
-   * never disagree on a serving runtime.
+   * not the provider's. The DEFAULT provider's one snapshot, which
+   * every ordinary edit() transaction gets, is composed here; the run
+   * stamper is the ADDITIONAL serving-path caller, and a serving runtime
+   * refuses a custom provider at construction, so the two composition
+   * paths can never disagree on a serving runtime.
    */
   trustSnapshotForPrincipal(principal: string): TrustSnapshot {
     return {
@@ -4406,9 +4443,50 @@ export class Runtime {
    * storage accepted or confirmed the hint.
    */
   registerSpaceHost(space: MemorySpace, host: string): boolean {
-    let route: URL;
+    const normalized = this.#normalizedSpaceHost(space, host);
+    const storage = this.storageManager;
+    const accept = storage.registerSpaceHost !== undefined
+      ? storage.registerSpaceHost(space, normalized)
+      : storage.registerSpaceHostDetailed?.(space, normalized).accepted;
+    if (accept === undefined) return false; // manager has no remote resolution
+    if (accept) this.#dynamicHosts.set(space, normalized);
+    return accept;
+  }
+
+  /**
+   * Records a host hint under the rules of {@link registerSpaceHost}, and
+   * says why when storage refuses it. A storage manager that gives only a
+   * verdict has its refusal reported as `unspecified`, and one that takes no
+   * hints at all as `no-remote-resolution`.
+   */
+  registerSpaceHostDetailed(
+    space: MemorySpace,
+    host: string,
+  ): SpaceHostRegistration {
+    const normalized = this.#normalizedSpaceHost(space, host);
+    const storage = this.storageManager;
+    let registration: SpaceHostRegistration;
+    if (storage.registerSpaceHostDetailed !== undefined) {
+      registration = storage.registerSpaceHostDetailed(space, normalized);
+    } else if (storage.registerSpaceHost !== undefined) {
+      registration = storage.registerSpaceHost(space, normalized)
+        ? { accepted: true }
+        : { accepted: false, reason: "unspecified" };
+    } else {
+      registration = { accepted: false, reason: "no-remote-resolution" };
+    }
+    if (registration.accepted) this.#dynamicHosts.set(space, normalized);
+    return registration;
+  }
+
+  /**
+   * Returns the normalized origin of `host`. A host that is not an HTTP or
+   * HTTPS origin throws an error naming `space`, with the validation error as
+   * its cause.
+   */
+  #normalizedSpaceHost(space: MemorySpace, host: string): string {
     try {
-      route = normalizeSpaceHost(host);
+      return normalizeSpaceHost(host).toString();
     } catch (cause) {
       if (!(cause instanceof SpaceHostValidationError)) throw cause;
       throw new Error(
@@ -4416,11 +4494,6 @@ export class Runtime {
         { cause },
       );
     }
-    const normalized = route.toString();
-    const accept = this.storageManager.registerSpaceHost?.(space, normalized);
-    if (accept === undefined) return false; // manager has no remote resolution
-    if (accept) this.#dynamicHosts.set(space, normalized);
-    return accept;
   }
 
   /**

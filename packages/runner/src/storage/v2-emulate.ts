@@ -1,6 +1,7 @@
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import type { SpaceHostRegistration } from "../space-host.ts";
 import { type Options, type SessionFactory, StorageManager } from "./v2.ts";
 
 const emulatedMemoryAudience = "did:key:z6Mk-runner-emulated-memory";
@@ -152,8 +153,8 @@ export class EmulatedStorageManager extends StorageManager {
    * resolve, so a host hint can never take effect. Refuse honestly
    * rather than inherit an acceptance that routes nothing.
    */
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed(): SpaceHostRegistration {
+    return { accepted: false, reason: "no-remote-resolution" };
   }
 
   override async close(): Promise<void> {

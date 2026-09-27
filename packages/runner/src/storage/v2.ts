@@ -104,7 +104,11 @@ import {
   registerSchemaDocument,
 } from "../schema-registry.ts";
 import { isCellScope, normalizeCellScope } from "../scope.ts";
-import { normalizeSpaceHost, SpaceHostValidationError } from "../space-host.ts";
+import {
+  normalizeSpaceHost,
+  type SpaceHostRegistration,
+  SpaceHostValidationError,
+} from "../space-host.ts";
 import type { RuntimeTelemetryMarker } from "../telemetry.ts";
 import { combineOptionalSchema, isUnknownCellSchema } from "../traverse.ts";
 import { recordCommitLocalSeq, recordCommitSeq } from "./commit-identity.ts";
@@ -1494,9 +1498,25 @@ export class StorageManager implements IStorageManager {
    * - A different-host hint cannot replace a route after a stateful operation
    *   is issued.
    *
-   * Idempotent when the hint matches what is already in effect.
+   * Idempotent when the hint matches what is already in effect. The verdict is
+   * that of {@link registerSpaceHostDetailed}, which is the method a subclass
+   * overrides.
    */
   registerSpaceHost(space: MemorySpace, host: string): boolean {
+    return this.registerSpaceHostDetailed(space, host).accepted;
+  }
+
+  /**
+   * Records a host hint under the rules of {@link registerSpaceHost}, and
+   * names the rule behind a refusal. A seed or an accepted hint for another
+   * host is refused as `known-different-host`, with that host. A hint for a
+   * provider that issued a stateful operation through the default route is
+   * refused as `default-route-in-use`, and no route is recorded for the space.
+   */
+  registerSpaceHostDetailed(
+    space: MemorySpace,
+    host: string,
+  ): SpaceHostRegistration {
     let route: URL;
     try {
       route = normalizeSpaceHost(host);
@@ -1509,25 +1529,28 @@ export class StorageManager implements IStorageManager {
     }
     const normalized = route.toString();
     const seeded = this.#seedHosts[space];
-    if (seeded !== undefined) {
-      return new URL(seeded).toString() === normalized;
-    }
-    const existing = this.#dynamicHosts.get(space);
+    const existing = seeded !== undefined
+      ? new URL(seeded).toString()
+      : this.#dynamicHosts.get(space);
     if (existing !== undefined) {
-      return existing === normalized;
+      return existing === normalized ? { accepted: true } : {
+        accepted: false,
+        reason: "known-different-host",
+        existingHost: existing,
+      };
     }
     const provider = this.#providers.get(space);
     const replacesDefaultRoute = provider !== undefined &&
       this.#resolveDefaultStorageRoute() !==
         toWebSocketAddress(storageAddressForHost(normalized)).toString();
     if (replacesDefaultRoute && !provider.canReplaceProvisionalReplica()) {
-      return false;
+      return { accepted: false, reason: "default-route-in-use" };
     }
     this.#dynamicHosts.set(space, normalized);
     if (replacesDefaultRoute) {
       this.trackUntilSettled(provider.replaceProvisionalReplica());
     }
-    return true;
+    return { accepted: true };
   }
 
   /**

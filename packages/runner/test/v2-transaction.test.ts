@@ -560,6 +560,37 @@ describe("v2-transaction", () => {
       }
     });
 
+    it("returns what a refused batch left changed in the document", async () => {
+      // The batch counterpart of the case above: the batch's first write is
+      // refused after creating its parent, so the batch installs nothing and
+      // records nothing, and only the working value says what changed.
+
+      const { storage, address, tx } = await writerOverCommittedDocument(
+        "of:v2-transaction-log-refused-batch",
+      );
+      try {
+        expect(tx.write({ ...address, path: ["value"] }, { a: 2 }).ok)
+          .toBeTruthy();
+        expect(tx.write({ ...address, path: ["value"] }, { a: 1 }).ok)
+          .toBeTruthy();
+        expect(tx.getReactivityLog!().writes).toEqual([]);
+
+        expect(
+          tx.writeBatch!([
+            { address: { ...address, path: ["value", "b", "-"] }, value: 5 },
+            { address: { ...address, path: ["value", "c"] }, value: 1 },
+          ]).error,
+        ).toBeDefined();
+        const left = tx.read({ ...address, path: ["value"] }, {
+          meta: stableInternalVerifierRead,
+        }).ok!.value;
+        expect(tx.getReactivityLog!().writes.map(({ path }) => path))
+          .toEqual(valueEqual(left, { a: 1 }) ? [] : [["value"]]);
+      } finally {
+        await storage.close();
+      }
+    });
+
     it("returns the same writes after a read as before it", async () => {
       const { storage, address, tx } = await writerOverCommittedDocument(
         "of:v2-transaction-log-across-read",

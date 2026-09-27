@@ -74,8 +74,8 @@ class LoopbackStorageManager extends StorageManager {
   private constructor(options: Options, server: MemoryV2Server.Server) {
     super(options, new LoopbackSessionFactory(() => server));
   }
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed() {
+    return { accepted: false, reason: "no-remote-resolution" } as const;
   }
 }
 

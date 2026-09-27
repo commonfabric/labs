@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import type { FabricValue } from "@commonfabric/data-model";
 import {
   entityRefToString,
+  linkRefFrom,
   linkRefPayload,
 } from "@commonfabric/data-model/cell-rep";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -4928,14 +4929,14 @@ describe("piece pull materialization", () => {
     );
     const scalarController = new PieceController(pieces, scalarTarget);
     const scalarInput = await scalarController.input.getCell();
-    const forged = sourcePiece.key("value").getAsLink({
+    const genuine = sourcePiece.key("value").getAsLink({
       base: scalarInput.key("slot"),
       includeSchema: true,
     });
-    (linkRefPayload(forged) as { schema?: JSONSchema }).schema = {
-      type: "number",
-      asCell: ["cell"],
-    };
+    const forged = linkRefFrom({
+      ...linkRefPayload(genuine),
+      schema: { type: "number", asCell: ["cell"] } as JSONSchema,
+    });
     await expect(
       scalarController.input.set(forged, ["slot"]),
     ).rejects.toThrow(/link carries a non-durable Cell wrapper/);

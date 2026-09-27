@@ -24,6 +24,7 @@ import {
   getTransactionReadActivities,
   getTransactionWriteAttempts,
   getTransactionWriteDetails,
+  getTransactionWrittenSpaces,
 } from "../src/storage/transaction-inspection.ts";
 
 const signer = await Identity.fromPassphrase("transaction-inspection");
@@ -592,6 +593,103 @@ describe("transaction inspection", () => {
         },
         value: 1,
       }]);
+    } finally {
+      await storageManager.close();
+    }
+  });
+
+  it("lists a space whose only write returned to its starting value among the written spaces", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    try {
+      const id = "test:transaction-inspection-written-spaces-revert" as const;
+      const seed = storageManager.edit();
+      seed.write({ space, scope: "space", id, path: [] }, {
+        value: { count: 1 },
+      });
+      await seed.commit();
+
+      const tx = storageManager.edit();
+      const address = {
+        space,
+        scope: "space",
+        id,
+        path: ["value", "count"],
+      } as const;
+      tx.write(address, 2);
+      tx.write(address, 1);
+
+      // The reactivity log lists only changed paths, so it names no write.
+      expect(tx.getReactivityLog?.().writes).toEqual([]);
+      expect(getTransactionWrittenSpaces(tx)).toEqual([space]);
+    } finally {
+      await storageManager.close();
+    }
+  });
+
+  it("names the direct reactivity log's spaces as written when the transaction keeps no write-attempt log or replayable journal", () => {
+    const journal = {
+      activity: () => {
+        throw new Error("no replay");
+      },
+      novelty: () => [],
+      history: () => [],
+    };
+    const tx = {
+      journal,
+      getReactivityLog: () => ({
+        reads: [],
+        shallowReads: [],
+        writes: [{
+          space: "did:key:written" as any,
+          scope: "space",
+          id: "of:write" as any,
+          path: ["field"],
+        }],
+        attemptedWrites: [{
+          space: "did:key:attempted" as any,
+          scope: "space",
+          id: "of:attempt" as any,
+          path: ["field"],
+        }],
+      }),
+      tx: {} as any,
+    } as unknown as IExtendedStorageTransaction;
+
+    expect(getTransactionWrittenSpaces(tx)).toEqual([
+      "did:key:written",
+      "did:key:attempted",
+    ]);
+  });
+
+  it("throws when a transaction offers no record of its writes", () => {
+    const tx = {
+      journal: {
+        activity: () => {
+          throw new Error("no replay");
+        },
+        novelty: () => [],
+        history: () => [],
+      },
+      tx: {} as any,
+    } as unknown as IExtendedStorageTransaction;
+
+    expect(() => getTransactionWrittenSpaces(tx)).toThrow("cannot be known");
+  });
+
+  it("leaves a space the transaction only read out of the written spaces", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    try {
+      const id = "test:transaction-inspection-written-spaces-read" as const;
+      const seed = storageManager.edit();
+      seed.write({ space, scope: "space", id, path: [] }, {
+        value: { count: 1 },
+      });
+      await seed.commit();
+
+      const tx = storageManager.edit();
+      tx.read({ space, scope: "space", id, path: ["value", "count"] });
+
+      expect(getTransactionWrittenSpaces(tx)).toEqual([]);
     } finally {
       await storageManager.close();
     }

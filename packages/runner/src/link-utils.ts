@@ -5,7 +5,7 @@ import {
   isDeepFrozen,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
-import { linkRefFrom, linkRefPayload } from "@commonfabric/data-model/cell-rep";
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import {
   deepFrozenCloneAndInternSchema,
   internSchema,
@@ -357,12 +357,11 @@ export function createSigilLinkFromParsedLink(
     keepAsCell?: KeepAsCell;
   } = {},
 ): SigilLink {
-  // Create the base structure
-  const sigil: SigilLink = linkRefFrom<CellLinkRefPayload>({
+  // The payload is built in full before the link is made, since a link's
+  // payload is fixed once it is.
+  const reference: CellLinkRefPayload = {
     path: link.path.map((p) => p.toString()),
-  });
-
-  const reference = linkRefPayload(sigil);
+  };
 
   // Handle base cell for relative references
   if (options.base) {
@@ -409,7 +408,7 @@ export function createSigilLinkFromParsedLink(
     reference.overwrite = "redirect";
   }
 
-  return sigil;
+  return linkRefFrom<CellLinkRefPayload>(reference);
 }
 
 /**

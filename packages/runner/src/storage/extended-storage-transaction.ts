@@ -176,6 +176,7 @@ import {
   getTransactionReadActivities,
   getTransactionWriteAttempts,
   getTransactionWriteDetails,
+  getTransactionWrittenSpaces,
 } from "./transaction-inspection.ts";
 
 /**
@@ -248,7 +249,12 @@ const reservedSiblingCarriedForward = (
   typeof carried !== "function" &&
   valueEqual(carried as FabricValue, stored as FabricValue);
 
-type CfcInstrumentationHooks = {
+/**
+ * What a transaction reports its CFC work through, and the runtime services it
+ * asks for. A hook that acts on a transaction is handed it, so one object can
+ * serve every transaction a runtime opens.
+ */
+export type CfcInstrumentationHooks = {
   /** The runtime's ceiling check, applied before a payload leaves a read. */
   checkReadCeiling?(
     tx: IExtendedStorageTransaction,
@@ -743,8 +749,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   /**
    * The prepared-digest input and epoch-bound computation, which tests and
-   * benchmarks drive directly to check binding and cache reuse, and the
-   * privileged write a fixture installs stored runtime state with.
+   * benchmarks drive directly to check binding and cache reuse, the
+   * privileged write a fixture installs stored runtime state with, and the
+   * instrumentation hooks the transaction was opened with.
    *
    * `privilegedSystemWrite()` runs one write inside the privileged
    * persistence scope, so it lands a document's reserved siblings the way
@@ -762,8 +769,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       value: FabricValue,
       options?: IWriteOptions,
     ): void;
+    readonly cfcInstrumentation: CfcInstrumentationHooks;
   } {
     return {
+      cfcInstrumentation: this.#cfcInstrumentation,
       buildPreparedDigestInput: () => this.#buildPreparedDigestInput(),
       preparedDigest: () => this.#preparedDigest(),
       privilegedSystemWrite: (address, value, options) =>
@@ -2430,10 +2439,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     );
 
     const writes: AttemptedWrite[] = [];
-    const seenWriteSpaces = new Set<MemorySpace>(
-      (log.writes ?? []).map((write) => write.space),
-    );
-    for (const space of seenWriteSpaces) {
+    for (const space of getTransactionWrittenSpaces(this)) {
       for (const write of this.getWriteDetails(space)) {
         writes.push(deepFreeze({
           ...write.address,
@@ -2591,13 +2597,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    */
   #materializeReferencedSchemaDocuments(): void {
     if (!getContentAddressedSchemasConfig()) return;
-    const log = this.getReactivityLog();
-    const spaces = new Set(
-      [...(log.writes ?? []), ...(log.attemptedWrites ?? [])].map((write) =>
-        write.space
-      ),
-    );
-    for (const space of spaces) {
+    for (const space of getTransactionWrittenSpaces(this)) {
       for (const detail of this.getWriteDetails(space)) {
         this.#stageSchemaDocsForValue(space, detail.address, detail.value);
       }

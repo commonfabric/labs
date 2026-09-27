@@ -471,7 +471,10 @@ export class FabricError extends FabricNativeWrapper<Error>
         for (const [key, val] of value.extraEntries()) {
           state[key] = val;
         }
-        return state;
+
+        // A snapshot of this instance's state, so frozen whether or not the
+        // instance is. The values in it are held as they are.
+        return Object.freeze(state);
       }
 
       /**
