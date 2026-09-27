@@ -460,6 +460,20 @@ describe("convertible-js", () => {
         )
           .toBe(false);
       });
+
+      it("returns a `ProblematicValue` for a payload it refuses, frozen by default, mutable when `mutable` is `true`", () => {
+        // `JSON.parse()` makes `__proto__` an own key, which a payload may not
+        // have.
+        const state = JSON.parse('{"id":"fid1:abc","__proto__":1}');
+        const codec = FabricLink[CODEC];
+        const frozen = codec.decode(CODEC_TYPE_TAGS.Link, state, env);
+        const mutable = codec.decode(CODEC_TYPE_TAGS.Link, state, env, true);
+
+        expect(frozen).toBeInstanceOf(ProblematicValue);
+        expect(Object.isFrozen(frozen)).toBe(true);
+        expect(mutable).toBeInstanceOf(ProblematicValue);
+        expect(Object.isFrozen(mutable)).toBe(false);
+      });
     });
 
     describe("ProblematicValue", () => {

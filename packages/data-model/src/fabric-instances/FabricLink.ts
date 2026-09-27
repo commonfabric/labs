@@ -149,11 +149,12 @@ export class FabricLink extends BaseFabricInstance implements ApiFabricLink {
           const result = new FabricLink(state);
           return mutable ? result : Object.freeze(result);
         } catch (e) {
-          return new ProblematicValue(
+          const problem = new ProblematicValue(
             typeTag,
             state,
             `Link: ${e instanceof Error ? e.message : String(e)}`,
           );
+          return mutable ? problem : Object.freeze(problem);
         }
       }
     })(),
