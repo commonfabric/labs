@@ -1501,64 +1501,58 @@ writer the stamp itself names (its module, source file and export). Proposed edi
 one-time authenticated migration of legacy claims, and that once stored claims
 are stamped the file-correspondence rules are retired.
 
-## From the display-boundary owner-self rule (2026-09-26)
+## From the acting-user and display-boundary build (2026-09-26)
 
-**SC-49 [normative] The owner-self rule of the standard display profile —
-§5.3.2 + invariant 3 + §8.10.6 + §4.9.2.** `open`. §5.3.2 requires every
-general exchange rule to carry an integrity precondition or durable
-`guard.policyState`, and allows "a narrowly specified owner-self
-standard-profile rule" in an attested deployment; invariant 3 and §4.3.6 say
-the same. §8.10.6 admits principal forms that resolve to the acting user under
-the deployment's standard exchange rules, naming `PersonalSpace` and verified
-`Space` membership as examples. No passage says what the owner-self rule is,
-so a value labeled `Resource{ class, subject: actingUser }` stays hidden from
-that user at every display sink.
+**SC-49 [normative] `$actingUser` in rule data, and deployment records at the
+display boundary — §4.9.2 + §8.10.6.** `open`. Two runtime behaviors the
+spec implies without spelling out.
 
-The runtime's standard render rule set carries one:
-`resource-owner-self-display` targets `Resource{ subject: $actingUser }` under
-`sinkClass: display` and adds `User($actingUser)` to the matched clause, with
-no integrity precondition. The evaluator implements §4.9.2 by starting every
-rule match with `$actingUser` bound to the trusted acting principal, and the
-matcher never binds the variable from a matched atom, so the reader is never
-learned from the label (cf. §8.10.3). When the acting principal is absent, not
-a complete DID, or the runtime's own subject (the default subject of an
-ownerless `Resource`, stored credentials among them), nothing is bound and
-every rule naming `$actingUser` is inert. The rule is add-only and
-clause-local (§4.4.5, invariant 11): a sibling clause naming another
-principal, a facet context, an expiry or a caveat keeps the value blocked. Its
-`sinkClass` guard is applicability, not authority.
+`$actingUser`. §4.9.2 says labels and exchange rules may reference
+`$actingUser`, which the runtime substitutes with the DID from the acting
+context; §4.4.5's evaluator takes the acting user as an argument, and §5.4.2
+and §13.2.1 use the variable in rule data. The evaluator implements this by
+starting every rule match with `$actingUser` bound to the trusted acting
+principal, and the matcher never binds the variable from a matched atom, so a
+reader is never learned from the label (cf. §8.10.3; §8.17.3 states the same
+discipline for placeholder principals in declared ceilings). No binding is
+supplied when the acting principal is absent, not a complete DID, or the
+runtime's own subject (the default subject of an ownerless `Resource`, stored
+credentials among them), and a rule naming `$actingUser` is then inert. Module
+rules keep their integrity or policy-state guard (§4.3.6).
 
-The rule is a new release judgment, made by the attested deployment through
-the route §5.3.2 and invariant 3 permit. It reaches no audience beyond the
-acting user, so §8.10.5.2's audience expansion does not arise, and §8.10.6's
-tighten-only clause is met because the judgment is the deployment's built-in
-rule rather than an unrecorded widening of the ceiling. It lives in the
-evaluator, not in a policy record, so attesting it is the deployment's
-obligation for its trusted evaluator (§9.2.1, §4.4.1), as it is for
-`space-reader-access-display` and the standard-profile discharge rules. A
-module author cannot write it: a manifest rule targets its own policy under an
-integrity or policy-state guard (§4.3.6). A guarded module rule naming
-`$actingUser` releases to the acting reader, as §4.9.2 describes.
+Deployment records at display. §8.10.6 says ordinary exchange-rule evaluation
+runs before the display ceiling's fit, as at any boundary, and that admitting
+more needs authored policy or verified authority. The render resolver
+evaluates the attested deployment snapshot, the records the commit and sink
+gates evaluate, validated and frozen when the runtime is built and covered by
+attestation of the deployment configuration (§4.4.1), beside the standard
+render rule and the module policies a label selects. What a record adds must
+still fit the ceiling, which admits the acting user alone, so no record widens
+a display's audience (§8.10.5.2). A browser-worker host supplies its records
+as `InitializationData.cfcPolicyRecords`, part of the security context an
+attach is compared against.
 
-Open points. (a) §4.9.2 lets exchange rules reference `$actingUser` without
-distinguishing where a rule comes from; the runtime binds it alike for the
-standard rules, deployment records and module manifests. (b) §5.3.2 does not
-say what "narrowly specified" bounds. The runtime leaves `class` and `scope`
-unconstrained: the spec names no class set, the unmerged facets chapter calls
-owner-self access a rule "over the owner's own resource classes", and the
-connector producer this rule serves mints its `Resource` atoms with `subject`
-set to the owner. It also reads `Resource.subject` as the owner, which §15's
-registry row does not state. (c) The rule is display-only by design; the spec
-does not address owner-self release at other sink classes. (d) §8.10.6's
-example list does not name the owner-self form, and §5.3.2 does not say what
-satisfies "attested deployment".
+A deployment that lets an owner see their own resources at display authors
+that release as a record: `Resource{ subject: $actingUser }` gains
+`User($actingUser)`, guarded on `BoundaryContext{ key: sinkClass, value:
+display }`. The record is the deployment's release judgment under §8.10.6,
+made through the attested-deployment route §5.3.2 allows for an owner-self
+rule; the standard render rules release no `Resource`.
 
-Proposed edit: in §5.3.2, with a cross-reference from invariant 3, specify the
-rule (target `Resource{ subject: $actingUser }`, `class` and `scope`
-unconstrained, no integrity precondition, postcondition `User($actingUser)`,
-display only, `$actingUser` supplied by the evaluator and never bound from a
-label), and state that a rule living in the attested evaluator satisfies
-"attested deployment"; add the form to §8.10.6's example list. Implemented in
-`packages/runner/src/cfc/render-ceiling.ts` (`STANDARD_RENDER_EXCHANGE_RULES`),
-`packages/runner/src/cfc/exchange-eval.ts` (`actingUserBindings`) and
-`packages/runner/src/cfc/atom-pattern.ts` (`ACTING_USER_VAR`).
+Open points. (a) §4.9.2 does not say whether its substitution applies at
+boundaries other than display, or to every source of rules; the runtime binds
+`$actingUser` at every boundary that names an acting principal, for the
+standard rules, deployment records and module manifests alike. (b) §5.3.2's
+owner-self allowance is written for a standard-profile rule; the spec does not
+say whether an owner-self release authored as a deployment record is that
+rule or authored policy under §8.10.6. (c) §8.10.6's example list names no
+owner-self form.
+
+Proposed edit: in §4.9.2, state that the evaluator supplies `$actingUser`
+before matching and never binds it from a label; in §8.10.6, state that the
+attested deployment snapshot is among the records evaluated before the fit.
+Implemented in `packages/runner/src/cfc/exchange-eval.ts`
+(`actingUserBindings`), `packages/runner/src/cfc/atom-pattern.ts`
+(`ACTING_USER_VAR`), `packages/runner/src/cfc/render-ceiling.ts`
+(`policySnapshot`) and `packages/runtime-client/src/protocol/types.ts`
+(`InitializationData.cfcPolicyRecords`).

@@ -164,13 +164,12 @@ type DriftFlag = Confidential<Flag, [PolicyOf<typeof driftFlagRules>]>;
   fields are compile errors.
 - Lowering rejects a general-surface rule unless it has a `pre.integrity`
   pattern or `guard.policyState` grant guard. Boundary-only authoring remains
-  extensions-gated. Owner-self access is a narrow trusted standard-profile rule
-  rather than a generic authoring exemption: the display boundary's
-  `resource-owner-self-display` rule
-  (`packages/runner/src/cfc/render-ceiling.ts`). `v("$actingUser")` in an
-  authored rule is the acting principal, which the evaluator binds before
-  matching and never reads off the label (spec §4.9.2); the rule still needs
-  its guard.
+  extensions-gated. Owner-self access is not an authoring exemption: a
+  deployment authors an owner-self display release as a deployment policy
+  record (`RuntimeOptions.cfcPolicyRecords`), which the display boundary
+  evaluates (SC-49). `v("$actingUser")` in an authored rule is the acting
+  principal, which the evaluator binds before matching and never reads off the
+  label (spec §4.9.2); the rule still needs its guard.
 
 ### 2a. Raising, direct
 
