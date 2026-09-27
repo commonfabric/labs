@@ -21,7 +21,9 @@ import {
  * An `AtomPattern` is one of:
  * - a **concrete scalar/array** — matches by structural equality;
  * - a **variable placeholder** `{ var: "$x" }` (a record whose SOLE own key
- *   is `var`, holding a non-empty string) — matches any value and binds it;
+ *   is `var`, holding a non-empty string) — matches any value and binds it,
+ *   except the acting-user placeholder `{ var: "$actingUser" }`, which only
+ *   unifies with a binding the caller supplies (see `ACTING_USER_VAR`);
  * - a **record pattern** `{ type: …, field: pattern|value, … }` — matches a
  *   record atom that has every named field matching the corresponding
  *   sub-pattern (recursively). Fields the pattern does not name are
@@ -71,6 +73,16 @@ export const EMPTY_ATOM_PATTERN_BINDINGS: AtomPatternBindings = Object.freeze(
 );
 
 type VarPlaceholder = { readonly var: string };
+
+/**
+ * The spec's acting-user variable (§4.9.2), which trusted code resolves to the
+ * acting principal before any labeled data is matched (§8.17.3). The matcher
+ * unifies it with a binding the caller supplies and never binds it from a
+ * matched atom: a reader learned from the label being evaluated is not an
+ * entailment proof (§8.10.3). A pattern that reaches the matcher with it
+ * unbound therefore matches nothing.
+ */
+const ACTING_USER_VAR = "$actingUser";
 
 /**
  * The exact placeholder shape: sole own key `var`, non-empty string value.
@@ -143,6 +155,11 @@ const matchPatternValue = (
       return commitmentAwareEquals(bindings[pattern.var], value)
         ? bindings
         : null;
+    }
+    // Taking the acting user from the atom would let the label under
+    // evaluation name its own reader; see `ACTING_USER_VAR`.
+    if (pattern.var === ACTING_USER_VAR) {
+      return null;
     }
     // A variable does NOT take a fresh binding from a committed field
     // (inv-12 Stage 1): the plaintext is not recoverable from the digest,

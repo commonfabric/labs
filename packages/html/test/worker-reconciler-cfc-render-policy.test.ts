@@ -3335,6 +3335,100 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     );
 
     await t.step(
+      "owner-self rule renders the acting user's own Resource and blocks another subject's",
+      async () => {
+        // The two values carry the same label except for the subject of their
+        // `Resource` clause, so the subject is what decides which one renders.
+
+        const otherSubject = "did:key:z6MkAnotherSubjectOfThisMessage";
+        const seedTx = runtime.edit();
+        const seedLabeled = (
+          id: string,
+          value: string,
+          confidentiality: CfcAtom[],
+        ) => {
+          const cell = runtime.getCell<string>(
+            signer.did(),
+            id,
+            undefined,
+            seedTx,
+          );
+          const link = cell.getAsNormalizedFullLink();
+          writeSeedEnvelopeDoc(seedTx, signer.did());
+          seedStoredEnvelope(seedTx, {
+            space: signer.did(),
+            id: link.id!,
+            type: "application/json",
+            path: [],
+          }, {
+            value,
+            cfc: {
+              version: 1,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: {
+                version: 1,
+                entries: [{ path: [], label: { confidentiality } }],
+              },
+            },
+          });
+          return cell;
+        };
+        const ownMessage = seedLabeled(
+          "cfc-owner-self-own-message",
+          "Owner's own message",
+          [
+            cfcAtom.user(signer.did()),
+            cfcAtom.resource("message", signer.did()),
+          ],
+        );
+        const otherMessage = seedLabeled(
+          "cfc-owner-self-other-message",
+          "Another subject's message",
+          [
+            cfcAtom.user(signer.did()),
+            cfcAtom.resource("message", otherSubject),
+          ],
+        );
+        assertEquals((await seedTx.commit()).ok !== undefined, true);
+
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+          renderConfidentialityCeiling: {
+            atoms: [
+              cfcAtom.user(signer.did()),
+              cfcAtom.personalSpace(signer.did()),
+            ],
+            caveatKinds: [],
+          },
+          resolveRenderConfidentiality: createRenderConfidentialityResolver({
+            actingPrincipal: signer.did(),
+            memberSpaces: [signer.did()],
+          }),
+        });
+        const cancel = reconciler.mount({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [ownMessage as never, otherMessage as never],
+        });
+        try {
+          await t.settle();
+          const renderedText = collector.getOpsOfType("create-text")
+            .map((op) => op.text);
+          assertEquals(renderedText.includes("Owner's own message"), true);
+          assertEquals(
+            renderedText.includes("Another subject's message"),
+            false,
+          );
+          assertEquals(renderedText.includes("Content hidden by policy"), true);
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
       "resolved-path fit honors marker / caveat-kind / declassification",
       async () => {
         // With the resolver active, the clause-aware fit still routes each

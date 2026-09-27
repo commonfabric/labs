@@ -1,14 +1,33 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
-import { buildCfcPolicyArtifactManifest } from "../src/cfc/policy.ts";
+import {
+  CFC_ATOM_TYPE,
+  CFC_CONCEPT_KIND,
+  cfcAtom,
+} from "@commonfabric/api/cfc";
+import {
+  type CfcConfClause,
+  clauseAlternatives,
+  normalizeClause,
+} from "../src/cfc/clause.ts";
+import {
+  DEFAULT_EXCHANGE_FUEL,
+  evaluateExchangeRules,
+} from "../src/cfc/exchange-eval.ts";
 import { commitCfcFieldValue } from "../src/cfc/label-representation.ts";
+import { atomsOutsideCeiling } from "../src/cfc/observation.ts";
+import {
+  buildCfcPolicyArtifactManifest,
+  buildCfcPolicySnapshot,
+  type ExchangeRule,
+} from "../src/cfc/policy.ts";
 import {
   createRenderConfidentialityResolver,
   RENDER_DISPLAY_SINK_CLASS,
+  standardRenderExchangeRules,
 } from "../src/cfc/render-ceiling.ts";
+import { sinkClassOf } from "../src/cfc/sink-inventory.ts";
 import type { SpaceMembershipProvider } from "../src/cfc/space-membership.ts";
-import { atomsOutsideCeiling } from "../src/cfc/observation.ts";
 
 // Epic H3b (docs/history/plans/cfc-future-work-implementation.md §7): the display-sink
 // render ceiling resolves §15.2 principal shapes via exchange rules
@@ -693,5 +712,290 @@ describe("CFC render resolver — spaces a module rule adds", () => {
       }),
       aliceCeiling,
     )).toEqual([]);
+  });
+});
+
+describe("CFC render resolver — the owner-self Resource rule", () => {
+  // A `Resource` atom whose subject is the acting user gains a `User` alternative
+  // naming that user at the display boundary, which is what lets its owner see
+  // it under the default ceiling (spec §8.10.6, and the owner-self exception of
+  // §5.3.2 and invariant 3). Every case fits against Alice's ceiling.
+
+  const resolveForAlice = () =>
+    createRenderConfidentialityResolver({ actingPrincipal: ALICE });
+  const message = (subject: string) => cfcAtom.resource("message", subject);
+  const ownerSelf = (atom: CfcConfClause) =>
+    normalizeClause({ anyOf: [atom, userAlice] });
+
+  describe("releasing", () => {
+    it("adds `User(acting)` to the acting user's own `Resource` clause, which then fits the ceiling", () => {
+      const resolved = resolveForAlice()({
+        confidentiality: [userAlice, message(ALICE)],
+      });
+      expect(resolved).toEqual([userAlice, ownerSelf(message(ALICE))]);
+      expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual([]);
+    });
+
+    it("keeps the matched `Resource` alternative beside the one it adds", () => {
+      const resolved = resolveForAlice()({ confidentiality: [message(ALICE)] });
+      expect(resolved.length).toBe(1);
+      expect(clauseAlternatives(resolved[0])).toContainEqual(message(ALICE));
+      expect(clauseAlternatives(resolved[0])).toContainEqual(userAlice);
+    });
+
+    it("releases a scoped `Resource` whatever its class and scope", () => {
+      const scoped = cfcAtom.resource("health", ALICE, { doc: "doc:e" });
+      const resolved = resolveForAlice()({ confidentiality: [scoped] });
+      expect(resolved).toEqual([ownerSelf(scoped)]);
+      expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual([]);
+    });
+
+    it("adds `User(acting)` to each clause naming one of the acting user's resources", () => {
+      const email = cfcAtom.resource("email", ALICE);
+      const contact = cfcAtom.resource("contact", ALICE);
+      const resolved = resolveForAlice()({ confidentiality: [email, contact] });
+      expect(resolved).toEqual([ownerSelf(email), ownerSelf(contact)]);
+      expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual([]);
+    });
+
+    it("adds `User(acting)` to an authored OR-clause holding the acting user's resource", () => {
+      const clause = { anyOf: [message(ALICE), cfcAtom.space(SPACE_OTHER)] };
+      const resolved = resolveForAlice()({ confidentiality: [clause] });
+      expect(resolved).toEqual([
+        normalizeClause({
+          anyOf: [message(ALICE), cfcAtom.space(SPACE_OTHER), userAlice],
+        }),
+      ]);
+      expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual([]);
+    });
+  });
+
+  describe("not releasing", () => {
+    it("leaves another subject's `Resource` clause unchanged, adding neither user", () => {
+      const label = [message(MALLORY)];
+      const resolved = resolveForAlice()({ confidentiality: label });
+      expect(resolved).toEqual(label);
+      expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual(label);
+    });
+
+    it("rewrites only the acting user's clause of two subjects' conjoined resources", () => {
+      const own = cfcAtom.resource("x", ALICE);
+      const theirs = cfcAtom.resource("x", MALLORY);
+      const resolved = resolveForAlice()({ confidentiality: [own, theirs] });
+      expect(resolved).toEqual([ownerSelf(own), theirs]);
+      expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual([theirs]);
+    });
+
+    it("leaves a clause naming another principal, a facet context, or an expiry untouched", () => {
+      // The facet context names Alice as its subject, and still is not a
+      // resource of hers: the rule reads the atom family, not the subject.
+      for (
+        const sibling of [
+          cfcAtom.user("mailto:bob@example.com"),
+          {
+            type: CFC_ATOM_TYPE.Context,
+            name: "facet:journal",
+            subject: ALICE,
+          },
+          cfcAtom.expires(1),
+        ]
+      ) {
+        const resolved = resolveForAlice()({
+          confidentiality: [userAlice, message(ALICE), sibling],
+        });
+        expect(resolved).toEqual([
+          userAlice,
+          ownerSelf(message(ALICE)),
+          sibling,
+        ]);
+        expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual([sibling]);
+      }
+    });
+
+    it("leaves a caveat clause untouched, even one sourced from the acting user's resource", () => {
+      const caveat = cfcAtom.caveat(
+        CFC_CONCEPT_KIND.PromptInjectionRiskUnscreened,
+        message(ALICE),
+      );
+      const resolved = resolveForAlice()({
+        confidentiality: [userAlice, message(ALICE), caveat],
+      });
+      expect(resolved).toEqual([userAlice, ownerSelf(message(ALICE)), caveat]);
+      expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual([caveat]);
+    });
+
+    it("fires at no sink class but display", () => {
+      // The classes come from the sink inventory the egress gate mints them
+      // from, so the model-call sinks are among the network ones.
+      const snapshot = buildCfcPolicySnapshot([{
+        id: "cfc-standard-render",
+        rules: standardRenderExchangeRules(ALICE),
+      }]);
+      const label = [userAlice, message(ALICE)];
+      const evaluateAt = (sinkClass: string) =>
+        evaluateExchangeRules({ confidentiality: label }, snapshot, {
+          boundary: [cfcAtom.boundaryContext("sinkClass", sinkClass)],
+          actingPrincipal: ALICE,
+        });
+      expect(evaluateAt(RENDER_DISPLAY_SINK_CLASS).label.confidentiality)
+        .toEqual([userAlice, ownerSelf(message(ALICE))]);
+      for (
+        const sink of [
+          "fetchJson",
+          "llm",
+          "generateText",
+          "agent",
+          "sqliteQuery",
+        ]
+      ) {
+        const result = evaluateAt(sinkClassOf(sink));
+        expect(result.firings).toEqual([]);
+        expect(result.label.confidentiality).toEqual(label);
+      }
+    });
+
+    it("rewrites nothing without an acting principal", () => {
+      // The subject-less resource is here because a rule built around a
+      // missing principal reads `subject: undefined` as an absence
+      // requirement, which that atom satisfies.
+      const label = [
+        message(ALICE),
+        { type: CFC_ATOM_TYPE.Resource, class: "message" },
+      ];
+      const resolve = createRenderConfidentialityResolver({
+        memberSpaces: [ALICE],
+      });
+      expect(resolve({ confidentiality: label })).toEqual(label);
+    });
+
+    it("returns the original label when the rule runs out of fuel", () => {
+      // One firing per clause, so a label one clause longer than the budget
+      // exhausts it. The label that fits the budget exactly is what shows the
+      // rule fires on these clauses at all.
+      const clauses = (count: number) =>
+        Array.from(
+          { length: count },
+          (_, index) => cfcAtom.resource(`class-${index}`, ALICE),
+        );
+      const fitting = clauses(DEFAULT_EXCHANGE_FUEL);
+      expect(
+        atomsOutsideCeiling(
+          resolveForAlice()({ confidentiality: fitting }),
+          aliceCeiling,
+        ),
+      ).toEqual([]);
+      const exhausting = clauses(DEFAULT_EXCHANGE_FUEL + 1);
+      const resolved = resolveForAlice()({ confidentiality: exhausting });
+      expect(resolved).toEqual(exhausting);
+      expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual(exhausting);
+    });
+  });
+
+  describe("the `$actingUser` placeholder in rule data", () => {
+    // Only trusted code binds the acting user. Rule data carrying the spec's
+    // `$actingUser` spelling reaches the ordinary matcher, where the
+    // placeholder never takes its value from a matched atom.
+
+    const displayBoundary = [
+      cfcAtom.boundaryContext("sink", "render"),
+      cfcAtom.boundaryContext("sinkClass", RENDER_DISPLAY_SINK_CLASS),
+    ];
+    const ownerSelfShaped = (variable: string): ExchangeRule => ({
+      id: "owner-self-shaped",
+      appliesTo: { type: CFC_ATOM_TYPE.Resource, subject: { var: variable } },
+      preCondition: {
+        boundary: [{
+          type: CFC_ATOM_TYPE.BoundaryContext,
+          key: "sinkClass",
+          value: RENDER_DISPLAY_SINK_CLASS,
+        }],
+      },
+      post: {
+        addAlternatives: [{
+          type: CFC_ATOM_TYPE.User,
+          subject: { var: variable },
+        }],
+      },
+    });
+    const evaluateDeployment = (variable: string, subject: string) =>
+      evaluateExchangeRules(
+        { confidentiality: [message(subject)] },
+        buildCfcPolicySnapshot([{
+          id: "deployment",
+          rules: [ownerSelfShaped(variable)],
+        }]),
+        { boundary: displayBoundary, actingPrincipal: ALICE },
+      );
+
+    it("never fires a deployment rule that names the acting user by it", () => {
+      // The same rule under an ordinary variable fires on any subject, which
+      // is the label-learned release the placeholder must not become.
+      expect(evaluateDeployment("$owner", MALLORY).label.confidentiality)
+        .toEqual([
+          normalizeClause({
+            anyOf: [message(MALLORY), cfcAtom.user(MALLORY)],
+          }),
+        ]);
+      for (const subject of [ALICE, MALLORY]) {
+        const result = evaluateDeployment("$actingUser", subject);
+        expect(result.firings).toEqual([]);
+        expect(result.label.confidentiality).toEqual([message(subject)]);
+      }
+    });
+
+    it("never fires a module policy rule that names the acting user by it", () => {
+      // Two manifests alike but for the variable their reader guard binds.
+      // The resolver mints Alice's own-space reader fact, which releases the
+      // first and not the second.
+      const manifestBinding = (variable: string) =>
+        buildCfcPolicyArtifactManifest({
+          formatVersion: 1,
+          moduleIdentity: "sha256:owner-self-module",
+          symbol: "ownerSelfRules",
+          template: {
+            templateVersion: 1,
+            exchangeRules: [{
+              name: "releaseToReader",
+              preCondition: {
+                confidentiality: [{ thisPolicy: true }],
+                integrity: [{
+                  type: CFC_ATOM_TYPE.HasRole,
+                  principal: { var: variable },
+                  space: { thisPolicyField: "subject" },
+                  role: "reader",
+                }],
+              },
+              postCondition: {
+                confidentiality: [{
+                  type: CFC_ATOM_TYPE.User,
+                  subject: { var: variable },
+                }],
+                integrity: [],
+              },
+            }],
+            dependencies: { authorityOnly: [], dataBearing: [] },
+            integrityRequirements: {},
+          },
+        });
+      const resolvedUnder = (variable: string) => {
+        const manifest = manifestBinding(variable);
+        const ref = cfcAtom.modulePolicyRef(
+          manifest.manifest.moduleIdentity,
+          manifest.manifest.symbol,
+          manifest.policyDigest,
+          ALICE,
+        );
+        const resolve = createRenderConfidentialityResolver({
+          actingPrincipal: ALICE,
+          memberSpaces: [ALICE],
+          modulePolicyResolver: () => manifest,
+        });
+        return { ref, resolved: resolve({ confidentiality: [ref] }) };
+      };
+      const ordinary = resolvedUnder("reader");
+      expect(atomsOutsideCeiling(ordinary.resolved, aliceCeiling)).toEqual([]);
+      const placeholder = resolvedUnder("$actingUser");
+      expect(placeholder.resolved).toEqual([placeholder.ref]);
+    });
   });
 });

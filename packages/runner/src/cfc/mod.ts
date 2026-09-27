@@ -238,7 +238,7 @@ export {
   modulePolicyRefsInConfidentiality,
   RENDER_DISPLAY_SINK_CLASS,
   RENDER_SINK_NAME,
-  STANDARD_RENDER_EXCHANGE_RULES,
+  standardRenderExchangeRules,
 } from "./render-ceiling.ts";
 export type { SpaceMembershipProvider, SpaceRole } from "./space-membership.ts";
 export {
