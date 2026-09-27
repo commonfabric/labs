@@ -7411,16 +7411,18 @@ const reconstructPatchedDocument = (
 };
 
 /**
- * Helper for {@link reconstructPatchedDocument}, which returns what
- * {@link encodedGrowth} does for one replayed patch, or `undefined` when the
- * patch cannot be weighed that way.
+ * Helper for {@link reconstructPatchedDocument}, which returns how many more
+ * UTF-8 bytes `document` takes than `previous` when each is encoded as
+ * stored, where `document` is `previous` with one stored patch applied — or
+ * `undefined` when the patch cannot be weighed by what it changed, and the
+ * result is to be weighed whole.
  *
- * The walk encodes pieces of `previous` and of `document`, and either may be
- * a revision the replay only passes through on the way to the result: a patch
- * can add a key the runtime reserves, which the codec refuses to encode, and a
- * later patch remove it. Nothing but the result is ever stored, so a piece the
- * codec refuses leaves the result to be weighed whole, and the codec's answer
- * about the result is the one that counts.
+ * It cannot be once weighing the pieces would encode more of them than
+ * {@link MAX_GROWTH_ENCODES}, and it cannot be when the codec refuses a
+ * piece: a revision the replay only passes through can hold a key the
+ * runtime reserves, which a later patch removes. Nothing but the result is
+ * ever stored, and the codec's answer about the result is the one that
+ * counts.
  */
 const replayedGrowth = (
   previous: EntityDocument,
@@ -7478,10 +7480,10 @@ const encodedByteLength = (value: FabricValue): number =>
   storedByteLength(encodeMemoryBoundary(value));
 
 /**
- * How many values {@link encodedGrowth} encodes, for one patch, before it
- * gives up and the revision is weighed by encoding it whole. A patch that
- * rewrites a list element by element reaches this, and past it the pieces
- * cost more than the whole.
+ * How many values {@link encodedGrowth} encodes for one patch before the
+ * revision is weighed by encoding it whole instead. A patch that rewrites a
+ * list element by element reaches it, and past it the pieces cost more than
+ * the whole.
  */
 const MAX_GROWTH_ENCODES = 64;
 
@@ -7489,35 +7491,26 @@ const MAX_GROWTH_ENCODES = 64;
 type GrowthBudget = { remaining: number };
 
 /**
- * Helper for {@link reconstructPatchedDocument}, which returns how many more
- * UTF-8 bytes `after` takes than `before` when each is encoded as stored,
- * where `after` is `before` with patches applied — or `undefined` once
- * `budget` is spent, for the caller to weigh the result whole instead.
+ * Helper for {@link replayedGrowth}, which returns how many more UTF-8 bytes
+ * `after` takes than `before` when each is encoded as stored. Throws once
+ * `budget` is spent, or when the codec refuses a piece.
  *
- * Patches replay copy-on-write, so the two share every subtree the patches
- * did not reach. The walk passes those over by identity and encodes only what
- * differs — a replaced value, and each member or element added or removed —
- * which is what lets a revision be weighed from the one it replays without
- * encoding it whole. An array is first trimmed of the elements it shares with
- * its counterpart at either end, so an insertion or a removal near the front
- * of a long list encodes what went in or out rather than every element it
- * moved.
- *
- * The result is exact, because the walk descends only where the encoding
- * composes: into a record none of whose keys starts with `/`, and an array
- * with no hole. A member there encodes as it does on its own, and members are
- * joined by one comma each. A `/`-keyed record is quoted as a whole, and a run
- * of holes is written as one count, so any other pair is weighed by encoding
- * each side. The walk keeps no guard against a cycle, which no stored document
- * holds.
+ * The two share every subtree the patch did not reach, which the walk passes
+ * over by identity, encoding only what differs. The result is exact, because
+ * the walk descends only where the encoding composes — a record none of whose
+ * keys starts with `/`, and an array with no hole — and encodes each side of
+ * any other pair whole. It keeps no guard against a cycle, which no stored
+ * document holds.
  */
 const encodedGrowth = (
   before: FabricValue,
   after: FabricValue,
   budget: GrowthBudget,
-): number | undefined => {
+): number => {
   if (Object.is(before, after)) return 0;
 
+  // A member of such a record encodes as it does on its own, and members are
+  // joined by one comma each.
   const beforeKeys = composingRecordKeys(before);
   const afterKeys = beforeKeys && composingRecordKeys(after);
   if (beforeKeys !== undefined && afterKeys !== undefined) {
@@ -7526,21 +7519,21 @@ const encodedGrowth = (
     let growth = separatorBytes(afterKeys.length) -
       separatorBytes(beforeKeys.length);
     for (const key of afterKeys) {
-      const part = Object.hasOwn(beforeRecord, key)
+      growth += Object.hasOwn(beforeRecord, key)
         ? encodedGrowth(beforeRecord[key], afterRecord[key], budget)
         : memberBytes(key, afterRecord[key], budget);
-      if (part === undefined) return undefined;
-      growth += part;
     }
     for (const key of beforeKeys) {
-      if (Object.hasOwn(afterRecord, key)) continue;
-      const part = memberBytes(key, beforeRecord[key], budget);
-      if (part === undefined) return undefined;
-      growth -= part;
+      if (!Object.hasOwn(afterRecord, key)) {
+        growth -= memberBytes(key, beforeRecord[key], budget);
+      }
     }
     return growth;
   }
 
+  // An array is first trimmed of the elements it shares with its counterpart
+  // at either end, so an insertion or a removal near the front of a long list
+  // weighs what went in or out rather than every element it moved.
   if (isHolelessArray(before) && isHolelessArray(after)) {
     const shorter = Math.min(before.length, after.length);
     let start = 0;
@@ -7557,30 +7550,21 @@ const encodedGrowth = (
     let growth = separatorBytes(after.length) - separatorBytes(before.length);
     if (beforeEnd === afterEnd) {
       for (let index = start; index < beforeEnd; index++) {
-        const part = encodedGrowth(before[index], after[index], budget);
-        if (part === undefined) return undefined;
-        growth += part;
+        growth += encodedGrowth(before[index], after[index], budget);
       }
       return growth;
     }
     for (let index = start; index < beforeEnd; index++) {
-      const part = elementBytes(before[index], budget);
-      if (part === undefined) return undefined;
-      growth -= part;
+      growth -= elementBytes(before[index], budget);
     }
     for (let index = start; index < afterEnd; index++) {
-      const part = elementBytes(after[index], budget);
-      if (part === undefined) return undefined;
-      growth += part;
+      growth += elementBytes(after[index], budget);
     }
     return growth;
   }
 
-  const afterBytes = budgetedByteLength(after, budget);
-  const beforeBytes = budgetedByteLength(before, budget);
-  return afterBytes === undefined || beforeBytes === undefined
-    ? undefined
-    : afterBytes - beforeBytes;
+  return budgetedByteLength(after, budget) -
+    budgetedByteLength(before, budget);
 };
 
 /**
@@ -7614,43 +7598,37 @@ const separatorBytes = (count: number): number => count > 1 ? count - 1 : 0;
 
 /**
  * Helper for {@link encodedGrowth}, which returns what {@link
- * encodedByteLength} does, charging one encode to `budget`, or `undefined`
- * when `budget` is already spent.
+ * encodedByteLength} does, charging one encode to `budget`. Throws when
+ * `budget` is already spent.
  */
 const budgetedByteLength = (
   value: FabricValue,
   budget: GrowthBudget,
-): number | undefined => {
-  if (budget.remaining <= 0) return undefined;
+): number => {
+  if (budget.remaining <= 0) {
+    throw new Error("weighing by pieces spent its budget");
+  }
   budget.remaining--;
   return encodedByteLength(value);
 };
 
 /**
  * Helper for {@link encodedGrowth}, which returns the bytes one record member
- * adds to the record's encoding — its key, the colon, and its value — or
- * `undefined` when `budget` is spent.
+ * adds to the record's encoding: its key, the colon, and its value.
  */
 const memberBytes = (
   key: string,
   value: FabricValue,
   budget: GrowthBudget,
-): number | undefined => {
-  const bytes = budgetedByteLength({ [key]: value }, budget);
-  return bytes === undefined ? undefined : bytes - encodedByteLength({});
-};
+): number =>
+  budgetedByteLength({ [key]: value }, budget) - encodedByteLength({});
 
 /**
  * Helper for {@link encodedGrowth}, which returns the bytes one array element
- * adds to the array's encoding, or `undefined` when `budget` is spent.
+ * adds to the array's encoding.
  */
-const elementBytes = (
-  value: FabricValue,
-  budget: GrowthBudget,
-): number | undefined => {
-  const bytes = budgetedByteLength([value], budget);
-  return bytes === undefined ? undefined : bytes - encodedByteLength([]);
-};
+const elementBytes = (value: FabricValue, budget: GrowthBudget): number =>
+  budgetedByteLength([value], budget) - encodedByteLength([]);
 
 /**
  * Helper for {@link readStateForScopeKey}, which finds the row holding
