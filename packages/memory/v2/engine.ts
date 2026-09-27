@@ -1302,8 +1302,8 @@ export type AppliedRevision = {
 
   /**
    * True on a `patch` revision whose operation declared a `baseSeq` equal to
-   * the seq of the head it was applied over, with the operation applied
-   * exactly as received. The revision's document is then the writer's own
+   * the seq of the head it was applied over, a head written before the
+   * commit, with the operation applied exactly as received. The revision's document is then the writer's own
    * operations replayed over a document its replica holds, so the writer
    * reproduces it without being sent it. Absent on a replayed commit's
    * revisions, which are read back from the store.
@@ -6461,9 +6461,12 @@ const writeOperation = (
     }
     case "patch": {
       // Read before this revision replaces the head. A document with no head
-      // row is absent, which a writer holding it as absent declares as 0.
+      // row is absent, which a writer holding it as absent declares as 0. A
+      // head an earlier operation of this commit wrote carries this commit's
+      // seq, which no document a writer holds can have, so only a base below
+      // it can match.
       const exactBase = options.checkBase === true &&
-        operation.baseSeq !== undefined &&
+        operation.baseSeq !== undefined && operation.baseSeq < seq &&
         ((engine.statements.selectHead.get({
             branch,
             id: operation.id,

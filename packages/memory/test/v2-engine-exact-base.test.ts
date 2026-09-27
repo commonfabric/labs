@@ -96,6 +96,31 @@ describe("applyCommit()", () => {
       expect(applied.revisions[0].exactBase).toBeUndefined();
     });
 
+    it("is absent on a patch declaring the seq of a head its own commit wrote", () => {
+      // The second patch lands on the head the first one wrote, at the
+      // commit's own seq; a writer cannot hold that document, so declaring
+      // the seq does not make the second patch exact.
+
+      const seeded = seed();
+
+      const applied = commitAs({
+        localSeq: 2,
+        reads: { confirmed: [], pending: [] },
+        operations: [
+          ...patchCommit(2, seeded).operations,
+          ...patchCommit(2, seeded + 1, [
+            { op: "replace", path: "/value/label", value: "y" },
+          ]).operations,
+        ],
+      });
+
+      expect(applied.seq).toBe(seeded + 1);
+      expect(applied.revisions.map((revision) => revision.exactBase)).toEqual([
+        true,
+        undefined,
+      ]);
+    });
+
     it("is absent on a patch declaring no base", () => {
       seed();
 

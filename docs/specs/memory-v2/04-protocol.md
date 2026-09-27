@@ -1290,8 +1290,9 @@ enforced through the catch-up marker and CLIENT-side verdict parking (CT-1927):
   while own `patch`-produced heads are delivered as full post-apply
   documents, since merged state is truth the writer cannot extrapolate.
   The exception is a patch whose `baseSeq` (`03-commit-model.md` section
-  3.1) equals the seq of the head the engine applied it over, the
-  operation stored as its writer sent it: its document is the writer's
+  3.1) equals the seq of the head the engine applied it over — a head
+  written before the commit, never one an earlier operation of the same
+  commit wrote — the operation stored as its writer sent it: its document is the writer's
   own edits replayed over a document the writer holds, so it is elided
   like a `set` head, and the verdict's revision for it carries
   `exactBase: true`. The engine checks only a default-branch,
