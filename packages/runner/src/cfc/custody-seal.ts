@@ -53,6 +53,7 @@ import {
   parseLink,
 } from "../link-utils.ts";
 import type { Runtime } from "../runtime.ts";
+import { normalizeCellScope } from "../scope.ts";
 import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
@@ -895,7 +896,7 @@ const linkRoomToBox = (
     id: destination.id,
     scope: destination.scope,
   })?.labelMap.entries ?? []).some((entry) =>
-    entry.path.length === 0 &&
+    entry.path.length === 0 && entry.origin === "derived" &&
     (entry.label.integrity ?? []).some((atom) => deepEqual(atom, SEALED_BY))
   );
   const current = tx.readValueOrThrow(destination, {
@@ -907,6 +908,8 @@ const linkRoomToBox = (
     : undefined;
   const holdsThisBox = currentLink !== undefined &&
     currentLink.id === boxLink.id && currentLink.space === boxLink.space &&
+    normalizeCellScope(currentLink.scope) ===
+      normalizeCellScope(boxLink.scope) &&
     currentLink.path.length === 0;
   if (
     governed.some((link) =>

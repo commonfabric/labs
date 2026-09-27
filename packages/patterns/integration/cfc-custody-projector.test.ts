@@ -256,13 +256,14 @@ const sealAndRelease = async (witnessed: boolean): Promise<void> => {
       expect(prepared.witnessedRelease).toBe(witnessed);
       return await commitCustodySeal(prepared.consent, trustedClick());
     };
-    const sealed = await seal(alice, ["no", "yes", "maybe"]);
-    await seal(bob, ["maybe", "yes", "no"]);
-    // Pizza and tacos each drew a `no`; both members said yes to sushi.
+    const sealed = await seal(alice, ["yes", "maybe", "no"]);
+    const bobs = await seal(bob, ["maybe", "yes", "yes"]);
+    // Tacos drew a `no`; pizza and sushi drew one `yes` each, and pizza is
+    // listed first.
     await waitForCellValue<string>(
       host,
       room.key("choice"),
-      (value) => value === "sushi",
+      (value) => value === "pizza",
       { stuckLabel: "the projector's answer over the sealed box" },
     );
     // The room holds a link to the box, not a copy of its entries: its
@@ -302,11 +303,46 @@ const sealAndRelease = async (witnessed: boolean): Promise<void> => {
     await waitForCellValue<string>(
       host,
       room.key("rating"),
-      (value) => value === "no" || value === "maybe",
+      (value) => value === "yes" || value === "maybe",
       { stuckLabel: "a member's rating read from the sealed box" },
     );
     expect(shownTo(bob.did(), room.key("choice"))).toBe(true);
     expect(shownTo(bob.did(), room.key("rating"))).toBe(false);
+    if (!witnessed) return;
+
+    // A member's code points the room's `box` at a record of its own that
+    // repeats Bob's real entry, so his stance counts for both seats. The
+    // projector's answer moves to what that record yields, and the rule,
+    // which asks that everything the projector read, the references it
+    // followed included, was the seal's, does not show it.
+    const crafted = await host.editWithRetry((tx) => {
+      setCfcImplementationIdentity(tx, {
+        kind: "verified",
+        moduleIdentity: "sha256:member-code",
+        symbol: "repointBox",
+        bindingPath: ["repointBox"],
+      });
+      const record = host.getCell(S, "crafted-box", {
+        type: "object",
+        ifc: { confidentiality: [cfcAtom.space(S)] },
+      } as never, tx);
+      const entry = host.getCellFromLink(
+        { ...bobs.box.getAsNormalizedFullLink(), path: [bobs.entryKey] },
+        undefined,
+        tx,
+      );
+      record.set({ first: entry, second: entry } as never);
+      room.key("box").withTx(tx).set(record as never);
+    });
+    expect(crafted.error).toBeUndefined();
+    // Bob's `yes` to sushi now counts twice.
+    await waitForCellValue<string>(
+      host,
+      room.key("choice"),
+      (value) => value === "sushi",
+      { stuckLabel: "the projector's answer over the crafted record" },
+    );
+    expect(shownTo(bob.did(), room.key("choice"))).toBe(false);
   } finally {
     for (const runtime of runtimes) {
       await runtime.dispose({ closeStorage: false });

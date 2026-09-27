@@ -454,6 +454,7 @@ const projectThrough = async (
   const choices = Object.values(entries).map((entry) =>
     entry?.stance?.choice ?? ""
   );
+  projectedChoices = [...choices].sort();
   const output = runtime.getCell(S, into, {
     type: "object",
     ifc: {
@@ -466,6 +467,9 @@ const projectThrough = async (
     entry.label.integrity ?? []
   );
 };
+
+/** The choices `projectThrough` last counted, sorted. */
+let projectedChoices: string[] = [];
 
 /** Writes `value` into `cell` as other code, in `identity`'s runtime. */
 const writeAsOtherCode = async (
@@ -968,6 +972,11 @@ describe("cfc-custody-seal", () => {
       type: "object",
       ifc: { confidentiality: [cfcAtom.space(S)] },
     };
+    // Bob's stance differs from Alice's, so what the projector counted shows
+    // which entries it read.
+    const bobStance = { choice: "tacos", budget: 20 };
+    const honestCount = ["sushi", "tacos"];
+    const bobTwice = ["tacos", "tacos"];
     const roomBox = (fixture: Fixture) =>
       fixture.runtimes.get(alice)!.getCell(S, "custody-room-box");
 
@@ -976,8 +985,9 @@ describe("cfc-custody-seal", () => {
       try {
         const binding = roomBox(fixture);
         await fixture.seal(alice, honestStance, binding);
-        await fixture.seal(bob, honestStance, binding);
+        await fixture.seal(bob, bobStance, binding);
         const integrity = await projectThrough(fixture, carol, binding);
+        expect(projectedChoices).toEqual(honestCount);
         expect(integrity).toContainEqual(witnessed);
       } finally {
         await fixture.dispose();
@@ -989,11 +999,7 @@ describe("cfc-custody-seal", () => {
       try {
         const binding = roomBox(fixture);
         await fixture.seal(alice, honestStance, binding);
-        const { box, entryKey } = await fixture.seal(
-          bob,
-          honestStance,
-          binding,
-        );
+        const { box, entryKey } = await fixture.seal(bob, bobStance, binding);
         const record = fixture.runtimes.get(mallory)!.getCell(
           S,
           "repeated-entries",
@@ -1007,6 +1013,7 @@ describe("cfc-custody-seal", () => {
           return { first: entry, second: entry };
         });
         const integrity = await projectThrough(fixture, carol, record);
+        expect(projectedChoices).toEqual(bobTwice);
         expect(integrity).toContainEqual({
           type: CFC_ATOM_TYPE.TransformedBy,
           identity: PROJECT,
@@ -1022,11 +1029,7 @@ describe("cfc-custody-seal", () => {
       try {
         const binding = roomBox(fixture);
         await fixture.seal(alice, honestStance, binding);
-        const { box, entryKey } = await fixture.seal(
-          bob,
-          honestStance,
-          binding,
-        );
+        const { box, entryKey } = await fixture.seal(bob, bobStance, binding);
         const repeat = (runtime: Runtime, tx: IExtendedStorageTransaction) => {
           const entry = runtime.getCellFromLink(
             { ...box.getAsNormalizedFullLink(), path: [entryKey] },
@@ -1070,6 +1073,7 @@ describe("cfc-custody-seal", () => {
         ).toBeUndefined();
         expect(await pointAt(labeled)).toBeUndefined();
         const integrity = await projectThrough(fixture, carol, binding);
+        expect(projectedChoices).toEqual(bobTwice);
         expect(integrity).not.toContainEqual(witnessed);
       } finally {
         await fixture.dispose();
@@ -1081,7 +1085,7 @@ describe("cfc-custody-seal", () => {
       try {
         const binding = roomBox(fixture);
         await fixture.seal(alice);
-        const { box } = await fixture.seal(bob);
+        const { box } = await fixture.seal(bob, bobStance);
         await writeAsOtherCode(
           fixture,
           mallory,
@@ -1094,6 +1098,7 @@ describe("cfc-custody-seal", () => {
             ),
         );
         const integrity = await projectThrough(fixture, carol, binding);
+        expect(projectedChoices).toEqual(honestCount);
         expect(integrity).not.toContainEqual(witnessed);
       } finally {
         await fixture.dispose();
@@ -1107,11 +1112,7 @@ describe("cfc-custody-seal", () => {
       try {
         const binding = roomBox(fixture);
         await fixture.seal(alice, honestStance, binding);
-        const { box, entryKey } = await fixture.seal(
-          bob,
-          honestStance,
-          binding,
-        );
+        const { box, entryKey } = await fixture.seal(bob, bobStance, binding);
         const record = fixture.runtimes.get(mallory)!.getCell(
           S,
           "redirected-entries",
@@ -1125,6 +1126,7 @@ describe("cfc-custody-seal", () => {
           return { first: entry, second: entry };
         });
         const integrity = await projectThrough(fixture, carol, record);
+        expect(projectedChoices).toEqual(bobTwice);
         expect(integrity).toContainEqual({
           type: CFC_ATOM_TYPE.TransformedBy,
           identity: PROJECT,
@@ -1161,16 +1163,13 @@ describe("cfc-custody-seal", () => {
           { raw: true },
         );
         await fixture.seal(alice, honestStance, binding);
-        const { box, entryKey } = await fixture.seal(
-          bob,
-          honestStance,
-          binding,
-        );
+        const { box, entryKey } = await fixture.seal(bob, bobStance, binding);
         // The seal wrote and stamped the slot the redirect leads to. Each
         // projection writes an output of its own, so an answer equal to an
         // earlier one is still written and stamped.
         expect(await projectThrough(fixture, carol, holder, "from-holder"))
           .toContainEqual(witnessed);
+        expect(projectedChoices).toEqual(honestCount);
         const record = runtime.getCell(S, "redirected-record");
         await writeAsOtherCode(fixture, mallory, record, (runtime, tx) => {
           const entry = runtime.getCellFromLink(
@@ -1194,6 +1193,7 @@ describe("cfc-custody-seal", () => {
           binding,
           "from-repeated",
         );
+        expect(projectedChoices).toEqual(bobTwice);
         expect(repeated).toContainEqual({
           type: CFC_ATOM_TYPE.TransformedBy,
           identity: PROJECT,
@@ -1212,11 +1212,7 @@ describe("cfc-custody-seal", () => {
       try {
         const binding = roomBox(fixture);
         await fixture.seal(alice, honestStance, binding);
-        const { box, entryKey } = await fixture.seal(
-          bob,
-          honestStance,
-          binding,
-        );
+        const { box, entryKey } = await fixture.seal(bob, bobStance, binding);
         for (
           const path of [[entryKey], [entryKey, "stance"], ["another-key"]]
         ) {
@@ -1247,7 +1243,7 @@ describe("cfc-custody-seal", () => {
           Object.keys(entries).filter((key) => key !== "another-key").sort(),
         );
         expect((entries[entryKey] as { stance: unknown }).stance).toEqual(
-          honestStance,
+          bobStance,
         );
       } finally {
         await fixture.dispose();
@@ -1291,7 +1287,7 @@ describe("cfc-custody-seal", () => {
       try {
         const binding = roomBox(fixture);
         await fixture.seal(alice, honestStance, binding);
-        const { box } = await fixture.seal(bob, honestStance, binding);
+        const { box } = await fixture.seal(bob, bobStance, binding);
         const chain = fixture.runtimes.get(mallory)!.getCell(S, "chain");
         await writeAsOtherCode(fixture, mallory, chain, (runtime, tx) => {
           const links: Record<string, unknown> = {
@@ -1321,6 +1317,7 @@ describe("cfc-custody-seal", () => {
             path: ["hop0"],
           }),
         );
+        expect(projectedChoices).toEqual(honestCount);
         expect(integrity).not.toContainEqual(witnessed);
       } finally {
         await fixture.dispose();
