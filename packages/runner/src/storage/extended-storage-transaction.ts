@@ -176,6 +176,7 @@ import {
   getTransactionReadActivities,
   getTransactionWriteAttempts,
   getTransactionWriteDetails,
+  getTransactionWrittenSpaces,
 } from "./transaction-inspection.ts";
 
 /**
@@ -3202,6 +3203,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       this.getWriteDetails(target.space);
   }
 
+  /** @inheritDoc */
+  getWrittenSpaces(): readonly MemorySpace[] {
+    return getTransactionWrittenSpaces(this.tx);
+  }
+
   status(): StorageTransactionStatus {
     if (this.#statusOverride !== undefined) {
       return this.#statusOverride;
@@ -4430,6 +4436,12 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
   }): Iterable<TransactionWriteDetail> {
     return this.#wrapped.getWriteDetailsForTarget?.(target) ??
       this.getWriteDetails(target.space);
+  }
+
+  /** @inheritDoc */
+  getWrittenSpaces(): readonly MemorySpace[] {
+    return this.#wrapped.getWrittenSpaces?.() ??
+      getTransactionWrittenSpaces(this.#wrapped.tx);
   }
 
   status(): StorageTransactionStatus {

@@ -175,3 +175,26 @@ export function getTransactionWriteDetails(
     }
   })();
 }
+
+/**
+ * The spaces `tx` recorded a write in (`IStorageTransaction.getWrittenSpaces`).
+ * A transaction without the native list reports the spaces its journal's write
+ * activities name; a V2 journal cannot replay its activity, so a V2
+ * transaction always provides the list.
+ */
+export function getTransactionWrittenSpaces(
+  tx: TxLike,
+): readonly MemorySpace[] {
+  const direct = tx.getWrittenSpaces?.() ?? unwrap(tx).getWrittenSpaces?.();
+  if (direct) {
+    return direct;
+  }
+
+  const spaces = new Set<MemorySpace>();
+  for (const activity of tx.journal.activity()) {
+    if ("write" in activity && activity.write) {
+      spaces.add(activity.write.space);
+    }
+  }
+  return [...spaces];
+}

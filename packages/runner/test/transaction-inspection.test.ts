@@ -24,6 +24,7 @@ import {
   getTransactionReadActivities,
   getTransactionWriteAttempts,
   getTransactionWriteDetails,
+  getTransactionWrittenSpaces,
 } from "../src/storage/transaction-inspection.ts";
 
 const signer = await Identity.fromPassphrase("transaction-inspection");
@@ -592,6 +593,53 @@ describe("transaction inspection", () => {
         },
         value: 1,
       }]);
+    } finally {
+      await storageManager.close();
+    }
+  });
+
+  it("lists a space whose only write returned to its starting value among the written spaces", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    try {
+      const id = "test:transaction-inspection-written-spaces-revert" as const;
+      const seed = storageManager.edit();
+      seed.write({ space, scope: "space", id, path: [] }, {
+        value: { count: 1 },
+      });
+      await seed.commit();
+
+      const tx = storageManager.edit();
+      const address = {
+        space,
+        scope: "space",
+        id,
+        path: ["value", "count"],
+      } as const;
+      tx.write(address, 2);
+      tx.write(address, 1);
+
+      // The reactivity log lists only changed paths, so it names no write.
+      expect(tx.getReactivityLog?.().writes).toEqual([]);
+      expect(getTransactionWrittenSpaces(tx)).toEqual([space]);
+    } finally {
+      await storageManager.close();
+    }
+  });
+
+  it("leaves a space the transaction only read out of the written spaces", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    try {
+      const id = "test:transaction-inspection-written-spaces-read" as const;
+      const seed = storageManager.edit();
+      seed.write({ space, scope: "space", id, path: [] }, {
+        value: { count: 1 },
+      });
+      await seed.commit();
+
+      const tx = storageManager.edit();
+      tx.read({ space, scope: "space", id, path: ["value", "count"] });
+
+      expect(getTransactionWrittenSpaces(tx)).toEqual([]);
     } finally {
       await storageManager.close();
     }

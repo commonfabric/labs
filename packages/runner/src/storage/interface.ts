@@ -1478,6 +1478,16 @@ export interface IStorageTransaction {
   }): Iterable<TransactionWriteDetail>;
 
   /**
+   * Optional list of the spaces this transaction recorded a write in: each
+   * space for which {@link getWriteDetails} yields a detail. That includes a
+   * write whose value has returned to where it started and an authoritative
+   * write of an unchanged value, both of which the reactivity log's `writes`
+   * leave out, since those list only paths whose value changed. A write elided
+   * as equal to the current value is never recorded, so it names no space.
+   */
+  getWrittenSpaces?(): readonly MemorySpace[];
+
+  /**
    * Retains the exact-instance commit basis of an elided write when its target
    * has pending state. The dependency adds neither a scheduling subscription
    * nor CFC value taint. Transactions without optimistic pending layers may
