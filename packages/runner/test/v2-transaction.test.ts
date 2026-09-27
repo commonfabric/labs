@@ -113,7 +113,12 @@ const oneEntryCommit = async (
       seed.write({ space, id, type, path: [] }, { value: keyedMap(length) }).ok,
     ).toBeTruthy();
     expect((await seed.commit()).ok).toBeTruthy();
-    await storage.pullOpenSpacesToHead();
+    // Watching the document is what has the server send the commit below back
+    // to this replica.
+    expect(
+      (await storage.open(space).sync(id, { path: [], schema: true })).ok,
+    ).toBeTruthy();
+    await storage.synced();
 
     const before = getContainersHashedForTestingOnly();
     const notified = notifications.length;

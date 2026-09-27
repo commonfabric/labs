@@ -43,6 +43,28 @@ describe("differential", () => {
       )).toEqual([["value", "bytes"]]);
     });
 
+    it("records only the differing path beside two equal cyclic values that branch", () => {
+      const branching = () => {
+        const node: Record<string, unknown> = { v: 1 };
+        node.left = node;
+        node.right = node;
+        return node;
+      };
+
+      expect(changedPaths(
+        { cycle: branching(), n: 1 },
+        { cycle: branching(), n: 2 },
+      )).toEqual([["value", "n"]]);
+    });
+
+    it("throws on a pair that is not two records or two arrays, rather than reading it as an empty record", () => {
+      // A `Date` has no own keys, so reading it by key would take two
+      // different ones as equal. It is not a `FabricValue`, and
+      // `valueEqual()` says so.
+      expect(() => changedPaths({ at: new Date(1) }, { at: new Date(2) }))
+        .toThrow();
+    });
+
     it("records each edited path of a revision that shares the rest", () => {
       const entries = Object.fromEntries(
         Array.from({ length: 20 }, (_, index) => [`key-${index}`, { index }]),

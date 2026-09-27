@@ -8,6 +8,7 @@ import {
   resolveScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
+import { isPlainObject } from "@commonfabric/utils/types";
 
 import { normalizeCellScope } from "../scope.ts";
 import type {
@@ -94,16 +95,6 @@ const pushChangedPath = (
 };
 
 /**
- * How deep `collectChangedPaths()` descends before it asks `valueEqual()`
- * whether a pair differs at all. Shallower than this a pair is only walked,
- * and a pair that is equal contributes no path by being walked. At this depth
- * and past it, a cyclic pair is what the question is for: walking two
- * distinct cyclic graphs never bottoms out, and asking stops the descent
- * where the graphs agree.
- */
-const MAX_UNCHECKED_DEPTH = 256;
-
-/**
  * Helper for {@link addStateChange}, which walks `before` and `after` in step
  * and records the path of every position where they differ.
  *
@@ -112,6 +103,14 @@ const MAX_UNCHECKED_DEPTH = 256;
  * recording anything. So comparing a document with a copy-on-write revision of
  * itself costs the edited spine, and comparing it with a separately decoded
  * copy costs one walk of the whole.
+ *
+ * Two things stop the walk short of reading a pair by its keys, and ask
+ * `valueEqual()` instead. A pair that is not two arrays or two plain records
+ * is one the walk cannot read by key without misreading it. And a pair
+ * whose `after` side is already open on the walk's path closes a cycle, which
+ * walking would descend forever; `valueEqual()` compares a cycle where the
+ * walk cannot. `ancestors` holds the `after` containers open on the path, and
+ * one side suffices: the walk descends only as deep as both values reach.
  */
 const collectChangedPaths = (
   before: FabricValue,
@@ -119,6 +118,7 @@ const collectChangedPaths = (
   currentPath: string[],
   depth: number,
   paths: string[][],
+  ancestors: object[],
 ): void => {
   if (Object.is(before, after)) {
     return;
@@ -159,15 +159,28 @@ const collectChangedPaths = (
       return;
     }
 
-    if (depth >= MAX_UNCHECKED_DEPTH && valueEqual(before, after)) {
+    const beforeIsArray = Array.isArray(before);
+    const afterIsArray = Array.isArray(after);
+    if (
+      (!beforeIsArray && !isPlainObject(before, false)) ||
+      (!afterIsArray && !isPlainObject(after, false))
+    ) {
+      if (!valueEqual(before, after)) {
+        pushChangedPath(paths, currentPath, depth);
+      }
       return;
     }
 
-    if (Array.isArray(before) && Array.isArray(after)) {
+    if (ancestors.includes(after) && valueEqual(before, after)) {
+      return;
+    }
+
+    if (beforeIsArray && afterIsArray) {
       if (before.length !== after.length) {
         pushChangedPath(paths, currentPath, depth);
       }
 
+      ancestors.push(after);
       const maxLength = Math.max(before.length, after.length);
       for (let index = 0; index < maxLength; index += 1) {
         const beforeHas = index in before;
@@ -184,6 +197,7 @@ const collectChangedPaths = (
             currentPath,
             depth + 1,
             paths,
+            ancestors,
           );
           continue;
         }
@@ -193,21 +207,24 @@ const collectChangedPaths = (
           pushChangedPath(paths, currentPath, depth + 1);
         }
       }
+      ancestors.pop();
       currentPath.length = depth;
       return;
     }
 
-    if (Array.isArray(before) !== Array.isArray(after)) {
+    if (beforeIsArray !== afterIsArray) {
       pushChangedPath(paths, currentPath, depth);
       return;
     }
 
-    // Both are plain objects here: `FabricSpecialObject`s and arrays returned
-    // above. Narrowing does not carry those exclusions forward, so name it.
+    // Both are plain records here: `FabricSpecialObject`s, arrays, and
+    // everything else returned above. Narrowing does not carry those
+    // exclusions forward, so name it.
     const beforeObject = before as FabricPlainObject;
     const afterObject = after as FabricPlainObject;
     const beforeKeys = Object.keys(beforeObject);
     const afterKeys = Object.keys(afterObject);
+    ancestors.push(after);
 
     if (beforeKeys.length === afterKeys.length) {
       let sameKeys = true;
@@ -227,8 +244,10 @@ const collectChangedPaths = (
             currentPath,
             depth + 1,
             paths,
+            ancestors,
           );
         }
+        ancestors.pop();
         currentPath.length = depth;
         return;
       }
@@ -246,6 +265,7 @@ const collectChangedPaths = (
           currentPath,
           depth + 1,
           paths,
+          ancestors,
         );
         continue;
       }
@@ -260,6 +280,7 @@ const collectChangedPaths = (
       currentPath[depth] = key;
       pushChangedPath(paths, currentPath, depth + 1);
     }
+    ancestors.pop();
     currentPath.length = depth;
     return;
   }
@@ -289,7 +310,7 @@ const addStateChange = (
   }
 
   const paths: string[][] = [];
-  collectChangedPaths(before, after, [], 0, paths);
+  collectChangedPaths(before, after, [], 0, paths, []);
   if (paths.length === 0) {
     return;
   }
