@@ -60,7 +60,6 @@ export class FabricLink extends BaseFabricInstance implements ApiFabricLink {
     super();
     assertValidPayload(payload);
     this.#payload = cloneIfNecessary(payload, {
-      frozen: true,
       deep: false,
     }) as FabricPlainObject;
   }
