@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { deepFreeze } from "@commonfabric/data-model";
+import { deepFreeze, type FabricValue } from "@commonfabric/data-model";
 
 import { buildReactivityPathsForChanges } from "../../src/storage/v2-transaction.ts";
 
@@ -51,6 +51,55 @@ const addingKeys = (size: number, added: number) => {
     writtenPaths,
   );
   return { paths, listings };
+};
+
+/** A deterministic generator of numbers in `[0, 1)`, from `seed`. */
+const seeded = (seed: number) => () => {
+  seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+  return seed / 0x7fffffff;
+};
+
+/** Keys chosen to collide, including the ones a pointer escapes. */
+const KEYS = ["a", "b", "0", "~x", "x/y", ""];
+
+/**
+ * A map of up to four records, and an edit of it in which each record, on its
+ * own, keeps its keys and values, changes a value, gains a key, loses one, or
+ * becomes an array, along with paths written beneath it. Siblings whose key
+ * sets did and did not change, beneath one parent, are what sharing an
+ * ancestor's comparison has to get right.
+ */
+const randomChange = (random: () => number) => {
+  const pick = <T>(items: readonly T[]) =>
+    items[Math.floor(random() * items.length)];
+  const before: Record<string, Record<string, FabricValue>> = {};
+  for (const name of KEYS.slice(0, 1 + Math.floor(random() * 4))) {
+    const record: Record<string, FabricValue> = {};
+    for (const key of KEYS.slice(0, 1 + Math.floor(random() * 3))) {
+      record[key] = Math.floor(random() * 3);
+    }
+    before[name] = record;
+  }
+  const after: Record<string, FabricValue> = {};
+  const written: string[][] = [];
+  for (const [name, record] of Object.entries(before)) {
+    const next: Record<string, FabricValue> = { ...record };
+    const keys = Object.keys(record);
+    const kind = pick(["keep", "change", "add", "remove", "array"] as const);
+    if (kind === "change") next[pick(keys)] = 9;
+    if (kind === "add") next["added"] = 1;
+    if (kind === "remove") delete next[pick(keys)];
+    after[name] = kind === "array" ? [1, 2] : next;
+    for (const key of [...keys, "added"]) {
+      if (random() < 0.6) written.push(["value", name, key]);
+    }
+    if (random() < 0.2) written.push(["value", name]);
+  }
+  return {
+    before: deepFreeze({ value: before }),
+    after: { value: after },
+    written: written.sort(() => random() - 0.5),
+  };
 };
 
 describe("buildReactivityPathsForChanges()", () => {
@@ -117,6 +166,40 @@ describe("buildReactivityPathsForChanges()", () => {
       ["value", "a", "x"],
       ["value", "a", "y"],
     ]);
+  });
+
+  it("returns, for many written paths, what each path alone returns, merged", () => {
+    // Every ancestor's comparison is shared between the written paths beneath
+    // it, so the property that sharing must keep is that the answer for a set
+    // of paths is the union of the answers for each one alone, sorted as the
+    // function sorts: shorter first, then by pointer.
+
+    const random = seeded(8144);
+    const pointer = (path: readonly string[]) =>
+      path.map((segment) =>
+        "/" + segment.replaceAll("~", "~0").replaceAll("/", "~1")
+      ).join("");
+    for (let run = 0; run < 3000; run++) {
+      const { before, after, written } = randomChange(random);
+
+      const alone = new Map<string, readonly string[]>();
+      for (const path of written) {
+        for (
+          const reported of buildReactivityPathsForChanges(before, after, [
+            path,
+          ])
+        ) {
+          alone.set(pointer(reported), reported);
+        }
+      }
+      const merged = [...alone.values()].sort((left, right) =>
+        left.length - right.length ||
+        (pointer(left) < pointer(right) ? -1 : 1)
+      );
+
+      expect(buildReactivityPathsForChanges(before, after, written))
+        .toEqual(merged);
+    }
   });
 
   it("lists a parent's keys as often for many added keys as for few", () => {
