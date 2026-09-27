@@ -187,44 +187,53 @@ export class VisitInProgress<
       }
 
       case "recurseOf": {
+        const { container, containerTag, doKeys, doValues } = result;
         let recurseResult: MainVisitResult<PlusType, ResultType>;
 
-        switch (result.containerTag) {
-          case VALUE_TAGS.Array: {
-            recurseResult = this.#recurseFabricArray(result);
-            break;
-          }
+        if (!(doValues || (doKeys && (containerTag === VALUE_TAGS.Object)))) {
+          // There is nothing to recurse into: the visitor asked for no part of
+          // the container (only a plain object has keys to visit), or it
+          // finished with the container without recursing into it.
+          recurseResult = this.#mapMode
+            ? this.#mapUnrecursedContainer(container, containerTag)
+            : undefined;
+        } else {
+          switch (containerTag) {
+            case VALUE_TAGS.Array: {
+              recurseResult = this.#recurseFabricArray(result);
+              break;
+            }
 
-          case VALUE_TAGS.FabricInstance: {
-            recurseResult = this.#recurseFabricInstance(result);
-            break;
-          }
+            case VALUE_TAGS.FabricInstance: {
+              recurseResult = this.#recurseFabricInstance(result);
+              break;
+            }
 
-          case VALUE_TAGS.Object: {
-            recurseResult = this.#recurseFabricPlainObject(result);
-            break;
-          }
+            case VALUE_TAGS.Object: {
+              recurseResult = this.#recurseFabricPlainObject(result);
+              break;
+            }
 
-          default: {
-            // deno-coverage-ignore-start
+            default: {
+              // deno-coverage-ignore-start
 
-            // This is a defense-in-depth protection against bugs in this
-            // submodule: `containerTag` is typed as exactly the three cases
-            // above, so nothing else can reach here.
-            throw new Error(
-              `Shouldn't happen: Got unrecognized \`containerTag\`: \`${result.containerTag}\``,
-            );
+              // This is a defense-in-depth protection against bugs in this
+              // submodule: `containerTag` is typed as exactly the three cases
+              // above, so nothing else can reach here.
+              throw new Error(
+                `Shouldn't happen: Got unrecognized \`containerTag\`: \`${containerTag}\``,
+              );
+            }
+              // deno-coverage-ignore-stop
           }
-            // deno-coverage-ignore-stop
         }
 
-        const { container } = result;
         if (
           (recurseResult === undefined) && this.#mapMode &&
           !Object.is(container, value)
         ) {
-          // The recursion found no changes, but it was a recursion into a
-          // `replace`ment, which stands in place of the original value.
+          // The container stands as it is, but it is a `replace`ment, which
+          // stands in place of the original value.
           return { type: "mapTo", value: this.#assertResultType(container) };
         }
 
@@ -248,9 +257,11 @@ export class VisitInProgress<
 
   /**
    * Iteratively calls `visitValue()` and `visitCycle()` on the visitor, until
-   * the visitor returns something other than a `replace` result. When doing a
-   * structural-map operation, an `undefined` ("no change") result for a
-   * replacement becomes a `mapTo` of the replacement.
+   * the visitor returns something other than a `replace` result. An
+   * `undefined` ("no change") result for a container becomes a no-op
+   * `recurseOf` form. When doing a structural-map operation, an `undefined`
+   * result for a non-container replacement becomes a `mapTo` of the
+   * replacement.
    */
   #visitResolvingCyclesAndReplacement(
     value: FabricValuePlus<PlusType>,
@@ -293,13 +304,23 @@ export class VisitInProgress<
         }
 
         default: {
-          if (
-            (result === undefined) && this.#mapMode &&
-            !Object.is(value, original)
-          ) {
-            // "No change" to a `replace`ment means that the replacement stands
-            // in place of the original value.
-            return { type: "mapTo", value: this.#assertResultType(value) };
+          if (result === undefined) {
+            if (isFabricContainerValueTag(tag)) {
+              // The visitor is finished with this container without recursing
+              // into it, which is exactly what a no-op `recurse` means.
+              // `#visitValue()` handles both the same way.
+              return {
+                type: "recurseOf",
+                containerTag: tag,
+                container: value as FabricContainerValuePlus<PlusType>,
+                doKeys: false,
+                doValues: false,
+              };
+            } else if (this.#mapMode && !Object.is(value, original)) {
+              // "No change" to a `replace`ment means that the replacement
+              // stands in place of the original value.
+              return { type: "mapTo", value: this.#assertResultType(value) };
+            }
           }
 
           return result;
@@ -315,14 +336,7 @@ export class VisitInProgress<
   #recurseFabricArray(
     result: RecurseOfForm<PlusType>,
   ): MainVisitResult<PlusType, ResultType> {
-    const { container, doValues } = result;
-
-    if (!doValues) {
-      // `result` represents a no-op `recurse`. Though pointless, nothing
-      // prevents a client from returning it as a visit result, so just handle
-      // it gracefully here.
-      return undefined;
-    }
+    const { container } = result;
 
     const array = container as FabricArrayPlus<PlusType>;
     const vis = this.#visitor;
@@ -440,14 +454,7 @@ export class VisitInProgress<
   #recurseFabricInstance(
     result: RecurseOfForm<PlusType>,
   ): MainVisitResult<PlusType, ResultType> {
-    const { container, doValues } = result;
-
-    if (!doValues) {
-      // `result` represents a no-op `recurse`. Though pointless, nothing
-      // prevents a client from returning it as a visit result, so just handle
-      // it gracefully here.
-      return undefined;
-    }
+    const { container } = result;
 
     const instance = container as FabricInstancePlus<PlusType>;
     const vis = this.#visitor;
@@ -550,13 +557,6 @@ export class VisitInProgress<
   ): MainVisitResult<PlusType, ResultType> {
     const { container, doKeys, doValues } = result;
 
-    if (!(doKeys || doValues)) {
-      // `result` represents a no-op `recurse`. Though pointless, nothing
-      // prevents a client from returning it as a visit result, so just handle
-      // it gracefully here.
-      return undefined;
-    }
-
     const plainObj = container as FabricPlainObjectPlus<PlusType>;
     const entries = Object.entries(plainObj);
     const vis = this.#visitor;
@@ -613,7 +613,7 @@ export class VisitInProgress<
 
         const valueResult = this.#handleMappingAsAppropriate(
           value,
-          doValues ? this.#visitValue(value) : undefined,
+          doValues ? this.#visitValue(value) : this.#mapUnvisitedValue(value),
         );
         let valueMappedTo: ResultType | undefined;
 
@@ -764,6 +764,66 @@ export class VisitInProgress<
   }
 
   /**
+   * Makes a shallow copy of a container, frozen when this instance freezes
+   * mapped containers and mutable otherwise. The copy holds the original's
+   * elements, entries, or instance state as they are. An array copy keeps the
+   * original's holes.
+   */
+  #copyContainer(
+    container: FabricContainerValuePlus<PlusType>,
+    tag: FabricContainerValueTag,
+  ): FabricValuePlus<PlusType> | FabricInstancePlus<ResultType> {
+    let copy: FabricValuePlus<PlusType>;
+
+    switch (tag) {
+      case VALUE_TAGS.Array: {
+        copy = (container as FabricArrayPlus<PlusType>).slice();
+        break;
+      }
+
+      case VALUE_TAGS.FabricInstance: {
+        const instance = container as FabricInstancePlus<PlusType>;
+        const codec = codecOf(instance);
+        const state = codec.encode(instance, FABRIC_INSTANCE_MAP_ENVIRONMENT);
+
+        if (this.#freezeMappedContainers) {
+          Object.freeze(state);
+        }
+
+        // This cast is sound for the same reason as the one in
+        // `#reconstructFabricInstance()`: the codec does not care about
+        // `PlusType`, and the state is handed back to the very codec that
+        // produced it. The copy as a whole is checked against `ResultType`
+        // by the caller.
+        return this.#reconstructFabricInstance(
+          instance,
+          codec,
+          state as unknown as FabricValuePlus<ResultType>,
+        );
+      }
+
+      case VALUE_TAGS.Object: {
+        copy = { ...(container as FabricPlainObjectPlus<PlusType>) };
+        break;
+      }
+
+      default: {
+        // deno-coverage-ignore-start
+
+        // This is a defense-in-depth protection against bugs in this
+        // submodule: `tag` is typed as exactly the three cases above, so
+        // nothing else can reach here.
+        throw new Error(
+          `Shouldn't happen: Got unrecognized container tag: \`${tag}\``,
+        );
+      }
+        // deno-coverage-ignore-stop
+    }
+
+    return this.#freezeMappedContainers ? Object.freeze(copy) : copy;
+  }
+
+  /**
    * Converts a `#visitValue()` result from a `recurse`-induced sub-value
    * iteration as appropriate, based on `#mapMode`. Specifically, a
    * `mainResult` is always returned as-is. Other than that, this always returns
@@ -854,6 +914,54 @@ export class VisitInProgress<
     }
 
     return { type: "mapTo", value: this.#assertResultType(resultValue) };
+  }
+
+  /**
+   * Makes the structural-map result for a container which is not recursed
+   * into. It is held to the same rule as a container that was recursed into
+   * and found unchanged: it stands as itself (a result of `undefined`) only
+   * when it is frozen and this instance freezes mapped containers, and is
+   * otherwise replaced by a shallow copy (see `#copyContainer()`).
+   */
+  #mapUnrecursedContainer(
+    container: FabricContainerValuePlus<PlusType>,
+    tag: FabricContainerValueTag,
+  ): MapToForm<ResultType> | undefined {
+    if (this.#freezeMappedContainers && Object.isFrozen(container)) {
+      return undefined;
+    }
+
+    return {
+      type: "mapTo",
+      value: this.#assertResultType(this.#copyContainer(container, tag)),
+    };
+  }
+
+  /**
+   * Makes the structural-map result for a value which is never presented to
+   * the visitor at all (e.g. a plain object's values under `DO_RECURSE_KEYS`).
+   * A container is held to the same rule as one which is not recursed into
+   * (see `#mapUnrecursedContainer()`), and a non-container stands as itself.
+   * When not mapping, this always returns `undefined`.
+   */
+  #mapUnvisitedValue(
+    value: FabricValuePlus<PlusType>,
+  ): MapToForm<ResultType> | undefined {
+    if (!this.#mapMode) {
+      return undefined;
+    }
+
+    const tag = this.#tagOfValueElseNull(value);
+
+    // We've narrowed on `tag`, but TypeScript can't tell that this necessarily
+    // means that `value` is a container value. Hence this cast, which is safe
+    // by construction.
+    return isFabricContainerValueTag(tag)
+      ? this.#mapUnrecursedContainer(
+        value as FabricContainerValuePlus<PlusType>,
+        tag,
+      )
+      : undefined;
   }
 
   /**

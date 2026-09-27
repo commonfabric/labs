@@ -46,6 +46,16 @@ function mutableMap(
   return new VisitInProgress(vis, { mode: "map", freeze: false }).visit(value);
 }
 
+/** Returns a `FabricError` with the given message. */
+function error(message: string): FabricError {
+  return new FabricError({
+    type: "Error",
+    message,
+    stack: undefined,
+    cause: undefined,
+  });
+}
+
 /**
  * Returns a `FabricError` with the given message, whose class's codec is
  * `FabricError`'s own except for the methods in `overrides`.
@@ -1202,7 +1212,7 @@ describe("VisitInProgress", () => {
             const rec = new Recorder();
             rec.onPlainObject = () => DO_RECURSE_KEYS;
             rec.onPrimitive = (v) => (v === "a") ? mapTo("z") : undefined;
-            const inner = { c: 3 };
+            const inner = Object.freeze({ c: 3 });
             const result = map({ a: 1, b: inner }, rec) as Record<
               string,
               unknown
@@ -1219,7 +1229,7 @@ describe("VisitInProgress", () => {
           it("returns the same object for `DO_RECURSE_KEYS` when no key changes and the object is frozen", () => {
             const rec = new Recorder();
             rec.onPlainObject = () => DO_RECURSE_KEYS;
-            const object = Object.freeze({ a: 1, b: { c: 3 } });
+            const object = deepFreeze({ a: 1, b: { c: 3 } });
 
             expect(map(object, rec)).toBe(object);
           });
@@ -1314,16 +1324,6 @@ describe("VisitInProgress", () => {
         });
 
         describe("`FabricInstance`s", () => {
-          /** Returns a `FabricError` with the given message. */
-          function error(message: string): FabricError {
-            return new FabricError({
-              type: "Error",
-              message,
-              stack: undefined,
-              cause: undefined,
-            });
-          }
-
           it("returns a new instance decoded from the mapped state", () => {
             const rec = new Recorder();
             rec.onPrimitive = (v) => (v === "boom") ? mapTo("bang") : undefined;
@@ -1630,6 +1630,151 @@ describe("VisitInProgress", () => {
 
             expect(result).toBeInstanceOf(FabricLink);
             expect(result).not.toBe(link);
+          });
+        });
+
+        describe("containers the visitor does not recurse into", () => {
+          describe("freezing", () => {
+            it("returns a frozen copy of an unfrozen root container, leaving the original unfrozen", () => {
+              const rec = new Recorder();
+              rec.onArray = () => undefined;
+              const array = [1, [2]];
+              const result = map(array, rec) as unknown[];
+
+              expect(result).not.toBe(array);
+              expect(result).toEqual(array);
+              expect(Object.isFrozen(result)).toBe(true);
+              expect(Object.isFrozen(array)).toBe(false);
+            });
+
+            it("returns a frozen root container as itself", () => {
+              const rec = new Recorder();
+              rec.onArray = () => undefined;
+              const array = Object.freeze([1, [2]]);
+
+              expect(map(array, rec)).toBe(array);
+            });
+
+            it("keeps the holes of an array it copies", () => {
+              const rec = new Recorder();
+              rec.onArray = () => undefined;
+              // deno-lint-ignore no-sparse-arrays
+              const result = map([1, , 3], rec) as unknown[];
+
+              expect(result.length).toBe(3);
+              expect(Object.keys(result)).toEqual(["0", "2"]);
+            });
+
+            it("returns a frozen copy of an unfrozen nested container, sharing its contents", () => {
+              const grandchild = [3];
+              const child = { c: grandchild };
+              const rec = new Recorder();
+              rec.onPlainObject = (v) =>
+                (v === child) ? undefined : DO_RECURSE_VALUES;
+              const result = map({ a: child }, rec) as {
+                a: { c: unknown };
+              };
+
+              expect(result.a).not.toBe(child);
+              expect(Object.isFrozen(result.a)).toBe(true);
+              expect(result.a.c).toBe(grandchild);
+              expect(Object.isFrozen(child)).toBe(false);
+            });
+
+            it("returns a new frozen instance for an unfrozen instance", () => {
+              const rec = new Recorder();
+              rec.onInstance = () => undefined;
+              const original = error("boom");
+              const result = map(original, rec);
+
+              expect(result).toBeInstanceOf(FabricError);
+              expect(result).not.toBe(original);
+              expect((result as FabricError).message).toBe("boom");
+              expect(Object.isFrozen(result)).toBe(true);
+              expect(Object.isFrozen(original)).toBe(false);
+            });
+
+            it("returns a frozen instance as itself", () => {
+              const rec = new Recorder();
+              rec.onInstance = () => undefined;
+              const original = Object.freeze(error("boom"));
+
+              expect(map(original, rec)).toBe(original);
+            });
+
+            it("returns a frozen copy of an unfrozen replacement", () => {
+              const two = [2];
+              const rec = new Recorder();
+              rec.onValue = (v) =>
+                (v === 1)
+                  ? replace(two)
+                  : (v === two)
+                  ? undefined
+                  : DO_DISPATCH;
+              const result = map([1], rec) as unknown[];
+
+              expect(result[0]).not.toBe(two);
+              expect(result[0]).toEqual(two);
+              expect(Object.isFrozen(result[0])).toBe(true);
+            });
+
+            it("returns a frozen copy of an unfrozen container for a no-op `recurse`", () => {
+              const rec = new Recorder();
+              rec.onArray = () => DO_RECURSE_KEYS;
+              const array = [1];
+              const result = map(array, rec);
+
+              expect(result).not.toBe(array);
+              expect(result).toEqual(array);
+              expect(Object.isFrozen(result)).toBe(true);
+            });
+
+            it("returns a frozen copy of an unfrozen value under `DO_RECURSE_KEYS`, without visiting it", () => {
+              const inner = { c: 3 };
+              const rec = new Recorder();
+              rec.onPlainObject = () => DO_RECURSE_KEYS;
+              const result = map({ b: inner }, rec) as { b: unknown };
+
+              expect(result.b).not.toBe(inner);
+              expect(result.b).toEqual(inner);
+              expect(Object.isFrozen(result.b)).toBe(true);
+              expect(rec.events.map((e) => e[1])).not.toContain(inner);
+            });
+          });
+
+          describe("without freezing", () => {
+            it("returns an unfrozen copy of a frozen root container", () => {
+              const rec = new Recorder();
+              rec.onArray = () => undefined;
+              const array = Object.freeze([1, [2]]);
+              const result = mutableMap(array, rec);
+
+              expect(result).not.toBe(array);
+              expect(result).toEqual(array);
+              expect(Object.isFrozen(result)).toBe(false);
+            });
+
+            it("returns a new unfrozen instance for a frozen instance", () => {
+              const rec = new Recorder();
+              rec.onInstance = () => undefined;
+              const original = Object.freeze(error("boom"));
+              const result = mutableMap(original, rec);
+
+              expect(result).toBeInstanceOf(FabricError);
+              expect(result).not.toBe(original);
+              expect(Object.isFrozen(result)).toBe(false);
+            });
+
+            it("returns an unfrozen copy of a frozen value under `DO_RECURSE_KEYS`", () => {
+              const inner = Object.freeze({ c: 3 });
+              const rec = new Recorder();
+              rec.onPlainObject = () => DO_RECURSE_KEYS;
+              const result = mutableMap({ b: inner }, rec) as { b: unknown };
+
+              expect(result.b).not.toBe(inner);
+              expect(result.b).toEqual(inner);
+              expect(Object.isFrozen(result.b)).toBe(false);
+            });
           });
         });
       });
