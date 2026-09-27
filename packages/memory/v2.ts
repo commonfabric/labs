@@ -858,6 +858,19 @@ export type PatchOperation = {
   id: EntityId;
   scope?: CellScope;
   patches: PatchOp[];
+
+  /**
+   * The seq of the document the writer will replay `patches` over when this
+   * commit's accept promotes: the head seq of a document its replica holds
+   * exactly as the server stores it (0 for a document delivered as absent).
+   * Never an admission input. The server compares it with the head it
+   * applies over and reports a match as `AppliedRevision.exactBase`
+   * (`v2/engine.ts`), which is what lets the committing session's frame omit
+   * the post-apply document: the writer's replay of its own operations over
+   * that same document reproduces it. Sent only to a server advertising
+   * {@link MemoryProtocolFlags.patchBaseSeq}.
+   */
+  baseSeq?: number;
 };
 
 export type DeleteOperation = {
@@ -1199,6 +1212,16 @@ export type MemoryProtocolFlags = {
    * and the client refuses to open the session.
    */
   sessionReadCeiling?: boolean;
+
+  /**
+   * Server capability: a `patch` operation may declare the `baseSeq` its
+   * writer will replay it over, and the server reports whether the head it
+   * applied over was that one (`AppliedRevision.exactBase`), eliding the
+   * committing session's copy of a head it so reports. Build-inherent, so a
+   * server of this version always advertises it. A client that sees it
+   * absent declares nothing, and every own patch head reaches it in full.
+   */
+  patchBaseSeq?: boolean;
 };
 
 /**
@@ -1226,6 +1249,7 @@ export type WireMemoryProtocolFlags = {
   sessionHoldings?: boolean;
   viewScopedReplicationV1?: boolean;
   sessionReadCeiling?: boolean;
+  patchBaseSeq?: boolean;
 };
 
 export type HelloMessage = {
@@ -2149,6 +2173,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records a session's declared read
   // ceiling and its serving runtime stamps it onto the runs it serves.
   sessionReadCeiling: true,
+  // Build-inherent: this build's engine compares a patch's declared base
+  // with the head it applies over and reports the result on the revision.
+  patchBaseSeq: true,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
 });
 
@@ -2311,6 +2338,11 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const patchBaseSeq = value.patchBaseSeq;
+  if (patchBaseSeq !== undefined && typeof patchBaseSeq !== "boolean") {
+    return null;
+  }
+
   return {
     modernCellRep: modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
@@ -2344,6 +2376,9 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: a client carrying a read
     // ceiling refuses such a server rather than reading unbounded.
     sessionReadCeiling: sessionReadCeiling === true,
+    // Absent (an older server) parses to false: the client declares no
+    // patch base, and its own patch heads keep arriving in full.
+    patchBaseSeq: patchBaseSeq === true,
   };
 };
 
@@ -2373,6 +2408,7 @@ export const wireMemoryProtocolFlags = (
   sessionHoldings: flags.sessionHoldings,
   viewScopedReplicationV1: flags.viewScopedReplicationV1,
   sessionReadCeiling: flags.sessionReadCeiling,
+  patchBaseSeq: flags.patchBaseSeq,
 });
 
 /**

@@ -655,10 +655,12 @@ type SessionHandle = {
 };
 
 /** Kind of the LAST operation an origin commit applied to a doc — decides the
- * own-write echo shape at flush (CT-1965): `set`/`delete` heads are elided
- * (the writer provably holds their outcome), `patch` heads ride the frame as
- * full post-apply documents. */
-type DirtyOp = "set" | "patch" | "delete";
+ * own-write echo shape at flush (CT-1965). The writer provably holds the
+ * outcome of a `set`, a `delete`, and an `exact-patch` — a patch the engine
+ * applied over the very document its writer declared it would replay the
+ * patch over (`AppliedRevision.exactBase`) — so those heads are elided. A
+ * `patch` head rides the frame as the full post-apply document. */
+type DirtyOp = "set" | "patch" | "exact-patch" | "delete";
 
 type DirtyOrigin = {
   sessionId: string;
@@ -4141,7 +4143,7 @@ export class Server {
             committedWrites.push({ id: revision.id, scopeKey });
             dirtyOps.set(
               toDirtyKey(revision.id, scopeKey),
-              revision.op,
+              revision.exactBase === true ? "exact-patch" : revision.op,
             );
           }
           if (dirtyOps.size > 0) {
@@ -6358,9 +6360,12 @@ export class Server {
                     // have moved it since, so `entry.doc` IS that commit's
                     // post-apply document. A `set`/`delete` head is then elided —
                     // the client supplied the bytes (or the absence) and the
-                    // verdict + marker promote them — while a `patch` head is
-                    // delivered in full: its post-apply state can contain merged
-                    // foreign content the writer's own ops cannot reproduce.
+                    // verdict + marker promote them — and so is an
+                    // `exact-patch` head, whose document is the writer's own
+                    // ops replayed over a document the writer holds. Any other
+                    // `patch` head is delivered in full: its post-apply state
+                    // can contain merged foreign content the writer's own ops
+                    // cannot reproduce.
                     const held = origin !== undefined &&
                       origin.sessionId === sessionId &&
                       origin.seq === entry.seq &&

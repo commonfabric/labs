@@ -471,7 +471,8 @@ const documentOperationsOf = (
 
 /**
  * The operations a commit hands the store: cell operations first, a patch
- * carrying its patches alone, and folded SQLite operations last.
+ * carrying its patches and any declared base but not its value, and folded
+ * SQLite operations last.
  */
 const storeOperationsOf = (
   operations: readonly NativeCommitOperation[],
@@ -487,6 +488,9 @@ const storeOperationsOf = (
           id: operation.id,
           scope: operation.scope,
           patches: operation.patches,
+          ...(operation.baseSeq === undefined
+            ? {}
+            : { baseSeq: operation.baseSeq }),
         };
       case "set":
         return {
@@ -526,6 +530,9 @@ type PendingVersion =
       op: "patch";
       patches: PatchOp[];
       value: EntityDocument;
+
+      /** The seq this layer declared as its base; see `PatchOperation`. */
+      baseSeq?: number;
     }
     | {
       localSeq: number;
@@ -555,6 +562,16 @@ type ConfirmedVersion = MaterializedVersion & {
    * arrival at an entry's floor.
    */
   coverClass?: CommitClass;
+
+  /**
+   * Set when `value` is the server's stored document at `seq` exactly: a
+   * version a frame delivered, or one promoted from an own patch the server
+   * reported it applied over the very version this replica replayed it over
+   * (`AppliedRevision.exactBase`). A patch built over such a version with no
+   * pending layer beneath it may declare `seq` as its base. Absent on every
+   * other promotion, whose value is this replica's own extrapolation.
+   */
+  serverExact?: true;
 };
 
 type PendingMaterializedPrefix = MaterializedVersion & {
@@ -625,7 +642,12 @@ const pendingVersion = (
   localSeq: number,
   operation:
     | { op: "set"; value: EntityDocument }
-    | { op: "patch"; patches: PatchOp[]; value: EntityDocument }
+    | {
+      op: "patch";
+      patches: PatchOp[];
+      value: EntityDocument;
+      baseSeq?: number;
+    }
     | { op: "delete" },
 ): PendingVersion => ({ localSeq, ...operation });
 
@@ -786,6 +808,36 @@ const materializedVersionThroughPending = (
     });
   }
   return cache.prefixes[pendingCount - 1]!;
+};
+
+/**
+ * Whether promoting `pending` over `confirmed` reproduces the server's stored
+ * document at the accept's seq: the layer declared `confirmed` as its base,
+ * `confirmed` is the server's document at that seq, and the accept reports
+ * the head it applied over was that same document. Promotion replays the
+ * layer's operations with the patch function the server applied them with,
+ * so equal inputs give the equal document the server stored.
+ */
+const promotesExactly = (
+  confirmed: ConfirmedVersion,
+  pending: PendingVersion,
+  applied: AppliedCommit,
+  id: URI,
+  scope: CellScope | undefined,
+): boolean => {
+  if (
+    pending.op !== "patch" || pending.baseSeq === undefined ||
+    confirmed.serverExact !== true || confirmed.seq !== pending.baseSeq
+  ) {
+    return false;
+  }
+  // The commit's LAST revision of the document decides, as it decides the
+  // server's echo: a later operation on it replays over this one.
+  const revision = applied.revisions.findLast((candidate) =>
+    candidate.id === id &&
+    normalizeCellScope(candidate.scope) === normalizeCellScope(scope)
+  );
+  return revision?.exactBase === true;
 };
 
 const dropMaterializedSuffix = (
@@ -3601,6 +3653,9 @@ type NativeCommitOperation =
     scope?: CellScope;
     patches: PatchOp[];
     value: EntityDocument;
+
+    /** Declared on the wire operation; see `PatchOperation.baseSeq`. */
+    baseSeq?: number;
   }
   | { op: "delete"; id: URI; scope?: CellScope };
 
@@ -6371,7 +6426,7 @@ export class SpaceReplica
   }
 
   async #commitOperations(
-    operations: NativeCommitOperation[],
+    written: NativeCommitOperation[],
     source?: IStorageTransaction,
     preconditions: readonly CommitPrecondition[] = [],
     sqliteOps: readonly SqliteOperation[] = [],
@@ -6379,11 +6434,12 @@ export class SpaceReplica
   ): Promise<Result<Unit, StorageTransactionRejected>> {
     const activePreconditions = activeCommitPreconditions(preconditions);
     if (
-      operations.length === 0 && sqliteOps.length === 0 &&
+      written.length === 0 && sqliteOps.length === 0 &&
       activePreconditions.length === 0
     ) {
       return { ok: {} };
     }
+    const operations = this.#declarePatchBases(written);
 
     const localSeq = this.#nextLocalSeq++;
     if (source !== undefined) {
@@ -6511,6 +6567,37 @@ export class SpaceReplica
     const result = await promise;
     this.#commitPromises.delete(promise);
     return result;
+  }
+
+  /**
+   * Helper for `#commitOperations()`, which gives each `patch` the base its
+   * accept will replay it over, where this replica holds that base exactly
+   * as the server stores it (`PatchOperation.baseSeq`): the confirmed version
+   * of a document with no pending layer, which this commit's layer will then
+   * sit directly on. Only a document's first operation in the commit
+   * declares one, since a later one replays over the first.
+   */
+  #declarePatchBases(
+    operations: NativeCommitOperation[],
+  ): NativeCommitOperation[] {
+    if (this.#sessionClient?.serverFlags?.patchBaseSeq !== true) {
+      return operations;
+    }
+    const seen = new Set<string>();
+    return operations.map((operation) => {
+      const key = this.#docKeyOf(operation);
+      if (seen.has(key)) return operation;
+      seen.add(key);
+      if (operation.op !== "patch") return operation;
+      const record = this.#docs.get(key);
+      if (
+        record === undefined || record.pending.length > 0 ||
+        record.confirmed.serverExact !== true
+      ) {
+        return operation;
+      }
+      return { ...operation, baseSeq: record.confirmed.seq };
+    });
   }
 
   /**
@@ -7879,11 +7966,14 @@ export class SpaceReplica
       // commit — the stale class must not ride onto it.
       const coverClass = upsert.coverClass ??
         (upsert.seq === previousConfirmedSeq ? previousCoverClass : undefined);
-      record.confirmed = confirmedVersion(
-        upsert.seq,
-        upsert.deleted === true ? undefined : upsert.doc,
-        coverClass,
-      );
+      record.confirmed = {
+        ...confirmedVersion(
+          upsert.seq,
+          upsert.deleted === true ? undefined : upsert.doc,
+          coverClass,
+        ),
+        serverExact: true,
+      };
       record.materialized = undefined;
       // The arrival wake fires on a FORWARD move — and on a same-seq
       // frame whose class arrives LATE (undefined -> defined): an entry
@@ -8699,7 +8789,7 @@ export class SpaceReplica
         this.#scopeKeyIdentity(),
       )
       : undefined;
-    for (const { id, scope, scopeKey } of keys.values()) {
+    for (const [key, { id, scope, scopeKey }] of keys) {
       const record = this.#record(id, scope, undefined, scopeKey);
       const pendingIndexes = record.pending.flatMap((entry, index) =>
         entry.localSeq === localSeq ? [index] : []
@@ -8764,6 +8854,12 @@ export class SpaceReplica
           if (cache.confirmed === previousConfirmed) {
             reusedSuffix = cache.prefixes.slice(lastPendingIndex + 1);
           }
+          if (
+            pendingIndexes.length === 1 &&
+            promotesExactly(previousConfirmed, pending, applied, id, scope)
+          ) {
+            promoted.serverExact = true;
+          }
         } else {
           promoted = confirmedVersion(
             applied.seq,
@@ -8783,6 +8879,9 @@ export class SpaceReplica
 
       if (promoted) {
         record.confirmed = promoted;
+        if (promoted.serverExact === true) {
+          this.#noteExactPromotion(key, promoted);
+        }
         record.materialized = reusedSuffix && reusedSuffix.length > 0
           ? {
             confirmed: promoted,
@@ -8833,6 +8932,23 @@ export class SpaceReplica
         ]);
       }
     }
+  }
+
+  /**
+   * Helper for `#confirmPending()`, which records a promotion the server
+   * reported exact as delivered: the replica holds the server's document at
+   * that seq as surely as if a frame had carried it, so its holdings may
+   * claim it (`holdings()`). A document no longer delivered at all — its
+   * watch removed while the commit was in flight — stays undeclared.
+   */
+  #noteExactPromotion(key: string, promoted: ConfirmedVersion): void {
+    const delivered = this.#delivered.get(key);
+    if (delivered === undefined || delivered.seq >= promoted.seq) return;
+    this.#delivered.set(key, {
+      ...delivered,
+      seq: promoted.seq,
+      deleted: promoted.value === undefined,
+    });
   }
 
   #dropPending(localSeq: number): void {

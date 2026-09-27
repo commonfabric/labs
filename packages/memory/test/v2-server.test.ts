@@ -2860,6 +2860,168 @@ Deno.test("memory v2 server classifies own-write echo by the head-producing op",
   }
 });
 
+Deno.test("memory v2 server elides an own patch head applied over the base it declares", async () => {
+  const server = createServer("memory://memory-v2-server-exact-base");
+  const writerMessages: ServerMessage[] = [];
+  const otherMessages: ServerMessage[] = [];
+  const writer = server.connect((message) => writerMessages.push(message));
+  const other = server.connect((message) => otherMessages.push(message));
+  const space = "did:key:z6Mk-memory-v2-exact-base";
+  const id = "of:doc:exact-base";
+
+  try {
+    const writerSessionId = await openTestSession(
+      writer,
+      writerMessages,
+      space,
+      "writer",
+    );
+    const otherSessionId = await openTestSession(
+      other,
+      otherMessages,
+      space,
+      "other",
+    );
+    await writer.receive(encodeMemoryBoundary({
+      type: "session.watch.set",
+      requestId: "watch",
+      space,
+      sessionId: writerSessionId,
+      watches: [{
+        id: "root",
+        kind: "graph",
+        query: { roots: [{ id, selector: { path: [], schema: false } }] },
+      }],
+    }));
+    assertResponse<unknown>(shiftMessage(writerMessages));
+
+    const transact = async (
+      connection: TestConnection,
+      messages: ServerMessage[],
+      sessionId: string,
+      localSeq: number,
+      operations: FabricValue[],
+    ) => {
+      await connection.receive(encodeMemoryBoundary({
+        type: "transact",
+        requestId: `${sessionId}-${localSeq}`,
+        space,
+        sessionId,
+        commit: {
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations,
+        },
+      }));
+      return nextResponse<any>(messages).ok!;
+    };
+    const patch = (value: string, baseSeq: number) => ({
+      op: "patch",
+      id,
+      patches: [{ op: "replace", path: "/value/label", value }],
+      baseSeq,
+    });
+
+    // A document never written has no head, which a writer holding it as
+    // absent declares as 0.
+    const created = await transact(
+      writer,
+      writerMessages,
+      writerSessionId,
+      1,
+      [{
+        op: "patch",
+        id,
+        patches: [{ op: "add", path: "/value", value: { label: "created" } }],
+        baseSeq: 0,
+      }],
+    );
+    assertEquals(created.revisions[0].exactBase, true);
+    await server.flushSessions([space]);
+    const createdFrame = assertEffect(shiftMessage(writerMessages));
+    assertEquals(createdFrame.effect.upserts, []);
+    assertEquals(createdFrame.effect.caughtUpLocalSeq, 1);
+
+    const exact = await transact(
+      writer,
+      writerMessages,
+      writerSessionId,
+      2,
+      [patch("exact", created.seq)],
+    );
+    assertEquals(exact.revisions[0].exactBase, true);
+    await server.flushSessions([space]);
+    const exactFrame = assertEffect(shiftMessage(writerMessages));
+    assertEquals(exactFrame.effect.upserts, []);
+    assertEquals(exactFrame.effect.caughtUpLocalSeq, 2);
+
+    // Another session's write lands and is delivered in a flush of its own,
+    // so the writer's next commit is the only novelty in its batch and its
+    // dirty origin survives. Its declared base is the head before that
+    // write, which is not the head the engine applies it over.
+    const foreign = await transact(
+      other,
+      otherMessages,
+      otherSessionId,
+      1,
+      [{
+        op: "patch",
+        id,
+        patches: [{ op: "replace", path: "/value/other", value: "foreign" }],
+      }],
+    );
+    await server.flushSessions([space]);
+    const foreignFrame = assertEffect(shiftMessage(writerMessages));
+    assertEquals(foreignFrame.effect.upserts.map((upsert) => upsert.seq), [
+      foreign.seq,
+    ]);
+
+    const stale = await transact(
+      writer,
+      writerMessages,
+      writerSessionId,
+      3,
+      [patch("stale", exact.seq)],
+    );
+    assertEquals(stale.revisions[0].exactBase, undefined);
+    await server.flushSessions([space]);
+    const staleFrame = assertEffect(shiftMessage(writerMessages));
+    assertEquals(staleFrame.effect.upserts, [{
+      branch: "",
+      id,
+      scope: "space",
+      seq: stale.seq,
+      doc: { value: { label: "stale", other: "foreign" } },
+    }]);
+    assertEquals(staleFrame.effect.caughtUpLocalSeq, 3);
+
+    // A second patch of the same document in one commit replays over the
+    // first, so the head it leaves is not the declared one's, and that last
+    // revision decides the frame.
+    const twice = await transact(
+      writer,
+      writerMessages,
+      writerSessionId,
+      4,
+      [patch("first", stale.seq), patch("second", stale.seq)],
+    );
+    assertEquals(
+      twice.revisions.map((revision: { exactBase?: true }) =>
+        revision.exactBase
+      ),
+      [true, undefined],
+    );
+    await server.flushSessions([space]);
+    const twiceFrame = assertEffect(shiftMessage(writerMessages));
+    assertEquals(twiceFrame.effect.upserts.map((upsert) => upsert.doc), [
+      { value: { label: "second", other: "foreign" } },
+    ]);
+    assertEquals(writerMessages, []);
+  } finally {
+    await server.close();
+  }
+});
+
 Deno.test("memory v2 server suppresses own patch heads when the own-write echo config is off", async () => {
   setOwnWriteEchoConfig(false);
   const server = createServer("memory://memory-v2-server-echo-config-off");
