@@ -108,9 +108,7 @@ export class FabricLink extends BaseFabricInstance implements ApiFabricLink {
     // Deep-clone the payload to the requested frozenness (no shared mutable
     // structure with the original; already-deep-frozen subtrees are shared
     // when `frozen` is `true`).
-    const payload = cloneIfNecessary(this.#payload, {
-      frozen,
-    }) as FabricPlainObject;
+    const payload = cloneIfNecessary(this.#payload, { frozen });
     return new FabricLink(payload);
   }
 
