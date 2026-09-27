@@ -3,7 +3,11 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { isDeepFrozen } from "@commonfabric/data-model";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import type { URI } from "../src/storage/interface.ts";
+import type {
+  IMemorySpaceAddress,
+  IStorageTransaction,
+  URI,
+} from "../src/storage/interface.ts";
 import {
   internalVerifierRead,
   isInternalVerifierRead,
@@ -64,6 +68,22 @@ const wholeListRead = async (
     await storage.close();
   }
 };
+
+/**
+ * Writes `x: 9` into the value of the document at `address`, then sets the
+ * `length` of its `arr` to `2 ** 32`, as one batch.
+ */
+const writeBatchEndingInOutOfRangeLength = (
+  tx: IStorageTransaction,
+  address: Omit<IMemorySpaceAddress, "path">,
+) =>
+  tx.writeBatch!([
+    { address: { ...address, path: ["value", "x"] }, value: 9 },
+    {
+      address: { ...address, path: ["value", "arr", "length"] },
+      value: 2 ** 32,
+    },
+  ]);
 
 describe("v2-transaction", () => {
   describe("getPotentiallyExternalReadActivities()", () => {
@@ -237,28 +257,51 @@ describe("v2-transaction", () => {
 
   describe("writeBatch()", () => {
     it("keeps the writes ahead of a refused array `length`, and reads and commits them", async () => {
-      // The transaction writes the document and then reads `value` back
-      // before the batch, which caches a frozen snapshot of it and keeps the
-      // root for readers. The batch's kept write reads back only if the batch
+      // The document is stored before the transaction opens, so the batch is
+      // the transaction's first write to it.
+
+      const storage = StorageManager.emulate({ as: signer });
+      try {
+        const address = { space, id: "of:batch-length-stored" as URI, type };
+        const seed = storage.edit();
+        expect(seed.write({ ...address, path: [] }, { value: { arr: [1] } }).ok)
+          .toBeDefined();
+        expect((await seed.commit()).ok).toBeDefined();
+        const tx = storage.edit();
+
+        const result = writeBatchEndingInOutOfRangeLength(tx, address);
+
+        expect(result.error?.name).toBe("InvalidArrayLengthError");
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value).toEqual({
+          arr: [1],
+          x: 9,
+        });
+        expect((await tx.commit()).ok).toBeDefined();
+        expect(
+          storage.edit().read({ ...address, path: ["value"] }).ok?.value,
+        ).toEqual({ arr: [1], x: 9 });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("returns the writes ahead of a refused array `length` to a read taken before the batch and again after it", async () => {
+      // The transaction writes the document and reads `value` back before the
+      // batch, which caches a frozen snapshot of it and keeps the root for
+      // readers. The second read sees the kept write only if the batch
       // installs a new root and drops that snapshot.
 
       const storage = StorageManager.emulate({ as: signer });
       try {
         const tx = storage.edit();
-        const address = { space, id: "of:batch-length-range" as URI, type };
+        const address = { space, id: "of:batch-length-read" as URI, type };
         expect(tx.write({ ...address, path: [] }, { value: { arr: [1] } }).ok)
           .toBeDefined();
         expect(tx.read({ ...address, path: ["value"] }).ok?.value).toEqual({
           arr: [1],
         });
 
-        const result = tx.writeBatch!([
-          { address: { ...address, path: ["value", "x"] }, value: 9 },
-          {
-            address: { ...address, path: ["value", "arr", "length"] },
-            value: 2 ** 32,
-          },
-        ]);
+        const result = writeBatchEndingInOutOfRangeLength(tx, address);
 
         expect(result.error?.name).toBe("InvalidArrayLengthError");
         expect(tx.read({ ...address, path: ["value"] }).ok?.value).toEqual({

@@ -283,7 +283,7 @@ const isOutOfRangeArrayLength = (
  * coercion rules for truncation (NaN → 0, +Infinity → unchanged,
  * −Infinity → 0, negative → count from end, fractional → floor). Grow
  * with holes uses the JS native semantic of `arr.length = nextLength`
- * (with `Math.floor` to keep length a uint32). A length that assignment
+ * (with `Math.floor` to keep length an integer). A length that assignment
  * would throw on is one `isOutOfRangeArrayLength()` admits, and
  * `applyMutablePathWrite` refuses it before calling this.
  */
