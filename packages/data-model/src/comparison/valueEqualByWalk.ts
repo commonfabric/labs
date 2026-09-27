@@ -32,12 +32,15 @@ const MAX_WALK_DEPTH = 256;
  *
  * Every pair the walk does not decide itself goes to `valueEqual()` — a
  * special object on either side, a record against an array, and anything
- * that is not a `FabricValue` — so the two return the same result on every
- * pair of `FabricValue`s. So do two cyclic graphs, and any pair nested deeper
- * than the walk goes, which `valueEqual()` then decides whole. The one
- * difference is in what gets read: a subtree the two operands share is never
- * visited, so a value `valueEqual()` would refuse to hash — a function, or a
- * class whose codec is a stub — does not throw from inside one.
+ * that is not a `FabricValue` — and operands nested deeper than the walk
+ * goes, two cyclic graphs sharing nothing among them, go to it whole. So the
+ * two return the same result on every acyclic pair of `FabricValue`s. Where
+ * they part is at a subtree the operands share, which the walk never visits.
+ * A value `valueEqual()` would refuse to hash — a function, or a class whose
+ * codec is a stub — does not throw from inside one. And a shared subtree that
+ * leads back to a container the operands do not share is passed as equal,
+ * where `valueEqual()`, which encodes a cycle relative to where its hash
+ * began, can tell the two apart.
  *
  * A record or an array is decided without the hash cache, neither consulting
  * it nor filling it. So two large, distinct, equal, deep-frozen values that

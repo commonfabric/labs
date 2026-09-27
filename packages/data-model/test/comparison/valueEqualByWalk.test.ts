@@ -50,11 +50,13 @@ describe("valueEqualByWalk()", () => {
       );
       const base: Record<string, FabricValue> = {};
       entries.forEach((entry, index) => base[`key-${index}`] = entry.value);
-      const revision = { ...base, "key-0": { name: "edited" } };
+      // The edit is to the last entry, which the walk reaches only after
+      // passing every other one, and it stops at the first difference.
+      const revision = { ...base, "key-49": { name: "edited" } };
 
       expect(valueEqualByWalk(base, revision)).toBe(false);
-      expect(entries.slice(1).map((entry) => entry.reads())).toEqual(
-        entries.slice(1).map(() => 0),
+      expect(entries.slice(0, -1).map((entry) => entry.reads())).toEqual(
+        entries.slice(0, -1).map(() => 0),
       );
     });
 
@@ -67,7 +69,7 @@ describe("valueEqualByWalk()", () => {
   });
 
   describe("agreement with `valueEqual()`", () => {
-    it("distinguishes an array hole from a stored `undefined`", () => {
+    it("returns `false` for an array hole against a stored `undefined`", () => {
       // deno-lint-ignore no-sparse-arrays
       const holed = [1, , 3];
 
@@ -76,18 +78,18 @@ describe("valueEqualByWalk()", () => {
       expect(valueEqualByWalk(holed, [1, , 3])).toBe(true);
     });
 
-    it("distinguishes an absent key from a key holding `undefined`", () => {
+    it("returns `false` for an absent key against a key holding `undefined`", () => {
       expect(valueEqualByWalk({ a: 1 }, { a: 1, b: undefined })).toBe(false);
       expect(valueEqualByWalk({ b: undefined, a: 1 }, { a: 1, b: undefined }))
         .toBe(true);
     });
 
-    it("holds `-0` distinct from `+0` and `NaN` equal to itself inside a container", () => {
+    it("returns `false` for `-0` against `+0` and `true` for `NaN` against itself, inside a container", () => {
       expect(valueEqualByWalk({ n: -0 }, { n: 0 })).toBe(false);
       expect(valueEqualByWalk([NaN], [NaN])).toBe(true);
     });
 
-    it("compares special objects by content, across classes sharing a codec tag", () => {
+    it("returns `true` for special objects of two classes sharing a codec tag and content", () => {
       const error = new FabricError({
         type: "Error",
         message: "boom",
@@ -118,7 +120,7 @@ describe("valueEqualByWalk()", () => {
       expect(() => valueEqualByWalk({ v: bare }, { v: { a: 1 } })).toThrow();
     });
 
-    it("compares cyclic graphs as `valueEqual()` does", () => {
+    it("returns what `valueEqual()` returns for two cyclic graphs sharing nothing", () => {
       const left: Record<string, FabricValue> = { label: "same" };
       const right: Record<string, FabricValue> = { label: "same" };
       left.self = left;
@@ -134,7 +136,7 @@ describe("valueEqualByWalk()", () => {
       expect(valueEqualByWalk(left, right)).toBe(false);
     });
 
-    it("compares values nested past the walk's depth as `valueEqual()` does", () => {
+    it("returns what `valueEqual()` returns for values nested past the walk's depth", () => {
       expect(valueEqualByWalk(chain(400, "leaf"), chain(400, "leaf")))
         .toBe(true);
       expect(valueEqualByWalk(chain(400, "leaf"), chain(400, "other")))

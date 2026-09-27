@@ -1,8 +1,8 @@
 /**
- * The canonical content hash of a `FabricValue`, fed as type-tagged bytes into
- * a single SHA-256 context, together with the caches that make feeding one
- * cheaper and a count of the containers fed, which a test reads to tell a
- * whole-value hash from a small one.
+ * Computes the canonical content hash of a `FabricValue` by feeding its
+ * type-tagged bytes into a single SHA-256 context. The module also keeps the
+ * caches that make feeding a string cheaper, and counts the containers it
+ * feeds, which is how a test tells a whole-value hash from a small one.
  */
 
 import {
@@ -123,18 +123,18 @@ const stringRepCache = new LRUCache<string, Uint8Array>({
   maxWeight: 8 * 1024 * 1024,
 });
 
+/** Prepopulated cache of encoded small-length numbers. */
+const smallLengthCache: Uint8Array[] = Array.from(
+  { length: MAX_CACHED_SMALL_LENGTH + 1 },
+  (_, i) => encodeULEB128(i),
+);
+
 /**
  * How many arrays and plain objects have been fed to a hasher, counted from
  * when this module loaded. Only a test or a benchmark reads it, through
  * `getContainersHashed()`.
  */
 let containersHashed = 0;
-
-/** Prepopulated cache of encoded small-length numbers. */
-const smallLengthCache: Uint8Array[] = Array.from(
-  { length: MAX_CACHED_SMALL_LENGTH + 1 },
-  (_, i) => encodeULEB128(i),
-);
 
 /**
  * Gets the bytes needed to represent the given string, either by computing it
