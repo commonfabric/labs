@@ -205,4 +205,73 @@ describe("v2-transaction", () => {
       expect(isDeepFrozen(value)).toBe(true);
     });
   });
+
+  describe("write()", () => {
+    it("returns an `InvalidArrayLengthError` for an array `length` of `2 ** 32`, and leaves the array as it was", async () => {
+      const storage = StorageManager.emulate({ as: signer });
+      try {
+        const tx = storage.edit();
+        const address = { space, id: "of:write-length-range" as URI, type };
+        expect(tx.write({ ...address, path: [] }, { value: { arr: [1] } }).ok)
+          .toBeDefined();
+
+        const result = tx.write(
+          { ...address, path: ["value", "arr", "length"] },
+          2 ** 32,
+        );
+
+        expect(result.error?.name).toBe("InvalidArrayLengthError");
+        expect(
+          result.error?.name === "InvalidArrayLengthError"
+            ? result.error.address.path
+            : undefined,
+        ).toEqual(["value", "arr", "length"]);
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value).toEqual({
+          arr: [1],
+        });
+      } finally {
+        await storage.close();
+      }
+    });
+  });
+
+  describe("writeBatch()", () => {
+    it("keeps the writes ahead of a refused array `length`, and reads and commits them", async () => {
+      // The transaction writes the document and then reads `value` back
+      // before the batch, which caches a frozen snapshot of it and keeps the
+      // root for readers. The batch's kept write reads back only if the batch
+      // installs a new root and drops that snapshot.
+
+      const storage = StorageManager.emulate({ as: signer });
+      try {
+        const tx = storage.edit();
+        const address = { space, id: "of:batch-length-range" as URI, type };
+        expect(tx.write({ ...address, path: [] }, { value: { arr: [1] } }).ok)
+          .toBeDefined();
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value).toEqual({
+          arr: [1],
+        });
+
+        const result = tx.writeBatch!([
+          { address: { ...address, path: ["value", "x"] }, value: 9 },
+          {
+            address: { ...address, path: ["value", "arr", "length"] },
+            value: 2 ** 32,
+          },
+        ]);
+
+        expect(result.error?.name).toBe("InvalidArrayLengthError");
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value).toEqual({
+          arr: [1],
+          x: 9,
+        });
+        expect((await tx.commit()).ok).toBeDefined();
+        expect(
+          storage.edit().read({ ...address, path: ["value"] }).ok?.value,
+        ).toEqual({ arr: [1], x: 9 });
+      } finally {
+        await storage.close();
+      }
+    });
+  });
 });

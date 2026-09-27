@@ -2779,7 +2779,8 @@ export type WriteError =
   | IUnsupportedMediaTypeError
   | InactiveTransactionError
   | IReadOnlyAddressError
-  | ITypeMismatchError;
+  | ITypeMismatchError
+  | IInvalidArrayLengthError;
 
 export type WriterError =
   | InactiveTransactionError
@@ -3463,6 +3464,20 @@ export interface IReadOnlyAddressError extends IStorageError {
   readonly address: IMemoryAddress;
 
   from(space: MemorySpace): IReadOnlyAddressError;
+}
+
+/**
+ * Error returned when a write sets an array's `length` to a number no array
+ * can have: a finite value of `2 ** 32` or more. Like a type mismatch, it would
+ * persist if the transaction were retried.
+ */
+export interface IInvalidArrayLengthError extends IStorageError {
+  readonly name: "InvalidArrayLengthError";
+
+  /** The address written, whose path ends in `length`. */
+  readonly address: IMemoryAddress;
+
+  from(space: MemorySpace): IInvalidArrayLengthError;
 }
 
 /**

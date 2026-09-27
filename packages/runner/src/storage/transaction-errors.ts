@@ -1,4 +1,5 @@
 import type {
+  IInvalidArrayLengthError,
   IMemoryAddress,
   IReadOnlyAddressError,
   IStorageTransactionAborted,
@@ -54,6 +55,24 @@ export const ReadOnlyAddressError = (
 ): IReadOnlyAddressError => ({
   name: "ReadOnlyAddressError",
   message: `Cannot write to read-only address: ${address.id}`,
+  address,
+  from(_space: MemorySpace) {
+    return this;
+  },
+});
+
+/**
+ * A write set the array `length` at `address` to `length`, which no array can
+ * have. A length is an integer below `2 ** 32`.
+ */
+export const InvalidArrayLengthError = (
+  address: IMemoryAddress,
+  length: number,
+): IInvalidArrayLengthError => ({
+  name: "InvalidArrayLengthError",
+  message: `Cannot write \`${length}\` at path [${
+    address.path.join(", ")
+  }]: an array's length is below \`2 ** 32\``,
   address,
   from(_space: MemorySpace) {
     return this;

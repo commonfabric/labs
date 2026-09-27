@@ -19,12 +19,14 @@ import {
 } from "@commonfabric/data-model";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import type {
+  IInvalidArrayLengthError,
   IMemoryAddress,
   ITypeMismatchError,
   Result,
 } from "../interface.ts";
 import { TypeMismatchError } from "./attestation.ts";
-import { createPathContainer } from "../v2-path.ts";
+import { InvalidArrayLengthError } from "../transaction-errors.ts";
+import { createPathContainer, readValueAtPath } from "../v2-path.ts";
 
 export type MutableWriteResult = {
   root: FabricValue | undefined;
@@ -79,6 +81,11 @@ export const getValueTypeName = (value: FabricValue | undefined): string => {
  * re-freeze short-circuits on everything except the freshly thawed
  * spine.
  *
+ * A length write of a finite `2 ** 32` or more to an array is refused
+ * with an `InvalidArrayLengthError`, decided before `cloneForMutation`
+ * runs, so that refusal leaves `currentRoot` as it was, spine identities
+ * included.
+ *
  * Writing `undefined` stores `undefined` (present-but-undefined is a
  * real state, distinct from absent) and materializes missing
  * intermediates like any other value. Removal is requested explicitly
@@ -99,7 +106,10 @@ export const applyMutablePathWrite = (
   address: IMemoryAddress,
   value: FabricValue | undefined,
   options?: MutablePathWriteOptions,
-): Result<MutableWriteResult, ITypeMismatchError> => {
+): Result<
+  MutableWriteResult,
+  ITypeMismatchError | IInvalidArrayLengthError
+> => {
   const isDelete = options?.delete === true;
   if (address.path.length === 0) {
     const nextRoot = isDelete ? undefined : value;
@@ -138,6 +148,16 @@ export const applyMutablePathWrite = (
 
   const leafKey = address.path[address.path.length - 1]!;
   const parentPath = address.path.slice(0, -1);
+
+  // A length no array can have is refused here, reading `currentRoot` alone,
+  // because `cloneForMutation()` below thaws the spine of a root the caller
+  // owns in place: a refusal decided after it would leave that root edited.
+  if (
+    leafKey === "length" && !isDelete && isOutOfRangeArrayLength(value) &&
+    Array.isArray(readValueAtPath(currentRoot, parentPath))
+  ) {
+    return { error: InvalidArrayLengthError(address, value) };
+  }
 
   // Thaw the spine and create missing intermediates, all in one call.
   // The resulting `parent` is the mutable container at `parentPath` --
@@ -247,13 +267,25 @@ export const applyMutablePathWrite = (
 };
 
 /**
+ * Indicates whether `value`, written as an array's `length`, is a number no
+ * array can have: a finite `2 ** 32` or more. `+Infinity` is not one, since the
+ * length coercion leaves the array unchanged for it.
+ */
+const isOutOfRangeArrayLength = (
+  value: FabricValue | undefined,
+): value is number =>
+  typeof value === "number" && Number.isFinite(value) && value >= 2 ** 32;
+
+/**
  * Helper for the legacy array-length-write semantics, called when
  * `applyMutablePathWrite` reaches a leaf key of `"length"` against an
  * array parent. Replicates `Array.prototype.slice(0, nextLength)`'s
  * coercion rules for truncation (NaN → 0, +Infinity → unchanged,
  * −Infinity → 0, negative → count from end, fractional → floor). Grow
  * with holes uses the JS native semantic of `arr.length = nextLength`
- * (with `Math.floor` to keep length a uint32).
+ * (with `Math.floor` to keep length a uint32). A length that assignment
+ * would throw on is one `isOutOfRangeArrayLength()` admits, and
+ * `applyMutablePathWrite` refuses it before calling this.
  */
 const applyArrayLengthWrite = (
   newRoot: FabricValue,
