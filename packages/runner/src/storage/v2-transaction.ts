@@ -3008,7 +3008,9 @@ export class V2StorageTransaction implements IStorageTransaction {
    * `apply()` mutates that root in place when it is already mutable. What
    * the reactivity log derives from the document is dropped first, so
    * nothing built before the write outlives it; every in-place write to a
-   * working root goes through here for that reason.
+   * working root goes through here for that reason. A write that changes the
+   * document drops it again when it replaces the root, so this first drop is
+   * defensive: it covers an in-place change that no replacement follows.
    */
   #writeWorkingRoot(
     doc: WritableDocumentEntry,

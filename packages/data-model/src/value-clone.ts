@@ -707,9 +707,9 @@ export type PathTrace =
  * changing nothing. A key is followed where it names an own property of an
  * array or a plain object (per `isFabricPlainContainer()`), and the descent
  * ends at the first key that does not, or at the first value that is neither.
- * `cloneForMutation()` decides every error it raises from this trace, so a
- * caller that refuses some mutations of its own traces first and refuses
- * before calling it, from facts the two cannot disagree on.
+ * `cloneForMutation()` decides every `CloneForMutationError` it raises from
+ * this trace, so a caller that refuses some mutations of its own traces first
+ * and refuses before calling it, from facts the two cannot disagree on.
  *
  * **Type Validation Note:** As for `cloneForMutation()`, `value` must honor
  * the whole `FabricValue` contract. A container holding a non-enumerable own
@@ -720,6 +720,9 @@ export function tracePath(
   value: FabricValue,
   path: readonly string[],
 ): PathTrace {
+  // TODO(danfuzz): When a path can reach a `FabricInstance`'s state, descend
+  // into it here, where `cloneForMutation()` and every caller refusing ahead of
+  // it take their facts, rather than ending the trace at it.
   const containers: (FabricArray | FabricPlainObject)[] = [];
   let current: FabricValue = value;
   for (let index = 0; index < path.length; index++) {

@@ -275,6 +275,26 @@ describe("value-clone", () => {
       expect(trace.containers).toHaveLength(2);
     });
 
+    it("returns `missing` at a key the record only inherits", () => {
+      const trace = tracePath({ a: {} }, ["a", "toString", "x"]);
+
+      expect(trace.end === "missing" && trace.at).toBe(1);
+    });
+
+    it("returns `complete` for an array's `length`, with the length as the value", () => {
+      const trace = tracePath({ a: [7, 8] }, ["a", "length"]);
+
+      expect(trace.end === "complete" && trace.value).toBe(2);
+    });
+
+    it("returns `blocked` at a null-prototype record", () => {
+      const record = Object.assign(Object.create(null), { b: 1 });
+
+      const trace = tracePath({ a: record } as FabricValue, ["a", "b"]);
+
+      expect(trace.end === "blocked" && trace.at).toBe(1);
+    });
+
     it("returns `blocked` where the path goes on past a value no key addresses", () => {
       const error = FabricError.fromNativeError(new Error("e"));
 

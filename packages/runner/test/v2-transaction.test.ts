@@ -531,7 +531,7 @@ describe("v2-transaction", () => {
           .toBeTruthy();
 
         for (
-          const path of [["value", "x", "name", "y"], ["value", "x", "0", "y"]]
+          const path of [["value", "x", "name"], ["value", "x", "0", "y"]]
         ) {
           expect(
             tx.write({ ...address, path }, undefined, { delete: true }).error,
@@ -619,7 +619,7 @@ describe("v2-transaction", () => {
       const lists: Step[][] = [
         [
           [["value", "y"], 3],
-          [["value", "x", "name", "y"], undefined, true],
+          [["value", "x", "name"], undefined, true],
           [["value", "z"], 4],
         ],
         [[["value", "y"], 3], [["value", "a", "-"], 5], [["value", "z"], 4]],
@@ -737,7 +737,7 @@ describe("v2-transaction", () => {
         expect(tx.write({ ...address, path: ["value", "x"] }, [1, 2]).ok)
           .toBeTruthy();
         const unreachable = {
-          address: { ...address, path: ["value", "x", "name", "y"] },
+          address: { ...address, path: ["value", "x", "name"] },
           value: undefined,
           delete: true,
         };

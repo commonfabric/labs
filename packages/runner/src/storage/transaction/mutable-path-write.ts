@@ -14,6 +14,7 @@
 import {
   cloneForMutation,
   cloneIfNecessary,
+  debugStr,
   type FabricValue,
   isFabricPlainContainer,
   missingContainerIsArray,
@@ -93,14 +94,21 @@ export interface PlannedPathWrite {
 
   /**
    * Carries the write out, storing an isolated copy of the value planned, on
-   * the root it was planned against, which must be unchanged since. That root
-   * is changed in place where it is already mutable. A delete with nothing to
-   * remove returns it unchanged.
+   * the root it was planned against. That root is changed in place where it
+   * is already mutable. A delete with nothing to remove returns it unchanged.
    *
-   * No refusal can come from here. It throws only where `cloneIfNecessary()`
-   * refuses the value it isolates -- the value planned, or the one it reports
-   * as `previousActivityValue` -- which is one outside the `FabricValue`
-   * contract, and before anything is changed.
+   * A plan is carried out at most once, and only while the root is as it was
+   * planned against: any change to it, another plan's `apply()` included,
+   * leaves every plan taken before it stale, so a caller plans each write
+   * against the root as it stands. A second `apply()` throws before anything
+   * changes. A stale plan is not otherwise detected; one that finds its parent
+   * an array where it planned a key other than an index throws rather than
+   * writing that key, though not before the spine is thawed.
+   *
+   * No refusal can come from here. Otherwise it throws only where
+   * `cloneIfNecessary()` refuses the value it isolates -- the value planned,
+   * or the one it reports as `previousActivityValue` -- which is one outside
+   * the `FabricValue` contract, and before anything is changed.
    */
   apply(): MutableWriteResult;
 }
@@ -251,14 +259,10 @@ const refusalOf = (
         "write",
       );
     }
-    if (
-      index === path.length - 1 && key === "length" && inArray &&
-      index < firstCreated && typeof value === "number" &&
-      isOutOfRangeArrayLength(value)
-    ) {
-      return InvalidArrayLengthError(address, value);
-    }
   }
+  // The leaf's length bound is checked above: a leaf `length` in an array
+  // already there leaves the trace complete, and a created container is
+  // never an array for `length`.
   return undefined;
 };
 
@@ -283,6 +287,7 @@ class Plan implements PlannedPathWrite {
   // `undefined` for the empty path, a missing root, and a delete beneath a
   // root that is not a container.
   readonly #trace: PathTrace | undefined;
+  #applied = false;
 
   /**
    * Constructs an instance which writes `value`, or deletes, at
@@ -317,6 +322,10 @@ class Plan implements PlannedPathWrite {
 
   /** @inheritDoc */
   apply(): MutableWriteResult {
+    if (this.#applied) {
+      throw new Error("A planned write is carried out at most once");
+    }
+    this.#applied = true;
     const value = this.#isDelete || this.#value === undefined
       ? undefined
       : cloneIfNecessary(this.#value);
@@ -393,7 +402,13 @@ class Plan implements PlannedPathWrite {
       if (leafKey === "length") {
         return applyArrayLengthWrite(newRoot, parent, value);
       }
-      // The plan admits no other key into an array than an index.
+      if (!isArrayIndexPropertyName(leafKey)) {
+        // Planned against a root that has changed since: the parent it
+        // planned for is an array now. Going on would write `parent[NaN]`.
+        throw new Error(
+          debugStr`A stale plan reached an array with the key $quote${leafKey}`,
+        );
+      }
       const slot = Number(leafKey);
       if (this.#isDelete) {
         delete parent[slot];

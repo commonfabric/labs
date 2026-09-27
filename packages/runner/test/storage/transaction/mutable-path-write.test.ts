@@ -172,6 +172,61 @@ describe("mutable-path-write", () => {
       );
     }
 
+    describe("admitting a write", () => {
+      // Each of these is refused by nothing in the value it lands in, so a
+      // plan that refused it would be refusing too much.
+
+      const admissions: [path: string[], value: number][] = [
+        [["list", "0"], 5],
+        [["list", "3"], 5],
+        [["list", "length"], 2],
+        [["obj", "-"], 5],
+        [["obj", "x", "0"], 5],
+      ];
+      for (const [path, value] of admissions) {
+        it(
+          `carries out a write of \`${value}\` to \`${path.join("/")}\``,
+          () => {
+            const root = { list: Object.freeze([1]), obj: {} };
+
+            const plan = planMutablePathWrite(root, at(path), value);
+
+            expect(plan.error).toBeUndefined();
+            expect(plan.ok!.apply().changed).toBe(true);
+          },
+        );
+      }
+    });
+
+    describe("carrying out a plan", () => {
+      it("throws, changing nothing, when a plan is carried out a second time", () => {
+        const plan = planMutablePathWrite({ a: 1 }, at(["a"]), 2).ok!;
+        const { root } = plan.apply();
+        const after = JSON.stringify(root);
+
+        expect(() => plan.apply()).toThrow();
+        expect(JSON.stringify(root)).toBe(after);
+      });
+
+      it("throws, rather than put a key other than an index on an array, for a plan the root has changed under", () => {
+        // Both are planned while `x` is missing; carrying out the first makes
+        // `x` the array the second never planned for.
+
+        const root = { value: {} };
+        const first = planMutablePathWrite(root, at(["value", "x", "0"]), 5)
+          .ok!;
+        const second = planMutablePathWrite(
+          root,
+          at(["value", "x", "name"]),
+          7,
+        ).ok!;
+        first.apply();
+
+        expect(() => second.apply()).toThrow();
+        expect(Object.keys((root.value as { x: object }).x)).toEqual(["0"]);
+      });
+    });
+
     describe("an array `length`", () => {
       it("returns an `InvalidArrayLengthError` for `2 ** 32`, and leaves an owned root's spine as it was", () => {
         // The root is one the caller owns and edits in place, as a
@@ -314,6 +369,15 @@ describe("mutable-path-write", () => {
         expect(result.previousActivityValue).toEqual({ a: 1 });
         expect(root.value).toEqual({ a: 1, b: { c: 1 } });
       });
+    });
+
+    it("returns no change for a delete beneath a root that is not a container", () => {
+      const plan = planMutablePathWrite(5, at(["a"]), undefined, {
+        delete: true,
+      });
+
+      expect(plan.ok?.present).toBe(false);
+      expect(plan.ok?.apply()).toMatchObject({ root: 5, changed: false });
     });
 
     it("stores `-` as a plain key of a root the write creates", () => {
