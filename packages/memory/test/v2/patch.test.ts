@@ -4,11 +4,7 @@ import { expect } from "@std/expect";
 import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
 
 import type { PatchOp } from "../../v2.ts";
-import {
-  applyPatch,
-  PatchApplyError,
-  patchOpDescriptors,
-} from "../../v2/patch.ts";
+import { applyPatch, PatchApplyError } from "../../v2/patch.ts";
 
 /**
  * A deep-frozen document whose `value` is an object of `size` keys, each entry
@@ -171,6 +167,16 @@ describe("patch", () => {
       expect(input).toEqual({ value: { a: { v: 1 }, b: 2 } });
     });
 
+    it("deep-freezes its input in place", () => {
+      // Freezing first is what marks every container the ops find mutable as
+      // one this call copied, and so safe to mutate in place.
+      const input = { value: { a: { b: 1 } }, other: [1] };
+
+      applyPatch(input, [{ op: "replace", path: "/value/a/b", value: 2 }]);
+
+      expect(isDeepFrozen(input)).toBe(true);
+    });
+
     it("returns a deep-frozen tree after moving a container an earlier op thawed", () => {
       const result = applyPatch(deepFreeze({ value: { a: { v: 1 } } }), [
         { op: "replace", path: "/value/a/v", value: 2 },
@@ -194,27 +200,5 @@ describe("patch", () => {
         expect(long).toBe(short);
       });
     }
-  });
-
-  describe("patchOpDescriptors", () => {
-    it("mutates in place the containers an earlier op sharing its set copied", () => {
-      const input = deepFreeze({ value: { a: 1 } });
-      const owned = new WeakSet<object>();
-
-      const first = patchOpDescriptors.add.apply(
-        input,
-        { op: "add", path: "/value/x", value: 1 },
-        owned,
-      );
-      const second = patchOpDescriptors.add.apply(
-        first,
-        { op: "add", path: "/value/y", value: 2 },
-        owned,
-      );
-
-      expect(second).toBe(first);
-      expect(second).toEqual({ value: { a: 1, x: 1, y: 2 } });
-      expect(input).toEqual({ value: { a: 1 } });
-    });
   });
 });
