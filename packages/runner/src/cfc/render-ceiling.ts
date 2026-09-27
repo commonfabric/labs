@@ -7,7 +7,6 @@ import {
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
-import { ACTING_USER_VAR } from "./atom-pattern.ts";
 import type { CfcConfClause } from "./clause.ts";
 import { clauseAlternatives } from "./clause.ts";
 import {
@@ -18,6 +17,7 @@ import {
   buildCfcPolicySnapshot,
   type ExchangeRule,
   isExactModulePolicyRef,
+  joinCfcPolicySnapshots,
   type PolicySnapshot,
 } from "./policy.ts";
 import type { RenderModulePolicyResolver } from "./policy-resolver.ts";
@@ -37,12 +37,12 @@ import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
  * §8.10.3) against the host's `maxConfidentiality`.
  *
  * Resolution runs RUNNER-side (this module) as B5's sink gate does
- * (`evaluateGatedConfidentiality` in prepare.ts), with the same evaluator and
- * acting principal. It differs in two things: the boundary class, since this
- * mints `sinkClass:"display"` where a sink gate mints its sink's class; and
- * the standard rules, since this evaluates `STANDARD_RENDER_EXCHANGE_RULES`
- * where a sink gate evaluates the deployment's policy records. The reconciler
- * consumes the resolved label; it never runs the evaluator itself.
+ * (`evaluateGatedConfidentiality` in prepare.ts): the same evaluator, acting
+ * principal and deployment policy records. It differs in two things: the
+ * boundary class, since this mints `sinkClass:"display"` where a sink gate
+ * mints its sink's class; and `STANDARD_RENDER_EXCHANGE_RULES`, which this
+ * evaluates beside the deployment's records. The reconciler consumes the
+ * resolved label; it never runs the evaluator itself.
  */
 
 /** The display sink class — the render sibling of B5's `"network"` class. */
@@ -54,7 +54,8 @@ export const RENDER_SINK_NAME = "render";
 /**
  * The display boundary context minted for every render evaluation: the sink
  * name plus its class. `sinkClass:"display"` is what the standard render
- * exchange rules guard on.
+ * exchange rules guard on, and what a deployment record guards on to act at
+ * display sinks alone.
  */
 const renderDisplayBoundary = (): readonly CfcAtom[] => [
   cfcAtom.boundaryContext("sink", RENDER_SINK_NAME),
@@ -69,33 +70,14 @@ const DISPLAY_SINK_CLASS_GUARD = {
 };
 
 /**
- * The standard render exchange rule set, evaluated at every display boundary
- * alongside the module policies a label selects. `PersonalSpace(actingUser)`
- * needs no rule, since the §8.10.6 ceiling admits it by exact match.
- *
- * - `space-reader-access-display` is §4.3.3's `SpaceReaderAccess`: a
- *   `Space($s)` alternative plus a verified `HasRole($p, $s, reader)`
- *   membership fact adds a `User($p)` alternative, so a display audience
- *   holding that role fits the `User(actingUser)` ceiling.
- * - `resource-owner-self-display` is the owner-self rule: a `Resource`
- *   alternative whose `subject` is the acting user, whatever its `class` and
- *   `scope`, gains a `User(actingUser)` alternative, so the acting user sees
- *   their own resources. It adds and never drops (§4.4.5), and rewrites no
- *   clause but the one it matched, so a sibling clause naming another
- *   principal, a facet context, an expiry or a caveat still blocks the value.
- *
- * The owner-self rule has no integrity guard. §5.3.2 and invariant 3 require
- * one of every general rule, and allow an attested deployment a narrowly
- * specified owner-self standard-profile rule instead; this is that rule.
- * Three properties keep it narrow. Its reader is `$actingUser`, which the
- * evaluator binds to the trusted acting principal before matching (§4.9.2)
- * and never takes from the atom it releases (cf. §8.10.3). It releases only to
- * that principal, the audience a display sink already has (§8.10.6). And its
- * `sinkClass` guard is applicability rather than authority: it keeps the rule
- * off network, agent and storage sinks, whose audience is not the acting
- * user. The set lives in the evaluator rather than in a policy record, so
- * attesting it is the deployment's obligation for the evaluator it runs
- * (§9.2.1, §4.4.1), as it is for the standard-profile discharge rules.
+ * The standard render exchange rule set: §4.3.3's `SpaceReaderAccess`, scoped
+ * to the display boundary. A `Space($s)` alternative plus a verified
+ * `HasRole($p, $s, reader)` membership fact adds a `User($p)` alternative, so
+ * a display audience holding that role fits the `User(actingUser)` ceiling.
+ * `PersonalSpace(actingUser)` needs no rule, since the §8.10.6 ceiling admits
+ * it by exact match. Any other release at display, an owner seeing their own
+ * `Resource` atoms among them, is the deployment's to author as a policy
+ * record (`RenderConfidentialityResolverConfig.policySnapshot`).
  */
 export const STANDARD_RENDER_EXCHANGE_RULES: readonly ExchangeRule[] = [{
   id: "space-reader-access-display",
@@ -112,19 +94,6 @@ export const STANDARD_RENDER_EXCHANGE_RULES: readonly ExchangeRule[] = [{
   post: {
     addAlternatives: [{ type: CFC_ATOM_TYPE.User, subject: { var: "$p" } }],
   },
-}, {
-  id: "resource-owner-self-display",
-  appliesTo: {
-    type: CFC_ATOM_TYPE.Resource,
-    subject: { var: ACTING_USER_VAR },
-  },
-  preCondition: { boundary: [DISPLAY_SINK_CLASS_GUARD] },
-  post: {
-    addAlternatives: [{
-      type: CFC_ATOM_TYPE.User,
-      subject: { var: ACTING_USER_VAR },
-    }],
-  },
 }];
 
 /** The standard render rules as a snapshot, built once: they are static. */
@@ -136,10 +105,21 @@ const STANDARD_RENDER_SNAPSHOT: PolicySnapshot = buildCfcPolicySnapshot([{
 export type RenderConfidentialityResolverConfig = {
   /**
    * The display audience: the acting user whose `HasRole` facts are minted,
-   * and the evaluator's `$actingUser`, to whom the owner-self rule releases
-   * that user's own `Resource` atoms. Absent, neither happens.
+   * and the evaluator's `$actingUser`. Absent, neither is supplied.
    */
   readonly actingPrincipal?: string;
+
+  /**
+   * The deployment's policy records (`Runtime.cfcPolicySnapshot`), which the
+   * render boundary evaluates beside the standard render rules and the module
+   * policies a label selects, before the ceiling fit (§8.10.6). They are the
+   * records every other boundary evaluates, validated and frozen when the
+   * runtime is built and attested with its configuration (§4.4.1). A record
+   * acts here only where its guards admit a display boundary, and what it
+   * adds must still fit the ceiling, which admits the acting user alone.
+   * Absent, only the standard render rules and module policies run.
+   */
+  readonly policySnapshot?: PolicySnapshot;
 
   /**
    * Deployment trust config (B3), for any render rule with a `Concept`-valued
@@ -314,6 +294,10 @@ export const createRenderConfidentialityResolver = (
   const boundary = renderDisplayBoundary();
   const trustResolver = createTrustResolver(config.trustConfig);
   const actingPrincipal = config.actingPrincipal;
+  const policy = joinCfcPolicySnapshots([
+    STANDARD_RENDER_SNAPSHOT,
+    config.policySnapshot,
+  ]);
   const staticMemberSpaces = config.memberSpaces ?? [];
   const provider = config.membershipProvider;
   const modulePolicyResolver = config.modulePolicyResolver;
@@ -342,7 +326,7 @@ export const createRenderConfidentialityResolver = (
         confidentiality: [...label.confidentiality],
         integrity: [...(label.integrity ?? [])],
       },
-      STANDARD_RENDER_SNAPSHOT,
+      policy,
       {
         integrity: mintReaderRoleFacts(actingPrincipal, [...memberSpaces]),
         boundary,

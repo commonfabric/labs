@@ -21,6 +21,7 @@ import type {
 import type { MetaField } from "@commonfabric/runner";
 import type {
   CfcConfClause,
+  CfcPolicyRecordInput,
   CfcTrustConfigInput,
 } from "@commonfabric/runner/cfc";
 import type { CfcLabelView } from "@commonfabric/runner/cfc/label-view-core";
@@ -848,6 +849,20 @@ export type InitializationData = {
   cfcTrustConfig?: CfcTrustConfigInput;
 
   /**
+   * The deployment policy records the worker's runtime evaluates at every
+   * boundary (`RuntimeOptions.cfcPolicyRecords`): exchange rules that release
+   * or discharge confidentiality where their guards hold, such as an
+   * owner-self display release adding `User($actingUser)` to a `Resource`
+   * whose subject is the acting user at `sinkClass: display`. The runtime
+   * validates them at construction and refuses to start on a malformed one.
+   * They are fixed for the runtime's lifetime. The display boundary evaluates
+   * them before the render ceiling's fit, so what a record adds must still fit
+   * the ceiling. Absent means no records, and only the standard render rules
+   * and the module policies a label selects apply at display.
+   */
+  cfcPolicyRecords?: readonly CfcPolicyRecordInput[];
+
+  /**
    * Whether author-supplied render-boundary declassification is honored.
    * `allow` is the default. `deny` ignores an author's
    * `declassifyConfidentiality`, so that a pattern cannot release a secret
@@ -958,9 +973,10 @@ export type InitializeRequest = BaseRequest & {
  * one origin are one posture.
  *
  * **Every field here holds plain JSON-shaped values only.** They are compared
- * with `deepEqual`, except `cfcTrustConfig`, which is compared by the digest
- * the runner gives the configuration it normalizes (`buildCfcTrustConfig`), so
- * key order and keys written as `undefined` do not refuse an attach. `deepEqual`
+ * with `deepEqual`, except `cfcTrustConfig` and `cfcPolicyRecords`, each
+ * compared by the digest the runner gives what it builds from it
+ * (`buildCfcTrustConfig`, `buildCfcPolicySnapshot`), so key order and keys
+ * written as `undefined` do not refuse an attach. `deepEqual`
  * compares a class instance by its enumerable own
  * properties -- so a `FabricValue`-carrying field would compare EQUAL between
  * two different values whose state lives in private fields, and an attach
@@ -981,6 +997,7 @@ export type RuntimeSecurityContext =
     | "cfcReadMaxConfidentiality"
     | "cfcReadOnExceed"
     | "cfcTrustConfig"
+    | "cfcPolicyRecords"
     | "renderDeclassificationPolicy"
     | "renderConfidentialityCeiling"
     | "trustSnapshot"

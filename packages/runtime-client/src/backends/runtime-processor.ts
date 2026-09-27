@@ -526,6 +526,9 @@ export function browserWorkerParamsFromInitializationData(
     ...(data.cfcTrustConfig !== undefined
       ? { cfcTrustConfig: data.cfcTrustConfig }
       : {}),
+    ...(data.cfcPolicyRecords !== undefined
+      ? { cfcPolicyRecords: data.cfcPolicyRecords }
+      : {}),
     ...(data.trustSnapshot
       ? { trustSnapshotProvider: () => data.trustSnapshot }
       : {}),
@@ -594,6 +597,9 @@ export function renderConfidentialityResolverFor(
   return createRenderConfidentialityResolver({
     actingPrincipal,
     trustConfig: runtime.cfcTrustConfig,
+    // The deployment's records, the ones every other boundary of this
+    // runtime evaluates, run at display too (spec §8.10.6).
+    policySnapshot: runtime.cfcPolicySnapshot,
     memberSpaces,
     // Share the reconciler's provider instance when supplied (so ACL
     // subscriptions and the resolver's reads observe the same cells); else
@@ -801,6 +807,7 @@ export function securityContextFrom(
     cfcReadMaxConfidentiality: data.cfcReadMaxConfidentiality,
     cfcReadOnExceed: data.cfcReadOnExceed,
     cfcTrustConfig: data.cfcTrustConfig,
+    cfcPolicyRecords: data.cfcPolicyRecords,
     renderDeclassificationPolicy: data.renderDeclassificationPolicy,
     renderConfidentialityCeiling: data.renderConfidentialityCeiling,
     trustSnapshot: data.trustSnapshot,
