@@ -281,7 +281,7 @@ minted into the same entries, not the mechanism.
      the non-coordinator closures and the marked-reads-consume-nothing
      asymmetry are pinned in `cfc-template-population.test.ts` ("SC-8
      remainder" block).
-  2. **Three machinery boundaries on template consumption**, all
+  2. **Two machinery boundaries on template consumption**, both
      inherited-from-existing disciplines rather than new semantics: a
      transaction re-deriving a container's membership stamps does not
      consume the very entries it replaces (`ownRestampContainerPaths` —
@@ -295,18 +295,31 @@ minted into the same entries, not the mechanism.
      consumes the target's content but not the slot's membership `J`;
      §2's "probe **or dereference**" overstated what the shipped row-3/
      row-4 boundary distinguishes, and the probe/standalone-read half is
-     what landed. The third: a standalone probe consumes the templates at
-     the slot it asked about and none beneath it. It asks which reference
-     sits at that one slot, and a template beneath labels a child's. Read
-     at the sigil's path (`linkProbeSubPath()`), a probe of a container
-     would otherwise match the container's own child template through the
-     sigil key, and in the atomic layout, where the probe reads the slot
-     itself, recursion would reach it. Every transaction that wrote a
-     store created under a label would then carry that label onto the
-     other documents it wrote. The children's readers keep consuming it
-     through the `value`/`shape` twins, or through a probe at a child's
-     own slot. Declared `*` entries are not templates of this kind and
-     stay consumed.
+     what landed.
+  3. **Update (2026-09-27): a standalone probe drops the runtime-minted
+     templates beneath the slot it probed.** This is new semantics, not a
+     machinery boundary. A probe asks which reference sits at one slot,
+     and a `*` template beneath that slot labels which reference sits at a
+     child. Read at the sigil's path (`linkProbeSubPath()`), a probe of a
+     container matched the container's own child template through the
+     sigil key; in the atomic layout, where the probe reads the slot
+     itself, recursion reaches it. So every transaction that wrote a store
+     created under a label — `Cell.set` probes its destination's root —
+     carried that label onto the other documents it wrote, and a
+     `sqliteQuery` whose parameter was labeled on its first issue refused
+     each row it settled.
+
+     It narrows what one reader carries. A transaction that resolves a
+     container and then dereferences a slot consumed the membership `J`
+     only through that probe, since the dereference is row 4. It now
+     carries what a dereference alone carries: the consequence of the
+     second boundary above, no longer depending on whether the container
+     was probed first. Readers of the children's content or existence keep
+     `J` through the `value`/`shape` twins, and a probe of a child's own
+     slot through the template there. Declared `*` entries are the
+     schema's policy, not runtime templates, and stay consumed. A
+     dereference that consumes the slot's `J` would close the residual for
+     every reader and is the open alternative.
 - **Stage B (Stage-2 full population; one PR, after A):** the
   `/cfc/labels/...` template mints per §5 + `inspectConfLabel` consuming
   them (upgrading WP7's computed-in-hand labels to persisted templates),

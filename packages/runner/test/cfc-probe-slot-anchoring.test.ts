@@ -300,6 +300,27 @@ describe("link-resolution probes and `*` templates", () => {
       });
       expect(carriesPicked(join)).toBe(true);
     });
+
+    it("carries into a slot's content what a dereference alone carries", async () => {
+      // A dereference consumes the element's content and not the slot's
+      // membership J (row 4, cfc-template-population.md §6). Resolving the
+      // list first used to add that J through the list's own probe reaching
+      // its child template; the two readers now agree. Pinned as agreement
+      // rather than as either answer: consuming the slot's J at the
+      // dereference would make both carry it.
+      const { list } = await declaredList("deref");
+      const { schema: _schema, ...link } = list.getAsNormalizedFullLink();
+      const element = (tx: IExtendedStorageTransaction) =>
+        runtime.getCellFromLink(link, undefined, tx);
+
+      const alone = joinOf((tx) => {
+        element(tx).key(0).key("n").get();
+      });
+      const resolvedFirst = joinOf((tx) => {
+        element(tx).resolveAsCell().key(0).key("n").get();
+      });
+      expect(carriesPicked(resolvedFirst)).toBe(carriesPicked(alone));
+    });
   });
 
   describe("a list whose schema declares a pointer policy", () => {

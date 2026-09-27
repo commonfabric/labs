@@ -3598,6 +3598,7 @@ const probedSlotPath = (path: readonly string[]): readonly string[] => {
 /**
  * Whether `entry` is a runtime-minted `*`-child template strictly beneath
  * `slot`: one labeling which reference sits at a child of the slot, or deeper.
+ * `*` matches on either side, as it does wherever an entry is resolved.
  */
 const isRuntimeTemplateBeneath = (
   entry: LabelMapEntry,
@@ -3606,9 +3607,7 @@ const isRuntimeTemplateBeneath = (
   const path = canonicalizeLogicalPath(entry.path);
   return path.length > slot.length &&
     isRuntimeMintedTemplate({ origin: entry.origin, path }) &&
-    slot.every((segment, index) =>
-      path[index] === "*" || path[index] === segment
-    );
+    isPrefix(slot, path);
 };
 
 /** Helper for `deriveFlowJoin`, which computes labels from transaction reads. */
@@ -3736,22 +3735,30 @@ const deriveFlowJoinImpl = (
       // structure/derived) — byte-identical to their pre-template
       // behavior, so the exclusion cannot under-taint relative to main.
       //
-      // A standalone probe keeps the templates at its slot and drops the
-      // runtime-minted ones beneath it. It asks which reference sits at ONE
-      // slot, and a template beneath that slot labels which reference sits
-      // at a child. Read at the sigil's path, a probe of a container matched
-      // the container's own child template through the sigil key, as though
-      // "/" were a child — and in the atomic layout, where the probe reads
-      // the slot itself, recursion would reach it too. `Cell.set` probing a
-      // store's root then carried the J of the store's creation onto every
-      // document the writer wrote: a `sqliteQuery` whose parameter was
-      // labeled on its first issue refused each row it settled. A reader of
-      // the children still consumes that J, through the `value` and `shape`
-      // twins, or through the template at each child's own slot when it
-      // probes one. Declared entries are the schema's policy and stay
-      // consumed as before: a declared `observes:"followRef"` entry has no
-      // twin, and this probe is what reaches it when a reader takes a whole
-      // container's references.
+      // The `probedSlot` arm is of another kind: it narrows a standalone
+      // observation, and it CAN carry less than main did. A probe keeps the
+      // templates at its slot and drops the runtime-minted ones beneath it.
+      // It asks which reference sits at ONE slot, and a template beneath
+      // labels which reference sits at a child. Read at the sigil's path, a
+      // probe of a container matched the container's own child template
+      // through the sigil key, as though "/" were a child — and in the
+      // atomic layout, where the probe reads the slot itself, recursion
+      // would reach it too. `Cell.set` probing a store's root then carried
+      // the J of the store's creation onto every document the writer wrote:
+      // a `sqliteQuery` whose parameter was labeled on its first issue
+      // refused each row it settled.
+      //
+      // What it gives up: a reader that resolves a container and then
+      // dereferences a slot consumed the membership J through that probe,
+      // and nothing else consumes it — the dereference is row 4 above. That
+      // reader now carries what a dereference alone carries, which no longer
+      // depends on whether the container happened to be probed first.
+      // Readers of the children's content or existence still consume J
+      // through the `value`/`shape` twins, and a probe of a child's own slot
+      // through the template there. Declared entries are the schema's
+      // policy and stay consumed: a declared `observes:"followRef"` entry
+      // has no twin, and this probe is what reaches it when a reader takes a
+      // whole container's references.
       const probedSlot = observation.shape === "followRef"
         ? probedSlotPath(logicalPath)
         : undefined;
