@@ -96,7 +96,8 @@ export const gatewayErrorRules = errorExchangeRules({
 
 Lowering: §5.4.2 `ErrorExchangeRule` entries in the same derived policy record
 as the pattern's general rules (one `exchangeRules` array per §5.3.2);
-`$actingUser` binding per §5.4.2. The §5.4.3 observation-model caveat holds:
+`$actingUser` is the acting principal the evaluator binds before matching
+(§4.9.2, §5.4.2; SC-49). The §5.4.3 observation-model caveat holds:
 descendant-path releases do not make `/error` materializable as a whole.
 Successful sanitization mints `SanitizedError` integrity naming the
 sanitizer's identity pair (§5.4.6).

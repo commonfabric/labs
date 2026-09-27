@@ -165,10 +165,12 @@ type DriftFlag = Confidential<Flag, [PolicyOf<typeof driftFlagRules>]>;
 - Lowering rejects a general-surface rule unless it has a `pre.integrity`
   pattern or `guard.policyState` grant guard. Boundary-only authoring remains
   extensions-gated. Owner-self access is a narrow trusted standard-profile rule
-  rather than a generic authoring exemption: the runtime binds the display
-  boundary's `resource-owner-self-display` rule to the acting principal
-  (`packages/runner/src/cfc/render-ceiling.ts`), and `v("$actingUser")` in an
-  authored rule never binds, so that rule matches nothing.
+  rather than a generic authoring exemption: the display boundary's
+  `resource-owner-self-display` rule
+  (`packages/runner/src/cfc/render-ceiling.ts`). `v("$actingUser")` in an
+  authored rule is the acting principal, which the evaluator binds before
+  matching and never reads off the label (spec §4.9.2); the rule still needs
+  its guard.
 
 ### 2a. Raising, direct
 
@@ -268,13 +270,11 @@ rules are generic and grant-guarded, and the user's editable defaults are
 //    subject IS the acting principal (the §5.4.2 $actingUser shape), and
 //    the rule releases only to that same principal — self-scoped by
 //    construction, never a release to anyone else.
-//    The substrate would write the acting principal in when it instantiates
-//    this kernel; `$actingUser` in rule data never binds.
 { "id": "concept-owner-access",
   "appliesTo": { "type": ".../atom/Context",
-    "concept": HEALTH, "subject": "$actingUser" },
+    "concept": HEALTH, "subject": { "var": "$actingUser" } },
   "post": { "addAlternatives": [
-    { "type": ".../atom/User", "subject": "$actingUser" }] } }
+    { "type": ".../atom/User", "subject": { "var": "$actingUser" } }] } }
 
 // 2. Standing default — one rule serves every user-edited default.
 { "id": "concept-standing-grant",

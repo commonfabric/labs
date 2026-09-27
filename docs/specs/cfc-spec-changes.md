@@ -1504,79 +1504,61 @@ are stamped the file-correspondence rules are retired.
 ## From the display-boundary owner-self rule (2026-09-26)
 
 **SC-49 [normative] The owner-self rule of the standard display profile —
-§5.3.2 + invariant 3 + §8.10.6.** `open`. §5.3.2 requires every general
-exchange rule to carry a non-empty integrity precondition or durable
-`guard.policyState`, says boundary metadata does not satisfy that, and allows
-"a narrowly specified owner-self standard-profile rule" in an attested
-deployment; invariant 3 and §4.3.6 repeat both halves. §8.10.6 admits
-`User(actingUser)` plus "principal forms that resolve to the acting user under
-the deployment's standard exchange rules", and its example list names
-`PersonalSpace` and verified `Space` membership. No passage says what the
-owner-self rule is. So a value whose label carries a `Resource` atom naming
-the acting user as its `subject` (§15's classification atom for a subject's
-records, documents or credentials) stays hidden from that user at every
-display sink.
+§5.3.2 + invariant 3 + §8.10.6 + §4.9.2.** `open`. §5.3.2 requires every
+general exchange rule to carry an integrity precondition or durable
+`guard.policyState`, and allows "a narrowly specified owner-self
+standard-profile rule" in an attested deployment; invariant 3 and §4.3.6 say
+the same. §8.10.6 admits principal forms that resolve to the acting user under
+the deployment's standard exchange rules, naming `PersonalSpace` and verified
+`Space` membership as examples. No passage says what the owner-self rule is,
+so a value labeled `Resource{ class, subject: actingUser }` stays hidden from
+that user at every display sink.
 
-The runtime's standard render rule set carries one owner-self rule,
-`resource-owner-self-display`. Under `sinkClass: display`, a `Resource`
-alternative whose `subject` is the acting principal, whatever its `class` and
-`scope`, gains `User(actingPrincipal)` in its own clause. The rule has no
-integrity precondition. The acting principal comes from the trusted acting
-context and is written into the rule when the render resolver is built, before
-any label is matched. That is §4.9.2's `$actingUser` substitution, done inside
-trusted code at bind time, the discipline §8.17.3 states for placeholder
-principals in declared ceilings. The reader is therefore never learned from the
-consumed atom (cf. §8.10.3). Without an acting principal that is a user's DID
-the rule is absent; the runtime's own subject, which a `Resource` names by
-default, is a service principal and fails closed (§8.10.6). `scope` is left
-unconstrained because a scoped resource of the owner is still the owner's;
-the custody seal matches the owner's atoms on their exact keys instead, since
-there the match moves authority rather than showing a value to its owner.
+The runtime's standard render rule set carries one:
+`resource-owner-self-display` targets `Resource{ subject: $actingUser }` under
+`sinkClass: display` and adds `User($actingUser)` to the matched clause, with
+no integrity precondition. The evaluator implements §4.9.2 by starting every
+rule match with `$actingUser` bound to the trusted acting principal, and the
+matcher never binds the variable from a matched atom, so the reader is never
+learned from the label (cf. §8.10.3). When the acting principal is absent, not
+a complete DID, or the runtime's own subject (the default subject of an
+ownerless `Resource`, stored credentials among them), nothing is bound and
+every rule naming `$actingUser` is inert. The rule is add-only and
+clause-local (§4.4.5, invariant 11): a sibling clause naming another
+principal, a facet context, an expiry or a caveat keeps the value blocked. Its
+`sinkClass` guard is applicability, not authority.
 
-It is sound because it releases nothing beyond the audience a display sink
-already has. The reader it adds is the acting user, and it adds that reader
-only where the clause's own subject is the acting user. That is also why it is
-not a loosening under §8.10.6's tighten-only clause: the admitted family there
-is defined as the principal forms that resolve to the acting user under the
-deployment's standard exchange rules, and no audience beyond the acting user
-is reached. The proposed edit below makes it a named member of that family.
-It is add-only and clause-local (§4.4.5, invariant 11), so a sibling clause
-naming another principal, a facet context, an expiry or a caveat keeps the
-value blocked. The `sinkClass` guard is applicability, not authority: it keeps
-the rule off network, agent and storage sinks, whose audience is not the
-acting user.
+The rule is a new release judgment, made by the attested deployment through
+the route §5.3.2 and invariant 3 permit. It reaches no audience beyond the
+acting user, so §8.10.5.2's audience expansion does not arise, and §8.10.6's
+tighten-only clause is met because the judgment is the deployment's built-in
+rule rather than an unrecorded widening of the ceiling. It lives in the
+evaluator, not in a policy record, so attesting it is the deployment's
+obligation for its trusted evaluator (§9.2.1, §4.4.1), as it is for
+`space-reader-access-display` and the standard-profile discharge rules. A
+module author cannot write it: a manifest rule targets its own policy under an
+integrity or policy-state guard (§4.3.6). A guarded module rule naming
+`$actingUser` releases to the acting reader, as §4.9.2 describes.
 
-The binding is not available to module authors or deployment records. The
-pattern matcher never binds the `$actingUser` placeholder from a matched atom,
-and no evaluator supplies it, so a deployment record or module manifest that
-writes it matches nothing. The same holds for every other pattern the matcher
-serves (integrity floors, trust statements, grant guards). A module rule also
-rewrites only the clause carrying its own policy reference (§4.4.5), under an
-integrity or policy-state guard (§4.3.6). Two things are excluded. Other atom
-families are not released: a facet `Context` naming the owner stays blocked,
-which matches the facets chapter (§19, not yet merged): "The owner view is not
-a facet." And no caveat is discharged: a caveat clause, even one whose source
-is the owner's own `Resource`, is outside the rule.
+Open points. (a) §4.9.2 lets exchange rules reference `$actingUser` without
+distinguishing where a rule comes from; the runtime binds it alike for the
+standard rules, deployment records and module manifests. (b) §5.3.2 does not
+say what "narrowly specified" bounds. The runtime leaves `class` and `scope`
+unconstrained: the spec names no class set, the unmerged facets chapter calls
+owner-self access a rule "over the owner's own resource classes", and the
+connector producer this rule serves mints its `Resource` atoms with `subject`
+set to the owner. It also reads `Resource.subject` as the owner, which §15's
+registry row does not state. (c) The rule is display-only by design; the spec
+does not address owner-self release at other sink classes. (d) §8.10.6's
+example list does not name the owner-self form, and §5.3.2 does not say what
+satisfies "attested deployment".
 
-Proposed edit: in §5.3.2, with a cross-reference from invariant 3, import
-§19's sentence "Owner-self access is the narrowly scoped standard rule over the
-owner's own resource classes", and specify the rule: target
-`Resource{ subject: $actingUser }` with `class` and `scope` unconstrained, no
-integrity precondition, postcondition `User($actingUser)`, applicable only at
-`sinkClass: display`, and `$actingUser` substituted from the trusted acting
-context before matching, never bound from a label. Add it to §8.10.6's example
-list of principal forms that resolve to the acting user. Implemented in
-`packages/runner/src/cfc/render-ceiling.ts` (`standardRenderExchangeRules`)
-and `packages/runner/src/cfc/atom-pattern.ts` (`ACTING_USER_VAR`).
-
-A question this leaves for the spec. §4.9.2 says labels and exchange rules can
-reference `$actingUser`, substituted at runtime from the acting context, and
-§5.4.2's error exchange rules bind it. The runtime's reading is narrower:
-`$actingUser` in rule data is inert, fail closed, and only a rule the runtime
-builds itself carries the acting principal. Under the wider reading a guarded
-module rule such as `HasRole($actingUser, THIS_POLICY.subject, reader)` would
-release to the acting reader, where the runtime keeps its clause sealed. The
-spec should say whether the substitution is available to module-authored and
-deployment rules, or reserved to rules the trusted runtime builds; §5.3.2's
-"not a generic exception available to module authors" settles the unguarded
-case only.
+Proposed edit: in §5.3.2, with a cross-reference from invariant 3, specify the
+rule (target `Resource{ subject: $actingUser }`, `class` and `scope`
+unconstrained, no integrity precondition, postcondition `User($actingUser)`,
+display only, `$actingUser` supplied by the evaluator and never bound from a
+label), and state that a rule living in the attested evaluator satisfies
+"attested deployment"; add the form to §8.10.6's example list. Implemented in
+`packages/runner/src/cfc/render-ceiling.ts` (`STANDARD_RENDER_EXCHANGE_RULES`),
+`packages/runner/src/cfc/exchange-eval.ts` (`actingUserBindings`) and
+`packages/runner/src/cfc/atom-pattern.ts` (`ACTING_USER_VAR`).

@@ -253,12 +253,13 @@ const extendThroughPattern = (
 };
 
 /**
- * The binding environment every rule match starts from: `$actingUser` bound to
- * the acting principal (spec §4.9.2), so a rule naming it unifies with that
- * principal and never takes one from the label. Empty, and every rule naming
- * `$actingUser` inert, when the acting principal is absent, not a complete DID,
- * or `CFC_RUNTIME_SUBJECT`: that is the default subject of a `Resource` with no
- * owner, stored credentials among them, and not a user a release may name.
+ * Returns the binding environment every rule match starts from: `$actingUser`
+ * bound to the acting principal (spec §4.9.2), so a rule naming it unifies
+ * with that principal and never takes one from the label. Returns the empty
+ * environment, leaving every rule that names `$actingUser` inert, when the
+ * acting principal is absent, not a complete DID, or `CFC_RUNTIME_SUBJECT`:
+ * that is the default subject of a `Resource` with no owner, stored
+ * credentials among them, and not a user a release may name.
  */
 const actingUserBindings = (
   actingPrincipal: string | undefined,
@@ -581,6 +582,8 @@ const extendThroughGrantGuard = (
  * clause/alternative; remaining guards must all be satisfiable under one
  * shared environment. Every consistent environment is its own match — the
  * §4.3.4 disjunction of all valid bindings.
+ *
+ * Every match starts from `initialBindings` (`actingUserBindings()`).
  *
  * `homeClauses` (label-carried selection, CT-1874/SP-1) restricts which
  * clauses may be the REWRITE TARGET: a rule brought into scope by a policy
