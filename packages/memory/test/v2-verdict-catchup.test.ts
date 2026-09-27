@@ -636,7 +636,7 @@ Deno.test("memory v2 server: requeue after failure does not resurrect echo suppr
         // ("set"): a "patch" origin is delivered under CT-1965 regardless,
         // which would also let the pin pass vacuously.
         seq: 1,
-        ops: new Map([["space\x00of:doc:b", "set" as const]]),
+        ops: new Map([["space\x00of:doc:b", { op: "set" as const }]]),
       });
       return Promise.reject(new Error("synthetic fan-out failure"));
     }

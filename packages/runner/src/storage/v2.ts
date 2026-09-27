@@ -48,6 +48,7 @@ import {
   isScopeKey,
   type OperationFieldQuery,
   type OperationFieldSnapshot,
+  PATCH_SEMANTICS_VERSION,
   type PatchOp,
   type ReleaseOpFieldOperation,
   resolveScopeKey,
@@ -488,9 +489,9 @@ const storeOperationsOf = (
           id: operation.id,
           scope: operation.scope,
           patches: operation.patches,
-          ...(operation.baseSeq === undefined
+          ...(operation.replayBaseSeq === undefined
             ? {}
-            : { baseSeq: operation.baseSeq }),
+            : { replayBaseSeq: operation.replayBaseSeq }),
         };
       case "set":
         return {
@@ -532,7 +533,7 @@ type PendingVersion =
       value: EntityDocument;
 
       /** The seq this layer declared as its base; see `PatchOperation`. */
-      baseSeq?: number;
+      replayBaseSeq?: number;
     }
     | {
       localSeq: number;
@@ -564,14 +565,17 @@ type ConfirmedVersion = MaterializedVersion & {
   coverClass?: CommitClass;
 
   /**
-   * True when `value` is the server's stored document at `seq` exactly: a
-   * version a frame delivered, or one promoted from an own patch the server
-   * reported it applied over the very version this replica replayed it over
-   * (`AppliedRevision.exactBase`). A patch built over such a version with no
-   * pending layer beneath it may declare `seq` as its base. Absent on every
-   * other promotion, whose value is this replica's own extrapolation.
+   * True when `value` equals, as a value, the server's stored document at
+   * `seq`: a version a frame delivered, or one promoted from an own patch the
+   * server reported it applied over the very version this replica replayed it
+   * over (`AppliedRevision.exactBase`). A patch built over such a version with
+   * no pending layer beneath it may declare `seq` as its replay base. Key
+   * order is not part of that equality: a frame delivers keys in the codec's
+   * order, and a replay keeps the order its operations inserted them in.
+   * Absent on every other promotion, whose value is this replica's own
+   * extrapolation.
    */
-  serverExact?: true;
+  serverEqual?: true;
 };
 
 type PendingMaterializedPrefix = MaterializedVersion & {
@@ -646,7 +650,7 @@ const pendingVersion = (
       op: "patch";
       patches: PatchOp[];
       value: EntityDocument;
-      baseSeq?: number;
+      replayBaseSeq?: number;
     }
     | { op: "delete" },
 ): PendingVersion => ({ localSeq, ...operation });
@@ -811,37 +815,52 @@ const materializedVersionThroughPending = (
 };
 
 /**
- * Returns whether `promoted`, the value of `pending` replayed over
- * `confirmed`, is the server's stored document at the accept's seq: the layer
- * declared `confirmed` as its base, `confirmed` is the server's document at
- * that seq, and the accept reports the head it applied over was that same
- * document. Promotion replays the layer's operations with the patch function
- * the server applied them with, so equal inputs give the equal document. A
- * replay that skipped the layer, whose operations did not apply, leaves
- * `confirmed`'s own value, and is refused.
+ * Returns whether `applied` reports that the engine applied its commit's last
+ * operation on the document over the replay base that operation declared
+ * (`AppliedRevision.exactBase`). The LAST revision decides, as it decides the
+ * server's echo: a later operation on the document replays over this one.
  */
-const promotesExactly = (
-  confirmed: ConfirmedVersion,
-  pending: PendingVersion,
-  promoted: EntityDocument | undefined,
+const reportsExactBase = (
   applied: AppliedCommit,
   id: URI,
   scope: CellScope | undefined,
+): boolean =>
+  applied.revisions.findLast((candidate) =>
+    candidate.id === id &&
+    normalizeCellScope(candidate.scope) === normalizeCellScope(scope)
+  )?.exactBase === true;
+
+/**
+ * Returns whether `promoted`, the value of `pending` replayed over
+ * `confirmed`, equals the server's stored document at an accept that reports
+ * its base exact: the layer declared `confirmed` as its replay base, and
+ * `confirmed` equals the server's document at that seq. The replay applies the
+ * layer's operations with the patch function the server applied them with,
+ * at the same {@link PATCH_SEMANTICS_VERSION}, so equal inputs give an equal
+ * document. A replay that skipped the layer, because its operations do not
+ * apply here, leaves `confirmed`'s own value, and is refused.
+ */
+const replaysServerDocument = (
+  confirmed: ConfirmedVersion,
+  pending: PendingVersion,
+  promoted: EntityDocument | undefined,
 ): boolean => {
   if (
-    pending.op !== "patch" || pending.baseSeq === undefined ||
-    confirmed.serverExact !== true || confirmed.seq !== pending.baseSeq ||
-    promoted === confirmed.value
+    pending.op !== "patch" || pending.replayBaseSeq === undefined ||
+    confirmed.serverEqual !== true || confirmed.seq !== pending.replayBaseSeq
   ) {
     return false;
   }
-  // The commit's LAST revision of the document decides, as it decides the
-  // server's echo: a later operation on it replays over this one.
-  const revision = applied.revisions.findLast((candidate) =>
-    candidate.id === id &&
-    normalizeCellScope(candidate.scope) === normalizeCellScope(scope)
-  );
-  return revision?.exactBase === true;
+  if (promoted !== confirmed.value) return true;
+  // The base came back as it was, which is either operations that changed
+  // nothing or a skipped layer; only applying them again tells which.
+  try {
+    applyPatchToDocument(confirmed.value, pending.patches);
+    return true;
+  } catch (error) {
+    if (error instanceof PatchApplyError) return false;
+    throw error;
+  }
 };
 
 const dropMaterializedSuffix = (
@@ -3658,8 +3677,8 @@ type NativeCommitOperation =
     patches: PatchOp[];
     value: EntityDocument;
 
-    /** The declared base; see `PatchOperation.baseSeq`. */
-    baseSeq?: number;
+    /** The declared base; see `PatchOperation.replayBaseSeq`. */
+    replayBaseSeq?: number;
   }
   | { op: "delete"; id: URI; scope?: CellScope };
 
@@ -6443,7 +6462,7 @@ export class SpaceReplica
     ) {
       return { ok: {} };
     }
-    const operations = this.#declarePatchBases(written);
+    const operations = this.#declareReplayBases(written);
 
     const localSeq = this.#nextLocalSeq++;
     if (source !== undefined) {
@@ -6575,16 +6594,21 @@ export class SpaceReplica
 
   /**
    * Helper for `#commitOperations()`, which gives each `patch` the base its
-   * accept will replay it over, where this replica holds that base exactly
-   * as the server stores it (`PatchOperation.baseSeq`): the confirmed version
-   * of a document with no pending layer, which this commit's layer will then
-   * sit directly on. Only a document's first operation in the commit
-   * declares one, since a later one replays over the first.
+   * accept will replay it over (`PatchOperation.replayBaseSeq`), where this
+   * replica holds that base as the server stores it: the confirmed version of
+   * a document with no pending layer, which this commit's layer will then sit
+   * directly on. Only a document's first operation in the commit declares
+   * one, since a later one replays over the first, and only to a server
+   * applying patches at the {@link PATCH_SEMANTICS_VERSION} this replica
+   * replays them at.
    */
-  #declarePatchBases(
+  #declareReplayBases(
     operations: NativeCommitOperation[],
   ): NativeCommitOperation[] {
-    if (this.#sessionClient?.serverFlags?.patchBaseSeq !== true) {
+    if (
+      this.#sessionClient?.serverFlags?.patchReplayVersion !==
+        PATCH_SEMANTICS_VERSION
+    ) {
       return operations;
     }
     const seen = new Set<string>();
@@ -6596,11 +6620,11 @@ export class SpaceReplica
       const record = this.#docs.get(key);
       if (
         record === undefined || record.pending.length > 0 ||
-        record.confirmed.serverExact !== true
+        record.confirmed.serverEqual !== true
       ) {
         return operation;
       }
-      return { ...operation, baseSeq: record.confirmed.seq };
+      return { ...operation, replayBaseSeq: record.confirmed.seq };
     });
   }
 
@@ -7976,7 +8000,7 @@ export class SpaceReplica
           upsert.deleted === true ? undefined : upsert.doc,
           coverClass,
         ),
-        serverExact: true,
+        serverEqual: true,
       };
       record.materialized = undefined;
       // The arrival wake fires on a FORWARD move — and on a same-seq
@@ -8860,16 +8884,30 @@ export class SpaceReplica
           }
           if (
             pendingIndexes.length === 1 &&
-            promotesExactly(
-              previousConfirmed,
-              pending,
-              prefix.value,
-              applied,
-              id,
-              scope,
-            )
+            reportsExactBase(applied, id, scope)
           ) {
-            promoted.serverExact = true;
+            if (
+              replaysServerDocument(previousConfirmed, pending, prefix.value)
+            ) {
+              promoted.serverEqual = true;
+            } else {
+              // The server left this document out of the frame because the
+              // replay here should reproduce it, and it did not: the patch
+              // semantics this replica replays with differ from the
+              // server's, or it no longer holds the base it declared.
+              logger.warn("exact-base-replay-refused", () => [
+                "own patch reported applied over its replay base did not " +
+                "replay to the server's document here",
+                {
+                  space: this.#space,
+                  id,
+                  localSeq,
+                  seq: applied.seq,
+                  confirmedSeq: previousConfirmed.seq,
+                  patchSemanticsVersion: PATCH_SEMANTICS_VERSION,
+                },
+              ]);
+            }
           }
         } else {
           promoted = confirmedVersion(

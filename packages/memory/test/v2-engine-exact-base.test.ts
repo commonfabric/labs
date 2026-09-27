@@ -21,10 +21,10 @@ const SESSION = "session:exact-base";
 const PRINCIPAL = "did:key:z6Mk-engine-exact-base-principal";
 const ID = "of:exact-base";
 
-/** Builds a commit of one patch to `ID`, declaring `baseSeq` when given. */
+/** Builds a commit of one patch to `ID`, declaring `replayBaseSeq` when given. */
 const patchCommit = (
   localSeq: number,
-  baseSeq: number | undefined,
+  replayBaseSeq: number | undefined,
   patches: PatchOp[] = [{ op: "replace", path: "/value/label", value: "x" }],
   id = ID,
 ): ClientCommit => ({
@@ -34,7 +34,7 @@ const patchCommit = (
     op: "patch",
     id,
     patches,
-    ...(baseSeq === undefined ? {} : { baseSeq }),
+    ...(replayBaseSeq === undefined ? {} : { replayBaseSeq }),
   }],
 });
 

@@ -1301,7 +1301,7 @@ export type AppliedRevision = {
   patches?: PatchOp[];
 
   /**
-   * True on a `patch` revision whose operation declared a `baseSeq` equal to
+   * True on a `patch` revision whose operation declared a `replayBaseSeq` equal to
    * the seq of the head it was applied over, a head written before the
    * commit, with the operation applied exactly as received. The revision's document is then the writer's own
    * operations replayed over a document its replica holds, so the writer
@@ -6145,7 +6145,7 @@ const applyCommitTransaction = (
       // sent, so its writer's replay cannot reproduce the result, and a
       // delegated one writes an instance keyed for its actor rather than for
       // the committing session.
-      checkBase: effectiveOperation === operation &&
+      checkReplayBase: effectiveOperation === operation &&
         branch === DEFAULT_BRANCH && delegated === undefined,
       // A delegated commit's scoped writes key from the validated CARRIED
       // identity (protocol.md §2's delegated row; scopes.md §5 —
@@ -6408,12 +6408,12 @@ const writeOperation = (
     scopeKeyOverride?: string;
 
     /**
-     * Whether a `patch` operation's declared `baseSeq` is compared with the
+     * Whether a `patch` operation's declared `replayBaseSeq` is compared with the
      * head it applies over. Only for an operation applied exactly as its
      * writer sent it, on the default branch, whose head rows hold every
      * document it has.
      */
-    checkBase?: boolean;
+    checkReplayBase?: boolean;
   },
 ): AppliedRevision => {
   const { branch, seq, opIndex, operation, principal, sessionId } = options;
@@ -6465,13 +6465,14 @@ const writeOperation = (
       // head an earlier operation of this commit wrote carries this commit's
       // seq, which no document a writer holds can have, so only a base below
       // it can match.
-      const exactBase = options.checkBase === true &&
-        operation.baseSeq !== undefined && operation.baseSeq < seq &&
+      const exactBase = options.checkReplayBase === true &&
+        operation.replayBaseSeq !== undefined &&
+        operation.replayBaseSeq < seq &&
         ((engine.statements.selectHead.get({
             branch,
             id: operation.id,
             scope_key: scopeKey,
-          }) as HeadRow | undefined)?.seq ?? 0) === operation.baseSeq;
+          }) as HeadRow | undefined)?.seq ?? 0) === operation.replayBaseSeq;
       engine.statements.insertRevision.run({
         branch,
         id: operation.id,

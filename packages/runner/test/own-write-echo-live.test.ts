@@ -18,10 +18,11 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import type {
-  ClientCommit,
-  PatchOperation,
-  SessionEffectMessage,
+import {
+  type ClientCommit,
+  PATCH_SEMANTICS_VERSION,
+  type PatchOperation,
+  type SessionEffectMessage,
 } from "@commonfabric/memory/v2";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
@@ -94,6 +95,23 @@ const withoutExactBase = (
     },
   };
 };
+
+/**
+ * Returns `message` with a `hello.ok` advertising `version` as the server's
+ * patch replay version, and any other message unchanged.
+ */
+const advertisingReplayVersion =
+  (version: number) =>
+  (message: Record<string, unknown>): Record<string, unknown> =>
+    message.type === "hello.ok"
+      ? {
+        ...message,
+        flags: {
+          ...(message.flags as Record<string, unknown>),
+          patchReplayVersion: version,
+        },
+      }
+      : message;
 
 describe("own-write echo (live)", () => {
   let server: MemoryV2Server.Server;
@@ -185,7 +203,9 @@ describe("own-write echo (live)", () => {
 
       const id = cell.getAsNormalizedFullLink().id;
       expect(cell.get()).toEqual(["seed", "A"]);
-      expect(sentPatches(tap, id).map(({ operation }) => operation.baseSeq))
+      expect(
+        sentPatches(tap, id).map(({ operation }) => operation.replayBaseSeq),
+      )
         .toEqual([undefined]);
       expect(deliveredDocs(tap, id)).toEqual([{ value: ["seed", "A"] }]);
       // The echo confirmed exactly what the optimistic overlay already
@@ -227,7 +247,7 @@ describe("own-write echo (live)", () => {
 
       expect(cell.get()).toEqual(["seed", "A"]);
       const [append] = sentPatches(tap, id);
-      expect(append.operation.baseSeq).toBeGreaterThan(0);
+      expect(append.operation.replayBaseSeq).toBeGreaterThan(0);
       expect(deliveredDocs(tap, id).length).toBe(deliveredBeforeAppend);
       expect(seen.length).toBe(notificationsAtVerdict);
       cancel();
@@ -258,8 +278,8 @@ describe("own-write echo (live)", () => {
 
       expect(cell.get()).toEqual(["seed", "A", "B"]);
       const [first, second] = sentPatches(tap, id);
-      expect(first.operation.baseSeq).toBeGreaterThan(0);
-      expect(second.operation.baseSeq).toBe(
+      expect(first.operation.replayBaseSeq).toBeGreaterThan(0);
+      expect(second.operation.replayBaseSeq).toBe(
         acceptedSeq(tap, first.requestId),
       );
       expect(deliveredDocs(tap, id).length).toBe(deliveredBeforeAppends);
@@ -292,11 +312,41 @@ describe("own-write echo (live)", () => {
 
       expect(cell.get()).toEqual(["seed", "A", "B"]);
       const [first, second] = sentPatches(tap, id);
-      expect(first.operation.baseSeq).toBeGreaterThan(0);
-      expect(second.operation.baseSeq).toBeUndefined();
+      expect(first.operation.replayBaseSeq).toBeGreaterThan(0);
+      expect(second.operation.replayBaseSeq).toBeUndefined();
       expect(deliveredDocs(tap, id).slice(deliveredBeforeAppends)).toEqual([
         { value: ["seed", "A", "B"] },
       ]);
+    } finally {
+      await rt.dispose();
+    }
+  });
+
+  it("names no base to a server applying patches at another semantics version", async () => {
+    // The server would elide the head on the strength of the replay here
+    // reproducing its document, which a replay at another version need not.
+
+    const tap = tapServer(
+      server,
+      advertisingReplayVersion(PATCH_SEMANTICS_VERSION + 1),
+    );
+    const rt = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage1,
+    });
+    try {
+      const cell = await seededThenWatched(rt, "other-version-list");
+      const id = cell.getAsNormalizedFullLink().id;
+
+      await commitList(rt, "other-version-list", (list) => list.push("A"));
+      await settle(rt);
+
+      expect(cell.get()).toEqual(["seed", "A"]);
+      expect(
+        sentPatches(tap, id).map(({ operation }) => operation.replayBaseSeq),
+      )
+        .toEqual([undefined]);
+      expect(deliveredDocs(tap, id).at(-1)).toEqual({ value: ["seed", "A"] });
     } finally {
       await rt.dispose();
     }
@@ -323,8 +373,8 @@ describe("own-write echo (live)", () => {
 
       expect(cell.get()).toEqual(["seed", "A", "B"]);
       const [first, second] = sentPatches(tap, id);
-      expect(first.operation.baseSeq).toBeGreaterThan(0);
-      expect(second.operation.baseSeq).toBeUndefined();
+      expect(first.operation.replayBaseSeq).toBeGreaterThan(0);
+      expect(second.operation.replayBaseSeq).toBeUndefined();
       expect(deliveredDocs(tap, id).at(-1)).toEqual({
         value: ["seed", "A", "B"],
       });

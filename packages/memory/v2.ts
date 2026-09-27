@@ -15,6 +15,7 @@ import {
 } from "@commonfabric/data-model/codecs";
 import { internPathSelector } from "@commonfabric/data-model-schema";
 import { isPlainObject, unsafeObjectKeyIn } from "@commonfabric/utils/types";
+import { PATCH_SEMANTICS_VERSION } from "./v2/patch-semantics.ts";
 import type { SessionReadCeiling } from "./v2/read-ceiling.ts";
 
 export const MEMORY_PROTOCOL = "memory" as const;
@@ -862,15 +863,15 @@ export type PatchOperation = {
   /**
    * The seq of the document the writer will replay `patches` over when this
    * commit's accept promotes: the head seq of a document its replica holds
-   * exactly as the server stores it (0 for a document delivered as absent).
-   * Never an admission input. The server compares it with the head it
-   * applies over and reports a match as `AppliedRevision.exactBase`
-   * (`v2/engine.ts`), which is what lets the committing session's frame omit
-   * the post-apply document: the writer's replay of its own operations over
-   * that same document reproduces it. Sent only to a server advertising
-   * {@link MemoryProtocolFlags.patchBaseSeq}.
+   * as the server stores it (0 for a document delivered as absent). Never an
+   * admission input. The server compares it with the head it applies over
+   * and reports a match as `AppliedRevision.exactBase` (`v2/engine.ts`),
+   * which is what lets the committing session's frame omit the post-apply
+   * document: the writer's replay of its own operations over that same
+   * document reproduces it. Sent only to a server advertising the
+   * {@link MemoryProtocolFlags.patchReplayVersion} the writer was built with.
    */
-  baseSeq?: number;
+  replayBaseSeq?: number;
 };
 
 export type DeleteOperation = {
@@ -1214,14 +1215,16 @@ export type MemoryProtocolFlags = {
   sessionReadCeiling?: boolean;
 
   /**
-   * Server capability: a `patch` operation may declare the `baseSeq` its
-   * writer will replay it over, and the server reports whether the head it
-   * applied over was that one (`AppliedRevision.exactBase`), eliding the
-   * committing session's copy of a head it so reports. Build-inherent, so a
-   * server of this version always advertises it. A client that sees it
-   * absent declares nothing, and every own patch head reaches it in full.
+   * Server capability: the {@link PATCH_SEMANTICS_VERSION} the server applies
+   * patches with. A client built with the same version may declare the
+   * `replayBaseSeq` it will replay a patch over, and the server reports
+   * whether the head it applied over was that one (`AppliedRevision.exactBase`),
+   * eliding the committing session's copy of a head it so reports. Absent on a
+   * server whose patch replay is switched off ({@link setPatchReplayConfig})
+   * or predates it; a client that sees it absent, or at another version,
+   * declares nothing, and every own patch head reaches it in full.
    */
-  patchBaseSeq?: boolean;
+  patchReplayVersion?: number;
 };
 
 /**
@@ -1249,7 +1252,7 @@ export type WireMemoryProtocolFlags = {
   sessionHoldings?: boolean;
   viewScopedReplicationV1?: boolean;
   sessionReadCeiling?: boolean;
-  patchBaseSeq?: boolean;
+  patchReplayVersion?: number;
 };
 
 export type HelloMessage = {
@@ -1973,7 +1976,9 @@ let commitPreconditionsEnabled = true;
 let syncSchemaTableEnabled = true;
 let messageCompressionEnabled = true;
 let ownWriteEchoEnabled = true;
+let patchReplayOverride: boolean | undefined;
 
+export { PATCH_SEMANTICS_VERSION };
 export {
   SERVER_EXECUTION_DEFAULT_ENABLED,
 } from "./v2/server-execution-default.ts";
@@ -2125,7 +2130,8 @@ export function resetMessageCompressionConfig(): void {
  * delivered truth instead of extrapolating merged state it never saw. Set- and
  * delete-produced heads stay elided — the client provably holds their outcome
  * — and so do heads of patches the engine applied over the base they declared
- * (`PatchOperation.baseSeq`), which the client reproduces by replaying them.
+ * (`PatchOperation.replayBaseSeq`), which the client reproduces by replaying
+ * them, unless {@link setPatchReplayConfig} switches that off.
  * Off elides every own head, leaving promotion to extrapolate each one. Not a
  * protocol capability: every client generation handles the echoed frames.
  */
@@ -2139,6 +2145,36 @@ export function getOwnWriteEchoConfig(): boolean {
 
 export function resetOwnWriteEchoConfig(): void {
   ownWriteEchoEnabled = true;
+}
+
+/**
+ * Sets whether this server lets a session's own patch head stand on the
+ * session's replay of its patch: advertising {@link PATCH_SEMANTICS_VERSION}
+ * to connecting clients, and eliding from a writer's frame a head applied
+ * over the base the patch declared. Off, the server advertises no version and
+ * delivers every own patch head in full, including to sessions that connected
+ * while it was on, so a writer holding a replayed document is sent the
+ * server's in the frame covering its next patch. The rollback lever for a
+ * suspected divergence between a client's patch replay and the server's.
+ * Absent an override, `CF_MEMORY_PATCH_REPLAY=off` in the server's
+ * environment switches it off.
+ */
+export function setPatchReplayConfig(enabled?: boolean): void {
+  patchReplayOverride = enabled;
+}
+
+export function getPatchReplayConfig(): boolean {
+  if (patchReplayOverride !== undefined) return patchReplayOverride;
+  try {
+    return typeof Deno === "undefined" ||
+      Deno.env.get("CF_MEMORY_PATCH_REPLAY") !== "off";
+  } catch {
+    return true;
+  }
+}
+
+export function resetPatchReplayConfig(): void {
+  patchReplayOverride = undefined;
 }
 
 export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
@@ -2175,9 +2211,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records a session's declared read
   // ceiling and its serving runtime stamps it onto the runs it serves.
   sessionReadCeiling: true,
-  // Build-inherent: this build's engine compares a patch's declared base
-  // with the head it applies over and reports the result on the revision.
-  patchBaseSeq: true,
+  ...(getPatchReplayConfig()
+    ? { patchReplayVersion: PATCH_SEMANTICS_VERSION }
+    : {}),
   syncSchemaTableV2: getSyncSchemaTableConfig(),
 });
 
@@ -2340,8 +2376,12 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
-  const patchBaseSeq = value.patchBaseSeq;
-  if (patchBaseSeq !== undefined && typeof patchBaseSeq !== "boolean") {
+  const patchReplayVersion = value.patchReplayVersion;
+  if (
+    patchReplayVersion !== undefined &&
+    !(Number.isSafeInteger(patchReplayVersion) &&
+      (patchReplayVersion as number) > 0)
+  ) {
     return null;
   }
 
@@ -2378,9 +2418,12 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: a client carrying a read
     // ceiling refuses such a server rather than reading unbounded.
     sessionReadCeiling: sessionReadCeiling === true,
-    // Absent (an older server) parses to false: the client declares no
-    // patch base, and its own patch heads keep arriving in full.
-    patchBaseSeq: patchBaseSeq === true,
+    // Absent (an older server, or one with patch replay switched off) stays
+    // absent: the client declares no replay base, and its own patch heads
+    // arrive in full.
+    ...(patchReplayVersion === undefined
+      ? {}
+      : { patchReplayVersion: patchReplayVersion as number }),
   };
 };
 
@@ -2410,7 +2453,9 @@ export const wireMemoryProtocolFlags = (
   sessionHoldings: flags.sessionHoldings,
   viewScopedReplicationV1: flags.viewScopedReplicationV1,
   sessionReadCeiling: flags.sessionReadCeiling,
-  patchBaseSeq: flags.patchBaseSeq,
+  ...(flags.patchReplayVersion === undefined
+    ? {}
+    : { patchReplayVersion: flags.patchReplayVersion }),
 });
 
 /**

@@ -45,6 +45,7 @@ import {
   type EventAttentionResolveResult,
   getMemoryProtocolFlags,
   getOwnWriteEchoConfig,
+  getPatchReplayConfig,
   getServerExecutionConfig,
   type GraphQuery,
   type GraphQueryRequest,
@@ -235,6 +236,14 @@ const operationCodecFailureCount = operationMeter.createCounter(
 const operationActiveWatchCount = operationMeter.createHistogram(
   "ct.memory.operation.active_watches",
   { description: "Active operation watches observed during sync assembly." },
+);
+const ownPatchHeadCount = operationMeter.createCounter(
+  "ct.memory.sync.own_patch_heads",
+  {
+    description: "A session's own patch heads at flush, by whether the " +
+      "engine applied the patch over its declared replay base and whether " +
+      "the head was elided from the session's frame.",
+  },
 );
 
 /**
@@ -655,19 +664,45 @@ type SessionHandle = {
 };
 
 /**
- * Kind of the LAST operation an origin commit applied to a doc, which decides
- * the own-write echo shape at flush. The writer provably holds the outcome of
- * a `set`, a `delete`, and an `exact-patch` — a patch the engine applied over
- * the very document its writer declared it would replay the patch over
- * (`AppliedRevision.exactBase`) — so those heads are elided. A `patch` head
- * rides the frame as the full post-apply document.
+ * What the LAST operation an origin commit applied to a doc left its writer
+ * holding, which decides the own-write echo shape at flush
+ * ({@link writerHolds}).
  */
-type DirtyOp = "set" | "patch" | "exact-patch" | "delete";
+type DirtyWrite =
+  /** A head whose outcome the writer supplied: the bytes or the absence. */
+  | { op: "set" | "delete" }
+  /** A patch head, which can hold content the writer's ops cannot rebuild. */
+  | { op: "patch" }
+  /**
+   * A patch the engine applied over the head at `replayBaseSeq`, the document
+   * its writer declared it replays the patch over (`AppliedRevision.exactBase`).
+   */
+  | { op: "exact-patch"; replayBaseSeq: number };
 
-type DirtyOrigin = {
-  sessionId: string;
-  seq: number;
-  op: DirtyOp;
+type DirtyOrigin = { sessionId: string; seq: number } & DirtyWrite;
+
+/**
+ * Whether the session that committed `origin` holds the head the commit left,
+ * so that its own frame may omit the head. `previous` is the snapshot of the
+ * doc the session was last sent or had elided, which an exact patch's replay
+ * has to be over: a doc retracted from the session since the commit is
+ * delivered, even though the engine applied the patch over its base. With the
+ * own-write echo off every own head is elided.
+ */
+const writerHolds = (
+  origin: DirtyOrigin,
+  previous: SessionCacheEntry | undefined,
+): boolean => {
+  switch (origin.op) {
+    case "set":
+    case "delete":
+      return true;
+    case "exact-patch":
+      return previous?.seq === origin.replayBaseSeq ||
+        !getOwnWriteEchoConfig();
+    case "patch":
+      return !getOwnWriteEchoConfig();
+  }
 };
 
 /**
@@ -3097,7 +3132,7 @@ export class Server {
       // Phase 3 (concurrent deliveries merge against durable state), so
       // the head rides flush frames as a full post-apply document, which
       // no observer could extrapolate from its own writes.
-      ops: new Map([[streamDirtyKey, "patch"]]),
+      ops: new Map([[streamDirtyKey, { op: "patch" }]]),
     });
     this.#notifyCommitAdmitted({
       space: entry.targetSpace,
@@ -4139,20 +4174,26 @@ export class Server {
           // produced the head this commit leaves behind, so it alone
           // decides the flush-time echo shape.
           const committedWrites: Array<{ id: string; scopeKey: ScopeKey }> = [];
-          const dirtyOps = new Map<string, DirtyOp>();
+          const dirtyWrites = new Map<string, DirtyWrite>();
+          const patchReplay = getPatchReplayConfig();
           for (const revision of commit.revisions) {
             const scopeKey = revision.scopeKey as ScopeKey;
             committedWrites.push({ id: revision.id, scopeKey });
-            dirtyOps.set(
+            const operation = message.commit.operations[revision.opIndex];
+            dirtyWrites.set(
               toDirtyKey(revision.id, scopeKey),
-              revision.exactBase === true ? "exact-patch" : revision.op,
+              patchReplay && revision.exactBase === true &&
+                operation?.op === "patch" &&
+                operation.replayBaseSeq !== undefined
+                ? { op: "exact-patch", replayBaseSeq: operation.replayBaseSeq }
+                : { op: revision.op },
             );
           }
-          if (dirtyOps.size > 0) {
-            this.markSpaceDirty(message.space, dirtyOps.keys(), {
+          if (dirtyWrites.size > 0) {
+            this.markSpaceDirty(message.space, dirtyWrites.keys(), {
               sessionId: message.sessionId,
               seq: commit.seq,
-              ops: dirtyOps,
+              ops: dirtyWrites,
             });
           } else {
             // Every operation elided: nothing was written, so no document
@@ -6361,18 +6402,24 @@ export class Server {
                     // means the head is exactly this session's own accepted
                     // write; under the per-space publication lock nothing can
                     // have moved it since, so `entry.doc` IS that commit's
-                    // post-apply document. A `set`/`delete` head is then elided —
-                    // the client supplied the bytes (or the absence) and the
-                    // verdict + marker promote them — and so is an
-                    // `exact-patch` head, whose document is the writer's own
-                    // ops replayed over a document the writer holds. Any other
-                    // `patch` head is delivered in full: its post-apply state
-                    // can contain merged foreign content the writer's own ops
-                    // cannot reproduce.
-                    const held = origin !== undefined &&
+                    // post-apply document, and `writerHolds()` decides from
+                    // the write's kind and what the session was last sent.
+                    let held = false;
+                    if (
+                      origin !== undefined &&
                       origin.sessionId === sessionId &&
-                      origin.seq === entry.seq &&
-                      (origin.op !== "patch" || !getOwnWriteEchoConfig());
+                      origin.seq === entry.seq
+                    ) {
+                      held = writerHolds(origin, previous);
+                      if (
+                        origin.op === "patch" || origin.op === "exact-patch"
+                      ) {
+                        ownPatchHeadCount.add(1, {
+                          exact: origin.op === "exact-patch",
+                          elided: held,
+                        });
+                      }
+                    }
                     if (!held) {
                       upserts.push(entry);
                     }
@@ -6744,7 +6791,7 @@ export class Server {
     origin?: {
       sessionId: string;
       seq: number;
-      ops: ReadonlyMap<string, DirtyOp>;
+      ops: ReadonlyMap<string, DirtyWrite>;
     },
   ): void {
     if (dirtyIds !== undefined) {
@@ -6779,7 +6826,7 @@ export class Server {
           origins?.set(id, {
             sessionId: origin.sessionId,
             seq: origin.seq,
-            op: origin.ops.get(id) ?? "patch",
+            ...(origin.ops.get(id) ?? { op: "patch" }),
           });
         }
       }

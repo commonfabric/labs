@@ -18,12 +18,15 @@ import {
   getMemoryProtocolFlags,
   MEMORY_PROTOCOL,
   parseMemoryProtocolFlags,
+  PATCH_SEMANTICS_VERSION,
   resetCommitPreconditionsConfig,
   resetMessageCompressionConfig,
+  resetPatchReplayConfig,
   resetServerExecutionConfig,
   resetSyncSchemaTableConfig,
   setCommitPreconditionsConfig,
   setMessageCompressionConfig,
+  setPatchReplayConfig,
   setServerExecutionConfig,
   setSyncSchemaTableConfig,
   toDocumentPath,
@@ -160,7 +163,7 @@ describe("memory v2 flags", () => {
       sessionHoldings: true,
       viewScopedReplicationV1: false,
       sessionReadCeiling: true,
-      patchBaseSeq: true,
+      patchReplayVersion: PATCH_SEMANTICS_VERSION,
       syncSchemaTableV2: false,
     });
 
@@ -187,7 +190,7 @@ describe("memory v2 flags", () => {
       sessionHoldings: true,
       viewScopedReplicationV1: false,
       sessionReadCeiling: true,
-      patchBaseSeq: true,
+      patchReplayVersion: PATCH_SEMANTICS_VERSION,
       syncSchemaTableV2: true,
     });
 
@@ -298,18 +301,41 @@ describe("parseMemoryProtocolFlags", () => {
     );
   });
 
-  it("requires explicit patch base capability advertisement", () => {
-    assertEquals(parseMemoryProtocolFlags({})?.patchBaseSeq, false);
+  it("parses the patch replay version as a positive integer or absent", () => {
+    assertEquals(parseMemoryProtocolFlags({})?.patchReplayVersion, undefined);
     assertEquals(
-      parseMemoryProtocolFlags({ patchBaseSeq: true })?.patchBaseSeq,
-      true,
+      parseMemoryProtocolFlags({ patchReplayVersion: 3 })?.patchReplayVersion,
+      3,
     );
-    assertEquals(parseMemoryProtocolFlags({ patchBaseSeq: "true" }), null);
+    for (const invalid of ["1", 0, -1, 1.5, true]) {
+      assertEquals(
+        parseMemoryProtocolFlags({ patchReplayVersion: invalid }),
+        null,
+      );
+    }
     assertEquals(
       parseMemoryProtocolFlags(
         wireMemoryProtocolFlags(getMemoryProtocolFlags()),
-      )?.patchBaseSeq,
-      true,
+      )?.patchReplayVersion,
+      PATCH_SEMANTICS_VERSION,
+    );
+  });
+
+  it("advertises no patch replay version while patch replay is switched off", () => {
+    try {
+      setPatchReplayConfig(false);
+      assertEquals(getMemoryProtocolFlags().patchReplayVersion, undefined);
+      assertEquals(
+        "patchReplayVersion" in
+          wireMemoryProtocolFlags(getMemoryProtocolFlags()),
+        false,
+      );
+    } finally {
+      resetPatchReplayConfig();
+    }
+    assertEquals(
+      getMemoryProtocolFlags().patchReplayVersion,
+      PATCH_SEMANTICS_VERSION,
     );
   });
 
@@ -332,7 +358,6 @@ describe("parseMemoryProtocolFlags", () => {
       sessionHoldings: false,
       viewScopedReplicationV1: false,
       sessionReadCeiling: false,
-      patchBaseSeq: false,
     });
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: false }), {
       genesisRoot: false,
@@ -352,7 +377,6 @@ describe("parseMemoryProtocolFlags", () => {
       sessionHoldings: false,
       viewScopedReplicationV1: false,
       sessionReadCeiling: false,
-      patchBaseSeq: false,
     });
   });
 
@@ -379,7 +403,6 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
-        patchBaseSeq: false,
       },
     );
   });
@@ -425,7 +448,6 @@ describe("parseMemoryProtocolFlags", () => {
         entityIdListing: false,
         entityIdPagination: false,
         entityIdLookup: false,
-        patchBaseSeq: false,
       },
     );
   });
@@ -451,7 +473,6 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
-        patchBaseSeq: false,
       },
     );
   });
@@ -479,7 +500,6 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
-        patchBaseSeq: false,
       },
     );
   });
@@ -515,7 +535,6 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
-        patchBaseSeq: false,
       },
     );
   });
@@ -544,7 +563,6 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
-        patchBaseSeq: false,
       },
     );
   });
@@ -570,7 +588,6 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
-        patchBaseSeq: false,
       },
     );
   });
@@ -602,7 +619,6 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
-        patchBaseSeq: false,
       },
     );
   });
