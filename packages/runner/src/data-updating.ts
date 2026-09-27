@@ -2274,7 +2274,10 @@ export function normalizeAndDiff(
     return changes;
   }
 
-  // When setting array length, also update the removed/added elements.
+  // A write to an array's `length` is emitted alone, and the write layer's
+  // length coercion decides what it leaves: a negative length counts from the
+  // end, a fraction is floored, and a grow adds holes. Unlike the array
+  // branch's shrink above, it names none of the slots a truncation removes.
   if (
     link.path.length > 0 && link.path[link.path.length - 1] === "length"
   ) {
@@ -2283,26 +2286,8 @@ export function normalizeAndDiff(
       path: link.path.slice(0, -1),
     }, options);
     if (Array.isArray(maybeCurrentArray)) {
-      const currentLength = maybeCurrentArray.length;
-      const newLength = newValue as number;
-      if (currentLength !== newLength) {
-        changes.push({ location: link, value: newLength });
-        for (
-          let i = Math.min(currentLength, newLength);
-          i < Math.max(currentLength, newLength);
-          i++
-        ) {
-          // Slots beyond the shorter length are removed (or, on growth,
-          // were never present): explicit deletes, not `undefined` values.
-          changes.push({
-            location: {
-              ...link,
-              path: [...link.path.slice(0, -1), i.toString()],
-            },
-            value: undefined,
-            delete: true,
-          });
-        }
+      if (maybeCurrentArray.length !== newValue) {
+        changes.push({ location: link, value: newValue as FabricValue });
         return changes;
       }
     } // else, i.e. parent is not an array: fall through to the primitive case

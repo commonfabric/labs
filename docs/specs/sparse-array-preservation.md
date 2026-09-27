@@ -192,6 +192,12 @@ for each index:
 Note: a change whose `value` is `undefined` WITHOUT the `delete` flag is a
 value write that stores `undefined`; only `delete: true` creates a hole.
 
+A write of a primitive value to an array's `length` takes a branch of its own
+and emits the length write alone. The write layer applies it with its own
+coercion (see `applyArrayLengthWrite`), so a negative length counts from the
+end and a fractional one is floored, and the diff's cost does not depend on how
+far a grow reaches; the commit that follows still does.
+
 The `hasPath` function uses `index in value` (not `value[index] !== undefined`)
 to correctly report that a path through a hole does not exist.
 

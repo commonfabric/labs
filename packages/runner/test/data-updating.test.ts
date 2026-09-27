@@ -412,41 +412,122 @@ describe("data-updating", () => {
       expect(changes[1].value).toBe(3);
     });
 
-    it("should generate correct paths when setting array length to 0", () => {
-      const testCell = runtime.getCell<{ items: number[] }>(
-        space,
-        "normalizeAndDiff array length to zero",
-        undefined,
-        tx,
-      );
-      // Create array with 100 items
-      const largeArray = Array.from({ length: 100 }, (_, i) => i);
-      testCell.set({ items: largeArray });
+    describe("a write to an array's `length`", () => {
+      /** Returns a fresh cell whose `items` holds `items`. */
+      const itemsCell = (cause: string, items: unknown[]) => {
+        const cell = runtime.getCell<{ items: unknown[] }>(
+          space,
+          cause,
+          undefined,
+          tx,
+        );
+        cell.set({ items });
+        return cell;
+      };
 
-      // Now set length to 0 through the length property
-      const lengthLink = testCell.key("items").key("length")
-        .getAsNormalizedFullLink();
-      const changes = normalizeAndDiff(runtime, tx, lengthLink, 0);
+      it("returns just the length write for a grow, which applies as holes", () => {
+        const cell = itemsCell("normalizeAndDiff array length grow", [1, 2]);
+        const lengthLink = cell.key("items").key("length")
+          .getAsNormalizedFullLink();
+        const changes = normalizeAndDiff(runtime, tx, lengthLink, 5);
 
-      // Should have 101 changes total
-      expect(changes.length).toBe(101);
+        expect(changes).toEqual([{ location: lengthLink, value: 5 }]);
 
-      // Find the length change
-      const lengthChange = changes.find((c) =>
-        c.location.path[c.location.path.length - 1] === "length"
-      );
-      expect(lengthChange).toBeDefined();
-      expect(lengthChange!.value).toBe(0);
+        applyChangeSet(tx, changes);
+        const items = cell.getRaw()!.items;
+        expect(items.length).toBe(5);
+        expect(Object.keys(items)).toEqual(["0", "1"]);
+      });
 
-      // Verify all elements are marked undefined with correct paths
-      const elementChanges = changes.filter((c) =>
-        c.location.path[c.location.path.length - 1] !== "length"
-      );
-      expect(elementChanges.length).toBe(100);
+      it("returns just the length write for a grow to `2 ** 32 - 1`", () => {
+        // What a grow costs here does not depend on how far it reaches, so
+        // the largest length an array can have returns as fast as `5` does.
 
-      elementChanges.forEach((change, i) => {
-        expect(change.location.path).toEqual(["items", i.toString()]);
-        expect(change.value).toBe(undefined);
+        const cell = itemsCell("normalizeAndDiff array length grow max", [1]);
+        const lengthLink = cell.key("items").key("length")
+          .getAsNormalizedFullLink();
+
+        expect(normalizeAndDiff(runtime, tx, lengthLink, 2 ** 32 - 1))
+          .toEqual([{ location: lengthLink, value: 2 ** 32 - 1 }]);
+      });
+
+      it("returns just the length write for a shrink to `0`, which empties the array", () => {
+        const cell = itemsCell(
+          "normalizeAndDiff array length to zero",
+          Array.from({ length: 100 }, (_, i) => i),
+        );
+        const lengthLink = cell.key("items").key("length")
+          .getAsNormalizedFullLink();
+        const changes = normalizeAndDiff(runtime, tx, lengthLink, 0);
+
+        expect(changes).toEqual([{ location: lengthLink, value: 0 }]);
+
+        applyChangeSet(tx, changes);
+        expect(cell.getRaw()!.items).toEqual([]);
+      });
+
+      it("returns just the length write for a fractional length", () => {
+        const cell = itemsCell(
+          "normalizeAndDiff array length fractional",
+          ["a", "b", "c", "d", "e"],
+        );
+        const lengthLink = cell.key("items").key("length")
+          .getAsNormalizedFullLink();
+
+        expect(normalizeAndDiff(runtime, tx, lengthLink, 2.5))
+          .toEqual([{ location: lengthLink, value: 2.5 }]);
+      });
+
+      it("keeps every surviving element for a negative length, which counts from the end", () => {
+        const cell = itemsCell(
+          "normalizeAndDiff array length negative",
+          ["a", "b", "c", "d", "e"],
+        );
+
+        cell.key("items").key("length").set(-1);
+
+        expect(cell.getRaw()!.items).toEqual(["a", "b", "c", "d"]);
+      });
+
+      it("empties the array for `-Infinity`", () => {
+        const cell = itemsCell("normalizeAndDiff array length -Infinity", [
+          "a",
+          "b",
+        ]);
+
+        cell.key("items").key("length").set(-Infinity);
+
+        expect(cell.getRaw()!.items).toEqual([]);
+      });
+
+      it("keeps every key of an object that replaces the array, `length` included", () => {
+        // The new values differ from the old elements at the same indices, so
+        // no key is lost to a comparison against the array being replaced.
+
+        const numeric = runtime.getCell<{ x: unknown }>(
+          space,
+          "normalizeAndDiff array replaced by object, numeric length",
+          undefined,
+          tx,
+        );
+        numeric.set({ x: ["a", "b", "c"] });
+        numeric.set({ x: { "0": "x", "1": "y", length: 1 } });
+
+        const named = runtime.getCell<{ x: unknown }>(
+          space,
+          "normalizeAndDiff array replaced by object, named length",
+          undefined,
+          tx,
+        );
+        named.set({ x: ["a", "b"] });
+        named.set({ x: { "0": "x", "1": "y", length: "two" } });
+
+        expect(numeric.getRaw()).toEqual({
+          x: { "0": "x", "1": "y", length: 1 },
+        });
+        expect(named.getRaw()).toEqual({
+          x: { "0": "x", "1": "y", length: "two" },
+        });
       });
     });
 
