@@ -304,6 +304,37 @@ const sealAndRelease = async (
     expect(published.value).toBe("pizza");
     expect(await readCustodyAnswer(hostRoom)).toBe("pizza");
 
+    // The room's own result must not answer a question the published answer
+    // does not. A member's code points the box at a record repeating
+    // Alice's entry, whose answer happens to equal the published one, so the
+    // projector's output does not change. Were that output readable, whether
+    // it is still shown would tell the member what Alice's stance alone
+    // yields: one bit per record.
+    const repeatedAlice = await host.editWithRetry((tx) => {
+      setCfcImplementationIdentity(tx, {
+        kind: "verified",
+        moduleIdentity: "sha256:member-code",
+        symbol: "repointBox",
+        bindingPath: ["repointBox"],
+      });
+      const record = host.getCell(S, "crafted-box-alice", {
+        type: "object",
+        ifc: { confidentiality: [cfcAtom.space(S)] },
+      } as never, tx);
+      const entry = host.getCellFromLink(
+        { ...sealed.box.getAsNormalizedFullLink(), path: [sealed.entryKey] },
+        undefined,
+        tx,
+      );
+      record.set({ first: entry, second: entry } as never);
+      room.key("box").withTx(tx).set(record as never);
+    });
+    expect(repeatedAlice.error).toBeUndefined();
+    // The projector runs over the record; its answer is the same.
+    await host.idle();
+    await host.storageManager.synced();
+    expect(shownTo(bob.did(), room.key("choice"))).toBe(false);
+
     // A member's code points the room's `box` at a record of its own that
     // repeats Bob's real entry, so his stance counts for both seats. The
     // projector's answer moves to what that record yields, and the rule,
@@ -341,6 +372,7 @@ const sealAndRelease = async (
     // the host publishes nothing again.
     await expect(publish()).rejects.toThrow("already published");
     expect(await readCustodyAnswer(hostRoom)).toBe("pizza");
+
   } finally {
     for (const runtime of runtimes) {
       await runtime.dispose({ closeStorage: false });
