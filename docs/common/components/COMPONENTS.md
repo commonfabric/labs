@@ -1145,8 +1145,8 @@ be any cell the pattern declares `PolicyOf` its custody rules: the runtime
 reads the policy from that cell's label, where the reference, its module
 identity, digest and room subject, is bound. The box `$box` receives is the one
 document the room's projector reads; reading it is label-gated like any other
-read. `packages/patterns/cfc-exchange-rules/custody-projector.tsx` is a room
-built this way.
+read. `packages/patterns/cfc-exchange-rules/custody-answer-room.tsx` is a room
+built this way, which shows its answer through `cf-custody-answer`.
 
 The button opens a native modal dialog. Its first part comes from what the
 runtime read and checked, not from anything the pattern renders: the room space;
@@ -1183,7 +1183,7 @@ nor the key of the actor's entry in the room. The box's entries carry the
 room's policy, and a read through the link carries it, so `$box` need declare
 none. Known limitation: a `$box` whose entries do declare a label is refused
 when the link is written (see the `TODO(custody-box-link)` repro in
-`packages/patterns/cfc-exchange-rules/custody-projector.tsx`). A binding that changes while a commit is in flight
+`packages/patterns/cfc-exchange-rules/custody-answer-room.tsx`). A binding that changes while a commit is in flight
 leaves the component without that event even if the seal committed, so a
 pattern that must know should read the room rather than rely on it; the
 component still writes the box link to the `$box` bound when the actor

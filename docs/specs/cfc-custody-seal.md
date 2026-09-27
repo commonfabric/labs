@@ -173,11 +173,15 @@ attestations on their seat cells; a pattern, which reads neither DIDs nor
 attestations, gains from `D` only a test of a guess at the whole set of seat
 DIDs, and the box's address already gives it the same test. Neither the component nor the worker hands
 the pattern the entry's key: a pattern that held it could write down which
-member's entry it is. `packages/patterns/cfc-exchange-rules/custody-projector.tsx`
-is such a room, and `packages/patterns/integration/cfc-custody-projector.test.ts`
-seals two members' stances through its cells and shows that a room reader sees
-its projector's answer and not a member's rating, under the room's own rule
-and under the same rule requiring the seal's witness.
+member's entry it is. `packages/patterns/cfc-exchange-rules/custody-answer-room.tsx`
+is such a room, and `packages/patterns/cfc-exchange-rules/custody-projector.tsx`
+is the same room demo-grade, its rule naming the projector alone.
+`packages/patterns/integration/cfc-custody-projector.test.ts` seals two
+members' stances through each room's cells and shows that a room reader sees
+its projector's answer and not a member's rating. For the answer room, whose
+rule requires the seal's witness, the host publishes that answer once and
+refuses the answer over a crafted box; for the demo-grade room it publishes
+nothing.
 
 ## What the seal writes
 

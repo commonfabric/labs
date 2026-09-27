@@ -1,12 +1,13 @@
 /**
- * DEMO-GRADE until a pattern's reads carry the seal's input witness (labs
- * L14b): its release rule cannot require that witness yet, so it protects a
- * member's stance from honest members' code only, and the host's confirmation
- * warns the member so.
- *
  * A room whose members' stances are sealed into its policy's custody, and
  * whose policy releases only what one function of its own module projects
- * from them.
+ * from them, once per instance.
+ *
+ * This is `custody-projector.tsx` with the release rule a room over sealed
+ * custody is meant to take, and showing the answer the seal publishes rather
+ * than its reactive projection. That room stays as it was recorded, with the
+ * weaker rule, because the rule is part of the policy its `policy` cell
+ * declares: a room of it keeps its sealed values under that policy.
  *
  * A member reviews a stance in the trusted host's `cf-custody-seal` dialog,
  * which a room binds as `<cf-custody-seal $draft $terms={terms}
@@ -23,27 +24,28 @@
  * - `policy` is declared `PolicyOf` the room's rules, so its label carries
  *   the policy's reference with this room as its subject, and the host reads
  *   the reference from there.
- * - Once a member seals, the host writes a link to the box into `box`.
+ * - When a member seals, the seal writes a link to the box into `box`, in
+ *   the transaction that writes the member's entry.
  *
  * Every entry of the box is labeled with the room's policy, and the box
  * itself with the policy or the room's readers, so what the pattern computes
  * from it is shown to anyone only through `releaseChoice`. That rule drops
  * the policy from what `projectChoice` returns, one of the listed answers,
- * which leaves the room's own readers able to see it; a member's rating, and
- * anything else computed from the box, stays sealed. The stances hold a
- * bounded array of closed ratings, one per option, which is the shape the
- * seal admits for a multiple choice.
+ * when everything confidential `projectChoice` read was written by the seal
+ * (`TransformedBy{builtin cfc-custody-seal}` as its input witness): the box
+ * the seal linked into `box`, and not a document other code put there, which
+ * could repeat another member's entry or mix it with entries it made up. A
+ * member's rating, and anything else computed from the box, stays sealed.
+ * The stances hold a bounded array of closed ratings, one per option, which
+ * is the shape the seal admits for a multiple choice.
  *
- * The rule names the projector by its identity alone, which is weaker than
- * it looks: `box` is ordinary room data, so a member's code can link it to a
- * document of its own that mixes another member's entry with entries it made
- * up, and learn that entry from the answers the rule releases. A rule that
- * also requires an input witness, `TransformedBy{builtin cfc-custody-seal}` on
- * everything confidential the projector read, is the shape a rule over sealed
- * custody is meant to take and would refuse those, but the witness does not
- * reach what a lift reads through its argument, so such a rule releases
- * nothing a pattern computes; see `docs/specs/cfc-custody-seal.md`. Until it
- * does, this room keeps a member's rating from honest members' code only.
+ * `choice` is reactive, so the room shows the host's `cf-custody-answer`
+ * instead, which asks the seal to publish `choice` once every seat has sealed
+ * and the rule releases it. The seal writes it once into the instance's
+ * answer slot, and the component shows what the slot holds, verified to be
+ * the seal's write. What the room's readers are shown then cannot move,
+ * whatever later points the projector at other input.
+ * `docs/specs/cfc-custody-seal.md` says what this does not cover.
  */
 
 import {
@@ -74,6 +76,10 @@ export const releaseChoice = exchangeRule({
         kind: "verified",
         moduleIdentity: THIS_POLICY.moduleIdentity,
         symbol: "projectChoice",
+      },
+      inputWitness: {
+        type: "https://commonfabric.org/cfc/atom/TransformedBy",
+        identity: { kind: "builtin", builtinId: "cfc-custody-seal" },
       },
     }],
   },
@@ -181,7 +187,7 @@ export interface CustodyTerms {
   stanceSchema: typeof STANCE_SCHEMA;
 }
 
-interface CustodyProjectorInput {
+interface CustodyAnswerRoomInput {
   terms: Writable<Default<CustodyTerms | null, null>>;
   /**
    * Declared with the room's policy, so that once written its label carries
@@ -206,13 +212,16 @@ interface CustodyProjectorInput {
   box: Writable<Default<Box, Record<string, never>>>;
 }
 
-export interface CustodyProjectorOutput {
+export interface CustodyAnswerRoomOutput {
   [NAME]: string;
   [UI]: VNode;
   terms: CustodyTerms | null;
   policy: Sealed<boolean>;
   box: Box;
-  /** The projected answer: a room reader sees it once the rule releases it. */
+  /**
+   * The projected answer, which moves with what the projector reads. The
+   * room shows the answer the seal published from it instead.
+   */
   choice: string;
   /** One member's sealed rating, which no rule releases. */
   rating: string;
@@ -236,19 +245,24 @@ const propose = handler<
   policy.set(true as Sealed<boolean>);
 });
 
-const CustodyProjector = pattern<
-  CustodyProjectorInput,
-  CustodyProjectorOutput
+const CustodyAnswerRoom = pattern<
+  CustodyAnswerRoomInput,
+  CustodyAnswerRoomOutput
 >(({ terms, policy, box }) => {
   const choice = projectChoice(box);
   const rating = firstRating(box);
   return {
-    [NAME]: "Sealed custody projector",
+    [NAME]: "Sealed custody answer room",
     [UI]: (
-      <cf-screen title="Sealed custody projector">
+      <cf-screen title="Sealed custody answer room">
         <cf-vstack gap="2" style={{ padding: "1rem" }}>
           <cf-label>The room's choice</cf-label>
-          <div id="custody-projector-choice">{choice}</div>
+          <cf-custody-answer
+            id="custody-answer-room-choice"
+            $terms={terms}
+            $policy={policy}
+            $output={choice}
+          />
         </cf-vstack>
       </cf-screen>
     ),
@@ -261,4 +275,4 @@ const CustodyProjector = pattern<
   };
 });
 
-export default CustodyProjector;
+export default CustodyAnswerRoom;

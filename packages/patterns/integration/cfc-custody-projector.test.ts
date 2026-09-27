@@ -1,16 +1,19 @@
 /**
  * Sealed custody reached from a pattern, end to end.
  *
- * Two members seal their stances into the room of
- * `cfc-exchange-rules/custody-projector.tsx` through the host's custody seal,
+ * Two members seal their stances into a room of
+ * `cfc-exchange-rules/custody-projector.tsx`, and of
+ * `cfc-exchange-rules/custody-answer-room.tsx`, through the host's custody seal,
  * bound to the pattern's own cells the way `cf-custody-seal` binds them: the
  * terms name each seat by a cell the member's runtime attested, the policy is
  * read from the label of the pattern's `policy` cell, and the box the seal
  * returns is linked into the pattern's `box`. The pattern's projector then
  * reads the box, and of what it computes only its answer is shown to a reader
- * of the room. This is the honest path; that the rule names the projector by
- * identity alone, and so releases what it computes over a crafted box, is in
- * the spec's limits.
+ * of the room. The answer room's rule requires the seal's witness, so the
+ * host publishes its answer once and refuses one over a crafted box; the
+ * projector's rule names the projector by identity alone, so the host
+ * publishes nothing for it, and that it releases what it computes over a
+ * crafted box is in the spec's limits.
  *
  * Each member runs its own runtime over one in-process memory server. No
  * toolshed or browser is involved; the trusted click is built the way the
@@ -49,12 +52,10 @@ import {
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 
-const PATTERN = join(
-  import.meta.dirname!,
-  "..",
-  "cfc-exchange-rules",
-  "custody-projector.tsx",
-);
+/** The demo-grade room, whose rule names its projector alone. */
+const PROJECTOR = "custody-projector.tsx";
+/** The room whose rule requires the seal's witness, and shows its answer. */
+const ANSWER_ROOM = "custody-answer-room.tsx";
 const ROOT = join(import.meta.dirname!, "..");
 const REVIEWER = "did:web:review.example";
 const SEAT_WRITER = "custody-projector-test-seat";
@@ -93,26 +94,16 @@ const trustedClick = () => {
   return event;
 };
 
-// The room's rule as the pattern writes it, requiring that everything
-// confidential its projector read was written by the seal, and the same rule
-// naming the projector alone.
-const IDENTITY_GUARD = `        symbol: "projectChoice",
-      },
-    }],`;
-const WITNESSED_GUARD = `        symbol: "projectChoice",
-      },
-      inputWitness: {
-        type: "https://commonfabric.org/cfc/atom/TransformedBy",
-        identity: { kind: "builtin", builtinId: "cfc-custody-seal" },
-      },
-    }],`;
-
 /**
- * Two members seal their stances into a room of the projector, the rule
- * requiring the seal's witness when `witnessed`, and a reader of the room is
- * shown the projector's answer and not a member's rating.
+ * Two members seal their stances into a room of `file`, and a reader of the
+ * room is shown the projector's answer and not a member's rating. The host
+ * publishes that answer only for the room whose rule requires the seal's
+ * witness.
  */
-const sealAndRelease = async (witnessed: boolean): Promise<void> => {
+const sealAndRelease = async (
+  file: typeof PROJECTOR | typeof ANSWER_ROOM,
+): Promise<void> => {
+  const witnessed = file === ANSWER_ROOM;
   const [alice, bob, roomKey] = await Promise.all(
     ["alice", "bob", "room"].map((name) =>
       Identity.fromPassphrase(`custody projector ${name}`)
@@ -149,28 +140,17 @@ const sealAndRelease = async (witnessed: boolean): Promise<void> => {
 
     // Alice starts the room.
     const host = runtimeFor(alice);
-    const resolved = await resolveLocalProgram(
+    const program = await resolveLocalProgram(
       (resolver) => host.harness.resolve(resolver),
-      { main: PATTERN, root: ROOT },
+      { main: join(ROOT, "cfc-exchange-rules", file), root: ROOT },
     );
-    const program = witnessed ? resolved : {
-      ...resolved,
-      files: resolved.files.map((file) => {
-        if (!file.name.endsWith("custody-projector.tsx")) return file;
-        expect(file.contents).toContain(WITNESSED_GUARD);
-        return {
-          ...file,
-          contents: file.contents.replace(WITNESSED_GUARD, IDENTITY_GUARD),
-        };
-      }),
-    };
     const compiled = await host.patternManager.compilePattern(program, {
       space: S,
     });
     const start = host.edit();
     const piece = host.getCell<Record<string, unknown>>(
       S,
-      "custody-projector",
+      file,
       undefined,
       start,
     );
@@ -371,13 +351,13 @@ const sealAndRelease = async (witnessed: boolean): Promise<void> => {
 };
 
 describe("sealed custody through a pattern", () => {
-  it("seals two members' stances, and publishes the projector's answer once", async () => {
+  it("seals two members' stances into the answer room, and publishes its answer once", async () => {
     // The projector reads the box through the room's `box`, which holds the
     // link the seal wrote, so everything it read carries the seal's stamp.
-    await sealAndRelease(true);
+    await sealAndRelease(ANSWER_ROOM);
   });
 
-  it("releases the answer but publishes nothing under a rule naming the projector alone", async () => {
-    await sealAndRelease(false);
+  it("releases the demo-grade room's answer, and publishes nothing under its rule naming the projector alone", async () => {
+    await sealAndRelease(PROJECTOR);
   });
 });

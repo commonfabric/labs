@@ -20,15 +20,25 @@ handler copying a raw input, or a different version of the module does not
 satisfy the rule. `blessed-object.tsx` does the same for a function returning an
 object, whose object node is released along with its fields.
 
-`custody-projector.tsx` is a room whose members seal their stances into the
+`custody-answer-room.tsx` is a room whose members seal their stances into the
 policy's custody through the host's `cf-custody-seal`, and whose policy releases
 only what its projector computes over the sealed box, one of the listed answers,
-when everything the projector read was written by the seal. It shows the pattern
-side of the [custody seal](../../../docs/specs/cfc-custody-seal.md): seats named
-by attested cells, the policy read from a declaring cell's label, the box link
-the seal writes into the room, and the answer the seal publishes once per
-instance through `cf-custody-answer`, which the room renders instead of its
-reactive projection. The spec's limits say what that still leaves open.
+when everything the projector read was written by the seal
+(`TransformedBy{builtin cfc-custody-seal}` as the rule's input witness). It
+shows the pattern side of the
+[custody seal](../../../docs/specs/cfc-custody-seal.md): seats named by attested
+cells, the policy read from a declaring cell's label, the box link the seal
+writes into the room, and the answer the seal publishes once per instance
+through `cf-custody-answer`, which the room renders instead of its reactive
+projection. The spec's limits say what that still leaves open.
+
+`custody-projector.tsx` is the same room, demo-grade: its rule names the
+projector alone rather than requiring the seal's input witness, and it renders
+its reactive projection. Under that rule a member's own code can feed the
+projector a crafted box and learn another member's entry from the answers, and
+the host publishes no answer for it. It is kept as recorded because the rule is
+part of the policy its `policy` cell declares, so changing the rule would change
+the policy a room of it already sealed under.
 
 `witnessed-chain.tsx` narrows the tally rule with an `inputWitness`: it releases
 the tally only when every confidential location the tally read was written by
@@ -72,5 +82,6 @@ deno task cf test packages/patterns/cfc-exchange-rules/direct-release.test.tsx
 deno task cf test packages/patterns/cfc-exchange-rules/blessed-computation.test.tsx
 deno task cf test packages/patterns/cfc-exchange-rules/blessed-object.test.tsx
 deno task cf test packages/patterns/cfc-exchange-rules/custody-projector.test.tsx
+deno task cf test packages/patterns/cfc-exchange-rules/custody-answer-room.test.tsx
 deno task cf test packages/patterns/cfc-exchange-rules/witnessed-chain.test.tsx
 ```

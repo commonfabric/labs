@@ -164,8 +164,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "E40icBz_MEFG2p8T7wt--1Bmeoaed750v3RVq-LXReI",
-              "policyDigest": "i6JhfOfgX-uWCKx8xRxvB4DhCGviXWffVLz0yvuL5Fo",
+              "moduleIdentity": "DybT2G1l1TNGLhbDYGtsKEOsRxGRUSDbjpIo4V2uxjg",
+              "policyDigest": "aNPFKn5kPlmkTaW-ySrNunTobRO1d1DqQHYcbL-VgCo",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -199,7 +199,7 @@
     ],
     "type": "object"
   },
-  "pattern": "cfc-exchange-rules/custody-projector.tsx",
+  "pattern": "cfc-exchange-rules/custody-answer-room.tsx",
   "resultSchema": {
     "$defs": {
       "Box": {
@@ -366,8 +366,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "E40icBz_MEFG2p8T7wt--1Bmeoaed750v3RVq-LXReI",
-              "policyDigest": "i6JhfOfgX-uWCKx8xRxvB4DhCGviXWffVLz0yvuL5Fo",
+              "moduleIdentity": "DybT2G1l1TNGLhbDYGtsKEOsRxGRUSDbjpIo4V2uxjg",
+              "policyDigest": "aNPFKn5kPlmkTaW-ySrNunTobRO1d1DqQHYcbL-VgCo",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
