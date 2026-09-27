@@ -3544,6 +3544,9 @@ export class V2StorageTransaction implements IStorageTransaction {
       if (route.error) return route;
     }
     const log = this.getReactivityLog();
+    // Each document's current value, fetched once however many reads name it;
+    // the replica does not change while this synchronous check runs.
+    const currentByDocument = new Map<DocumentEntry, FabricValue | undefined>();
     for (
       const [reads, shallow] of [
         [log.reads, false],
@@ -3552,14 +3555,12 @@ export class V2StorageTransaction implements IStorageTransaction {
     ) {
       // The log keeps a read each time one was taken, and a reader walking a
       // large value takes the same shallow read of its root once per child.
-      // The same read checks the same way every time, so each is checked once.
-      const checked = new Set<string>();
+      // A read whose value is still the one it was given passes in constant
+      // time. One whose value moved is checked once per document and path,
+      // since checking it again gives the same answer, and comparing a large
+      // container once per copy of the read is what made this quadratic.
+      const checked = new Map<DocumentEntry, Set<string>>();
       for (const address of reads) {
-        const readKey = `${address.space}\0${this.#docKey(address)}\0${
-          encodePointer(address.path)
-        }`;
-        if (checked.has(readKey)) continue;
-        checked.add(readKey);
         const branch = this.#branches.get(address.space);
         const doc = branch?.docs.get(this.#docKey(address));
         // Read recording creates both before adding activity. If a future
@@ -3571,26 +3572,43 @@ export class V2StorageTransaction implements IStorageTransaction {
             ),
           };
         }
-        const replica = branch.replica;
-        const current = toTransactionDocumentValue(
-          isDurableReadTx(this) && replica.getNonSpeculativeDocument
-            ? replica.getNonSpeculativeDocument(
-              address.id,
-              address.scope,
-              this.#scopeKeyIdentity,
-            )
-            : replica.getDocument(
-              address.id,
-              address.scope,
-              this.#scopeKeyIdentity,
-            ),
-        );
+        let current: FabricValue | undefined;
+        if (currentByDocument.has(doc)) {
+          current = currentByDocument.get(doc);
+        } else {
+          const replica = branch.replica;
+          current = toTransactionDocumentValue(
+            isDurableReadTx(this) && replica.getNonSpeculativeDocument
+              ? replica.getNonSpeculativeDocument(
+                address.id,
+                address.scope,
+                this.#scopeKeyIdentity,
+              )
+              : replica.getDocument(
+                address.id,
+                address.scope,
+                this.#scopeKeyIdentity,
+              ),
+          );
+          currentByDocument.set(doc, current);
+        }
         const expected = readValueAtPath(doc.initial.value, address.path, {
           allowArrayLength: true,
         });
         const actual = readValueAtPath(current, address.path, {
           allowArrayLength: true,
         });
+        // A value present on both sides and the very same one passes every
+        // check below.
+        if (expected !== undefined && Object.is(expected, actual)) continue;
+        const pointer = encodePointer(address.path);
+        let checkedPaths = checked.get(doc);
+        if (checkedPaths === undefined) {
+          checkedPaths = new Set();
+          checked.set(doc, checkedPaths);
+        }
+        if (checkedPaths.has(pointer)) continue;
+        checkedPaths.add(pointer);
         if (
           hasValueAtPath(doc.initial.value, address.path, {
               allowArrayLength: true,
