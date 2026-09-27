@@ -285,7 +285,7 @@ describe("v2-transaction", () => {
       }
     });
 
-    it("returns the writes ahead of a refused array `length` to a read taken before the batch and again after it", async () => {
+    it("returns the writes ahead of a refused array `length` to a read repeated after the batch", async () => {
       // The transaction writes the document and reads `value` back before the
       // batch, which caches a frozen snapshot of it and keeps the root for
       // readers. The second read sees the kept write only if the batch

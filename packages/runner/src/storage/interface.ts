@@ -1067,7 +1067,8 @@ export interface IWriteOptions {
    * object key or punching an array hole — instead of storing a value.
    * `value` must be `undefined`. Without this flag, writing `undefined`
    * stores `undefined` as a real value: present-but-undefined is distinct
-   * from absent. A root-path delete retracts the document.
+   * from absent. A root-path delete retracts the document, and a delete of
+   * an array's `length` empties the array.
    */
   delete?: boolean;
 

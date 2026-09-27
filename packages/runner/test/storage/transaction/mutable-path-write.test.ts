@@ -39,11 +39,13 @@ describe("mutable-path-write", () => {
       });
 
       it("returns an `InvalidArrayLengthError` for `2 ** 32` on an array held under a named key of another array", () => {
-        // A write that creates missing containers can leave a named own
-        // property on an array, and the write descends through it like any
-        // other own property.
+        // A write that creates missing containers under a named key of an
+        // array leaves the array holding a named own property, and a write
+        // through a mutable array descends into it. `named` is frozen, so a
+        // write that reached it would thaw it by replacing it.
 
-        const outer = Object.assign([1], { named: [7] });
+        const named = Object.freeze([7]);
+        const outer = Object.assign([1], { named });
 
         const result = applyMutablePathWrite(
           { outer } as unknown as FabricValue,
@@ -52,7 +54,7 @@ describe("mutable-path-write", () => {
         );
 
         expect(result.error?.name).toBe("InvalidArrayLengthError");
-        expect(outer.named).toEqual([7]);
+        expect(outer.named).toBe(named);
       });
 
       it("grows the array for `2 ** 32 - 0.5`, whose floor is a length an array can have", () => {
@@ -71,7 +73,18 @@ describe("mutable-path-write", () => {
         ).toBe(2 ** 32 - 1);
       });
 
-      it("empties the array for a delete, whatever value the delete carries", () => {
+      it("empties the array for a delete carrying `1`, a length it could truncate to", () => {
+        const result = applyMutablePathWrite(
+          { list: [1, 2] },
+          at(["list", "length"]),
+          1,
+          { delete: true },
+        );
+
+        expect(result.ok?.root).toEqual({ list: [] });
+      });
+
+      it("empties the array for a delete carrying `2 ** 32`, a length it could not grow to", () => {
         const result = applyMutablePathWrite(
           { list: [1, 2] },
           at(["list", "length"]),

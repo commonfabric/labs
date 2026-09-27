@@ -92,9 +92,9 @@ export const getValueTypeName = (value: FabricValue | undefined): string => {
  * intermediates like any other value. Removal is requested explicitly
  * via `options.delete`, which deletes the leaf slot (object key removal
  * or array hole) and never materializes intermediates for a slot that
- * wasn't there. A delete with leaf key `"length"` funnels through the
- * legacy length coercion (undefined → NaN → truncate), matching the
- * historical `tx.write(path/length, undefined)` behavior.
+ * wasn't there. A delete with leaf key `"length"` empties the array: it
+ * goes through the legacy length coercion as `undefined` (→ NaN → 0),
+ * whatever value the call carries.
  *
  * `force: false` is passed to `cloneForMutation` because the root, by
  * this point, is either (a) freshly allocated by us (in the
@@ -152,9 +152,12 @@ export const applyMutablePathWrite = (
 
   // `cloneForMutation()` below thaws the spine of a root the caller owns in
   // place, replacing each frozen container on it with a mutable copy, so the
-  // length refusal is decided first, reading `currentRoot` alone.
+  // length refusal is decided first, reading `currentRoot` alone. The lookup
+  // reaches every array that call would, and possibly one it would not (see
+  // `existingValueAt()`), so it refuses at least every length that throws.
   if (
-    leafKey === "length" && !isDelete && isOutOfRangeArrayLength(value) &&
+    leafKey === "length" && !isDelete && typeof value === "number" &&
+    isOutOfRangeArrayLength(value) &&
     Array.isArray(existingValueAt(currentRoot, parentPath))
   ) {
     return { error: InvalidArrayLengthError(address, value) };
@@ -273,11 +276,15 @@ export const applyMutablePathWrite = (
 
 /**
  * Helper for `applyMutablePathWrite()`, which returns the value already at
- * `path` within `root` that `cloneForMutation()` would reach, creating
- * nothing: it descends the same way, through an own property of a plain
- * container (per `isPlainContainer()`) whatever the key, an array's included.
- * Returns `undefined` where that descent stops short, which is where
- * `cloneForMutation()` either creates the rest of the path or refuses it.
+ * `path` within `root`, creating nothing. It descends through an own property
+ * of a plain container (per `isPlainContainer()`) whatever the key, an
+ * array's included, and returns `undefined` where that stops short.
+ *
+ * `cloneForMutation()` descends by the same rule, but through the mutable
+ * copy it makes of each frozen container, and that copy holds a subset of the
+ * original's own properties: an array's indices, an object's enumerable keys.
+ * So every existing value that call reaches, this reaches too, while through a
+ * frozen container this can also reach one held under a key the copy drops.
  */
 const existingValueAt = (
   root: FabricValue,
@@ -299,10 +306,8 @@ const existingValueAt = (
  * `2 ** 32` or more. `+Infinity` is not one, since the coercion leaves the
  * array unchanged for it.
  */
-const isOutOfRangeArrayLength = (
-  value: FabricValue | undefined,
-): value is number =>
-  typeof value === "number" && Number.isFinite(value) && value >= 2 ** 32;
+const isOutOfRangeArrayLength = (value: number): boolean =>
+  Number.isFinite(value) && value >= 2 ** 32;
 
 /**
  * Helper for the legacy array-length-write semantics, called when
