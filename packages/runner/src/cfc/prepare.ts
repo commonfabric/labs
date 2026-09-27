@@ -85,7 +85,6 @@ import type {
 } from "../storage/interface.ts";
 import {
   internalVerifierRead,
-  isDereferenceResolutionProbe,
   isInternalVerifierRead,
   isLinkResolutionProbe,
   isMachineryRead,
@@ -3313,13 +3312,6 @@ const forEachFlowObservation = (
       // machinery-read boundary that lets the generic pure-link mint route
       // ship (SC-8 remainder; template-population §6).
       machinery: boolean;
-      // True when the resolver issued the read as one of its own probes on
-      // the way to the position a caller asked for
-      // (`dereferenceResolutionProbe`). Such a probe is resolution
-      // machinery whether or not it found a link to follow: the caller's
-      // read at the resolved position is the observation. Excluded from
-      // `*`-template consumption in `deriveFlowJoin` beside the two above.
-      resolverProbe: boolean;
       // True when the read carries `writeDestinationRead`. `deriveFlowJoin`
       // drops these (§18.6.2); every other consumer of this walk keeps
       // them, which is what leaves `flowLabelWorkExists` — and with it
@@ -3456,7 +3448,6 @@ const forEachFlowObservation = (
             return coveredByTrace();
           },
           machinery: isMachineryRead(read.meta),
-          resolverProbe: isDereferenceResolutionProbe(read.meta),
           writeDestination: isWriteDestinationRead(read.meta),
         },
       )
@@ -3502,7 +3493,6 @@ const forEachFlowObservation = (
           nonRecursive: false,
           coveredByTrace: false,
           machinery: false,
-          resolverProbe: false,
           writeDestination: false,
         },
       )
@@ -3709,27 +3699,13 @@ const deriveFlowJoinImpl = (
       // reads keep every OTHER consumption (link entries, concrete
       // structure/derived) — byte-identical to their pre-template
       // behavior, so the exclusion cannot under-taint relative to main.
-      //
-      // The `resolverProbe` arm is the trace arm's other half. A trace
-      // exists only where the resolver found a link and followed it; where
-      // it found none, or stopped at one, its probe arrived here as a
-      // standalone pointer observation and consumed the templates, though
-      // what the caller learns about the slot arrives through the caller's
-      // own read at the resolved position, which consumes the `value` and
-      // `shape` twins carrying the same J. So every transaction that wrote
-      // a store the runtime owns carried the J of that store's CREATION
-      // through `Cell.set`'s own resolution of it, onto every other
-      // document it wrote: a `sqliteQuery` whose parameter was labeled on
-      // its first issue refused each row it settled. The read ceiling
-      // already treats these probes as machinery (#7799).
-      const resolutionMachinery = observation.coveredByTrace ||
-        observation.machinery || observation.resolverProbe;
-      const excludesTemplates = resolutionMachinery ||
+      const excludesTemplates = observation.coveredByTrace ||
+        observation.machinery ||
         ownedContainers !== undefined;
       const labelKey = stringTupleKey([
         observation.shape,
         String(observation.nonRecursive === true),
-        String(resolutionMachinery),
+        String(observation.coveredByTrace || observation.machinery),
         encodePointer(logicalPath),
       ]);
       let label = document.labels.get(labelKey);
@@ -3737,7 +3713,7 @@ const deriveFlowJoinImpl = (
         const exclusion = excludesTemplates
           ? {
             excludeEntry: (entry: LabelMapEntry) =>
-              (resolutionMachinery &&
+              ((observation.coveredByTrace || observation.machinery) &&
                 isRuntimeMintedTemplate({
                   origin: entry.origin,
                   path: canonicalizeLogicalPath(entry.path),
