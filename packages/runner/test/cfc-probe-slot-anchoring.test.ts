@@ -1,6 +1,6 @@
 /**
- * What a link-resolution probe consumes: the pointer policy of the one slot
- * it asked about, never what lies beneath that slot.
+ * Which runtime-minted `*` templates a standalone link probe consumes: those
+ * at the one slot it asked about, never those beneath it.
  *
  * A builtin mints its result store and writes it in one transaction, and
  * when that transaction read something labeled, the store's creation mints
@@ -15,6 +15,8 @@
  *
  * Probes AT a slot keep consuming what the templates exist for: which
  * reference a membership decision put at a slot, or that it put none there.
+ * A reader of a container's references keeps its label, and a schema's
+ * declared pointer policy stays consumed as before.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -283,6 +285,53 @@ describe("link-resolution probes and `*` templates", () => {
         list.withTx(tx).key(1).equals(second);
       });
       expect(carriesPicked(join)).toBe(true);
+    });
+
+    it("taints taking the whole list's references", async () => {
+      // Which element sits at each slot, read as handles: the probe of the
+      // list itself no longer supplies the membership, so this pins that
+      // what the read does at each slot still does.
+      const { list } = await declaredList("handles");
+
+      const join = joinOf((tx) => {
+        (list.withTx(tx).get() as unknown as Cell<unknown>[]).map((cell) =>
+          cell.getAsNormalizedFullLink().id
+        );
+      });
+      expect(carriesPicked(join)).toBe(true);
+    });
+  });
+
+  describe("a list whose schema declares a pointer policy", () => {
+    beforeEach(() => makeRuntime(false));
+
+    // A declared `observes: "followRef"` entry has no `value` or `shape` twin,
+    // so a reader who takes the references without opening them consumes it
+    // through the list's own probe or not at all.
+    it("taints taking its references, raw or as handles", async () => {
+      const first = await plainCell("declared-first", { n: 1 });
+      const second = await plainCell("declared-second", { n: 2 });
+      const write = runtime.edit();
+      const list = runtime.getCell(space, "declared-list", {
+        type: "array",
+        items: {
+          asCell: ["cell"],
+          ifc: { confidentiality: PICKED_CLAUSE, observes: "followRef" },
+        },
+        // deno-lint-ignore no-explicit-any -- `ifc` is not on the schema type
+      } as any, write);
+      list.set([first.withTx(write), second.withTx(write)]);
+      runtime.prepareTxForCommit(write);
+      expect((await write.commit()).error).toBeUndefined();
+
+      expect(carriesPicked(joinOf((tx) => {
+        list.withTx(tx).getRaw();
+      }))).toBe(true);
+      expect(carriesPicked(joinOf((tx) => {
+        (list.withTx(tx).get() as unknown as Cell<unknown>[]).map((cell) =>
+          cell.getAsNormalizedFullLink().id
+        );
+      }))).toBe(true);
     });
   });
 });

@@ -267,16 +267,6 @@ normative from C1 on:
   pass-through with the target doc's content label, re-smearing the §2
   pointer/content substrate. Still strictly wider than pre-C1, which
   consumed nothing for probes.
-- **A followRef observation is of one slot.** A probe asks which reference
-  sits at the slot it names, so it consumes pointer policy at that slot and
-  above it — the slot's link-origin entry, a parent's `*` template matching
-  the slot — and nothing beneath it. The runner anchors the observation
-  there whatever path the read took. In the legacy layout the probe reads at
-  `linkProbeSubPath()` beneath the slot, where the sigil key would match the
-  slot's own `*`-child template as though it were a child; in the atomic
-  layout it reads the slot itself, so the observation is non-recursive. A
-  `*`-child template labels which reference sits at each child, which is
-  not what a probe of the parent asks.
 - **The §4 row 3 / row 4 boundary is the dereference trace.** A probe issued
   while *following* a reference — its slot path covered at-or-above by a
   same-tx recorded trace source — is resolution machinery (row 4,

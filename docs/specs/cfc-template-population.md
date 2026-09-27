@@ -281,7 +281,7 @@ minted into the same entries, not the mechanism.
      the non-coordinator closures and the marked-reads-consume-nothing
      asymmetry are pinned in `cfc-template-population.test.ts` ("SC-8
      remainder" block).
-  2. **Two machinery boundaries on template consumption**, both
+  2. **Three machinery boundaries on template consumption**, all
      inherited-from-existing disciplines rather than new semantics: a
      transaction re-deriving a container's membership stamps does not
      consume the very entries it replaces (`ownRestampContainerPaths` —
@@ -295,7 +295,18 @@ minted into the same entries, not the mechanism.
      consumes the target's content but not the slot's membership `J`;
      §2's "probe **or dereference**" overstated what the shipped row-3/
      row-4 boundary distinguishes, and the probe/standalone-read half is
-     what landed.
+     what landed. The third: a standalone probe consumes the templates at
+     the slot it asked about and none beneath it. It asks which reference
+     sits at that one slot, and a template beneath labels a child's. Read
+     at the sigil's path (`linkProbeSubPath()`), a probe of a container
+     would otherwise match the container's own child template through the
+     sigil key, and in the atomic layout, where the probe reads the slot
+     itself, recursion would reach it. Every transaction that wrote a
+     store created under a label would then carry that label onto the
+     other documents it wrote. The children's readers keep consuming it
+     through the `value`/`shape` twins, or through a probe at a child's
+     own slot. Declared `*` entries are not templates of this kind and
+     stay consumed.
 - **Stage B (Stage-2 full population; one PR, after A):** the
   `/cfc/labels/...` template mints per §5 + `inspectConfLabel` consuming
   them (upgrading WP7's computed-in-hand labels to persisted templates),

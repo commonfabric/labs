@@ -3286,20 +3286,6 @@ const pureLinkContainerPaths = (
   }
 };
 
-/**
- * The slot a link-resolution probe asked about: its path without the sub-path
- * at which a link exposes its recognizable form (`linkProbeSubPath`, the
- * sigil's `["/", "link@1"]` in the legacy layout, nothing in the atomic one).
- */
-const probedSlotPath = (path: readonly string[]): readonly string[] => {
-  const sigil = linkProbeSubPath();
-  const slotLength = path.length - sigil.length;
-  if (sigil.length === 0 || slotLength < 0) return path;
-  return sigil.every((segment, index) => path[slotLength + index] === segment)
-    ? path.slice(0, slotLength)
-    : path;
-};
-
 const forEachFlowObservation = (
   tx: IExtendedStorageTransaction,
   consume: (
@@ -3432,24 +3418,11 @@ const forEachFlowObservation = (
         logicalPath,
       );
     let shape: ReadObservationShape;
-    let observedPath = logicalPath;
-    let nonRecursive = read.nonRecursive;
     if (isLinkResolutionProbe(read.meta)) {
       if (coveredByTrace() || isMachineryRead(read.meta)) {
         continue;
       }
       shape = "followRef";
-      // A probe observes which reference sits at the ONE slot it asked
-      // about, so it consumes pointer policy at that slot and above it — the
-      // slot's link-origin entry, a parent's `*` template matching the slot —
-      // and never below. Read at the sigil's path, the probe matched the
-      // slot's own `*`-child template through the sigil key, as though "/"
-      // were a child, and a recursive probe at the slot in the atomic layout
-      // would match it too. That template labels which reference sits at
-      // each CHILD. `Cell.set` probing a store's root then carried the J of
-      // the store's creation onto every document the writer wrote.
-      observedPath = probedSlotPath(logicalPath);
-      nonRecursive = true;
     } else {
       shape = read.nonRecursive === true ? "shape" : "value";
     }
@@ -3459,7 +3432,7 @@ const forEachFlowObservation = (
         id,
         scope,
         (read.type ?? "application/json") as MediaType,
-        observedPath,
+        logicalPath,
         // `coveredByTrace` extends the C0 §6.1 row-3/row-4 boundary to
         // PLAIN reads for the one entry kind whose consumption at slot
         // paths is new (the `*`-path class templates): resolution
@@ -3471,7 +3444,7 @@ const forEachFlowObservation = (
         // seeding, result plumbing, coordinator scaffolding).
         {
           shape,
-          nonRecursive,
+          nonRecursive: read.nonRecursive,
           get coveredByTrace() {
             return coveredByTrace();
           },
@@ -3603,6 +3576,36 @@ const isReplacedMembershipEntry = (
     containers.has(pathKey(entryPath.slice(0, -1)));
 };
 
+/**
+ * The slot a link-resolution probe asked about: its path without the sub-path
+ * at which a link exposes its recognizable form (`linkProbeSubPath`, the
+ * sigil's `["/", "link@1"]` in the legacy layout, nothing in the atomic one).
+ */
+const probedSlotPath = (path: readonly string[]): readonly string[] => {
+  const sigil = linkProbeSubPath();
+  const slotLength = path.length - sigil.length;
+  if (sigil.length === 0 || slotLength < 0) return path;
+  return sigil.every((segment, index) => path[slotLength + index] === segment)
+    ? path.slice(0, slotLength)
+    : path;
+};
+
+/**
+ * Whether `entry` is a runtime-minted `*`-child template strictly beneath
+ * `slot`: one labeling which reference sits at a child of the slot, or deeper.
+ */
+const isRuntimeTemplateBeneath = (
+  entry: LabelMapEntry,
+  slot: readonly string[],
+): boolean => {
+  const path = canonicalizeLogicalPath(entry.path);
+  return path.length > slot.length &&
+    isRuntimeMintedTemplate({ origin: entry.origin, path }) &&
+    slot.every((segment, index) =>
+      path[index] === "*" || path[index] === segment
+    );
+};
+
 /** Helper for `deriveFlowJoin`, which computes labels from transaction reads. */
 const deriveFlowJoinImpl = (
   tx: IExtendedStorageTransaction,
@@ -3727,9 +3730,29 @@ const deriveFlowJoinImpl = (
       // reads keep every OTHER consumption (link entries, concrete
       // structure/derived) — byte-identical to their pre-template
       // behavior, so the exclusion cannot under-taint relative to main.
+      //
+      // A standalone probe keeps the templates at its slot and drops the
+      // runtime-minted ones beneath it. It asks which reference sits at ONE
+      // slot, and a template beneath that slot labels which reference sits
+      // at a child. Read at the sigil's path, a probe of a container matched
+      // the container's own child template through the sigil key, as though
+      // "/" were a child — and in the atomic layout, where the probe reads
+      // the slot itself, recursion would reach it too. `Cell.set` probing a
+      // store's root then carried the J of the store's creation onto every
+      // document the writer wrote: a `sqliteQuery` whose parameter was
+      // labeled on its first issue refused each row it settled. A reader of
+      // the children still consumes that J, through the `value` and `shape`
+      // twins, or through the template at each child's own slot when it
+      // probes one. Declared entries are the schema's policy and stay
+      // consumed as before: a declared `observes:"followRef"` entry has no
+      // twin, and this probe is what reaches it when a reader takes a whole
+      // container's references.
+      const probedSlot = observation.shape === "followRef"
+        ? probedSlotPath(logicalPath)
+        : undefined;
       const excludesTemplates = observation.coveredByTrace ||
         observation.machinery ||
-        ownedContainers !== undefined;
+        ownedContainers !== undefined || probedSlot !== undefined;
       const labelKey = stringTupleKey([
         observation.shape,
         String(observation.nonRecursive === true),
@@ -3747,7 +3770,9 @@ const deriveFlowJoinImpl = (
                   path: canonicalizeLogicalPath(entry.path),
                 })) ||
               (ownedContainers !== undefined &&
-                isReplacedMembershipEntry(entry, ownedContainers)),
+                isReplacedMembershipEntry(entry, ownedContainers)) ||
+              (probedSlot !== undefined &&
+                isRuntimeTemplateBeneath(entry, probedSlot)),
           }
           : {};
         const entries = document.metadata === undefined
