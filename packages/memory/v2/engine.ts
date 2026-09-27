@@ -13,7 +13,11 @@ import {
   SCHEMA_META_MEMBER,
   schemaMetaRefHashes,
 } from "@commonfabric/data-model-schema/schema-refs";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+  isPlainObject,
+} from "@commonfabric/utils/types";
 import { mapLinkSchemas } from "./schema-table-links.ts";
 import {
   applySqliteCommitWrite,
@@ -7316,7 +7320,16 @@ const reconstructPatchedDocument = (
   // A cached revision is an immutable prefix of this exact branch, scope,
   // and operation range. Replaying its suffix preserves frozen subtrees
   // instead of decoding and rebuilding the prefix at every commit.
+  //
+  // `encodedBytes` is what the document cache weighs the result by: the
+  // result itself, as it would be stored. No row the reconstruction read
+  // bounds it — additive patches accumulate past any one of them — and a
+  // replay-cost sum overstates it several times over (a Topics piece replayed
+  // from a base and five near-whole patches decodes ~300 KB to retain ~55).
+  // It starts as the exact weight of wherever the replay begins, and each
+  // patch adds what it grew the document by.
   let document: EntityDocument | undefined;
+  let encodedBytes = 0;
   let replayFrom = 0;
   for (let index = patches.length - 1; index >= 0; index--) {
     const patch = patches[index];
@@ -7335,15 +7348,30 @@ const reconstructPatchedDocument = (
     if (cached?.document !== undefined && cached.document !== null) {
       engine.documentCacheStats.resumes++;
       document = cached.document;
+      encodedBytes = cached.weight;
       replayFrom = index + 1;
       break;
     }
   }
   if (document === undefined) {
     if (snapshotRow && snapshotRow.seq === baseSeq) {
-      document = decodeStoredDocument(snapshotRow.value);
+      // A snapshot is written from the revision its seq ended at, which the
+      // commit writing it had just read, so that revision is usually cached.
+      const snapshotted = cachedSnapshottedRevision(
+        engine,
+        { id, scopeKey, branch },
+        snapshotRow.seq,
+      );
+      if (snapshotted !== undefined) {
+        engine.documentCacheStats.resumes++;
+        document = snapshotted.document;
+        encodedBytes = snapshotted.weight;
+      } else {
+        document = decodeStoredDocument(snapshotRow.value);
+        encodedBytes = storedByteLength(snapshotRow.value);
+      }
     } else if (baseRow?.op === "set") {
-      document = cachedDocumentForRevision(
+      const cachedBase = cachedDocumentForRevision(
         engine,
         documentCacheKey(
           branch,
@@ -7354,31 +7382,166 @@ const reconstructPatchedDocument = (
           baseRow.op,
           baseRow.data?.length ?? -1,
         ),
-      )?.document ?? decodeStoredDocument(baseRow.data);
+      );
+      document = cachedBase?.document ?? decodeStoredDocument(baseRow.data);
+      encodedBytes = cachedBase?.weight ?? storedByteLength(baseRow.data);
     } else {
       document = emptyEntityDocument();
+      encodedBytes = encodedByteLength(document);
     }
   }
 
   for (const patch of patches.slice(replayFrom)) {
     engine.documentCacheStats.patchReplays++;
+    const previous = document;
     document = applyPatchToDocument(
       document,
       decodeStoredPatchList(patch.data),
     );
+    encodedBytes += encodedGrowth(previous, document);
   }
 
-  // What the document cache weighs the result by: the result itself, as it
-  // would be stored. No row the reconstruction read bounds it — additive
-  // patches accumulate past any one of them — and a replay-cost sum
-  // overstates it several times over (a Topics piece replayed from a base
-  // and five near-whole patches decodes ~300 KB to retain ~55). Encoding
-  // the result is exact and costs a fraction of the replay it follows.
-  return {
-    document,
-    encodedBytes: storedByteLength(encodeMemoryBoundary(document)),
-  };
+  return { document, encodedBytes };
 };
+
+/**
+ * Helper for {@link reconstructPatchedDocument}, which returns the cached
+ * revision a snapshot at `seq` holds — the last revision the branch itself
+ * wrote at that seq — or `undefined` when the cache does not hold it, or the
+ * branch wrote nothing at that seq.
+ */
+const cachedSnapshottedRevision = (
+  engine: Engine,
+  { id, scopeKey, branch }: {
+    id: EntityId;
+    scopeKey: string;
+    branch: BranchName;
+  },
+  seq: number,
+): { document: EntityDocument; weight: number } | undefined => {
+  const row = engine.statements.selectAtSeqLocal.get({
+    branch,
+    id,
+    scope_key: scopeKey,
+    seq,
+  }) as ReadRow | undefined;
+  if (row === undefined || row.seq !== seq) return undefined;
+  const cached = cachedDocumentForRevision(
+    engine,
+    documentCacheKey(
+      branch,
+      id,
+      scopeKey,
+      row.seq,
+      row.op_index,
+      row.op,
+      row.data?.length ?? -1,
+    ),
+  );
+  return cached?.document === undefined || cached.document === null
+    ? undefined
+    : { document: cached.document, weight: cached.weight };
+};
+
+/** Encoded UTF-8 bytes of `value` encoded as stored. */
+const encodedByteLength = (value: FabricValue): number =>
+  storedByteLength(encodeMemoryBoundary(value));
+
+/**
+ * Helper for {@link reconstructPatchedDocument}, which returns how many more
+ * UTF-8 bytes `after` takes than `before` when each is encoded as stored,
+ * where `after` is `before` with patches applied.
+ *
+ * Patches replay copy-on-write, so the two share every subtree the patches
+ * did not reach. The walk passes those over by identity and encodes only what
+ * differs — a replaced value, and each member added or removed — which is what
+ * lets a revision be weighed from the one it replays without encoding it
+ * whole.
+ *
+ * The result is exact, because the walk descends only where the encoding
+ * composes: into a record none of whose keys starts with `/`, and an array
+ * with no hole. A member there encodes as it does on its own, and members are
+ * joined by one comma each. A `/`-keyed record is quoted as a whole, and a run
+ * of holes is written as one count, so any other pair is weighed by encoding
+ * each side.
+ */
+const encodedGrowth = (before: FabricValue, after: FabricValue): number => {
+  if (Object.is(before, after)) return 0;
+
+  const beforeKeys = composingRecordKeys(before);
+  const afterKeys = beforeKeys && composingRecordKeys(after);
+  if (beforeKeys !== undefined && afterKeys !== undefined) {
+    const beforeRecord = before as Record<string, FabricValue>;
+    const afterRecord = after as Record<string, FabricValue>;
+    let growth = separatorBytes(afterKeys.length) -
+      separatorBytes(beforeKeys.length);
+    for (const key of afterKeys) {
+      growth += Object.hasOwn(beforeRecord, key)
+        ? encodedGrowth(beforeRecord[key], afterRecord[key])
+        : memberBytes(key, afterRecord[key]);
+    }
+    for (const key of beforeKeys) {
+      if (!Object.hasOwn(afterRecord, key)) {
+        growth -= memberBytes(key, beforeRecord[key]);
+      }
+    }
+    return growth;
+  }
+
+  if (Array.isArray(before) && Array.isArray(after)) {
+    let growth = separatorBytes(after.length) - separatorBytes(before.length);
+    for (
+      let index = 0;
+      index < Math.max(before.length, after.length);
+      index++
+    ) {
+      const inBefore = index < before.length;
+      const inAfter = index < after.length;
+      if ((inBefore && !(index in before)) || (inAfter && !(index in after))) {
+        return encodedByteLength(after) - encodedByteLength(before);
+      }
+      growth += !inAfter
+        ? -elementBytes(before[index])
+        : !inBefore
+        ? elementBytes(after[index])
+        : encodedGrowth(before[index], after[index]);
+    }
+    return growth;
+  }
+
+  return encodedByteLength(after) - encodedByteLength(before);
+};
+
+/**
+ * Helper for {@link encodedGrowth}, which returns the keys of `value` if it is
+ * a plain record none of whose keys starts with `/`, or `undefined` if it is
+ * anything else.
+ */
+const composingRecordKeys = (value: FabricValue): string[] | undefined => {
+  if (!isPlainObject(value, false)) return undefined;
+  const keys = Object.keys(value);
+  return keys.some((key) => key.startsWith("/")) ? undefined : keys;
+};
+
+/**
+ * Helper for {@link encodedGrowth}, which returns the bytes of the commas
+ * between `count` members.
+ */
+const separatorBytes = (count: number): number => count > 1 ? count - 1 : 0;
+
+/**
+ * Helper for {@link encodedGrowth}, which returns the bytes one record member
+ * adds to the record's encoding: its key, the colon, and its value.
+ */
+const memberBytes = (key: string, value: FabricValue): number =>
+  encodedByteLength({ [key]: value }) - encodedByteLength({});
+
+/**
+ * Helper for {@link encodedGrowth}, which returns the bytes one array element
+ * adds to the array's encoding.
+ */
+const elementBytes = (value: FabricValue): number =>
+  encodedByteLength([value]) - encodedByteLength([]);
 
 /**
  * Helper for {@link readStateForScopeKey}, which finds the row holding

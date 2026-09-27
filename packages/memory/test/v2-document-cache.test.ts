@@ -355,6 +355,148 @@ describe("v2 document cache", () => {
     }, { documentCacheMaxEntries: 1 });
   });
 
+  it("weighs each replayed revision exactly as it would be stored", async () => {
+    // Each revision is weighed from the one it replays, by what its patch
+    // changed. The ops between them reach every shape the encoding treats
+    // differently: a quoted `/`-keyed record, a record turning into one, an
+    // array with a hole, a tagged `undefined`, and text outside ASCII.
+    const id = entityId(0);
+    const patches = [
+      { op: "replace", path: "/value/record/a", value: "y" },
+      { op: "add", path: "/value/record/added", value: { deep: [1] } },
+      { op: "remove", path: "/value/gone" },
+      { op: "replace", path: "/value/link/~1/link@1/id", value: "of:y" },
+      { op: "add", path: "/value/link/~1extra", value: 1 },
+      { op: "append", path: "/value/list", values: [4, 5] },
+      { op: "splice", path: "/value/list", index: 1, remove: 1, add: ["a"] },
+      { op: "add-unique", path: "/value/list", values: [1, 9] },
+      { op: "remove-by-value", path: "/value/list", value: 9 },
+      { op: "increment", path: "/value/n", by: 5 },
+      { op: "move", from: "/value/record/added", path: "/value/moved" },
+      { op: "replace", path: "/value/holes/0", value: 7 },
+      { op: "replace", path: "/value/text", value: "字字" },
+      { op: "add", path: "/value/record/empty", value: undefined },
+      { op: "replace", path: "/value/record", value: { "/weird": 1 } },
+      { op: "remove", path: "/value/moved" },
+      { op: "replace", path: "/value", value: { fresh: true } },
+    ];
+    await withEngine((engine) => {
+      applyCommit(engine, {
+        sessionId: "s:a",
+        commit: commit(1, {
+          operations: [setOp(id, {
+            list: [1, 2, 3],
+            record: { a: "x", b: { c: 1 } },
+            link: { "/": { "link@1": { id: "of:x", path: [] } } },
+            // deno-lint-ignore no-sparse-arrays
+            holes: [1, , 3],
+            text: "字",
+            n: 0,
+            gone: "bye",
+          })],
+        }),
+      } as never);
+      const resumesBefore = documentCacheDiagnostics(engine).resumes;
+      patches.forEach((patch, index) => {
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(index + 2, {
+            operations: [{ op: "patch", id, patches: [patch] }],
+          }),
+        } as never);
+        const stored = storedValue(engine, 0);
+        expect(documentCacheDiagnostics(engine).bytes, patch.op).toBe(
+          encodedWeight(stored),
+        );
+      });
+      // Every revision after the first was weighed from the one before it,
+      // not decoded and weighed afresh.
+      expect(documentCacheDiagnostics(engine).resumes - resumesBefore).toBe(
+        patches.length - 1,
+      );
+    }, { documentCacheMaxEntries: 1, snapshotInterval: 100 });
+  });
+
+  it("resumes the commit after a snapshot from the revision the snapshot holds", async () => {
+    // The snapshot is written from a revision the cache already holds, so the
+    // next rebuild starts there rather than decoding the snapshot.
+    await withEngine((engine) => {
+      seed(engine, 1, () => ({ count: 0, untouched: { list: [1, 2, 3] } }));
+      commitCountPatch(engine, 2, 1);
+      commitCountPatch(engine, 3, 2);
+      const before = documentCacheDiagnostics(engine);
+      commitCountPatch(engine, 4, 3);
+      const after = documentCacheDiagnostics(engine);
+      const stored = storedValue(engine, 0);
+
+      expect(stored).toEqual({
+        value: { count: 3, untouched: { list: [1, 2, 3] } },
+      });
+      expect(after.resumes - before.resumes).toBe(1);
+      expect(after.bytes).toBe(encodedWeight(stored));
+    }, { documentCacheMaxEntries: 1, snapshotInterval: 2 });
+  });
+
+  it("serializes as many bytes committing one entry of a long record as of a short one", async () => {
+    // Weighing a revision by encoding it whole would serialize every entry;
+    // weighing it by what its patch changed serializes the same bytes
+    // whatever the record around the change holds.
+    const serializedBytes = async (length: number): Promise<number> => {
+      let bytes = 0;
+      await withEngine((engine) => {
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(1, {
+            operations: [setOp(
+              entityId(0),
+              Object.fromEntries(
+                Array.from({ length }, (_, index) => [
+                  `key-${index}`,
+                  { name: `entry-${index}` },
+                ]),
+              ),
+            )],
+          }),
+        } as never);
+        const stringify = JSON.stringify;
+        JSON.stringify = ((...args: Parameters<typeof JSON.stringify>) => {
+          const text = stringify(...args);
+          bytes += text?.length ?? 0;
+          return text;
+        }) as typeof JSON.stringify;
+        try {
+          applyCommit(engine, {
+            sessionId: "s:a",
+            commit: commit(2, {
+              operations: [{
+                op: "patch",
+                id: entityId(0),
+                patches: [{
+                  op: "replace",
+                  path: "/value/key-0/name",
+                  value: "edited",
+                }],
+              }],
+            }),
+          } as never);
+        } finally {
+          JSON.stringify = stringify;
+        }
+      });
+      return bytes;
+    };
+
+    const short = await serializedBytes(20);
+    const long = await serializedBytes(2_000);
+
+    // As in the runner's count of hashed containers, the equality alone would
+    // hold for two totals that each grew with their record, and the bound
+    // alone for one that grew slowly: the short record encodes to more than
+    // 500 bytes by itself.
+    expect(long).toBe(short);
+    expect(long).toBeLessThan(500);
+  });
+
   it("weighs documents in encoded bytes, not string code units", async () => {
     const cjk = "字".repeat(900); // three UTF-8 bytes per character
     await withEngine((engine) => {
