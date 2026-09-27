@@ -136,6 +136,71 @@ const largeCopiesAddingKeys = async (
   }
 };
 
+/**
+ * Commits a document whose `value` holds `size` keys, takes the same shallow
+ * read of that `value` `repeats` times in a transaction that validates its
+ * reactive reads, changes one of the values from a second transaction, and
+ * reports how many times the first transaction's empty commit listed the keys
+ * of an object of at least `size` keys, and whether that commit was accepted.
+ *
+ * The change leaves the key set as it was, so the shallow read still holds, but
+ * it gives the value a new identity, so checking the read has to compare key
+ * sets. A count that tracks `repeats` is the same read being checked again.
+ */
+const listingsValidatingRepeatedShallowReads = async (
+  size: number,
+  repeats: number,
+): Promise<{ listings: number; accepted: boolean }> => {
+  const storage = StorageManager.emulate({ as: signer });
+  try {
+    const address = {
+      space,
+      id: `of:v2-transaction-shallow-${repeats}` as URI,
+      type,
+    };
+    const seed = storage.edit();
+    expect(
+      seed.write({ ...address, path: [] }, {
+        value: recordsOfSize(size, "key"),
+      }).ok,
+    ).toBeTruthy();
+    expect((await seed.commit()).ok).toBeTruthy();
+
+    const reader = storage.edit();
+    reader.validateReactiveReads = true;
+    for (let index = 0; index < repeats; index++) {
+      expect(
+        reader.read({ ...address, path: ["value"] }, { nonRecursive: true })
+          .ok,
+      ).toBeTruthy();
+    }
+
+    const writer = storage.edit();
+    expect(
+      writer.write({ ...address, path: ["value", "key-0", "name"] }, "renamed")
+        .ok,
+    ).toBeTruthy();
+    expect((await writer.commit()).ok).toBeTruthy();
+
+    const keys = Object.keys;
+    let listings = 0;
+    Object.keys = ((target: object) => {
+      const listed = keys(target);
+      if (listed.length >= size) listings++;
+      return listed;
+    }) as typeof Object.keys;
+    let accepted;
+    try {
+      accepted = (await reader.commit()).error === undefined;
+    } finally {
+      Object.keys = keys;
+    }
+    return { listings, accepted };
+  } finally {
+    await storage.close();
+  }
+};
+
 describe("v2-transaction", () => {
   describe("getPotentiallyExternalReadActivities()", () => {
     it("retains every raw clock position while excluding sealed verifier records", async () => {
@@ -405,6 +470,18 @@ describe("v2-transaction", () => {
   });
 
   describe("commit()", () => {
+    it("checks a shallow read of a large object once however often it was taken", async () => {
+      const short = await listingsValidatingRepeatedShallowReads(1000, 10);
+      const long = await listingsValidatingRepeatedShallowReads(1000, 100);
+
+      expect(short.accepted).toBe(true);
+      expect(long.accepted).toBe(true);
+      // The floor keeps the probe honest: were the key sets no longer listed
+      // through `Object.keys()`, both counts would read zero and agree.
+      expect(short.listings).toBeGreaterThan(0);
+      expect(long.listings).toBe(short.listings);
+    });
+
     it("copies a large object as often for many written keys beneath it as for few", async () => {
       const short = await largeCopiesAddingKeys(1000, 10);
       const long = await largeCopiesAddingKeys(1000, 100);

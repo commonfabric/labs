@@ -909,6 +909,9 @@ const shallowStructureChanged = (
   before: FabricValue | undefined,
   after: FabricValue | undefined,
 ): boolean => {
+  if (Object.is(before, after)) {
+    return false;
+  }
   if (isFabricPlainContainer(before) && isFabricPlainContainer(after)) {
     const beforeKeys = Object.keys(before);
     const afterKeys = Object.keys(after);
@@ -3526,7 +3529,16 @@ export class V2StorageTransaction implements IStorageTransaction {
         [log.shallowReads, true],
       ] as const
     ) {
+      // The log keeps a read each time one was taken, and a reader walking a
+      // large value takes the same shallow read of its root once per child.
+      // The same read checks the same way every time, so each is checked once.
+      const checked = new Set<string>();
       for (const address of reads) {
+        const readKey = `${address.space}\0${this.#docKey(address)}\0${
+          encodePointer(address.path)
+        }`;
+        if (checked.has(readKey)) continue;
+        checked.add(readKey);
         const branch = this.#branches.get(address.space);
         const doc = branch?.docs.get(this.#docKey(address));
         // Read recording creates both before adding activity. If a future
