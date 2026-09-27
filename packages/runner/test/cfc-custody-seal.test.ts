@@ -1324,6 +1324,31 @@ describe("cfc-custody-seal", () => {
       }
     });
 
+    it("refuses a box cell in another instance's custody documents", async () => {
+      // The anchor carries no integrity, by design, so it does not look like
+      // a document the seal wrote. A box cell led into an earlier instance's
+      // anchor would have the seal write a key there under its own identity,
+      // which the anchor admits, and every later seal of that instance would
+      // then refuse the anchor.
+      const fixture = await setup();
+      try {
+        const binding = roomBox(fixture);
+        const { instance } = await fixture.seal(alice, honestStance, binding);
+        await fixture.setTerms({ ...TERMS, question: "Somewhere else?" });
+        const runtime = fixture.runtimes.get(alice)!;
+        const earlier = runtime.getCell(S, {
+          custodyAnchor: { policy: P, instance },
+        });
+        await expect(
+          fixture.seal(alice, honestStance, earlier.key("x")),
+        ).rejects.toThrow("only from a cell that holds nothing else");
+        await fixture.setTerms(TERMS);
+        await fixture.seal(bob, bobStance, binding);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
     it("refuses a box cell outside the room space", async () => {
       const fixture = await setup();
       try {

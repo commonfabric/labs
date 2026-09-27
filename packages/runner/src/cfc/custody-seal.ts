@@ -859,6 +859,55 @@ const holdsNothing = (value: unknown): boolean =>
     Object.keys(value).length === 0);
 
 /**
+ * Whether the document at `link` is an instance's anchor, of any instance and
+ * any policy its label names. The anchor carries no integrity, by design, so
+ * its label cannot say the seal wrote it; its address can. It holds the
+ * instance it anchors, and sits where the seal derives the anchor from that
+ * instance and the policy its declared clause names.
+ */
+const isCustodyDocument = (
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  room: string,
+): boolean => {
+  const stored = tx.readValueOrThrow({ ...link, path: [] }, {
+    meta: internalVerifierRead,
+  });
+  const instance = isObjectNotArray(stored) &&
+      typeof stored.instance === "string"
+    ? stored.instance
+    : undefined;
+  if (instance === undefined) return false;
+  const named = (readStoredCfcMetadata(tx, {
+    space: link.space,
+    id: link.id,
+    scope: link.scope,
+  })?.labelMap.entries ?? []).flatMap((entry) =>
+    (entry.label.confidentiality ?? []).flatMap((clause) =>
+      clauseAlternatives(clause as CfcConfClause)
+    )
+  );
+  return named.some((atom) => {
+    if (
+      !isObjectNotArray(atom) || atom.type !== CFC_ATOM_TYPE.Policy ||
+      atom.policyRefKind !== "module" ||
+      typeof atom.moduleIdentity !== "string" ||
+      typeof atom.symbol !== "string" || typeof atom.policyDigest !== "string"
+    ) return false;
+    const policy = cfcAtom.modulePolicyRef(
+      atom.moduleIdentity,
+      atom.symbol,
+      atom.policyDigest,
+      room,
+    );
+    const anchor = anchorCell(runtime, policy, instance)
+      .getAsNormalizedFullLink();
+    return anchor.space === link.space && anchor.id === link.id;
+  });
+};
+
+/**
  * Writes a link to the box into the room's box cell, in the transaction that
  * writes the entry. The transaction is the seal's, so the write is attributed
  * to it, and the link is recorded as the one reference the value stored there
@@ -887,7 +936,7 @@ const linkRoomToBox = (
   }
   // The seal writes under its own identity, which the box and the anchor
   // admit, so the cell it links from is checked to be only that: not in a
-  // document the seal governs nor in the terms it reviewed, and holding this
+  // document the seal governs, for this instance or another, nor in the terms it reviewed, and holding this
   // box's link already, or nothing — an empty default, as a room's `Default`
   // leaves — in a document the seal did not write. A binding that leads
   // anywhere else would have the seal write there on the member's behalf.
@@ -918,6 +967,7 @@ const linkRoomToBox = (
     (reviewed.space === destination.space && reviewed.id === destination.id &&
       (isPathPrefix(reviewed.path, destination.path) ||
         isPathPrefix(destination.path, reviewed.path))) ||
+    isCustodyDocument(runtime, tx, destination, room) ||
     (!holdsThisBox && (!holdsNothing(current) || sealWritten))
   ) {
     throw new Error(
