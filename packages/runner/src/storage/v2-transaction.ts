@@ -119,6 +119,7 @@ import {
   applyMutablePathWrite,
   getValueTypeName,
   isContainerValue,
+  type MutablePathWriteOptions,
 } from "./transaction/mutable-path-write.ts";
 import { toTransactionDocumentValue } from "./v2-document.ts";
 import { hasValueAtPath, readValueAtPath } from "./v2-path.ts";
@@ -150,13 +151,6 @@ type ReadDocumentEntry = {
   // the overwhelming majority of documents: one is created the first time a
   // write displaces a root some materialized read may still describe.
   displaced?: DisplacedRoot[];
-
-  /**
-   * Never set on a document this transaction has only read. Present so that
-   * `V2StorageTransaction.#invalidateWrittenState()` takes either kind of
-   * entry; `WritableDocumentEntry.reactivityPaths` says what it holds.
-   */
-  reactivityPaths?: readonly (readonly string[])[];
 };
 
 type WritableDocumentEntry = {
@@ -174,7 +168,10 @@ type WritableDocumentEntry = {
    * build of the reactivity log during one commit shares them. They depend
    * only on `initial`, `current` and `patchDetails`, so a read leaves them
    * standing. `V2StorageTransaction.#invalidateWrittenState()` drops them
-   * wherever `current` or `patchDetails` may change.
+   * wherever `current` or `patchDetails` may change: ahead of every in-place
+   * write to the working root, which all go through
+   * `V2StorageTransaction.#writeWorkingRoot()`, and wherever the root or the
+   * recorded patch details are replaced.
    */
   reactivityPaths?: readonly (readonly string[])[];
 
@@ -2056,7 +2053,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     (doc.displaced ??= []).push({ until: this.#writeEpoch, root: standing });
   }
 
-  #replaceCurrent(doc: DocumentEntry, next: RootAttestation): void {
+  #replaceCurrent(doc: WritableDocumentEntry, next: RootAttestation): void {
     this.#writeEpoch++;
     doc.current = next;
     this.#invalidateWrittenState(doc);
@@ -2318,8 +2315,8 @@ export class V2StorageTransaction implements IStorageTransaction {
       ? previousPresent
       : presentBeforeWrite(activityPath);
 
-    this.#invalidateWrittenState(doc);
-    const result = applyMutablePathWrite(
+    const result = this.#writeWorkingRoot(
+      doc,
       current.value,
       address,
       isolatedValue,
@@ -2499,8 +2496,8 @@ export class V2StorageTransaction implements IStorageTransaction {
         : hasValueAtPath(nextRoot, activityPath, {
           allowArrayLength: true,
         });
-      this.#invalidateWrittenState(doc);
-      const result = applyMutablePathWrite(
+      const result = this.#writeWorkingRoot(
+        doc,
         nextRoot,
         address,
         isolatedValue,
@@ -3198,14 +3195,32 @@ export class V2StorageTransaction implements IStorageTransaction {
 
   /**
    * Drops what the reactivity log derives from `doc`'s written state: the
-   * paths kept on the document, and the log built from them. Called ahead of
-   * every write that mutates the working root in place, which a write can do
-   * even when it then refuses the value, and wherever the root or the recorded
-   * patch details are replaced.
+   * paths kept on the document, and the log built from them. Called by
+   * `#writeWorkingRoot()` ahead of every in-place write to the working root,
+   * and wherever the root or the recorded patch details are replaced.
    */
-  #invalidateWrittenState(doc: DocumentEntry): void {
+  #invalidateWrittenState(doc: WritableDocumentEntry): void {
     doc.reactivityPaths = undefined;
     this.#invalidateReactivityLog();
+  }
+
+  /**
+   * Writes `value` at `address.path` within `root`, `doc`'s working root, by
+   * way of `applyMutablePathWrite()`, which mutates that root in place when it
+   * is already mutable, and can do so even for a write it then refuses. What
+   * the reactivity log derives from the document is dropped first, so nothing
+   * built before the write outlives it; every in-place write to a working root
+   * goes through here for that reason.
+   */
+  #writeWorkingRoot(
+    doc: WritableDocumentEntry,
+    root: FabricValue | undefined,
+    address: IMemoryAddress,
+    value: FabricValue | undefined,
+    options?: MutablePathWriteOptions,
+  ): ReturnType<typeof applyMutablePathWrite> {
+    this.#invalidateWrittenState(doc);
+    return applyMutablePathWrite(root, address, value, options);
   }
 
   /**
