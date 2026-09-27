@@ -76,7 +76,7 @@ describe("BaseValueVisitor", () => {
             value: unknown,
           ): VisitResult<unknown, unknown> {
             return Array.isArray(value)
-              ? { type: "recurse", doKeys: false, doValues: true }
+              ? { type: "recurse", doKeys: false }
               : undefined;
           }
         }

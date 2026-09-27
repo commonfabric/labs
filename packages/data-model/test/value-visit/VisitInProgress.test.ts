@@ -7,7 +7,6 @@ import { deepFreeze } from "@/deep-freeze.ts";
 import { FabricError, FabricLink, FabricMap } from "@/fabric-instances";
 import { FabricBytes } from "@/fabric-primitives";
 import {
-  DO_RECURSE_KEYS,
   DO_RECURSE_KEYS_VALUES,
   DO_RECURSE_VALUES,
   type ValueVisitor,
@@ -420,16 +419,6 @@ describe("VisitInProgress", () => {
           ]);
         });
 
-        it("visits only the keys of a plain object for `DO_RECURSE_KEYS`", () => {
-          const rec = new Recorder();
-          rec.onPlainObject = () => DO_RECURSE_KEYS;
-
-          visit({ a: 1 }, rec);
-          expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
-            ["primitive", "a", "string"],
-          ]);
-        });
-
         it("visits only the values of a plain object for `DO_RECURSE_VALUES`", () => {
           const rec = new Recorder();
           rec.onPlainObject = () => DO_RECURSE_VALUES;
@@ -461,8 +450,8 @@ describe("VisitInProgress", () => {
           ]);
         });
 
-        it("reports each entry to `visitingFabricPlainObjectEntry()` whichever of keys or values is recursed", () => {
-          for (const form of [DO_RECURSE_KEYS, DO_RECURSE_VALUES]) {
+        it("reports each entry to `visitingFabricPlainObjectEntry()` whether or not keys are recursed", () => {
+          for (const form of [DO_RECURSE_KEYS_VALUES, DO_RECURSE_VALUES]) {
             const rec = new Recorder();
             rec.onPlainObject = () => form;
             const object = { a: 1 };
@@ -476,28 +465,6 @@ describe("VisitInProgress", () => {
               ["visitingFabricPlainObjectEntry", object, "a", 1],
             ]);
           }
-        });
-
-        it("iterates nothing for `DO_RECURSE_KEYS` on an array", () => {
-          const rec = new Recorder();
-          rec.onArray = () => DO_RECURSE_KEYS;
-
-          visit([1, 2], rec);
-          expect(rec.names).not.toContain("primitive");
-          expect(rec.names).not.toContain("visitingFabricArrayElement");
-        });
-
-        it("iterates nothing for a `recurse` form with both flags `false`, on a plain object", () => {
-          const rec = new Recorder();
-          rec.onPlainObject = () => ({
-            type: "recurse",
-            doKeys: false,
-            doValues: false,
-          });
-
-          visit({ a: 1 }, rec);
-          expect(rec.names).not.toContain("primitive");
-          expect(rec.names).not.toContain("visitingFabricPlainObjectEntry");
         });
 
         it("honors a `recurse` returned directly from `visitValue()`, without subtype dispatch", () => {
@@ -626,16 +593,6 @@ describe("VisitInProgress", () => {
           expect(visit([link, 1], rec)).toBe("before");
           expect(rec.events.map((e) => e[1])).not.toContain(payload);
           expect(rec.events.map((e) => e[1])).not.toContain(1);
-        });
-
-        it("iterates nothing for `DO_RECURSE_KEYS` on an instance", () => {
-          const rec = new Recorder();
-          rec.onInstance = () => DO_RECURSE_KEYS;
-          const link = new FabricLink({ id: "fid1:abc" });
-
-          visit(link, rec);
-          expect(rec.names).not.toContain("visitingFabricInstanceState");
-          expect(rec.names).not.toContain("primitive");
         });
 
         it("throws from the codec for an instance whose codec is a stub", () => {
@@ -1208,32 +1165,6 @@ describe("VisitInProgress", () => {
             expect(map({ a: 1, b: 2 }, rec)).toEqual({ z: 1, b: 2 });
           });
 
-          it("returns a new object with mapped keys and the original values, for `DO_RECURSE_KEYS`", () => {
-            const rec = new Recorder();
-            rec.onPlainObject = () => DO_RECURSE_KEYS;
-            rec.onPrimitive = (v) => (v === "a") ? mapTo("z") : undefined;
-            const inner = Object.freeze({ c: 3 });
-            const result = map({ a: 1, b: inner }, rec) as Record<
-              string,
-              unknown
-            >;
-
-            expect(result).toEqual({ z: 1, b: inner });
-            expect(result.b).toBe(inner);
-            expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
-              ["primitive", "a", "string"],
-              ["primitive", "b", "string"],
-            ]);
-          });
-
-          it("returns the same object for `DO_RECURSE_KEYS` when no key changes and the object is frozen", () => {
-            const rec = new Recorder();
-            rec.onPlainObject = () => DO_RECURSE_KEYS;
-            const object = deepFreeze({ a: 1, b: { c: 3 } });
-
-            expect(map(object, rec)).toBe(object);
-          });
-
           it("reports each entry's final key and mapped value to `mappedFabricPlainObjectEntry()`, after visiting the entry", () => {
             const rec = new Recorder();
             rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
@@ -1632,150 +1563,94 @@ describe("VisitInProgress", () => {
             expect(result).not.toBe(link);
           });
         });
+      });
 
-        describe("containers the visitor does not recurse into", () => {
-          describe("freezing", () => {
-            it("returns a frozen copy of an unfrozen root container, leaving the original unfrozen", () => {
-              const rec = new Recorder();
-              rec.onArray = () => undefined;
-              const array = [1, [2]];
-              const result = map(array, rec) as unknown[];
+      describe("containers the visitor returns `undefined` for", () => {
+        it("maps a nested container to `undefined` when the visitor leaves `undefined` alone", () => {
+          const rec = new Recorder();
+          rec.onArray = (v) => (v.length === 1) ? undefined : DO_RECURSE_VALUES;
+          const result = map([0, [1]], rec) as unknown[];
 
-              expect(result).not.toBe(array);
-              expect(result).toEqual(array);
-              expect(Object.isFrozen(result)).toBe(true);
-              expect(Object.isFrozen(array)).toBe(false);
-            });
+          expect(result.length).toBe(2);
+          expect(result[1]).toBeUndefined();
+        });
 
-            it("returns a frozen root container as itself", () => {
-              const rec = new Recorder();
-              rec.onArray = () => undefined;
-              const array = Object.freeze([1, [2]]);
+        it("maps a container to whatever the visitor maps `undefined` to", () => {
+          const rec = new Recorder();
+          rec.onPlainObject = (v) =>
+            ("inner" in v) ? DO_RECURSE_VALUES : undefined;
+          rec.onPrimitive = (v) =>
+            (v === undefined) ? mapTo("gone") : undefined;
 
-              expect(map(array, rec)).toBe(array);
-            });
-
-            it("keeps the holes of an array it copies", () => {
-              const rec = new Recorder();
-              rec.onArray = () => undefined;
-              // deno-lint-ignore no-sparse-arrays
-              const result = map([1, , 3], rec) as unknown[];
-
-              expect(result.length).toBe(3);
-              expect(Object.keys(result)).toEqual(["0", "2"]);
-            });
-
-            it("returns a frozen copy of an unfrozen nested container, sharing its contents", () => {
-              const grandchild = [3];
-              const child = { c: grandchild };
-              const rec = new Recorder();
-              rec.onPlainObject = (v) =>
-                (v === child) ? undefined : DO_RECURSE_VALUES;
-              const result = map({ a: child }, rec) as {
-                a: { c: unknown };
-              };
-
-              expect(result.a).not.toBe(child);
-              expect(Object.isFrozen(result.a)).toBe(true);
-              expect(result.a.c).toBe(grandchild);
-              expect(Object.isFrozen(child)).toBe(false);
-            });
-
-            it("returns a new frozen instance for an unfrozen instance", () => {
-              const rec = new Recorder();
-              rec.onInstance = () => undefined;
-              const original = error("boom");
-              const result = map(original, rec);
-
-              expect(result).toBeInstanceOf(FabricError);
-              expect(result).not.toBe(original);
-              expect((result as FabricError).message).toBe("boom");
-              expect(Object.isFrozen(result)).toBe(true);
-              expect(Object.isFrozen(original)).toBe(false);
-            });
-
-            it("returns a frozen instance as itself", () => {
-              const rec = new Recorder();
-              rec.onInstance = () => undefined;
-              const original = Object.freeze(error("boom"));
-
-              expect(map(original, rec)).toBe(original);
-            });
-
-            it("returns a frozen copy of an unfrozen replacement", () => {
-              const two = [2];
-              const rec = new Recorder();
-              rec.onValue = (v) =>
-                (v === 1)
-                  ? replace(two)
-                  : (v === two)
-                  ? undefined
-                  : DO_DISPATCH;
-              const result = map([1], rec) as unknown[];
-
-              expect(result[0]).not.toBe(two);
-              expect(result[0]).toEqual(two);
-              expect(Object.isFrozen(result[0])).toBe(true);
-            });
-
-            it("returns a frozen copy of an unfrozen container for a no-op `recurse`", () => {
-              const rec = new Recorder();
-              rec.onArray = () => DO_RECURSE_KEYS;
-              const array = [1];
-              const result = map(array, rec);
-
-              expect(result).not.toBe(array);
-              expect(result).toEqual(array);
-              expect(Object.isFrozen(result)).toBe(true);
-            });
-
-            it("returns a frozen copy of an unfrozen value under `DO_RECURSE_KEYS`, without visiting it", () => {
-              const inner = { c: 3 };
-              const rec = new Recorder();
-              rec.onPlainObject = () => DO_RECURSE_KEYS;
-              const result = map({ b: inner }, rec) as { b: unknown };
-
-              expect(result.b).not.toBe(inner);
-              expect(result.b).toEqual(inner);
-              expect(Object.isFrozen(result.b)).toBe(true);
-              expect(rec.events.map((e) => e[1])).not.toContain(inner);
-            });
+          expect(map({ inner: { a: 1 } }, rec)).toStrictEqual({
+            inner: "gone",
           });
+        });
 
-          describe("without freezing", () => {
-            it("returns an unfrozen copy of a frozen root container", () => {
-              const rec = new Recorder();
-              rec.onArray = () => undefined;
-              const array = Object.freeze([1, [2]]);
-              const result = mutableMap(array, rec);
+        it("maps a root container to `undefined`", () => {
+          const rec = new Recorder();
+          rec.onArray = () => undefined;
 
-              expect(result).not.toBe(array);
-              expect(result).toEqual(array);
-              expect(Object.isFrozen(result)).toBe(false);
-            });
+          expect(map([1], rec)).toBeUndefined();
+        });
 
-            it("returns a new unfrozen instance for a frozen instance", () => {
-              const rec = new Recorder();
-              rec.onInstance = () => undefined;
-              const original = Object.freeze(error("boom"));
-              const result = mutableMap(original, rec);
+        it("maps a container to `undefined` without freezing", () => {
+          const rec = new Recorder();
+          rec.onPlainObject = (v) => ("a" in v) ? undefined : DO_RECURSE_VALUES;
+          const result = mutableMap({ b: { a: 1 } }, rec) as { b: unknown };
 
-              expect(result).toBeInstanceOf(FabricError);
-              expect(result).not.toBe(original);
-              expect(Object.isFrozen(result)).toBe(false);
-            });
+          expect(Object.hasOwn(result, "b")).toBe(true);
+          expect(result.b).toBeUndefined();
+        });
 
-            it("returns an unfrozen copy of a frozen value under `DO_RECURSE_KEYS`", () => {
-              const inner = Object.freeze({ c: 3 });
-              const rec = new Recorder();
-              rec.onPlainObject = () => DO_RECURSE_KEYS;
-              const result = mutableMap({ b: inner }, rec) as { b: unknown };
+        it("maps an instance to `undefined`", () => {
+          const rec = new Recorder();
+          rec.onInstance = () => undefined;
 
-              expect(result.b).not.toBe(inner);
-              expect(result.b).toEqual(inner);
-              expect(Object.isFrozen(result.b)).toBe(false);
-            });
-          });
+          expect(map([error("boom")], rec)).toStrictEqual([undefined]);
+        });
+
+        it("throws when the codec refuses the `undefined` that an instance's declined state becomes", () => {
+          const rec = new Recorder();
+          rec.onPlainObject = () => undefined;
+
+          expect(() => map(error("boom"), rec)).toThrow(
+            /Codec of .* refused replacement state `undefined`/,
+          );
+        });
+
+        it("maps a cyclic reference to `undefined` when `visitCycle()` returns `undefined`", () => {
+          const rec = new Recorder();
+          rec.onCycle = () => undefined;
+          const array: unknown[] = [1];
+          array.push(array);
+          const result = map(array, rec) as unknown[];
+
+          expect(result).toStrictEqual([1, undefined]);
+        });
+
+        it("visits `undefined` in a plain visit, in place of the container", () => {
+          const rec = new Recorder();
+          rec.onArray = (v) => (v.length === 1) ? undefined : DO_RECURSE_VALUES;
+          const inner = [1];
+
+          visit([0, inner], rec);
+          expect(rec.events.map((e) => e[1])).not.toContain(1);
+          expect(
+            rec.events.filter((e) => e[0] === "value").map((e) => e[1]),
+          ).toStrictEqual([[0, inner], 0, inner, undefined]);
+        });
+
+        it("does not visit `undefined` in a plain visit for a container the visitor returns `mapTo` for", () => {
+          const rec = new Recorder();
+          rec.onArray = (v) =>
+            (v.length === 1) ? mapTo(undefined) : DO_RECURSE_VALUES;
+          const inner = [1];
+
+          expect(visit([0, inner], rec)).toBeUndefined();
+          expect(
+            rec.events.filter((e) => e[0] === "value").map((e) => e[1]),
+          ).toStrictEqual([[0, inner], 0, inner]);
         });
       });
     });

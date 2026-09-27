@@ -40,26 +40,21 @@ export type MapToForm<ResultType> = {
  * A `recurse` form. This is returned by visitor methods which visit containers.
  * This tells the visitor engine that it should recursively visit the contents
  * of the container, such that each visited item is known by the engine to be
- * contained by the container which is being recursed into. The two `boolean`
- * properties indicate whether the container's keys and/or values are to be
- * recursed over. `doKeys` is ignored in a context where there is no key.
+ * contained by the container which is being recursed into. The container's
+ * values are always visited. `doKeys` indicates whether its keys are visited
+ * too, and is ignored in a context where there is no key.
  *
  * If a visitor returns an instance of this type which (implicitly) references a
  * non-container, that situation is detected by the visitor engine at runtime
  * and results in a `throw`n error.
  *
- * **Note:** The visit calls per-mapping are specifically in key-then-value
+ * **Note:** The visit calls per keyed item are specifically in key-then-value
  * order, and if the result of visiting a key is a `mainResult`, then that ends
  * the iteration before the corresponding value is visited.
- *
- * **Note:** It is technically possible to define a no-op instance of this type,
- * which is the equivalent to returning `undefined`. This is pointless, but it
- * is not prevented.
  */
 export type RecurseForm = {
   readonly type: "recurse";
   readonly doKeys: boolean;
-  readonly doValues: boolean;
 };
 
 /**
@@ -82,18 +77,7 @@ export type ReplaceForm<PlusType> = {
  * the visitor engine to "do" something.
  */
 export const DO_RECURSE_KEYS_VALUES: RecurseForm = Object.freeze(
-  { type: "recurse", doKeys: true, doValues: true } as const,
-);
-
-/**
- * Standard instance of `RecurseForm` for recursing over keys only. This is only
- * meaningful for recursing over mappings.
- *
- * The `DO_` prefix is intended to make it clear at use sites that it is telling
- * the visitor engine to "do" something.
- */
-export const DO_RECURSE_KEYS: RecurseForm = Object.freeze(
-  { type: "recurse", doKeys: true, doValues: false } as const,
+  { type: "recurse", doKeys: true } as const,
 );
 
 /**
@@ -104,7 +88,7 @@ export const DO_RECURSE_KEYS: RecurseForm = Object.freeze(
  * the visitor engine to "do" something.
  */
 export const DO_RECURSE_VALUES: RecurseForm = Object.freeze(
-  { type: "recurse", doKeys: false, doValues: true } as const,
+  { type: "recurse", doKeys: false } as const,
 );
 
 //
@@ -118,8 +102,8 @@ export const DO_RECURSE_VALUES: RecurseForm = Object.freeze(
  * See the included result types for details on what they mean. As for
  * `undefined`, if a visitor returns it in the context of this type, it means
  * that the visit of the given value was completed; the visitor engine will not
- * process it further. In a structural-map operation, this additionally means
- * that the value maps to itself.
+ * process it further. (`VisitResult` gives `undefined` a more specific meaning
+ * for a container.)
  */
 export type BaselineVisitorMethodResult<ResultType> =
   | MainResultForm<ResultType>
@@ -135,7 +119,18 @@ export type MappedResult<ResultType> = BaselineVisitorMethodResult<ResultType>;
  * Possible results from `visitValue()`, `visitCycle()`, or one of the methods
  * that `DefaultValueVisitor.visitValue()` can call (directly or indirectly).
  *
- * See the included result types for details on what they mean.
+ * See the included result types for details on what they mean. What
+ * `undefined` means depends on the visited value:
+ *
+ * * For a non-container, `undefined` means that the visit of the value was
+ *   completed. In a structural-map operation, the value maps to itself.
+ * * For a container, `undefined` means exactly the same as a `replace` whose
+ *   replacement is `undefined`: the visitor engine goes on to visit `undefined`
+ *   in the container's place, and the visitor may handle that visit or not. A
+ *   visitor which wants to finish with a container without that further visit
+ *   returns a `mapTo` instead. Beneath the top level of a plain visit a `mapTo`
+ *   is ignored, and in a structural-map operation it supplies the container's
+ *   result directly.
  */
 export type VisitResult<PlusType, ResultType> =
   | BaselineVisitorMethodResult<ResultType>
