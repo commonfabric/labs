@@ -237,12 +237,12 @@ describe("value-clone", () => {
   });
 
   describe("missingContainerIsArray()", () => {
-    it("returns `true` for a canonical array index and for `-`", () => {
+    it("returns `true` for `0`, `7`, `4294967294`, and `-`", () => {
       expect(["0", "7", "4294967294", "-"].map(missingContainerIsArray))
         .toEqual([true, true, true, true]);
     });
 
-    it("returns `false` for any other key", () => {
+    it("returns `false` for `length`, `08`, `-1`, `4294967295`, the empty string, and `a`", () => {
       expect(
         ["length", "08", "-1", "4294967295", "", "a"].map(
           missingContainerIsArray,

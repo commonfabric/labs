@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { isDeepFrozen, valueEqual } from "@commonfabric/data-model";
+import { isDeepFrozen } from "@commonfabric/data-model";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type {
   IMemorySpaceAddress,
@@ -483,6 +483,10 @@ describe("v2-transaction", () => {
             actualType: refused.error.actualType,
           },
         ).toEqual({ path: ["value", "x", "name"], actualType: "array" });
+        expect(
+          tx.read({ ...address, path: ["value", "x", "name", "first"] }).ok
+            ?.value,
+        ).toBeUndefined();
         expect(await committedValue(storage, address, tx)).toEqual({
           x: [1, 2],
         });
@@ -697,12 +701,11 @@ describe("v2-transaction", () => {
       }
     });
 
-    it("returns what a refused write left changed in the document", async () => {
-      // A write of `-` beneath a missing parent is refused. Whether a refusal
-      // leaves the document changed is the write's business. What is pinned
-      // here is that paths kept from before the refused write are not reused
-      // after it: beneath `value`, a path this transaction wrote, the log
-      // follows whatever the refusal left there.
+    it("returns no writes after a refused write, which leaves the document as it was", async () => {
+      // The two writes ahead of the refused one leave the working value edited
+      // in place yet equal to what was committed, so the log holds no writes.
+      // A refusal that changed that value would show here as a write under
+      // `value`.
 
       const { storage, address, tx } = await writerOverCommittedDocument(
         "of:v2-transaction-log-refused-write",
@@ -716,11 +719,13 @@ describe("v2-transaction", () => {
 
         expect(tx.write({ ...address, path: ["value", "b", "-"] }, 5).error)
           .toBeDefined();
-        const left = tx.read({ ...address, path: ["value"] }, {
-          meta: stableInternalVerifierRead,
-        }).ok!.value;
-        expect(tx.getReactivityLog!().writes.map(({ path }) => path))
-          .toEqual(valueEqual(left, { a: 1 }) ? [] : [["value"]]);
+
+        expect(
+          tx.read({ ...address, path: ["value"] }, {
+            meta: stableInternalVerifierRead,
+          }).ok?.value,
+        ).toEqual({ a: 1 });
+        expect(tx.getReactivityLog!().writes).toEqual([]);
       } finally {
         await storage.close();
       }

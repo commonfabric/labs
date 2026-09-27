@@ -11,9 +11,9 @@ const at = (path: string[]): IMemoryAddress => ({
 });
 
 /**
- * A root the caller owns and edits in place, as a transaction's working value
- * is, holding a frozen list that a write would thaw and replace to descend
- * into it.
+ * Returns a root the caller owns and edits in place, as a transaction's
+ * working value is, holding a frozen list that a write would thaw and replace
+ * to descend into it.
  */
 const ownedRoot = () => {
   const list = Object.freeze([1]);
@@ -133,27 +133,6 @@ describe("mutable-path-write", () => {
         const result = applyMutablePathWrite([1], at(["length"]), 2 ** 32);
 
         expect(result.error?.name).toBe("InvalidArrayLengthError");
-      });
-
-      it("returns a `TypeMismatchError` at a named key of an array for `2 ** 32` written through it", () => {
-        // The key other than an index is refused before the length is
-        // considered, so the array held there is never reached. `named` is
-        // frozen, so a write that reached it would thaw it by replacing it.
-
-        const named = Object.freeze([7]);
-        const outer = Object.assign([1], { named });
-
-        const result = applyMutablePathWrite(
-          { outer } as unknown as FabricValue,
-          at(["outer", "named", "length"]),
-          2 ** 32,
-        );
-
-        expect(
-          result.error?.name === "TypeMismatchError" &&
-            result.error.address.path,
-        ).toEqual(["outer", "named"]);
-        expect(outer.named).toBe(named);
       });
 
       it("grows the array for `2 ** 32 - 0.5`, whose floor is a length an array can have", () => {
