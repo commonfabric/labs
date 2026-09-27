@@ -787,8 +787,8 @@ describe("CFC render resolver — the owner-self Resource rule", () => {
     });
 
     it("leaves a clause naming another principal, a facet context, or an expiry untouched", () => {
-      // The facet context names Alice as its subject, and still is not a
-      // resource of hers: the rule reads the atom family, not the subject.
+      // The facet context names Alice as its subject and is still not one of
+      // her resources: the rule matches the `Resource` family alone.
       for (
         const sibling of [
           cfcAtom.user("mailto:bob@example.com"),
@@ -927,7 +927,7 @@ describe("CFC render resolver — the owner-self Resource rule", () => {
         { boundary: displayBoundary, actingPrincipal: ALICE },
       );
 
-    it("never fires a deployment rule that names the acting user by it", () => {
+    it("leaves the label unchanged under a deployment rule that writes it", () => {
       // The same rule under an ordinary variable fires on any subject, which
       // is the label-learned release the placeholder must not become.
       expect(evaluateDeployment("$owner", MALLORY).label.confidentiality)
@@ -943,7 +943,7 @@ describe("CFC render resolver — the owner-self Resource rule", () => {
       }
     });
 
-    it("never fires a module policy rule that names the acting user by it", () => {
+    it("keeps the label sealed under a module policy rule that writes it", () => {
       // Two manifests alike but for the variable their reader guard binds.
       // The resolver mints Alice's own-space reader fact, which releases the
       // first and not the second.
