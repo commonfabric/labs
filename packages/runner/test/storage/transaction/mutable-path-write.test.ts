@@ -3,12 +3,20 @@ import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import type { IMemoryAddress } from "../../../src/storage/interface.ts";
-import { applyMutablePathWrite } from "../../../src/storage/transaction/mutable-path-write.ts";
+import { planMutablePathWrite } from "../../../src/storage/transaction/mutable-path-write.ts";
 
 const at = (path: string[]): IMemoryAddress => ({
   id: "of:mutable-path-write",
   path,
 });
+
+/** Plans a write and, where it is admitted, carries it out. */
+const applyWrite = (
+  ...args: Parameters<typeof planMutablePathWrite>
+) => {
+  const plan = planMutablePathWrite(...args);
+  return plan.error ? { error: plan.error } : { ok: plan.ok.apply() };
+};
 
 /**
  * Returns a root the caller owns and edits in place, as a transaction's
@@ -21,7 +29,7 @@ const ownedRoot = () => {
 };
 
 describe("mutable-path-write", () => {
-  describe("applyMutablePathWrite()", () => {
+  describe("planMutablePathWrite()", () => {
     describe("refusing a write", () => {
       // What the write would create or thaw on its way down lands in the
       // root it was handed, so a refusal that got that far shows as a key
@@ -48,7 +56,7 @@ describe("mutable-path-write", () => {
           () => {
             const { list, root } = ownedRoot();
 
-            const result = applyMutablePathWrite(root, at(path), 5);
+            const result = applyWrite(root, at(path), 5);
 
             expect(
               result.error?.name === "TypeMismatchError" && {
@@ -69,7 +77,7 @@ describe("mutable-path-write", () => {
         const record = Object.assign(Object.create(null), { inner: {} });
         const root = { record } as FabricValue;
 
-        const result = applyMutablePathWrite(
+        const result = applyWrite(
           root,
           at(["record", "inner", "x"]),
           5,
@@ -94,7 +102,7 @@ describe("mutable-path-write", () => {
 
           const { list, root } = ownedRoot();
 
-          const result = applyMutablePathWrite(root, at(path), undefined, {
+          const result = applyWrite(root, at(path), undefined, {
             delete: true,
           });
 
@@ -118,7 +126,7 @@ describe("mutable-path-write", () => {
         const list = Object.freeze([1]);
         const root = { n: 1, list };
 
-        const result = applyMutablePathWrite(
+        const result = applyWrite(
           root,
           at(["list", "length"]),
           2 ** 32,
@@ -130,7 +138,7 @@ describe("mutable-path-write", () => {
       });
 
       it("returns an `InvalidArrayLengthError` for `2 ** 32` on an array root", () => {
-        const result = applyMutablePathWrite([1], at(["length"]), 2 ** 32);
+        const result = applyWrite([1], at(["length"]), 2 ** 32);
 
         expect(result.error?.name).toBe("InvalidArrayLengthError");
       });
@@ -138,7 +146,7 @@ describe("mutable-path-write", () => {
       it("grows the array for `2 ** 32 - 0.5`, whose floor is a length an array can have", () => {
         // The array is left sparse, so growing it allocates nothing per slot.
 
-        const result = applyMutablePathWrite(
+        const result = applyWrite(
           { list: [1] },
           at(["list", "length"]),
           2 ** 32 - 0.5,
@@ -152,7 +160,7 @@ describe("mutable-path-write", () => {
       });
 
       it("empties the array for a delete carrying `1`, a length it could truncate to", () => {
-        const result = applyMutablePathWrite(
+        const result = applyWrite(
           { list: [1, 2] },
           at(["list", "length"]),
           1,
@@ -167,7 +175,7 @@ describe("mutable-path-write", () => {
       });
 
       it("empties the array for a delete carrying `2 ** 32`, a length it could not grow to", () => {
-        const result = applyMutablePathWrite(
+        const result = applyWrite(
           { list: [1, 2] },
           at(["list", "length"]),
           2 ** 32,
@@ -182,7 +190,7 @@ describe("mutable-path-write", () => {
       });
 
       it("stores `2 ** 32` as an ordinary value where the parent is an object", () => {
-        const result = applyMutablePathWrite(
+        const result = applyWrite(
           { box: {} },
           at(["box", "length"]),
           2 ** 32,

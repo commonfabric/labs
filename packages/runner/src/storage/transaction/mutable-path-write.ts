@@ -13,6 +13,7 @@
 
 import {
   cloneForMutation,
+  cloneIfNecessary,
   type FabricValue,
   isFabricPlainContainer,
   missingContainerIsArray,
@@ -82,18 +83,18 @@ export interface PlannedPathWrite {
   readonly materializedValue: FabricValue | undefined;
 
   /**
-   * Carries the write out, storing `value`: the value planned, or a copy of
-   * it. The root it was planned against must be unchanged since, and is
-   * mutated in place where it is already mutable. A delete with nothing to
-   * remove returns that root unchanged.
+   * Carries the write out, storing an isolated copy of the value planned.
+   * The root it was planned against must be unchanged since, and is mutated
+   * in place where it is already mutable. A delete with nothing to remove
+   * returns that root unchanged.
    */
-  apply(value: FabricValue | undefined): MutableWriteResult;
+  apply(): MutableWriteResult;
 }
 
 /**
  * Decides whether a write at `address.path` within `root` is refused, and
  * reports what the write finds, reading `root` and changing nothing. A write
- * it admits is carried out by the plan's `apply()`.
+ * it admits is carried out by the plan's `apply()`, which stores `value`.
  *
  * A write of a value is refused with a `TypeMismatchError` naming the path
  * through the offending key where a key lands in a container that cannot hold
@@ -120,7 +121,7 @@ export const planMutablePathWrite = (
   const path = address.path;
   if (path.length === 0) {
     return {
-      ok: new Plan(root, address, isDelete, root !== undefined, root),
+      ok: new Plan(root, address, value, isDelete, root !== undefined, root),
     };
   }
 
@@ -130,7 +131,7 @@ export const planMutablePathWrite = (
   } else if (isContainerValue(root)) {
     trace = tracePath(root, path);
   } else if (isDelete) {
-    return { ok: new Plan(root, address, isDelete, false, undefined) };
+    return { ok: new Plan(root, address, value, isDelete, false, undefined) };
   } else {
     return {
       error: TypeMismatchError(
@@ -141,11 +142,11 @@ export const planMutablePathWrite = (
     };
   }
 
+  const previousValue = trace?.end === "complete" ? trace.value : undefined;
   const present = trace?.end === "complete";
-  const previousValue = present ? trace!.value : undefined;
   if (isDelete) {
     return {
-      ok: new Plan(root, address, isDelete, present, previousValue),
+      ok: new Plan(root, address, value, isDelete, present, previousValue),
     };
   }
 
@@ -161,17 +162,15 @@ export const planMutablePathWrite = (
   let materializedValue: FabricValue | undefined;
   if (trace === undefined) {
     materializedAt = [];
-  } else if (
-    trace.end === "missing" && trace.containers.length < path.length
-  ) {
-    const holder = trace.containers.length - 1;
-    materializedAt = path.slice(0, holder);
-    materializedValue = trace.containers[holder];
+  } else if (trace.end === "missing" && trace.at < path.length - 1) {
+    materializedAt = path.slice(0, trace.at);
+    materializedValue = trace.containers[trace.at];
   }
   return {
     ok: new Plan(
       root,
       address,
+      value,
       isDelete,
       present,
       previousValue,
@@ -179,24 +178,6 @@ export const planMutablePathWrite = (
       materializedValue,
     ),
   };
-};
-
-/**
- * Plans and carries out a write in one step, for a caller with nothing to do
- * between the two. Like `planMutablePathWrite()` followed by the plan's
- * `apply(value)`.
- */
-export const applyMutablePathWrite = (
-  root: FabricValue | undefined,
-  address: IMemoryAddress,
-  value: FabricValue | undefined,
-  options?: MutablePathWriteOptions,
-): Result<MutableWriteResult, MutablePathWriteError> => {
-  const plan = planMutablePathWrite(root, address, value, options);
-  if (plan.error) {
-    return { error: plan.error };
-  }
-  return { ok: plan.ok.apply(value) };
 };
 
 /**
@@ -233,10 +214,13 @@ const refusalOf = (
 ): MutablePathWriteError | undefined => {
   const path = address.path;
   const containers = trace?.containers ?? [];
-  // Keys from this index on land in containers the write creates.
-  const firstCreated = trace?.end === "complete"
-    ? path.length
-    : containers.length;
+  // Keys from this index on land in containers the write creates: every key
+  // where the write creates the root, and those past a missing slot.
+  const firstCreated = trace === undefined
+    ? 0
+    : trace.end === "missing"
+    ? trace.at + 1
+    : path.length;
   for (let index = 0; index < path.length; index++) {
     const key = path[index]!;
     const inArray = index < firstCreated
@@ -249,9 +233,10 @@ const refusalOf = (
         "write",
       );
     }
-    if (trace?.end === "blocked" && index === containers.length - 1) {
+    if (trace?.end === "blocked" && index === trace.at - 1) {
+      // `path[index]` leads to a value no key addresses, and the path goes on.
       return TypeMismatchError(
-        { ...address, path: path.slice(0, index + 1) },
+        { ...address, path: path.slice(0, trace.at) },
         toDebugKindString(trace.value),
         "write",
       );
@@ -278,54 +263,59 @@ const isOutOfRangeArrayLength = (value: number): boolean =>
 
 /** The plan `planMutablePathWrite()` returns. */
 class Plan implements PlannedPathWrite {
-  readonly root: FabricValue | undefined;
-  readonly address: IMemoryAddress;
-  readonly isDelete: boolean;
   readonly present: boolean;
   readonly previousValue: FabricValue | undefined;
   readonly materializedAt: readonly string[] | undefined;
   readonly materializedValue: FabricValue | undefined;
+  readonly #root: FabricValue | undefined;
+  readonly #address: IMemoryAddress;
+  readonly #value: FabricValue | undefined;
+  readonly #isDelete: boolean;
 
   /** Constructs an instance holding what the planning found. */
   constructor(
     root: FabricValue | undefined,
     address: IMemoryAddress,
+    value: FabricValue | undefined,
     isDelete: boolean,
     present: boolean,
     previousValue: FabricValue | undefined,
     materializedAt?: readonly string[],
     materializedValue?: FabricValue,
   ) {
-    this.root = root;
-    this.address = address;
-    this.isDelete = isDelete;
     this.present = present;
     this.previousValue = previousValue;
     this.materializedAt = materializedAt;
     this.materializedValue = materializedValue;
+    this.#root = root;
+    this.#address = address;
+    this.#value = value;
+    this.#isDelete = isDelete;
   }
 
   /** @inheritDoc */
-  apply(value: FabricValue | undefined): MutableWriteResult {
-    const path = this.address.path;
+  apply(): MutableWriteResult {
+    const path = this.#address.path;
+    const value = this.#isDelete || this.#value === undefined
+      ? undefined
+      : cloneIfNecessary(this.#value);
     if (path.length === 0) {
-      const nextRoot = this.isDelete ? undefined : value;
       return {
-        root: nextRoot,
-        previousValue: this.root,
-        changed: !valueEqual(this.root, nextRoot),
+        root: value,
+        previousValue: this.#root,
+        changed: !valueEqual(this.#root, value),
       };
     }
-    if (this.isDelete && !this.present) {
-      return { root: this.root, previousValue: undefined, changed: false };
+    if (this.#isDelete && !this.present) {
+      return { root: this.#root, previousValue: undefined, changed: false };
     }
 
     const leafKey = path[path.length - 1]!;
     // A write the plan admitted never reaches a root that is defined but not
     // a container, so a root still missing here is one to create.
-    const root = this.root === undefined
+    const root = this.#root === undefined
       ? (missingContainerIsArray(path[0]!) ? [] : {})
-      : this.root;
+      : this.#root;
     // `cloneForMutation()` decides its errors from the same trace the plan
     // refused by, over the same unchanged root, so it throws on nothing the
     // plan admitted, and what it returns at the parent path is an array or a
@@ -343,13 +333,13 @@ class Plan implements PlannedPathWrite {
         return applyArrayLengthWrite(
           newRoot,
           parent,
-          this.isDelete ? undefined : value,
+          value,
         );
       }
       // The plan admits no other key into an array than an index.
       const slot = Number(leafKey);
       const previousValue = parent[slot];
-      if (this.isDelete) {
+      if (this.#isDelete) {
         if (!(slot in parent)) {
           return { root: newRoot, previousValue, changed: false };
         }
@@ -376,7 +366,7 @@ class Plan implements PlannedPathWrite {
     const hasOwnLeaf = Object.hasOwn(obj, leafKey);
     // Absent means absent: without the guard this is the prototype's member.
     const previousValue = hasOwnLeaf ? obj[leafKey] : undefined;
-    if (this.isDelete) {
+    if (this.#isDelete) {
       if (!hasOwnLeaf) {
         return { root: newRoot, previousValue, changed: false };
       }

@@ -300,7 +300,7 @@ const ensureWritableDocument = (
 
 /**
  * Drops `doc.frozenReads` entries on the chain of `writtenPath` -- both
- * ancestors (whose containers were rebuilt by `applyMutablePathWrite()`)
+ * ancestors (whose containers were rebuilt by a plan's `apply()`)
  * and descendants (the subtree at the write target is gone). Sibling
  * subtrees off divergent ancestors are preserved: structural sharing
  * leaves their values reference-identical to the consumer's cached
@@ -2156,10 +2156,6 @@ export class V2StorageTransaction implements IStorageTransaction {
       return { ok: current };
     }
 
-    const isolatedValue = value === undefined
-      ? undefined
-      : cloneIfNecessary(value);
-
     // For create-parents writes, the materialization point (deepest
     // pre-existing parent on the write path) is where the observable
     // change happens for subscribers watching a parent. For simple writes
@@ -2174,7 +2170,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       ? planned.present
       : planned.materializedValue !== undefined;
 
-    const result = this.#writeWorkingRoot(doc, planned, isolatedValue);
+    const result = this.#writeWorkingRoot(doc, planned);
     // Authoritative mode records the (value-unchanged) write anyway so it
     // reaches the commit as a full-cover re-assert, and an unconfirmed
     // schema document is recorded for the same delivery reason; delete
@@ -2295,9 +2291,6 @@ export class V2StorageTransaction implements IStorageTransaction {
     // after it would observe the post-write state. (See
     // `#writeWithinBranch` for the same invariant and a regression test.)
     for (const { address, value, delete: isDelete } of writes) {
-      const isolatedValue = value === undefined
-        ? undefined
-        : cloneIfNecessary(value);
       const plan = planMutablePathWrite(
         nextRoot,
         address,
@@ -2325,7 +2318,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       // both); delete no-ops still skip.
       if (
         isDelete ? !planned.present : (planned.present &&
-          valueEqual(planned.previousValue, isolatedValue) &&
+          valueEqual(planned.previousValue, value) &&
           !this.#authoritativeWrites &&
           !this.#mustDeliverSchemaDoc(space, address.id))
       ) {
@@ -2341,7 +2334,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       const previousActivityPresent = planned.materializedAt === undefined
         ? planned.present
         : planned.materializedValue !== undefined;
-      const result = this.#writeWorkingRoot(doc, planned, isolatedValue);
+      const result = this.#writeWorkingRoot(doc, planned);
       nextRoot = result.root;
       if (
         !result.changed &&
@@ -3030,19 +3023,17 @@ export class V2StorageTransaction implements IStorageTransaction {
   }
 
   /**
-   * Carries out `planned`, a write to `doc`'s working root, storing `value`.
-   * The plan's `apply()` mutates that root in place when it is already
-   * mutable. What the reactivity log derives from the document is dropped
+   * Carries out `planned`, a write to `doc`'s working root. The plan's
+   * `apply()` mutates that root in place when it is already mutable. What the reactivity log derives from the document is dropped
    * first, so nothing built before the write outlives it; every in-place
    * write to a working root goes through here for that reason.
    */
   #writeWorkingRoot(
     doc: WritableDocumentEntry,
     planned: PlannedPathWrite,
-    value: FabricValue | undefined,
   ): MutableWriteResult {
     this.#invalidateWrittenState(doc);
-    return planned.apply(value);
+    return planned.apply();
   }
 
   /**

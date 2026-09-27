@@ -585,9 +585,9 @@ export function cloneForMutation<T extends FabricValue>(
   const trace = tracePath(value, path);
   const { containers } = trace;
   if (trace.end === "blocked") {
-    // The path continues at `path[containers.length]` from a value no key
-    // addresses: the root itself, or the value the key before it led to.
-    const at = containers.length;
+    // The path goes on at `path[at]` from a value no key addresses: the root
+    // itself, or the value the key before it led to.
+    const { at } = trace;
     if (at === 0) {
       throw new CloneForMutationError(
         "non-container-root",
@@ -612,7 +612,7 @@ export function cloneForMutation<T extends FabricValue>(
     );
   }
   if (trace.end === "missing" && !createMissing) {
-    const at = containers.length - 1;
+    const { at } = trace;
     throw new CloneForMutationError(
       "missing-segment",
       at,
@@ -638,25 +638,24 @@ export function cloneForMutation<T extends FabricValue>(
 
   // Shallow-thaw each container the path passes through that is already
   // there, splicing each thawed copy into its thawed parent. Each child is
-  // the one the trace found rather than a read of the parent's copy, which
-  // holds the same children.
+  // the one the trace found, which the parent's copy holds too.
   const newRoot = cloneIfNecessary(value, cloneOpts) as T;
   let current = newRoot as MutableFabricContainerValueLayer;
-  const existing = trace.end === "missing"
-    ? containers.length - 1
-    : path.length;
+  const existing = trace.end === "missing" ? trace.at : path.length;
+  const valueAtPath = trace.end === "complete" ? trace.value : undefined;
   for (let index = 0; index < existing; index++) {
-    const key = path[index]!;
+    // The last container thawed is the value at the path itself, which is a
+    // container wherever this loop reaches it: the checks above refuse
+    // anything else.
     const next = index + 1 < containers.length
       ? containers[index + 1]!
-      : trace.value!;
+      : valueAtPath!;
     const thawed = cloneIfNecessary(
       next,
       cloneOpts,
     ) as MutableFabricContainerValueLayer;
-    const parent = current as Record<string, FabricValue>;
-    if (parent[key] !== thawed) {
-      parent[key] = thawed;
+    if (thawed !== next) {
+      (current as Record<string, FabricValue>)[path[index]!] = thawed;
     }
     current = thawed;
   }
@@ -678,31 +677,36 @@ export function cloneForMutation<T extends FabricValue>(
 
 /**
  * What `tracePath()` found along a path, read without changing anything.
+ * `containers` holds the containers already in the value that the path
+ * addresses into, root first: `containers[i]` holds `path[i]`.
  */
-export interface PathTrace {
+export type PathTrace =
+  /** Every key names an own slot; `value` is the value at the path. */
+  | {
+    readonly end: "complete";
+    readonly containers: readonly (FabricArray | FabricPlainObject)[];
+    readonly value: FabricValue | undefined;
+  }
   /**
-   * How the descent ended: `complete` where every key of the path names an own
-   * slot, `missing` where one does not, and `blocked` where the path goes on
-   * past a value no key addresses.
+   * `path[at]` names no own slot of `containers[at]`, the last container, and
+   * each key after it addresses a container a mutation would create, shaped as
+   * `missingContainerIsArray()` says.
    */
-  readonly end: "complete" | "missing" | "blocked";
-
+  | {
+    readonly end: "missing";
+    readonly containers: readonly (FabricArray | FabricPlainObject)[];
+    readonly at: number;
+  }
   /**
-   * The containers already in the value that the path addresses into, root
-   * first: `containers[i]` holds `path[i]`. Where `end` is `missing`, the last
-   * of them lacks its key, and each key after that one addresses a container a
-   * mutation would create, shaped as `missingContainerIsArray()` says. Where
-   * `end` is `blocked`, the path goes on at `path[containers.length]` from
-   * `value`, which is not a container.
+   * The path goes on at `path[at]` from `value`, the value at
+   * `path.slice(0, at)`, which is neither an array nor a plain object.
    */
-  readonly containers: readonly (FabricArray | FabricPlainObject)[];
-
-  /**
-   * The value at the path where `end` is `complete`, the value that ended the
-   * descent where it is `blocked`, and `undefined` where it is `missing`.
-   */
-  readonly value: FabricValue | undefined;
-}
+  | {
+    readonly end: "blocked";
+    readonly containers: readonly (FabricArray | FabricPlainObject)[];
+    readonly at: number;
+    readonly value: FabricValue | undefined;
+  };
 
 /**
  * Traces `path` through `value` by the rules `cloneForMutation()` descends by,
@@ -726,12 +730,12 @@ export function tracePath(
   let current: FabricValue = value;
   for (let index = 0; index < path.length; index++) {
     if (!isFabricPlainContainer(current)) {
-      return { end: "blocked", containers, value: current };
+      return { end: "blocked", containers, at: index, value: current };
     }
     containers.push(current);
     const key = path[index]!;
     if (!Object.hasOwn(current, key)) {
-      return { end: "missing", containers, value: undefined };
+      return { end: "missing", containers, at: index };
     }
     current = (current as Record<string, FabricValue>)[key];
   }
