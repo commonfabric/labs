@@ -85,8 +85,9 @@ size tested. CPU per commit:
 | 17,500 | link | 2,459 ms | 836 ms |
 
 From 10,752 to 17,500 entries, 1.6 times the data, main's cost rose 3.4-fold
-and the change's 1.44-fold: no whole-document hash is left on the commit path
-to thrash the string cache.
+with string values and 2.8-fold with links, and the change's 1.44-fold and
+1.6-fold: no whole-document hash is left on the commit path to thrash the
+string cache.
 
 ## Ruled out
 
