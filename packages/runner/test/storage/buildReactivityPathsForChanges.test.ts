@@ -39,9 +39,15 @@ const addingKeys = (size: number, added: number) => {
     key,
   ]);
 
+  const beforeRoot = deepFreeze({ value: counted(deepFreeze(before)) });
+  const afterRoot = { value: counted(after) };
+  // Freezing the input above walks it through the proxy too, and is not what
+  // is being counted.
+  listings = 0;
+
   const paths = buildReactivityPathsForChanges(
-    deepFreeze({ value: counted(deepFreeze(before)) }),
-    { value: counted(after) },
+    beforeRoot,
+    afterRoot,
     writtenPaths,
   );
   return { paths, listings };

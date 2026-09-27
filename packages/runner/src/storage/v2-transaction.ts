@@ -31,6 +31,7 @@ import {
   encodePointer,
   parsePointer,
   pathsOverlap,
+  prefixPointers,
 } from "../../../memory/v2/path.ts";
 import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope } from "../scope.ts";
@@ -149,6 +150,7 @@ type ReadDocumentEntry = {
   // the overwhelming majority of documents: one is created the first time a
   // write displaces a root some materialized read may still describe.
   displaced?: DisplacedRoot[];
+  reactivityPaths?: readonly (readonly string[])[];
 };
 
 type WritableDocumentEntry = {
@@ -159,12 +161,17 @@ type WritableDocumentEntry = {
   writeDetails: Map<string, TransactionWriteDetail>;
   patchDetails: Map<string, TransactionWriteDetail>;
   displaced?: DisplacedRoot[];
-  // The paths this transaction's writes to the document report for
-  // reactivity, from `buildReactivityPathsForChanges()`. They depend only on
-  // `initial`, `current` and `patchDetails`, so a read leaves them standing and
-  // a write to this document clears them; that is what lets every build of the
-  // reactivity log during one commit share them.
+
+  /**
+   * The paths this transaction's writes to the document report for
+   * reactivity, from `buildReactivityPathsForChanges()`, kept so that every
+   * build of the reactivity log during one commit shares them. They depend
+   * only on `initial`, `current` and `patchDetails`, so a read leaves them
+   * standing. `V2StorageTransaction.#invalidateWrittenState()` drops them
+   * wherever `current` or `patchDetails` may change.
+   */
   reactivityPaths?: readonly (readonly string[])[];
+
   // Mergeable-write intents recorded by recordMergeableOp, keyed by document
   // path. The commit emits these as the corresponding mergeable op (which the
   // server resolves against durable state) instead of a value diffed against a
@@ -759,25 +766,6 @@ const isPrefixPath = (
   path: readonly string[],
 ): boolean => prefix.length <= path.length && pathsOverlap(prefix, path);
 
-/**
- * The JSON Pointer of each prefix of `path`, indexed by the prefix's length:
- * the root's (`""`) first and `path`'s own last. Each is built from the one
- * before, so the list costs about one encoding of `path`.
- *
- * With paths indexed by pointer, which of them is a prefix of `path` is then a
- * lookup per entry of this list, a cost that grows with the depth of `path`
- * rather than with the number of paths indexed.
- */
-const prefixPointers = (path: readonly string[]): string[] => {
-  const pointers = [""];
-  let pointer = "";
-  for (const segment of path) {
-    pointer += encodePointer([segment]);
-    pointers.push(pointer);
-  }
-  return pointers;
-};
-
 const isSubsumedByTailSplice = (
   spliceCandidate: PatchDraftCandidate,
   candidatePath: readonly string[],
@@ -913,7 +901,7 @@ export const selectPatchOps = (
 // "unchanged", leaving an in-place fabric change at an ancestor prefix with no
 // reactivity path. `differential.ts` guards its sibling walk the same way.
 //
-// That covers a `FabricInstance` too. `buildReactivityPathsForChange` calls
+// That covers a `FabricInstance` too. `buildReactivityPathsForChanges` calls
 // this with the value at every proper ancestor prefix of a written path, read
 // from the document as it stood when the transaction opened, so a write
 // anywhere below a stored `FabricError` arrives here at commit time.
@@ -962,8 +950,8 @@ const compareDocPaths = (
  *
  * Comparing an ancestor's shallow structure reads its whole key set, and every
  * written path beneath it shares the answer, so each ancestor is compared once
- * per call rather than once per written path. That keeps `K` writes under one
- * `N`-key object at `O(K + N)` rather than `O(K × N)`.
+ * per call however many written paths sit beneath it. `K` writes under one
+ * `N`-key object then list its keys once, not `K` times.
  *
  * Exported for direct unit testing.
  */
@@ -986,11 +974,12 @@ export const buildReactivityPathsForChanges = (
       continue;
     }
 
+    const pointers = prefixPointers(path);
     for (let prefixLength = 1; prefixLength < path.length; prefixLength += 1) {
-      const prefix = path.slice(0, prefixLength);
-      const pointer = encodePointer(prefix);
+      const pointer = pointers[prefixLength];
       let changed = ancestorChanged.get(pointer);
       if (changed === undefined) {
+        const prefix = path.slice(0, prefixLength);
         changed = shallowStructureChanged(
           readValueAtPath(beforeRoot, prefix, {
             allowArrayLength: true,
@@ -1001,11 +990,11 @@ export const buildReactivityPathsForChanges = (
         );
         ancestorChanged.set(pointer, changed);
       }
-      if (changed) {
-        paths.set(pointer, prefix);
+      if (changed && !paths.has(pointer)) {
+        paths.set(pointer, path.slice(0, prefixLength));
       }
     }
-    paths.set(encodePointer(path), path);
+    paths.set(pointers[path.length], path);
   }
   return [...paths.values()].sort(compareDocPaths);
 };
@@ -1825,10 +1814,11 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     if (usesLocalReads(this) && !hasDataUriScheme(address.id)) {
       // `patchDetails` is keyed by each write's pointer.
+      const patchDetails = doc.patchDetails;
       const written = this.#readEpoch === undefined &&
-        doc.patchDetails !== undefined &&
+        patchDetails !== undefined && patchDetails.size > 0 &&
         prefixPointers(address.path).some((pointer) =>
-          doc.patchDetails!.has(pointer)
+          patchDetails.has(pointer)
         );
       const replica = branch.replica;
       const identity = this.#scopeKeyIdentity;
@@ -2060,6 +2050,7 @@ export class V2StorageTransaction implements IStorageTransaction {
   #replaceCurrent(doc: DocumentEntry, next: RootAttestation): void {
     this.#writeEpoch++;
     doc.current = next;
+    this.#invalidateWrittenState(doc);
   }
 
   trackReadPaths(
@@ -2318,6 +2309,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       ? previousPresent
       : presentBeforeWrite(activityPath);
 
+    this.#invalidateWrittenState(doc);
     const result = applyMutablePathWrite(
       current.value,
       address,
@@ -2498,6 +2490,7 @@ export class V2StorageTransaction implements IStorageTransaction {
         : hasValueAtPath(nextRoot, activityPath, {
           allowArrayLength: true,
         });
+      this.#invalidateWrittenState(doc);
       const result = applyMutablePathWrite(
         nextRoot,
         address,
@@ -2597,7 +2590,6 @@ export class V2StorageTransaction implements IStorageTransaction {
       previousValue,
       previousPresent,
     );
-    doc.reactivityPaths = undefined;
     this.#invalidateReactivityLog();
   }
 
@@ -2632,6 +2624,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       previousValue,
       previousPresent,
     );
+    this.#invalidateWrittenState(doc);
   }
 
   #upsertWriteDetail(
@@ -3192,6 +3185,18 @@ export class V2StorageTransaction implements IStorageTransaction {
 
   #invalidateReactivityLog(): void {
     this.#reactivityLogCache = undefined;
+  }
+
+  /**
+   * Drops what the reactivity log derives from `doc`'s written state: the
+   * paths kept on the document, and the log built from them. Called ahead of
+   * every write that mutates the working root in place, which a write can do
+   * even when it then refuses the value, and wherever the root or the recorded
+   * patch details are replaced.
+   */
+  #invalidateWrittenState(doc: DocumentEntry): void {
+    doc.reactivityPaths = undefined;
+    this.#invalidateReactivityLog();
   }
 
   /**

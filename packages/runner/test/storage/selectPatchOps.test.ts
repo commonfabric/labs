@@ -62,6 +62,9 @@ const segmentReadsSelecting = (count: number): number => {
     { length: count },
     (_, index) => cover(counted(["value", `key-${index}`])),
   );
+  // Building each candidate's pointer above reads its path too, and is not
+  // what is being counted.
+  reads = 0;
 
   expect(selectPatchOps(candidates, [], []).length).toBe(count);
   return reads;
@@ -123,13 +126,15 @@ describe("selectPatchOps()", () => {
   });
 
   it("reads each candidate's path as often among many candidates as among few", () => {
-    const short = segmentReadsSelecting(20);
-    const long = segmentReadsSelecting(200);
+    const short = segmentReadsSelecting(20) / 20;
+    const long = segmentReadsSelecting(200) / 200;
 
-    // Per candidate, so that the equality says the work for one candidate does
-    // not grow with how many others there are. The floor keeps a probe that
-    // stopped observing the paths from agreeing at zero.
+    // Per candidate. Comparing each candidate with those kept before it reads
+    // a kept path once per later candidate, which multiplies the count per
+    // candidate about tenfold between these sizes; the bound leaves room for
+    // a factor that grows as slowly as a sort's. The floor keeps a probe that
+    // stopped observing the paths from passing at zero.
     expect(short).toBeGreaterThan(0);
-    expect(long / 200).toBe(short / 20);
+    expect(long).toBeLessThan(short * 2);
   });
 });

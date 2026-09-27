@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { isDeepFrozen } from "@commonfabric/data-model";
+import { isDeepFrozen, valueEqual } from "@commonfabric/data-model";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { URI } from "../src/storage/interface.ts";
 import {
@@ -114,7 +114,11 @@ const largeCopiesAddingKeys = async (
     const assign = Object.assign;
     let copies = 0;
     Object.assign = ((target: object, ...sources: object[]) => {
-      if (sources.some((source) => Object.keys(source).length >= size)) {
+      if (
+        sources.some((source) =>
+          source != null && Object.keys(source).length >= size
+        )
+      ) {
         copies++;
       }
       return assign(target, ...sources);
@@ -316,6 +320,62 @@ describe("v2-transaction", () => {
         // left to report.
         expect(tx.getReactivityLog!().writes.map(({ path }) => path))
           .toEqual([["value"], ["value", "c"]]);
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("returns the writes of a batch made after the log was last built", async () => {
+      const { storage, address, tx } = await writerOverCommittedDocument(
+        "of:v2-transaction-log-after-batch",
+      );
+      try {
+        expect(tx.write({ ...address, path: ["value", "b"] }, 2).ok)
+          .toBeTruthy();
+        expect(tx.getReactivityLog!().writes.map(({ path }) => path))
+          .toEqual([["value"], ["value", "b"]]);
+
+        expect(
+          tx.writeBatch!([
+            { address: { ...address, path: ["value", "c"] }, value: 3 },
+            { address: { ...address, path: ["value", "a"] }, value: 9 },
+          ]).ok,
+        ).toBeTruthy();
+        expect(tx.getReactivityLog!().writes.map(({ path }) => path))
+          .toEqual([
+            ["value"],
+            ["value", "a"],
+            ["value", "b"],
+            ["value", "c"],
+          ]);
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("returns what a refused write left changed in the document", async () => {
+      // A write of `-` beneath a missing parent is refused only after the
+      // parent is created in the working value, so the refusal can leave the
+      // document changed. Whether it does is the write's business; what is
+      // pinned here is that the log agrees with the value the commit sends.
+
+      const { storage, address, tx } = await writerOverCommittedDocument(
+        "of:v2-transaction-log-refused-write",
+      );
+      try {
+        expect(tx.write({ ...address, path: ["value"] }, { a: 2 }).ok)
+          .toBeTruthy();
+        expect(tx.write({ ...address, path: ["value"] }, { a: 1 }).ok)
+          .toBeTruthy();
+        expect(tx.getReactivityLog!().writes).toEqual([]);
+
+        expect(tx.write({ ...address, path: ["value", "b", "-"] }, 5).error)
+          .toBeDefined();
+        const left = tx.read({ ...address, path: ["value"] }, {
+          meta: stableInternalVerifierRead,
+        }).ok!.value;
+        expect(tx.getReactivityLog!().writes.map(({ path }) => path))
+          .toEqual(valueEqual(left, { a: 1 }) ? [] : [["value"]]);
       } finally {
         await storage.close();
       }
