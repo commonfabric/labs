@@ -63,6 +63,9 @@ import {
   cellRefToIdentityKey,
   isCellHandle,
   NAME,
+  type PresenceEvent,
+  type PresenceRecord,
+  type PresenceRoomHandle,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
 import { GFM } from "@lezer/markdown";
@@ -87,11 +90,7 @@ import {
   MentionableArraySchema,
   MentionableSchema,
 } from "../../core/mentionable.ts";
-import {
-  presenceUrlContext,
-  runtimeContext,
-  spaceContext,
-} from "../../runtime-context.ts";
+import { runtimeContext, spaceContext } from "../../runtime-context.ts";
 import { type StoredFile, uploadFile } from "../../utils/file-cell-storage.ts";
 import { mentionIdFromCellId } from "../../utils/mention-id.ts";
 import {
@@ -133,11 +132,12 @@ import {
   presenceSelectionToJSON,
 } from "./codemirror-presence.ts";
 import {
-  copresenceRoomForField,
-  CopresenceSession,
+  CARET_FACET,
+  caretFacetOf,
+  participantFromRecord,
   type PresenceFailureCategory,
-  type PresenceServerMessage,
-} from "./copresence-client.ts";
+  presenceFailureCategory,
+} from "./presence-facets.ts";
 
 /** A unique noteId, so notes created from a mention do not collide. */
 function generateNoteId(): string {
@@ -188,10 +188,6 @@ function escapeMarkdownImageAltText(text: string): string {
     .replace(/\]/g, "\\]")
     .replace(/\r?\n/g, " ");
 }
-
-// A browser tab advertises one editor room at a time. Blur retains ownership;
-// focus in another instance transfers it.
-let activePresenceEditor: CFCodeEditor | undefined;
 
 /**
  * Supported MIME types for syntax highlighting
@@ -266,11 +262,13 @@ const getLangExtFromMimeType = (mime: MimeType) => {
  * @attr {CellHandle<string>} pattern - Optional pattern piece used for backlink context.
  * @attr {boolean} collaborative - Use Memory's operation protocol for concurrent editing.
  * @attr {string} presenceRoom - Optional opaque room override for ephemeral
- *   co-presence. The bound text Cell address supplies the default.
+ *   co-presence. Without one the runtime derives the room from the bound
+ *   text Cell's resolved field.
  * @attr {string} participantName - Plain-text display name which enables
- *   co-presence when this editor is focused.
- * @attr {string} presenceUrl - Optional WebSocket co-presence service
- *   override. Hosts can instead provide `presenceUrlContext`.
+ *   co-presence. Every collaborative editor on a page joins its own room and
+ *   publishes its caret, with `focused` reporting which one owns focus.
+ *   Presence travels over the runtime's memory connection; no endpoint is
+ *   configured.
  *
  * @fires cf-change - Fired when content changes with detail: { value, oldValue, language }
  * @fires cf-focus - Fired on focus
@@ -329,7 +327,6 @@ export class CFCodeEditor extends BaseElement {
     collaborative: { type: Boolean },
     presenceRoom: { type: String },
     participantName: { type: String },
-    presenceUrl: { type: String },
   };
 
   declare value: CellHandle<string> | string;
@@ -373,11 +370,6 @@ export class CFCodeEditor extends BaseElement {
   declare collaborative: boolean;
   declare presenceRoom: string;
   declare participantName: string;
-  declare presenceUrl: string;
-
-  @consume({ context: presenceUrlContext, subscribe: true })
-  @property({ attribute: false })
-  accessor contextPresenceUrl: string | undefined = undefined;
 
   @consume({ context: runtimeContext, subscribe: true })
   @property({ attribute: false })
@@ -404,11 +396,13 @@ export class CFCodeEditor extends BaseElement {
   private _presenceComp = new Compartment();
   private _collaboration: CodeMirrorCollaborationController | undefined;
   private _collaborationSyncUnsub: (() => void) | undefined;
-  private _presence: CopresenceSession | undefined;
+  private _presence: PresenceRoomHandle | undefined;
+  private _presenceUnsubscribe: (() => void) | undefined;
+  private _presenceJoining = false;
+  private _presenceGeneration = 0;
   private _presenceParticipantId: string | undefined;
   private _presenceHasSelection = false;
   private _presenceEpoch: number | undefined;
-  private _presenceServiceUrl: string | undefined;
   private _presenceRoom: string | undefined;
   private _presenceFailure:
     | {
@@ -416,7 +410,6 @@ export class CFCodeEditor extends BaseElement {
       configurationKey: string;
     }
     | undefined;
-  private _presenceReconnectListenersInstalled = false;
   private _collaborationTransition: Promise<void> | undefined;
   private _collaborationGeneration = 0;
   private _collaborationFailed = false;
@@ -559,7 +552,6 @@ export class CFCodeEditor extends BaseElement {
     this.collaborative = false;
     this.presenceRoom = "";
     this.participantName = "";
-    this.presenceUrl = "";
     this.mentionable = null;
     this.references = null;
     this.fabricHosts = [];
@@ -1682,7 +1674,6 @@ export class CFCodeEditor extends BaseElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    this._setupPresenceReconnectListeners();
     if (this.autofocus && this._editorView) {
       this._queueAutofocus();
     }
@@ -1690,8 +1681,7 @@ export class CFCodeEditor extends BaseElement {
 
   override disconnectedCallback() {
     super.disconnectedCallback();
-    this._cleanupPresenceReconnectListeners();
-    this._releasePresenceOwnership();
+    this._cleanupPresence();
     this._cleanup();
   }
 
@@ -1994,25 +1984,21 @@ export class CFCodeEditor extends BaseElement {
     this._publishPresence();
   }
 
+  /**
+   * Joins the presence room of the collaborative field through the cell's
+   * runtime once collaboration is ready and a participant name is set. A
+   * join already made for the same epoch and room is kept and republished
+   * to; a failure is reported once per configuration, and a `configuration`
+   * failure is not retried until the room or name changes.
+   */
   private _setupPresence(
     synchronization = this._collaboration?.synchronizationSnapshot,
     retryFailedConnection = false,
   ): void {
-    if (activePresenceEditor !== this) {
-      this._cleanupPresence();
-      return;
-    }
     const view = this._editorView;
-    const serviceUrl = this.presenceUrl || this.contextPresenceUrl || "";
-    const room = this.presenceRoom ||
-      (synchronization === null || synchronization === undefined
-        ? ""
-        : copresenceRoomForField(synchronization.field));
-    const configurationKey = JSON.stringify([
-      serviceUrl,
-      room,
-      this.participantName,
-    ]);
+    const controller = this._collaboration;
+    const room = this.presenceRoom;
+    const configurationKey = JSON.stringify([room, this.participantName]);
     if (
       this._presenceFailure !== undefined &&
       this._presenceFailure.configurationKey !== configurationKey
@@ -2020,9 +2006,9 @@ export class CFCodeEditor extends BaseElement {
       this._presenceFailure = undefined;
     }
     if (
-      !view || !this.collaborative || !this._collaboration?.active ||
+      !view || !this.collaborative || !controller?.active ||
       synchronization === null || synchronization === undefined ||
-      !room || !this.participantName || !serviceUrl
+      !this.participantName
     ) {
       this._cleanupPresence();
       return;
@@ -2035,10 +2021,9 @@ export class CFCodeEditor extends BaseElement {
       return;
     }
     if (
-      this._presence !== undefined &&
+      (this._presence !== undefined || this._presenceJoining) &&
       this._presenceEpoch === synchronization.confirmedCursor.epoch &&
-      this._presenceRoom === room &&
-      this._presenceServiceUrl === serviceUrl
+      this._presenceRoom === room
     ) {
       this._publishPresence();
       return;
@@ -2053,49 +2038,53 @@ export class CFCodeEditor extends BaseElement {
     });
     this._presenceEpoch = synchronization.confirmedCursor.epoch;
     this._presenceRoom = room;
-    this._presenceServiceUrl = serviceUrl;
-    try {
-      this._presence = new CopresenceSession({
-        serviceUrl,
-        room,
-        onMessage: (message) => this._handlePresenceMessage(message),
-        onFailure: (category) => this._failPresence(category),
-      });
+    const generation = this._presenceGeneration;
+    const cell = controller.cell;
+    this._presenceJoining = true;
+    void cell.runtime().joinPresenceRoom(
+      cell,
+      room === "" ? {} : { room },
+    ).then((handle) => {
+      if (generation !== this._presenceGeneration) {
+        void handle.leave();
+        return;
+      }
+      this._presenceJoining = false;
+      this._presence = handle;
+      this._presenceParticipantId = handle.participantId;
+      this._presenceUnsubscribe = handle.subscribe((event) =>
+        this._handlePresenceEvent(event)
+      );
+      this._applyPresenceSnapshot(handle.participants);
       this._publishPresence();
-    } catch {
-      this._failPresence("configuration");
-    }
-  }
-
-  private _takePresenceOwnership(): void {
-    if (activePresenceEditor !== this) {
-      const previous = activePresenceEditor;
-      activePresenceEditor = this;
-      previous?._cleanupPresence();
-    }
-    this._setupPresence();
+    }, (error) => {
+      if (generation !== this._presenceGeneration) return;
+      this._presenceJoining = false;
+      this._failPresence(presenceFailureCategory(error));
+    });
   }
 
   private _handlePresenceFocus(): void {
-    this._takePresenceOwnership();
-    this._publishPresence();
-  }
-
-  private _releasePresenceOwnership(): void {
-    if (activePresenceEditor !== this) return;
-    activePresenceEditor = undefined;
-    this._cleanupPresence();
+    // A focus is a user's action, and the one signal on which a failed
+    // connection is tried again. A room already joined is republished to
+    // with the new focus state; one being joined publishes on arrival.
+    this._setupPresence(undefined, true);
   }
 
   private _cleanupPresence(): void {
+    // A join still in flight belongs to the generation it started under and
+    // leaves the room it lands in.
+    this._presenceGeneration++;
+    this._presenceJoining = false;
     const presence = this._presence;
     this._presence = undefined;
-    presence?.dispose();
+    this._presenceUnsubscribe?.();
+    this._presenceUnsubscribe = undefined;
+    void presence?.leave();
     this._presenceParticipantId = undefined;
     this._presenceHasSelection = false;
     this._presenceEpoch = undefined;
     this._presenceRoom = undefined;
-    this._presenceServiceUrl = undefined;
     this._editorView?.dispatch({
       effects: [
         codeMirrorPresenceClearEffect.of(null),
@@ -2105,14 +2094,8 @@ export class CFCodeEditor extends BaseElement {
   }
 
   private _failPresence(category: PresenceFailureCategory): void {
-    const synchronization = this._collaboration?.synchronizationSnapshot;
-    const room = this.presenceRoom ||
-      (synchronization === null || synchronization === undefined
-        ? ""
-        : copresenceRoomForField(synchronization.field));
     const configurationKey = JSON.stringify([
-      this.presenceUrl || this.contextPresenceUrl || "",
-      room,
+      this.presenceRoom,
       this.participantName,
     ]);
     if (
@@ -2126,86 +2109,62 @@ export class CFCodeEditor extends BaseElement {
     this.emit("cf-presence-error", { category });
   }
 
-  private _retryPresenceFromSignal(): void {
-    if (!this._presenceFailure) return;
-    this._setupPresence(undefined, true);
-  }
-
-  private readonly _handlePresenceOnline = (): void => {
-    this._retryPresenceFromSignal();
-  };
-
-  private readonly _handlePresenceVisibilityChange = (): void => {
-    if (
-      typeof document !== "undefined" && document.visibilityState === "visible"
-    ) {
-      this._retryPresenceFromSignal();
-    }
-  };
-
-  private _setupPresenceReconnectListeners(): void {
-    if (this._presenceReconnectListenersInstalled) return;
-    this._presenceReconnectListenersInstalled = true;
-    globalThis.addEventListener("online", this._handlePresenceOnline);
-    if (typeof document !== "undefined") {
-      document.addEventListener(
-        "visibilitychange",
-        this._handlePresenceVisibilityChange,
-      );
-    }
-  }
-
-  private _cleanupPresenceReconnectListeners(): void {
-    if (!this._presenceReconnectListenersInstalled) return;
-    this._presenceReconnectListenersInstalled = false;
-    globalThis.removeEventListener("online", this._handlePresenceOnline);
-    if (typeof document !== "undefined") {
-      document.removeEventListener(
-        "visibilitychange",
-        this._handlePresenceVisibilityChange,
-      );
-    }
-  }
-
-  private _handlePresenceMessage(message: PresenceServerMessage): void {
+  private _handlePresenceEvent(event: PresenceEvent): void {
     const view = this._editorView;
     const synchronization = this._collaboration?.synchronizationSnapshot;
+    if (event.kind === "failure") {
+      this._failPresence(presenceFailureCategory(event.error));
+      return;
+    }
     if (!view || !this._presence || !synchronization) return;
-    if (message.type === "room.snapshot") {
-      this._presenceParticipantId = message.snapshot.selfParticipantId;
+    if (event.kind === "snapshot") {
+      this._presenceParticipantId = event.participantId;
+      this._applyPresenceSnapshot(event.participants);
+      return;
+    }
+    if (event.kind === "upsert") {
+      if (event.participant.participantId === this._presenceParticipantId) {
+        return;
+      }
+      const participant = participantFromRecord(event.participant);
       view.dispatch({
-        effects: [
-          codeMirrorPresenceClearEffect.of(null),
-          ...message.snapshot.participants
-            .filter((participant) =>
-              participant.participantId !== this._presenceParticipantId
-            )
-            .map((participant) =>
-              codeMirrorPresenceUpsertEffect.of({
-                participant,
-                pendingChanges: synchronization.pendingChanges,
-              })
-            ),
-        ],
+        effects: participant === null
+          ? codeMirrorPresenceRemoveEffect.of(event.participant.participantId)
+          : codeMirrorPresenceUpsertEffect.of({
+            participant,
+            pendingChanges: synchronization.pendingChanges,
+          }),
       });
       return;
     }
-    if (message.type === "participant.upsert") {
-      if (message.participant.participantId === this._presenceParticipantId) {
-        return;
-      }
-      view.dispatch({
-        effects: codeMirrorPresenceUpsertEffect.of({
-          participant: message.participant,
-          pendingChanges: synchronization.pendingChanges,
-        }),
-      });
-    } else {
-      if (message.participantId === this._presenceParticipantId) return;
-      view.dispatch({
-        effects: codeMirrorPresenceRemoveEffect.of(message.participantId),
-      });
-    }
+    if (event.participantId === this._presenceParticipantId) return;
+    view.dispatch({
+      effects: codeMirrorPresenceRemoveEffect.of(event.participantId),
+    });
+  }
+
+  /** Replaces every remote caret with those the room's records carry. */
+  private _applyPresenceSnapshot(records: readonly PresenceRecord[]): void {
+    const view = this._editorView;
+    const synchronization = this._collaboration?.synchronizationSnapshot;
+    if (!view || !synchronization) return;
+    view.dispatch({
+      effects: [
+        codeMirrorPresenceClearEffect.of(null),
+        ...records
+          .filter((record) =>
+            record.participantId !== this._presenceParticipantId
+          )
+          .map(participantFromRecord)
+          .filter((participant) => participant !== null)
+          .map((participant) =>
+            codeMirrorPresenceUpsertEffect.of({
+              participant,
+              pendingChanges: synchronization.pendingChanges,
+            })
+          ),
+      ],
+    });
   }
 
   private _publishPresence(): void {
@@ -2218,9 +2177,10 @@ export class CFCodeEditor extends BaseElement {
     const focused = view.hasFocus;
     if (focused) this._presenceHasSelection = true;
     const provisional = synchronization.pendingChanges.length !== 0;
-    try {
-      presence.publish({
-        name: this.participantName,
+    presence.setName(this.participantName);
+    presence.setFacet(
+      CARET_FACET,
+      caretFacetOf({
         focused,
         cursor: synchronization.confirmedCursor,
         selection: this._presenceHasSelection
@@ -2230,10 +2190,8 @@ export class CFCodeEditor extends BaseElement {
           ))
           : null,
         basis: provisional ? "provisional" : "confirmed",
-      });
-    } catch {
-      this._failPresence("configuration");
-    }
+      }),
+    );
   }
 
   /**

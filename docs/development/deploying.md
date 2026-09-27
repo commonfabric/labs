@@ -117,35 +117,6 @@ therefore something the `build-toolshed` job does, and a deploy carries
 whatever that build baked in. It needs no API host: it is served from the same
 origin as the API it calls, which is what the shell falls back to.
 
-`SHELL_PRESENCE_URL`, a repository variable of this repository, optionally
-names the WebSocket service used for ephemeral collaborative-editor presence.
-Setting it is the whole of turning co-presence on for these two environments;
-it is configuration rather than code, so it is set once and every later build
-reads it. The job passes it to the build under the name the build reads,
-`PRESENCE_URL`, and esbuild bakes it into the bundle as a define. A value that
-is not a credential-free WebSocket URL is rejected by
-`packages/shell/src/lib/presence-url.ts` and fails the build rather than
-shipping, and the job confirms the URL reached the bundle before the binary is
-uploaded. An unset variable omits the define, and a shell with no presence
-endpoint is a working shell — unlike an absent API host, an absent presence
-endpoint is not a misconfiguration, so nothing fails.
-
-Because nothing fails either way, a green job does not by itself say which of
-the two shells a binary carries. The build log does: the step names the
-endpoint it passed to the build, or says the variable is unset and that
-co-presence will be off wherever the binary runs.
-
-Two consequences follow from the value being baked rather than read at start-up.
-Changing the variable reaches a deployment only through a rebuild and a
-redeploy, so a redeploy of an existing commit cannot change it. And one binary
-serves both environments, so both carry the same endpoint — though not at the
-same moment, because `deploy-rapids` ships every push to `main` on its own
-while `deploy-estuary` waits to be dispatched. A variable change therefore
-reaches rapids first and estuary when someone deploys it there.
-
-What a running deployment actually carries is visible from outside it: the URL
-is in the `/scripts/index.js` that deployment serves, or it is not.
-
 ## The staging shell
 
 The `deploy-shell-staging` job in `.github/workflows/deno.yml` publishes the
@@ -161,13 +132,6 @@ carries that host, and the build substitutes it into the bundle. It is a
 variable rather than a secret: the value ends up in a bundle that anyone can
 read, so hiding it from review buys nothing and costs the ability to see what
 staging points at. The host it names is the one `deploy-rapids` keeps current.
-
-`STAGING_SHELL_PRESENCE_URL` optionally names the WebSocket service used for
-ephemeral collaborative-editor presence. When it is unset, the shell provides
-no default and co-presence stays disabled unless an editor supplies an explicit
-endpoint. Like the API URL, a configured presence URL is public build
-configuration, and the deployment job verifies it in both the built and
-published scripts.
 
 Publishing is not the same as working, and this job cannot tell the difference
 by uploading alone — it makes no request to the API it just configured. So it
