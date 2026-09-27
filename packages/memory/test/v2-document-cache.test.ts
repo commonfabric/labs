@@ -489,10 +489,9 @@ describe("v2 document cache", () => {
     const short = await serializedBytes(20);
     const long = await serializedBytes(2_000);
 
-    // As in the runner's count of hashed containers, the equality alone would
-    // hold for two totals that each grew with their record, and the bound
-    // alone for one that grew slowly: the short record encodes to more than
-    // 500 bytes by itself.
+    // Both are needed: the equality alone passes a total that is flat but
+    // large, and the bound alone passes one that grows slowly with the record.
+    // The short record alone encodes to more than 500 bytes.
     expect(long).toBe(short);
     expect(long).toBeLessThan(500);
   });
