@@ -694,8 +694,8 @@ using them is not optional in code that can reach a stored value:
   class whose codec is a stub, which this walk returns for.
   `valueEqual({ v: aFabricMap }, { v: 5 })` throws where `fabricAwareEqual()`
   returns `false`.
-- `valueEqualByWalk(a, b)` returns what `valueEqual()` returns, and is the
-  comparison for a value against a revision of itself — the working root of a
+- `valueEqualByWalk(a, b)` returns what `valueEqual()` returns on acyclic
+  values, and is the comparison for a value against a revision of itself — the working root of a
   transaction against the root it started from, a patched document against
   the document it patched. A copy-on-write edit shares every subtree off the
   edited spine, and this walks records and arrays in step, settles a subtree

@@ -57,6 +57,42 @@ describe("differential", () => {
       )).toEqual([["value", "n"]]);
     });
 
+    it("records the path where two unequal cyclic values close their cycles, and the leaf where they differ", () => {
+      const cycle = (v: number) => {
+        const node: Record<string, unknown> = { v };
+        node.self = node;
+        return node;
+      };
+
+      expect(changedPaths({ c: cycle(1) }, { c: cycle(2) })).toEqual([
+        ["value", "c", "self"],
+        ["value", "c", "v"],
+      ]);
+    });
+
+    it("records no change for two equal cyclic arrays", () => {
+      const cycle = () => {
+        const node: unknown[] = [1];
+        node.push(node);
+        return node;
+      };
+
+      expect(changedPaths({ list: cycle() }, { list: cycle() })).toEqual([]);
+    });
+
+    it("records a record replaced by an array at its own path", () => {
+      expect(changedPaths({ v: {} }, { v: [] })).toEqual([["value", "v"]]);
+    });
+
+    it("records the paths of a copy that shares nothing and differs at two leaves, in sorted order", () => {
+      const copy = (b: number, a: number) => ({ b: { n: b }, a: { n: a } });
+
+      expect(changedPaths(copy(1, 1), copy(2, 2))).toEqual([
+        ["value", "a", "n"],
+        ["value", "b", "n"],
+      ]);
+    });
+
     it("throws on a pair that is not two records or two arrays, rather than reading it as an empty record", () => {
       // A `Date` has no own keys, so reading it by key would take two
       // different ones as equal. It is not a `FabricValue`, and

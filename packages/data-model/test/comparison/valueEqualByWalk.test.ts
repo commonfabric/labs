@@ -109,6 +109,10 @@ describe("valueEqualByWalk()", () => {
       )).toBe(false);
     });
 
+    it("returns `false` for two arrays of different lengths", () => {
+      expect(valueEqualByWalk([1, 2], [1, 2, 3])).toBe(false);
+    });
+
     it("returns `false` for a record against an array", () => {
       expect(valueEqualByWalk({ v: {} }, { v: [] })).toBe(false);
     });

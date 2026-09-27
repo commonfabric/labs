@@ -1,11 +1,9 @@
-import { isPlainObject } from "@commonfabric/utils/types";
-
 import type {
   FabricArray,
   FabricPlainObject,
   FabricValue,
 } from "@/interface.ts";
-import { isFabricSpecialObject } from "@/types";
+import { isFabricPlainContainer } from "@/types";
 import { valueEqual } from "./valueEqual.ts";
 
 /**
@@ -30,9 +28,9 @@ const MAX_WALK_DEPTH = 256;
  * cached. A walk also stops at the first difference it finds, which a hash
  * cannot.
  *
- * Every pair the walk does not decide itself goes to `valueEqual()` — a
- * special object on either side, a record against an array, and anything
- * that is not a `FabricValue` — and operands nested deeper than the walk
+ * Every pair that is not two plain records or two arrays goes to
+ * `valueEqual()` — a special object on either side, and anything that is not
+ * a `FabricValue` — and operands nested deeper than the walk
  * goes, two cyclic graphs sharing nothing among them, go to it whole. So the
  * two return the same result on every acyclic pair of `FabricValue`s. Where
  * they part is at a subtree the operands share, which the walk never visits.
@@ -64,26 +62,16 @@ function walkEqual(
   depth: number,
 ): boolean | undefined {
   if (Object.is(a, b)) return true;
-  if (
-    typeof a !== "object" || a === null || typeof b !== "object" ||
-    b === null || isFabricSpecialObject(a) || isFabricSpecialObject(b)
-  ) {
+  if (!isFabricPlainContainer(a) || !isFabricPlainContainer(b)) {
     return valueEqual(a, b);
   }
   if (depth >= MAX_WALK_DEPTH) return undefined;
 
   const aIsArray = Array.isArray(a);
-  if (aIsArray && Array.isArray(b)) {
-    return walkArrays(a as FabricArray, b as FabricArray, depth + 1);
-  }
-  if (!aIsArray && isPlainObject(a, false) && isPlainObject(b, false)) {
-    return walkRecords(
-      a as FabricPlainObject,
-      b as FabricPlainObject,
-      depth + 1,
-    );
-  }
-  return valueEqual(a, b);
+  if (aIsArray !== Array.isArray(b)) return false;
+  return aIsArray
+    ? walkArrays(a as FabricArray, b as FabricArray, depth + 1)
+    : walkRecords(a as FabricPlainObject, b as FabricPlainObject, depth + 1);
 }
 
 /**

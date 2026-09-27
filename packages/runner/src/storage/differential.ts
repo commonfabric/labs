@@ -1,6 +1,7 @@
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import {
   isFabricObjectOrArray,
+  isFabricPlainContainer,
   isFabricSpecialObject,
   valueEqual,
 } from "@commonfabric/data-model";
@@ -8,7 +9,6 @@ import {
   resolveScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
-import { isPlainObject } from "@commonfabric/utils/types";
 
 import { normalizeCellScope } from "../scope.ts";
 import type {
@@ -105,9 +105,10 @@ const pushChangedPath = (
  * copy costs one walk of the whole.
  *
  * Two things stop the walk short of reading a pair by its keys, and ask
- * `valueEqual()` instead. A pair that is not two arrays or two plain records
- * is one the walk cannot read by key without misreading it. And a pair
- * whose `after` side is already open on the walk's path closes a cycle, which
+ * `valueEqual()` instead, recording a change at the pair's own path when it
+ * says the two differ. A pair that is not two arrays or two plain records is
+ * one the walk cannot read by key without misreading it. And a pair whose
+ * `after` side is already open on the walk's path closes a cycle, which
  * walking would descend forever; `valueEqual()` compares a cycle where the
  * walk cannot. `ancestors` holds the `after` containers open on the path, and
  * one side suffices: the walk descends only as deep as both values reach.
@@ -159,19 +160,19 @@ const collectChangedPaths = (
       return;
     }
 
-    const beforeIsArray = Array.isArray(before);
-    const afterIsArray = Array.isArray(after);
-    if (
-      (!beforeIsArray && !isPlainObject(before, false)) ||
-      (!afterIsArray && !isPlainObject(after, false))
-    ) {
+    if (!isFabricPlainContainer(before) || !isFabricPlainContainer(after)) {
       if (!valueEqual(before, after)) {
         pushChangedPath(paths, currentPath, depth);
       }
       return;
     }
+    const beforeIsArray = Array.isArray(before);
+    const afterIsArray = Array.isArray(after);
 
-    if (ancestors.includes(after) && valueEqual(before, after)) {
+    if (ancestors.includes(after)) {
+      if (!valueEqual(before, after)) {
+        pushChangedPath(paths, currentPath, depth);
+      }
       return;
     }
 
