@@ -268,6 +268,8 @@ rules are generic and grant-guarded, and the user's editable defaults are
 //    subject IS the acting principal (the §5.4.2 $actingUser shape), and
 //    the rule releases only to that same principal — self-scoped by
 //    construction, never a release to anyone else.
+//    The substrate would write the acting principal in when it instantiates
+//    this kernel; `$actingUser` in rule data never binds.
 { "id": "concept-owner-access",
   "appliesTo": { "type": ".../atom/Context",
     "concept": HEALTH, "subject": "$actingUser" },
