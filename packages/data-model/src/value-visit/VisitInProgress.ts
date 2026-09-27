@@ -46,7 +46,6 @@ type RecurseOfForm<PlusType> = {
   readonly containerTag: FabricContainerValueTag;
   readonly container: FabricContainerValuePlus<PlusType>;
   readonly doKeys: boolean;
-  readonly doValues: boolean;
 };
 
 /**
@@ -59,11 +58,22 @@ type MainVisitResult<PlusType, ResultType> = Exclude<
 >;
 
 /**
+ * Configuration for `VisitInProgress`
+ */
+export type VisitInProgressConfig =
+  | { mode: "visit" }
+  | { mode: "map"; freeze: boolean };
+
+/**
  * State of a visit currently in progress, along with most of the visit
  * execution machinery.
  *
  * This class is _intentionally_ omitted from the barrel `export` file for the
  * submodule.
+ *
+ * TODO(danfuzz): Honor the configuration's `freeze`. Until then, a
+ * structural-map operation behaves the same whatever `freeze` says: an
+ * unchanged value is its own result, and nothing is frozen.
  */
 export class VisitInProgress<
   PlusType = never,
@@ -71,6 +81,12 @@ export class VisitInProgress<
 > {
   /** Concrete visitor implementation. */
   readonly #visitor: ValueVisitor<PlusType, ResultType>;
+
+  /** Whether mapping results are to be collected. */
+  readonly #mapMode: boolean;
+
+  /** When in mapping mode, whether to freeze mapped containers. */
+  readonly #freezeMappedContainers: boolean;
 
   /** Bound method call to `#visitor.isPlusType()`. */
   readonly #isPlusType: PlusTypePredicate<PlusType>;
@@ -81,9 +97,6 @@ export class VisitInProgress<
   /** Indicates if a visit is now actually in-progress. */
   #inProgress = false;
 
-  /** Whether mapping results are to be collected. */
-  #doMap = false;
-
   /**
    * Cached result of a call to `#visitor.isDomainAssignableToResultType()`, if
    * ever called.
@@ -93,8 +106,16 @@ export class VisitInProgress<
   /**
    * Constructs an instance.
    */
-  constructor(visitor: ValueVisitor<PlusType, ResultType>) {
+  constructor(
+    visitor: ValueVisitor<PlusType, ResultType>,
+    config: VisitInProgressConfig,
+  ) {
     this.#visitor = visitor;
+    this.#mapMode = config.mode === "map";
+    this.#freezeMappedContainers = (config.mode === "map")
+      ? config.freeze
+      : false;
+
     this.#isPlusType = visitor.isPlusType.bind(visitor);
   }
 
@@ -103,46 +124,21 @@ export class VisitInProgress<
   //
 
   /**
-   * Performs a structural-map over the indicated value, as a top-level
-   * operation.
-   */
-  map(
-    value: FabricValuePlus<PlusType>,
-  ): ResultType {
-    return this.#topVisit(value, true);
-  }
-
-  /**
-   * Visits the indicated value as a top-level operation.
+   * Performs a visit over the indicated value, as a top-level operation. This
+   * does either a plain visit or a map, depending on how this instance was
+   * configured.
    */
   visit(
     value: FabricValuePlus<PlusType>,
   ): ResultType {
-    return this.#topVisit(value, false);
-  }
-
-  //
-  // Visitor engine implementation
-  //
-  // This is arranged in approximately top-down fashion, to aid in readability.
-  //
-
-  /**
-   * Performs a top-level visit or structural-map operation.
-   */
-  #topVisit(
-    value: FabricValuePlus<PlusType>,
-    doMap: boolean,
-  ): ResultType {
     this.#assertNoConcurrentUse();
 
     this.#inProgress = true;
-    this.#doMap = doMap;
     try {
       const result = this.#visitValue(value);
       switch (result?.type) {
         case undefined: {
-          if (doMap) {
+          if (this.#mapMode) {
             return this.#assertResultType(value);
           } else {
             // `ResultType` might or might not include `undefined`, so we have to
@@ -168,6 +164,12 @@ export class VisitInProgress<
       this.#inProgress = false;
     }
   }
+
+  //
+  // Visitor engine implementation
+  //
+  // This is arranged in approximately top-down fashion, to aid in readability.
+  //
 
   /**
    * Visits a top-level value or contained sub-value.
@@ -219,7 +221,7 @@ export class VisitInProgress<
 
         const { container } = result;
         if (
-          (recurseResult === undefined) && this.#doMap &&
+          (recurseResult === undefined) && this.#mapMode &&
           !Object.is(container, value)
         ) {
           // The recursion found no changes, but it was a recursion into a
@@ -293,7 +295,7 @@ export class VisitInProgress<
 
         default: {
           if (
-            (result === undefined) && this.#doMap &&
+            (result === undefined) && this.#mapMode &&
             !Object.is(value, original)
           ) {
             // "No change" to a `replace`ment means that the replacement stands
@@ -314,19 +316,12 @@ export class VisitInProgress<
   #recurseFabricArray(
     result: RecurseOfForm<PlusType>,
   ): MainVisitResult<PlusType, ResultType> {
-    const { container, doValues } = result;
-
-    if (!doValues) {
-      // `result` represents a no-op `recurse`. Though pointless, nothing
-      // prevents a client from returning it as a visit result, so just handle
-      // it gracefully here.
-      return undefined;
-    }
+    const { container } = result;
 
     const array = container as FabricArrayPlus<PlusType>;
     const vis = this.#visitor;
     const mapResult: MutableFabricArrayPlusLayer<ResultType> | undefined =
-      this.#doMap ? new Array(array.length) : undefined;
+      this.#mapMode ? new Array(array.length) : undefined;
     let anyChanges = false;
 
     this.#stack.push(array);
@@ -385,7 +380,7 @@ export class VisitInProgress<
             mapResult![idxNumber] = mappedTo;
             anyChanges ||= !Object.is(element, mappedTo);
 
-            const result = vis.visitedFabricArrayElement(
+            const result = vis.mappedFabricArrayElement(
               array,
               idxNumber,
               mappedTo,
@@ -439,14 +434,7 @@ export class VisitInProgress<
   #recurseFabricInstance(
     result: RecurseOfForm<PlusType>,
   ): MainVisitResult<PlusType, ResultType> {
-    const { container, doValues } = result;
-
-    if (!doValues) {
-      // `result` represents a no-op `recurse`. Though pointless, nothing
-      // prevents a client from returning it as a visit result, so just handle
-      // it gracefully here.
-      return undefined;
-    }
+    const { container } = result;
 
     const instance = container as FabricInstancePlus<PlusType>;
     const vis = this.#visitor;
@@ -494,7 +482,7 @@ export class VisitInProgress<
       }
 
       const mappedTo = stateResult.value;
-      const result = vis.visitedFabricInstanceState(instance, mappedTo);
+      const result = vis.mappedFabricInstanceState(instance, mappedTo);
       if (result?.type === "mainResult") {
         return result;
       }
@@ -570,20 +558,13 @@ export class VisitInProgress<
   #recurseFabricPlainObject(
     result: RecurseOfForm<PlusType>,
   ): MainVisitResult<PlusType, ResultType> {
-    const { container, doKeys, doValues } = result;
-
-    if (!(doKeys || doValues)) {
-      // `result` represents a no-op `recurse`. Though pointless, nothing
-      // prevents a client from returning it as a visit result, so just handle
-      // it gracefully here.
-      return undefined;
-    }
+    const { container, doKeys } = result;
 
     const plainObj = container as FabricPlainObjectPlus<PlusType>;
     const entries = Object.entries(plainObj);
     const vis = this.#visitor;
     const mapResult: MutableFabricPlainObjectPlusLayer<ResultType> | undefined =
-      this.#doMap ? {} : undefined;
+      this.#mapMode ? {} : undefined;
     let anyChanges = false;
 
     this.#stack.push(plainObj);
@@ -635,7 +616,7 @@ export class VisitInProgress<
 
         const valueResult = this.#handleMappingAsAppropriate(
           value,
-          doValues ? this.#visitValue(value) : undefined,
+          this.#visitValue(value),
         );
         let valueMappedTo: ResultType | undefined;
 
@@ -665,7 +646,7 @@ export class VisitInProgress<
           // `keyMappedTo!` is safe, because if we made it here, it necessarily
           // got set to a `string`.
           const finalKey: string = keyMappedTo!;
-          const result = vis.visitedFabricPlainObjectEntry(
+          const result = vis.mappedFabricPlainObjectEntry(
             plainObj,
             finalKey,
             valueMappedTo,
@@ -710,7 +691,6 @@ export class VisitInProgress<
           containerTag: finalValueTag,
           container: finalValue as FabricContainerValuePlus<PlusType>,
           doKeys: result.doKeys,
-          doValues: result.doValues,
         };
       }
     }
@@ -797,14 +777,13 @@ export class VisitInProgress<
 
   /**
    * Converts a `#visitValue()` result being used as a plain object key, from a
-   * `recurse`-induced sub-value iteration, as appropriate, based on the
-   * `#doMap` mode.
+   * `recurse`-induced sub-value iteration, as appropriate, based on `#mapMode`.
    */
   #handlePlainObjectKeyMappingAsAppropriate(
     original: string,
     visitResult: MainVisitResult<PlusType, ResultType>,
   ): MainResultForm<ResultType> | MapToForm<string> | undefined {
-    if (!this.#doMap) {
+    if (!this.#mapMode) {
       return (visitResult?.type === "mainResult") ? visitResult : undefined;
     }
 
@@ -835,7 +814,7 @@ export class VisitInProgress<
 
   /**
    * Converts a `#visitValue()` result from a `recurse`-induced sub-value
-   * iteration as appropriate, based on the `#doMap` mode. Specifically, a
+   * iteration as appropriate, based on `#mapMode`. Specifically, a
    * `mainResult` is always returned as-is. Other than that, this always returns
    * a `mapTo` result when mapping (furthermore validating the result as
    * necessary), and always returns `undefined` when _not_ mapping.
@@ -844,7 +823,7 @@ export class VisitInProgress<
     original: FabricValuePlus<PlusType>,
     visitResult: MainVisitResult<PlusType, ResultType>,
   ): MainVisitResult<PlusType, ResultType> {
-    if (!this.#doMap) {
+    if (!this.#mapMode) {
       return (visitResult?.type === "mainResult") ? visitResult : undefined;
     }
 

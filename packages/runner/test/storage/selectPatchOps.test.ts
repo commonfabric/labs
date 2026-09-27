@@ -1,12 +1,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { encodePointer } from "@commonfabric/memory/v2/path";
+import { encodePointer, isPrefixPath } from "@commonfabric/memory/v2/path";
 
 import {
   type PatchDraftCandidate,
   selectPatchOps,
 } from "../../src/storage/v2-transaction.ts";
+import { seededRandom } from "../combine-order.ts";
 
 /** A covering `replace` candidate at `path`. */
 const cover = (path: readonly string[]): PatchDraftCandidate => ({
@@ -70,6 +71,52 @@ const segmentReadsSelecting = (count: number): number => {
   return reads;
 };
 
+/**
+ * The selection `selectPatchOps()` makes, stated directly: every candidate
+ * compared with every other. Quadratic, and so a statement of the rules rather
+ * than a way to apply them.
+ */
+const selectComparingAllPairs = (
+  fullCover: readonly PatchDraftCandidate[],
+  nonCover: readonly PatchDraftCandidate[],
+  suppress: Parameters<typeof selectPatchOps>[2],
+): string[] => {
+  const subsumedByTailSplice = (path: readonly string[]) =>
+    nonCover.some((splice) =>
+      splice.tailSpliceStartIndex !== undefined &&
+      path.length > splice.path.length && isPrefixPath(splice.path, path) &&
+      /^(0|[1-9]\d*)$/.test(path[splice.path.length]) &&
+      Number(path[splice.path.length]) >= splice.tailSpliceStartIndex
+    );
+  const covers = fullCover
+    .filter((candidate) => !subsumedByTailSplice(candidate.path))
+    .sort((left, right) => left.path.length - right.path.length)
+    .reduce<PatchDraftCandidate[]>(
+      (kept, candidate) =>
+        kept.some((earlier) => isPrefixPath(earlier.path, candidate.path))
+          ? kept
+          : [...kept, candidate],
+      [],
+    );
+  const others = nonCover.filter((candidate) =>
+    !covers.some((cover) => isPrefixPath(cover.path, candidate.path)) &&
+    !subsumedByTailSplice(candidate.path)
+  );
+  const suppressed = (path: readonly string[]) =>
+    suppress.some((suppression) => {
+      if (!isPrefixPath(suppression.path, path)) return false;
+      if (path.length === suppression.path.length || suppression.subtree) {
+        return true;
+      }
+      const child = path[suppression.path.length];
+      return suppression.tailStart !== undefined &&
+        /^(0|[1-9]\d*)$/.test(child) && Number(child) >= suppression.tailStart;
+    });
+  return [...covers, ...others]
+    .filter((candidate) => !suppressed(candidate.path))
+    .map((candidate) => (candidate.patch as { path: string }).path);
+};
+
 describe("selectPatchOps()", () => {
   it("returns a covering candidate once and drops the ones beneath it", () => {
     expect(keptPointers([
@@ -123,6 +170,44 @@ describe("selectPatchOps()", () => {
       [],
       [{ path: ["value", "list"], tailStart: 2 }],
     )).toEqual(["/value/list/0", "/value/list/name"]);
+  });
+
+  it("returns what comparing every candidate with every other returns", () => {
+    // Paths drawn from a small tree, so that candidates, tail splices and
+    // suppressions sit at, above and beneath one another, with the segments
+    // a pointer escapes among them.
+
+    const random = seededRandom(8144);
+    const segments = ["value", "a", "0", "1", "2", "~x", "x/y", ""];
+    const pick = <T>(items: readonly T[]) =>
+      items[Math.floor(random() * items.length)];
+    const path = () =>
+      Array.from({ length: Math.floor(random() * 4) }, () => pick(segments));
+    for (let run = 0; run < 3000; run++) {
+      const fullCover = Array.from(
+        { length: Math.floor(random() * 8) },
+        () => cover(path()),
+      );
+      const nonCover = Array.from(
+        { length: Math.floor(random() * 4) },
+        () => tailSplice(path(), Math.floor(random() * 3)),
+      );
+      const suppress = Array.from({ length: Math.floor(random() * 3) }, () => {
+        const kind = random();
+        return {
+          path: path(),
+          ...(kind < 0.33
+            ? { subtree: true }
+            : kind < 0.66
+            ? { tailStart: Math.floor(random() * 3) }
+            : {}),
+        };
+      });
+
+      expect(keptPointers(fullCover, nonCover, suppress)).toEqual(
+        selectComparingAllPairs(fullCover, nonCover, suppress),
+      );
+    }
   });
 
   it("reads each candidate's path as often among many candidates as among few", () => {

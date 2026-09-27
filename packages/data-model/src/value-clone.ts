@@ -406,10 +406,9 @@ export interface CloneForMutationOptions {
    * `cloneIfNecessary`'s default when `frozen: false` (which is what each
    * per-container thaw effectively requests).
    *
-   * - `force: true` (default) — the caller's input is left untouched, apart
-   *   from any of its containers the caller put in `owned`. Every container
-   *   along the spine -- including the root and the value at `path` -- is a
-   *   fresh shallow copy, apart from those `owned` names.
+   * - `force: true` (default) — the caller's input is guaranteed to be left
+   *   untouched. Every container along the spine -- including the root and
+   *   the value at `path` -- is a fresh shallow copy.
    * - `force: false` — spine containers that are already mutable are reused
    *   by identity, and the helper may mutate the caller's input's spine
    *   slots in place when it needs to splice a freshly-thawed child into a
@@ -455,23 +454,6 @@ export interface CloneForMutationOptions {
    * Mirrors `v2-path.ensureParentContainers`'s `lastKey` parameter.
    */
   nextKeyAfterPath?: string;
-
-  /**
-   * The containers this caller has already copied, shared across a batch of
-   * calls that each mutate the tree the previous one returned. A container
-   * in the set that is still mutable is reused by identity whatever `force`
-   * says, and every container this call copies or creates is added to it.
-   * Each container on the batch's spines is then copied at most once, so a
-   * batch of `K` mutations under one `N`-key object copies that object once
-   * rather than `K` times.
-   *
-   * A container in the set must be one only the caller holds, in one place in
-   * its tree, since a mutation through it is seen wherever it is referenced.
-   * Before placing one a second time or handing it out, the caller releases
-   * it, by freezing it or by deleting it from the set. Default: no set, so
-   * reuse is decided by `force` alone.
-   */
-  owned?: WeakSet<object>;
 }
 
 /**
@@ -482,9 +464,8 @@ export interface CloneForMutationResult<T extends FabricValue> {
   /**
    * Replacement for the caller's input value, with the spine to `path` made
    * mutable. Identical to the input by reference iff no clone was necessary
-   * (only possible when the input's spine was already mutable throughout,
-   * and each container on it was either in `owned` or reused under
-   * `force: false`).
+   * (only possible when `force: false` and the input's spine was already
+   * mutable throughout).
    */
   value: T;
 
@@ -512,10 +493,6 @@ export interface CloneForMutationResult<T extends FabricValue> {
  * `cloneIfNecessary(_, { frozen: false, deep: false, force })`) and the
  * shallow clone is spliced into its (already-mutable) parent. The result
  * `pathValue` is the mutable container at the end of `path`.
- *
- * A caller applying a batch of mutations to one tree passes the same
- * `owned` set to every call, so that a container the batch has already
- * copied is mutated in place rather than copied again.
  *
  * ### Mutation patterns supported via the returned `pathValue`
  *
@@ -580,19 +557,6 @@ export function cloneForMutation<T extends FabricValue>(
   // arrives here as the readonly view of itself; that is what the casts to
   // `MutableFabricContainerValueLayer` below correct.
   const cloneOpts = { frozen: false as const, deep: false as const, force };
-  const owned = options?.owned;
-  // Every copy along the spine goes through here, so that a container the
-  // caller already owns is reused and one copied now is owned from here on.
-  // A frozen member of `owned` is copied like any other frozen container.
-  // Only containers reach here, which is what the casts to `object` rest on.
-  const thaw = <V extends FabricValue>(container: V): V => {
-    if (owned?.has(container as object) && !Object.isFrozen(container)) {
-      return container;
-    }
-    const thawed = cloneIfNecessary(container, cloneOpts) as V;
-    if (thawed !== container) owned?.add(thawed as object);
-    return thawed;
-  };
 
   // Empty-path fast path
   if (path.length === 0) {
@@ -609,7 +573,7 @@ export function cloneForMutation<T extends FabricValue>(
           `(empty path)`,
       );
     }
-    const newRoot = thaw(value);
+    const newRoot = cloneIfNecessary(value, cloneOpts) as T;
     return {
       value: newRoot,
       pathValue: newRoot as MutableFabricContainerValueLayer,
@@ -617,7 +581,7 @@ export function cloneForMutation<T extends FabricValue>(
   }
 
   // Every error this call raises is decided from the trace, before anything
-  // is copied or created, so a throw leaves the input and `owned` as they were.
+  // is copied or created, so a throw leaves the input as it was.
   const trace = tracePath(value, path);
   const { containers } = trace;
   if (trace.end === "blocked") {
@@ -676,7 +640,7 @@ export function cloneForMutation<T extends FabricValue>(
   // there, splicing each thawed copy into its thawed parent. Each child is
   // the one the trace found rather than a read of the parent's copy, which
   // holds the same children.
-  const newRoot = thaw(value);
+  const newRoot = cloneIfNecessary(value, cloneOpts) as T;
   let current = newRoot as MutableFabricContainerValueLayer;
   const existing = trace.end === "missing"
     ? containers.length - 1
@@ -686,7 +650,10 @@ export function cloneForMutation<T extends FabricValue>(
     const next = index + 1 < containers.length
       ? containers[index + 1]!
       : trace.value!;
-    const thawed = thaw(next) as MutableFabricContainerValueLayer;
+    const thawed = cloneIfNecessary(
+      next,
+      cloneOpts,
+    ) as MutableFabricContainerValueLayer;
     const parent = current as Record<string, FabricValue>;
     if (parent[key] !== thawed) {
       parent[key] = thawed;
@@ -702,7 +669,6 @@ export function cloneForMutation<T extends FabricValue>(
       ? nextKeyAfterPath
       : path[index + 1]!;
     const fresh = createMissingContainer(nextKey);
-    owned?.add(fresh);
     (current as Record<string, FabricValue>)[path[index]!] = fresh;
     current = fresh;
   }

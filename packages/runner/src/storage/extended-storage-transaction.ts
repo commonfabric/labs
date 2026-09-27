@@ -1896,6 +1896,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   recordCfcAssertedValueRoot(
     address: CfcAddress,
     authorization?: RuntimeWritePolicyAuthorization,
+    reference?: CfcAddress,
   ): void {
     // A root widens where a flow stamp lands, so a record without the
     // runtime's mark is dropped: pattern code reaches this transaction, and
@@ -1908,6 +1909,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.#cfcState.assertedValueRoots.push(deepFreeze({
       address,
       identity: this.#cfcState.implementationIdentity,
+      ...(reference !== undefined ? { reference } : {}),
     }));
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("asserted-value-root-added");
@@ -4173,8 +4175,9 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
   recordCfcAssertedValueRoot(
     address: CfcAddress,
     authorization?: RuntimeWritePolicyAuthorization,
+    reference?: CfcAddress,
   ): void {
-    this.#wrapped.recordCfcAssertedValueRoot(address, authorization);
+    this.#wrapped.recordCfcAssertedValueRoot(address, authorization, reference);
   }
 
   prepareForCommit(): void {

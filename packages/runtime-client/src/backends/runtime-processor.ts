@@ -2086,9 +2086,14 @@ export class RuntimeProcessor {
     const terms = this.#hostSelectedCell(request.terms);
     const policy = this.#hostSelectedCell(request.policy);
     const settings = this.#hostSelectedCell(request.allowedSources);
-    const prepared = await prepareCustodySeal(draft, { terms, policy }, {
-      allowedSources: settings,
-    });
+    const box = request.box === undefined
+      ? undefined
+      : this.#hostSelectedCell(request.box);
+    const prepared = await prepareCustodySeal(
+      draft,
+      { terms, policy, ...(box === undefined ? {} : { box }) },
+      { allowedSources: settings },
+    );
     if (unavailable()) throw new Error("Custody sealing is unavailable");
     const id = crypto.randomUUID();
     this.#custodySeals.set(clientScopedKey(client, id), {

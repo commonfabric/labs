@@ -2,7 +2,6 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
-  DO_RECURSE_KEYS,
   DO_RECURSE_KEYS_VALUES,
   DO_RECURSE_VALUES,
   type RecurseForm,
@@ -10,16 +9,15 @@ import {
 
 describe("value-visit/interface", () => {
   describe("the `DO_*` constants", () => {
-    const recurseCases: [string, RecurseForm, boolean, boolean][] = [
-      ["DO_RECURSE_KEYS_VALUES", DO_RECURSE_KEYS_VALUES, true, true],
-      ["DO_RECURSE_KEYS", DO_RECURSE_KEYS, true, false],
-      ["DO_RECURSE_VALUES", DO_RECURSE_VALUES, false, true],
+    const recurseCases: [string, RecurseForm, boolean][] = [
+      ["DO_RECURSE_KEYS_VALUES", DO_RECURSE_KEYS_VALUES, true],
+      ["DO_RECURSE_VALUES", DO_RECURSE_VALUES, false],
     ];
 
-    for (const [name, form, doKeys, doValues] of recurseCases) {
-      it(`makes \`${name}\` a frozen \`recurse\` form with \`doKeys\` ${doKeys} and \`doValues\` ${doValues}`, () => {
+    for (const [name, form, doKeys] of recurseCases) {
+      it(`makes \`${name}\` a frozen \`recurse\` form with \`doKeys\` ${doKeys}`, () => {
         expect(Object.isFrozen(form)).toBe(true);
-        expect(form).toEqual({ type: "recurse", doKeys, doValues });
+        expect(form).toStrictEqual({ type: "recurse", doKeys });
       });
     }
   });
