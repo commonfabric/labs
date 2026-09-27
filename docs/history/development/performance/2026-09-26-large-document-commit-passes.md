@@ -65,9 +65,16 @@ before it is needed again, so every hash re-encodes every string.
   what each patch grew it by, measured by a walk in step that encodes only
   what the patch replaced, added or removed. The encoding composes exactly
   through records with no `/`-prefixed key and arrays with no hole, which is
-  all the walk descends through, so the weight stays exact.
+  all the walk descends through, so the weight stays exact. An array is
+  trimmed of the elements it shares with its counterpart at either end before
+  it is walked, and past 64 encoded pieces a patch gives up and the result is
+  encoded whole. A piece of a revision the replay only passes through may be
+  one the codec refuses, a reserved key a later patch removes, and then too
+  only the result is encoded.
 - The commit after a snapshot resumes from the cached revision the snapshot
-  was written from, rather than decoding the snapshot row.
+  was written from, rather than decoding the snapshot row, and takes its
+  weight from the snapshot row's length, which re-anchors the carried weight
+  at every snapshot.
 
 Containers hashed per one-entry commit went from `10N + 12` to 0 at every
 size tested. CPU per commit:
@@ -100,6 +107,13 @@ two readers take it from there: the server building the echo, and the next
 commit's resume. Deferring it moves the same work onto them, and where
 neither reads, the next commit's resume misses and replays from the last
 snapshot. What was wasted was the encode that weighed the entry.
+
+**Weighing pieces with no bound.** An array compared position by position,
+with no trimming and no bound on pieces encoded, weighed the removal of the
+first entry of a 2,000-entry list by encoding every entry it moved: five to
+eight times the cost of the single encode it replaced. Encoding the removed
+member of a revision the replay only passed through also threw on a reserved
+key that a later patch removed, where encoding only the result did not.
 
 **A bare identity walk in the differential.** Dropping the per-level
 `valueEqual()` without the two guards above made two equal cyclic subtrees
