@@ -739,6 +739,25 @@ const isPrefixPath = (
   path: readonly string[],
 ): boolean => prefix.length <= path.length && pathsOverlap(prefix, path);
 
+/**
+ * The JSON Pointer of each prefix of `path`, indexed by the prefix's length:
+ * the root's (`""`) first and `path`'s own last. Each is built from the one
+ * before, so the list costs about one encoding of `path`.
+ *
+ * With paths indexed by pointer, which of them is a prefix of `path` is then a
+ * lookup per entry of this list, a cost that grows with the depth of `path`
+ * rather than with the number of paths indexed.
+ */
+const prefixPointers = (path: readonly string[]): string[] => {
+  const pointers = [""];
+  let pointer = "";
+  for (const segment of path) {
+    pointer += encodePointer([segment]);
+    pointers.push(pointer);
+  }
+  return pointers;
+};
+
 const isSubsumedByTailSplice = (
   spliceCandidate: PatchDraftCandidate,
   candidatePath: readonly string[],
@@ -803,45 +822,59 @@ const compareDocPaths = (
   return leftPointer < rightPointer ? -1 : leftPointer > rightPointer ? 1 : 0;
 };
 
-const buildReactivityPathsForChange = (
+/**
+ * The paths one document's writes report for reactivity, sorted by
+ * `compareDocPaths()` and free of duplicates: each written path whose value
+ * differs between `beforeRoot` and `afterRoot`, and each proper ancestor of
+ * such a path whose shallow structure differs (see `shallowStructureChanged()`),
+ * so that a shape-only reader of the ancestor wakes when a key comes or goes
+ * and not when a value beneath it changes.
+ *
+ * Comparing an ancestor's shallow structure reads its whole key set, and every
+ * written path beneath it shares the answer, so each ancestor is compared once
+ * per call rather than once per written path. That keeps `K` writes under one
+ * `N`-key object at `O(K + N)` rather than `O(K × N)`.
+ */
+const buildReactivityPathsForChanges = (
   beforeRoot: FabricValue | undefined,
   afterRoot: FabricValue | undefined,
-  path: readonly string[],
+  writtenPaths: Iterable<readonly string[]>,
 ): readonly (readonly string[])[] => {
-  const beforeValue = readValueAtPath(beforeRoot, path, {
-    allowArrayLength: true,
-  });
-  const afterValue = readValueAtPath(afterRoot, path, {
-    allowArrayLength: true,
-  });
-  if (valueEqual(beforeValue, afterValue)) {
-    return [];
-  }
-
   const paths = new Map<string, readonly string[]>();
-  if (path.length === 0) {
-    paths.set("", []);
-    return [...paths.values()];
-  }
-
-  for (let prefixLength = 1; prefixLength < path.length; prefixLength += 1) {
-    const prefix = path.slice(0, prefixLength);
-    if (
-      !shallowStructureChanged(
-        readValueAtPath(beforeRoot, prefix, {
-          allowArrayLength: true,
-        }),
-        readValueAtPath(afterRoot, prefix, {
-          allowArrayLength: true,
-        }),
-      )
-    ) {
+  // Keyed by the ancestor's pointer, which `paths` shares.
+  const ancestorChanged = new Map<string, boolean>();
+  for (const path of writtenPaths) {
+    const beforeValue = readValueAtPath(beforeRoot, path, {
+      allowArrayLength: true,
+    });
+    const afterValue = readValueAtPath(afterRoot, path, {
+      allowArrayLength: true,
+    });
+    if (valueEqual(beforeValue, afterValue)) {
       continue;
     }
-    paths.set(encodePointer(prefix), prefix);
-  }
 
-  paths.set(encodePointer(path), path);
+    for (let prefixLength = 1; prefixLength < path.length; prefixLength += 1) {
+      const prefix = path.slice(0, prefixLength);
+      const pointer = encodePointer(prefix);
+      let changed = ancestorChanged.get(pointer);
+      if (changed === undefined) {
+        changed = shallowStructureChanged(
+          readValueAtPath(beforeRoot, prefix, {
+            allowArrayLength: true,
+          }),
+          readValueAtPath(afterRoot, prefix, {
+            allowArrayLength: true,
+          }),
+        );
+        ancestorChanged.set(pointer, changed);
+      }
+      if (changed) {
+        paths.set(pointer, prefix);
+      }
+    }
+    paths.set(encodePointer(path), path);
+  }
   return [...paths.values()].sort(compareDocPaths);
 };
 
@@ -1659,9 +1692,11 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
 
     if (usesLocalReads(this) && !hasDataUriScheme(address.id)) {
+      // `patchDetails` is keyed by each write's pointer.
       const written = this.#readEpoch === undefined &&
-        [...(doc.patchDetails?.values() ?? [])].some((write) =>
-          isPrefixPath(write.address.path, address.path)
+        doc.patchDetails !== undefined &&
+        prefixPointers(address.path).some((pointer) =>
+          doc.patchDetails!.has(pointer)
         );
       const replica = branch.replica;
       const identity = this.#scopeKeyIdentity;
@@ -3086,22 +3121,13 @@ export class V2StorageTransaction implements IStorageTransaction {
         }
 
         const { id, scope } = this.#parseDocKey(key);
-        const reactivityPaths = new Map<string, readonly string[]>();
-        for (const detail of doc.patchDetails.values()) {
-          for (
-            const path of buildReactivityPathsForChange(
-              doc.initial.value,
-              doc.current.value,
-              detail.address.path,
-            )
-          ) {
-            reactivityPaths.set(encodePointer(path), path);
-          }
-        }
-
         const instance = this.#instanceOf(scope);
         for (
-          const path of [...reactivityPaths.values()].sort(compareDocPaths)
+          const path of buildReactivityPathsForChanges(
+            doc.initial.value,
+            doc.current.value,
+            doc.patchDetails.values().map((detail) => detail.address.path),
+          )
         ) {
           writes.push({
             space,
@@ -3612,69 +3638,88 @@ export class V2StorageTransaction implements IStorageTransaction {
       return null;
     }
 
-    const tailSpliceCandidates = nonCoverCandidates.filter((candidate) =>
-      candidate.tailSpliceStartIndex !== undefined
-    );
+    // Every filter below asks which of a set of paths prefix a candidate's
+    // path. A transaction writing `K` keys yields `K` candidates, so each set
+    // is indexed by pointer and a candidate looks up its own prefixes, rather
+    // than comparing against every member of the set in turn.
+    const tailSplicesByPointer = new Map<string, PatchDraftCandidate[]>();
+    for (const candidate of nonCoverCandidates) {
+      if (candidate.tailSpliceStartIndex === undefined) continue;
+      const pointer = encodePointer(candidate.path);
+      const splices = tailSplicesByPointer.get(pointer);
+      if (splices === undefined) {
+        tailSplicesByPointer.set(pointer, [candidate]);
+      } else {
+        splices.push(candidate);
+      }
+    }
+    // A tail splice subsumes only what sits strictly beneath it, so a
+    // candidate's own pointer, the last of its prefixes, is not looked up.
+    const isSubsumedByAnyTailSplice = (
+      candidatePath: readonly string[],
+    ): boolean =>
+      prefixPointers(candidatePath).slice(0, -1).some((pointer) =>
+        tailSplicesByPointer.get(pointer)?.some((spliceCandidate) =>
+          isSubsumedByTailSplice(spliceCandidate, candidatePath)
+        ) ?? false
+      );
 
     const retainedCoverCandidates = fullCoverCandidates
-      .filter((candidate) =>
-        !tailSpliceCandidates.some((spliceCandidate) =>
-          isSubsumedByTailSplice(spliceCandidate, candidate.path)
-        )
-      )
+      .filter((candidate) => !isSubsumedByAnyTailSplice(candidate.path))
       .sort((left, right) => left.path.length - right.path.length);
+    // Shortest first, so a candidate overlaps one already kept exactly when
+    // that one's path is a prefix of its own.
     const nonOverlappingCoverCandidates: typeof retainedCoverCandidates = [];
+    const coverPointers = new Set<string>();
+    const isUnderCover = (path: readonly string[]): boolean =>
+      prefixPointers(path).some((pointer) => coverPointers.has(pointer));
     for (const detail of retainedCoverCandidates) {
-      if (
-        nonOverlappingCoverCandidates.some((existing) =>
-          pathsOverlap(existing.path, detail.path)
-        )
-      ) {
+      if (isUnderCover(detail.path)) {
         continue;
       }
       nonOverlappingCoverCandidates.push(detail);
+      coverPointers.add(encodePointer(detail.path));
     }
 
     const retainedNonCoverCandidates = nonCoverCandidates.filter((detail) =>
-      !nonOverlappingCoverCandidates.some((existing) =>
-        isPrefixPath(existing.path, detail.path)
-      ) &&
-      !tailSpliceCandidates.some((spliceCandidate) =>
-        spliceCandidate !== detail &&
-        isSubsumedByTailSplice(spliceCandidate, detail.path)
-      )
+      !isUnderCover(detail.path) && !isSubsumedByAnyTailSplice(detail.path)
     );
 
     // Drop the candidates the append op replaces: the whole-array op at the
     // append path, and element candidates in the appended tail (index >= start).
     // Edits to existing elements (index < start) and unrelated sibling/ancestor
     // candidates are kept.
+    const suppressionsByPointer = new Map<string, OpSuppression[]>();
+    for (const suppression of suppress) {
+      const pointer = encodePointer(suppression.path);
+      const suppressions = suppressionsByPointer.get(pointer);
+      if (suppressions === undefined) {
+        suppressionsByPointer.set(pointer, [suppression]);
+      } else {
+        suppressions.push(suppression);
+      }
+    }
     const isSuppressed = (candidatePath: readonly string[]): boolean =>
-      suppress.some(({ path, tailStart, subtree }) => {
-        if (
-          candidatePath.length === path.length &&
-          isPrefixPath(path, candidatePath)
-        ) {
-          return true;
-        }
-        // A remove-by-value suppresses the whole subtree (any descendant); a tail
-        // op suppresses only appended-tail element candidates; an increment
-        // suppresses only the exact scalar path.
-        if (subtree) {
-          return isPrefixPath(path, candidatePath);
-        }
-        if (
-          tailStart === undefined ||
-          !isPrefixPath(path, candidatePath) ||
-          candidatePath.length <= path.length
-        ) {
-          return false;
-        }
-        const childSegment = candidatePath[path.length];
-        return childSegment !== undefined &&
-          isArrayIndexPropertyName(childSegment) &&
-          Number(childSegment) >= tailStart;
-      });
+      prefixPointers(candidatePath).some((pointer, length) =>
+        suppressionsByPointer.get(pointer)?.some(({ tailStart, subtree }) => {
+          // Any suppression at the candidate's own path suppresses it.
+          if (length === candidatePath.length) {
+            return true;
+          }
+          // A remove-by-value suppresses the whole subtree (any descendant); a
+          // tail op suppresses only appended-tail element candidates; an
+          // increment suppresses only the exact scalar path.
+          if (subtree) {
+            return true;
+          }
+          if (tailStart === undefined) {
+            return false;
+          }
+          const childSegment = candidatePath[length]!;
+          return isArrayIndexPropertyName(childSegment) &&
+            Number(childSegment) >= tailStart;
+        }) ?? false
+      );
 
     const patches: PatchOp[] = [
       ...nonOverlappingCoverCandidates
