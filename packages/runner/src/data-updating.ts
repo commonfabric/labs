@@ -7,7 +7,6 @@ import {
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import {
   assertValidFabricValueLayer,
-  cloneIfNecessary,
   debugStr,
   fabricFromConvertibleJsValue,
   type FabricPlainObject,
@@ -792,7 +791,7 @@ function scopedRedirectChanges(
   context: unknown,
   options: DiffAndUpdateOptions | undefined,
   state: DiffWalkState,
-  currentValue: unknown,
+  currentValue: FabricValue,
 ): ChangeSet {
   const scopedLink: NormalizedFullLink = { ...link, scope };
   const viaUser = getServerExecutionConfig() && scope === "session" &&
@@ -1057,7 +1056,7 @@ export function normalizeAndDiff(
   context?: unknown,
   options?: DiffAndUpdateOptions,
   state: DiffWalkState = { seen: new Map() },
-  precomputedCurrent: unknown = NO_PRECOMPUTED,
+  precomputedCurrent: FabricValue | typeof NO_PRECOMPUTED = NO_PRECOMPUTED,
   // Whether the PARENT object's schema lists this slot in `required`
   // (threaded one hop by the object branch below; undefined = unknown).
   // Consumed by the scope-isolation warn: a missing cell only voids the
@@ -2013,14 +2012,11 @@ export function normalizeAndDiff(
     // emitted nothing; identical re-asserts are idempotent at the
     // store (serving-loop.md §5).
     if (changes.length === 0 && tx.isAuthoritativeWrites?.() === true) {
-      // Written whole rather than by its members, and this is the only branch
-      // that does so, which makes it the only one that owes the store a value
-      // the caller cannot go on mutating. Already-frozen input is handed
-      // through by identity.
-      changes.push({
-        location: link,
-        value: cloneIfNecessary(newValue as FabricValue, { deep: false }),
-      });
+      // With nothing emitted, the slot already holds the written array in
+      // stored form, with each `Cell` in `newValue` held as a link, so that is
+      // what gets asserted. It is the transaction's own read of the slot, so
+      // the caller holds no reference to it.
+      changes.push({ location: link, value: currentValue });
     } else if (changes.length === 0) {
       tx.retainPendingWriteElision?.(toMemorySpaceAddress(link));
     }
@@ -2111,7 +2107,7 @@ export function normalizeAndDiff(
     state.seen.set(newValue, link);
 
     // At this point currentValue is guaranteed to be a record
-    const currentRecord = currentValue as Record<string, unknown>;
+    const currentRecord = currentValue as FabricPlainObject;
 
     // Requiredness of each child slot, for the scope-isolation warn: only a
     // parent-`required` property makes a missing cell void the read.
@@ -2259,14 +2255,9 @@ export function normalizeAndDiff(
     // completion's equal-`{}` result riding a doomed overlay is never
     // asserted durably. See the array branch for the full rationale.
     if (changes.length === 0 && tx.isAuthoritativeWrites?.() === true) {
-      // Written whole rather than by its members, and this is the only branch
-      // that does so, which makes it the only one that owes the store a value
-      // the caller cannot go on mutating. Already-frozen input is handed
-      // through by identity.
-      changes.push({
-        location: link,
-        value: cloneIfNecessary(newValue as FabricValue, { deep: false }),
-      });
+      // As in the array branch, the slot already holds the written record in
+      // stored form, which is what gets asserted.
+      changes.push({ location: link, value: currentRecord });
     } else if (changes.length === 0) {
       tx.retainPendingWriteElision?.(toMemorySpaceAddress(link));
     }

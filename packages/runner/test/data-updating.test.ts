@@ -1229,6 +1229,76 @@ describe("data-updating", () => {
       expect(Object.isFrozen(written)).toBe(false);
     });
 
+    it("asserts an array of equal links in its stored form", () => {
+      // The transaction itself is marked, rather than reporting the posture
+      // through `authoritative()`, so that applying the change set skips the
+      // write layer's equal-value elision as well and writes it in full.
+
+      const target = runtime.getCell<number>(
+        space,
+        "authoritative re-assert link target (array)",
+        undefined,
+        tx,
+      );
+      target.set(1);
+      const testCell = runtime.getCell<{ items: unknown[] }>(
+        space,
+        "authoritative re-assert equal links array",
+        undefined,
+        tx,
+      );
+      testCell.set({ items: [target] });
+      const current = testCell.key("items").getAsNormalizedFullLink();
+      const stored = tx.readValueOrThrow(current);
+      tx.tx.markAuthoritativeWrites!();
+      expect(tx.isAuthoritativeWrites?.()).toBe(true);
+
+      const changes = normalizeAndDiff(runtime, tx, current, [target]);
+
+      expect(changes.length).toBe(1);
+      expect(changes[0].location).toEqual(current);
+      expect(changes[0].value).toEqual(stored);
+      expect(isPrimitiveCellLink((changes[0].value as unknown[])[0])).toBe(
+        true,
+      );
+      applyChangeSet(tx, changes);
+      expect(tx.readValueOrThrow(current)).toEqual(stored);
+    });
+
+    it("asserts a record of equal links in its stored form", () => {
+      // Marked on the transaction itself, as in the array case above.
+
+      const target = runtime.getCell<number>(
+        space,
+        "authoritative re-assert link target (record)",
+        undefined,
+        tx,
+      );
+      target.set(1);
+      const testCell = runtime.getCell<{ rec: Record<string, unknown> }>(
+        space,
+        "authoritative re-assert equal links record",
+        undefined,
+        tx,
+      );
+      testCell.set({ rec: { a: target } });
+      const current = testCell.key("rec").getAsNormalizedFullLink();
+      const stored = tx.readValueOrThrow(current);
+      tx.tx.markAuthoritativeWrites!();
+      expect(tx.isAuthoritativeWrites?.()).toBe(true);
+
+      const changes = normalizeAndDiff(runtime, tx, current, { a: target });
+
+      expect(changes.length).toBe(1);
+      expect(changes[0].location).toEqual(current);
+      expect(changes[0].value).toEqual(stored);
+      expect(
+        isPrimitiveCellLink((changes[0].value as Record<string, unknown>).a),
+      ).toBe(true);
+      applyChangeSet(tx, changes);
+      expect(tx.readValueOrThrow(current)).toEqual(stored);
+    });
+
     it("emits nothing for an equal array outside the authoritative posture", () => {
       const testCell = runtime.getCell<{ items: number[] }>(
         space,
