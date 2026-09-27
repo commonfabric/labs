@@ -75,14 +75,14 @@ export const EMPTY_ATOM_PATTERN_BINDINGS: AtomPatternBindings = Object.freeze(
 type VarPlaceholder = { readonly var: string };
 
 /**
- * The spec's acting-user variable (§4.9.2). Only the caller may bind it, by
- * supplying the acting principal before matching (cf. §8.17.3); the matcher
- * unifies it with that binding and never binds it from a matched atom, since a
- * reader learned from the label being evaluated is not an entailment proof
- * (cf. §8.10.3). A pattern that reaches the matcher with it unbound therefore
- * matches nothing.
+ * The spec's acting-user variable (§4.9.2), which stands for the acting
+ * principal. The caller binds it before matching, as the exchange-rule
+ * evaluator does; the matcher unifies it with that binding and never binds it
+ * from a matched atom, since a reader learned from the label being evaluated
+ * is not an entailment proof (cf. §8.10.3). A pattern that reaches the matcher
+ * with it unbound therefore matches nothing.
  */
-const ACTING_USER_VAR = "$actingUser";
+export const ACTING_USER_VAR = "$actingUser";
 
 /**
  * The exact placeholder shape: sole own key `var`, non-empty string value.

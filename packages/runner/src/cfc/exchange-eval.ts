@@ -1,5 +1,6 @@
 import {
   CFC_ATOM_TYPE,
+  CFC_RUNTIME_SUBJECT,
   type CfcAtom,
   type CfcModulePolicyRefAtom,
 } from "@commonfabric/api/cfc";
@@ -9,9 +10,11 @@ import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
 import {
+  ACTING_USER_VAR,
   type AtomPattern,
   type AtomPatternBindings,
   conceptGuard,
+  EMPTY_ATOM_PATTERN_BINDINGS,
   instantiateAtomPattern,
   isAtomVarPlaceholder,
   matchAtomPattern,
@@ -21,6 +24,7 @@ import {
   type CfcConfClause,
   type CfcOrClause,
   clauseAlternatives,
+  isCompleteDID,
   isOrClause,
   normalizeClause,
 } from "./clause.ts";
@@ -172,6 +176,11 @@ export type ExchangeEvalContext = {
   /** Trust closure for concept-valued integrity guards (B3). */
   readonly trustResolver?: TrustResolver;
 
+  /**
+   * The principal this evaluation acts for: the user a concept guard's trust
+   * closure is taken for, and the value of `$actingUser` in every rule
+   * (spec §4.9.2). Absent, a rule naming `$actingUser` never fires.
+   */
   readonly actingPrincipal?: string;
 
   /**
@@ -242,6 +251,21 @@ const extendThroughPattern = (
   }
   return next;
 };
+
+/**
+ * The binding environment every rule match starts from: `$actingUser` bound to
+ * the acting principal (spec §4.9.2), so a rule naming it unifies with that
+ * principal and never takes one from the label. Empty, and every rule naming
+ * `$actingUser` inert, when the acting principal is absent, not a complete DID,
+ * or `CFC_RUNTIME_SUBJECT`: that is the default subject of a `Resource` with no
+ * owner, stored credentials among them, and not a user a release may name.
+ */
+const actingUserBindings = (
+  actingPrincipal: string | undefined,
+): AtomPatternBindings =>
+  isCompleteDID(actingPrincipal) && actingPrincipal !== CFC_RUNTIME_SUBJECT
+    ? Object.freeze({ [ACTING_USER_VAR]: actingPrincipal })
+    : EMPTY_ATOM_PATTERN_BINDINGS;
 
 type RuleMatch = {
   readonly clauseIndex: number;
@@ -574,6 +598,7 @@ const matchRule = (
   confidentiality: readonly CfcConfClause[],
   availableIntegrity: readonly CfcAtom[],
   ctx: ExchangeEvalContext,
+  initialBindings: AtomPatternBindings,
   homeClauses?: ReadonlySet<number>,
 ): RuleMatch[] => {
   const matches: RuleMatch[] = [];
@@ -589,7 +614,11 @@ const matchRule = (
     if (homeClauses !== undefined && !homeClauses.has(clauseIndex)) continue;
     const alternatives = clauseAlternatives(confidentiality[clauseIndex]);
     for (const alternative of alternatives) {
-      const target = matchAtomPattern(rule.appliesTo, alternative);
+      const target = matchAtomPattern(
+        rule.appliesTo,
+        alternative,
+        initialBindings,
+      );
       if (target === null) continue;
 
       let environments: AtomPatternBindings[] = [target];
@@ -856,6 +885,7 @@ export const evaluateExchangeRules = (
     ...(label.integrity ?? []),
     ...(ctx.integrity ?? []),
   ];
+  const initialBindings = actingUserBindings(ctx.actingPrincipal);
 
   let confidentiality: readonly CfcConfClause[] =
     (label.confidentiality as readonly CfcConfClause[]).map(
@@ -882,6 +912,7 @@ export const evaluateExchangeRules = (
         confidentiality,
         availableIntegrity,
         ctx,
+        initialBindings,
         homeClauses,
       );
       // Index discipline (spec §4.4.5): adds never shift clause indices, so

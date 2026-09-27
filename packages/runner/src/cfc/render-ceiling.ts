@@ -1,14 +1,13 @@
 import {
   CFC_ATOM_TYPE,
-  CFC_RUNTIME_SUBJECT,
   type CfcAtom,
   cfcAtom,
   type CfcModulePolicyRefAtom,
 } from "@commonfabric/api/cfc";
-import { isDID } from "@commonfabric/identity/did";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
+import { ACTING_USER_VAR } from "./atom-pattern.ts";
 import type { CfcConfClause } from "./clause.ts";
 import { clauseAlternatives } from "./clause.ts";
 import {
@@ -19,6 +18,7 @@ import {
   buildCfcPolicySnapshot,
   type ExchangeRule,
   isExactModulePolicyRef,
+  type PolicySnapshot,
 } from "./policy.ts";
 import type { RenderModulePolicyResolver } from "./policy-resolver.ts";
 import type { SpaceMembershipProvider } from "./space-membership.ts";
@@ -36,11 +36,13 @@ import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
  * resolved confidentiality for the reconciler to fit (clause-subsumption,
  * §8.10.3) against the host's `maxConfidentiality`.
  *
- * Resolution runs RUNNER-side (this module) exactly as B5's sink gate does
- * (`evaluateGatedConfidentiality` in prepare.ts), differing only in the
- * boundary class: this mints `sinkClass:"display"` where the network sink
- * mints `sinkClass:"network"`. The reconciler consumes the resolved label; it
- * never runs the evaluator itself.
+ * Resolution runs RUNNER-side (this module) as B5's sink gate does
+ * (`evaluateGatedConfidentiality` in prepare.ts), with the same evaluator and
+ * acting principal. It differs in two things: the boundary class, since this
+ * mints `sinkClass:"display"` where a sink gate mints its sink's class; and
+ * the standard rules, since this evaluates `STANDARD_RENDER_EXCHANGE_RULES`
+ * where a sink gate evaluates the deployment's policy records. The reconciler
+ * consumes the resolved label; it never runs the evaluator itself.
  */
 
 /** The display sink class — the render sibling of B5's `"network"` class. */
@@ -67,12 +69,35 @@ const DISPLAY_SINK_CLASS_GUARD = {
 };
 
 /**
- * Spec §4.3.3's `SpaceReaderAccess`, scoped to the display boundary: a
- * `Space($s)` alternative plus a verified `HasRole($p, $s, reader)` membership
- * fact adds a `User($p)` alternative, so a display audience holding that role
- * fits the `User(actingUser)` ceiling.
+ * The standard render exchange rule set, evaluated at every display boundary
+ * alongside the module policies a label selects. `PersonalSpace(actingUser)`
+ * needs no rule, since the §8.10.6 ceiling admits it by exact match.
+ *
+ * - `space-reader-access-display` is §4.3.3's `SpaceReaderAccess`: a
+ *   `Space($s)` alternative plus a verified `HasRole($p, $s, reader)`
+ *   membership fact adds a `User($p)` alternative, so a display audience
+ *   holding that role fits the `User(actingUser)` ceiling.
+ * - `resource-owner-self-display` is the owner-self rule: a `Resource`
+ *   alternative whose `subject` is the acting user, whatever its `class` and
+ *   `scope`, gains a `User(actingUser)` alternative, so the acting user sees
+ *   their own resources. It adds and never drops (§4.4.5), and rewrites no
+ *   clause but the one it matched, so a sibling clause naming another
+ *   principal, a facet context, an expiry or a caveat still blocks the value.
+ *
+ * The owner-self rule has no integrity guard. §5.3.2 and invariant 3 require
+ * one of every general rule, and allow an attested deployment a narrowly
+ * specified owner-self standard-profile rule instead; this is that rule.
+ * Three properties keep it narrow. Its reader is `$actingUser`, which the
+ * evaluator binds to the trusted acting principal before matching (§4.9.2)
+ * and never takes from the atom it releases (cf. §8.10.3). It releases only to
+ * that principal, the audience a display sink already has (§8.10.6). And its
+ * `sinkClass` guard is applicability rather than authority: it keeps the rule
+ * off network, agent and storage sinks, whose audience is not the acting
+ * user. The set lives in the evaluator rather than in a policy record, so
+ * attesting it is the deployment's obligation for the evaluator it runs
+ * (§9.2.1, §4.4.1), as it is for the standard-profile discharge rules.
  */
-const SPACE_READER_ACCESS_DISPLAY: ExchangeRule = {
+export const STANDARD_RENDER_EXCHANGE_RULES: readonly ExchangeRule[] = [{
   id: "space-reader-access-display",
   appliesTo: { type: CFC_ATOM_TYPE.Space, id: { var: "$s" } },
   preCondition: {
@@ -87,69 +112,32 @@ const SPACE_READER_ACCESS_DISPLAY: ExchangeRule = {
   post: {
     addAlternatives: [{ type: CFC_ATOM_TYPE.User, subject: { var: "$p" } }],
   },
-};
-
-/**
- * Returns the owner-self rule bound to `actingPrincipal`: at the display
- * boundary, a `Resource` alternative whose `subject` is `actingPrincipal`,
- * whatever its `class` and `scope`, gains a `User(actingPrincipal)` alternative
- * in its own clause, so the acting user sees their own resources under the
- * §8.10.6 ceiling. The rule adds and never drops (§4.4.5), and rewrites no clause but
- * the one it matched, so a sibling clause naming another principal, a facet
- * context, an expiry or a caveat still blocks the value.
- *
- * It has no integrity guard. §5.3.2 and invariant 3 require one of every
- * general rule, and allow an attested deployment a narrowly specified
- * owner-self standard-profile rule instead; this is that rule, and three
- * properties keep it narrow. Its reader is the acting principal from the
- * trusted acting context, written into the rule before any label is matched
- * (§4.9.2; cf. §8.17.3), never learned from the atom it releases (cf.
- * §8.10.3). It releases only to that
- * principal, the audience a display sink already has (§8.10.6). And its
- * `sinkClass` guard is applicability rather than authority: it keeps the rule
- * off network, agent and storage sinks, whose audience is not the acting user.
- *
- * The binding exists only in this standard render set. Rule data cannot
- * express it: a deployment record or module manifest that writes the spec's
- * `$actingUser` reaches the matcher with it unbound and matches nothing.
- */
-const resourceOwnerSelfDisplay = (actingPrincipal: string): ExchangeRule => ({
+}, {
   id: "resource-owner-self-display",
-  appliesTo: { type: CFC_ATOM_TYPE.Resource, subject: actingPrincipal },
+  appliesTo: {
+    type: CFC_ATOM_TYPE.Resource,
+    subject: { var: ACTING_USER_VAR },
+  },
   preCondition: { boundary: [DISPLAY_SINK_CLASS_GUARD] },
   post: {
-    addAlternatives: [{ type: CFC_ATOM_TYPE.User, subject: actingPrincipal }],
+    addAlternatives: [{
+      type: CFC_ATOM_TYPE.User,
+      subject: { var: ACTING_USER_VAR },
+    }],
   },
-});
+}];
 
-/**
- * Returns the standard render exchange rule set for a display audience of
- * `actingPrincipal`: `SpaceReaderAccess`, and the owner-self rule bound to
- * `actingPrincipal` when that is a user's DID. `PersonalSpace(actingUser)`
- * needs no rule, since the §8.10.6 ceiling admits it by exact match.
- */
-export const standardRenderExchangeRules = (
-  actingPrincipal: string | undefined,
-): readonly ExchangeRule[] => {
-  // The owner-self rule needs a user to release to. Built around `undefined`
-  // its `subject` would read as an absence requirement, which a subject-less
-  // `Resource` satisfies; and `CFC_RUNTIME_SUBJECT` is the service a
-  // `Resource` names by default, credentials among them, not an owner who
-  // views (§8.10.6: service principals fail closed).
-  if (!isDID(actingPrincipal) || actingPrincipal === CFC_RUNTIME_SUBJECT) {
-    return [SPACE_READER_ACCESS_DISPLAY];
-  }
-  return [
-    SPACE_READER_ACCESS_DISPLAY,
-    resourceOwnerSelfDisplay(actingPrincipal),
-  ];
-};
+/** The standard render rules as a snapshot, built once: they are static. */
+const STANDARD_RENDER_SNAPSHOT: PolicySnapshot = buildCfcPolicySnapshot([{
+  id: "cfc-standard-render",
+  rules: STANDARD_RENDER_EXCHANGE_RULES,
+}])!;
 
 export type RenderConfidentialityResolverConfig = {
   /**
    * The display audience: the acting user whose `HasRole` facts are minted,
-   * and to whom the owner-self rule releases the acting user's own `Resource`
-   * atoms when it is a user's DID. Absent, neither happens.
+   * and the evaluator's `$actingUser`, to whom the owner-self rule releases
+   * that user's own `Resource` atoms. Absent, neither happens.
    */
   readonly actingPrincipal?: string;
 
@@ -326,12 +314,6 @@ export const createRenderConfidentialityResolver = (
   const boundary = renderDisplayBoundary();
   const trustResolver = createTrustResolver(config.trustConfig);
   const actingPrincipal = config.actingPrincipal;
-  // The acting principal is fixed for the resolver's lifetime, so the rule
-  // set bound to it is built once, before any label arrives.
-  const standardRules = buildCfcPolicySnapshot([{
-    id: "cfc-standard-render",
-    rules: standardRenderExchangeRules(actingPrincipal),
-  }]);
   const staticMemberSpaces = config.memberSpaces ?? [];
   const provider = config.membershipProvider;
   const modulePolicyResolver = config.modulePolicyResolver;
@@ -360,7 +342,7 @@ export const createRenderConfidentialityResolver = (
         confidentiality: [...label.confidentiality],
         integrity: [...(label.integrity ?? [])],
       },
-      standardRules,
+      STANDARD_RENDER_SNAPSHOT,
       {
         integrity: mintReaderRoleFacts(actingPrincipal, [...memberSpaces]),
         boundary,

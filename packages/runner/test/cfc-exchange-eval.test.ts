@@ -1,7 +1,11 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
+import {
+  CFC_ATOM_TYPE,
+  CFC_RUNTIME_SUBJECT,
+  cfcAtom,
+} from "@commonfabric/api/cfc";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 
 import type { AtomPattern } from "../src/cfc/atom-pattern.ts";
@@ -1077,6 +1081,111 @@ describe("CFC exchange-rule evaluation (B4)", () => {
         { anyOf: [spaceX, shareRef, userAlice] },
         spaceY,
       ])).toBe(true);
+    });
+  });
+
+  describe("the acting-user variable", () => {
+    // Spec §4.9.2: `$actingUser` in a rule is the acting principal, which the
+    // evaluator supplies before matching; it is never read off the label.
+
+    const message = (subject: string) => cfcAtom.resource("message", subject);
+    const ownerSelfSnapshot = buildCfcPolicySnapshot([{
+      id: "owner-self",
+      rules: [{
+        id: "owner-self",
+        appliesTo: {
+          type: CFC_ATOM_TYPE.Resource,
+          subject: { var: "$actingUser" },
+        },
+        post: {
+          addAlternatives: [{
+            type: CFC_ATOM_TYPE.User,
+            subject: { var: "$actingUser" },
+          }],
+        },
+      }],
+    }])!;
+    const readerSnapshot = buildCfcPolicySnapshot([{
+      id: "acting-reader",
+      rules: [{
+        id: "acting-reader",
+        appliesTo: { type: CFC_ATOM_TYPE.Space, id: { var: "$s" } },
+        preCondition: {
+          integrity: [{
+            type: CFC_ATOM_TYPE.HasRole,
+            principal: { var: "$actingUser" },
+            space: { var: "$s" },
+            role: "reader",
+          }],
+        },
+        post: {
+          addAlternatives: [{
+            type: CFC_ATOM_TYPE.User,
+            subject: { var: "$actingUser" },
+          }],
+        },
+      }],
+    }])!;
+
+    it("binds `$actingUser` to the acting principal, rewriting only its own subject's clause", () => {
+      const result = evaluateExchangeRules(
+        { confidentiality: [message(ALICE), message(BOB)] },
+        ownerSelfSnapshot,
+        { actingPrincipal: ALICE },
+      );
+      expect(result.label.confidentiality).toEqual([
+        normalizeClause({ anyOf: [message(ALICE), userAlice] }),
+        message(BOB),
+      ]);
+    });
+
+    it("fires no rule naming `$actingUser` without an acting principal", () => {
+      const label = { confidentiality: [message(ALICE)] };
+      const result = evaluateExchangeRules(label, ownerSelfSnapshot, {});
+      expect(result.firings).toEqual([]);
+      expect(result.label.confidentiality).toEqual(label.confidentiality);
+    });
+
+    it("binds `$actingUser` to no acting principal but a complete DID other than the runtime's", () => {
+      for (const acting of ["alice", "did:", "did:key", CFC_RUNTIME_SUBJECT]) {
+        const result = evaluateExchangeRules(
+          { confidentiality: [message(acting)] },
+          ownerSelfSnapshot,
+          { actingPrincipal: acting },
+        );
+        expect(result.firings).toEqual([]);
+      }
+    });
+
+    it("never takes `$actingUser` from evidence the label carries", () => {
+      // Bob's reader fact would bind an ordinary variable to Bob. Alice's fact
+      // is what shows the guard is reachable at all.
+      const underBobsFact = evaluateExchangeRules(
+        {
+          confidentiality: [spaceX],
+          integrity: [roleBobX],
+        },
+        readerSnapshot,
+        { actingPrincipal: ALICE },
+      );
+      expect(underBobsFact.label.confidentiality).toEqual([spaceX]);
+      const withNobodyActing = evaluateExchangeRules(
+        {
+          confidentiality: [spaceX],
+          integrity: [roleBobX],
+        },
+        readerSnapshot,
+        {},
+      );
+      expect(withNobodyActing.label.confidentiality).toEqual([spaceX]);
+      const underAlicesFact = evaluateExchangeRules(
+        { confidentiality: [spaceX] },
+        readerSnapshot,
+        { actingPrincipal: ALICE, integrity: [roleAliceX] },
+      );
+      expect(underAlicesFact.label.confidentiality).toEqual([
+        normalizeClause({ anyOf: [spaceX, userAlice] }),
+      ]);
     });
   });
 });

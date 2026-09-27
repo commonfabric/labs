@@ -160,6 +160,7 @@ export {
 } from "./clause.ts";
 export type { AtomPattern, AtomPatternBindings } from "./atom-pattern.ts";
 export {
+  ACTING_USER_VAR,
   atomEntails,
   instantiateAtomPattern,
   isAtomVarPlaceholder,
@@ -238,7 +239,7 @@ export {
   modulePolicyRefsInConfidentiality,
   RENDER_DISPLAY_SINK_CLASS,
   RENDER_SINK_NAME,
-  standardRenderExchangeRules,
+  STANDARD_RENDER_EXCHANGE_RULES,
 } from "./render-ceiling.ts";
 export type { SpaceMembershipProvider, SpaceRole } from "./space-membership.ts";
 export {

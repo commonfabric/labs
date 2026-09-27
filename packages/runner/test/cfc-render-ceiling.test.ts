@@ -25,7 +25,7 @@ import {
 import {
   createRenderConfidentialityResolver,
   RENDER_DISPLAY_SINK_CLASS,
-  standardRenderExchangeRules,
+  STANDARD_RENDER_EXCHANGE_RULES,
 } from "../src/cfc/render-ceiling.ts";
 import { SINK_CLASSES, sinkClassOf } from "../src/cfc/sink-inventory.ts";
 import type { SpaceMembershipProvider } from "../src/cfc/space-membership.ts";
@@ -830,7 +830,7 @@ describe("CFC render resolver — the owner-self Resource rule", () => {
       // model-call sinks' network class among them.
       const snapshot = buildCfcPolicySnapshot([{
         id: "cfc-standard-render",
-        rules: standardRenderExchangeRules(ALICE),
+        rules: STANDARD_RENDER_EXCHANGE_RULES,
       }]);
       const label = [userAlice, message(ALICE)];
       const evaluateAt = (sinkClass: string) =>
@@ -850,9 +850,7 @@ describe("CFC render resolver — the owner-self Resource rule", () => {
     });
 
     it("rewrites nothing without an acting principal", () => {
-      // The subject-less resource is here because a rule built around a
-      // missing principal reads `subject: undefined` as an absence
-      // requirement, which that atom satisfies.
+      // A missing principal must not match a missing subject either.
       const label = [
         message(ALICE),
         { type: CFC_ATOM_TYPE.Resource, class: "message" },
@@ -870,6 +868,7 @@ describe("CFC render resolver — the owner-self Resource rule", () => {
         const [acting, atom] of [
           [CFC_RUNTIME_SUBJECT, cfcAtom.resource("oauth-token")],
           ["alice", cfcAtom.resource("message", "alice")],
+          ["did:key", cfcAtom.resource("message", "did:key")],
         ] as const
       ) {
         const resolve = createRenderConfidentialityResolver({
@@ -916,10 +915,11 @@ describe("CFC render resolver — the owner-self Resource rule", () => {
     });
   });
 
-  describe("the `$actingUser` placeholder in rule data", () => {
-    // Only trusted code binds the acting user. Rule data carrying the spec's
-    // `$actingUser` spelling reaches the ordinary matcher, where the
-    // placeholder never takes its value from a matched atom.
+  describe("the `$actingUser` variable in rule data", () => {
+    // Spec §4.9.2: a rule's `$actingUser` is the acting principal, supplied by
+    // the evaluator before matching and never read off the label. A rule
+    // without an integrity or policy-state guard stays out of module
+    // manifests, so the unguarded owner-self form is the runtime's alone.
 
     const displayBoundary = [
       cfcAtom.boundaryContext("sink", "render"),
@@ -942,85 +942,129 @@ describe("CFC render resolver — the owner-self Resource rule", () => {
         }],
       },
     });
-    const evaluateDeployment = (variable: string, subject: string) =>
+    const evaluateDeployment = (
+      variable: string,
+      subject: string,
+      actingPrincipal: string | undefined,
+    ) =>
       evaluateExchangeRules(
         { confidentiality: [message(subject)] },
         buildCfcPolicySnapshot([{
           id: "deployment",
           rules: [ownerSelfShaped(variable)],
         }]),
-        { boundary: displayBoundary, actingPrincipal: ALICE },
+        { boundary: displayBoundary, actingPrincipal },
       );
 
-    it("leaves the label unchanged under a deployment rule that writes it", () => {
-      // The same rule under an ordinary variable fires on any subject, which
-      // is the label-learned release the placeholder must not become.
-      expect(evaluateDeployment("$owner", MALLORY).label.confidentiality)
-        .toEqual([
-          normalizeClause({
-            anyOf: [message(MALLORY), cfcAtom.user(MALLORY)],
-          }),
-        ]);
-      for (const subject of [ALICE, MALLORY]) {
-        const result = evaluateDeployment("$actingUser", subject);
+    it("binds a deployment rule's `$actingUser` to the acting principal and to nobody else", () => {
+      // The same rule under an ordinary variable fires on any subject: the
+      // label-learned release `$actingUser` must not become.
+      expect(
+        evaluateDeployment("$owner", MALLORY, ALICE).label.confidentiality,
+      ).toEqual([
+        normalizeClause({ anyOf: [message(MALLORY), cfcAtom.user(MALLORY)] }),
+      ]);
+      expect(
+        evaluateDeployment("$actingUser", ALICE, ALICE).label.confidentiality,
+      ).toEqual([ownerSelf(message(ALICE))]);
+      for (
+        const [subject, acting] of [[MALLORY, ALICE], [ALICE, undefined]]
+      ) {
+        const result = evaluateDeployment("$actingUser", subject!, acting);
         expect(result.firings).toEqual([]);
-        expect(result.label.confidentiality).toEqual([message(subject)]);
+        expect(result.label.confidentiality).toEqual([message(subject!)]);
       }
     });
 
-    it("keeps the label sealed under a module policy rule that writes it", () => {
-      // Two manifests alike but for the variable their reader guard binds.
-      // The resolver mints Alice's own-space reader fact, which releases the
-      // first and not the second.
-      const manifestBinding = (variable: string) =>
-        buildCfcPolicyArtifactManifest({
-          formatVersion: 1,
-          moduleIdentity: "sha256:owner-self-module",
-          symbol: "ownerSelfRules",
-          template: {
-            templateVersion: 1,
-            exchangeRules: [{
-              name: "releaseToReader",
-              preCondition: {
-                confidentiality: [{ thisPolicy: true }],
-                integrity: [{
-                  type: CFC_ATOM_TYPE.HasRole,
-                  principal: { var: variable },
-                  space: { thisPolicyField: "subject" },
-                  role: "reader",
-                }],
-              },
-              postCondition: {
-                confidentiality: [{
-                  type: CFC_ATOM_TYPE.User,
-                  subject: { var: variable },
-                }],
-                integrity: [],
-              },
+    // A module rule releasing its clause to whichever reader of the policy's
+    // subject space is acting.
+    const actingReaderManifest = buildCfcPolicyArtifactManifest({
+      formatVersion: 1,
+      moduleIdentity: "sha256:acting-reader-module",
+      symbol: "actingReaderRules",
+      template: {
+        templateVersion: 1,
+        exchangeRules: [{
+          name: "releaseToActingReader",
+          preCondition: {
+            confidentiality: [{ thisPolicy: true }],
+            integrity: [{
+              type: CFC_ATOM_TYPE.HasRole,
+              principal: { var: "$actingUser" },
+              space: { thisPolicyField: "subject" },
+              role: "reader",
             }],
-            dependencies: { authorityOnly: [], dataBearing: [] },
-            integrityRequirements: {},
           },
-        });
-      const resolvedUnder = (variable: string) => {
-        const manifest = manifestBinding(variable);
-        const ref = cfcAtom.modulePolicyRef(
-          manifest.manifest.moduleIdentity,
-          manifest.manifest.symbol,
-          manifest.policyDigest,
-          ALICE,
-        );
-        const resolve = createRenderConfidentialityResolver({
-          actingPrincipal: ALICE,
-          memberSpaces: [ALICE],
-          modulePolicyResolver: () => manifest,
-        });
-        return { ref, resolved: resolve({ confidentiality: [ref] }) };
+          postCondition: {
+            confidentiality: [{
+              type: CFC_ATOM_TYPE.User,
+              subject: { var: "$actingUser" },
+            }],
+            integrity: [],
+          },
+        }],
+        dependencies: { authorityOnly: [], dataBearing: [] },
+        integrityRequirements: {},
+      },
+    });
+    const actingReaderRef = cfcAtom.modulePolicyRef(
+      actingReaderManifest.manifest.moduleIdentity,
+      actingReaderManifest.manifest.symbol,
+      actingReaderManifest.policyDigest,
+      SPACE_TEAM,
+    );
+
+    it("releases a guarded module rule's clause to the acting reader it names", () => {
+      const resolve = createRenderConfidentialityResolver({
+        actingPrincipal: ALICE,
+        memberSpaces: [SPACE_TEAM],
+        modulePolicyResolver: () => actingReaderManifest,
+      });
+      const resolved = resolve({ confidentiality: [actingReaderRef] });
+      expect(resolved).toEqual([
+        normalizeClause({ anyOf: [actingReaderRef, userAlice] }),
+      ]);
+      expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual([]);
+    });
+
+    it("keeps that clause sealed without an acting principal, and from another reader's evidence", () => {
+      // Mallory's reader fact would bind an ordinary variable to Mallory.
+      const label = {
+        confidentiality: [actingReaderRef],
+        integrity: [cfcAtom.hasRole(MALLORY, SPACE_TEAM, "reader")],
       };
-      const ordinary = resolvedUnder("reader");
-      expect(atomsOutsideCeiling(ordinary.resolved, aliceCeiling)).toEqual([]);
-      const placeholder = resolvedUnder("$actingUser");
-      expect(placeholder.resolved).toEqual([placeholder.ref]);
+      for (const actingPrincipal of [undefined, ALICE]) {
+        const resolve = createRenderConfidentialityResolver({
+          actingPrincipal,
+          modulePolicyResolver: () => actingReaderManifest,
+        });
+        expect(resolve(label)).toEqual([actingReaderRef]);
+      }
+    });
+
+    it("refuses a module manifest whose rule has no guard, or targets anything but its own policy", () => {
+      const manifestWith = (preCondition: unknown) => () =>
+        buildCfcPolicyArtifactManifest({
+          ...actingReaderManifest.manifest,
+          template: {
+            ...actingReaderManifest.manifest.template,
+            exchangeRules: [{
+              ...actingReaderManifest.manifest.template.exchangeRules[0],
+              preCondition,
+            }],
+          },
+        } as never);
+      expect(manifestWith({
+        confidentiality: [{ thisPolicy: true }],
+        integrity: [],
+      })).toThrow(/integrity or policyState guard/);
+      expect(manifestWith({
+        confidentiality: [{
+          type: CFC_ATOM_TYPE.Resource,
+          subject: { var: "$actingUser" },
+        }],
+        integrity: [],
+      })).toThrow(/must target THIS_POLICY/);
     });
   });
 });
