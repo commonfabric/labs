@@ -160,8 +160,9 @@ effective in the session and returns a boolean, and `registerSpaceHostDetailed`
 returns the reason for a refusal; nothing appends the hint to the site table
 with commit acknowledgment, and the spec is explicit that the optimistic
 `CellHandle` paths cannot be used for it. A `known-different-host` refusal
-carries the host the space is routed to. The runtime exposes no query for the
-effective host of a space beyond that refusal. Common Fabric browser-link
+carries the host the space is routed to. `Runtime.hostForSpace` returns the
+effective host inside the worker, and no runtime-client request exposes it, so
+that refusal is the only route an embedder is told. Common Fabric browser-link
 receipt remains a dormant concept in the specification and is not work ordered
 by this plan.
 
