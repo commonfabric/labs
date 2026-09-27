@@ -3964,16 +3964,6 @@ child equals multiple independent copies of it. Where a cycle closes is:
 `a = {x: a}` and `b = {x: {x: b}}` are unequal, although no finite sequence of
 reads tells them apart.
 
-**Deciding it by walk.** `valueEqualByWalk(a, b)` decides the same relation on
-acyclic values without hashing a container: it walks two records or arrays in
-step, settles a subtree both operands hold by identity without reading it, and
-decides every other pair by `valueEqual()`. That makes it the route for a value
-against a revision of itself, whose unedited subtrees are shared. The identity
-shortcut is also the one place it parts from the relation above, and only on a
-cyclic value: a shared subtree that leads back to a container the operands do
-not share is taken as equal, where the hash encoding, which places a cycle
-relative to where its hash began, can tell the two apart.
-
 **String representation.** Equality and the hash encoding both treat a string
 as its exact sequence of UTF-16 code units, lone surrogates included. The hash
 encodes strings as WTF-8 (`2-hash-byte-format.md` Section 4.4), under which

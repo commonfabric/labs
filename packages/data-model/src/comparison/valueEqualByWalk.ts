@@ -16,34 +16,20 @@ import { valueEqual } from "./valueEqual.ts";
 const MAX_WALK_DEPTH = 256;
 
 /**
- * Like `valueEqual()`, except that two records or two arrays are decided by
- * walking them in step rather than by hashing each whole, and a pair of
- * subtrees that are one and the same object is decided by identity without
- * being read.
+ * Like `valueEqual()`, except that two plain records or two arrays are
+ * compared by walking them in step rather than by hashing each whole, and a
+ * subtree both operands share is settled by identity without being read. So
+ * comparing a value with a copy-on-write revision of itself costs the edited
+ * spine, and a walk stops at the first difference it finds.
  *
- * That is what makes it the comparison for a value against a revision of
- * itself. A copy-on-write edit shares every subtree off the edited spine with
- * the value it was made from, so comparing the two costs the spine, where
- * `valueEqual()` hashes the whole of any operand whose hash it has not
- * cached. A walk also stops at the first difference it finds, which a hash
- * cannot.
- *
- * Every pair that is not two plain records or two arrays goes to
- * `valueEqual()` — a special object on either side, and anything that is not
- * a `FabricValue` — and operands nested deeper than the walk
- * goes, two cyclic graphs sharing nothing among them, go to it whole. So the
- * two return the same result on every acyclic pair of `FabricValue`s. Where
- * they part is at a subtree the operands share, which the walk never visits.
- * A value `valueEqual()` would refuse to hash — a function, or a class whose
- * codec is a stub — does not throw from inside one. And a shared subtree that
- * leads back to a container the operands do not share is passed as equal,
- * where `valueEqual()`, which encodes a cycle relative to where its hash
- * began, can tell the two apart.
- *
- * A record or an array is decided without the hash cache, neither consulting
- * it nor filling it. So two large, distinct, equal, deep-frozen values that
- * were hashed once already cost this a full walk, where `valueEqual()`
- * compares two cached hashes.
+ * Any other pair goes to `valueEqual()`, and so do operands nested deeper than
+ * the walk goes, which includes two cyclic graphs sharing nothing. The two
+ * therefore return the same result on every acyclic pair of `FabricValue`s.
+ * They part only at a shared subtree, which is never read: a value
+ * `valueEqual()` would refuse to hash does not throw from inside one, and one
+ * that closes a cycle through a container the operands do not share is taken
+ * as equal. The hash cache is neither consulted nor filled for a record or an
+ * array, so two distinct equal values hashed once already cost a full walk.
  */
 export function valueEqualByWalk(a: FabricValue, b: FabricValue): boolean {
   return walkEqual(a, b, 0) ?? valueEqual(a, b);

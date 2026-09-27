@@ -56,11 +56,9 @@ before it is needed again, so every hash re-encodes every string.
 
 - The no-op check compares by walking the two roots in step, which settles
   every subtree a copy-on-write edit shares by identity: `valueEqualByWalk()`.
-- The differential compares by its own walk alone. A root check by identity,
-  and no `valueEqual()` per level. A special object is compared by content at
-  its own position. A pair that is not two arrays or two plain records goes
-  to `valueEqual()`, and so does a pair whose `after` container repeats on
-  the walk's path.
+- The differential asks `valueEqualByWalk()` where it asked `valueEqual()`:
+  once for the two roots, and once for each pair of containers before
+  descending into it.
 - The server weighs a replayed revision from the revision it resumed, plus
   what each patch grew it by, measured by a walk in step that encodes only
   what the patch replaced, added or removed. The encoding composes exactly
@@ -115,12 +113,14 @@ eight times the cost of the single encode it replaced. Encoding the removed
 member of a revision the replay only passed through also threw on a reserved
 key that a later patch removed, where encoding only the result did not.
 
-**A bare identity walk in the differential.** Dropping the per-level
-`valueEqual()` without the two guards above made two equal cyclic subtrees
-that branch take time exponential in the depth cap, and read a `Date` as an
-empty record. No stored document can be cyclic or hold a `Date`, since the
-codec refuses both, but the guards cost about 10 to 15 ms of the echo walk at
-10,752 link entries and keep the behavior the walk had.
+**Rewriting the differential's walk.** Dropping the differential's
+per-level check and letting its own walk be the comparison needed two guards
+to keep its behavior: one for a pair that is not two plain records or two
+arrays, which it would read as an empty record, and one for a cycle, where two
+equal branching subtrees took time exponential in the depth. Measured against
+asking `valueEqualByWalk()` at each level instead, which keeps the
+differential's structure and behavior as they were, it bought nothing: 394 ms
+against 387 ms at 10,752 link entries, inside the noise.
 
 ## What is left
 

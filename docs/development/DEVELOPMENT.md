@@ -695,16 +695,10 @@ using them is not optional in code that can reach a stored value:
   `valueEqual({ v: aFabricMap }, { v: 5 })` throws where `fabricAwareEqual()`
   returns `false`.
 - `valueEqualByWalk(a, b)` returns what `valueEqual()` returns on acyclic
-  values, and is the comparison for a value against a revision of itself — the working root of a
-  transaction against the root it started from, a patched document against
-  the document it patched. A copy-on-write edit shares every subtree off the
-  edited spine, and this walks records and arrays in step, settles a subtree
-  both operands hold by identity without reading it, and hands every other
-  pair, special objects included, to `valueEqual()`. So it costs the spine
-  where `valueEqual()` hashes the whole of any operand whose hash it has not
-  cached. The bound runs the other way for two distinct values whose hashes
-  are already cached: `valueEqual()` compares two hashes, and this walks both
-  whole.
+  values, and is the comparison for a value against a copy-on-write revision
+  of itself: it walks the two in step and settles a subtree they share by
+  identity, where `valueEqual()` hashes the whole of any operand whose hash it
+  has not cached.
 
 Around a dozen walks in `runner` and `piece` take one of the two
 non-refusing answers, and what each says is decided by what it owes its
