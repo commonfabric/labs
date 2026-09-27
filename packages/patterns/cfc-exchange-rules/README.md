@@ -20,16 +20,19 @@ handler copying a raw input, or a different version of the module does not
 satisfy the rule. `blessed-object.tsx` does the same for a function returning an
 object, whose object node is released along with its fields.
 
-`custody-projector.tsx` is demo-grade until a pattern's reads carry the seal's
-input witness. It is a room whose members seal their stances into the policy's
-custody through the host's `cf-custody-seal`, and whose policy releases only
-what its projector computes over the sealed box: one of the listed answers. It
-shows the pattern side of the
+`custody-projector.tsx` is demo-grade: its rule names the projector alone rather
+than requiring the seal's input witness. It is a room whose members seal their
+stances into the policy's custody through the host's `cf-custody-seal`, and
+whose policy releases only what its projector computes over the sealed box: one
+of the listed answers. It shows the pattern side of the
 [custody seal](../../../docs/specs/cfc-custody-seal.md): seats named by attested
-cells, the policy read from a declaring cell's label, and the box link the host
-writes back. Its rule names the projector by identity alone, so a member's own
-code can feed the projector a crafted box and learn another member's entry from
-the answers; the spec's limits say what closes that.
+cells, the policy read from a declaring cell's label, and the box link the seal
+writes into the room. Under its identity-only rule a member's own code can feed
+the projector a crafted box and learn another member's entry from the answers.
+The same rule requiring `TransformedBy{builtin cfc-custody-seal}` as its input
+witness releases the answer over the box the seal linked, and refuses one over
+any document other code put in its place; the spec's limits say what that still
+leaves open.
 
 `witnessed-chain.tsx` narrows the tally rule with an `inputWitness`: it releases
 the tally only when every confidential location the tally read was written by

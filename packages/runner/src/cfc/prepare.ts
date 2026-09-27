@@ -3133,14 +3133,48 @@ const isPureLinkStructure = (value: unknown): boolean => {
   return false;
 };
 
-// Whether a primitive cell link sits anywhere in `value`, `value` included.
-const containsCellLink = (value: unknown): boolean => {
-  if (isPrimitiveCellLink(value)) return true;
-  if (Array.isArray(value)) return value.some(containsCellLink);
-  if (isWalkableObjectOrArray(value)) {
-    return Object.values(value).some(containsCellLink);
+/**
+ * Whether every primitive cell link in `value`, `value` included, is a
+ * reference the runtime recorded at its path: the one `references` maps that
+ * path to, spelled as a plain reference to that document's root. `path` is
+ * where `value` sits in `target`.
+ */
+const holdsOnlySuppliedReferences = (
+  value: unknown,
+  path: readonly string[],
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  references: ReadonlyMap<string, CfcAddress>,
+): boolean => {
+  if (isPrimitiveCellLink(value)) {
+    const reference = references.get(pathKey(path));
+    if (reference === undefined || isWriteRedirectLink(value)) return false;
+    const link = parseLink(value, { ...target, path: [] });
+    return link !== undefined && link.id === reference.id &&
+      link.space === reference.space &&
+      normalizeCellScope(link.scope) === normalizeCellScope(reference.scope) &&
+      canonicalizeLogicalPath(link.path).length === 0 &&
+      canonicalizeLogicalPath(reference.path).length === 0;
   }
-  return false;
+  if (Array.isArray(value)) {
+    return value.every((member, index) =>
+      holdsOnlySuppliedReferences(
+        member,
+        [...path, String(index)],
+        target,
+        references,
+      )
+    );
+  }
+  if (isWalkableObjectOrArray(value)) {
+    return Object.entries(value).every(([key, member]) =>
+      holdsOnlySuppliedReferences(member, [...path, key], target, references)
+    );
+  }
+  return true;
 };
 
 /**
@@ -3161,8 +3195,10 @@ const containsCellLink = (value: unknown): boolean => {
  * That holds only for plain data. A position holding a reference holds the
  * pointer, and a pointer the diff found in place — a write redirect, which
  * the diff writes through rather than over — is not one the writer supplied,
- * so a destination with any reference beneath it is left to the per-path
- * stamps. A destination is also taken only where
+ * so a destination with a reference beneath it is left to the per-path
+ * stamps, unless the reference is one the runtime recorded storing at that
+ * path for this writer (`CfcAssertedValueRoot.reference`). A destination is
+ * also taken only where
  * - the transaction wrote beneath it, so a no-op write stamps nothing;
  * - the join names the writer (`TransformedBy`), which is the one thing the
  *   stamp adds over the per-path stamps; and
@@ -3221,14 +3257,23 @@ const assertedValueRootPaths = (
       isPrefix(root, path) || (recursive && isPrefix(path, root))
     );
   };
-  for (const { address, identity } of tx.getCfcState().assertedValueRoots) {
-    if (targetKey(address) !== key) continue;
+  const recorded = tx.getCfcState().assertedValueRoots.filter((
+    { address, identity },
+  ) =>
+    targetKey(address) === key &&
     // The stamp names the join's identity, so a root another identity wrote
     // in the same transaction is not this writer's to claim.
-    if (
-      writeIdentity.multiple || identity === undefined ||
-      !deepEqual(identity, writeIdentity.identity)
-    ) continue;
+    !writeIdentity.multiple && identity !== undefined &&
+    deepEqual(identity, writeIdentity.identity)
+  );
+  // The references the runtime stored for this writer in the document, by
+  // path (`CfcAssertedValueRoot.reference`).
+  const references = new Map<string, CfcAddress>();
+  for (const { address, reference } of recorded) {
+    if (reference === undefined) continue;
+    references.set(pathKey(canonicalizeLogicalPath(address.path)), reference);
+  }
+  for (const { address } of recorded) {
     const root = canonicalizeLogicalPath(address.path);
     const rootKey = pathKey(root);
     if (seen.has(rootKey)) continue;
@@ -3237,7 +3282,10 @@ const assertedValueRootPaths = (
     const value = tx.readValueOrThrow({ ...target, path: root }, {
       meta: INTERNAL_VERIFIER_META,
     });
-    if (value === undefined || containsCellLink(value)) continue;
+    if (
+      value === undefined ||
+      !holdsOnlySuppliedReferences(value, root, target, references)
+    ) continue;
     if (!fitsCeilingsFrom(root)) continue;
     // A destination this transaction created holds nothing it did not
     // write, whatever it read on the way.
@@ -3575,6 +3623,29 @@ const isReplacedMembershipEntry = (
     containers.has(pathKey(entryPath.slice(0, -1)));
 };
 
+/**
+ * The input witnesses a followed reference holds at its slot: the retained
+ * atoms of the value stamps that resolve there. Which reference sits at a
+ * slot decides which document a reader reads, so a reader that follows one to
+ * confidential content consumed the choice as an input, whatever the slot's
+ * own label says. A reference link writes put in place carries no value stamp
+ * of its own, so it retains nothing unless its writer's stamp covers the slot
+ * (`assertedValueRootPaths`).
+ */
+const followedReferenceWitnesses = (
+  metadata: CfcMetadata | undefined,
+  slot: readonly string[],
+): CfcAtom[] => {
+  if (metadata === undefined) return [];
+  const evidence = consumedEntriesForRead(metadata, slot, {
+    nonRecursive: true,
+    consumes: "value",
+  }).filter(isWitnessEvidence).map(asWitnessEvidence);
+  return retainedInputWitnesses(
+    labelForEntriesAtPath(evidence, slot)?.integrity,
+  );
+};
+
 /** Helper for `deriveFlowJoin`, which computes labels from transaction reads. */
 const deriveFlowJoinImpl = (
   tx: IExtendedStorageTransaction,
@@ -3629,6 +3700,20 @@ const deriveFlowJoinImpl = (
   }>();
   // §8.12.8 readback exclusion: see `ownRestampContainerPaths`.
   const ownRestamps = ownRestampContainerPaths(tx);
+  // Where each document was read with confidential content, and each
+  // location a content read observed, for the references followed into it
+  // (`followedReferenceWitnesses`).
+  const confidentialReads = new Map<
+    string,
+    { path: readonly string[]; recursive: boolean }[]
+  >();
+  const observedLocations = new Map<string, {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+    path: readonly string[];
+    recursive: boolean;
+  }>();
   forEachFlowObservation(
     tx,
     (space, id, scope, type, logicalPath, observation) => {
@@ -3643,6 +3728,20 @@ const deriveFlowJoinImpl = (
         return false;
       }
       const key = targetKey({ space, id, scope });
+      if (identity !== undefined && observation.shape !== "followRef") {
+        const recursive = observation.shape === "value" &&
+          observation.nonRecursive !== true;
+        const locationKey = stringTupleKey([key, pathKey(logicalPath)]);
+        if (!observedLocations.get(locationKey)?.recursive) {
+          observedLocations.set(locationKey, {
+            space,
+            id,
+            scope,
+            path: logicalPath,
+            recursive,
+          });
+        }
+      }
       let document = metadataByDoc.get(key);
       if (document === undefined) {
         document = {
@@ -3788,6 +3887,16 @@ const deriveFlowJoinImpl = (
       }
       if (label?.confidentiality?.length) {
         atoms.push(...label.confidentiality);
+        let reads = confidentialReads.get(key);
+        if (reads === undefined) {
+          reads = [];
+          confidentialReads.set(key, reads);
+        }
+        reads.push({
+          path: logicalPath,
+          recursive: observation.shape !== "shape" &&
+            observation.nonRecursive !== true,
+        });
       }
       // followRef observations contribute confidentiality only. The
       // hereditary meet quantifies over the transformation's CONTENT inputs
@@ -3854,6 +3963,115 @@ const deriveFlowJoinImpl = (
       : hereditaryMeet.filter((kept) =>
         hereditary.some((atom) => deepEqual(atom, kept))
       );
+  }
+  // A reference a transformation observed and followed to confidential
+  // content is an input location of its own: the slot holding it decided
+  // what was read. It counts whether or not the slot is itself labeled, and
+  // so does a reference whose target is such a slot. A write redirect counts
+  // like any other reference: pattern code can store one as data, and a
+  // read follows it as it follows any other. Nothing here applies to a
+  // transformation that read nothing confidential.
+  if (
+    identity !== undefined && inputWitnesses?.length !== 0 &&
+    confidentialReads.size > 0
+  ) {
+    const docKey = (address: Omit<CfcAddress, "path">) =>
+      targetKey({
+        space: address.space,
+        id: address.id as URI,
+        scope: normalizeCellScope(address.scope),
+      });
+    type ObservedLocation = typeof observedLocations extends
+      Map<string, infer V> ? V : never;
+    const references: { slot: ObservedLocation; target: CfcAddress }[] = [];
+    // A shallow read observed the value at its path; a recursive one, every
+    // value beneath it, each reference among them included.
+    const collect = (
+      location: ObservedLocation,
+      value: unknown,
+      path: readonly string[],
+    ): void => {
+      if (isPrimitiveCellLink(value)) {
+        const link = parseLink(value, { ...location, path: [] });
+        if (link === undefined) return;
+        references.push({
+          slot: { ...location, path },
+          target: {
+            space: link.space,
+            id: link.id,
+            scope: normalizeCellScope(link.scope),
+            path: canonicalizeLogicalPath(link.path),
+          },
+        });
+        return;
+      }
+      if (!location.recursive) return;
+      if (Array.isArray(value)) {
+        value.forEach((member, index) =>
+          collect(location, member, [...path, String(index)])
+        );
+      } else if (isWalkableObjectOrArray(value)) {
+        for (const [member, nested] of Object.entries(value)) {
+          collect(location, nested, [...path, member]);
+        }
+      }
+    };
+    for (const location of observedLocations.values()) {
+      collect(
+        location,
+        tx.readValueOrThrow(location, { meta: INTERNAL_VERIFIER_META }),
+        location.path,
+      );
+    }
+    const readsConfidentially = (target: CfcAddress): boolean =>
+      (confidentialReads.get(docKey(target)) ?? []).some((read) =>
+        isPrefix(target.path, read.path) ||
+        (read.recursive && isPrefix(read.path, target.path))
+      );
+    // A worklist over the references by the document each names, so a
+    // chain of references is walked once rather than once per link.
+    type Reference = (typeof references)[number];
+    const byTargetDoc = new Map<string, Reference[]>();
+    for (const reference of references) {
+      const key = docKey(reference.target);
+      const named = byTargetDoc.get(key);
+      if (named === undefined) byTargetDoc.set(key, [reference]);
+      else named.push(reference);
+    }
+    const followed = new Set<Reference>();
+    const pending: Reference[] = [];
+    for (const reference of references) {
+      if (readsConfidentially(reference.target)) {
+        followed.add(reference);
+        pending.push(reference);
+      }
+    }
+    while (pending.length > 0) {
+      const next = pending.pop()!;
+      for (const reference of byTargetDoc.get(docKey(next.slot)) ?? []) {
+        if (
+          !followed.has(reference) &&
+          isPrefix(reference.target.path, next.slot.path)
+        ) {
+          followed.add(reference);
+          pending.push(reference);
+        }
+      }
+    }
+    for (const { slot } of followed) {
+      const key = docKey(slot);
+      const metadata = metadataByDoc.has(key)
+        ? metadataByDoc.get(key)!.metadata
+        : storedMetadataFor(
+          tx,
+          slot.space,
+          slot.id,
+          slot.scope,
+          "application/json",
+        );
+      noteInputWitnesses(followedReferenceWitnesses(metadata, slot.path));
+      if (inputWitnesses?.length === 0) break;
+    }
   }
   const confidentiality = uniqueCfcAtoms(atoms);
   const integrity: CfcAtom[] = [...(hereditaryMeet ?? [])];

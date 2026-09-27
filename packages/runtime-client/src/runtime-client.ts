@@ -281,13 +281,15 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * Prepares a custody seal of `draft` into the room whose terms and policy
    * are named, for the trusted host to show before the actor confirms. The
    * worker reads and checks every cell, and keeps the consent; the preview is
-   * what crosses.
+   * what crosses. When `box` is named, the seal writes the link to the
+   * instance's box into it as it commits.
    */
   async prepareCustodySeal(cells: {
     draft: CellRef;
     terms: CellRef;
     policy: CellRef;
     allowedSources: CellRef;
+    box?: CellRef;
   }): Promise<CustodySealPreview> {
     return await this.#conn.request<RequestType.CustodySealPrepare>({
       type: RequestType.CustodySealPrepare,
@@ -295,6 +297,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       terms: cells.terms,
       policy: cells.policy,
       allowedSources: cells.allowedSources,
+      ...(cells.box === undefined ? {} : { box: cells.box }),
     });
   }
 

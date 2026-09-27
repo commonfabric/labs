@@ -45,7 +45,14 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import { utf8Compare, utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 import { type Cell, isCell } from "../cell.ts";
-import { type NormalizedFullLink, parseLink } from "../link-utils.ts";
+import { resolveLink } from "../link-resolution.ts";
+import {
+  isPrimitiveCellLink,
+  isWriteRedirectLink,
+  type NormalizedFullLink,
+  parseLink,
+} from "../link-utils.ts";
+import type { Runtime } from "../runtime.ts";
 import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
@@ -68,6 +75,7 @@ import {
 } from "./represents-principal.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
+import { runtimeWritePolicyAuthorization } from "./types.ts";
 import { isRendererTrustedEvent } from "./ui-contract.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
@@ -104,6 +112,16 @@ export interface CustodyRoom {
    * cell still holds it.
    */
   readonly policy: CfcModulePolicyRefAtom | Cell<unknown>;
+
+  /**
+   * The room's cell that receives the link to the instance's box: the cell
+   * the room's projector reads its box through. The seal writes the link in
+   * the transaction that writes the entry, attributed to the seal, so a
+   * release rule that requires the seal's witness covers which document the
+   * room reads as its box as well as what that document holds. It must be
+   * in the room space.
+   */
+  readonly box?: Cell<unknown>;
 }
 
 /** Host-supplied bounds on what the actor may seal into this room. */
@@ -706,18 +724,11 @@ const readEvidence = (tx: IExtendedStorageTransaction): ReadEvidence[] => {
  * rule releases what code computed over anything the seal did not write. A
  * policy with no rules releases nothing and passes.
  *
- * The witness is necessary, not sufficient. A witness is the meet over the
- * confidential observations of the releasing code only, so a document that
- * mixes a real entry with unlabeled entries of a member's own still carries
- * it. A room's release also rests on writer policies on the box and on the
- * releasing code's output, and on endorsed releasing code that takes no
- * public selector parameters.
- *
- * TODO(L14b): until a pattern's reads carry the witness, a rule in this form
- * releases nothing a pattern computes, so every pattern room reports
- * `false`. Once they do, and once the conditions above can be checked, a seal
- * into a policy whose rules are not all witnessed should be refused rather
- * than warned about.
+ * The witness is necessary, not sufficient. A room's release also rests on
+ * writer policies on the box and on the releasing code's output, and on
+ * endorsed releasing code that takes no public selector parameters. Once
+ * those can be checked, a seal into a policy whose rules are not all
+ * witnessed should be refused rather than warned about.
  */
 export const releaseRequiresSealWitness = (
   template: PolicyTemplateV1,
@@ -830,6 +841,105 @@ const absentOrAnchor = (
 const anchorClause = (policy: CfcModulePolicyRefAtom): CfcConfClause => ({
   anyOf: [policy, cfcAtom.space(policy.subject as string)],
 });
+
+/** Whether `prefix` is `path` or one of its ancestors. */
+const isPathPrefix = (
+  prefix: readonly string[],
+  path: readonly string[],
+): boolean =>
+  prefix.length <= path.length &&
+  prefix.every((segment, index) => segment === path[index]);
+
+/** Whether `value` holds nothing: absent, or an empty record or list. */
+const holdsNothing = (value: unknown): boolean =>
+  value === undefined ||
+  (Array.isArray(value) && value.length === 0) ||
+  (isObjectNotArray(value) && !isPrimitiveCellLink(value) &&
+    Object.keys(value).length === 0);
+
+/**
+ * Writes a link to the box into the room's box cell, in the transaction that
+ * writes the entry. The transaction is the seal's, so the write is attributed
+ * to it, and the link is recorded as the one reference the value stored there
+ * holds (`CfcAssertedValueRoot.reference`), so the cell carries the seal's
+ * stamp: a reader that follows it to the box finds it witnessed like the box.
+ */
+const linkRoomToBox = (
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  binding: Cell<unknown>,
+  boxLink: NormalizedFullLink,
+  room: string,
+  governed: readonly NormalizedFullLink[],
+  reviewed: NormalizedFullLink,
+): void => {
+  const destination = resolveLink(
+    runtime,
+    tx,
+    binding.getAsNormalizedFullLink(),
+    "writeRedirect",
+  );
+  if (destination.space !== room) {
+    throw new Error(
+      "Custody seal links the box only from a cell in the room space",
+    );
+  }
+  // The seal writes under its own identity, which the box and the anchor
+  // admit, so the cell it links from is checked to be only that: not in a
+  // document the seal governs nor in the terms it reviewed, and holding this
+  // box's link already, or nothing — an empty default, as a room's `Default`
+  // leaves — in a document the seal did not write. A binding that leads
+  // anywhere else would have the seal write there on the member's behalf.
+  const sealWritten = (readStoredCfcMetadata(tx, {
+    space: destination.space,
+    id: destination.id,
+    scope: destination.scope,
+  })?.labelMap.entries ?? []).some((entry) =>
+    entry.path.length === 0 &&
+    (entry.label.integrity ?? []).some((atom) => deepEqual(atom, SEALED_BY))
+  );
+  const current = tx.readValueOrThrow(destination, {
+    meta: internalVerifierRead,
+  });
+  const currentLink = isPrimitiveCellLink(current) &&
+      !isWriteRedirectLink(current)
+    ? parseLink(current, { ...destination, path: [] })
+    : undefined;
+  const holdsThisBox = currentLink !== undefined &&
+    currentLink.id === boxLink.id && currentLink.space === boxLink.space &&
+    currentLink.path.length === 0;
+  if (
+    governed.some((link) =>
+      link.space === destination.space && link.id === destination.id
+    ) ||
+    (reviewed.space === destination.space && reviewed.id === destination.id &&
+      (isPathPrefix(reviewed.path, destination.path) ||
+        isPathPrefix(destination.path, reviewed.path))) ||
+    (!holdsThisBox && (!holdsNothing(current) || sealWritten))
+  ) {
+    throw new Error(
+      "Custody seal links the box only from a cell that holds nothing else",
+    );
+  }
+  runtime.getCellFromLink(destination, undefined, tx).set(
+    runtime.getCellFromLink({ ...boxLink, schema: undefined }, undefined, tx),
+  );
+  tx.recordCfcAssertedValueRoot(
+    {
+      space: destination.space,
+      id: destination.id,
+      scope: destination.scope,
+      path: [...destination.path],
+    },
+    runtimeWritePolicyAuthorization,
+    {
+      space: boxLink.space,
+      id: boxLink.id,
+      scope: boxLink.scope,
+      path: [],
+    },
+  );
+};
 
 /** The instance's box, in the room space. */
 const boxCell = (
@@ -1395,6 +1505,16 @@ const inspect = async (
       throw new Error("Custody terms must live in a space named by a DID");
     }
     policy = checkPolicy(requestedPolicy, room);
+    if (requestedRoom.box !== undefined) {
+      if (requestedRoom.box.runtime !== runtime) {
+        throw new Error("Custody seal handles must belong to the same runtime");
+      }
+      if (requestedRoom.box.getAsNormalizedFullLink().space !== room) {
+        throw new Error(
+          "Custody seal links the box only from a cell in the room space",
+        );
+      }
+    }
     ({ terms: rawTerms, seatLinks } = readTerms(
       runtime.getCellFromLink(termsLink, undefined, termsTx),
     ));
@@ -1618,7 +1738,7 @@ export async function commitCustodySeal(
     throw new Error(STALE_REVIEW);
   }
   const runtime = state.draft.runtime;
-  const { actor, policy, instance, entryKey } = state;
+  const { actor, policy, instance, entryKey, room } = state;
   signal?.throwIfAborted();
 
   // The anchor comes first, so a seal that cannot establish it has written
@@ -1759,6 +1879,17 @@ export async function commitCustodySeal(
         terms: canonicalJson(state.terms),
         stance: state.stance,
       });
+      if (state.requestedRoom.box !== undefined) {
+        linkRoomToBox(
+          runtime,
+          tx,
+          state.requestedRoom.box,
+          boxLink,
+          room,
+          [boxLink, anchorLink],
+          state.termsLink,
+        );
+      }
     },
     undefined,
     { signal },

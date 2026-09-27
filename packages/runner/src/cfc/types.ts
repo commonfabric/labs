@@ -743,16 +743,24 @@ export type PreparedDigestInput = {
    * keep its digest. Absent when empty, so a transaction that recorded none
    * keeps the established prepared-digest spelling.
    */
-  readonly assertedValueRoots?: readonly {
-    readonly address: CfcAddress;
-    readonly identity: ImplementationIdentity | undefined;
-  }[];
+  readonly assertedValueRoots?: readonly CfcAssertedValueRoot[];
 
   /**
    * List-coordinator containers whose membership preparation re-stamps
    * (`CfcTxState.structureContainers`). Absent when empty, like the roots.
    */
   readonly structureContainers?: readonly CfcAddress[];
+};
+
+/**
+ * A destination the runtime wrote a whole value to (`CfcTxState.assertedValueRoots`),
+ * with the implementation identity that made the write. `reference` names
+ * the document root a pointer the runtime stored at this path refers to.
+ */
+export type CfcAssertedValueRoot = {
+  readonly address: CfcAddress;
+  readonly identity: ImplementationIdentity | undefined;
+  readonly reference?: CfcAddress;
 };
 
 /**
@@ -993,10 +1001,12 @@ export type CfcTxState = {
   // `prepare.ts`). Recorded only under the runtime's authorization, with the
   // implementation identity that made the write, so a root stamps only for
   // the identity the flow join names.
-  assertedValueRoots: {
-    address: CfcAddress;
-    identity: ImplementationIdentity | undefined;
-  }[];
+  //
+  // A root recorded with a `reference` holds a pointer the runtime itself
+  // chose for the writer, as the custody seal does when it links a room to
+  // its box: that one pointer, at that one path, is part of the value the
+  // writer supplied.
+  assertedValueRoots: CfcAssertedValueRoot[];
   // Addresses whose invalidating writes scheduled this run (§8.9.2 trigger
   // reads): the decision to run *now* was influenced by their values, so
   // they join the flow-label derivation even when the run never re-reads
