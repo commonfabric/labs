@@ -2,11 +2,7 @@ import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { isUnsafeObjectKey } from "@commonfabric/utils/types";
 import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
 
-import {
-  codecOf,
-  NonterminalCodec,
-  NullLiveEnvironment,
-} from "@/codec-common";
+import { codecOf, NonterminalCodec, NullLiveEnvironment } from "@/codec-common";
 import type {
   FabricArrayPlus,
   FabricContainerValuePlus,
@@ -912,9 +908,7 @@ export class VisitInProgress<
         resultState,
         FABRIC_INSTANCE_MAP_ENVIRONMENT,
       ) as FabricInstancePlus<ResultType>;
-      return this.#freezeMappedContainers
-        ? Object.freeze(result)
-        : result;
+      return this.#freezeMappedContainers ? Object.freeze(result) : result;
     } catch (cause) {
       throw new Error(
         debugStr`Codec of $quote${originalInstance} accepted but then failed to decode replacement state $quote${resultState}`,
