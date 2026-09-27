@@ -96,6 +96,7 @@ import {
 import {
   getTransactionReadActivities,
   getTransactionWriteAttempts,
+  getTransactionWrittenSpaces,
 } from "../storage/transaction-inspection.ts";
 import { atomPropagationClass } from "./atom-classes.ts";
 import {
@@ -2800,7 +2801,6 @@ const valueWriteTargets = (
       metaOnlyByPath: Map<string, boolean>;
     }
   >();
-  const log = tx.getReactivityLog?.();
   const forgedSystemDocuments = new Set<string>();
   for (const recorded of tx.getCfcState().unprivilegedSystemWrites ?? []) {
     // Document ids can contain slashes; each separator is a possible boundary.
@@ -2812,12 +2812,7 @@ const valueWriteTargets = (
       forgedSystemDocuments.add(recorded.slice(0, offset));
     }
   }
-  const seenWriteSpaces = new Set<MemorySpace>(
-    [...(log?.writes ?? []), ...(log?.attemptedWrites ?? [])].map((write) =>
-      write.space
-    ),
-  );
-  for (const space of seenWriteSpaces) {
+  for (const space of getTransactionWrittenSpaces(tx)) {
     for (const write of tx.getWriteDetails?.(space) ?? []) {
       const rawPath = write.address.path;
       const writePath = canonicalizeLogicalPath(rawPath);
@@ -4119,20 +4114,20 @@ export const flowLabelWorkExists = (
   // idiom. The raw-write surface itself is the S18 chokepoint seam, not a
   // relevance question.
   const selfMintedDocs = new Set<string>();
-  const log = tx.getReactivityLog?.();
-  const writeSpaces = new Set<MemorySpace>(
-    [...(log?.writes ?? []), ...(log?.attemptedWrites ?? [])].map((write) =>
-      write.space
-    ),
-  );
-  for (const space of writeSpaces) {
+  for (const space of getTransactionWrittenSpaces(tx)) {
     for (const write of tx.getWriteDetails?.(space) ?? []) {
       // Either a direct `["cfc"]` write or a whole-envelope root write whose
-      // value embeds a `cfc` record (the raw-seed idiom).
+      // value embeds a `cfc` record (the raw-seed idiom). A write whose final
+      // value equals its value before the transaction minted nothing, so the
+      // metadata it touched is still the pre-existing kind. That includes one
+      // that changed only whether an `undefined` slot is present: such a slot
+      // holds no label, and counting the document self-minted would only hide
+      // the entries it already had.
       if (
-        write.address.path[0] === "cfc" ||
-        (write.address.path.length === 0 && isObjectOrArray(write.value) &&
-          isObjectOrArray((write.value as { cfc?: unknown }).cfc))
+        (write.address.path[0] === "cfc" ||
+          (write.address.path.length === 0 && isObjectOrArray(write.value) &&
+            isObjectOrArray((write.value as { cfc?: unknown }).cfc))) &&
+        !fabricAwareEqual(write.value, write.previousValue)
       ) {
         selfMintedDocs.add(targetKey({
           space: write.address.space,

@@ -5,6 +5,7 @@ import type { FabricPlainObject } from "@commonfabric/data-model";
 import { entityRefFromString } from "@commonfabric/data-model/cell-rep";
 import { navigate } from "@commonfabric/navigation";
 import { slugIdForSpace } from "@commonfabric/runner/slugs";
+import type { SpaceHostRegistration } from "@commonfabric/runner/space-host";
 import { NameSchema } from "@commonfabric/runner/schemas";
 import {
   attachOptionsFrom,
@@ -796,6 +797,15 @@ export class RuntimeInternals extends EventTarget {
   async registerSpaceHost(space: DID, host: string): Promise<boolean> {
     this.#check();
     return await this.#client.registerSpaceHost(space, host);
+  }
+
+  /** See RuntimeClient.registerSpaceHostDetailed. */
+  async registerSpaceHostDetailed(
+    space: DID,
+    host: string,
+  ): Promise<SpaceHostRegistration> {
+    this.#check();
+    return await this.#client.registerSpaceHostDetailed(space, host);
   }
 
   async idle(): Promise<void> {

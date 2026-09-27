@@ -176,6 +176,7 @@ import {
   getTransactionReadActivities,
   getTransactionWriteAttempts,
   getTransactionWriteDetails,
+  getTransactionWrittenSpaces,
 } from "./transaction-inspection.ts";
 
 /**
@@ -2430,10 +2431,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     );
 
     const writes: AttemptedWrite[] = [];
-    const seenWriteSpaces = new Set<MemorySpace>(
-      (log.writes ?? []).map((write) => write.space),
-    );
-    for (const space of seenWriteSpaces) {
+    for (const space of getTransactionWrittenSpaces(this)) {
       for (const write of this.getWriteDetails(space)) {
         writes.push(deepFreeze({
           ...write.address,
@@ -2591,13 +2589,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    */
   #materializeReferencedSchemaDocuments(): void {
     if (!getContentAddressedSchemasConfig()) return;
-    const log = this.getReactivityLog();
-    const spaces = new Set(
-      [...(log.writes ?? []), ...(log.attemptedWrites ?? [])].map((write) =>
-        write.space
-      ),
-    );
-    for (const space of spaces) {
+    for (const space of getTransactionWrittenSpaces(this)) {
       for (const detail of this.getWriteDetails(space)) {
         this.#stageSchemaDocsForValue(space, detail.address, detail.value);
       }

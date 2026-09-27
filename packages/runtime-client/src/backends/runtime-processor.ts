@@ -235,6 +235,7 @@ import {
   type PieceUpdateSourceRequest,
   type PieceUpdateSourceResponse,
   type RecreateSpaceRootPatternRequest,
+  type RegisterSpaceHostDetailedRequest,
   type RegisterSpaceHostRequest,
   RequestType,
   type ResolveEventAttentionRequest,
@@ -261,6 +262,7 @@ import {
   type SnapshotSharePreview,
   type SpaceAclResponse,
   type SpaceGetAclRequest,
+  type SpaceHostRegistrationResponse,
   type SpaceRemoveAclEntryRequest,
   type SpaceResponse,
   type SpaceSetAclEntryRequest,
@@ -2983,6 +2985,17 @@ export class RuntimeProcessor {
     };
   }
 
+  handleRegisterSpaceHostDetailed(
+    request: RegisterSpaceHostDetailedRequest,
+  ): SpaceHostRegistrationResponse {
+    return {
+      registration: this.#runtime.registerSpaceHostDetailed(
+        request.space,
+        request.host,
+      ),
+    };
+  }
+
   async handleResolveSpaceName(
     request: ResolveSpaceNameRequest,
   ): Promise<SpaceResponse> {
@@ -3367,6 +3380,8 @@ export class RuntimeProcessor {
         return await this.handleResolveSpaceName(request);
       case RequestType.RegisterSpaceHost:
         return this.handleRegisterSpaceHost(request);
+      case RequestType.RegisterSpaceHostDetailed:
+        return this.handleRegisterSpaceHostDetailed(request);
       case RequestType.GetGraphSnapshot:
         return this.getGraphSnapshot(request);
       case RequestType.GetLoggerCounts:

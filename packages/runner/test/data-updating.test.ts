@@ -1,9 +1,12 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { spy } from "@std/testing/mock";
 
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { JSONSchema } from "../src/builder/types.ts";
@@ -33,6 +36,57 @@ import { toURI } from "../src/uri-utils.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
+
+/**
+ * Commits a map of `size` entries, each holding a cell of its own, rewrites it
+ * whole with one entry changed, and returns how many times the rewrite's
+ * `set()` enumerated the keys of a link envelope, along with the changed entry
+ * as read back after the rewrite commits.
+ *
+ * In the legacy link representation, recognizing a value as a link and
+ * reading the link out of it each run `Object.keys()` on the `{ "/": ... }`
+ * envelope, so the count is how many times the walk asked a link what it is.
+ */
+const linkRecognitionsOfOneEntryRewrite = async (
+  runtime: Runtime,
+  size: number,
+): Promise<{ recognitions: number; changed: unknown }> => {
+  const people = Array.from(
+    { length: size },
+    (_, index) => runtime.getCell(space, `rewrite of ${size}: person ${index}`),
+  );
+  const entries = (changed: string) =>
+    Object.fromEntries(people.map((person, index) => [
+      `key-${index}`,
+      { person, fallbackName: index === 0 ? changed : `name-${index}` },
+    ]));
+  const map = runtime.getCell<Record<string, unknown>>(
+    space,
+    `rewrite of ${size}`,
+  );
+
+  const seed = runtime.edit();
+  map.withTx(seed).set(entries("before"));
+  expect((await seed.commit()).error).toBeUndefined();
+
+  const rewritten = entries("after");
+  const tx = runtime.edit();
+  let recognitions: number;
+  {
+    using keys = spy(Object, "keys");
+    map.withTx(tx).set(rewritten);
+    recognitions =
+      keys.calls.filter(({ args: [value] }) =>
+        isObjectOrArray(value) && Object.hasOwn(value, "/")
+      ).length;
+  }
+  expect((await tx.commit()).error).toBeUndefined();
+
+  return {
+    recognitions,
+    changed: map.key("key-0").key("fallbackName").get(),
+  };
+};
 
 describe("data-updating", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -905,6 +959,57 @@ describe("data-updating", () => {
         reference: { name: "Referenced Cell", value: 100 },
         metadata: { description: "Contains a nested link" },
       });
+    });
+
+    it("recognizes each link of a rewritten map of cells a fixed number of times, at 200 entries as at 20", async () => {
+      // Every check the walk makes about whether a value is a link, or where
+      // it points, reads a parse made once per call, so each entry costs the
+      // same small number of recognitions however large the map. The equal
+      // per-entry counts say the cost does not grow with the map; the bound
+      // says it stays this small, which a check that recognized and parsed
+      // again on its own would break. The lower bound fails the case if the
+      // links stop being envelopes that `Object.keys()` enumerates, rather
+      // than letting it pass on a count of zero.
+      const short = await linkRecognitionsOfOneEntryRewrite(runtime, 20);
+      const long = await linkRecognitionsOfOneEntryRewrite(runtime, 200);
+
+      expect(short.changed).toBe("after");
+      expect(long.changed).toBe("after");
+      expect(long.recognitions / 200).toBe(short.recognitions / 20);
+      expect(long.recognitions / 200).toBeGreaterThan(0);
+      expect(long.recognitions / 200).toBeLessThanOrEqual(17);
+    });
+
+    it("replaces a stored link whose path does not parse with a write redirect", () => {
+      const aliased = runtime.getCell<{ v: number }>(
+        space,
+        "the cell a write redirect names",
+        undefined,
+        tx,
+      );
+      aliased.set({ v: 1 });
+      const slot = runtime.getCell<Record<string, unknown>>(
+        space,
+        "a slot holding a link whose path does not parse",
+        undefined,
+        tx,
+      );
+      tx.writeValueOrThrow(slot.getAsNormalizedFullLink(), {
+        x: linkRefFrom({
+          id: aliased.getAsNormalizedFullLink().id,
+          path: [null],
+        }),
+      });
+
+      const changes = normalizeAndDiff(
+        runtime,
+        tx,
+        slot.key("x").getAsNormalizedFullLink(),
+        aliased.getAsWriteRedirectLink(),
+      );
+
+      expect(changes).toHaveLength(1);
+      expect(parseLink(changes[0].value)?.overwrite).toBe("redirect");
     });
   });
 
