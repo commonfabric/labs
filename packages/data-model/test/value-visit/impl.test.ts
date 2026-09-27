@@ -61,7 +61,7 @@ describe("value-visit/impl", () => {
         "visitingFabricArrayElement",
         "value",
         "primitive",
-        "visitedFabricArrayElement",
+        "mappedFabricArrayElement",
       ]);
     });
   });
@@ -99,6 +99,10 @@ describe("value-visit/impl", () => {
       class FirstNumber extends DefaultValueVisitor<never, number> {
         override visitNumber(value: number): VisitResult<never, number> {
           return mainResult(value);
+        }
+
+        override visitUnhandledValue(): VisitResult<never, number> {
+          return undefined;
         }
       }
 
