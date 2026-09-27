@@ -40,9 +40,9 @@ export type MapToForm<ResultType> = {
  * A `recurse` form. This is returned by visitor methods which visit containers.
  * This tells the visitor engine that it should recursively visit the contents
  * of the container, such that each visited item is known by the engine to be
- * contained by the container which is being recursed into. The two `boolean`
- * properties indicate whether the container's keys and/or values are to be
- * recursed over. `doKeys` is ignored in a context where there is no key.
+ * contained by the container which is being recursed into. The container's
+ * values are always visited. `doKeys` indicates whether its keys are visited
+ * too, and is ignored in a context where there is no key.
  *
  * If a visitor returns an instance of this type which (implicitly) references a
  * non-container, that situation is detected by the visitor engine at runtime
@@ -51,15 +51,10 @@ export type MapToForm<ResultType> = {
  * **Note:** The visit calls per-mapping are specifically in key-then-value
  * order, and if the result of visiting a key is a `mainResult`, then that ends
  * the iteration before the corresponding value is visited.
- *
- * **Note:** It is technically possible to define a no-op instance of this type,
- * which is the equivalent to returning `undefined`. This is pointless, but it
- * is not prevented.
  */
 export type RecurseForm = {
   readonly type: "recurse";
   readonly doKeys: boolean;
-  readonly doValues: boolean;
 };
 
 /**
@@ -82,18 +77,7 @@ export type ReplaceForm<PlusType> = {
  * the visitor engine to "do" something.
  */
 export const DO_RECURSE_KEYS_VALUES: RecurseForm = Object.freeze(
-  { type: "recurse", doKeys: true, doValues: true } as const,
-);
-
-/**
- * Standard instance of `RecurseForm` for recursing over keys only. This is only
- * meaningful for recursing over mappings.
- *
- * The `DO_` prefix is intended to make it clear at use sites that it is telling
- * the visitor engine to "do" something.
- */
-export const DO_RECURSE_KEYS: RecurseForm = Object.freeze(
-  { type: "recurse", doKeys: true, doValues: false } as const,
+  { type: "recurse", doKeys: true } as const,
 );
 
 /**
@@ -104,7 +88,7 @@ export const DO_RECURSE_KEYS: RecurseForm = Object.freeze(
  * the visitor engine to "do" something.
  */
 export const DO_RECURSE_VALUES: RecurseForm = Object.freeze(
-  { type: "recurse", doKeys: false, doValues: true } as const,
+  { type: "recurse", doKeys: false } as const,
 );
 
 //

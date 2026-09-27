@@ -4,8 +4,10 @@ import { expect } from "@std/expect";
 import {
   DefaultValueVisitor,
   makeMapValueFunction,
+  makeMutableMapValueFunction,
   makeVisitValueFunction,
   mapValue,
+  mutableMapValue,
   type VisitResult,
   visitValue,
 } from "@/value-visit";
@@ -41,6 +43,34 @@ describe("value-visit/impl", () => {
       const rec = new Recorder();
       rec.onPrimitive = () => mapTo("one");
       const map = makeMapValueFunction(rec);
+
+      expect(map([1])).toEqual(["one"]);
+      expect(map({ a: 2 })).toEqual({ a: "one" });
+    });
+  });
+
+  describe("mutableMapValue()", () => {
+    it("maps the value with the given visitor", () => {
+      const rec = new Recorder();
+      rec.onPrimitive = () => mapTo("one");
+
+      expect(mutableMapValue([1], rec)).toEqual(["one"]);
+      expect(rec.names).toEqual([
+        "value",
+        "array",
+        "visitingFabricArrayElement",
+        "value",
+        "primitive",
+        "visitedFabricArrayElement",
+      ]);
+    });
+  });
+
+  describe("makeMutableMapValueFunction()", () => {
+    it("returns a function that maps with the bound visitor", () => {
+      const rec = new Recorder();
+      rec.onPrimitive = () => mapTo("one");
+      const map = makeMutableMapValueFunction(rec);
 
       expect(map([1])).toEqual(["one"]);
       expect(map({ a: 2 })).toEqual({ a: "one" });
