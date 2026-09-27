@@ -445,10 +445,6 @@ export class VisitInProgress<
     const codec = codecOf(instance);
     const state = codec.encode(instance, FABRIC_INSTANCE_MAP_ENVIRONMENT);
 
-    if (this.#freezeMappedContainers) {
-      Object.freeze(state);
-    }
-
     this.#stack.push(instance);
 
     try {

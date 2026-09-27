@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue, PrimitiveValueTag } from "@";
+import { UnknownValue } from "@/codec-common";
 import { CODEC, type NonterminalCodec } from "@/codec-interface/interface.ts";
 import { deepFreeze } from "@/deep-freeze.ts";
 import { FabricError, FabricLink, FabricMap } from "@/fabric-instances";
@@ -502,15 +503,15 @@ describe("VisitInProgress", () => {
 
       describe("`FabricInstance` recursion", () => {
         // `FabricLink` and `FabricError` are the fixtures because their
-        // codecs are real. A link's state is its payload, the very object,
+        // codecs are real. A link's state is its `.payload`, the very object,
         // which makes the sequence easy to state; an error's state is built
         // fresh on each encode and can hold a `cause`, which is what a cycle
         // through an instance needs.
 
         it("reports the instance and its state to `visitingFabricInstanceState()`, then visits the state under the instance", () => {
           const rec = new Recorder();
-          const payload = { id: "fid1:abc" };
-          const link = new FabricLink(payload);
+          const link = new FabricLink({ id: "fid1:abc" });
+          const payload = link.payload;
 
           expect(visit(link, rec)).toBeUndefined();
           expect(rec.events).toEqual([
@@ -587,8 +588,8 @@ describe("VisitInProgress", () => {
         it("ends the visit from `visitingFabricInstanceState()`, before the state is visited", () => {
           const rec = new Recorder();
           rec.onVisitingFabricInstanceState = () => mainResult("before");
-          const payload = { id: "fid1:abc" };
-          const link = new FabricLink(payload);
+          const link = new FabricLink({ id: "fid1:abc" });
+          const payload = link.payload;
 
           expect(visit([link, 1], rec)).toBe("before");
           expect(rec.events.map((e) => e[1])).not.toContain(payload);
@@ -1514,6 +1515,20 @@ describe("VisitInProgress", () => {
             expect((result as FabricError).message).toBe("boom");
             expect(Object.isFrozen(result)).toBe(true);
             expect(Object.isFrozen(original)).toBe(false);
+          });
+
+          it("leaves unfrozen the external state an instance encodes as itself", () => {
+            // An `UnknownValue`'s state is an external reference, which its
+            // codec returns as itself, unfrozen.
+            const state = { a: 1 };
+            const original = new UnknownValue("Test@1", state);
+            const result = map(original, new Recorder()) as UnknownValue;
+
+            expect(result).not.toBe(original);
+            expect(result.state).not.toBe(state);
+            expect(result.state).toEqual(state);
+            expect(Object.isFrozen(result.state)).toBe(true);
+            expect(Object.isFrozen(state)).toBe(false);
           });
         });
 
