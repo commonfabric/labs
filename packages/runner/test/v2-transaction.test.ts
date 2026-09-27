@@ -2,8 +2,9 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { isDeepFrozen } from "@commonfabric/data-model";
+import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import type { URI } from "../src/storage/interface.ts";
+import type { ICommitNotification, URI } from "../src/storage/interface.ts";
 import {
   internalVerifierRead,
   isInternalVerifierRead,
@@ -60,6 +61,69 @@ const wholeListRead = async (
 
     expect(read.ok).toBeTruthy();
     return { value: read.ok!.value, descriptors };
+  } finally {
+    await storage.close();
+  }
+};
+
+/** A keyed map of `length` records, the shape a directory or an index has. */
+const keyedMap = (length: number) =>
+  Object.fromEntries(
+    Array.from({ length }, (_, index) => [
+      `key-${index}`,
+      { name: `entry-${index}`, nested: { id: `id-${index}` } },
+    ]),
+  );
+
+/**
+ * Commits a change to one entry of a document holding a keyed map of `length`
+ * records, and reports how many containers were hashed from the commit through
+ * the replica's integration of the server's echo, together with the paths the
+ * commit's notification named.
+ *
+ * Every comparison on that path asks whether two versions of the document
+ * differ. A content hash answers by feeding the hasher every container in a
+ * version, so a count that tracks the length of the map is one of those
+ * comparisons hashing the whole document.
+ */
+const oneEntryCommit = async (
+  length: number,
+): Promise<{ containersHashed: number; changedPaths: string[][] }> => {
+  const storage = StorageManager.emulate({ as: signer });
+  const commits: ICommitNotification[] = [];
+  // A subscriber is what makes the replica compute the change a commit makes,
+  // for its own commit and again for the echo.
+  storage.subscribe({
+    next(notification) {
+      if (notification.type === "commit") commits.push(notification);
+      return undefined;
+    },
+  });
+  try {
+    const id: URI = `of:v2-transaction-one-entry-${length}`;
+    const seed = storage.edit();
+    expect(
+      seed.write({ space, id, type, path: [] }, { value: keyedMap(length) }).ok,
+    ).toBeTruthy();
+    expect((await seed.commit()).ok).toBeTruthy();
+    await storage.pullOpenSpacesToHead();
+
+    const before = getContainersHashedForTestingOnly();
+    const tx = storage.edit();
+    expect(
+      tx.write({ space, id, type, path: ["value", "key-0", "name"] }, "edited")
+        .ok,
+    ).toBeTruthy();
+    expect((await tx.commit()).ok).toBeTruthy();
+    await storage.pullOpenSpacesToHead();
+    const containersHashed = getContainersHashedForTestingOnly() - before;
+
+    return {
+      containersHashed,
+      changedPaths: [...commits.at(-1)!.changes].map((change) => [
+        ...change.address.path,
+      ]),
+    };
   } finally {
     await storage.close();
   }
@@ -203,6 +267,28 @@ describe("v2-transaction", () => {
       const { value } = await wholeListRead(20);
 
       expect(isDeepFrozen(value)).toBe(true);
+    });
+  });
+
+  describe("commit()", () => {
+    it("hashes as many containers committing one entry of a long map as of a short one", async () => {
+      const short = await oneEntryCommit(20);
+      const long = await oneEntryCommit(2_000);
+
+      // Both bounds are needed, as for the read above: the equality alone
+      // would hold for two counts that each grew with their own map, and the
+      // bound alone for a count that grew slowly. Hashing the short document
+      // whole once already feeds the hasher 42 containers.
+      expect(long.containersHashed).toBe(short.containersHashed);
+      expect(long.containersHashed).toBeLessThan(20);
+    });
+
+    it("notifies the one path the commit changed", async () => {
+      // What the count above must not be bought with: the notification is
+      // what reactivity reads, and it has to name the change and only that.
+      const { changedPaths } = await oneEntryCommit(2_000);
+
+      expect(changedPaths).toEqual([["value", "key-0", "name"]]);
     });
   });
 });

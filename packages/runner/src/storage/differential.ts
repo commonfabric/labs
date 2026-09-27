@@ -3,6 +3,7 @@ import {
   isFabricObjectOrArray,
   isFabricSpecialObject,
   valueEqual,
+  valueEqualByWalk,
 } from "@commonfabric/data-model";
 import {
   resolveScopeKey,
@@ -93,6 +94,26 @@ const pushChangedPath = (
   paths.push(currentPath.slice(0, depth));
 };
 
+/**
+ * How deep `collectChangedPaths()` descends before it asks `valueEqual()`
+ * whether a pair differs at all. Above this depth a pair is only walked, and a
+ * pair that is equal contributes no path by being walked. Below it, a cyclic
+ * pair is what the question is for: walking two distinct cyclic graphs never
+ * bottoms out, and asking stops the descent where the graphs agree.
+ */
+const MAX_UNCHECKED_DEPTH = 256;
+
+/**
+ * Helper for {@link addStateChange}, which walks `before` and `after` in step
+ * and records the path of every position where they differ.
+ *
+ * The walk is the whole of the comparison: a pair both values share is passed
+ * over by identity, and a pair holding the same content is walked without
+ * recording anything. So comparing a document with a copy-on-write revision of
+ * itself costs the edited spine, and comparing it with a separately decoded
+ * copy costs one walk of the whole, where asking `valueEqual()` about each
+ * container on the way down would hash the document again at every level.
+ */
 const collectChangedPaths = (
   before: FabricValue,
   after: FabricValue,
@@ -110,15 +131,11 @@ const collectChangedPaths = (
   }
 
   if (isFabricObjectOrArray(before) && isFabricObjectOrArray(after)) {
-    if (valueEqual(before, after)) {
-      return;
-    }
-
     // A `FabricSpecialObject` keeps its state in private fields, so the
     // key-walk below sees zero own-keys and would wrongly report "no change"
-    // even though `valueEqual` above already established they differ. Record a
-    // change at this path and don't decompose. (CT-1770: a `FabricBytes` value
-    // updated in place otherwise never reaches reactive consumers.)
+    // for two that differ. Compare it by content, record a change at this
+    // path when it differs, and don't decompose. (CT-1770: a `FabricBytes`
+    // value updated in place otherwise never reaches reactive consumers.)
     //
     // The `FabricPrimitive` vs `FabricInstance` distinction matters here even
     // though both are handled the same way: a `FabricPrimitive` genuinely IS an
@@ -137,7 +154,13 @@ const collectChangedPaths = (
     if (
       isFabricSpecialObject(before) || isFabricSpecialObject(after)
     ) {
-      pushChangedPath(paths, currentPath, depth);
+      if (!valueEqual(before, after)) {
+        pushChangedPath(paths, currentPath, depth);
+      }
+      return;
+    }
+
+    if (depth >= MAX_UNCHECKED_DEPTH && valueEqual(before, after)) {
       return;
     }
 
@@ -253,7 +276,11 @@ const addStateChange = (
   before: State["is"] | undefined,
   after: State["is"] | undefined,
 ): void => {
-  if (valueEqual(before, after)) {
+  // By walk rather than by hash: `after` is usually either a revision sharing
+  // all but a spine with `before`, or a freshly decoded copy whose hash no
+  // cache holds. A cyclic pair is handed to `valueEqual()` whole, which is
+  // what keeps the walk below from descending one forever.
+  if (valueEqualByWalk(before, after)) {
     return;
   }
 

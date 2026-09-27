@@ -5,6 +5,7 @@ import {
   isDeepFrozen,
   isFabricPlainContainer,
   valueEqual,
+  valueEqualByWalk,
 } from "@commonfabric/data-model";
 import { hasDataUriScheme } from "@commonfabric/data-model/codec-data-uri";
 import {
@@ -1422,10 +1423,13 @@ export class V2StorageTransaction implements IStorageTransaction {
       // full-cover path in buildPatchOperation). An unconfirmed schema
       // document steps out to the re-delivery set instead — as a
       // whole-doc set: content addressing makes any visible copy the
-      // whole document.
+      // whole document. Writes reach the working root by copy-on-write from
+      // `doc.initial`, so the two share every subtree no write replaced, and
+      // comparing them by walk costs the written spine rather than a hash of
+      // the whole document.
       if (
         !this.#authoritativeWrites &&
-        valueEqual(doc.current.value, doc.initial.value)
+        valueEqualByWalk(doc.current.value, doc.initial.value)
       ) {
         if (
           this.#mustDeliverSchemaDoc(space, id) &&
