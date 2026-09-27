@@ -40,6 +40,7 @@ import type {
   WriteStackTraceEntry,
   WriteStackTraceMatcher,
 } from "@commonfabric/runner/shared";
+import type { SpaceHostRegistration } from "@commonfabric/runner/space-host";
 export type { JSONObject, JSONSchema, JSONValue, Program };
 
 export type { CfcLabelView };
@@ -267,6 +268,12 @@ export enum RequestType {
    * error rather than a `false`.
    */
   RegisterSpaceHost = "runtime:registerSpaceHost",
+
+  /**
+   * Routes one space's storage to a named host as `RegisterSpaceHost` does,
+   * and returns the reason along with a refusal.
+   */
+  RegisterSpaceHostDetailed = "runtime:registerSpaceHostDetailed",
 
   /** Waits for the pattern manager's compile-cache writes to land. */
   FlushCompileCacheWrites = "runtime:flushCompileCacheWrites",
@@ -1249,6 +1256,14 @@ export type CustodySealPrepareRequest = BaseRequest & {
 
   /** The actor's source policy, in the actor's home space. */
   allowedSources: CellRef;
+
+  /**
+   * The room's cell that receives the link to the instance's box, in the
+   * room space. The seal writes the link itself, in the transaction that
+   * writes the entry, so the room's release witness covers which box the
+   * room reads.
+   */
+  box?: CellRef;
 };
 
 /** A principal the room space's access list lets read the room. */
@@ -1691,6 +1706,25 @@ export type ResolveSpaceNameRequest = BaseRequest & {
  */
 export type RegisterSpaceHostRequest = BaseRequest & {
   type: RequestType.RegisterSpaceHost;
+
+  /**
+   * The space to route.
+   */
+  space: DID;
+
+  /**
+   * The origin its storage should resolve against.
+   */
+  host: string;
+};
+
+/**
+ * Record a host hint for a space under the rules and the ordering contract of
+ * {@link RegisterSpaceHostRequest}. The worker returns the registration, which
+ * carries the reason for a refusal.
+ */
+export type RegisterSpaceHostDetailedRequest = BaseRequest & {
+  type: RequestType.RegisterSpaceHostDetailed;
 
   /**
    * The space to route.
@@ -3092,6 +3126,7 @@ export type IPCClientRequest =
   | RuntimeSyncedRequest
   | ResolveSpaceNameRequest
   | RegisterSpaceHostRequest
+  | RegisterSpaceHostDetailedRequest
   | VDomMountRequest
   | VDomUnmountRequest
   | DetectNonIdempotentRequest
@@ -3164,6 +3199,14 @@ export type BooleanResponse = {
    * The verdict.
    */
   value: boolean;
+};
+
+/** The outcome of a space host registration. */
+export type SpaceHostRegistrationResponse = {
+  /**
+   * Whether the hint was accepted, and the reason when it was not.
+   */
+  registration: SpaceHostRegistration;
 };
 
 /**
@@ -3685,6 +3728,7 @@ export type RemoteResponse =
   | EmptyResponse
   | NullResponse
   | BooleanResponse
+  | SpaceHostRegistrationResponse
   | CellValueResponse
   | CellGetResponse
   | CellResponse
@@ -3985,6 +4029,10 @@ export type Commands = {
   [RequestType.RegisterSpaceHost]: {
     request: RegisterSpaceHostRequest;
     response: BooleanResponse;
+  };
+  [RequestType.RegisterSpaceHostDetailed]: {
+    request: RegisterSpaceHostDetailedRequest;
+    response: SpaceHostRegistrationResponse;
   };
   [RequestType.PieceGet]: {
     request: PieceGetRequest;

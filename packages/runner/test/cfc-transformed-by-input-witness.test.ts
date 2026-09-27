@@ -777,6 +777,8 @@ describe("TransformedBy input witnesses", () => {
         write?: readonly string[];
         authorized?: boolean;
         recordedBy?: ImplementationIdentity;
+        /** A path recorded as holding a reference the runtime stored there. */
+        referenced?: { slot: readonly string[]; entity: string };
       } = {},
     ): Promise<void> => {
       const tx = runtime.edit();
@@ -789,6 +791,19 @@ describe("TransformedBy input witnesses", () => {
           ? undefined
           : runtimeWritePolicyAuthorization,
       );
+      if (options.referenced !== undefined) {
+        tx.recordCfcAssertedValueRoot(
+          { space, id, scope: "space", path: [...options.referenced.slot] },
+          runtimeWritePolicyAuthorization,
+          {
+            space,
+            scope: "space",
+            id: runtime.getCell(space, options.referenced.entity, undefined, tx)
+              .getAsNormalizedFullLink().id,
+            path: [],
+          },
+        );
+      }
       setCfcImplementationIdentity(tx, COMMIT);
       tx.writeOrThrow(
         {
@@ -867,6 +882,45 @@ describe("TransformedBy input witnesses", () => {
           tx.prepareCfc();
           expect((await tx.commit()).error).toBeUndefined();
         }),
+      ).toBe(false);
+    });
+
+    // A reference planted beside the votes, which a slot record below may
+    // claim as the one the runtime stored there.
+    const plantReference = async (runtime: Runtime): Promise<void> => {
+      const tx = runtime.edit();
+      setCfcImplementationIdentity(tx, ATTACKER);
+      runtime.getCell(space, "committed", undefined, tx).key(
+        "ref" as never,
+      ).set(runtime.getCell(space, "bob-note", undefined, tx) as never);
+      tx.prepareCfc();
+      expect((await tx.commit()).error).toBeUndefined();
+    };
+
+    it("stamps a destination holding the reference the runtime recorded at its path", async () => {
+      expect(
+        await released(
+          { referenced: { slot: ["ref"], entity: "bob-note" } },
+          plantReference,
+        ),
+      ).toBe(true);
+    });
+
+    it("drops a destination whose path holds a reference other than the one recorded there", async () => {
+      expect(
+        await released(
+          { referenced: { slot: ["ref"], entity: "alice-note" } },
+          plantReference,
+        ),
+      ).toBe(false);
+    });
+
+    it("drops a destination whose reference sits at a path with no reference recorded", async () => {
+      expect(
+        await released(
+          { referenced: { slot: ["other"], entity: "bob-note" } },
+          plantReference,
+        ),
       ).toBe(false);
     });
 

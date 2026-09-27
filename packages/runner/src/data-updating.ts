@@ -7,7 +7,6 @@ import {
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import {
   assertValidFabricValueLayer,
-  cloneIfNecessary,
   debugStr,
   fabricFromConvertibleJsValue,
   type FabricPlainObject,
@@ -60,8 +59,6 @@ import { createRef } from "./create-ref.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
 import { resolveLink } from "./link-resolution.ts";
 import {
-  areLinksSame,
-  areMaybeLinkAndNormalizedLinkSame,
   areNormalizedLinksSame,
   createSigilLinkFromParsedLink,
   declareStreamSchema,
@@ -71,6 +68,7 @@ import {
   isWriteRedirectLink,
   type NormalizedFullLink,
   parseLink,
+  type PrimitiveCellLink,
   toMemorySpaceAddress,
 } from "./link-utils.ts";
 import {
@@ -793,7 +791,7 @@ function scopedRedirectChanges(
   context: unknown,
   options: DiffAndUpdateOptions | undefined,
   state: DiffWalkState,
-  currentValue: unknown,
+  currentValue: FabricValue,
 ): ChangeSet {
   const scopedLink: NormalizedFullLink = { ...link, scope };
   const viaUser = getServerExecutionConfig() && scope === "session" &&
@@ -1058,7 +1056,7 @@ export function normalizeAndDiff(
   context?: unknown,
   options?: DiffAndUpdateOptions,
   state: DiffWalkState = { seen: new Map() },
-  precomputedCurrent: unknown = NO_PRECOMPUTED,
+  precomputedCurrent: FabricValue | typeof NO_PRECOMPUTED = NO_PRECOMPUTED,
   // Whether the PARENT object's schema lists this slot in `required`
   // (threaded one hop by the object branch below; undefined = unknown).
   // Consumed by the scope-isolation warn: a missing cell only voids the
@@ -1468,6 +1466,13 @@ export function normalizeAndDiff(
     }
   }
 
+  // The incoming value's link, parsed once for every check below that asks
+  // whether the value is a link or where it points, and `undefined` where it
+  // is not a sigil link.
+  const newValueLink = isPrimitiveCellLink(newValue)
+    ? parseLink(newValue, link)
+    : undefined;
+
   // Check for links that are data: URIs and inline them, by calling
   // normalizeAndDiff on the contents of the link. This re-entry REPLACES the
   // value (the link's contents, not the link), so anchoring eligibility
@@ -1478,10 +1483,7 @@ export function normalizeAndDiff(
   // The re-entry hands on what `findAndInlineDataUriLinks` produced, so the
   // check accepts exactly the media type that call inlines: this codec's
   // own. A `data:` URI of any other media type stores as an ordinary link.
-  const newValueLinkId = isCellLink(newValue)
-    ? parseLink(newValue, link).id
-    : undefined;
-  if (newValueLinkId !== undefined && isFabricDataUri(newValueLinkId)) {
+  if (newValueLink !== undefined && isFabricDataUri(newValueLink.id)) {
     return normalizeAndDiff(
       runtime,
       tx,
@@ -1494,7 +1496,9 @@ export function normalizeAndDiff(
   }
 
   // If we're about to create a reference to ourselves, no-op
-  if (areMaybeLinkAndNormalizedLinkSame(newValue, link, link)) {
+  if (
+    newValueLink !== undefined && areNormalizedLinksSame(link, newValueLink)
+  ) {
     diffLogger.debug(
       "diff",
       () =>
@@ -1515,23 +1519,31 @@ export function normalizeAndDiff(
     })
     : precomputedCurrent;
 
+  // Whether the stored value is a link, asked once. Where it points is parsed
+  // only by a check that needs to know: a write redirect replaces a stored
+  // link without reading its target, even one whose path does not parse. The
+  // casts below lean on this answer, which the type of the reassignable
+  // `currentValue` cannot carry.
+  const currentValueIsLink = isPrimitiveCellLink(currentValue);
+
   // A new alias can overwrite a previous alias. No-op if the same.
-  if (isWriteRedirectLink(newValue)) {
+  if (newValueLink?.overwrite === "redirect") {
     const carriedCfcLabelView = cfcLabelViewForPrimitiveLink(newValue);
-    const parsedLink = parseLink(newValue, link);
     if (
-      isWriteRedirectLink(currentValue) &&
-      areNormalizedLinksSame(
-        parseLink(currentValue, link),
-        parsedLink,
-      )
+      currentValueIsLink && isWriteRedirectLink(currentValue) &&
+      areNormalizedLinksSame(parseLink(currentValue, link), newValueLink)
     ) {
       diffLogger.debug(
         "diff",
         () => `[BRANCH_WRITE_REDIRECT] Same redirect, no-op at path=${pathStr}`,
       );
       if (cfcLabelViewHasValues(carriedCfcLabelView)) {
-        recordLinkWritePolicyInput(tx, link, parsedLink, carriedCfcLabelView);
+        recordLinkWritePolicyInput(
+          tx,
+          link,
+          newValueLink,
+          carriedCfcLabelView,
+        );
       }
       tx.retainPendingWriteElision?.(toMemorySpaceAddress(link));
       return [];
@@ -1541,7 +1553,7 @@ export function normalizeAndDiff(
         () =>
           `[BRANCH_WRITE_REDIRECT] Different redirect, updating at path=${pathStr}`,
       );
-      recordLinkWritePolicyInput(tx, link, parsedLink, carriedCfcLabelView);
+      recordLinkWritePolicyInput(tx, link, newValueLink, carriedCfcLabelView);
       changes.push({
         location: link,
         value: stripCfcLabelViewFromPrimitiveLink(newValue) as FabricValue,
@@ -1551,7 +1563,7 @@ export function normalizeAndDiff(
   }
 
   // Handle alias in current value (at this point: if newValue is not an alias)
-  if (isWriteRedirectLink(currentValue)) {
+  if (currentValueIsLink && isWriteRedirectLink(currentValue)) {
     consumeSteeringSlot(tx, link, options);
     diffLogger.debug(
       "diff",
@@ -1589,8 +1601,8 @@ export function normalizeAndDiff(
   // per-session state at the shared base scope. Reference values are exempt:
   // writing a link re-binds the slot (and the schema-declared narrowing above
   // already handled scoped re-binds before reaching here).
-  if (isPrimitiveCellLink(currentValue) && !isCellLink(newValue)) {
-    const storedLink = parseLink(currentValue, link);
+  if (currentValueIsLink && newValueLink === undefined) {
+    const storedLink = parseLink(currentValue as PrimitiveCellLink, link);
     if (scopeRank(storedLink.scope) > scopeRank(link.scope)) {
       consumeSteeringSlot(tx, link, options);
       diffLogger.debug(
@@ -1615,14 +1627,13 @@ export function normalizeAndDiff(
     }
   }
 
-  if (isPrimitiveCellLink(newValue)) {
+  if (newValueLink !== undefined) {
     diffLogger.debug(
       "diff",
       () =>
         debugStr`[BRANCH_CELL_LINK] Processing cell link at path=${pathStr} link=$quote,long${newValue}`,
     );
     const carriedCfcLabelView = cfcLabelViewForPrimitiveLink(newValue);
-    const parsedLink = parseLink(newValue, link);
 
     // Collapse same-document self/parent links created by query-result dereferencing.
     // Example: "internal.__#1.next" -> "internal.__#1". Writing that link would
@@ -1630,16 +1641,16 @@ export function normalizeAndDiff(
     // (a plain JSON snapshot). Do not collapse when the link came from converting
     // a seen cycle to a Cell, and only collapse when the target is the immediate
     // parent path.
-    if (!linkOriginFromCell && isImmediateParent(parsedLink, link)) {
+    if (!linkOriginFromCell && isImmediateParent(newValueLink, link)) {
       diffLogger.debug(
         "diff",
         () =>
           `[CELL_LINK_COLLAPSE] Same-doc ancestor/self link detected at path=${pathStr} -> embedding snapshot from ${
-            parsedLink.path.join(".")
+            newValueLink.path.join(".")
           }`,
       );
       const snapshot = tx.readValueOrThrow(
-        parsedLink,
+        newValueLink,
         options,
       ) as unknown;
       // This re-entry REPLACES the value (the snapshot, not the link), so
@@ -1656,8 +1667,11 @@ export function normalizeAndDiff(
       );
     }
     if (
-      isPrimitiveCellLink(currentValue) &&
-      areLinksSame(newValue, currentValue, link) &&
+      currentValueIsLink &&
+      areNormalizedLinksSame(
+        newValueLink,
+        parseLink(currentValue as PrimitiveCellLink, link),
+      ) &&
       scopeInitialization(newValue) === scopeInitialization(currentValue)
     ) {
       diffLogger.debug(
@@ -1665,7 +1679,7 @@ export function normalizeAndDiff(
         () => `[BRANCH_CELL_LINK] Same cell link, no-op at path=${pathStr}`,
       );
       if (cfcLabelViewHasValues(carriedCfcLabelView)) {
-        recordLinkWritePolicyInput(tx, link, parsedLink, carriedCfcLabelView);
+        recordLinkWritePolicyInput(tx, link, newValueLink, carriedCfcLabelView);
       }
       tx.retainPendingWriteElision?.(toMemorySpaceAddress(link));
       return [];
@@ -1706,11 +1720,11 @@ export function normalizeAndDiff(
       // re-scope walks) flow through. This is a WARN, not a throw, pending
       // review; see #4561. Authors: share the value, or a space-scoped cell
       // with a PerUser pointer to "mine" (pitfall #6 shows the idiom).
-      if (scopeRank(parsedLink.scope) > scopeRank(link.scope)) {
+      if (scopeRank(newValueLink.scope) > scopeRank(link.scope)) {
         const declared = declaredCellScope(link.schema);
         if (
           (declared === undefined ||
-            scopeRank(declared) < scopeRank(parsedLink.scope)) &&
+            scopeRank(declared) < scopeRank(newValueLink.scope)) &&
           !schemaToleratesMissing(link.schema) &&
           // Optional slots (parent schema present, key not in `required`)
           // degrade harmlessly when the cell is missing — only a required
@@ -1721,14 +1735,14 @@ export function normalizeAndDiff(
           diffLogger.warn(
             "diff",
             () => [
-              `Storing a ${parsedLink.scope}-scoped link in ` +
+              `Storing a ${newValueLink.scope}-scoped link in ` +
               `${link.scope}-scoped data at path "${pathStr}": scoped links ` +
               `do not carry a principal, so every reader resolves it to ` +
-              `their own ${parsedLink.scope} instance. If this write meant ` +
+              `their own ${newValueLink.scope} instance. If this write meant ` +
               `to SHARE data, it cannot propagate — share the value itself, ` +
               `or a space-scoped cell (keep a PerUser pointer to "mine"), ` +
               `or declare the slot's schema with scope ` +
-              `"${parsedLink.scope}" if per-reader resolution is intended. ` +
+              `"${newValueLink.scope}" if per-reader resolution is intended. ` +
               `See docs/development/debugging/gotchas/` +
               `scoped-cell-pitfalls.md (pitfall 6).`,
             ],
@@ -1740,7 +1754,7 @@ export function normalizeAndDiff(
         () =>
           `[BRANCH_CELL_LINK] Different cell link, updating at path=${pathStr}`,
       );
-      recordLinkWritePolicyInput(tx, link, parsedLink, carriedCfcLabelView);
+      recordLinkWritePolicyInput(tx, link, newValueLink, carriedCfcLabelView);
       return [
         // TODO(seefeld): Normalize the link to a sigil link?
         {
@@ -1998,14 +2012,11 @@ export function normalizeAndDiff(
     // emitted nothing; identical re-asserts are idempotent at the
     // store (serving-loop.md §5).
     if (changes.length === 0 && tx.isAuthoritativeWrites?.() === true) {
-      // Written whole rather than by its members, and this is the only branch
-      // that does so, which makes it the only one that owes the store a value
-      // the caller cannot go on mutating. Already-frozen input is handed
-      // through by identity.
-      changes.push({
-        location: link,
-        value: cloneIfNecessary(newValue as FabricValue, { deep: false }),
-      });
+      // With nothing emitted, the slot already holds the written array in
+      // stored form, with each `Cell` in `newValue` held as a link, so that is
+      // what gets asserted. It is the transaction's own read of the slot, so
+      // the caller holds no reference to it.
+      changes.push({ location: link, value: currentValue });
     } else if (changes.length === 0) {
       tx.retainPendingWriteElision?.(toMemorySpaceAddress(link));
     }
@@ -2081,7 +2092,7 @@ export function normalizeAndDiff(
     // slots whose stored parent is still the special object.
     if (
       !isKeyableObjectNotArray(currentValue) ||
-      isPrimitiveCellLink(currentValue)
+      currentValueIsLink
     ) {
       diffLogger.debug(
         "diff",
@@ -2096,7 +2107,7 @@ export function normalizeAndDiff(
     state.seen.set(newValue, link);
 
     // At this point currentValue is guaranteed to be a record
-    const currentRecord = currentValue as Record<string, unknown>;
+    const currentRecord = currentValue as FabricPlainObject;
 
     // Requiredness of each child slot, for the scope-isolation warn: only a
     // parent-`required` property makes a missing cell void the read.
@@ -2244,14 +2255,9 @@ export function normalizeAndDiff(
     // completion's equal-`{}` result riding a doomed overlay is never
     // asserted durably. See the array branch for the full rationale.
     if (changes.length === 0 && tx.isAuthoritativeWrites?.() === true) {
-      // Written whole rather than by its members, and this is the only branch
-      // that does so, which makes it the only one that owes the store a value
-      // the caller cannot go on mutating. Already-frozen input is handed
-      // through by identity.
-      changes.push({
-        location: link,
-        value: cloneIfNecessary(newValue as FabricValue, { deep: false }),
-      });
+      // As in the array branch, the slot already holds the written record in
+      // stored form, which is what gets asserted.
+      changes.push({ location: link, value: currentRecord });
     } else if (changes.length === 0) {
       tx.retainPendingWriteElision?.(toMemorySpaceAddress(link));
     }

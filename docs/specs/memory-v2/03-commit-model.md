@@ -213,6 +213,13 @@ interface PendingRead {
 Confirmed reads are validated against canonical history. Pending reads are
 resolved within the submitting logical session.
 
+A read's `path` is an array holding a string at every index. The server refuses
+a commit carrying a read of any other path — one with a hole, one with a
+segment that is not a string, or one that is not an array — with a
+`ProtocolError`, whether or not the read's staleness is checked. The staleness
+check matches a read's path against a write's touched paths segment by
+segment, and defines that match for string segments only.
+
 ## 3.5 Stacked Pending Commits
 
 A client can create commit `C2` that reads from the optimistic writes of earlier

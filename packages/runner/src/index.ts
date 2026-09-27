@@ -10,6 +10,8 @@ export {
   isLoopbackHostname,
   normalizeSpaceHost,
   spaceHostFromFabricAuthority,
+  type SpaceHostRefusalReason,
+  type SpaceHostRegistration,
   SpaceHostValidationError,
 } from "./space-host.ts";
 export type {

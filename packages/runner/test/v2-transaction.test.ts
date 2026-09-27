@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { isDeepFrozen, valueEqual } from "@commonfabric/data-model";
+import { type FabricValue, isDeepFrozen } from "@commonfabric/data-model";
 import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
 import {
   EmulatedStorageManager,
@@ -381,6 +381,34 @@ const writeBatchEndingInOutOfRangeLength = (
     },
   ]);
 
+/**
+ * Commits `{ x: 1 }` as the value of the document `id`, and opens a
+ * transaction that has written it `{ x: 2 }`. That transaction edits its
+ * working value in place from then on, and the commit sends what that value
+ * holds, so a later write that changed it would show in both.
+ */
+const transactionOverEditedValue = async (id: URI) => {
+  const storage = StorageManager.emulate({ as: signer });
+  const address = { space, id, type };
+  const seed = storage.edit();
+  expect(seed.write({ ...address, path: [] }, { value: { x: 1 } }).ok)
+    .toBeTruthy();
+  expect((await seed.commit()).ok).toBeTruthy();
+  const tx = storage.edit();
+  expect(tx.write({ ...address, path: ["value"] }, { x: 2 }).ok).toBeTruthy();
+  return { storage, address, tx };
+};
+
+/** Commits `tx`, and returns the value `storage` then holds at `address`. */
+const committedValue = async (
+  storage: ReturnType<typeof StorageManager.emulate>,
+  address: { space: typeof space; id: URI; type: typeof type },
+  tx: ReturnType<ReturnType<typeof StorageManager.emulate>["edit"]>,
+): Promise<unknown> => {
+  expect((await tx.commit()).ok).toBeTruthy();
+  return storage.edit().read({ ...address, path: ["value"] }).ok?.value;
+};
+
 describe("v2-transaction", () => {
   describe("getPotentiallyExternalReadActivities()", () => {
     it("retains every raw clock position while excluding sealed verifier records", async () => {
@@ -549,6 +577,134 @@ describe("v2-transaction", () => {
         await storage.close();
       }
     });
+
+    it("leaves the value unchanged when it refuses a leaf of `-` beneath a missing parent", async () => {
+      // `a` is missing, and the array a write would create for it takes no
+      // key but an index.
+
+      const { storage, address, tx } = await transactionOverEditedValue(
+        "of:v2-transaction-refused-leaf",
+      );
+      try {
+        const refused = tx.write({ ...address, path: ["value", "a", "-"] }, 5);
+
+        expect(refused.error?.name).toBe("TypeMismatchError");
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value)
+          .toEqual({ x: 2 });
+        expect(await committedValue(storage, address, tx)).toEqual({ x: 2 });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("returns a `TypeMismatchError` for `-` beneath a missing parent short of the leaf, and leaves the value unchanged", async () => {
+      const { storage, address, tx } = await transactionOverEditedValue(
+        "of:v2-transaction-refused-created-array",
+      );
+      try {
+        const refused = tx.write(
+          { ...address, path: ["value", "a", "-", "b"] },
+          5,
+        );
+
+        expect(
+          refused.error?.name === "TypeMismatchError" && {
+            path: refused.error.address.path,
+            actualType: refused.error.actualType,
+          },
+        ).toEqual({ path: ["value", "a", "-"], actualType: "array" });
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value)
+          .toEqual({ x: 2 });
+        expect(await committedValue(storage, address, tx)).toEqual({ x: 2 });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("returns a `TypeMismatchError` for a key other than an index into an existing array, short of the leaf", async () => {
+      // An array holds nothing under `name`, so what the write would put
+      // there is a value no read of the array reports and no commit carries.
+
+      const { storage, address, tx } = await transactionOverEditedValue(
+        "of:v2-transaction-refused-array-key",
+      );
+      try {
+        expect(tx.write({ ...address, path: ["value", "x"] }, [1, 2]).ok)
+          .toBeTruthy();
+
+        const refused = tx.write(
+          { ...address, path: ["value", "x", "name", "first"] },
+          "Ada",
+        );
+
+        expect(
+          refused.error?.name === "TypeMismatchError" && {
+            path: refused.error.address.path,
+            actualType: refused.error.actualType,
+          },
+        ).toEqual({ path: ["value", "x", "name"], actualType: "array" });
+        expect(
+          tx.read({ ...address, path: ["value", "x", "name", "first"] }).ok
+            ?.value,
+        ).toBeUndefined();
+        expect(await committedValue(storage, address, tx)).toEqual({
+          x: [1, 2],
+        });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("deletes nothing through a key the value only inherits", async () => {
+      // `toString` names a member of every record's prototype and no slot of
+      // this one, so the delete has nothing to remove.
+
+      const { storage, address, tx } = await transactionOverEditedValue(
+        "of:v2-transaction-delete-inherited",
+      );
+      try {
+        expect(
+          tx.write(
+            { ...address, path: ["value", "toString", "x"] },
+            undefined,
+            { delete: true },
+          ).ok,
+        ).toBeTruthy();
+
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value)
+          .toEqual({ x: 2 });
+        expect(await committedValue(storage, address, tx)).toEqual({ x: 2 });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("deletes nothing through a key an array cannot hold, or through a primitive", async () => {
+      // Neither path reaches a slot, so each delete has nothing to remove;
+      // `writeBatch()` answers the same, below.
+
+      const { storage, address, tx } = await transactionOverEditedValue(
+        "of:v2-transaction-delete-unreachable",
+      );
+      try {
+        expect(tx.write({ ...address, path: ["value", "x"] }, [1, 2]).ok)
+          .toBeTruthy();
+
+        for (
+          const path of [["value", "x", "name"], ["value", "x", "0", "y"]]
+        ) {
+          expect(
+            tx.write({ ...address, path }, undefined, { delete: true }).error,
+          ).toBeUndefined();
+        }
+
+        expect(await committedValue(storage, address, tx)).toEqual({
+          x: [1, 2],
+        });
+      } finally {
+        await storage.close();
+      }
+    });
   });
 
   describe("writeBatch()", () => {
@@ -608,6 +764,156 @@ describe("v2-transaction", () => {
         expect(
           storage.edit().read({ ...address, path: ["value"] }).ok?.value,
         ).toEqual({ arr: [1], x: 9 });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("returns what separate writes return for the same list, and records the same write details", async () => {
+      // Each list is applied twice over the same document: as separate
+      // `write()`s, stopping at the first refusal as a batch does, and as one
+      // batch. Each starts by writing `value/e`, so the rest land on a working
+      // value the transaction already edits in place.
+
+      type Step = [path: string[], value: FabricValue, isDelete?: boolean];
+      const lists: Step[][] = [
+        [
+          [["value", "y"], 3],
+          [["value", "x", "name"], undefined, true],
+          [["value", "z"], 4],
+        ],
+        [[["value", "y"], 3], [["value", "a", "-"], 5], [["value", "z"], 4]],
+        [[["value", "x", "0"], 9], [["value", "x", "length"], 1]],
+        [[["value", "n", "q"], undefined, true], [["value", "y"], 3]],
+        [
+          [["value", "new", "deep", "k"], 1],
+          [["value", "new", "deep", "j"], 2],
+        ],
+      ];
+
+      const outcome = async (steps: Step[], asBatch: boolean) => {
+        const storage = StorageManager.emulate({ as: signer });
+        try {
+          const address = {
+            space,
+            id: "of:v2-transaction-parity" as URI,
+            type,
+          };
+          const seed = storage.edit();
+          expect(
+            seed.write({ ...address, path: [] }, {
+              value: { x: [1, 2], n: 5 },
+            }).ok,
+          ).toBeTruthy();
+          expect((await seed.commit()).ok).toBeTruthy();
+
+          const tx = storage.edit();
+          expect(tx.write({ ...address, path: ["value", "e"] }, 1).ok)
+            .toBeTruthy();
+          let error: string | undefined;
+          if (asBatch) {
+            error = tx.writeBatch!(
+              steps.map(([path, value, isDelete]) => ({
+                address: { ...address, path },
+                value,
+                delete: isDelete,
+              })),
+            ).error?.name;
+          } else {
+            for (const [path, value, isDelete] of steps) {
+              error = tx.write(
+                { ...address, path },
+                value,
+                isDelete ? { delete: true } : undefined,
+              ).error?.name;
+              if (error !== undefined) break;
+            }
+          }
+          return {
+            error,
+            value: tx.read({ ...address, path: ["value"] }).ok?.value,
+            details: [...tx.getWriteDetails!(space)],
+          };
+        } finally {
+          await storage.close();
+        }
+      };
+
+      for (const steps of lists) {
+        const separate = await outcome(steps, false);
+        const batched = await outcome(steps, true);
+
+        expect({ steps, ...batched }).toEqual({ steps, ...separate });
+      }
+    });
+
+    it("keeps the writes ahead of a refused one, and nothing of the refused one", async () => {
+      const { storage, address, tx } = await transactionOverEditedValue(
+        "of:v2-transaction-batch-refused-later",
+      );
+      try {
+        const result = tx.writeBatch!([
+          { address: { ...address, path: ["value", "y"] }, value: 3 },
+          { address: { ...address, path: ["value", "a", "-"] }, value: 5 },
+          { address: { ...address, path: ["value", "z"] }, value: 4 },
+        ]);
+
+        expect(result.error?.name).toBe("TypeMismatchError");
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value)
+          .toEqual({ x: 2, y: 3 });
+        expect(await committedValue(storage, address, tx)).toEqual({
+          x: 2,
+          y: 3,
+        });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("leaves the value unchanged when its first write is refused", async () => {
+      const { storage, address, tx } = await transactionOverEditedValue(
+        "of:v2-transaction-batch-refused-first",
+      );
+      try {
+        const result = tx.writeBatch!([
+          { address: { ...address, path: ["value", "a", "-"] }, value: 5 },
+          { address: { ...address, path: ["value", "y"] }, value: 3 },
+        ]);
+
+        expect(result.error?.name).toBe("TypeMismatchError");
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value)
+          .toEqual({ x: 2 });
+        expect(await committedValue(storage, address, tx)).toEqual({ x: 2 });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("deletes nothing through a key an array cannot hold, alone or beside another write", async () => {
+      const { storage, address, tx } = await transactionOverEditedValue(
+        "of:v2-transaction-batch-delete-unreachable",
+      );
+      try {
+        expect(tx.write({ ...address, path: ["value", "x"] }, [1, 2]).ok)
+          .toBeTruthy();
+        const unreachable = {
+          address: { ...address, path: ["value", "x", "name"] },
+          value: undefined,
+          delete: true,
+        };
+
+        expect(tx.writeBatch!([unreachable]).error).toBeUndefined();
+        expect(
+          tx.writeBatch!([
+            unreachable,
+            { address: { ...address, path: ["value", "y"] }, value: 3 },
+          ]).error,
+        ).toBeUndefined();
+
+        expect(await committedValue(storage, address, tx)).toEqual({
+          x: [1, 2],
+          y: 3,
+        });
       } finally {
         await storage.close();
       }
@@ -690,13 +996,11 @@ describe("v2-transaction", () => {
       }
     });
 
-    it("returns what a refused write left changed in the document", async () => {
-      // A write of `-` beneath a missing parent is refused only after the
-      // parent is created in the working value, so the refusal can leave the
-      // document changed. Whether it should is the write's business. What is
-      // pinned here is that paths kept from before the refused write are not
-      // reused after it: beneath `value`, a path this transaction wrote, the
-      // log follows whatever the refusal left there.
+    it("returns no writes after a refused write, which leaves the document as it was", async () => {
+      // The two writes ahead of the refused one leave the working value edited
+      // in place yet equal to what was committed, so the log holds no writes.
+      // A refusal that changed that value would show here as a write under
+      // `value`.
 
       const { storage, address, tx } = await writerOverCommittedDocument(
         "of:v2-transaction-log-refused-write",
@@ -710,11 +1014,46 @@ describe("v2-transaction", () => {
 
         expect(tx.write({ ...address, path: ["value", "b", "-"] }, 5).error)
           .toBeDefined();
-        const left = tx.read({ ...address, path: ["value"] }, {
-          meta: stableInternalVerifierRead,
-        }).ok!.value;
-        expect(tx.getReactivityLog!().writes.map(({ path }) => path))
-          .toEqual(valueEqual(left, { a: 1 }) ? [] : [["value"]]);
+
+        expect(
+          tx.read({ ...address, path: ["value"] }, {
+            meta: stableInternalVerifierRead,
+          }).ok?.value,
+        ).toEqual({ a: 1 });
+        expect(tx.getReactivityLog!().writes).toEqual([]);
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("returns no writes after a refused batch, which leaves the document as it was", async () => {
+      // The batch counterpart of the case above: the batch's first write is
+      // refused, so the batch applies nothing, and a refusal that changed the
+      // working value would show here as a write under `value`.
+
+      const { storage, address, tx } = await writerOverCommittedDocument(
+        "of:v2-transaction-log-refused-batch",
+      );
+      try {
+        expect(tx.write({ ...address, path: ["value"] }, { a: 2 }).ok)
+          .toBeTruthy();
+        expect(tx.write({ ...address, path: ["value"] }, { a: 1 }).ok)
+          .toBeTruthy();
+        expect(tx.getReactivityLog!().writes).toEqual([]);
+
+        expect(
+          tx.writeBatch!([
+            { address: { ...address, path: ["value", "b", "-"] }, value: 5 },
+            { address: { ...address, path: ["value", "c"] }, value: 1 },
+          ]).error,
+        ).toBeDefined();
+
+        expect(
+          tx.read({ ...address, path: ["value"] }, {
+            meta: stableInternalVerifierRead,
+          }).ok?.value,
+        ).toEqual({ a: 1 });
+        expect(tx.getReactivityLog!().writes).toEqual([]);
       } finally {
         await storage.close();
       }

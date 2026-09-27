@@ -105,9 +105,37 @@ read's confidential locations:
   scalar leaves included. Without this rule no such read would carry a witness.
   A recursive read drops the existence stamps too. An existence stamp is carried through every overwrite of its path, so left in
   it would shadow the value stamp of a later whole write above it.
-- A reference probe (`followRef`) keeps its own entries. A pointer's label is
-  the link write's, with no `TransformedBy`, so a reference retains no witness
-  however its content is read.
+- A reference probe (`followRef`) keeps its own entries. A pointer's link
+  entry is the link write's, with no `TransformedBy`, so a probe that observes
+  which reference sits at a slot retains no witness. A reference followed to
+  confidential content is a location of its own, below.
+
+### References a transformation follows
+
+Which reference sits at a slot decides which document a reader reads, so a
+transformation that follows a reference to confidential content consumed the
+reference as an input, whatever the slot holding it is labeled. Such a slot is
+a location of its own: its integrity is resolved over the value stamps at the
+slot, as a shallow read of it is, and it counts even when nothing labels the
+slot. So is a slot whose reference leads to another such slot. A reference
+counts when the transformation read the slot, or read recursively above it,
+and read the document it names at or below its target with confidentiality. A
+write redirect counts like any other reference: pattern code can store one as
+data, and a read follows it as it follows any other. A transformation that read
+nothing confidential has no such location to account for.
+
+A reference a link write put in place carries no value stamp of its own, so a
+slot holding one retains no witness unless its writer's stamp covers it. A
+destination whose value holds a reference is stamped whole only when the
+runtime recorded that reference as the writer's, at that path
+(`CfcAssertedValueRoot.reference`). The custody seal records the link it writes
+into a room's box cell this way ([sealed custody](cfc-custody-seal.md)).
+
+Without this, a document a transformation read only to find its inputs would
+constrain nothing when unlabeled. A member's code could hand an endorsed
+transformer a record of its own whose entries are references to real, witnessed
+values, one of them repeated, and the witness, taken over the values alone,
+would hold.
 
 ### What the endorsed writer's stamp covers
 
@@ -202,10 +230,11 @@ Each of these refuses an honest release rather than admitting a crafted one:
   for a collection, a root that carries its own clause — so its writes are
   attributed.
 - **References.** A reference slot's label is the link's own (`LinkReference`
-  provenance and the carried confidentiality), with no `TransformedBy`, so a
-  transformation that reads a list of references retains no witness, whoever
-  wrote the list. An endorsed transformer's committed input is a value, not a
-  collection of references.
+  provenance and the carried confidentiality), with no `TransformedBy`, and a
+  reference followed to confidential content is a location of its own, so a
+  transformation that follows a reference other than one the runtime recorded
+  as its writer's retains no witness, whoever wrote the list. An endorsed
+  transformer's committed input is a value, not a collection of references.
 - **Structure-only stamps.** A written location whose only derived stamp is a
   membership or shape entry has no value evidence.
 
@@ -264,6 +293,12 @@ not rely on the witness without them.
   transaction created, such as the runtime's setup writing a `Default`, keeps
   no writer on its container node, so a two-level guard over such a list
   releases nothing.
+- **An output that does not change.** A stamp is replaced when its value is
+  written. When an endorsed transformer runs again over inputs other code
+  chose and computes the value it had already written, it writes nothing, and
+  the value keeps the stamp its earlier run earned. Whoever chose the inputs
+  learns whether they yield the value already released, one comparison per
+  run.
 - **Selection among committed values.** A transformation fed a subset of
   honestly committed inputs computes over a choice. References are refused
   above; a selection made by endorsed code is that code's semantics.

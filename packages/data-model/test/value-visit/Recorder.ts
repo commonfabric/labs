@@ -19,7 +19,7 @@ import type {
 } from "@";
 import {
   DefaultValueVisitor,
-  type VisitedResult,
+  type MappedResult,
   type VisitingResult,
   type VisitResult,
 } from "@/value-visit";
@@ -85,18 +85,18 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     tag: PrimitiveValueTag,
   ) => VisitResult<unknown, unknown>;
   onPlusType?: (value: unknown) => VisitResult<unknown, unknown>;
-  onVisitedFabricArrayElement?: (
+  onMappedFabricArrayElement?: (
     index: number,
     value: unknown,
-  ) => VisitedResult<unknown>;
-  onVisitedFabricInstanceState?: (
+  ) => MappedResult<unknown>;
+  onMappedFabricInstanceState?: (
     instance: FabricInstancePlus<unknown>,
     state: unknown,
-  ) => VisitedResult<unknown>;
-  onVisitedFabricPlainObjectEntry?: (
+  ) => MappedResult<unknown>;
+  onMappedFabricPlainObjectEntry?: (
     key: unknown,
     value: unknown,
-  ) => VisitedResult<unknown>;
+  ) => MappedResult<unknown>;
   onVisitingFabricArrayElement?: (
     index: number,
     value: unknown,
@@ -201,35 +201,35 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     return this.onPlusType ? this.onPlusType(value) : undefined;
   }
 
-  override visitedFabricArrayElement(
+  override mappedFabricArrayElement(
     array: FabricArrayPlus<unknown>,
     index: number,
     value: unknown,
-  ): VisitedResult<unknown> {
-    this.events.push(["visitedFabricArrayElement", array, index, value]);
-    return this.onVisitedFabricArrayElement
-      ? this.onVisitedFabricArrayElement(index, value)
+  ): MappedResult<unknown> {
+    this.events.push(["mappedFabricArrayElement", array, index, value]);
+    return this.onMappedFabricArrayElement
+      ? this.onMappedFabricArrayElement(index, value)
       : undefined;
   }
 
-  override visitedFabricInstanceState(
+  override mappedFabricInstanceState(
     instance: FabricInstancePlus<unknown>,
     state: unknown,
-  ): VisitedResult<unknown> {
-    this.events.push(["visitedFabricInstanceState", instance, state]);
-    return this.onVisitedFabricInstanceState
-      ? this.onVisitedFabricInstanceState(instance, state)
+  ): MappedResult<unknown> {
+    this.events.push(["mappedFabricInstanceState", instance, state]);
+    return this.onMappedFabricInstanceState
+      ? this.onMappedFabricInstanceState(instance, state)
       : undefined;
   }
 
-  override visitedFabricPlainObjectEntry(
+  override mappedFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<unknown>,
     key: unknown,
     value: unknown,
-  ): VisitedResult<unknown> {
-    this.events.push(["visitedFabricPlainObjectEntry", container, key, value]);
-    return this.onVisitedFabricPlainObjectEntry
-      ? this.onVisitedFabricPlainObjectEntry(key, value)
+  ): MappedResult<unknown> {
+    this.events.push(["mappedFabricPlainObjectEntry", container, key, value]);
+    return this.onMappedFabricPlainObjectEntry
+      ? this.onMappedFabricPlainObjectEntry(key, value)
       : undefined;
   }
 

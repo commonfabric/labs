@@ -5,6 +5,7 @@ import {
   cloneIfNecessary,
   deepFreeze,
   type MutableFabricContainerValueLayer,
+  tracePath,
   valueEqual,
 } from "@commonfabric/data-model";
 import { isInstance, isObjectNotArray } from "@commonfabric/utils/types";
@@ -57,10 +58,10 @@ export const emptyEntityDocument = (): EntityDocument => ({});
 
 /**
  * `applyPatch` over a possibly-absent document: an absent base normalizes
- * to the empty envelope. The one entry point for "replay these ops over
- * whatever this document currently is" — server-side reconstruction and
- * client-side pending replay share it rather than each knowing the
- * absent-base rule.
+ * to the empty envelope. Like `applyPatch`, it deep-freezes `base` in place.
+ * The one entry point for "replay these ops over whatever this document
+ * currently is" — server-side reconstruction and client-side pending replay
+ * share it rather than each knowing the absent-base rule.
  */
 export const applyPatchToDocument = (
   base: EntityDocument | undefined,
@@ -89,66 +90,68 @@ export const applyPatchToDocument = (
  * The function is therefore on the hot path for any read that reconstructs
  * a document from its stored patch list.
  *
- * Mutation discipline: each op is applied via a copy-on-write descent. The
- * spine of containers from the root down to the mutated container is thawed to
- * mutable copies (via `cloneForMutation()`), the leaf operation is applied to
- * that mutable container, and subtrees off the spine stay frozen-by-reference
- * (structural sharing). A container is copied the first time an op's spine
- * passes through it, and later ops in the same call mutate that copy in place,
- * so each container is copied at most once per call: `K` ops beneath one
- * `N`-key object copy it once, not `K` times. No op writes to the caller's
- * `state`. The assembled tree is then fully deep-frozen at the `applyPatch`
- * boundary, so callers can rely on the return value being deeply frozen; the
- * subtrees it shares with `state` are frozen in place, `state` itself included
- * when no op touches it.
+ * Mutation discipline: frozen means shared, and mutable means this call's own.
+ * `state` is deep-frozen in place first, so the only mutable containers an op
+ * finds are the ones earlier ops of the same call copied. Each op then applies
+ * via a copy-on-write descent: a frozen container on its spine is thawed to a
+ * mutable copy (via `cloneForMutation()`), a mutable one is mutated in place,
+ * the leaf operation is applied to the container at the end, and subtrees off
+ * the spine stay frozen-by-reference (structural sharing). So a container on
+ * the ops' spines is copied once per call however many ops pass through it,
+ * and `K` ops beneath one `N`-key object copy it once rather than `K` times. A
+ * `move` re-inserts what it moves through `cloneValue()`, which copies it again
+ * when an earlier op of the same call has thawed it. The assembled tree is
+ * deep-frozen at the `applyPatch` boundary as well, so callers can rely on the
+ * return value being deeply frozen.
  */
 export const applyPatch = (
   state: FabricValue,
   ops: PatchOp[],
 ): FabricValue => {
-  // Every container in this set was copied by an op of this call, so no one
-  // outside the call holds it. Op values enter the tree through `cloneValue()`,
-  // which never hands back a mutable container, so none of them is shared.
-  const owned = new WeakSet<object>();
-  let current = state;
+  let current = deepFreeze(state);
   for (const op of ops) {
-    current = applyOp(current, op, owned);
+    current = applyOp(current, op);
   }
   return deepFreeze(current);
 };
 
-const applyOp = (
-  state: FabricValue,
-  op: PatchOp,
-  owned: WeakSet<object>,
-): FabricValue => patchOpDescriptors[op.op].apply(state, op, owned);
+const applyOp = (state: FabricValue, op: PatchOp): FabricValue =>
+  patchOpDescriptors[op.op].apply(state, op);
+
+/** `cloneForMutation()` options for a descent that creates nothing. */
+const REUSE_MUTABLE = { force: false } as const;
 
 /**
  * Copy-on-write thaw of the spine of `root` down to `thawPath`, returning the
  * new root and the mutable container at `thawPath`. Subtrees off the spine are
- * shared by identity (structural sharing). A spine container in `owned` was
- * copied by an earlier op of the same `applyPatch()` call and is reused in
- * place; any other is copied and added to `owned`, so the caller's input is
- * left untouched (`cloneForMutation` defaults to `force: true`).
- * `cloneForMutation`'s typed errors are translated into this module's
- * path-style messages, and a value-at-path that isn't a plain container is
- * rejected (patch ops only mutate objects/arrays). `fullPath` is used for error
- * messages.
+ * shared by identity (structural sharing). A frozen spine container is copied;
+ * a mutable one is one an earlier op of the same `applyPatch()` call copied,
+ * since that call froze its input first, and is mutated in place
+ * (`force: false`). `cloneForMutation`'s typed errors are translated into this
+ * module's path-style messages, and a value-at-path that isn't a plain
+ * container is rejected (patch ops only mutate objects/arrays). `fullPath` is
+ * used for error messages. Given `createMissingFor`, the descent creates the
+ * containers it finds missing, the last shaped for that next key (see
+ * `CloneForMutationOptions.nextKeyAfterPath`).
  */
 const thawSpine = (
   root: FabricValue,
   thawPath: string[],
   fullPath: string[],
-  owned: WeakSet<object>,
-  options?: { createMissing?: boolean; nextKeyAfterPath?: string },
+  createMissingFor?: string,
 ): { root: FabricValue; container: PatchContainer } => {
   let value: FabricValue;
   let pathValue: MutableFabricContainerValueLayer;
   try {
-    ({ value, pathValue } = cloneForMutation(root, thawPath, {
-      ...options,
-      owned,
-    }));
+    ({ value, pathValue } = cloneForMutation(
+      root,
+      thawPath,
+      createMissingFor === undefined ? REUSE_MUTABLE : {
+        createMissing: true,
+        nextKeyAfterPath: createMissingFor,
+        force: false,
+      },
+    ));
   } catch (e) {
     if (e instanceof CloneForMutationError) {
       throw new PatchApplyError(
@@ -171,17 +174,11 @@ const replaceAtPath = (
   root: FabricValue,
   path: string[],
   value: FabricValue,
-  owned: WeakSet<object>,
 ): FabricValue => {
   if (path.length === 0) {
     return cloneValue(value);
   }
-  const { root: newRoot, container } = thawSpine(
-    root,
-    path.slice(0, -1),
-    path,
-    owned,
-  );
+  const { root: newRoot, container } = thawSpine(root, path.slice(0, -1), path);
   const key = path[path.length - 1]!;
   if (Array.isArray(container)) {
     container[requireExistingArrayIndex(container, key, path)] = cloneValue(
@@ -198,37 +195,37 @@ const replaceAtPath = (
  * created during the mutating descent), but a present array must already contain
  * any index traversed through, and a present non-container can't be traversed.
  * This is what keeps `add` from fabricating missing array indices (which
- * `cloneForMutation`'s `createMissing` would otherwise do).
+ * `cloneForMutation`'s `createMissing` would otherwise do). The spine is read
+ * from `tracePath()`, the trace `cloneForMutation()` descends by.
  */
 const validateAddSpine = (root: FabricValue, path: string[]): void => {
-  let current: FabricValue = root;
-  // Becomes true once we pass a missing object key: everything below is freshly
-  // created, so all containers from there down are empty.
-  let creating = false;
-  for (let i = 0; i < path.length - 1; i++) {
-    const segment = path[i]!;
-    if (creating) {
-      // A freshly-created array is empty, so an intermediate array index (or the
-      // `-` append marker) can never resolve to an existing element to traverse
-      // into -- reject it rather than fabricate one. Plain object keys are fine;
-      // they get created on the way down.
-      if (isArraySegment(segment) || segment === "-") {
-        throw new PatchApplyError(`missing path ${encodePointer(path)}`);
+  const spine = path.slice(0, -1);
+  const trace = tracePath(root, spine);
+  for (let i = 0; i < spine.length; i++) {
+    const segment = spine[i]!;
+    if (i < trace.containers.length) {
+      // A present array must hold the index; a missing object key starts the
+      // part of the spine the descent creates.
+      if (Array.isArray(trace.containers[i])) {
+        parseArrayIndex(segment);
+        if (trace.end === "missing" && i === trace.at) {
+          throw new PatchApplyError(`missing path ${encodePointer(path)}`);
+        }
       }
       continue;
     }
-    if (Array.isArray(current)) {
-      current = current[requireExistingArrayIndex(current, segment, path)];
-    } else if (isPatchObject(current)) {
-      if (!Object.hasOwn(current, segment)) {
-        creating = true;
-        continue;
-      }
-      current = current[segment];
-    } else {
+    if (trace.end === "blocked") {
       throw new PatchApplyError(
         `path is not traversable at ${encodePointer(path)}`,
       );
+    }
+    // Past a missing object key everything is freshly created, and a
+    // freshly-created array is empty, so an intermediate array index (or the
+    // `-` append marker) can never resolve to an existing element to traverse
+    // into -- reject it rather than fabricate one. Plain object keys are fine;
+    // they get created on the way down.
+    if (isArraySegment(segment) || segment === "-") {
+      throw new PatchApplyError(`missing path ${encodePointer(path)}`);
     }
   }
 };
@@ -237,7 +234,6 @@ const addAtPath = (
   root: FabricValue,
   path: string[],
   value: FabricValue,
-  owned: WeakSet<object>,
 ): FabricValue => {
   if (path.length === 0) {
     return cloneValue(value);
@@ -248,11 +244,7 @@ const addAtPath = (
     root,
     path.slice(0, -1),
     path,
-    owned,
-    {
-      createMissing: true,
-      nextKeyAfterPath: key,
-    },
+    key,
   );
   if (Array.isArray(container)) {
     if (key === "-") {
@@ -270,22 +262,13 @@ const addAtPath = (
   return newRoot;
 };
 
-const removeAtPath = (
-  root: FabricValue,
-  path: string[],
-  owned: WeakSet<object>,
-): FabricValue => {
+const removeAtPath = (root: FabricValue, path: string[]): FabricValue => {
   if (path.length === 0) {
     throw new PatchApplyError(
       "root remove must be represented as a delete operation",
     );
   }
-  const { root: newRoot, container } = thawSpine(
-    root,
-    path.slice(0, -1),
-    path,
-    owned,
-  );
+  const { root: newRoot, container } = thawSpine(root, path.slice(0, -1), path);
   const key = path[path.length - 1]!;
   if (Array.isArray(container)) {
     container.splice(requireExistingArrayIndex(container, key, path), 1);
@@ -302,7 +285,6 @@ const moveValue = (
   root: FabricValue,
   from: string[],
   path: string[],
-  owned: WeakSet<object>,
 ): FabricValue => {
   if (from.length === 0) {
     throw new PatchApplyError("cannot move the root value");
@@ -315,7 +297,7 @@ const moveValue = (
   // re-enters the tree through `addAtPath()`'s `cloneValue()`, so the tree
   // never holds it at two places.
   const extracted = getAtPath(root, from);
-  return addAtPath(removeAtPath(root, from, owned), path, extracted, owned);
+  return addAtPath(removeAtPath(root, from), path, extracted);
 };
 
 const spliceAtPath = (
@@ -324,9 +306,8 @@ const spliceAtPath = (
   index: number,
   remove: number,
   add: FabricValue[],
-  owned: WeakSet<object>,
 ): FabricValue => {
-  const { root: newRoot, container } = thawSpine(root, path, path, owned);
+  const { root: newRoot, container } = thawSpine(root, path, path);
   if (!Array.isArray(container)) {
     throw new PatchApplyError(
       `splice target is not an array at ${encodePointer(path)}`,
@@ -347,13 +328,9 @@ const appendAtPath = (
   root: FabricValue,
   path: string[],
   values: FabricValue[],
-  owned: WeakSet<object>,
 ): FabricValue => {
   validateAddSpine(root, path);
-  const { root: newRoot, container } = thawSpine(root, path, path, owned, {
-    createMissing: true,
-    nextKeyAfterPath: "0",
-  });
+  const { root: newRoot, container } = thawSpine(root, path, path, "0");
   if (!Array.isArray(container)) {
     throw new PatchApplyError(
       `append target is not an array at ${encodePointer(path)}`,
@@ -371,13 +348,9 @@ const addUniqueAtPath = (
   root: FabricValue,
   path: string[],
   values: FabricValue[],
-  owned: WeakSet<object>,
 ): FabricValue => {
   validateAddSpine(root, path);
-  const { root: newRoot, container } = thawSpine(root, path, path, owned, {
-    createMissing: true,
-    nextKeyAfterPath: "0",
-  });
+  const { root: newRoot, container } = thawSpine(root, path, path, "0");
   if (!Array.isArray(container)) {
     throw new PatchApplyError(
       `add-unique target is not an array at ${encodePointer(path)}`,
@@ -399,7 +372,6 @@ const removeByValueAtPath = (
   root: FabricValue,
   path: string[],
   value: FabricValue,
-  owned: WeakSet<object>,
 ): FabricValue => {
   const existing = readNumberOrAbsent(root, path);
   if (!Array.isArray(existing)) {
@@ -408,7 +380,7 @@ const removeByValueAtPath = (
   if (!existing.some((element) => valueEqual(element, value))) {
     return root;
   }
-  const { root: newRoot, container } = thawSpine(root, path, path, owned);
+  const { root: newRoot, container } = thawSpine(root, path, path);
   // The value at `path` was confirmed to be an array above, so its thawed
   // container is that same array.
   const array = container as FabricValue[];
@@ -449,7 +421,6 @@ const incrementAtPath = (
   root: FabricValue,
   path: string[],
   by: number,
-  owned: WeakSet<object>,
 ): FabricValue => {
   if (path.length === 0) {
     throw new PatchApplyError("increment requires a non-root path");
@@ -471,11 +442,7 @@ const incrementAtPath = (
     root,
     path.slice(0, -1),
     path,
-    owned,
-    {
-      createMissing: true,
-      nextKeyAfterPath: path[path.length - 1]!,
-    },
+    path[path.length - 1]!,
   );
   const key = path[path.length - 1]!;
   if (Array.isArray(container)) {
@@ -553,10 +520,13 @@ const isContainer = (value: FabricValue): value is PatchContainer =>
  * switch:
  *
  * - `apply` is the mutation the durable store performs for the op (used by
- *   {@link applyPatch} above). Its `owned` argument holds the containers
- *   earlier ops of the same `applyPatch()` call copied, which it mutates in
- *   place rather than copying again, and it adds to the set every container it
- *   copies.
+ *   {@link applyPatch} above). It may mutate in place any container of
+ *   `state` that is not frozen, because `applyPatch()` guarantees each such
+ *   container was copied by an earlier op of the same call and is held in one
+ *   place. It keeps that guarantee by placing a value only through
+ *   `cloneValue()`, which never hands back a mutable container: a mutable
+ *   container placed at a second path, or handed out, would be mutated through
+ *   every reference to it.
  * - `pointerFields` names the fields whose value is a JSON Pointer into the
  *   document (`["path"]` for most ops, `["from", "path"]` for `move`). It is the
  *   source for every "which paths does this op touch" computation: the
@@ -593,11 +563,7 @@ export type PatchOpDescriptor<Op extends PatchOp = PatchOp> = {
   readonly op: Op["op"];
   readonly pointerFields: readonly string[];
   readonly structural: boolean;
-  readonly apply: (
-    state: FabricValue,
-    op: Op,
-    owned: WeakSet<object>,
-  ) => FabricValue;
+  readonly apply: (state: FabricValue, op: Op) => FabricValue;
 };
 
 const descriptor = <Op extends PatchOp>(
@@ -609,71 +575,59 @@ export const patchOpDescriptors: Record<PatchOp["op"], PatchOpDescriptor> = {
     op: "replace",
     pointerFields: ["path"],
     structural: false,
-    apply: (state, op, owned) =>
-      replaceAtPath(state, parsePointer(op.path), op.value, owned),
+    apply: (state, op) => replaceAtPath(state, parsePointer(op.path), op.value),
   }),
   add: descriptor<Extract<PatchOp, { op: "add" }>>({
     op: "add",
     pointerFields: ["path"],
     structural: true,
-    apply: (state, op, owned) =>
-      addAtPath(state, parsePointer(op.path), op.value, owned),
+    apply: (state, op) => addAtPath(state, parsePointer(op.path), op.value),
   }),
   remove: descriptor<Extract<PatchOp, { op: "remove" }>>({
     op: "remove",
     pointerFields: ["path"],
     structural: true,
-    apply: (state, op, owned) =>
-      removeAtPath(state, parsePointer(op.path), owned),
+    apply: (state, op) => removeAtPath(state, parsePointer(op.path)),
   }),
   move: descriptor<Extract<PatchOp, { op: "move" }>>({
     op: "move",
     pointerFields: ["from", "path"],
     structural: true,
-    apply: (state, op, owned) =>
-      moveValue(state, parsePointer(op.from), parsePointer(op.path), owned),
+    apply: (state, op) =>
+      moveValue(state, parsePointer(op.from), parsePointer(op.path)),
   }),
   splice: descriptor<Extract<PatchOp, { op: "splice" }>>({
     op: "splice",
     pointerFields: ["path"],
     structural: false,
-    apply: (state, op, owned) =>
-      spliceAtPath(
-        state,
-        parsePointer(op.path),
-        op.index,
-        op.remove,
-        op.add,
-        owned,
-      ),
+    apply: (state, op) =>
+      spliceAtPath(state, parsePointer(op.path), op.index, op.remove, op.add),
   }),
   append: descriptor<Extract<PatchOp, { op: "append" }>>({
     op: "append",
     pointerFields: ["path"],
     structural: false,
-    apply: (state, op, owned) =>
-      appendAtPath(state, parsePointer(op.path), op.values, owned),
+    apply: (state, op) => appendAtPath(state, parsePointer(op.path), op.values),
   }),
   "add-unique": descriptor<Extract<PatchOp, { op: "add-unique" }>>({
     op: "add-unique",
     pointerFields: ["path"],
     structural: false,
-    apply: (state, op, owned) =>
-      addUniqueAtPath(state, parsePointer(op.path), op.values, owned),
+    apply: (state, op) =>
+      addUniqueAtPath(state, parsePointer(op.path), op.values),
   }),
   "remove-by-value": descriptor<Extract<PatchOp, { op: "remove-by-value" }>>({
     op: "remove-by-value",
     pointerFields: ["path"],
     structural: false,
-    apply: (state, op, owned) =>
-      removeByValueAtPath(state, parsePointer(op.path), op.value, owned),
+    apply: (state, op) =>
+      removeByValueAtPath(state, parsePointer(op.path), op.value),
   }),
   increment: descriptor<Extract<PatchOp, { op: "increment" }>>({
     op: "increment",
     pointerFields: ["path"],
     structural: false,
-    apply: (state, op, owned) =>
-      incrementAtPath(state, parsePointer(op.path), op.by, owned),
+    apply: (state, op) => incrementAtPath(state, parsePointer(op.path), op.by),
   }),
 };
 

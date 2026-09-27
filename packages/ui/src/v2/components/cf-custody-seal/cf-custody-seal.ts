@@ -37,8 +37,9 @@ type SealSummary = {
  * the actor's entry and values it made up, as many times as it likes, so no
  * per-answer bound holds.
  *
- * TODO(L14b): once a pattern's reads carry the input witness, the seal should
- * refuse such a policy and this warning goes with it.
+ * TODO(custody-refuse-unwitnessed): once the other conditions a witnessed
+ * release rests on can be checked (`releaseRequiresSealWitness`), the seal
+ * should refuse such a policy and this warning goes with it.
  */
 const UNWITNESSED_RELEASE_WARNING =
   "This room protects your answer's inputs from members' honest code only; a member running their own code can learn your stance one answer at a time.";
@@ -167,12 +168,14 @@ function describeSource(source: unknown): string {
  * details. Only a trusted
  * click on the dialog's own confirmation seals.
  *
- * Once the value is sealed, the component writes a link to the instance's box
- * into `$box`, when bound: the box is the one document the room's projector
- * reads, and a pattern has no other way to address it. Reading it stays
- * label-gated, so what the pattern computes from it leaves the room only
- * through the room policy's own release rules. The blinded key of the actor's
- * entry never reaches the pattern.
+ * The seal writes a link to the instance's box into `$box`, when bound, in
+ * the transaction that writes the entry: the box is the one document the
+ * room's projector reads, and a pattern has no other way to address it. The
+ * link is the seal's own write, so a release rule that requires the seal's
+ * witness also covers which document the projector reads as its box. Reading
+ * it stays label-gated, so what the pattern computes from it leaves the room
+ * only through the room policy's own release rules. The blinded key of the
+ * actor's entry never reaches the pattern.
  *
  * @element cf-custody-seal
  * @fires cf-sealed - The value is sealed; `detail.instance` is the instance
@@ -324,7 +327,10 @@ export class CFCustodySeal extends BaseElement {
   @property({ attribute: false })
   accessor sources: CellHandle | undefined;
 
-  /** Optional writable cell that receives a link to the instance's box. */
+  /**
+   * Optional cell in the room space that receives a link to the instance's
+   * box, written by the seal.
+   */
   @property({ attribute: false })
   accessor box: CellHandle | undefined;
 
@@ -529,6 +535,7 @@ export class CFCustodySeal extends BaseElement {
         terms: terms.ref(),
         policy: policy.ref(),
         allowedSources: sources.ref(),
+        ...(box === undefined ? {} : { box: box.ref() }),
       });
       if (!this.#current(binding)) {
         this.#releasePreview(runtime, preview.id);
@@ -575,27 +582,14 @@ export class CFCustodySeal extends BaseElement {
     this.#error = "";
     this.requestUpdate();
     try {
+      // The seal writes the link to the box into the box binding the actor
+      // reviewed with, in the transaction that writes the entry, so the
+      // entry and the room's way to it land together.
       const sealed = await binding.runtime.commitCustodySeal(preview.id);
       // The preview is consumed; nothing is left to cancel.
       this.#preview = undefined;
-      // The entry is durable, and the link is the room's only way to it, so
-      // it goes to the box binding the actor reviewed with, even when a
-      // binding has changed since. The value is sealed whatever becomes of
-      // the link, so a failed write is reported as that and the seal is still
-      // announced: a second seal would be refused as a second entry.
-      let linkError = "";
-      if (binding.box) {
-        try {
-          await binding.box.setStrict(sealed.box);
-        } catch (error) {
-          linkError = `Sealed, but the link to the room's box was not saved: ${
-            error instanceof Error ? error.message : "the write failed"
-          }`;
-        }
-      }
       if (!this.#current(binding)) return;
       this.#invalidate();
-      this.#error = linkError;
       this.emit("cf-sealed", { instance: sealed.instance });
     } catch (error) {
       this.#preview = undefined;
