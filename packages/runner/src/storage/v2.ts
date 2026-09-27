@@ -811,23 +811,27 @@ const materializedVersionThroughPending = (
 };
 
 /**
- * Whether promoting `pending` over `confirmed` reproduces the server's stored
- * document at the accept's seq: the layer declared `confirmed` as its base,
- * `confirmed` is the server's document at that seq, and the accept reports
- * the head it applied over was that same document. Promotion replays the
- * layer's operations with the patch function the server applied them with,
- * so equal inputs give the equal document the server stored.
+ * Whether `promoted`, the value of `pending` replayed over `confirmed`, is the
+ * server's stored document at the accept's seq: the layer declared
+ * `confirmed` as its base, `confirmed` is the server's document at that seq,
+ * and the accept reports the head it applied over was that same document.
+ * Promotion replays the layer's operations with the patch function the
+ * server applied them with, so equal inputs give the equal document. A replay
+ * that skipped the layer, whose operations did not apply, leaves `confirmed`'s
+ * own value, and is refused.
  */
 const promotesExactly = (
   confirmed: ConfirmedVersion,
   pending: PendingVersion,
+  promoted: EntityDocument | undefined,
   applied: AppliedCommit,
   id: URI,
   scope: CellScope | undefined,
 ): boolean => {
   if (
     pending.op !== "patch" || pending.baseSeq === undefined ||
-    confirmed.serverExact !== true || confirmed.seq !== pending.baseSeq
+    confirmed.serverExact !== true || confirmed.seq !== pending.baseSeq ||
+    promoted === confirmed.value
   ) {
     return false;
   }
@@ -8789,7 +8793,7 @@ export class SpaceReplica
         this.#scopeKeyIdentity(),
       )
       : undefined;
-    for (const [key, { id, scope, scopeKey }] of keys) {
+    for (const { id, scope, scopeKey } of keys.values()) {
       const record = this.#record(id, scope, undefined, scopeKey);
       const pendingIndexes = record.pending.flatMap((entry, index) =>
         entry.localSeq === localSeq ? [index] : []
@@ -8856,7 +8860,14 @@ export class SpaceReplica
           }
           if (
             pendingIndexes.length === 1 &&
-            promotesExactly(previousConfirmed, pending, applied, id, scope)
+            promotesExactly(
+              previousConfirmed,
+              pending,
+              prefix.value,
+              applied,
+              id,
+              scope,
+            )
           ) {
             promoted.serverExact = true;
           }
@@ -8879,9 +8890,6 @@ export class SpaceReplica
 
       if (promoted) {
         record.confirmed = promoted;
-        if (promoted.serverExact === true) {
-          this.#noteExactPromotion(key, promoted);
-        }
         record.materialized = reusedSuffix && reusedSuffix.length > 0
           ? {
             confirmed: promoted,
@@ -8932,23 +8940,6 @@ export class SpaceReplica
         ]);
       }
     }
-  }
-
-  /**
-   * Helper for `#confirmPending()`, which records a promotion the server
-   * reported exact as delivered: the replica holds the server's document at
-   * that seq as surely as if a frame had carried it, so its holdings may
-   * claim it (`holdings()`). A document no longer delivered at all — its
-   * watch removed while the commit was in flight — stays undeclared.
-   */
-  #noteExactPromotion(key: string, promoted: ConfirmedVersion): void {
-    const delivered = this.#delivered.get(key);
-    if (delivered === undefined || delivered.seq >= promoted.seq) return;
-    this.#delivered.set(key, {
-      ...delivered,
-      seq: promoted.seq,
-      deleted: promoted.value === undefined,
-    });
   }
 
   #dropPending(localSeq: number): void {
