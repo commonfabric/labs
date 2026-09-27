@@ -172,7 +172,7 @@ const commitWitnessesSubmit = async (
             CFC_ATOM_TYPE.TransformedBy &&
           witness !== undefined &&
           (witness.identity as { symbol?: unknown })?.symbol ===
-            SUBMIT.symbol;
+            "submit";
       })
     );
   } finally {
