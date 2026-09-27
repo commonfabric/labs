@@ -498,20 +498,6 @@ export interface DiffWalkState {
    * such elements inline.
    */
   nextAnchorId?: () => string | number;
-
-  /**
-   * The read-only transaction through which every cell of the walk's runtime
-   * resolves a schema its link does not state, opened by the first cell that
-   * needs one, and again should it stop being ready. A cell with a ready
-   * transaction of its own resolves through
-   * that instead, and a cell of another runtime through one of its own
-   * runtime's.
-   *
-   * Whoever constructs a state uses it for one walk and then drops it. Held
-   * past that, this transaction would go on serving what it read after later
-   * commits changed it.
-   */
-  readTx?: IExtendedStorageTransaction;
 }
 
 /**
@@ -1322,18 +1308,7 @@ export function normalizeAndDiff(
     // the write, so seed the target doc here, only if it has no value yet —
     // re-derivations serialize the same cell again but find the doc present
     // and leave user edits alone.
-    //
-    // A cell whose link states no schema has its schema read from storage.
-    // The walk runs synchronously and commits nothing itself, so what those
-    // reads find cannot change between one cell and the next, and the cells
-    // of the walk's runtime share one transaction for them. A cell of another
-    // runtime reads that runtime's storage instead.
-    const cellSchema =
-      newValue instanceof CellImpl && newValue.runtime === runtime
-        ? newValue.schemaReadingThrough(() =>
-          state.readTx = runtime.readTx(state.readTx)
-        )
-        : newValue.schema;
+    const cellSchema = newValue.schema;
     let initializedSeed = false;
     const seedDefault = isObjectOrArray(cellSchema)
       ? cellSchema.default

@@ -1358,29 +1358,18 @@ export class CellImpl<T extends FabricValue>
   }
 
   get schema(): JSONSchema | undefined {
-    return this.schemaReadingThrough();
-  }
-
-  /**
-   * Like `.schema`, except that where the cell holds no ready transaction of
-   * its own, a schema its link does not carry is resolved through the
-   * transaction `fallbackReadTx()` returns, rather than through one opened for
-   * that read alone. That has to be a ready transaction reading this cell's
-   * runtime's storage. A caller resolving many cells' schemas in one pass
-   * hands every one the same transaction this way.
-   */
-  schemaReadingThrough(
-    fallbackReadTx?: () => IExtendedStorageTransaction,
-  ): JSONSchema | undefined {
     if (this.#_link.schema !== undefined) return this.#_link.schema;
 
     // If no schema is defined, resolve link and get schema from there (which is
     // what .get() would do).
     if (this.#hasFullLink()) {
-      const tx = this.tx?.status().status === "ready"
-        ? this.tx
-        : fallbackReadTx?.() ?? this.runtime.readTx();
-      return resolveLink(this.runtime, tx, this.#link, "writeRedirect").schema;
+      const resolvedLink = resolveLink(
+        this.runtime,
+        this.runtime.readTx(this.tx),
+        this.#link,
+        "writeRedirect",
+      );
+      return resolvedLink.schema;
     }
 
     return undefined;
