@@ -511,13 +511,21 @@ export class VisitInProgress<
         !Object.is(mappedTo, state),
       );
 
-      if (recurseResult === undefined) {
+      // We determine "changedness" for `FabricInstance` by considering the
+      // mutability of the instance in addition to whether the state actually
+      // got changed from the mapping. This (former part) is to guarantee that
+      // an instance whose mutability doesn't align with
+      // `#freezeMappedContainers` will always get reconstructed.
+      if (
+        (recurseResult === undefined) &&
+        (Object.isFrozen(instance) === this.#freezeMappedContainers)
+      ) {
         return undefined;
       } else {
         const instanceResult = this.#reconstructFabricInstance(
           instance,
           codec,
-          recurseResult.value,
+          recurseResult ? recurseResult.value : mappedTo,
         );
         return this.#makeRecurseResult(instance, instanceResult, true);
       }
