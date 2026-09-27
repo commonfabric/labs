@@ -87,6 +87,29 @@ const SENT = {
       concepts: ["https://commonfabric.org/cfc/concepts/reach"],
     }],
   },
+  cfcPolicyRecords: [{
+    id: "reach-display",
+    rules: [{
+      id: "reach-display-release",
+      appliesTo: {
+        type: "https://commonfabric.org/cfc/atom/Resource",
+        subject: { var: "$actingUser" },
+      },
+      preCondition: {
+        boundary: [{
+          type: "https://commonfabric.org/cfc/atom/BoundaryContext",
+          key: "sinkClass",
+          value: "display",
+        }],
+      },
+      post: {
+        addAlternatives: [{
+          type: "https://commonfabric.org/cfc/atom/User",
+          subject: { var: "$actingUser" },
+        }],
+      },
+    }],
+  }],
   renderDeclassificationPolicy: "deny",
   renderConfidentialityCeiling: {
     atoms: [cfcAtom.user(signer.did())],
@@ -200,6 +223,14 @@ const REACH = {
         signer.did(),
       ),
     expected: true,
+  },
+  cfcPolicyRecords: {
+    // The runtime's own validated snapshot, which every boundary evaluates.
+    reads: (o) =>
+      o.runtime.cfcPolicySnapshot?.records.map((record) =>
+        record.rules.map((rule) => `${record.id}/${rule.id}`)
+      ),
+    expected: [["reach-display/reach-display-release"]],
   },
   renderDeclassificationPolicy: {
     reads: (o) => o.processor.accessForTestingOnly.renderDeclassificationPolicy,

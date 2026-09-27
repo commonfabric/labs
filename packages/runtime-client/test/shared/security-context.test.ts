@@ -203,6 +203,54 @@ describe("securityContextDifferences()", () => {
     ).toEqual(["cfcTrustConfig"]);
   });
 
+  // A deployment record set as two documents might spell it: the same rule
+  // with its keys in another order.
+  const displayRecords = (subjectKeyFirst: boolean) => [{
+    id: "owner-self-display",
+    rules: [{
+      id: "resource-owner-self-display",
+      appliesTo: subjectKeyFirst
+        ? { subject: { var: "$actingUser" }, type: "Resource" }
+        : { type: "Resource", subject: { var: "$actingUser" } },
+      post: {
+        addAlternatives: [{ type: "User", subject: { var: "$actingUser" } }],
+      },
+    }],
+  }];
+
+  it("names the deployment policy records when they differ", () => {
+    // A runtime evaluates one record set at every boundary, so a document
+    // believing another would read a value as released, or sealed, where the
+    // runtime does otherwise.
+    expect(
+      securityContextDifferences(
+        { ...running, cfcPolicyRecords: displayRecords(false) },
+        running,
+      ),
+    ).toEqual(["cfcPolicyRecords"]);
+  });
+
+  it("reads one record set spelled two ways as the same posture", () => {
+    expect(
+      securityContextDifferences(
+        { ...running, cfcPolicyRecords: displayRecords(true) },
+        { ...running, cfcPolicyRecords: displayRecords(false) },
+      ),
+    ).toEqual([]);
+  });
+
+  it("names a record set the runtime could not have booted with", () => {
+    // A malformed record set builds no snapshot, and it is not the posture of
+    // a runtime that booted, whatever that runtime holds.
+    const malformed = [{ id: "broken", rules: "all" }] as never;
+    expect(
+      securityContextDifferences(
+        { ...running, cfcPolicyRecords: malformed },
+        { ...running, cfcPolicyRecords: malformed },
+      ),
+    ).toEqual(["cfcPolicyRecords"]);
+  });
+
   it("names the enforcement mode when it differs", () => {
     expect(
       securityContextDifferences(

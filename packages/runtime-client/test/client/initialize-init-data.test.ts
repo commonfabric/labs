@@ -122,6 +122,14 @@ describe("initialize-init-data", () => {
             concepts: ["https://commonfabric.org/cfc/concepts/forwarding"],
           }],
         },
+        cfcPolicyRecords: [{
+          id: "forwarding-records",
+          rules: [{
+            id: "forwarding-rule",
+            appliesTo: { type: "https://example.com/atoms/Forwarding" },
+            post: { dropClause: true },
+          }],
+        }],
         renderDeclassificationPolicy: "deny",
         renderConfidentialityCeiling: { caveatKinds: ["forwarding"] },
         trustSnapshot: { id: "forwarding-snapshot" },
