@@ -3894,9 +3894,12 @@ export const flowLabelWorkExists = (
   for (const space of getTransactionWrittenSpaces(tx)) {
     for (const write of tx.getWriteDetails?.(space) ?? []) {
       // Either a direct `["cfc"]` write or a whole-envelope root write whose
-      // value embeds a `cfc` record (the raw-seed idiom). A write that ended
-      // where it started minted nothing, so the metadata it touched is still
-      // the pre-existing kind.
+      // value embeds a `cfc` record (the raw-seed idiom). A write whose final
+      // value equals its value before the transaction minted nothing, so the
+      // metadata it touched is still the pre-existing kind. That includes one
+      // that changed only whether an `undefined` slot is present: such a slot
+      // holds no label, and counting the document self-minted would only hide
+      // the entries it already had.
       if (
         (write.address.path[0] === "cfc" ||
           (write.address.path.length === 0 && isObjectOrArray(write.value) &&
