@@ -1,3 +1,10 @@
+/**
+ * The canonical content hash of a `FabricValue`, fed as type-tagged bytes into
+ * a single SHA-256 context, together with the caches that make feeding one
+ * cheaper and a count of the containers fed, which a test reads to tell a
+ * whole-value hash from a small one.
+ */
+
 import {
   createHasher,
   type IncrementalHasher,
@@ -115,6 +122,13 @@ const stringRepCache = new LRUCache<string, Uint8Array>({
   weigh: (key, value) => key.length * 2 + value.length + 64,
   maxWeight: 8 * 1024 * 1024,
 });
+
+/**
+ * How many arrays and plain objects have been fed to a hasher, counted from
+ * when this module loaded. Only a test or a benchmark reads it, through
+ * `getContainersHashed()`.
+ */
+let containersHashed = 0;
 
 /** Prepopulated cache of encoded small-length numbers. */
 const smallLengthCache: Uint8Array[] = Array.from(
@@ -270,6 +284,7 @@ export class ValueHasher {
     const hasher = this.#hasher;
     const path = this.#path;
 
+    containersHashed++;
     path.push(value);
     hasher.update(TAG_ARRAY_BYTES);
     let i = 0;
@@ -453,6 +468,7 @@ export class ValueHasher {
     const hasher = this.#hasher;
     const path = this.#path;
 
+    containersHashed++;
     path.push(value);
 
     // Note: Even though we could conceivably define the key sort order to be
@@ -497,4 +513,14 @@ export class ValueHasher {
     valueHasher.feedValue(value);
     return valueHasher.digestString();
   }
+}
+
+/**
+ * Counts the arrays and plain objects fed to a hasher.
+ *
+ * @internal Not in the `value-hash` barrel; `for-testing-only.ts` offers it to
+ * tests.
+ */
+export function getContainersHashed(): number {
+  return containersHashed;
 }

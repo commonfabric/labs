@@ -1,4 +1,4 @@
-export { fabricAwareEqual, valueEqual } from "@/comparison";
+export { fabricAwareEqual, valueEqual, valueEqualByWalk } from "@/comparison";
 
 export {
   deepFreeze,
