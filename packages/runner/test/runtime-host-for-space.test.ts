@@ -130,9 +130,15 @@ describe("Runtime.registerSpaceHost", () => {
       }
     });
 
-    it("answers no-remote-resolution when the manager has none", async () => {
+    it("reports no-remote-resolution when the manager has none", async () => {
       const runtime = makeRuntime();
       try {
+        expect(
+          runtime.storageManager.registerSpaceHostDetailed?.(
+            spaceB,
+            "http://host-b.test/",
+          ),
+        ).toEqual({ accepted: false, reason: "no-remote-resolution" });
         expect(runtime.registerSpaceHostDetailed(spaceB, "http://host-b.test/"))
           .toEqual({ accepted: false, reason: "no-remote-resolution" });
         expect(runtime.mappedHostFor(spaceB)).toBeUndefined();
@@ -141,7 +147,7 @@ describe("Runtime.registerSpaceHost", () => {
       }
     });
 
-    it("answers unspecified for a manager that gives only a verdict", async () => {
+    it("reports unspecified for a manager that gives only a verdict", async () => {
       const storageManager = Object.assign(
         StorageManager.emulate({ as: signer }),
         {

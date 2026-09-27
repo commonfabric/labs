@@ -487,26 +487,8 @@ describe("StorageManager.registerSpaceHost", () => {
 
     it("throws on a malformed host, naming the space", async () => {
       const manager = await makeManager();
-      expect(() =>
-        manager.registerSpaceHostDetailed(spaceLearned, "not a url")
-      ).toThrow(`Invalid host for space ${spaceLearned}`);
-    });
-
-    it("answers no-remote-resolution from an emulated manager", async () => {
-      const signer = await Identity.fromPassphrase("register-space-host");
-      const manager = StorageManager.emulate({ as: signer });
-      try {
-        expect(
-          manager.registerSpaceHostDetailed(
-            spaceLearned,
-            "http://host-b.test",
-          ),
-        ).toEqual({ accepted: false, reason: "no-remote-resolution" });
-        expect(manager.registerSpaceHost(spaceLearned, "http://host-b.test"))
-          .toBe(false);
-      } finally {
-        await manager.close();
-      }
+      expect(() => manager.registerSpaceHostDetailed(spaceLearned, "not a url"))
+        .toThrow(`Invalid host for space ${spaceLearned}`);
     });
   });
 
