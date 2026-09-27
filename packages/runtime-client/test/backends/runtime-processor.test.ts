@@ -54,7 +54,7 @@ import {
   cfcLabelViewForCell,
   createRuntimeCfcModulePolicySource,
   linkCfcLabelView,
-  setLinkCfcLabelView,
+  withLinkCfcLabelView,
 } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import * as V2Storage from "@commonfabric/runner/storage/v2";
@@ -2872,20 +2872,22 @@ describe("runtime-processor", () => {
       runtime: Runtime,
       id: string,
     ): Cell<unknown> {
-      const link = runtime.getCell(cfcSigner.did(), id).getAsLink();
-      setLinkCfcLabelView(link, {
-        version: 1,
-        entries: [{
-          path: [],
-          label: {
-            confidentiality: [{
-              type: CFC_ATOM_TYPE.Caveat,
-              kind: "derived-from",
-              source: "did:key:alice",
-            }],
-          },
-        }],
-      } as CfcLabelView);
+      const link = withLinkCfcLabelView(
+        runtime.getCell(cfcSigner.did(), id).getAsLink(),
+        {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: [{
+                type: CFC_ATOM_TYPE.Caveat,
+                kind: "derived-from",
+                source: "did:key:alice",
+              }],
+            },
+          }],
+        } as CfcLabelView,
+      );
       return runtime.getCellFromLink(link);
     }
 

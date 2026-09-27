@@ -168,6 +168,12 @@ export interface FabricCodec<PlusType, Encoded> {
    * declare the narrower state type it actually decodes and read its parts as
    * such. `state` is the whole of `Encoded` here because this interface is what
    * a registry holds, and the codecs in one agree on nothing narrower.
+   *
+   * A `state` need not come from {@link #encode}, so an implementation which
+   * keeps a container from `state` as part of the value it builds may do so
+   * only when that container is frozen and stays frozen in that value. Anything
+   * else it keeps, it copies. A mutable value may keep frozen state this way,
+   * so long as nothing that makes it mutable depends on changing that state.
    */
   decode(
     typeTag: string,
@@ -188,6 +194,15 @@ export interface FabricCodec<PlusType, Encoded> {
    *
    * `env` is what a codec reaches the running system through, the same one
    * {@link #decode} is handed.
+   *
+   * The result is a snapshot of `value`: it represents `value`'s internal
+   * state as frozen data, and its external references as themselves, with
+   * their frozenness left as it is. This holds whether or not `value` is
+   * itself frozen. A mutable value's internal state is copied into the result,
+   * never frozen in place, and a result may be cached so long as it is dropped
+   * when the value changes. A value whose state effectively is an external
+   * reference may return that reference as itself, frozen or not; so a caller
+   * must not freeze a result in place, or otherwise change it.
    */
   encode(value: FabricValuePlus<PlusType>, env: LiveEnvironment): Encoded;
 }

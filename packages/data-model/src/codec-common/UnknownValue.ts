@@ -118,6 +118,8 @@ export class UnknownValue extends BaseFabricInstance {
 
       /** @inheritDoc */
       encode(value: UnknownValue, _env: LiveEnvironment): FabricValue {
+        // The preserved state is all this value holds, and it is an external
+        // reference rather than internal state, so it is returned as itself.
         return value.state;
       }
 

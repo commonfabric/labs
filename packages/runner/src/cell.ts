@@ -113,7 +113,7 @@ import {
   cfcLabelViewForResolvedCell,
   redactCaveatSourcesForDisplay,
 } from "./cfc/label-view.ts";
-import { setLinkCfcLabelView } from "./cfc/link-label-view.ts";
+import { withLinkCfcLabelView } from "./cfc/link-label-view.ts";
 import {
   readStoredCfcMetadata,
   storedCfcMetadataAppliesToPath,
@@ -4736,12 +4736,15 @@ type CellLinkOptions = {
  * it when asked.
  */
 function linkToCell(cell: Cell<any>, options: CellLinkOptions): SigilLink {
-  const link = cell.getAsLink(options);
+  let link = cell.getAsLink(options);
 
   if (options.includeCfcLabelView) {
     const cfcLabelView = getCarriedCfcLabelView(cell);
     if (cfcLabelView) {
-      setLinkCfcLabelView(link, redactCaveatSourcesForDisplay(cfcLabelView));
+      link = withLinkCfcLabelView(
+        link,
+        redactCaveatSourcesForDisplay(cfcLabelView),
+      );
     }
   }
 
