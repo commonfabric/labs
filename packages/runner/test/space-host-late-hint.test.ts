@@ -1269,7 +1269,7 @@ describe("late space host hints", () => {
           targetSpace,
           "https://different-toolshed.test",
         ),
-      ).toEqual({ accepted: false, reason: "already-opened" });
+      ).toEqual({ accepted: false, reason: "default-route-in-use" });
       // The refusal fixes no route: a hint naming the default host, which the
       // written provider is on, is still confirmed.
       expect(

@@ -4411,7 +4411,10 @@ export class Runtime {
    */
   registerSpaceHost(space: MemorySpace, host: string): boolean {
     const normalized = this.#normalizedSpaceHost(space, host);
-    const accept = this.storageManager.registerSpaceHost?.(space, normalized);
+    const storage = this.storageManager;
+    const accept = storage.registerSpaceHost !== undefined
+      ? storage.registerSpaceHost(space, normalized)
+      : storage.registerSpaceHostDetailed?.(space, normalized).accepted;
     if (accept === undefined) return false; // manager has no remote resolution
     if (accept) this.#dynamicHosts.set(space, normalized);
     return accept;
@@ -4444,9 +4447,9 @@ export class Runtime {
   }
 
   /**
-   * The normalized origin of `host`. A host that is not an HTTP or HTTPS
-   * origin throws an error naming `space`, with the validation error as its
-   * cause.
+   * Returns the normalized origin of `host`. A host that is not an HTTP or
+   * HTTPS origin throws an error naming `space`, with the validation error as
+   * its cause.
    */
   #normalizedSpaceHost(space: MemorySpace, host: string): string {
     try {

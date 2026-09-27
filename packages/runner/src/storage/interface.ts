@@ -331,8 +331,8 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
 
   /**
    * Record a host hint as {@link registerSpaceHost} does, and say why when it
-   * is refused. Optional: a manager that gives only the verdict implements
-   * {@link registerSpaceHost} alone.
+   * is refused. Optional: a manager may implement either method, or both
+   * with the same verdict.
    */
   registerSpaceHostDetailed?(
     space: MemorySpace,

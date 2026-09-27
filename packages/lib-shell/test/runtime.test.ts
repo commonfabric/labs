@@ -94,7 +94,7 @@ class MockRuntimeClient {
   registerSpaceHostDetailed(space: DID, host: string) {
     this.registeredSpaceHosts.push({ space, host });
     return Promise.resolve(
-      { accepted: false, reason: "already-opened" } as const,
+      { accepted: false, reason: "default-route-in-use" } as const,
     );
   }
 
@@ -459,14 +459,14 @@ describe("RuntimeInternals", () => {
     }
   });
 
-  it("returns the worker's reason for refusing a space host", async () => {
+  it("returns the worker's registration for a refused space host", async () => {
     const space = "did:key:z6Mk-lib-shell-routed-space" as DID;
     const client = new MockRuntimeClient();
     const runtime = new RuntimeInternals(client as any);
     try {
       await expect(
         runtime.registerSpaceHostDetailed(space, "http://host-b.test/"),
-      ).resolves.toEqual({ accepted: false, reason: "already-opened" });
+      ).resolves.toEqual({ accepted: false, reason: "default-route-in-use" });
       expect(client.registeredSpaceHosts).toEqual([
         { space, host: "http://host-b.test/" },
       ]);

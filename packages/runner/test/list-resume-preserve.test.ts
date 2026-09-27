@@ -169,8 +169,8 @@ class GatedStorageManager extends StorageManager {
   ) {
     super(options, new GatedSessionFactory(() => server, gate));
   }
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed() {
+    return { accepted: false, reason: "no-remote-resolution" } as const;
   }
 }
 

@@ -448,7 +448,7 @@ describe("StorageManager.registerSpaceHost", () => {
   });
 
   describe("registerSpaceHostDetailed()", () => {
-    it("reports an accepted hint and its confirmation without a reason", async () => {
+    it("returns an acceptance for a first hint and for its confirmation", async () => {
       const manager = await makeManager();
       expect(
         manager.registerSpaceHostDetailed(spaceLearned, "http://host-b.test"),
@@ -461,7 +461,7 @@ describe("StorageManager.registerSpaceHost", () => {
       ).toEqual({ accepted: true });
     });
 
-    it("names the seeded host when a hint would re-point a seeded space", async () => {
+    it("returns `known-different-host` with the seeded host for a seeded space", async () => {
       const manager = await makeManager();
       expect(
         manager.registerSpaceHostDetailed(spaceSeeded, "http://host-evil.test"),
@@ -472,7 +472,7 @@ describe("StorageManager.registerSpaceHost", () => {
       });
     });
 
-    it("names the accepted host when a later hint differs from it", async () => {
+    it("returns `known-different-host` with the accepted host for a later hint", async () => {
       const manager = await makeManager();
       expect(manager.registerSpaceHost(spaceLearned, "http://host-b.test"))
         .toBe(true);

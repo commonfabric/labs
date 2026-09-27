@@ -18,16 +18,17 @@ export class SpaceHostValidationError extends TypeError {
  *
  * - `known-different-host`: a seed or an accepted hint already routes the
  *   space to another host, which a registration confirms and never replaces.
- * - `already-opened`: the space opened through the default host and a
+ * - `default-route-in-use`: the space opened through the default host and a
  *   stateful operation was issued there, so this session keeps that route.
- *   The refusal says nothing against the offered host.
+ *   Opening alone does not cause it. The refusal says nothing against the
+ *   offered host.
  * - `no-remote-resolution`: storage resolves no per-space host, so a hint can
  *   take no effect.
  * - `unspecified`: storage gave a verdict without a reason.
  */
 export type SpaceHostRefusalReason =
   | "known-different-host"
-  | "already-opened"
+  | "default-route-in-use"
   | "no-remote-resolution"
   | "unspecified";
 
@@ -36,9 +37,21 @@ export type SpaceHostRefusalReason =
  * effect and one that confirms the route already in effect.
  */
 export type SpaceHostRegistration =
-  | { accepted: true }
   | {
+    /**
+     * The hint is in effect.
+     */
+    accepted: true;
+  }
+  | {
+    /**
+     * The hint was refused.
+     */
     accepted: false;
+
+    /**
+     * The rule that refused it.
+     */
     reason: "known-different-host";
 
     /**
@@ -47,7 +60,14 @@ export type SpaceHostRegistration =
     existingHost: string;
   }
   | {
+    /**
+     * The hint was refused.
+     */
     accepted: false;
+
+    /**
+     * The rule that refused it.
+     */
     reason: Exclude<SpaceHostRefusalReason, "known-different-host">;
   };
 

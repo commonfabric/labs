@@ -852,7 +852,7 @@ describe("RuntimeClient", () => {
   });
 
   describe("registerSpaceHostDetailed", () => {
-    function clientAnswering(registration: unknown) {
+    function clientReturning(registration: unknown) {
       const requests: unknown[] = [];
       const conn = {
         on: () => {},
@@ -870,7 +870,7 @@ describe("RuntimeClient", () => {
     const space = "did:key:z6Mk-runtime-client-routed-space";
 
     it("sends the hint and returns the worker's registration", async () => {
-      const { client, requests } = clientAnswering({ accepted: true });
+      const { client, requests } = clientReturning({ accepted: true });
 
       expect(await client.registerSpaceHostDetailed(space, "http://b.test/"))
         .toEqual({ accepted: true });
@@ -889,12 +889,12 @@ describe("RuntimeClient", () => {
             reason: "known-different-host",
             existingHost: "http://known.test/",
           },
-          { accepted: false, reason: "already-opened" },
+          { accepted: false, reason: "default-route-in-use" },
           { accepted: false, reason: "no-remote-resolution" },
           { accepted: false, reason: "unspecified" },
         ]
       ) {
-        const { client } = clientAnswering(refusal);
+        const { client } = clientReturning(refusal);
         expect(await client.registerSpaceHostDetailed(space, "http://b.test/"))
           .toEqual(refusal);
       }

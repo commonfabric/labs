@@ -5988,7 +5988,7 @@ describe("runtime-processor", () => {
     });
 
     describe("handleRegisterSpaceHostDetailed()", () => {
-      it("forwards to the runtime and reports each refusal with its reason", () => {
+      it("forwards to the runtime and returns each registration unchanged", () => {
         const calls: Array<[string, string]> = [];
         const registrations = {
           "http://accepted.test/": { accepted: true },
@@ -5997,7 +5997,10 @@ describe("runtime-processor", () => {
             reason: "known-different-host",
             existingHost: "http://known.test/",
           },
-          "http://late.test/": { accepted: false, reason: "already-opened" },
+          "http://late.test/": {
+            accepted: false,
+            reason: "default-route-in-use",
+          },
           "http://local.test/": {
             accepted: false,
             reason: "no-remote-resolution",

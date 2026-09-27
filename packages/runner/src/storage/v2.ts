@@ -1498,7 +1498,9 @@ export class StorageManager implements IStorageManager {
    * - A different-host hint cannot replace a route after a stateful operation
    *   is issued.
    *
-   * Idempotent when the hint matches what is already in effect.
+   * Idempotent when the hint matches what is already in effect. The verdict is
+   * that of {@link registerSpaceHostDetailed}, which is the method a subclass
+   * overrides.
    */
   registerSpaceHost(space: MemorySpace, host: string): boolean {
     return this.registerSpaceHostDetailed(space, host).accepted;
@@ -1509,7 +1511,7 @@ export class StorageManager implements IStorageManager {
    * names the rule behind a refusal. A seed or an accepted hint for another
    * host is refused as `known-different-host`, with that host. A hint for a
    * provider that issued a stateful operation through the default route is
-   * refused as `already-opened`, and no route is recorded for the space.
+   * refused as `default-route-in-use`, and no route is recorded for the space.
    */
   registerSpaceHostDetailed(
     space: MemorySpace,
@@ -1542,7 +1544,7 @@ export class StorageManager implements IStorageManager {
       this.#resolveDefaultStorageRoute() !==
         toWebSocketAddress(storageAddressForHost(normalized)).toString();
     if (replacesDefaultRoute && !provider.canReplaceProvisionalReplica()) {
-      return { accepted: false, reason: "already-opened" };
+      return { accepted: false, reason: "default-route-in-use" };
     }
     this.#dynamicHosts.set(space, normalized);
     if (replacesDefaultRoute) {
