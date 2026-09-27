@@ -83,7 +83,7 @@ describe("message-quoting", () => {
 
   describe("JsonCodecEngine.decode()", () => {
     it("hands back the excerpt it refused", () => {
-      const env = new NullLiveEnvironment(false);
+      const env = new NullLiveEnvironment();
       for (const data of HOSTILE) {
         let message = "";
         try {

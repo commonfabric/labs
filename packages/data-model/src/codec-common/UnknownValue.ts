@@ -12,7 +12,6 @@ import {
   type NonterminalCodec,
 } from "@/codec-interface/interface.ts";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
-import { deepFreeze } from "@/deep-freeze.ts";
 import { isCodecTypeTag } from "./isCodecTypeTag.ts";
 import { ProblematicStateError } from "./ProblematicStateError.ts";
 
@@ -134,12 +133,11 @@ export class UnknownValue extends BaseFabricInstance {
       decode(
         typeTag: string,
         state: FabricValue,
-        env: LiveEnvironment,
+        _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const result = new UnknownValue(typeTag, state);
-        // Honor `shouldDeepFreeze`: produce the type's correct deep-frozen
-        // form via its `[DEEP_FREEZE]` member (recursing through `deepFreeze`).
-        return env.shouldDeepFreeze ? deepFreeze(result) : result;
+        return mutable ? result : Object.freeze(result);
       }
     })(),
   );

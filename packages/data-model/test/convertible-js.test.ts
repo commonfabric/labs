@@ -37,7 +37,6 @@ import {
   FabricInstance,
   type FabricPrimitive,
   type FabricValue,
-  isDeepFrozen,
   isValidFabricConvertibleJsValue,
   shallowCleanArray,
   shallowCleanPlainObject,
@@ -57,7 +56,12 @@ import {
   IS_DEEP_FROZEN,
   SHALLOW_UNFROZEN_CLONE,
 } from "@/fabric-bases";
-import { FabricError, FabricMap, FabricSet } from "@/fabric-instances";
+import {
+  FabricError,
+  FabricLink,
+  FabricMap,
+  FabricSet,
+} from "@/fabric-instances";
 import {
   FabricBytes,
   FabricEpochNsec,
@@ -410,64 +414,103 @@ describe("convertible-js", () => {
     });
   });
 
-  describe("codec `decode()` honors `shouldDeepFreeze`", () => {
-    const frozenCtx = new DummyLiveEnvironment(true);
-    const mutableCtx = new DummyLiveEnvironment(false);
+  describe("codec `decode()` honors `mutable`", () => {
+    const env = new DummyLiveEnvironment();
 
     describe("FabricError", () => {
-      it("is deep-frozen when `shouldDeepFreeze` is `true`, mutable when `false`", () => {
+      const tag = CODEC_TYPE_TAGS.Error;
+
+      it("is frozen by default, mutable when `mutable` is `true`", () => {
         const state = {
           type: "Error",
           name: null,
           message: "boom",
         };
-        const frozen = FabricError[CODEC].decode(
-          CODEC_TYPE_TAGS.Error,
-          state,
-          frozenCtx,
+        const codec = FabricError[CODEC];
+
+        expect(Object.isFrozen(codec.decode(tag, state, env))).toBe(true);
+        expect(Object.isFrozen(codec.decode(tag, state, env, true))).toBe(
+          false,
         );
-        expect(isDeepFrozen(frozen)).toBe(true);
-        const mutable = FabricError[CODEC].decode(
-          CODEC_TYPE_TAGS.Error,
+      });
+
+      it("leaves its `cause` as it finds it", () => {
+        const cause = { x: 1 };
+        const state = { type: "Error", name: null, message: "boom", cause };
+        const result = FabricError[CODEC].decode(
+          tag,
           state,
-          mutableCtx,
-        );
-        expect(Object.isFrozen(mutable)).toBe(false);
+          env,
+        ) as FabricError;
+
+        expect(result.cause).toBe(cause);
+        expect(Object.isFrozen(cause)).toBe(false);
+      });
+    });
+
+    describe("FabricLink", () => {
+      it("is frozen by default, mutable when `mutable` is `true`", () => {
+        const state = { id: "fid1:abc" };
+        const codec = FabricLink[CODEC];
+
+        expect(Object.isFrozen(codec.decode(CODEC_TYPE_TAGS.Link, state, env)))
+          .toBe(true);
+        expect(
+          Object.isFrozen(codec.decode(CODEC_TYPE_TAGS.Link, state, env, true)),
+        )
+          .toBe(false);
       });
     });
 
     describe("ProblematicValue", () => {
-      it("is deep-frozen when `shouldDeepFreeze` is `true`, mutable when `false`", () => {
+      it("is frozen by default, mutable when `mutable` is `true`", () => {
         // Tag travels separately; the bare inner state is the codec payload,
         // which for this class is a record of the three facts it preserves.
 
         const state = { tag: "Bad@1", state: { x: 1 }, error: "oops" };
-        const frozen = ProblematicValue[CODEC].decode(
+        const codec = ProblematicValue[CODEC];
+
+        expect(Object.isFrozen(codec.decode("Bad@1", state, env))).toBe(true);
+        expect(Object.isFrozen(codec.decode("Bad@1", state, env, true)))
+          .toBe(false);
+      });
+
+      it("leaves the state it preserves as it finds it", () => {
+        const preserved = { x: 1 };
+        const state = { tag: "Bad@1", state: preserved, error: "oops" };
+        const result = ProblematicValue[CODEC].decode(
           "Bad@1",
           state,
-          frozenCtx,
-        );
-        expect(isDeepFrozen(frozen)).toBe(true);
-        const mutable = ProblematicValue[CODEC].decode(
-          "Bad@1",
-          state,
-          mutableCtx,
-        );
-        expect(Object.isFrozen(mutable)).toBe(false);
+          env,
+        ) as ProblematicValue;
+
+        expect(result.state).toBe(preserved);
+        expect(Object.isFrozen(preserved)).toBe(false);
       });
     });
 
     describe("UnknownValue", () => {
-      it("is deep-frozen when `shouldDeepFreeze` is `true`, mutable when `false`", () => {
+      it("is frozen by default, mutable when `mutable` is `true`", () => {
         const state = { y: 2 };
-        const frozen = UnknownValue[CODEC].decode("Fancy@3", state, frozenCtx);
-        expect(isDeepFrozen(frozen)).toBe(true);
-        const mutable = UnknownValue[CODEC].decode(
+        const codec = UnknownValue[CODEC];
+
+        expect(Object.isFrozen(codec.decode("Fancy@3", state, env))).toBe(
+          true,
+        );
+        expect(Object.isFrozen(codec.decode("Fancy@3", state, env, true)))
+          .toBe(false);
+      });
+
+      it("leaves its state as it finds it", () => {
+        const state = { y: 2 };
+        const result = UnknownValue[CODEC].decode(
           "Fancy@3",
           state,
-          mutableCtx,
-        );
-        expect(Object.isFrozen(mutable)).toBe(false);
+          env,
+        ) as UnknownValue;
+
+        expect(result.state).toBe(state);
+        expect(Object.isFrozen(state)).toBe(false);
       });
     });
   });

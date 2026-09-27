@@ -323,10 +323,11 @@ export abstract class BaseDecodeAct<Encoded, SerializedForm = Encoded>
       throw new ProblematicStateError(tag, decoded.state, decoded.error);
     }
 
-    // A codec's `decode()` promises deep-frozen results rather than relying on
-    // every caller to freeze. That covers the codec's own product -- a
-    // `FabricPrimitive` is already frozen, making it an O(1) cache hit -- and
-    // the lenient fallback above alike.
+    // A codec's `decode()` freezes only the value it builds, so the deep freeze
+    // here is what makes the result deep-frozen as a whole, and known to be.
+    // That covers the codec's
+    // own product -- a `FabricPrimitive` is already frozen, making it an O(1)
+    // cache hit -- and the lenient fallback above alike.
     return deepFreeze(decoded);
   }
 }

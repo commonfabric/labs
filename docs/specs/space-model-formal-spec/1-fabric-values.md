@@ -665,12 +665,13 @@ export class FabricError extends FabricNativeWrapper<Error> {
        * identity, falling back to `name` for backward compatibility with
        * data encoded before `type` was added; missing `message`
        * becomes `''`. Reserved and unsafe keys are excluded from the
-       * extras. Honors `env.shouldDeepFreeze` (Section 2.5).
+       * extras. Frozen unless `mutable` (Section 2.4).
        */
       decode(
         _typeTag: string,
         state: FabricValue,
-        env: LiveEnvironment,
+        _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const s = state as Record<string, FabricValue>;
         const type = (s.type as string) ?? (s.name as string) ?? 'Error';
@@ -693,7 +694,7 @@ export class FabricError extends FabricNativeWrapper<Error> {
           cause: s.cause,
           extras,
         });
-        return env.shouldDeepFreeze ? deepFreeze(result) : result;
+        return mutable ? result : Object.freeze(result);
       }
     })(),
   );
@@ -757,11 +758,12 @@ export class FabricMap
       decode(
         _typeTag: string,
         state: FabricValue,
-        env: LiveEnvironment,
+        _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const entries = state as [FabricValue, FabricValue][];
         const result = new FabricMap(new Map(entries));
-        return env.shouldDeepFreeze ? deepFreeze(result) : result;
+        return mutable ? result : Object.freeze(result);
       }
     })(),
   );
@@ -810,11 +812,12 @@ export class FabricSet extends FabricNativeWrapper<Set<FabricValue>> {
       decode(
         _typeTag: string,
         state: FabricValue,
-        env: LiveEnvironment,
+        _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const elements = state as FabricValue[];
         const result = new FabricSet(new Set(elements));
-        return env.shouldDeepFreeze ? deepFreeze(result) : result;
+        return mutable ? result : Object.freeze(result);
       }
     })(),
   );
@@ -2284,11 +2287,20 @@ export interface FabricCodec<PlusType, Encoded> {
    * state type it actually decodes and read its parts as such. `state` is the
    * whole of `Encoded` here because this interface is what a registry holds,
    * and the codecs in one agree on nothing narrower.
+   *
+   * `mutable` decides the frozenness of the value built, and of nothing
+   * else: when `false`, the default, the result is frozen, and when `true`,
+   * it is left mutable. Either way a decode freezes only what it builds
+   * itself, never a value it keeps from `state`; freezing what `state` holds
+   * belongs to whatever built it. A codec whose values are immutable
+   * whatever their construction, such as a `FabricPrimitive`'s, has nothing
+   * to decide and may leave `mutable` undeclared.
    */
   decode(
     typeTag: string,
     state: Encoded,
     env: LiveEnvironment,
+    mutable?: boolean,
   ): FabricValuePlus<PlusType>;
 
   /**
@@ -2502,24 +2514,6 @@ export interface LiveEnvironment {
    * up existing instances during decoding.
    */
   getCell(ref: { id: string; path: string[]; space: string }): FabricInstance;
-
-  /**
-   * Output-contract directive: when `true`, every codec `decode()`
-   * implementation that consults this live environment must produce a deep-frozen
-   * result; when `false`, a mutable result is acceptable. Same contract as
-   * the `frozen` argument to `cloneIfNecessary()` (see
-   * `packages/data-model/value-clone.ts`): `shouldDeepFreeze === true`
-   * corresponds to `cloneIfNecessary(value, { frozen: true })`.
-   *
-   * Required (not optional): every live environment declares it. A shared
-   * `BaseLiveEnvironment`
-   * (`packages/data-model/src/codec-interface/BaseLiveEnvironment.ts`)
-   * centralizes the getter with a `true` default, mirroring
-   * `cloneIfNecessary()`'s default; environments opt out by overriding. An
-   * `NullLiveEnvironment` (same directory) covers environment-less
-   * decodes: its `getCell()` throws with a configurable message.
-   */
-  readonly shouldDeepFreeze: boolean;
 }
 ```
 
@@ -2528,7 +2522,7 @@ export interface LiveEnvironment {
 > one any client can satisfy. It has several already -- `memory` builds one,
 > as do tests in `data-model` and `runner` -- and more are expected. Future
 > fabric types may extend `LiveEnvironment` if they need capabilities beyond
-> `getCell` and `shouldDeepFreeze`.
+> `getCell`.
 
 ### 2.6 Brand Detection
 
@@ -2894,10 +2888,11 @@ export class UnknownValue extends BaseFabricInstance {
       decode(
         typeTag: string,
         state: FabricValue,
-        env: LiveEnvironment,
+        _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const result = new UnknownValue(typeTag, state);
-        return env.shouldDeepFreeze ? deepFreeze(result) : result;
+        return mutable ? result : Object.freeze(result);
       }
     })(),
   );
@@ -3023,13 +3018,14 @@ export class ProblematicValue extends BaseFabricInstance {
       decode(
         _typeTag: string,
         state: FabricValue,
-        env: LiveEnvironment,
+        _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         // A state that is not this shape becomes a `ProblematicValue` of
         // this decode; omitted for brevity.
         const { tag, state: inner, error } = state as never;
         const result = new ProblematicValue(tag, inner, error);
-        return env.shouldDeepFreeze ? deepFreeze(result) : result;
+        return mutable ? result : Object.freeze(result);
       }
     })(),
   );
@@ -4688,11 +4684,10 @@ from internal codec machinery to callers:
   sub-trees directly without further copying because the input tree is already
   deep-frozen.
 
-- **Codec `decode()` implementations honoring `shouldDeepFreeze`.** When a
-  decode call's `LiveEnvironment.shouldDeepFreeze` is `true` (Section 2.5; the
-  safe default), each codec `decode()` implementation produces a deep-frozen
-  result (typically via the instance's own `[DEEP_FREEZE]`, recursing through
-  `deepFreeze()`).
+- **Codec `decode()` implementations freezing what they build.** Unless a
+  decode call passes `mutable` as `true` (Section 2.4), each codec `decode()`
+  implementation freezes the value it builds, and only that; the deep freeze
+  of the whole is the decode walker's, above.
 
 - **`deepFreeze()` at schema merge/combine sites.** See Section 8.2.
 

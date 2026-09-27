@@ -13,7 +13,6 @@ import {
   SHALLOW_UNFROZEN_CLONE,
 } from "@/fabric-bases";
 import { cloneIfNecessary } from "@/value-clone.ts";
-import { deepFreeze } from "@/deep-freeze.ts";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
 import {
@@ -141,13 +140,14 @@ export class FabricLink extends BaseFabricInstance implements ApiFabricLink {
       decode(
         typeTag: string,
         state: FabricPlainObject,
-        env: LiveEnvironment,
+        _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         // The constructor validates the payload and throws on any violation,
         // so bad state falls into the `catch`.
         try {
           const result = new FabricLink(state);
-          return env.shouldDeepFreeze ? deepFreeze(result) : result;
+          return mutable ? result : Object.freeze(result);
         } catch (e) {
           return new ProblematicValue(
             typeTag,

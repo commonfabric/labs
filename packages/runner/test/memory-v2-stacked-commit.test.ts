@@ -72,7 +72,6 @@ const signer = await Identity.fromPassphrase("memory-v2-stacked-commit");
 const space = signer.did();
 const DOCUMENT_MIME = "application/json" as const;
 const testLiveEnvironment = new NullLiveEnvironment(
-  true,
   "no cell reconstruction in stacked commit transport",
 );
 const DOCS = {

@@ -1938,7 +1938,6 @@ export type ServerMessage =
   | SessionRevokedMessage;
 
 const memoryLiveEnvironment = new NullLiveEnvironment(
-  true,
   "no cell decoding at the memory boundary",
 );
 

@@ -62,14 +62,9 @@ import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 /**
  * Shared test `LiveEnvironment`: `getCell()` always throws (no test
- * here reaches it); `shouldDeepFreeze` is inherited from
- * `BaseLiveEnvironment` (defaults to `true`).
+ * here reaches it).
  */
 class TestLiveEnvironment extends BaseLiveEnvironment {
-  constructor() {
-    super(true);
-  }
-
   override getCell(): never {
     throw new Error("getCell not implemented in test runtime");
   }
