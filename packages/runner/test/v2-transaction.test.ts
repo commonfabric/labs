@@ -421,8 +421,10 @@ describe("v2-transaction", () => {
     it("returns what a refused write left changed in the document", async () => {
       // A write of `-` beneath a missing parent is refused only after the
       // parent is created in the working value, so the refusal can leave the
-      // document changed. Whether it does is the write's business; what is
-      // pinned here is that the log agrees with the value the commit sends.
+      // document changed. Whether it should is the write's business. What is
+      // pinned here is that paths kept from before the refused write are not
+      // reused after it: beneath `value`, a path this transaction wrote, the
+      // log follows whatever the refusal left there.
 
       const { storage, address, tx } = await writerOverCommittedDocument(
         "of:v2-transaction-log-refused-write",
