@@ -518,9 +518,15 @@ export interface DiffWalkState {
   writtenKinds?: Map<string, boolean>;
 }
 
-/** The key `DiffWalkState.writtenKinds` holds a position under. */
+/**
+ * The key `DiffWalkState.writtenKinds` holds a position under. It leaves the
+ * scope out: an element whose schema narrows its scope is written at the same
+ * position in the narrower instance, inside the array this walk wrote at the
+ * broader one, so its parent is judged by that array whichever instance holds
+ * the element.
+ */
 const writtenPositionKey = (link: NormalizedFullLink): string =>
-  JSON.stringify([link.space, link.id, link.scope ?? null, link.path]);
+  JSON.stringify([link.space, link.id, link.path]);
 
 /**
  * Traverses newValue and updates `current` and any relevant linked documents.

@@ -1315,6 +1315,49 @@ describe("data-updating", () => {
       expect(ids[1]).toBe(ids[0]);
     });
 
+    it("anchors a fresh scope-narrowed array element under the identity a stored one's takes", () => {
+      // Each element's schema narrows it to the user's instance, so the
+      // element is anchored at the same position in that instance. The array
+      // the element sits in is the one this walk writes, whichever instance
+      // holds its content.
+      const schema = {
+        type: "array",
+        items: {
+          type: "object",
+          scope: "user",
+          properties: { note: { type: "string" } },
+        },
+      } as const satisfies JSONSchema;
+      const testCell = runtime.getCell<unknown>(
+        space,
+        "fresh and stored scoped anchor ids",
+        schema,
+        tx,
+      );
+      const link = testCell.getAsNormalizedFullLink();
+      const context = "fresh and stored scoped anchor ids";
+      const ids: (string | undefined)[] = [];
+      for (const note of ["first", "second"]) {
+        diffAndUpdate(
+          runtime,
+          tx,
+          link,
+          [{ note }],
+          context,
+          undefined,
+          () => "seed",
+        );
+        const scoped = runtime.getCellFromLink(
+          { ...link, scope: "user", path: ["0"], schema: undefined },
+          undefined,
+          tx,
+        );
+        ids.push(parseLink(scoped.getRaw(), scoped)?.id);
+      }
+      expect(ids[0]).toBeDefined();
+      expect(ids[1]).toBe(ids[0]);
+    });
+
     it("converges repeated references on one document", () => {
       // The same object in two array slots is one entity: both slots link to
       // a single document and the id source is consumed once. Preserving the

@@ -191,7 +191,6 @@ import {
   CFC_ENFORCING_STRICTNESS,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
-  type CfcDereferenceTrace,
   cfcEnforcementStrictness,
   type CfcLabelView,
   type CfcMetadata,
@@ -3275,7 +3274,6 @@ const assertedValueRootPaths = (
   const key = targetKey(target);
   const roots: (readonly string[])[] = [];
   const seen = new Set<string>();
-  const { writeIdentity } = tx.getCfcState();
   let observed:
     | { path: readonly string[]; recursive: boolean }[]
     | undefined;
@@ -3683,8 +3681,8 @@ const stampNamesReference = (
   });
 
 /**
- * Whether a value stamp at exactly `slot` names its writer but describes a
- * reference other than `target`, the one the slot holds. A slot a writer
+ * Whether a stamp at exactly `slot` names its writer but describes a
+ * reference other than `target`, the one the slot holds, or none. A slot a writer
  * stored a reference at is stamped with that reference named beside the
  * writer (`assertedValueRootPaths`), so the stamp describes one pointer. An
  * append lands at the list's live tail, while the label envelope its
@@ -3697,8 +3695,13 @@ const slotStampDescribesAnother = (
   target: CfcAddress,
 ): boolean => {
   const key = pathKey(slot);
+  // Every entry a value read of the slot takes as witness evidence counts,
+  // an untagged one written before entries carried an origin or an
+  // observation class included: a stamp that names a writer at the slot but
+  // no reference, or another one, cannot vouch for the pointer there.
   return metadata.labelMap.entries.some((entry) =>
-    entry.origin === "derived" && entry.observes === "value" &&
+    isWitnessEvidence(entry) &&
+    (entry.observes === undefined || entry.observes === "value") &&
     pathKey(canonicalizeLogicalPath(entry.path)) === key &&
     (entry.label.integrity ?? []).some(isTransformedByAtom) &&
     !stampNamesReference(entry, target)

@@ -190,7 +190,7 @@ const commitWitnessesSubmit = async (
 const seedListOfBriefs = async (
   runtime: Runtime,
   held: "first" | "second",
-  described: "first" | "second",
+  described: "first" | "second" | "legacy",
 ): Promise<void> => {
   const tx = runtime.edit();
   writeSeedEnvelopeDoc(tx, space);
@@ -247,12 +247,16 @@ const seedListOfBriefs = async (
             origin: "derived",
             observes: "value",
           },
-          {
-            path: ["1"],
-            label: stamp(briefs[described]),
-            origin: "derived",
-            observes: "value",
-          },
+          described === "legacy"
+            // A stamp from before entries were tagged: no origin, no
+            // observation class, and no reference named beside the writer.
+            ? { path: ["1"], label: stamp() }
+            : {
+              path: ["1"],
+              label: stamp(briefs[described]),
+              origin: "derived",
+              observes: "value",
+            },
         ],
       },
     },
@@ -336,6 +340,16 @@ describe("input witnesses over appends made concurrently", () => {
     // The second slot holds a copy of the first brief's reference, and its
     // stamp names the second brief: the stamp does not describe the slot.
     await seedListOfBriefs(session(), "first", "second");
+    expect(await commitWitnessesSubmit(server, ["reject", "reject"])).toBe(
+      false,
+    );
+  });
+
+  it("withholds the witness through a slot whose untagged stamp names no reference", async () => {
+    // The second slot holds a copy of the first brief's reference, and its
+    // stamp, one written before entries were tagged, names the submit step
+    // but no reference, so it cannot say which pointer it describes.
+    await seedListOfBriefs(session(), "first", "legacy");
     expect(await commitWitnessesSubmit(server, ["reject", "reject"])).toBe(
       false,
     );
