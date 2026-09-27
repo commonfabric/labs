@@ -20,12 +20,12 @@ import { atomsOutsideCeiling } from "../src/cfc/observation.ts";
 import {
   buildCfcPolicyArtifactManifest,
   buildCfcPolicySnapshot,
+  type CfcPolicyRecordInput,
   type ExchangeRule,
 } from "../src/cfc/policy.ts";
 import {
   createRenderConfidentialityResolver,
   RENDER_DISPLAY_SINK_CLASS,
-  STANDARD_RENDER_EXCHANGE_RULES,
 } from "../src/cfc/render-ceiling.ts";
 import { SINK_CLASSES, sinkClassOf } from "../src/cfc/sink-inventory.ts";
 import type { SpaceMembershipProvider } from "../src/cfc/space-membership.ts";
@@ -716,14 +716,42 @@ describe("CFC render resolver — spaces a module rule adds", () => {
   });
 });
 
-describe("CFC render resolver — the owner-self Resource rule", () => {
-  // A `Resource` atom whose subject is the acting user gains a `User` alternative
-  // naming that user at the display boundary, which is what lets its owner see
-  // it under the default ceiling (spec §8.10.6, and the owner-self exception of
-  // §5.3.2 and invariant 3). Every case fits against Alice's ceiling.
+describe("CFC render resolver — deployment policy at the display boundary", () => {
+  // The display boundary evaluates the deployment's policy records before the
+  // ceiling fit, as any boundary does (spec §8.10.6). The record here is the
+  // owner-self display release a deployment authors: a `Resource` atom whose
+  // subject is the acting user gains a `User` alternative naming that user.
+  // Every case fits against Alice's ceiling.
 
+  const ownerSelfDisplayRecord: CfcPolicyRecordInput = {
+    id: "owner-self-display",
+    rules: [{
+      id: "resource-owner-self-display",
+      appliesTo: {
+        type: CFC_ATOM_TYPE.Resource,
+        subject: { var: "$actingUser" },
+      },
+      preCondition: {
+        boundary: [{
+          type: CFC_ATOM_TYPE.BoundaryContext,
+          key: "sinkClass",
+          value: RENDER_DISPLAY_SINK_CLASS,
+        }],
+      },
+      post: {
+        addAlternatives: [{
+          type: CFC_ATOM_TYPE.User,
+          subject: { var: "$actingUser" },
+        }],
+      },
+    }],
+  };
+  const ownerSelfSnapshot = buildCfcPolicySnapshot([ownerSelfDisplayRecord]);
   const resolveForAlice = () =>
-    createRenderConfidentialityResolver({ actingPrincipal: ALICE });
+    createRenderConfidentialityResolver({
+      actingPrincipal: ALICE,
+      policySnapshot: ownerSelfSnapshot,
+    });
   const message = (subject: string) => cfcAtom.resource("message", subject);
   const ownerSelf = (atom: CfcConfClause) =>
     normalizeClause({ anyOf: [atom, userAlice] });
@@ -772,6 +800,62 @@ describe("CFC render resolver — the owner-self Resource rule", () => {
   });
 
   describe("not releasing", () => {
+    it("keeps the owner's own `Resource` clause hidden without a deployment record", () => {
+      // The standard render rules release no `Resource`: an owner-self
+      // release is the deployment's to author.
+      const label = [userAlice, message(ALICE)];
+      const resolve = createRenderConfidentialityResolver({
+        actingPrincipal: ALICE,
+        memberSpaces: [ALICE],
+      });
+      const resolved = resolve({ confidentiality: label });
+      expect(resolved).toEqual(label);
+      expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual([
+        message(ALICE),
+      ]);
+    });
+
+    it("releases nothing of Alice's to another acting user", () => {
+      const label = [userAlice, message(ALICE)];
+      const resolve = createRenderConfidentialityResolver({
+        actingPrincipal: MALLORY,
+        policySnapshot: ownerSelfSnapshot,
+      });
+      expect(resolve({ confidentiality: label })).toEqual(label);
+    });
+
+    it("keeps a value hidden whose deployment release names someone other than the acting user", () => {
+      // A deployment record can add any alternative, and the alternative it
+      // adds must still fit the acting user's ceiling.
+      const toMallory = buildCfcPolicySnapshot([{
+        id: "release-to-mallory",
+        rules: [{
+          id: "resource-to-mallory",
+          appliesTo: { type: CFC_ATOM_TYPE.Resource },
+          preCondition: {
+            boundary: [{
+              type: CFC_ATOM_TYPE.BoundaryContext,
+              key: "sinkClass",
+              value: RENDER_DISPLAY_SINK_CLASS,
+            }],
+          },
+          post: { addAlternatives: [cfcAtom.user(MALLORY)] },
+        }],
+      }]);
+      const resolve = createRenderConfidentialityResolver({
+        actingPrincipal: ALICE,
+        policySnapshot: toMallory,
+      });
+      const resolved = resolve({
+        confidentiality: [userAlice, message(ALICE)],
+      });
+      const released = normalizeClause({
+        anyOf: [message(ALICE), cfcAtom.user(MALLORY)],
+      });
+      expect(resolved).toEqual([userAlice, released]);
+      expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual([released]);
+    });
+
     it("leaves another subject's `Resource` clause unchanged, adding neither user", () => {
       const label = [message(MALLORY)];
       const resolved = resolveForAlice()({ confidentiality: label });
@@ -828,13 +912,9 @@ describe("CFC render resolver — the owner-self Resource rule", () => {
     it("fires at no sink class but display", () => {
       // Every class the egress gate mints from the sink inventory, the
       // model-call sinks' network class among them.
-      const snapshot = buildCfcPolicySnapshot([{
-        id: "cfc-standard-render",
-        rules: STANDARD_RENDER_EXCHANGE_RULES,
-      }]);
       const label = [userAlice, message(ALICE)];
       const evaluateAt = (sinkClass: string) =>
-        evaluateExchangeRules({ confidentiality: label }, snapshot, {
+        evaluateExchangeRules({ confidentiality: label }, ownerSelfSnapshot, {
           boundary: [cfcAtom.boundaryContext("sinkClass", sinkClass)],
           actingPrincipal: ALICE,
         });
@@ -857,6 +937,7 @@ describe("CFC render resolver — the owner-self Resource rule", () => {
       ];
       const resolve = createRenderConfidentialityResolver({
         memberSpaces: [ALICE],
+        policySnapshot: ownerSelfSnapshot,
       });
       expect(resolve({ confidentiality: label })).toEqual(label);
     });
@@ -873,6 +954,7 @@ describe("CFC render resolver — the owner-self Resource rule", () => {
       ) {
         const resolve = createRenderConfidentialityResolver({
           actingPrincipal: acting,
+          policySnapshot: ownerSelfSnapshot,
         });
         expect(resolve({ confidentiality: [atom] })).toEqual([atom]);
       }
