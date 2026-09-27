@@ -268,9 +268,17 @@ The `$box` cell must be in the room space, and the seal refuses one that is
 not, at preview and again at commit. The seal writes under its own identity,
 which the box and the anchor admit, so it follows the cell's write redirects
 only to a location that holds this box's link already, or holds nothing (an
-empty default, as a room's `Default` leaves) in a document the seal did not
-write, and never into the box, the anchor, or the terms: a member's room code could otherwise have the seal overwrite another
-member's entry. Once the seal has written it, the cell carries the seal's
+empty default, as a room's `Default` leaves) in a document that exists and that
+the seal did not write, and never into the box, the terms, or any instance's
+anchor: a member's room code could otherwise have the seal overwrite another
+member's entry, or write into another instance's anchor, which every later seal
+of that instance would then refuse. The anchor carries no integrity, so the seal
+recognizes one by its address, derived from the instance it holds and the
+policy its label names. An instance is the digest of its terms, so a member can
+derive the address of an anchor or box the seal has yet to create; the seal
+cannot tell such an absent document from an ordinary one, so it never links
+from a document that does not exist yet. Documents are compared by space, id
+and scope. Once the seal has written it, the cell carries the seal's
 label, so a link other code writes over it must name a document that carries a
 label of its own.
 

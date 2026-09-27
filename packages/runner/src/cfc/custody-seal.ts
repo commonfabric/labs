@@ -903,7 +903,8 @@ const isCustodyDocument = (
     );
     const anchor = anchorCell(runtime, policy, instance)
       .getAsNormalizedFullLink();
-    return anchor.space === link.space && anchor.id === link.id;
+    return anchor.space === link.space && anchor.id === link.id &&
+      normalizeCellScope(anchor.scope) === normalizeCellScope(link.scope);
   });
 };
 
@@ -955,18 +956,27 @@ const linkRoomToBox = (
       !isWriteRedirectLink(current)
     ? parseLink(current, { ...destination, path: [] })
     : undefined;
+  // A cell the seal links from sits in a room document that exists. An
+  // instance is the digest of its terms, so a member can derive the address
+  // of an anchor or box the seal has yet to create; an absent document could
+  // be one, and cannot be told apart from an ordinary one by its content.
+  const documentExists = tx.readValueOrThrow({ ...destination, path: [] }, {
+    meta: internalVerifierRead,
+  }) !== undefined;
   const holdsThisBox = currentLink !== undefined &&
     currentLink.id === boxLink.id && currentLink.space === boxLink.space &&
     normalizeCellScope(currentLink.scope) ===
       normalizeCellScope(boxLink.scope) &&
     currentLink.path.length === 0;
+  const sameDocument = (link: NormalizedFullLink) =>
+    link.space === destination.space && link.id === destination.id &&
+    normalizeCellScope(link.scope) === normalizeCellScope(destination.scope);
   if (
-    governed.some((link) =>
-      link.space === destination.space && link.id === destination.id
-    ) ||
-    (reviewed.space === destination.space && reviewed.id === destination.id &&
+    governed.some(sameDocument) ||
+    (sameDocument(reviewed) &&
       (isPathPrefix(reviewed.path, destination.path) ||
         isPathPrefix(destination.path, reviewed.path))) ||
+    !documentExists ||
     isCustodyDocument(runtime, tx, destination, room) ||
     (!holdsThisBox && (!holdsNothing(current) || sealWritten))
   ) {
@@ -1873,6 +1883,12 @@ export async function commitCustodySeal(
   } catch (error) {
     receiptTx.abort();
     throw error;
+  }
+
+  // The room document the box link is written into, as the entry
+  // transaction checks it.
+  if (state.requestedRoom.box !== undefined) {
+    await syncResolved(state.requestedRoom.box);
   }
 
   // Every seal of an instance writes the one box document, so seals by

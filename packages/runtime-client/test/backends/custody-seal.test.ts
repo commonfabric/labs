@@ -312,7 +312,12 @@ describe("custody-seal", () => {
 
   it("writes the link to the box into the room's box cell the host names", async () => {
     await withFixture(async ({ processor, runtime, refs }) => {
-      const roomBox = runtime.getCell(S, "custody-room-box");
+      // The room document whose cell receives the link.
+      const cells = runtime.getCell(S, "room-cells");
+      const setup = runtime.edit();
+      cells.withTx(setup).set({} as never);
+      expect((await setup.commit()).error).toBeUndefined();
+      const roomBox = cells.key("box");
       const preview = await processor.handleRequest({
         type: RequestType.CustodySealPrepare,
         ...refs,

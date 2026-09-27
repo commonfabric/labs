@@ -225,6 +225,8 @@ const setup = async (
   } as never, install).set({ open: true } as never);
   const terms = host.getCell(S, "custody-terms", undefined, install);
   terms.set((options.terms ?? TERMS) as never);
+  // The room document whose cells receive the seal's links.
+  host.getCell(S, "room-cells", undefined, install).set({} as never);
   expect((await install.commit()).error).toBeUndefined();
   // The room space's access list: its identity owns it, and the members read
   // and write it.
@@ -978,7 +980,7 @@ describe("cfc-custody-seal", () => {
     const honestCount = ["sushi", "tacos"];
     const bobTwice = ["tacos", "tacos"];
     const roomBox = (fixture: Fixture) =>
-      fixture.runtimes.get(alice)!.getCell(S, "custody-room-box");
+      fixture.runtimes.get(alice)!.getCell(S, "room-cells").key("box");
 
     it("keeps the witness for a projector reading the box through the link the seal wrote", async () => {
       const fixture = await setup();
@@ -1146,7 +1148,7 @@ describe("cfc-custody-seal", () => {
       try {
         const runtime = fixture.runtimes.get(mallory)!;
         const binding = roomBox(fixture);
-        const holder = runtime.getCell(S, "box-holder");
+        const holder = runtime.getCell(S, "room-cells").key("holder");
         const redirectTo = (cell: Cell<unknown>) =>
         (
           runtime: Runtime,
@@ -1344,6 +1346,63 @@ describe("cfc-custody-seal", () => {
         ).rejects.toThrow("only from a cell that holds nothing else");
         await fixture.setTerms(TERMS);
         await fixture.seal(bob, bobStance, binding);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a box cell in a later instance's anchor before it exists", async () => {
+      // An instance is the digest of its terms, so a member can derive a
+      // later instance's anchor before anyone seals into it. A box cell led
+      // there would have the seal create the anchor with a key of its own,
+      // and the instance's first seal would then refuse the anchor.
+      const fixture = await setup();
+      try {
+        const binding = roomBox(fixture);
+        const later = { ...TERMS, question: "Somewhere else?" };
+        const runtime = fixture.runtimes.get(alice)!;
+        const anchor = runtime.getCell(S, {
+          custodyAnchor: { policy: P, instance: hashStringOf(later) },
+        });
+        for (const target of [anchor.key("x"), anchor]) {
+          await expect(fixture.seal(alice, honestStance, target)).rejects
+            .toThrow("only from a cell that holds nothing else");
+        }
+        await fixture.setTerms(later);
+        await fixture.seal(bob, bobStance, binding);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("tells a room document in another scope from the anchor sharing its id", async () => {
+      // A user-scoped document may share an anchor's id, and even hold what an
+      // anchor holds; it is another document, so the seal may link from it.
+      const fixture = await setup();
+      try {
+        const runtime = fixture.runtimes.get(alice)!;
+        const anchor = runtime.getCell(S, {
+          custodyAnchor: { policy: P, instance: hashStringOf(TERMS) },
+        }).getAsNormalizedFullLink();
+        const scoped = runtime.getCellFromLink({ ...anchor, scope: "user" });
+        await writeAsOtherCode(
+          fixture,
+          alice,
+          scoped,
+          () => ({ instance: hashStringOf(TERMS) }),
+          {
+            type: "object",
+            ifc: {
+              confidentiality: [{
+                anyOf: [
+                  { ...P, subject: { __ctOwningSpace: true } },
+                  cfcAtom.space(S),
+                ],
+              }],
+            },
+          },
+        );
+        await fixture.seal(alice, honestStance, scoped.key("box"));
       } finally {
         await fixture.dispose();
       }
