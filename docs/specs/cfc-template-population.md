@@ -76,8 +76,9 @@ read (`value` class at the slot) resolves the `value` twin; and — because
 the runner classifies slot-pointer observations as `followRef`
 (`isLinkResolutionProbe` → `followRef` in `forEachFlowObservation`;
 observation-classes §4/§7) — the **`followRef` twin is what actually
-closes the pointer-identity residual**: a probe or dereference at a
-computed slot consumes the assignment decision (`J` decided *which*
+closes the pointer-identity residual**: a standalone probe at a
+computed slot (a dereference does not; §6, the row-3/row-4 boundary)
+consumes the assignment decision (`J` decided *which*
 element the reader resolves through — inv-9 flow-path confidentiality),
 while still consuming nothing of the container's *content* classes and
 nothing of the target beyond its own link entry. The pointer/content
