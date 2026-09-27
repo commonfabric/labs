@@ -5,7 +5,7 @@ import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
 import {
   codecOf,
   NonterminalCodec,
-  NULL_LIVE_ENVIRONMENT,
+  NullLiveEnvironment,
 } from "@/codec-common";
 import type {
   FabricArrayPlus,
@@ -64,6 +64,12 @@ type MainVisitResult<PlusType, ResultType> = Exclude<
 export type VisitInProgressConfig =
   | { mode: "visit" }
   | { mode: "map"; freeze: boolean };
+
+/**
+ * `NullLiveEnvironment` with `shouldDeepFreeze === false`, used for processing
+ * `FabricInstance`s during structural-map operations.
+ */
+const FABRIC_INSTANCE_MAP_ENVIRONMENT = new NullLiveEnvironment(false);
 
 /**
  * State of a visit currently in progress, along with most of the visit
@@ -450,7 +456,11 @@ export class VisitInProgress<
     const instance = container as FabricInstancePlus<PlusType>;
     const vis = this.#visitor;
     const codec = codecOf(instance);
-    const state = codec.encode(instance, NULL_LIVE_ENVIRONMENT);
+    const state = codec.encode(instance, FABRIC_INSTANCE_MAP_ENVIRONMENT);
+
+    if (this.#freezeMappedContainers) {
+      Object.freeze(state);
+    }
 
     this.#stack.push(instance);
 
@@ -897,11 +907,14 @@ export class VisitInProgress<
     }
 
     try {
-      return resultCodec.decode(
+      const result = resultCodec.decode(
         codecTag,
         resultState,
-        NULL_LIVE_ENVIRONMENT,
+        FABRIC_INSTANCE_MAP_ENVIRONMENT,
       ) as FabricInstancePlus<ResultType>;
+      return this.#freezeMappedContainers
+        ? Object.freeze(result)
+        : result;
     } catch (cause) {
       throw new Error(
         debugStr`Codec of $quote${originalInstance} accepted but then failed to decode replacement state $quote${resultState}`,
