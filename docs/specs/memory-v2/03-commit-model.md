@@ -27,7 +27,7 @@ interface PatchWriteOperation {
   op: "patch";
   id: EntityId;
   patches: PatchOp[];
-  baseSeq?: number;
+  replayBaseSeq?: number;
 }
 
 interface DeleteOperation {
@@ -44,13 +44,15 @@ more sequenced revisions. `set` carries a logical `EntityDocument`; `patch`
 carries path-targeted edits whose leaf values use the shared FabricValue
 surface, not just a JSON subset.
 
-A `patch` may also carry `baseSeq`: the seq of the document its writer will
-replay the edits over when the commit's accept promotes, declared only when the
-writer's replica holds that document exactly as the server stores it. It is not
-a precondition, and a mismatch refuses nothing. The server compares it with the
-head it applies the patch over and reports a match on the revision it writes,
-which is what lets the committing session's own sync frame omit the resulting
-document (`04-protocol.md` section 4.11.2).
+A `patch` may also carry `replayBaseSeq`: the seq of the document its writer
+will replay the edits over when the commit's accept promotes, declared only
+when the writer's replica holds that document as the server stores it, and only
+to a server applying patches at the writer's own `PATCH_SEMANTICS_VERSION`. It
+is not a precondition, and a mismatch refuses nothing. The server compares it
+with the head it applies the patch over and reports a match on the revision it
+writes, which is what lets the committing session's own sync frame omit the
+resulting document (`04-protocol.md` section 4.11.2; `09-invariants.md`
+INV-15).
 
 ## 3.2 Transaction Structure
 

@@ -494,8 +494,8 @@ revision at the field path. Consequently:
 
 The committing runtime cannot extrapolate a server-rebased result from its
 submitted payload. Server dirty-origin handling therefore treats `apply-op`
-like a `patch` that names no base (`03-commit-model.md` section 3.1): the
-writer receives the authoritative materialized document in the covering
+like a `patch` that names no replay base (`03-commit-model.md` section 3.1):
+the writer receives the authoritative materialized document in the covering
 session sync rather than suppressing its own echo as a plain `set`.
 
 Operation watches and materialized watches may both cover the same field. Their
