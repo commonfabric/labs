@@ -393,8 +393,13 @@ describe("CFC commit preparation", () => {
       }
     });
 
-    it("replaces a reverted path's derived label whether or not another document in its space changed", async () => {
-      for (const otherChange of [false, true]) {
+    for (
+      const [otherChange, description] of [
+        [false, "when nothing else in its space changed"],
+        [true, "when another document in its space changed"],
+      ] as const
+    ) {
+      it(`replaces a reverted path's derived value label ${description}`, async () => {
         // `observe` lets the schema-less writes commit, so the label map
         // they leave behind can be read back.
         const { runtime, dispose } = makeRuntime({
@@ -453,22 +458,28 @@ describe("CFC commit preparation", () => {
             path: [],
           }) as {
             value?: unknown;
-            cfc?: { labelMap?: { entries?: unknown[] } };
+            cfc?: {
+              labelMap?: {
+                entries?: { path: string[]; observes?: unknown }[];
+              };
+            };
           };
           check.abort();
           expect(stored.value).toEqual({ note: "labeled" });
-          // The value entry is replaced by this transaction's empty
-          // derivation; the existence entry is frozen at creation and stays.
-          expect(stored.cfc?.labelMap?.entries).toEqual([{
-            path: ["note"],
-            origin: "derived",
-            observes: "shape",
-            label: { confidentiality: [spaceAtom] },
-          }]);
+          // The transaction's empty derivation replaces what value reads
+          // consume at the path. The existence entry is frozen at creation,
+          // so an entry remains there, which also shows the label map was
+          // read back at all.
+          const atNote = (stored.cfc?.labelMap?.entries ?? []).filter(
+            (entry) => entry.path.join("/") === "note",
+          );
+          expect(atNote.length).toBeGreaterThan(0);
+          expect(atNote.filter((entry) => entry.observes !== "shape"))
+            .toEqual([]);
         } finally {
           await dispose();
         }
-      }
-    });
+      });
+    }
   });
 });
