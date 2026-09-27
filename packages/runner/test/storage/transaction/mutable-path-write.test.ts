@@ -83,23 +83,30 @@ describe("mutable-path-write", () => {
       });
     });
 
-    it("returns no change for a delete through a missing slot, and leaves the root as it was", () => {
-      const { list, root } = ownedRoot();
+    for (const path of [["missing", "x"], ["missing", "-"]]) {
+      it(
+        `returns no change for a delete of \`${
+          path.join("/")
+        }\` through a missing slot, and leaves the root as it was`,
+        () => {
+          // There is nothing to remove, and the walk says so before it reaches
+          // a key it would refuse in a write.
 
-      const result = applyMutablePathWrite(
-        root,
-        at(["missing", "x"]),
-        undefined,
-        { delete: true },
+          const { list, root } = ownedRoot();
+
+          const result = applyMutablePathWrite(root, at(path), undefined, {
+            delete: true,
+          });
+
+          expect(result.ok).toEqual({
+            root,
+            previousValue: undefined,
+            changed: false,
+          });
+          expect(Object.keys(root)).toEqual(["n", "list"]);
+          expect(root.list).toBe(list);
+        },
       );
-
-      expect(result.ok).toEqual({
-        root,
-        previousValue: undefined,
-        changed: false,
-      });
-      expect(Object.keys(root)).toEqual(["n", "list"]);
-      expect(root.list).toBe(list);
-    });
+    }
   });
 });

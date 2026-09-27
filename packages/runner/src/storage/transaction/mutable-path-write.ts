@@ -152,7 +152,7 @@ export const applyMutablePathWrite = (
   if (check.error) {
     return { error: check.error };
   }
-  if (!check.ok) {
+  if (check.ok === "absent") {
     return {
       ok: { root: currentRoot, previousValue: undefined, changed: false },
     };
@@ -236,17 +236,18 @@ export const applyMutablePathWrite = (
 /**
  * Helper for `applyMutablePathWrite()`, which decides whether the write to
  * `address` within `root` is refused, reading `root` and changing nothing.
- * Returns `true` where the write goes ahead, and `false` for a delete whose
+ * Returns `apply` where the write goes ahead, and `absent` for a delete whose
  * path passes a missing slot, which leaves it nothing to remove.
  *
  * Each key is checked against the container that holds it once the write's
  * missing intermediates exist: the one already there, or the one
  * `cloneForMutation()` creates, which is an array exactly when
- * `missingContainerIsArray()` says so of the key addressing it. An array takes an index
- * or `length` and no other key, since any other slot on one is a value that
- * no path read reports and no commit carries. A key short of the leaf that
- * lands on anything but a plain container ends the descent, `length` on an
- * array included. The error names the path through the offending key.
+ * `missingContainerIsArray()` says so of the key addressing it. An array
+ * takes an index or `length` and no other key, since any other slot on one
+ * is a value that no path read reports and no commit carries. A key short of
+ * the leaf that lands on anything but a plain container is refused too,
+ * `length` on an array included. Either way, the error names the path
+ * through the offending key.
  *
  * The descent admits only what `isContainerValue()` does, which is narrower
  * than what `cloneForMutation()` descends through, so every path that
@@ -256,7 +257,7 @@ const checkWritePath = (
   root: Record<string, FabricValue> | FabricValue[],
   address: IMemoryAddress,
   isDelete: boolean,
-): Result<boolean, ITypeMismatchError> => {
+): Result<"apply" | "absent", ITypeMismatchError> => {
   const path = address.path;
   // `undefined` once the walk has passed a missing slot: every container from
   // there down is one the write creates.
@@ -280,7 +281,7 @@ const checkWritePath = (
     }
     if (!Object.hasOwn(container, key)) {
       if (isDelete) {
-        return { ok: false };
+        return { ok: "absent" };
       }
       container = undefined;
       continue;
@@ -297,7 +298,7 @@ const checkWritePath = (
     }
     container = next;
   }
-  return { ok: true };
+  return { ok: "apply" };
 };
 
 /**

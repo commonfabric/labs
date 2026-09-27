@@ -254,7 +254,7 @@ describe("v2-transaction", () => {
       }
     });
 
-    it("refuses `-` beneath a missing parent short of the leaf, and leaves the value unchanged", async () => {
+    it("returns a `TypeMismatchError` for `-` beneath a missing parent short of the leaf, and leaves the value unchanged", async () => {
       const { storage, address, tx } = await transactionOverEditedValue(
         "of:v2-transaction-refused-created-array",
       );
@@ -264,7 +264,6 @@ describe("v2-transaction", () => {
           5,
         );
 
-        expect(refused.error?.name).toBe("TypeMismatchError");
         expect(
           refused.error?.name === "TypeMismatchError" && {
             path: refused.error.address.path,
@@ -279,7 +278,7 @@ describe("v2-transaction", () => {
       }
     });
 
-    it("refuses a key that is not an index into an existing array short of the leaf", async () => {
+    it("returns a `TypeMismatchError` for a key other than an index into an existing array, short of the leaf", async () => {
       // An array holds nothing under `name`, so what the write would put
       // there is a value no read of the array reports and no commit carries.
 
