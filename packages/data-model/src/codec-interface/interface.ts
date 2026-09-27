@@ -171,8 +171,9 @@ export interface FabricCodec<PlusType, Encoded> {
    *
    * A `state` need not come from {@link #encode}, so an implementation which
    * keeps a container from `state` as part of the value it builds may do so
-   * only when that container is frozen and the value is to be frozen. Anything
-   * else it keeps, it copies.
+   * only when that container is frozen and stays frozen in that value. Anything
+   * else it keeps, it copies. A mutable value may keep frozen state this way,
+   * so long as nothing that makes it mutable depends on changing that state.
    */
   decode(
     typeTag: string,
