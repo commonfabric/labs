@@ -92,10 +92,14 @@ export type {
   EventAppendDeliveryOutcome,
   IExtendedStorageTransaction,
   IOperationStorageCapability,
+  IPresenceStorageCapability,
   MemorySpace,
   TransactionCommitOptions,
 } from "./storage/interface.ts";
-export { hasOperationStorageCapability } from "./storage/interface.ts";
+export {
+  hasOperationStorageCapability,
+  hasPresenceStorageCapability,
+} from "./storage/interface.ts";
 export { isCfcEnforcementRejection } from "./storage/rejection.ts";
 export type {
   EntityIdListOptions,

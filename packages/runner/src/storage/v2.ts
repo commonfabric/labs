@@ -122,6 +122,7 @@ import {
   IMergedChanges,
   IOperationStorageCapability,
   IPreconditionFailedError,
+  IPresenceStorageCapability,
   IReadActivity,
   IRemoteStorageProviderSettings,
   ISpaceReplica,
@@ -3199,7 +3200,11 @@ type ProviderOperationSubscription = {
  */
 type TelemetrySink = { submit(marker: RuntimeTelemetryMarker): void };
 
-class Provider implements IStorageProvider, IOperationStorageCapability {
+class Provider
+  implements
+    IStorageProvider,
+    IOperationStorageCapability,
+    IPresenceStorageCapability {
   replica: SpaceReplica;
 
   /**
@@ -3350,6 +3355,18 @@ class Provider implements IStorageProvider, IOperationStorageCapability {
   releaseOperationField(operation: ReleaseOpFieldOperation): Promise<void> {
     return this.#followReplacement((replica) =>
       replica.releaseOperationField(operation)
+    );
+  }
+
+  joinPresenceRoom(
+    room: string,
+    observer: (event: MemoryV2Client.PresenceEvent) => void,
+  ): Promise<MemoryV2Client.PresenceMembership> {
+    if (this.#destroyed) {
+      return Promise.reject(new Error("memory provider closed"));
+    }
+    return this.#followReplacement((replica) =>
+      replica.joinPresenceRoom(room, observer)
     );
   }
 
@@ -3693,7 +3710,10 @@ type LocalDocAddress = { id: URI; scope?: CellScope; scopeKey?: ScopeKey };
  * class.
  */
 export class SpaceReplica
-  implements ISpaceReplica, IOperationStorageCapability {
+  implements
+    ISpaceReplica,
+    IOperationStorageCapability,
+    IPresenceStorageCapability {
   readonly #space: MemorySpace;
   readonly #subscription: IStorageSubscription;
   readonly #scopeKeyIdentity: () => ScopeKeyIdentity;
@@ -4726,6 +4746,14 @@ export class SpaceReplica
       });
       this.#operationWatchRemovals.set(watchId, removal);
     };
+  }
+
+  async joinPresenceRoom(
+    room: string,
+    observer: (event: MemoryV2Client.PresenceEvent) => void,
+  ): Promise<MemoryV2Client.PresenceMembership> {
+    const { session } = await this.#activeSessionHandle();
+    return session.joinPresenceRoom(room, observer);
   }
 
   async #removeOperationWatch(watchId: string): Promise<void> {
