@@ -180,10 +180,12 @@ export function getTransactionWriteDetails(
  * The spaces `tx` recorded a write in (`IStorageTransaction.getWrittenSpaces`).
  * A transaction without the native list reports the spaces its journal's write
  * activities name. One whose journal cannot replay its activity either
- * reports the spaces its direct reactivity log names, which leaves out a space
- * whose every write returned to where it started, since the log's `writes`
- * list only changed paths. A transaction offering none of the three throws
- * the journal's error. A V2 transaction always provides the list.
+ * reports the spaces its direct reactivity log names in `writes` or
+ * `attemptedWrites`. The log's `writes` list only changed paths, so that
+ * leaves out a space whose every write returned to where it started unless
+ * one of those writes also recorded an attempted write, as a write through
+ * the value diff does. A transaction offering none of the three throws the
+ * journal's error. A V2 transaction always provides the list.
  */
 export function getTransactionWrittenSpaces(
   tx: TxLike,
