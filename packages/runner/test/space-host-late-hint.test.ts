@@ -1264,6 +1264,20 @@ describe("late space host hints", () => {
           "https://different-toolshed.test",
         ),
       ).toBe(false);
+      expect(
+        manager.registerSpaceHostDetailed(
+          targetSpace,
+          "https://different-toolshed.test",
+        ),
+      ).toEqual({ accepted: false, reason: "default-route-in-use" });
+      // The refusal fixes no route: a hint naming the default host, which the
+      // written provider is on, is still confirmed.
+      expect(
+        manager.registerSpaceHostDetailed(
+          targetSpace,
+          "https://default-toolshed.test",
+        ),
+      ).toEqual({ accepted: true });
       expect(provider.replica).toBe(replica);
       expect(provider.replica.getDocument(targetId)).toEqual({
         value: { name: "acknowledged data" },

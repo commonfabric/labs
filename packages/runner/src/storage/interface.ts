@@ -83,6 +83,7 @@ import type {
 import type { EntityId } from "../create-ref.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import { RAW_META_WRITE } from "../meta-seam.ts";
+import type { SpaceHostRegistration } from "../space-host.ts";
 import { BaseMemoryAddress } from "../traverse.ts";
 import type { MergeableOpDelta } from "./mergeable-ops.ts";
 export type {
@@ -327,6 +328,16 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * through the provisional route.
    */
   registerSpaceHost?(space: MemorySpace, host: string): boolean;
+
+  /**
+   * Record a host hint as {@link registerSpaceHost} does, and say why when it
+   * is refused. Optional: a manager may implement either method, or both
+   * with the same verdict.
+   */
+  registerSpaceHostDetailed?(
+    space: MemorySpace,
+    host: string,
+  ): SpaceHostRegistration;
 
   /** Changes memory-message compression for live and later remote sessions. */
   setMessageCompressionEnabled?(enabled: boolean): Promise<void>;

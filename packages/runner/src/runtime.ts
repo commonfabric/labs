@@ -151,7 +151,11 @@ import {
 } from "./schema-doc-config.ts";
 import { isCellScope, normalizeCellScope, scopeRank } from "./scope.ts";
 import { SourceReconciler } from "./source-reconciler.ts";
-import { normalizeSpaceHost, SpaceHostValidationError } from "./space-host.ts";
+import {
+  normalizeSpaceHost,
+  type SpaceHostRegistration,
+  SpaceHostValidationError,
+} from "./space-host.ts";
 import { EffectsChannel } from "./speculation/effects-channel.ts";
 import {
   type EventIntentOutcome,
@@ -4406,9 +4410,50 @@ export class Runtime {
    * storage accepted or confirmed the hint.
    */
   registerSpaceHost(space: MemorySpace, host: string): boolean {
-    let route: URL;
+    const normalized = this.#normalizedSpaceHost(space, host);
+    const storage = this.storageManager;
+    const accept = storage.registerSpaceHost !== undefined
+      ? storage.registerSpaceHost(space, normalized)
+      : storage.registerSpaceHostDetailed?.(space, normalized).accepted;
+    if (accept === undefined) return false; // manager has no remote resolution
+    if (accept) this.#dynamicHosts.set(space, normalized);
+    return accept;
+  }
+
+  /**
+   * Records a host hint under the rules of {@link registerSpaceHost}, and
+   * says why when storage refuses it. A storage manager that gives only a
+   * verdict has its refusal reported as `unspecified`, and one that takes no
+   * hints at all as `no-remote-resolution`.
+   */
+  registerSpaceHostDetailed(
+    space: MemorySpace,
+    host: string,
+  ): SpaceHostRegistration {
+    const normalized = this.#normalizedSpaceHost(space, host);
+    const storage = this.storageManager;
+    let registration: SpaceHostRegistration;
+    if (storage.registerSpaceHostDetailed !== undefined) {
+      registration = storage.registerSpaceHostDetailed(space, normalized);
+    } else if (storage.registerSpaceHost !== undefined) {
+      registration = storage.registerSpaceHost(space, normalized)
+        ? { accepted: true }
+        : { accepted: false, reason: "unspecified" };
+    } else {
+      registration = { accepted: false, reason: "no-remote-resolution" };
+    }
+    if (registration.accepted) this.#dynamicHosts.set(space, normalized);
+    return registration;
+  }
+
+  /**
+   * Returns the normalized origin of `host`. A host that is not an HTTP or
+   * HTTPS origin throws an error naming `space`, with the validation error as
+   * its cause.
+   */
+  #normalizedSpaceHost(space: MemorySpace, host: string): string {
     try {
-      route = normalizeSpaceHost(host);
+      return normalizeSpaceHost(host).toString();
     } catch (cause) {
       if (!(cause instanceof SpaceHostValidationError)) throw cause;
       throw new Error(
@@ -4416,11 +4461,6 @@ export class Runtime {
         { cause },
       );
     }
-    const normalized = route.toString();
-    const accept = this.storageManager.registerSpaceHost?.(space, normalized);
-    if (accept === undefined) return false; // manager has no remote resolution
-    if (accept) this.#dynamicHosts.set(space, normalized);
-    return accept;
   }
 
   /**
