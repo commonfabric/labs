@@ -13,6 +13,7 @@ import { createChildCellTransaction } from "../src/storage/extended-storage-tran
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import { CFC_GRANT_ID_PREFIX } from "../src/cfc/grants.ts";
+import type { CfcEnforcementMode } from "../src/cfc/types.ts";
 import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import type { FabricValue, JSONSchema } from "../src/builder/types.ts";
@@ -24,7 +25,9 @@ const space = signer.did();
 /** The space's own readers: a confidentiality every write in it fits. */
 const spaceAtom = cfcAtom.space(space);
 
-const makeRuntime = () => {
+const makeRuntime = (
+  options: { cfcEnforcementMode?: CfcEnforcementMode } = {},
+) => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -32,6 +35,7 @@ const makeRuntime = () => {
     // The flow probe is what computes relevance from reads and writes
     // nothing marked; at `off` there is no probe to race.
     cfcFlowLabels: "persist",
+    ...options,
   });
   return {
     runtime,
@@ -279,5 +283,140 @@ describe("CFC commit preparation", () => {
     } finally {
       await dispose();
     }
+  });
+
+  describe("a recorded write whose value is unchanged", () => {
+    // A write the transaction recorded is an attempted write whatever value
+    // it leaves behind (spec §8.10.2.1), so a labeled target of one makes the
+    // transaction relevant, and the write replaces the derived component at
+    // its path (§8.12.8). Neither the value it ends on nor another write in
+    // the same space decides either.
+
+    it("marks relevant a transaction whose only write to a labeled document returned to its starting value", async () => {
+      const { runtime, dispose } = makeRuntime();
+      try {
+        const id = runtime.getCell(space, "commit-prep-reverted")
+          .getAsNormalizedFullLink().id;
+        const seed = runtime.edit();
+        seedLabeledDoc(seed, id);
+        expect((await seed.commit()).error).toBeUndefined();
+
+        const tx = runtime.edit();
+        const address = {
+          space,
+          scope: "space",
+          id,
+          path: ["value", "note"],
+        } as const;
+        tx.writeOrThrow(address, "overwritten" as unknown as FabricValue);
+        tx.writeOrThrow(address, "labeled" as unknown as FabricValue);
+        runtime.prepareTxForCommit(tx);
+        expect(tx.getCfcState().relevant).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("marks relevant a transaction whose only write is an authoritative write of a labeled document's unchanged value", async () => {
+      const { runtime, dispose } = makeRuntime();
+      try {
+        const id = runtime.getCell(space, "commit-prep-authoritative")
+          .getAsNormalizedFullLink().id;
+        const seed = runtime.edit();
+        seedLabeledDoc(seed, id);
+        expect((await seed.commit()).error).toBeUndefined();
+
+        const tx = runtime.edit();
+        // The extended transaction marks itself only where it serves a seal
+        // destination; the mode itself lives on the transaction it wraps.
+        tx.tx.markAuthoritativeWrites!();
+        tx.writeOrThrow(
+          { space, scope: "space", id, path: ["value", "note"] },
+          "labeled" as unknown as FabricValue,
+        );
+        runtime.prepareTxForCommit(tx);
+        expect(tx.getCfcState().relevant).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("replaces a reverted path's derived label whether or not another document in its space changed", async () => {
+      for (const otherChange of [false, true]) {
+        // `observe` lets the schema-less writes commit, so the label map
+        // they leave behind can be read back.
+        const { runtime, dispose } = makeRuntime({
+          cfcEnforcementMode: "observe",
+        });
+        try {
+          const id = runtime.getCell(space, "commit-prep-derived")
+            .getAsNormalizedFullLink().id;
+          const otherId = runtime.getCell(space, "commit-prep-other")
+            .getAsNormalizedFullLink().id;
+          const seed = runtime.edit();
+          writeSeedEnvelopeDoc(seed, space);
+          seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
+            value: { note: "labeled" },
+            cfc: {
+              version: 1,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: {
+                version: 1,
+                entries: [{
+                  path: ["note"],
+                  origin: "derived",
+                  label: { confidentiality: [spaceAtom] },
+                }],
+              },
+            },
+          } as unknown as FabricValue);
+          seed.writeOrThrow(
+            { space, scope: "space", id: otherId, path: [] },
+            { value: { count: 1 } } as unknown as FabricValue,
+          );
+          expect((await seed.commit()).error).toBeUndefined();
+
+          const tx = runtime.edit();
+          const address = {
+            space,
+            scope: "space",
+            id,
+            path: ["value", "note"],
+          } as const;
+          tx.writeOrThrow(address, "overwritten" as unknown as FabricValue);
+          tx.writeOrThrow(address, "labeled" as unknown as FabricValue);
+          if (otherChange) {
+            tx.writeOrThrow(
+              { space, scope: "space", id: otherId, path: ["value", "count"] },
+              2 as unknown as FabricValue,
+            );
+          }
+          expect((await tx.commit()).error).toBeUndefined();
+
+          const check = runtime.edit();
+          const stored = check.readOrThrow({
+            space,
+            scope: "space",
+            id,
+            path: [],
+          }) as {
+            value?: unknown;
+            cfc?: { labelMap?: { entries?: unknown[] } };
+          };
+          check.abort();
+          expect(stored.value).toEqual({ note: "labeled" });
+          // The value entry is replaced by this transaction's empty
+          // derivation; the existence entry is frozen at creation and stays.
+          expect(stored.cfc?.labelMap?.entries).toEqual([{
+            path: ["note"],
+            origin: "derived",
+            observes: "shape",
+            label: { confidentiality: [spaceAtom] },
+          }]);
+        } finally {
+          await dispose();
+        }
+      }
+    });
   });
 });
