@@ -129,13 +129,15 @@ const REUSE_MUTABLE = { force: false } as const;
  * (`force: false`). `cloneForMutation`'s typed errors are translated into this
  * module's path-style messages, and a value-at-path that isn't a plain
  * container is rejected (patch ops only mutate objects/arrays). `fullPath` is
- * used for error messages.
+ * used for error messages. Given `createMissingFor`, the descent creates the
+ * containers it finds missing, the last shaped for that next key (see
+ * `CloneForMutationOptions.nextKeyAfterPath`).
  */
 const thawSpine = (
   root: FabricValue,
   thawPath: string[],
   fullPath: string[],
-  options?: { createMissing?: boolean; nextKeyAfterPath?: string },
+  createMissingFor?: string,
 ): { root: FabricValue; container: PatchContainer } => {
   let value: FabricValue;
   let pathValue: MutableFabricContainerValueLayer;
@@ -143,7 +145,11 @@ const thawSpine = (
     ({ value, pathValue } = cloneForMutation(
       root,
       thawPath,
-      options === undefined ? REUSE_MUTABLE : { ...options, force: false },
+      createMissingFor === undefined ? REUSE_MUTABLE : {
+        createMissing: true,
+        nextKeyAfterPath: createMissingFor,
+        force: false,
+      },
     ));
   } catch (e) {
     if (e instanceof CloneForMutationError) {
@@ -247,10 +253,7 @@ const addAtPath = (
     root,
     path.slice(0, -1),
     path,
-    {
-      createMissing: true,
-      nextKeyAfterPath: key,
-    },
+    key,
   );
   if (Array.isArray(container)) {
     if (key === "-") {
@@ -336,10 +339,7 @@ const appendAtPath = (
   values: FabricValue[],
 ): FabricValue => {
   validateAddSpine(root, path, path.length);
-  const { root: newRoot, container } = thawSpine(root, path, path, {
-    createMissing: true,
-    nextKeyAfterPath: "0",
-  });
+  const { root: newRoot, container } = thawSpine(root, path, path, "0");
   if (!Array.isArray(container)) {
     throw new PatchApplyError(
       `append target is not an array at ${encodePointer(path)}`,
@@ -359,10 +359,7 @@ const addUniqueAtPath = (
   values: FabricValue[],
 ): FabricValue => {
   validateAddSpine(root, path, path.length);
-  const { root: newRoot, container } = thawSpine(root, path, path, {
-    createMissing: true,
-    nextKeyAfterPath: "0",
-  });
+  const { root: newRoot, container } = thawSpine(root, path, path, "0");
   if (!Array.isArray(container)) {
     throw new PatchApplyError(
       `add-unique target is not an array at ${encodePointer(path)}`,
@@ -454,10 +451,7 @@ const incrementAtPath = (
     root,
     path.slice(0, -1),
     path,
-    {
-      createMissing: true,
-      nextKeyAfterPath: path[path.length - 1]!,
-    },
+    path[path.length - 1]!,
   );
   const key = path[path.length - 1]!;
   if (Array.isArray(container)) {
