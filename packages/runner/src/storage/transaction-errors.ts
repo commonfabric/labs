@@ -1,4 +1,6 @@
+import { debugStr } from "@commonfabric/data-model";
 import type {
+  IInvalidArrayLengthError,
   IMemoryAddress,
   IReadOnlyAddressError,
   IStorageTransactionAborted,
@@ -54,6 +56,25 @@ export const ReadOnlyAddressError = (
 ): IReadOnlyAddressError => ({
   name: "ReadOnlyAddressError",
   message: `Cannot write to read-only address: ${address.id}`,
+  address,
+  from(_space: MemorySpace) {
+    return this;
+  },
+});
+
+/**
+ * Returns the error for a write to the `length` at `address` that would grow
+ * that array to `requested`, which is `2 ** 32` or more, longer than any array
+ * can be.
+ */
+export const InvalidArrayLengthError = (
+  address: IMemoryAddress,
+  requested: number,
+): IInvalidArrayLengthError => ({
+  name: "InvalidArrayLengthError",
+  message: debugStr`Cannot grow the array at $quote,long${
+    address.path.slice(0, -1)
+  } in $quote,long${address.id} to length $quote${requested}: an array's length must be below \`2 ** 32\``,
   address,
   from(_space: MemorySpace) {
     return this;

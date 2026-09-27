@@ -1067,7 +1067,8 @@ export interface IWriteOptions {
    * object key or punching an array hole — instead of storing a value.
    * `value` must be `undefined`. Without this flag, writing `undefined`
    * stores `undefined` as a real value: present-but-undefined is distinct
-   * from absent. A root-path delete retracts the document.
+   * from absent. A root-path delete retracts the document, and a delete of
+   * an array's `length` empties the array.
    */
   delete?: boolean;
 
@@ -2100,12 +2101,15 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   /**
    * Records a destination the runtime wrote a whole value to, so the flow
    * stamp lands there rather than only at the paths the diff changed. See
-   * `CfcTxState.assertedValueRoots`. Dropped unless `authorization` carries
-   * the runtime's mark. The address is `deepFreeze()`d on entry.
+   * `CfcTxState.assertedValueRoots`. `reference` names the document root a
+   * pointer the runtime stored at `address` refers to. Dropped unless
+   * `authorization` carries the runtime's mark. The address is
+   * `deepFreeze()`d on entry.
    */
   recordCfcAssertedValueRoot(
     address: CfcAddress,
     authorization?: RuntimeWritePolicyAuthorization,
+    reference?: CfcAddress,
   ): void;
 
   /**
@@ -2779,7 +2783,8 @@ export type WriteError =
   | IUnsupportedMediaTypeError
   | InactiveTransactionError
   | IReadOnlyAddressError
-  | ITypeMismatchError;
+  | ITypeMismatchError
+  | IInvalidArrayLengthError;
 
 export type WriterError =
   | InactiveTransactionError
@@ -3463,6 +3468,20 @@ export interface IReadOnlyAddressError extends IStorageError {
   readonly address: IMemoryAddress;
 
   from(space: MemorySpace): IReadOnlyAddressError;
+}
+
+/**
+ * Error returned when a write to an array's `length` would grow the array to
+ * `2 ** 32` or more, past the longest an array can be. Like a type mismatch,
+ * it would persist if the transaction were retried.
+ */
+export interface IInvalidArrayLengthError extends IStorageError {
+  readonly name: "InvalidArrayLengthError";
+
+  /** The address written, whose path ends in `length`. */
+  readonly address: IMemoryAddress;
+
+  from(space: MemorySpace): IInvalidArrayLengthError;
 }
 
 /**

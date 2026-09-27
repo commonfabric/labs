@@ -310,6 +310,33 @@ describe("custody-seal", () => {
     });
   });
 
+  it("writes the link to the box into the room's box cell the host names", async () => {
+    await withFixture(async ({ processor, runtime, refs }) => {
+      // The room document whose cell receives the link.
+      const cells = runtime.getCell(S, "room-cells");
+      const setup = runtime.edit();
+      cells.withTx(setup).set({} as never);
+      expect((await setup.commit()).error).toBeUndefined();
+      const roomBox = cells.key("box");
+      const preview = await processor.handleRequest({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+        box: createCellRef(roomBox),
+      }, first) as CustodySealPreview;
+      const sealed = await processor.handleRequest({
+        type: RequestType.CustodySealCommit,
+        id: preview.id,
+      }, first) as { receipt: CellRef; box: CellRef; instance: string };
+      await roomBox.sync();
+      const tx = runtime.edit();
+      const linked = roomBox.withTx(tx).resolveAsCell()
+        .getAsNormalizedFullLink();
+      tx.abort();
+      expect(linked.space).toBe(S);
+      expect(linked.id).toBe(sealed.box.id);
+    });
+  });
+
   it("admits one confirmation, from the client that prepared it", async () => {
     await withFixture(async ({ processor, refs }) => {
       await expect(processor.handleRequest({

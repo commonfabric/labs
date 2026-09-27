@@ -1249,6 +1249,14 @@ export type CustodySealPrepareRequest = BaseRequest & {
 
   /** The actor's source policy, in the actor's home space. */
   allowedSources: CellRef;
+
+  /**
+   * The room's cell that receives the link to the instance's box, in the
+   * room space. The seal writes the link itself, in the transaction that
+   * writes the entry, so the room's release witness covers which box the
+   * room reads.
+   */
+  box?: CellRef;
 };
 
 /** A principal the room space's access list lets read the room. */
