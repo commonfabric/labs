@@ -1,9 +1,12 @@
 /**
  * Own-write echo, end to end over a LIVE in-process server: a session's own
  * accepted patch-produced heads ride its covering frame as full post-apply
- * documents. The risk this suite pins is DOUBLE-APPLY — the echoed base swap
- * must not compose with a still-standing pending overlay — and the
- * notification contract: an echo fully shadowed by the write it confirms must
+ * documents, except a head the engine applied over the very document the
+ * patch named as its base, which the writer reproduces by replaying its own
+ * patch. The risk this suite pins is DOUBLE-APPLY — the echoed base swap
+ * must not compose with a still-standing pending overlay, and the promotion
+ * that stands in for an elided echo must apply the patch once — and the
+ * notification contract: a frame fully shadowed by the write it confirms must
  * not re-notify the writer.
  *
  * Fan-out is gated manually and flushed explicitly, so which commits share a
@@ -15,6 +18,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import type { SessionEffectMessage } from "@commonfabric/memory/v2";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -29,6 +33,32 @@ const stringListSchema = {
   items: { type: "string" },
   // deno-lint-ignore no-explicit-any
 } as any;
+
+/**
+ * Records every `session/effect` message `server` sends from here on. A
+ * runtime opens its connection at its first use of the space, so a call made
+ * before that sees every frame the runtime is sent.
+ */
+const recordEffects = (
+  server: MemoryV2Server.Server,
+): SessionEffectMessage[] => {
+  const effects: SessionEffectMessage[] = [];
+  const connect = server.connect.bind(server);
+  server.connect = (send) =>
+    connect((message) => {
+      if ((message as { type?: string }).type === "session/effect") {
+        effects.push(message as SessionEffectMessage);
+      }
+      send(message);
+    });
+  return effects;
+};
+
+/** The documents `effects` carried for `id`, in the order they were sent. */
+const deliveredDocs = (effects: SessionEffectMessage[], id: string) =>
+  effects.flatMap((message) => message.effect.upserts)
+    .filter((upsert) => upsert.id === id && upsert.doc !== undefined)
+    .map((upsert) => upsert.doc);
 
 describe("own-write echo (live)", () => {
   let server: MemoryV2Server.Server;
@@ -50,16 +80,27 @@ describe("own-write echo (live)", () => {
   it("applies its own patch echo exactly once and does not re-notify", async () => {
     // Pure echo: the only write in the batch is this session's own append, so
     // the dirty-origin survives and the covering frame carries the patch head
-    // as a full post-apply document. The echoed base swap and the parked
-    // promotion run in the same frame application; the list must come out
-    // exactly once-appended, and the sink must not fire again for a frame that
+    // as a full post-apply document. The document is watched before its seed
+    // lands, so the seed's own set head is elided and promoted locally, and
+    // the replica holds no delivered version for the append to name as the
+    // base it replays over. The echoed base swap and the parked promotion run
+    // in the same frame application; the list must come out exactly
+    // once-appended, and the sink must not fire again for a frame that
     // confirms what the overlay already showed.
 
+    const effects = recordEffects(server);
     const rt = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: storage1,
     });
     try {
+      const cell = rt.getCell<string[]>(
+        space,
+        "echo-once-list",
+        stringListSchema,
+      );
+      await cell.sync();
+
       const tx0 = rt.edit();
       const seedCell = rt.getCell<string[]>(
         space,
@@ -73,12 +114,6 @@ describe("own-write echo (live)", () => {
       await clock.settle();
       await rt.storageManager.synced();
 
-      const cell = rt.getCell<string[]>(
-        space,
-        "echo-once-list",
-        stringListSchema,
-      );
-      await cell.sync();
       const seen: string[][] = [];
       const cancel = cell.sink((value) => {
         seen.push([...(value ?? [])]);
@@ -100,10 +135,68 @@ describe("own-write echo (live)", () => {
       await rt.idle();
 
       expect(cell.get()).toEqual(["seed", "A"]);
+      expect(deliveredDocs(effects, cell.getAsNormalizedFullLink().id))
+        .toEqual([{ value: ["seed", "A"] }]);
       // The echo confirmed exactly what the optimistic overlay already
       // showed; a second notification would be a spurious integrate.
       expect(seen.length).toBe(notificationsAtVerdict);
       expect(seen[seen.length - 1]).toEqual(["seed", "A"]);
+      cancel();
+    } finally {
+      await rt.dispose();
+    }
+  });
+
+  it("applies its own patch once without an echo when the patch lands on the document the frame delivered", async () => {
+    // The seed lands before the document is watched, so the watch delivers
+    // it, and the append names that delivered document as the base its
+    // promotion replays over. The engine applies it over that same head, so
+    // the covering frame carries no copy, and the promotion alone must leave
+    // the list once-appended without notifying again.
+
+    const effects = recordEffects(server);
+    const rt = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage1,
+    });
+    try {
+      const tx0 = rt.edit();
+      rt.getCell<string[]>(space, "exact-once-list", stringListSchema, tx0)
+        .set(["seed"]);
+      await tx0.commit({ resolveAt: "verdict" });
+      await server.flushSessions([space]);
+      await clock.settle();
+      await rt.storageManager.synced();
+
+      const cell = rt.getCell<string[]>(
+        space,
+        "exact-once-list",
+        stringListSchema,
+      );
+      await cell.sync();
+      const seen: string[][] = [];
+      const cancel = cell.sink((value) => {
+        seen.push([...(value ?? [])]);
+      });
+      const id = cell.getAsNormalizedFullLink().id;
+      const deliveredBeforeAppend = deliveredDocs(effects, id).length;
+
+      const txA = rt.edit();
+      rt.getCell<string[]>(space, "exact-once-list", stringListSchema, txA)
+        .push("A");
+      await txA.commit({ resolveAt: "verdict" });
+      await rt.idle();
+      const notificationsAtVerdict = seen.length;
+      expect(seen[seen.length - 1]).toEqual(["seed", "A"]);
+
+      await server.flushSessions([space]);
+      await clock.settle();
+      await rt.storageManager.synced();
+      await rt.idle();
+
+      expect(cell.get()).toEqual(["seed", "A"]);
+      expect(deliveredDocs(effects, id).length).toBe(deliveredBeforeAppend);
+      expect(seen.length).toBe(notificationsAtVerdict);
       cancel();
     } finally {
       await rt.dispose();
