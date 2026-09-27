@@ -5932,8 +5932,8 @@ const applyCommitTransaction = (
     return true;
   };
   // Every read is checked before any read's staleness is, so that a malformed
-  // read is refused as such whatever else the commit carries: its path, and a
-  // confirmed read's seq or a pending read's layers and basis.
+  // read is refused as such whatever the commit's other reads hold: its path,
+  // and a confirmed read's seq or a pending read's layers and basis.
   for (const read of commit.reads.confirmed) {
     requireReadPath(read);
     requireConfirmedReadSeq(read);

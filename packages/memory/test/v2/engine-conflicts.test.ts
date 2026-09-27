@@ -316,6 +316,12 @@ describe("engine-conflicts", () => {
     }
   }
 
+  it("applies a commit whose confirmed read names `Number.MAX_SAFE_INTEGER`, past the head", () => {
+    const read = { id: ids[0], path: toDocumentPath(["value"]) };
+    expect(commitReads([{ ...read, seq: Number.MAX_SAFE_INTEGER }]).seq)
+      .toBe(2);
+  });
+
   for (const [kind, seq] of [...malformedSeqs, ["`undefined`", undefined]]) {
     it(`throws \`ProtocolError\` for a read whose \`seq\` is ${kind} after a stale read`, () => {
       const stale = { id: ids[0], path: toDocumentPath(["value"]), seq: 0 };
