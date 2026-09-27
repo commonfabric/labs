@@ -203,15 +203,16 @@ describe("securityContextDifferences()", () => {
     ).toEqual(["cfcTrustConfig"]);
   });
 
-  // A deployment record set as two documents might spell it: the same rule
-  // with its keys in another order.
-  const displayRecords = (subjectKeyFirst: boolean) => [{
+  // A deployment record set as two documents might spell it: one leaves the
+  // record's scope and the rule's side-condition scope at their defaults, the
+  // other writes the defaults out.
+  const displayRecords = (defaultsWrittenOut: boolean) => [{
     id: "owner-self-display",
+    ...(defaultsWrittenOut ? { selection: "ambient" as const } : {}),
     rules: [{
       id: "resource-owner-self-display",
-      appliesTo: subjectKeyFirst
-        ? { subject: { var: "$actingUser" }, type: "Resource" }
-        : { type: "Resource", subject: { var: "$actingUser" } },
+      appliesTo: { type: "Resource", subject: { var: "$actingUser" } },
+      ...(defaultsWrittenOut ? { preConfScope: "targetClause" as const } : {}),
       post: {
         addAlternatives: [{ type: "User", subject: { var: "$actingUser" } }],
       },

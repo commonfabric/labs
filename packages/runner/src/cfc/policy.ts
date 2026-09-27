@@ -985,7 +985,10 @@ const snapshotOf = (records: readonly PolicyRecord[]): PolicySnapshot => ({
  * Returns one snapshot holding the records of every snapshot in `snapshots`,
  * in order, skipping `undefined`, for a boundary that evaluates several
  * validated record sets to one fixpoint. The records are the ones already
- * validated and frozen; nothing is revalidated.
+ * validated and frozen; nothing is revalidated. Two record sets may use the
+ * same record id, which `buildCfcPolicySnapshot` refuses within one set;
+ * both records are evaluated, and only diagnostics that name a record by id
+ * become ambiguous.
  */
 export const joinCfcPolicySnapshots = (
   snapshots: readonly (PolicySnapshot | undefined)[],

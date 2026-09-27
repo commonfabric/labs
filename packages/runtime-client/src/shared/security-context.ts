@@ -143,11 +143,13 @@ function trustConfigsEqual(
 /**
  * Deployment policy records compare by the digest of the snapshot the runner
  * builds from them (`buildCfcPolicySnapshot`), which is what a runtime holds
- * and evaluates. Key order and a key written as `undefined` are spelling, not
- * posture; the order of records and of their rules is kept, as the runner's
- * digest keeps it. A record set the runner refuses to build is one no runtime
- * booted with, so it agrees with nothing. Imported through the `cfc/policy`
- * subpath for the reason given at {@link readCeilingsEqual}.
+ * and evaluates. Key order is spelling, not posture, and so is a record or
+ * rule field left at its default or written out. Inside a pattern a key
+ * written as `undefined` is an absence requirement and part of the digest.
+ * The order of records and of their rules is kept, as the runner's digest
+ * keeps it. A record set the runner refuses to build is one no runtime booted
+ * with, so it agrees with nothing. Imported through the `cfc/policy` subpath
+ * for the reason given at {@link readCeilingsEqual}.
  */
 function policyRecordsEqual(
   left: readonly CfcPolicyRecordInput[] | undefined,

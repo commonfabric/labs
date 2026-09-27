@@ -505,8 +505,11 @@ its policy snapshot when it is built, refusing to start on a malformed record,
 and evaluates that snapshot at every boundary: the commit and sink gates, and
 the display boundary before the render ceiling's fit. A rule's `$actingUser`
 is the acting principal, which for display is the render audience. What a
-record adds at display must still fit the ceiling, which admits the acting
-user alone. The records are part of the runtime's security context, compared
+record adds at display must still fit the host's render ceiling: the acting
+user's identity atoms and the allow-listed caveat kinds. Attesting the records
+with the rest of the deployment's configuration is the deployment's
+obligation; the runtime validates them and does not attest them. The records
+are part of the runtime's security context, compared
 by the digest of the snapshot the runner builds from them, so an attach
 asserting another set is refused and key order is not posture.
 
@@ -541,9 +544,10 @@ sinks only:
 }
 ```
 
-It carries no integrity guard, which makes it the deployment's release
-judgment under spec §8.10.6 and the owner-self allowance of §5.3.2
-([SC-49](../specs/cfc-spec-changes.md)). It leaves `class` and `scope`
+It carries no integrity guard. It is the deployment's release judgment under
+spec §8.10.6; how it relates to the owner-self allowance of §5.3.2 and to
+invariant 3 is among the open points of
+[SC-49](../specs/cfc-spec-changes.md). It leaves `class` and `scope`
 unconstrained; a deployment that means to release fewer classes names them in
 `appliesTo`.
 

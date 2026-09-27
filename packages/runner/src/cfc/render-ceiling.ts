@@ -38,11 +38,13 @@ import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
  *
  * Resolution runs RUNNER-side (this module) as B5's sink gate does
  * (`evaluateGatedConfidentiality` in prepare.ts): the same evaluator, acting
- * principal and deployment policy records. It differs in two things: the
+ * principal and deployment policy records. It differs in three things: the
  * boundary class, since this mints `sinkClass:"display"` where a sink gate
- * mints its sink's class; and `STANDARD_RENDER_EXCHANGE_RULES`, which this
- * evaluates beside the deployment's records. The reconciler consumes the
- * resolved label; it never runs the evaluator itself.
+ * mints its sink's class; `STANDARD_RENDER_EXCHANGE_RULES`, which this
+ * evaluates beside the deployment's records; and the switch, since this runs
+ * wherever the render ceiling is on, whatever the `cfcPolicyEvaluation` dial
+ * says. The reconciler consumes the resolved label; it never runs the
+ * evaluator itself.
  */
 
 /** The display sink class — the render sibling of B5's `"network"` class. */
@@ -114,10 +116,12 @@ export type RenderConfidentialityResolverConfig = {
    * render boundary evaluates beside the standard render rules and the module
    * policies a label selects, before the ceiling fit (§8.10.6). They are the
    * records every other boundary evaluates, validated and frozen when the
-   * runtime is built and attested with its configuration (§4.4.1). A record
-   * acts here only where its guards admit a display boundary, and what it
-   * adds must still fit the ceiling, which admits the acting user alone.
-   * Absent, only the standard render rules and module policies run.
+   * runtime is built; attesting them with the rest of its configuration is
+   * the deployment's obligation (§4.4.1, §9.2.1). A record acts here only
+   * where its guards admit a display boundary, and what it adds must still fit
+   * the host's ceiling: the acting user's identity atoms and the allow-listed
+   * caveat kinds. Absent, only the standard render rules and module policies
+   * run.
    */
   readonly policySnapshot?: PolicySnapshot;
 

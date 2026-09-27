@@ -1523,34 +1523,38 @@ rules keep their integrity or policy-state guard (§4.3.6).
 Deployment records at display. §8.10.6 says ordinary exchange-rule evaluation
 runs before the display ceiling's fit, as at any boundary, and that admitting
 more needs authored policy or verified authority. The render resolver
-evaluates the attested deployment snapshot, the records the commit and sink
-gates evaluate, validated and frozen when the runtime is built and covered by
-attestation of the deployment configuration (§4.4.1), beside the standard
-render rule and the module policies a label selects. What a record adds must
-still fit the ceiling, which admits the acting user alone, so no record widens
-a display's audience (§8.10.5.2). A browser-worker host supplies its records
-as `InitializationData.cfcPolicyRecords`, part of the security context an
-attach is compared against.
+evaluates the deployment snapshot, the records the commit and sink gates
+evaluate, beside the standard render rule and the module policies a label
+selects. The runtime validates and freezes the records when it is built;
+attesting them with the rest of the deployment configuration is the
+deployment's obligation (§4.4.1, §9.2.1), and a browser-worker host supplies
+them from the page as `InitializationData.cfcPolicyRecords`, part of the
+security context an attach is compared against. What a record adds must still
+fit the host's render ceiling, which names the acting user's identity atoms and
+the allow-listed caveat kinds, so no record makes a display render for anyone
+but the acting user (§8.10.5.2).
 
 A deployment that lets an owner see their own resources at display authors
 that release as a record: `Resource{ subject: $actingUser }` gains
 `User($actingUser)`, guarded on `BoundaryContext{ key: sinkClass, value:
-display }`. The record is the deployment's release judgment under §8.10.6,
-made through the attested-deployment route §5.3.2 allows for an owner-self
-rule; the standard render rules release no `Resource`.
+display }`. The record is the deployment's release judgment under §8.10.6;
+the standard render rules release no `Resource`.
 
 Open points. (a) §4.9.2 does not say whether its substitution applies at
 boundaries other than display, or to every source of rules; the runtime binds
 `$actingUser` at every boundary that names an acting principal, for the
 standard rules, deployment records and module manifests alike. (b) §5.3.2's
-owner-self allowance is written for a standard-profile rule; the spec does not
-say whether an owner-self release authored as a deployment record is that
-rule or authored policy under §8.10.6. (c) §8.10.6's example list names no
-owner-self form.
+owner-self allowance and invariant 3 are written for a standard-profile rule;
+the spec does not say whether an owner-self release authored as a deployment
+record is that rule or authored policy under §8.10.6. The runtime refuses no
+unguarded deployment record. (c) §8.10.6's example list names no owner-self
+form. (d) §5.3.2 does not say what satisfies "attested deployment"; the
+runtime leaves attesting its configuration, the records included, to the
+deployment.
 
 Proposed edit: in §4.9.2, state that the evaluator supplies `$actingUser`
 before matching and never binds it from a label; in §8.10.6, state that the
-attested deployment snapshot is among the records evaluated before the fit.
+deployment's policy records are among the records evaluated before the fit.
 Implemented in `packages/runner/src/cfc/exchange-eval.ts`
 (`actingUserBindings`), `packages/runner/src/cfc/atom-pattern.ts`
 (`ACTING_USER_VAR`), `packages/runner/src/cfc/render-ceiling.ts`

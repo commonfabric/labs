@@ -6,6 +6,7 @@ import {
   CFC_RUNTIME_SUBJECT,
   cfcAtom,
 } from "@commonfabric/api/cfc";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
 import {
   type CfcConfClause,
   clauseAlternatives,
@@ -756,6 +757,19 @@ describe("CFC render resolver — deployment policy at the display boundary", ()
   const ownerSelf = (atom: CfcConfClause) =>
     normalizeClause({ anyOf: [atom, userAlice] });
 
+  /**
+   * Whether the owner-self record releases `acting`'s own message to them,
+   * the positive control for a case that shows it releasing nothing else.
+   */
+  const releasesOwnMessage = (acting: string) =>
+    deepEqual(
+      createRenderConfidentialityResolver({
+        actingPrincipal: acting,
+        policySnapshot: ownerSelfSnapshot,
+      })({ confidentiality: [message(acting)] }),
+      [normalizeClause({ anyOf: [message(acting), cfcAtom.user(acting)] })],
+    );
+
   describe("releasing", () => {
     it("adds `User(acting)` to the acting user's own `Resource` clause, which then fits the ceiling", () => {
       const resolved = resolveForAlice()({
@@ -822,6 +836,7 @@ describe("CFC render resolver — deployment policy at the display boundary", ()
         policySnapshot: ownerSelfSnapshot,
       });
       expect(resolve({ confidentiality: label })).toEqual(label);
+      expect(releasesOwnMessage(MALLORY)).toBe(true);
     });
 
     it("keeps a value hidden whose deployment release names someone other than the acting user", () => {
@@ -861,6 +876,7 @@ describe("CFC render resolver — deployment policy at the display boundary", ()
       const resolved = resolveForAlice()({ confidentiality: label });
       expect(resolved).toEqual(label);
       expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual(label);
+      expect(releasesOwnMessage(ALICE)).toBe(true);
     });
 
     it("rewrites only the acting user's clause of two subjects' conjoined resources", () => {
@@ -910,8 +926,10 @@ describe("CFC render resolver — deployment policy at the display boundary", ()
     });
 
     it("fires at no sink class but display", () => {
-      // Every class the egress gate mints from the sink inventory, the
-      // model-call sinks' network class among them.
+      // What confines the record to display is its own guard, checked here
+      // against every class the egress gate mints from the sink inventory,
+      // the model-call sinks' network class among them; the sink gates
+      // evaluate the same deployment snapshot.
       const label = [userAlice, message(ALICE)];
       const evaluateAt = (sinkClass: string) =>
         evaluateExchangeRules({ confidentiality: label }, ownerSelfSnapshot, {
@@ -940,6 +958,7 @@ describe("CFC render resolver — deployment policy at the display boundary", ()
         policySnapshot: ownerSelfSnapshot,
       });
       expect(resolve({ confidentiality: label })).toEqual(label);
+      expect(releasesOwnMessage(ALICE)).toBe(true);
     });
 
     it("rewrites nothing for an acting principal that is not a user's DID", () => {
@@ -958,6 +977,7 @@ describe("CFC render resolver — deployment policy at the display boundary", ()
         });
         expect(resolve({ confidentiality: [atom] })).toEqual([atom]);
       }
+      expect(releasesOwnMessage(ALICE)).toBe(true);
     });
 
     it("releases a committed subject that digests to the acting user, and no other", () => {
