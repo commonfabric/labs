@@ -1425,8 +1425,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       // whole-doc set: content addressing makes any visible copy the
       // whole document. Writes reach the working root by copy-on-write from
       // `doc.initial`, so the two share every subtree no write replaced, and
-      // comparing them by walk costs the written spine rather than a hash of
-      // the whole document.
+      // comparing them by walk costs the written spine.
       if (
         !this.#authoritativeWrites &&
         valueEqualByWalk(doc.current.value, doc.initial.value)

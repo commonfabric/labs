@@ -4,7 +4,7 @@ import { Identity } from "@commonfabric/identity";
 import { isDeepFrozen } from "@commonfabric/data-model";
 import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import type { ICommitNotification, URI } from "../src/storage/interface.ts";
+import type { StorageNotification, URI } from "../src/storage/interface.ts";
 import {
   internalVerifierRead,
   isInternalVerifierRead,
@@ -82,20 +82,27 @@ const keyedMap = (length: number) =>
  * commit's notification named.
  *
  * Every comparison on that path asks whether two versions of the document
- * differ. A content hash answers by feeding the hasher every container in a
- * version, so a count that tracks the length of the map is one of those
+ * differ. Comparing them by content hash feeds the hasher every container in
+ * a version, so a count that tracks the length of the map is one of those
  * comparisons hashing the whole document.
+ *
+ * The echo is a copy of the document decoded afresh, sharing nothing with the
+ * replica's own, so the paths its integration notifies are reported too.
  */
 const oneEntryCommit = async (
   length: number,
-): Promise<{ containersHashed: number; changedPaths: string[][] }> => {
+): Promise<{
+  containersHashed: number;
+  changedPaths: string[][];
+  echoedPaths: string[][];
+}> => {
   const storage = StorageManager.emulate({ as: signer });
-  const commits: ICommitNotification[] = [];
+  const notifications: StorageNotification[] = [];
   // A subscriber is what makes the replica compute the change a commit makes,
   // for its own commit and again for the echo.
   storage.subscribe({
     next(notification) {
-      if (notification.type === "commit") commits.push(notification);
+      notifications.push(notification);
       return undefined;
     },
   });
@@ -109,6 +116,7 @@ const oneEntryCommit = async (
     await storage.pullOpenSpacesToHead();
 
     const before = getContainersHashedForTestingOnly();
+    const notified = notifications.length;
     const tx = storage.edit();
     expect(
       tx.write({ space, id, type, path: ["value", "key-0", "name"] }, "edited")
@@ -118,11 +126,20 @@ const oneEntryCommit = async (
     await storage.pullOpenSpacesToHead();
     const containersHashed = getContainersHashedForTestingOnly() - before;
 
+    const pathsOf = (type: StorageNotification["type"]) =>
+      notifications.slice(notified)
+        .filter((notification) => notification.type === type)
+        .flatMap((notification) =>
+          "changes" in notification
+            ? [...notification.changes].map((change) => [
+              ...change.address.path,
+            ])
+            : []
+        );
     return {
       containersHashed,
-      changedPaths: [...commits.at(-1)!.changes].map((change) => [
-        ...change.address.path,
-      ]),
+      changedPaths: pathsOf("commit"),
+      echoedPaths: [...pathsOf("integrate"), ...pathsOf("pull")],
     };
   } finally {
     await storage.close();
@@ -275,20 +292,23 @@ describe("v2-transaction", () => {
       const short = await oneEntryCommit(20);
       const long = await oneEntryCommit(2_000);
 
-      // Both bounds are needed, as for the read above: the equality alone
-      // would hold for two counts that each grew with their own map, and the
-      // bound alone for a count that grew slowly. Hashing the short document
-      // whole once already feeds the hasher 42 containers.
+      // Both are needed: the equality alone passes a count that is flat but
+      // large, and the bound alone passes one that grows slowly with the map.
+      // Hashing the short document whole once already feeds the hasher 42
+      // containers.
       expect(long.containersHashed).toBe(short.containersHashed);
       expect(long.containersHashed).toBeLessThan(20);
     });
 
-    it("notifies the one path the commit changed", async () => {
+    it("notifies the one path the commit changed, and no path for its echo", async () => {
       // What the count above must not be bought with: the notification is
       // what reactivity reads, and it has to name the change and only that.
-      const { changedPaths } = await oneEntryCommit(2_000);
+      // The echo holds what the replica already shows, so comparing the two
+      // finds nothing to notify.
+      const { changedPaths, echoedPaths } = await oneEntryCommit(2_000);
 
       expect(changedPaths).toEqual([["value", "key-0", "name"]]);
+      expect(echoedPaths).toEqual([]);
     });
   });
 });

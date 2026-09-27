@@ -3,7 +3,6 @@ import {
   isFabricObjectOrArray,
   isFabricSpecialObject,
   valueEqual,
-  valueEqualByWalk,
 } from "@commonfabric/data-model";
 import {
   resolveScopeKey,
@@ -96,10 +95,11 @@ const pushChangedPath = (
 
 /**
  * How deep `collectChangedPaths()` descends before it asks `valueEqual()`
- * whether a pair differs at all. Above this depth a pair is only walked, and a
- * pair that is equal contributes no path by being walked. Below it, a cyclic
- * pair is what the question is for: walking two distinct cyclic graphs never
- * bottoms out, and asking stops the descent where the graphs agree.
+ * whether a pair differs at all. Shallower than this a pair is only walked,
+ * and a pair that is equal contributes no path by being walked. At this depth
+ * and past it, a cyclic pair is what the question is for: walking two
+ * distinct cyclic graphs never bottoms out, and asking stops the descent
+ * where the graphs agree.
  */
 const MAX_UNCHECKED_DEPTH = 256;
 
@@ -111,8 +111,7 @@ const MAX_UNCHECKED_DEPTH = 256;
  * over by identity, and a pair holding the same content is walked without
  * recording anything. So comparing a document with a copy-on-write revision of
  * itself costs the edited spine, and comparing it with a separately decoded
- * copy costs one walk of the whole, where asking `valueEqual()` about each
- * container on the way down would hash the document again at every level.
+ * copy costs one walk of the whole.
  */
 const collectChangedPaths = (
   before: FabricValue,
@@ -134,8 +133,8 @@ const collectChangedPaths = (
     // A `FabricSpecialObject` keeps its state in private fields, so the
     // key-walk below sees zero own-keys and would wrongly report "no change"
     // for two that differ. Compare it by content, record a change at this
-    // path when it differs, and don't decompose. (CT-1770: a `FabricBytes`
-    // value updated in place otherwise never reaches reactive consumers.)
+    // path when it differs, and don't decompose; otherwise a `FabricBytes`
+    // value updated in place never reaches reactive consumers.
     //
     // The `FabricPrimitive` vs `FabricInstance` distinction matters here even
     // though both are handled the same way: a `FabricPrimitive` genuinely IS an
@@ -276,11 +275,7 @@ const addStateChange = (
   before: State["is"] | undefined,
   after: State["is"] | undefined,
 ): void => {
-  // By walk rather than by hash: `after` is usually either a revision sharing
-  // all but a spine with `before`, or a freshly decoded copy whose hash no
-  // cache holds. A cyclic pair is handed to `valueEqual()` whole, which is
-  // what keeps the walk below from descending one forever.
-  if (valueEqualByWalk(before, after)) {
+  if (Object.is(before, after)) {
     return;
   }
 
