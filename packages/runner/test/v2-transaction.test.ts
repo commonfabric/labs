@@ -3,7 +3,11 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { isDeepFrozen, valueEqual } from "@commonfabric/data-model";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import type { URI } from "../src/storage/interface.ts";
+import type {
+  IMemorySpaceAddress,
+  IStorageTransaction,
+  URI,
+} from "../src/storage/interface.ts";
 import {
   internalVerifierRead,
   isInternalVerifierRead,
@@ -201,6 +205,22 @@ const listingsValidatingRepeatedShallowReads = async (
   }
 };
 
+/**
+ * Writes `x: 9` into the value of the document at `address`, then sets the
+ * `length` of its `arr` to `2 ** 32`, as one batch.
+ */
+const writeBatchEndingInOutOfRangeLength = (
+  tx: IStorageTransaction,
+  address: Omit<IMemorySpaceAddress, "path">,
+) =>
+  tx.writeBatch!([
+    { address: { ...address, path: ["value", "x"] }, value: 9 },
+    {
+      address: { ...address, path: ["value", "arr", "length"] },
+      value: 2 ** 32,
+    },
+  ]);
+
 describe("v2-transaction", () => {
   describe("getPotentiallyExternalReadActivities()", () => {
     it("retains every raw clock position while excluding sealed verifier records", async () => {
@@ -339,6 +359,98 @@ describe("v2-transaction", () => {
       const { value } = await wholeListRead(20);
 
       expect(isDeepFrozen(value)).toBe(true);
+    });
+  });
+
+  describe("write()", () => {
+    it("returns an `InvalidArrayLengthError` for an array `length` of `2 ** 32`, and leaves the array as it was", async () => {
+      const storage = StorageManager.emulate({ as: signer });
+      try {
+        const tx = storage.edit();
+        const address = { space, id: "of:write-length-range" as URI, type };
+        expect(tx.write({ ...address, path: [] }, { value: { arr: [1] } }).ok)
+          .toBeDefined();
+
+        const result = tx.write(
+          { ...address, path: ["value", "arr", "length"] },
+          2 ** 32,
+        );
+
+        expect(result.error?.name).toBe("InvalidArrayLengthError");
+        expect(
+          result.error?.name === "InvalidArrayLengthError"
+            ? result.error.address.path
+            : undefined,
+        ).toEqual(["value", "arr", "length"]);
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value).toEqual({
+          arr: [1],
+        });
+      } finally {
+        await storage.close();
+      }
+    });
+  });
+
+  describe("writeBatch()", () => {
+    it("keeps the writes ahead of a refused array `length`, and reads and commits them", async () => {
+      // The document is stored before the transaction opens, so the batch is
+      // the transaction's first write to it.
+
+      const storage = StorageManager.emulate({ as: signer });
+      try {
+        const address = { space, id: "of:batch-length-stored" as URI, type };
+        const seed = storage.edit();
+        expect(seed.write({ ...address, path: [] }, { value: { arr: [1] } }).ok)
+          .toBeDefined();
+        expect((await seed.commit()).ok).toBeDefined();
+        const tx = storage.edit();
+
+        const result = writeBatchEndingInOutOfRangeLength(tx, address);
+
+        expect(result.error?.name).toBe("InvalidArrayLengthError");
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value).toEqual({
+          arr: [1],
+          x: 9,
+        });
+        expect((await tx.commit()).ok).toBeDefined();
+        expect(
+          storage.edit().read({ ...address, path: ["value"] }).ok?.value,
+        ).toEqual({ arr: [1], x: 9 });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("returns the writes ahead of a refused array `length` to a read repeated after the batch", async () => {
+      // The transaction writes the document and reads `value` back before the
+      // batch, which caches a frozen snapshot of it and keeps the root for
+      // readers. The second read sees the kept write only if the batch
+      // installs a new root and drops that snapshot.
+
+      const storage = StorageManager.emulate({ as: signer });
+      try {
+        const tx = storage.edit();
+        const address = { space, id: "of:batch-length-read" as URI, type };
+        expect(tx.write({ ...address, path: [] }, { value: { arr: [1] } }).ok)
+          .toBeDefined();
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value).toEqual({
+          arr: [1],
+        });
+
+        const result = writeBatchEndingInOutOfRangeLength(tx, address);
+
+        expect(result.error?.name).toBe("InvalidArrayLengthError");
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value).toEqual({
+          arr: [1],
+          x: 9,
+        });
+        expect((await tx.commit()).ok).toBeDefined();
+        expect(
+          storage.edit().read({ ...address, path: ["value"] }).ok?.value,
+        ).toEqual({ arr: [1], x: 9 });
+      } finally {
+        await storage.close();
+      }
     });
   });
 
