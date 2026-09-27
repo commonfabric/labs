@@ -30,7 +30,7 @@ use their separate exact-manifest resolver and never enter that snapshot.
 
 ## Last Updated
 
-2026-07-11
+2026-09-26
 
 ## Motivation
 
@@ -164,8 +164,11 @@ type DriftFlag = Confidential<Flag, [PolicyOf<typeof driftFlagRules>]>;
   fields are compile errors.
 - Lowering rejects a general-surface rule unless it has a `pre.integrity`
   pattern or `guard.policyState` grant guard. Boundary-only authoring remains
-  extensions-gated. If the owner-self case is approved, it ships as a narrow
-  trusted standard-profile rule rather than a generic authoring exemption.
+  extensions-gated. Owner-self access is a narrow trusted standard-profile rule
+  rather than a generic authoring exemption: the runtime binds the display
+  boundary's `resource-owner-self-display` rule to the acting principal
+  (`packages/runner/src/cfc/render-ceiling.ts`), and `v("$actingUser")` in an
+  authored rule never binds, so that rule matches nothing.
 
 ### 2a. Raising, direct
 
