@@ -13,13 +13,33 @@ import { BaseElement } from "../../core/base-element.ts";
 import { runtimeContext } from "../../runtime-context.ts";
 
 /**
+ * The seal's refusals while an answer is not, or is already, published: the
+ * slot says which. Anything else, such as a lost worker connection or a slot
+ * the seal did not write, is said to the room's readers.
+ */
+const EXPECTED_REFUSALS = [
+  "Custody answer requires every seat to have sealed",
+  "Custody answer requires a value the room's policy releases to its readers",
+  "Custody answer is already published for this instance",
+  "Custody answer's room changed while publishing",
+];
+
+const isExpectedRefusal = (error: unknown): boolean =>
+  error instanceof Error &&
+  EXPECTED_REFUSALS.some((refusal) => error.message.includes(refusal));
+
+const messageOf = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+/**
  * Publishes a custody room's answer once and shows it. A room binds it as
  * `<cf-custody-answer $terms={terms} $policy={policy} $output={choice} />`,
  * where `output` is the room's projected answer. Each time the projected
  * answer changes, the component asks the worker to publish it; the seal
- * publishes it once, only when a rule of the room's policy that requires the
- * seal's witness releases it to the room's readers and every seat has sealed,
- * and refuses every later request. The component shows what the seal
+ * publishes it once, only when every rule of the room's policy requires the
+ * seal's witness, a rule releases it to the room's readers, and every seat has
+ * sealed, and refuses every later request. A failure other than those
+ * refusals is shown as an alert, and the next change asks again. The component shows what the seal
  * published, read by the worker from the slot the seal derives from the
  * room's terms and policy and verified to be the seal's own write, never a
  * value the room holds, so what it shows cannot move once the answer is
@@ -53,12 +73,14 @@ export class CFCustodyAnswer extends BaseElement {
   #inFlight: Promise<void> | undefined;
   #again = false;
   #generation = 0;
+  #error = "";
 
   /** Exercises the publication without a subscription. */
   get accessForTestingOnly(): {
     publish(): Promise<void>;
     readonly published: boolean;
     readonly answer: JSONValue | undefined;
+    readonly error: string;
   } {
     // deno-lint-ignore no-this-alias
     const component = this;
@@ -69,6 +91,9 @@ export class CFCustodyAnswer extends BaseElement {
       },
       get answer() {
         return component.#answer;
+      },
+      get error() {
+        return component.#error;
       },
     };
   }
@@ -81,6 +106,7 @@ export class CFCustodyAnswer extends BaseElement {
       this.#generation++;
       this.#published = false;
       this.#answer = undefined;
+      this.#error = "";
       this.#subscribe();
     }
   }
@@ -97,9 +123,15 @@ export class CFCustodyAnswer extends BaseElement {
   }
 
   override render() {
-    return this.#answer === undefined
-      ? nothing
-      : html`<span part="answer">${String(this.#answer)}</span>`;
+    return html`${
+      this.#answer === undefined
+        ? nothing
+        : html`<span part="answer">${String(this.#answer)}</span>`
+    }${
+      this.#error
+        ? html`<p role="alert" part="error">${this.#error}</p>`
+        : nothing
+    }`;
   }
 
   #subscribe(): void {
@@ -113,6 +145,7 @@ export class CFCustodyAnswer extends BaseElement {
       this.#generation++;
       this.#published = false;
       this.#answer = undefined;
+      this.#error = "";
       this.requestUpdate();
       void this.#publish();
     });
@@ -148,15 +181,17 @@ export class CFCustodyAnswer extends BaseElement {
     if (this.#published || !runtime || !terms || !policy || !output) return;
     const generation = this.#generation;
     let instance: string | undefined;
+    let error = "";
     try {
       instance = (await runtime.publishCustodyAnswer({
         terms: terms.ref(),
         policy: policy.ref(),
         output: output.ref(),
       })).instance;
-    } catch {
-      // Refused: not yet released, not every seat has sealed, or already
-      // published. The slot says which.
+    } catch (refused) {
+      // Not yet released, not every seat has sealed, or already published:
+      // the slot says which. Anything else is said.
+      if (!isExpectedRefusal(refused)) error = messageOf(refused);
     }
     // Shown from the slot itself, whoever published it.
     let answer: JSONValue | undefined;
@@ -165,10 +200,18 @@ export class CFCustodyAnswer extends BaseElement {
         terms: terms.ref(),
         policy: policy.ref(),
       });
-    } catch {
-      return;
+      // Published, by this request or another member's: whatever this
+      // request met on the way no longer matters.
+      if (answer !== undefined) error = "";
+    } catch (failed) {
+      error = messageOf(failed);
     }
-    if (generation !== this.#generation || answer === undefined) return;
+    if (generation !== this.#generation) return;
+    if (error !== this.#error) {
+      this.#error = error;
+      this.requestUpdate();
+    }
+    if (answer === undefined) return;
     this.#published = true;
     this.#answer = answer;
     this.requestUpdate();

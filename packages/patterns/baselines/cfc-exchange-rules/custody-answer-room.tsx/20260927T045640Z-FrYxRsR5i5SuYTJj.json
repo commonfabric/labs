@@ -154,7 +154,7 @@
           "cell"
         ],
         "default": {},
-        "description": "Receives a link to the instance's box from the host once a seat seals.\nIt declares no label of its own: every entry of the box already carries\nthe room's policy, and a read through the link carries it.\n\nTODO(custody-box-link): declaring `Record<string, Sealed<BoxEntry>>` here\nis refused. Repro: give `box` that type, then write a link to the sealed\nbox into it as `cf-custody-seal` does, a blind UI write\n(`runtime.commitUiCellWrite(cell, link, { blind: true })`); commit\npreparation crashes with `type changed incompatibly at /box: [\"object\"]\n-> [\"array\"]`, as the schema merge sets the input's record schema\nagainst an array schema. `integration/cfc-custody-projector.test.ts`\nmakes that write; change this type back to reproduce."
+        "description": "Receives a link to the instance's box, which the seal writes in the\ntransaction that writes a member's entry. It declares no label of its\nown: every entry of the box already carries the room's policy, and a\nread through the link carries it.\n\nTODO(custody-box-link): declaring `Record<string, Sealed<BoxEntry>>` here\nis refused. Repro: give `box` that type and seal into the room, as\n`integration/cfc-custody-projector.test.ts` does; the seal's commit\npreparation crashes with `type changed incompatibly at /box: [\"object\"]\n-> [\"array\"]`, as the schema merge sets the input's record schema\nagainst an array schema."
       },
       "policy": {
         "asCell": [
@@ -164,8 +164,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "DybT2G1l1TNGLhbDYGtsKEOsRxGRUSDbjpIo4V2uxjg",
-              "policyDigest": "aNPFKn5kPlmkTaW-ySrNunTobRO1d1DqQHYcbL-VgCo",
+              "moduleIdentity": "nV9tEEqAE0liIXw4qmJBZJXQDtL-wS2xsw_Py44RPp8",
+              "policyDigest": "8SqMjR8es-LC5TZ5LXzXvH-sV_UHqTAGaI7OG_UAX7M",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -366,8 +366,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "DybT2G1l1TNGLhbDYGtsKEOsRxGRUSDbjpIo4V2uxjg",
-              "policyDigest": "aNPFKn5kPlmkTaW-ySrNunTobRO1d1DqQHYcbL-VgCo",
+              "moduleIdentity": "nV9tEEqAE0liIXw4qmJBZJXQDtL-wS2xsw_Py44RPp8",
+              "policyDigest": "8SqMjR8es-LC5TZ5LXzXvH-sV_UHqTAGaI7OG_UAX7M",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true

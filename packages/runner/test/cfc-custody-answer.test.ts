@@ -91,6 +91,32 @@ const policyArtifact = (witnessed: boolean) =>
     },
   } as never);
 
+/** A member's own policy, whose rule releases whatever the member's code
+ * computed: nothing a room would install, but every policy a label names is
+ * evaluated. */
+const OTHER_MODULE = "sha256:custody-answer-other-module";
+const otherArtifact = buildCfcPolicyArtifactManifest({
+  formatVersion: 1,
+  moduleIdentity: OTHER_MODULE,
+  symbol: "releaseAnything",
+  template: {
+    templateVersion: 1,
+    exchangeRules: [{
+      name: "releaseAnything",
+      preCondition: {
+        confidentiality: [{ thisPolicy: true }],
+        integrity: [{
+          type: CFC_ATOM_TYPE.TransformedBy,
+          identity: { kind: "verified", moduleIdentity: "sha256:member-code" },
+        }],
+      },
+      postCondition: { confidentiality: [], integrity: [] },
+    }],
+    dependencies: { authorityOnly: [], dataBearing: [] },
+    integrityRequirements: {},
+  },
+} as never);
+
 const STANCE_SCHEMA = {
   type: "object",
   properties: { choice: { enum: ["pizza", "sushi", "tacos"] } },
@@ -168,7 +194,7 @@ const setup = async ({ witnessed = true } = {}) => {
       cfcEnforcementMode: "enforce-strict",
       cfcFlowLabels: "persist",
     });
-    runtime.registerCfcPolicyManifests(undefined, [artifact]);
+    runtime.registerCfcPolicyManifests(undefined, [artifact, otherArtifact]);
     created.push(runtime);
     return runtime;
   };
@@ -195,10 +221,10 @@ const setup = async ({ witnessed = true } = {}) => {
   }
 
   const syncManifest = async (runtime: Runtime) => {
-    await runtime.getCellFromEntityId(
-      S,
-      cfcPolicyManifestDocId(artifact.policyDigest),
-    ).sync();
+    for (const digest of [artifact.policyDigest, otherArtifact.policyDigest]) {
+      await runtime.getCellFromEntityId(S, cfcPolicyManifestDocId(digest))
+        .sync();
+    }
   };
 
   const fixture = {
@@ -264,7 +290,9 @@ const setup = async ({ witnessed = true } = {}) => {
       identity: Identity,
       from: Cell<unknown>,
       output: Cell<unknown>,
-    ): Promise<string> {
+      clause: unknown = { ...policy, subject: { __ctOwningSpace: true } },
+      code: ImplementationIdentity = PROJECT,
+    ): Promise<string | { refused: string }> {
       const runtime = runtimes.get(identity)!;
       await syncManifest(runtime);
       const local = runtime.getCellFromLink(from.getAsNormalizedFullLink());
@@ -274,18 +302,13 @@ const setup = async ({ witnessed = true } = {}) => {
         output.getAsNormalizedFullLink(),
         {
           type: "string",
-          ifc: {
-            confidentiality: [{
-              ...policy,
-              subject: { __ctOwningSpace: true },
-            }],
-          },
+          ifc: { confidentiality: [clause] },
         } as never,
       );
       await target.sync();
       let answer = "";
       const written = await runtime.editWithRetry((tx) => {
-        setCfcImplementationIdentity(tx, PROJECT);
+        setCfcImplementationIdentity(tx, code);
         const entries = (local.withTx(tx).get() ?? {}) as Record<
           string,
           { stance?: { choice?: string } }
@@ -298,7 +321,9 @@ const setup = async ({ witnessed = true } = {}) => {
           : "no agreement";
         target.withTx(tx).set(answer as never);
       });
-      expect(written.error).toBeUndefined();
+      if (written.error !== undefined) {
+        return { refused: String(written.error.message) };
+      }
       return answer;
     },
     async publish(identity: Identity, output: Cell<unknown>) {
@@ -449,6 +474,94 @@ describe("custody answers", () => {
     }
   });
 
+  it("refuses a value whose policy and witness a member's schema declared", async () => {
+    // A member's code writes a made-up answer into a cell whose schema
+    // declares the room's policy and the witnessed projector's integrity.
+    // Declared integrity is not a derivation: the value has no witness.
+    const fixture = await setup();
+    try {
+      const box = boxOf(fixture);
+      await fixture.seal(alice, "sushi", box);
+      const { instance } = await fixture.seal(bob, "sushi", box);
+      const forged = fixture.runtimes.get(mallory)!.getCell(S, "declared");
+      await writeAsMember(fixture, forged, () => "tacos", {
+        type: "string",
+        ifc: {
+          confidentiality: [{
+            ...fixture.policy,
+            subject: { __ctOwningSpace: true },
+          }],
+          integrity: [{
+            type: CFC_ATOM_TYPE.TransformedBy,
+            identity: {
+              kind: "verified",
+              moduleIdentity: MODULE,
+              symbol: "projectChoice",
+              bindingPath: ["projectChoice"],
+            },
+            inputWitness: {
+              type: CFC_ATOM_TYPE.TransformedBy,
+              identity: {
+                kind: "builtin",
+                builtinId: "cfc-custody-seal",
+                instance,
+              },
+            },
+          }],
+        },
+      });
+      await expect(fixture.publish(mallory, forged)).rejects.toThrow(
+        "releases to its readers",
+      );
+      const output = outputOf(fixture);
+      expect(await fixture.project(bob, box, output)).toBe("sushi");
+      expect((await fixture.publish(bob, output)).value).toBe("sushi");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("cannot label an answer for another policy's rule to release", async () => {
+    // A member's own code reads the sealed box (so what it computes carries
+    // the seal's witness) and labels its result with a clause naming the
+    // room's policy OR one of its own whose rule releases anything, so that
+    // rule, not the room's, would drop the room's clause. Writer fit refuses
+    // the write: the box's entries carry the room's policy, and a clause
+    // that also admits another policy is weaker than it.
+    const fixture = await setup();
+    try {
+      const box = boxOf(fixture);
+      const output = outputOf(fixture);
+      await fixture.seal(alice, "sushi", box);
+      await fixture.seal(bob, "sushi", box);
+      const other = cfcAtom.modulePolicyRef(
+        OTHER_MODULE,
+        "releaseAnything",
+        otherArtifact.policyDigest,
+        S,
+      );
+      const result = await fixture.project(bob, box, output, {
+        anyOf: [
+          { ...fixture.policy, subject: { __ctOwningSpace: true } },
+          { ...other, subject: { __ctOwningSpace: true } },
+        ],
+      }, {
+        kind: "verified",
+        moduleIdentity: "sha256:member-code",
+        symbol: "projectChoice",
+        bindingPath: ["projectChoice"],
+      });
+      expect(result).toEqual({
+        refused: expect.stringContaining("writer-fit confidentiality misfit"),
+      });
+      // The honest projector still publishes over the same box.
+      expect(await fixture.project(bob, box, output)).toBe("sushi");
+      expect((await fixture.publish(bob, output)).value).toBe("sushi");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it("refuses an answer slot other code wrote first, and shows nothing from it", async () => {
     const fixture = await setup();
     try {
@@ -543,7 +656,7 @@ describe("custody answers", () => {
       const output = outputOf(fixture);
       await fixture.seal(alice, "sushi", first);
       await fixture.seal(bob, "sushi", first);
-      await fixture.project(bob, first, output);
+      expect(await fixture.project(bob, first, output)).toBe("sushi");
       const earlier = await fixture.publish(bob, output);
 
       await fixture.setTerms("Where should we eat tomorrow?");

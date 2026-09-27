@@ -295,7 +295,10 @@ answer per instance. `publishCustodyAnswer(room, output)` is the host operation
 that publishes it, and `readCustodyAnswer(room)` the one that reads it back.
 A pattern reaches both through `cf-custody-answer` (`$terms`, `$policy`,
 `$output`), which asks the worker to publish each time the projected answer
-changes, and shows what the seal published.
+changes, and shows what the seal published. The refusals below are expected
+while an answer is not, or is already, published, and the component stays
+quiet on them; any other failure, such as a lost worker connection or a slot
+the seal did not write, it shows as an alert.
 
 The seal publishes only when all of these hold, read by the worker from the
 cells the host names, never from the request:

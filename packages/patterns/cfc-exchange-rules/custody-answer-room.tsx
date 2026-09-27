@@ -196,18 +196,17 @@ interface CustodyAnswerRoomInput {
    */
   policy: Writable<Sealed<boolean>>;
   /**
-   * Receives a link to the instance's box from the host once a seat seals.
-   * It declares no label of its own: every entry of the box already carries
-   * the room's policy, and a read through the link carries it.
+   * Receives a link to the instance's box, which the seal writes in the
+   * transaction that writes a member's entry. It declares no label of its
+   * own: every entry of the box already carries the room's policy, and a
+   * read through the link carries it.
    *
    * TODO(custody-box-link): declaring `Record<string, Sealed<BoxEntry>>` here
-   * is refused. Repro: give `box` that type, then write a link to the sealed
-   * box into it as `cf-custody-seal` does, a blind UI write
-   * (`runtime.commitUiCellWrite(cell, link, { blind: true })`); commit
+   * is refused. Repro: give `box` that type and seal into the room, as
+   * `integration/cfc-custody-projector.test.ts` does; the seal's commit
    * preparation crashes with `type changed incompatibly at /box: ["object"]
    * -> ["array"]`, as the schema merge sets the input's record schema
-   * against an array schema. `integration/cfc-custody-projector.test.ts`
-   * makes that write; change this type back to reproduce.
+   * against an array schema.
    */
   box: Writable<Default<Box, Record<string, never>>>;
 }

@@ -18,7 +18,7 @@ class HeadlessAnswer extends CFCustodyAnswer {
 
 const setup = (
   publishes: Array<() => ReturnType<Publish>>,
-  slot: { answer?: string } = {},
+  slot: { answer?: string; refuse?: string } = {},
 ) => {
   const element = new HeadlessAnswer();
   const requests: Parameters<Publish>[0][] = [];
@@ -31,7 +31,9 @@ const setup = (
     },
     readCustodyAnswer: (cells: unknown) => {
       reads.push(cells);
-      return Promise.resolve(slot.answer);
+      return slot.refuse === undefined
+        ? Promise.resolve(slot.answer)
+        : Promise.reject(new Error(slot.refuse));
     },
   } as unknown as RuntimeClient;
   const terms = createMockCellHandle<unknown>({}, { id: "of:terms" });
@@ -96,5 +98,33 @@ describe("cf-custody-answer", () => {
     expect(state.element.accessForTestingOnly.answer).toBe("tacos");
     await state.element.accessForTestingOnly.publish();
     expect(state.requests).toHaveLength(2);
+  });
+
+  it("says so when the request fails for a reason other than a refusal", async () => {
+    const slot: { answer?: string; refuse?: string } = {};
+    const state = setup([
+      () => Promise.reject(new Error("worker connection lost")),
+      () =>
+        Promise.reject(
+          new Error("Custody answer requires every seat to have sealed"),
+        ),
+      () =>
+        Promise.reject(
+          new Error("Custody answer is already published for this instance"),
+        ),
+    ], slot);
+    await state.element.accessForTestingOnly.publish();
+    expect(state.element.accessForTestingOnly.error).toBe(
+      "worker connection lost",
+    );
+    expect(state.element.accessForTestingOnly.published).toBe(false);
+    // An expected refusal is quiet, and clears what an earlier failure said.
+    await state.element.accessForTestingOnly.publish();
+    expect(state.element.accessForTestingOnly.error).toBe("");
+    // A slot the seal did not write is said, not shown.
+    slot.refuse = "Custody answer refuses a slot the seal did not write";
+    await state.element.accessForTestingOnly.publish();
+    expect(state.element.accessForTestingOnly.error).toBe(slot.refuse);
+    expect(state.element.accessForTestingOnly.answer).toBeUndefined();
   });
 });
