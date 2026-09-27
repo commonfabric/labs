@@ -10,39 +10,85 @@ import {
   patchOpDescriptors,
 } from "../../v2/patch.ts";
 
-/** A deep-frozen document whose `value` is an object of `size` keys. */
+/**
+ * A deep-frozen document whose `value` is an object of `size` keys, each entry
+ * holding a name, a count, and a list holding `x`.
+ */
 const documentOfSize = (size: number) => {
-  const map: Record<string, { name: string }> = {};
+  const map: Record<string, { name: string; count: number; tags: string[] }> =
+    {};
   for (let index = 0; index < size; index++) {
-    map[`key-${index}`] = { name: `name-${index}` };
+    map[`key-${index}`] = { name: `name-${index}`, count: 0, tags: ["x"] };
   }
   return deepFreeze({ value: map });
 };
 
+/** `count` ops of one kind, each beneath its own entry of `value`. */
+const opsOf = (
+  count: number,
+  op: (index: number) => PatchOp,
+): PatchOp[] => Array.from({ length: count }, (_, index) => op(index));
+
 /**
- * `count` ops beneath the document's `value`, one per entry: each adds a new
- * key, changes an existing entry's `name`, or removes an existing key. All
- * three descend through `value`, so each is one that could copy it again.
+ * A batch of each op kind beneath the document's `value`, one op per entry.
+ * Every one descends through `value`, so each is one that could copy it again,
+ * and keying the table by the op union makes a new op kind a compile error
+ * here until it has a row.
  */
 const opsBeneathValue = {
-  add: (count: number): PatchOp[] =>
-    Array.from({ length: count }, (_, index) => ({
-      op: "add",
-      path: `/value/added-${index}`,
-      value: { name: `added-${index}` },
-    })),
-  replace: (count: number): PatchOp[] =>
-    Array.from({ length: count }, (_, index) => ({
+  replace: (count) =>
+    opsOf(count, (index) => ({
       op: "replace",
       path: `/value/key-${index}/name`,
       value: `renamed-${index}`,
     })),
-  remove: (count: number): PatchOp[] =>
-    Array.from({ length: count }, (_, index) => ({
-      op: "remove",
-      path: `/value/key-${index}`,
+  add: (count) =>
+    opsOf(count, (index) => ({
+      op: "add",
+      path: `/value/added-${index}`,
+      value: { name: `added-${index}` },
     })),
-} satisfies Record<string, (count: number) => PatchOp[]>;
+  remove: (count) =>
+    opsOf(count, (index) => ({ op: "remove", path: `/value/key-${index}` })),
+  move: (count) =>
+    opsOf(count, (index) => ({
+      op: "move",
+      from: `/value/key-${index}`,
+      path: `/value/moved-${index}`,
+    })),
+  splice: (count) =>
+    opsOf(count, (index) => ({
+      op: "splice",
+      path: `/value/key-${index}/tags`,
+      index: 0,
+      remove: 0,
+      add: ["y"],
+    })),
+  append: (count) =>
+    opsOf(count, (index) => ({
+      op: "append",
+      path: `/value/key-${index}/tags`,
+      values: ["y"],
+    })),
+  "add-unique": (count) =>
+    opsOf(count, (index) => ({
+      op: "add-unique",
+      path: `/value/key-${index}/tags`,
+      values: ["y"],
+    })),
+  "remove-by-value": (count) =>
+    opsOf(count, (index) => ({
+      op: "remove-by-value",
+      path: `/value/key-${index}/tags`,
+      value: "x",
+    })),
+  increment: (count) =>
+    opsOf(count, (index) => ({
+      op: "increment",
+      path: `/value/key-${index}/count`,
+      by: 1,
+    })),
+} satisfies Record<PatchOp["op"], (count: number) => PatchOp[]>;
 
 /**
  * Applies `ops` to `document`, whose `value` starts with `size` keys, and
