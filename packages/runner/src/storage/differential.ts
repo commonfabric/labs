@@ -256,7 +256,10 @@ const addStateChange = (
   before: State["is"] | undefined,
   after: State["is"] | undefined,
 ): void => {
-  if (valueEqualByWalk(before, after)) {
+  // Identity alone: `collectChangedPaths()` compares each pair of containers
+  // before descending into it, the roots included, and records nothing for
+  // a pair that is equal.
+  if (Object.is(before, after)) {
     return;
   }
 
