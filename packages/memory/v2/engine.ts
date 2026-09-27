@@ -6859,7 +6859,7 @@ type ConflictExclusion = {
   readonly namedLocalSeqs: readonly number[];
 };
 
-/** The patches of a scan, as far as it has read them. */
+/** The patches after one basis, read to the last of them and indexed. */
 type PatchIndexes = {
   /** Each patch op's leaf paths, tagged with its patch's `seq`. */
   readonly leaves: TouchedPathIndex;
@@ -6868,28 +6868,40 @@ type PatchIndexes = {
   readonly shapes: TouchedPathIndex;
 };
 
-/** Every write to one document after one basis, less those excluded. */
-type ConflictScan =
-  /** A `set` or `delete` came after the basis; this is the newest one's. */
-  | { readonly setOrDeleteSeq: number }
-  /** Only patches came after the basis, and every one of them is indexed. */
-  | PatchIndexes;
-
 /**
- * The completed conflict scans of one commit's read validation, by document
- * and exclusion and then by basis. A scan is kept only once it has reached
- * the last write: one a read stopped at the write it conflicts with has not
- * indexed the rest. Valid only while the `revision` table is unchanged, which
- * holds from the first read validated to the commit's first write.
+ * What one commit's read validation has learned of the writes to one
+ * document, less those one exclusion removes.
  */
-type ConflictScans = Map<string, Map<number, ConflictScan>>;
+type DocumentConflicts = {
+  /** The newest `set` or `delete` after each basis a read has named. */
+  readonly newestSetOrDelete: Map<number, number | null>;
+
+  /**
+   * Every patch after `basis`, indexed, once a read at `basis` has reached
+   * the last of them. It decides a read at `basis` or any later one, which
+   * conflicts with the newest patch it matches exactly when that patch is
+   * newer than its basis. A read at an earlier basis replaces it with the
+   * patches after its own.
+   */
+  patches?: { readonly basis: number; readonly indexes: PatchIndexes };
+};
 
 /**
- * Helper for `findConflictSeq()`, which returns the key the scans of one
- * document and exclusion are kept under, or `undefined` for a read whose
- * branch or entity is not a string. A key built from any other value could
- * give one scan to two reads the statements tell apart, so such a read is
- * scanned on its own.
+ * What one commit's read validation has learned, by document and exclusion:
+ * one entry per basis for the `set` or `delete` after it, and at most one
+ * patch index however many bases the reads name. Valid only while the
+ * `revision` table is unchanged, which holds from the first read validated to
+ * the commit's first write.
+ */
+type ConflictScans = Map<string, DocumentConflicts>;
+
+/**
+ * Helper for `findConflictSeq()`, which returns the key what it learns of one
+ * document and exclusion is kept under, or `undefined` for a read whose branch
+ * or entity is not a string. A key built from any other value could join two
+ * reads the statements tell apart, so such a read is decided on its own. The
+ * layers an exclusion names are keyed as a set, since the statements test
+ * membership in them.
  */
 const conflictScanKey = (
   branch: BranchName,
@@ -6903,7 +6915,9 @@ const conflictScanKey = (
       id,
       scopeKey,
       exclude?.sessionKey ?? null,
-      exclude?.namedLocalSeqs ?? null,
+      exclude === undefined
+        ? null
+        : [...new Set(exclude.namedLocalSeqs)].sort((a, b) => a - b),
     ])
     : undefined;
 
@@ -6924,14 +6938,16 @@ const newestPatchConflict = (
  * Returns the `seq` of the write a read at `readPath` on one document
  * conflicts with, or `null` when none does: the newest `set` or `delete` after
  * `afterSeq` when there is one, whatever the read's path, and otherwise the
- * newest patch whose touched paths `patchOverlapsRead()` — or, for a shallow
- * read, `patchOverlapsNonRecursiveRead()` — matches against the read.
+ * newest patch after `afterSeq` whose touched paths `patchOverlapsRead()` —
+ * or, for a shallow read, `patchOverlapsNonRecursiveRead()` — matches against
+ * the read.
  *
  * Patches are read newest first and indexed an op at a time, so a read stops
- * at the op it conflicts with and decodes nothing older. A scan that reaches
- * the last patch is kept in `scans`, and every later read of the same
- * document, basis and exclusion is decided from its indexes in time
- * proportional to the read path's depth, whatever the number of patches.
+ * at the op it conflicts with and decodes nothing older. A read that reaches
+ * the last patch leaves its indexes in `scans`, and every later read of the
+ * same document and exclusion at that basis or a later one is decided from
+ * them in time proportional to its path's depth, whatever the number of
+ * patches.
  */
 const findConflictSeq = (
   engine: Engine,
@@ -6957,21 +6973,11 @@ const findConflictSeq = (
   exclude?: ConflictExclusion,
 ): number | null => {
   const key = conflictScanKey(branch, id, scopeKey, exclude);
-  const kept = key === undefined ? undefined : scans.get(key)?.get(afterSeq);
-  if (kept !== undefined) {
-    return "setOrDeleteSeq" in kept
-      ? kept.setOrDeleteSeq
-      : newestPatchConflict(kept, readPath, nonRecursive);
+  let document = key === undefined ? undefined : scans.get(key);
+  if (key !== undefined && document === undefined) {
+    document = { newestSetOrDelete: new Map() };
+    scans.set(key, document);
   }
-  const keep = (scan: ConflictScan): void => {
-    if (key === undefined) return;
-    let byBasis = scans.get(key);
-    if (byBasis === undefined) {
-      byBasis = new Map();
-      scans.set(key, byBasis);
-    }
-    byBasis.set(afterSeq, scan);
-  };
 
   const setDeleteStatement = exclude === undefined
     ? engine.statements.selectSetDeleteConflict
@@ -6989,12 +6995,27 @@ const findConflictSeq = (
       named_local_seqs: JSON.stringify(exclude.namedLocalSeqs),
     }),
   };
-  const setOrDeleteConflict = setDeleteStatement.get(params) as
-    | { seq: number }
-    | undefined;
-  if (setOrDeleteConflict !== undefined) {
-    keep({ setOrDeleteSeq: setOrDeleteConflict.seq });
-    return setOrDeleteConflict.seq;
+
+  let setOrDeleteSeq = document?.newestSetOrDelete.get(afterSeq);
+  if (setOrDeleteSeq === undefined) {
+    setOrDeleteSeq =
+      (setDeleteStatement.get(params) as { seq: number } | undefined)
+        ?.seq ?? null;
+    document?.newestSetOrDelete.set(afterSeq, setOrDeleteSeq);
+  }
+  if (setOrDeleteSeq !== null) {
+    return setOrDeleteSeq;
+  }
+
+  // Kept patches decide a read by comparing `seq`s here, which agrees with the
+  // statements' `seq > :after_seq` for a finite numeric basis and not for
+  // every value a read can carry, so a read at any other basis is decided on
+  // its own.
+  const shared = Number.isFinite(afterSeq) ? document : undefined;
+  const kept = shared?.patches;
+  if (kept !== undefined && kept.basis <= afterSeq) {
+    const seq = newestPatchConflict(kept.indexes, readPath, nonRecursive);
+    return seq !== null && seq > afterSeq ? seq : null;
   }
 
   const indexes: PatchIndexes = {
@@ -7019,7 +7040,9 @@ const findConflictSeq = (
       }
     }
   }
-  keep(indexes);
+  if (shared !== undefined) {
+    shared.patches = { basis: afterSeq, indexes };
+  }
   return null;
 };
 

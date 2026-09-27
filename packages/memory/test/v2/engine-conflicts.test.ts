@@ -573,6 +573,91 @@ describe("engine-conflicts", () => {
       expect(patches.calls).toHaveLength(0);
     });
 
+    it("runs one patch statement for reads at several bases when the earliest comes first", () => {
+      const seqs = [1, 2, 3, 4].map((localSeq) =>
+        writePatch(localSeq, {
+          op: "replace",
+          path: "/value/a",
+          value: localSeq,
+        })
+      );
+      using patches = spy(engine.statements.selectPatchConflicts, "iter");
+      expect(
+        conflictsOf([
+          { ...untouched, seq: 1 },
+          ...seqs.slice(0, 3).map((seq) => ({ ...untouched, seq })),
+          { id, path: toDocumentPath(["value", "a"]), seq: seqs[1] },
+        ]),
+      ).toEqual([{
+        of: id,
+        scope: "space",
+        seq: seqs[1],
+        conflictSeq: seqs[3],
+      }]);
+      expect(patches.calls).toHaveLength(1);
+    });
+
+    it("scans again for a read at an earlier basis, and decides reads at later bases from that scan", () => {
+      const seqs = [1, 2, 3].map((localSeq) =>
+        writePatch(localSeq, {
+          op: "replace",
+          path: "/value/a",
+          value: localSeq,
+        })
+      );
+      using patches = spy(engine.statements.selectPatchConflicts, "iter");
+      expect(
+        conflictsOf([
+          { ...untouched, seq: seqs[1] },
+          { ...untouched, seq: 1 },
+          { ...untouched, seq: seqs[0] },
+          { ...untouched, seq: seqs[2] },
+        ]),
+      ).toEqual([]);
+      expect(patches.calls).toHaveLength(2);
+    });
+
+    it("runs one patch statement for pending reads naming the same layers in another order", () => {
+      const sessionId = "session:layer-order";
+      for (
+        const [localSeq, path] of [[1, "/value/a"], [2, "/value/b"]] as const
+      ) {
+        applyCommit(engine, {
+          sessionId,
+          commit: {
+            localSeq,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "patch",
+              id,
+              patches: [{ op: "replace", path, value: localSeq }],
+            }],
+          },
+        });
+      }
+      using patches = spy(
+        engine.statements.selectPatchConflictsExcludingSession,
+        "iter",
+      );
+      applyCommit(engine, {
+        sessionId,
+        commit: {
+          localSeq: 3,
+          reads: {
+            confirmed: [],
+            pending: [[1, 2], [2, 1], [2, 1, 2]].map((localSeq) => ({
+              id,
+              path: toDocumentPath(["value", "b"]),
+              localSeq,
+              basisSeq: 1,
+            })),
+          },
+          operations: [{ op: "set", id: "of:output", value: { value: 1 } }],
+        },
+      });
+      expect(patches.calls).toHaveLength(1);
+    });
+
     it("reports a conflict with the newest `set` after the basis where a newer patch also conflicts with the read", () => {
       const set = write(1, { op: "set", id, value: { value: { a: 5 } } });
       writePatch(2, { op: "replace", path: "/value/a", value: 10 });

@@ -24,9 +24,10 @@ patch.
 The reads of one commit commonly share a document and a basis — a per-key write
 of K keys reads K paths of one map — so a scan of the patches after a basis
 indexes their touched paths, newest first, and a scan that reaches the last of
-them serves every later read of the same document, basis and exclusion. Such a
-read is decided from the index in time proportional to its path's depth,
-whatever the number of patches. A read that conflicts stops the scan at the
+them serves every later read of the same document and exclusion at that basis
+or a later one, which conflicts with the newest patch it matches exactly when
+that patch is newer than its basis. Such a read is decided from the index in
+time proportional to its path's depth, whatever the number of patches. A read that conflicts stops the scan at the
 patch it conflicts with. The index decides exactly what the predicates the
 sections below name, `patchOverlapsRead` and `patchOverlapsNonRecursiveRead`,
 decide; they remain the definition of a Tier-2 conflict.
