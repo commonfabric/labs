@@ -660,6 +660,15 @@ describe("custody answers", () => {
       const earlier = await fixture.publish(bob, output);
 
       await fixture.setTerms("Where should we eat tomorrow?");
+      // A seal for this instance does not write into the earlier instance's
+      // custody documents, its answer slot or its anchor.
+      for (const kind of ["custodyAnswer", "custodyAnchor"] as const) {
+        const earlierDoc = fixture.runtimes.get(alice)!.getCell(S, {
+          [kind]: { policy: fixture.policy, instance: earlier.instance },
+        });
+        await expect(fixture.seal(alice, "tacos", earlierDoc.key("x")))
+          .rejects.toThrow("only from a cell that holds nothing else");
+      }
       const second = fixture.runtimes.get(alice)!.getCell(S, "room-cells").key(
         "second",
       );

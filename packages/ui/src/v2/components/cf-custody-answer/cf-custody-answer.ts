@@ -38,8 +38,9 @@ const messageOf = (error: unknown): string =>
  * answer changes, the component asks the worker to publish it; the seal
  * publishes it once, only when every rule of the room's policy requires the
  * seal's witness, a rule releases it to the room's readers, and every seat has
- * sealed, and refuses every later request. A failure other than those
- * refusals is shown as an alert, and the next change asks again. The component shows what the seal
+ * sealed, and refuses every later request. Before the room has terms it asks
+ * nothing. A failure other than those refusals is shown as an alert, and the
+ * next change asks again. The component shows what the seal
  * published, read by the worker from the slot the seal derives from the
  * room's terms and policy and verified to be the seal's own write, never a
  * value the room holds, so what it shows cannot move once the answer is
@@ -179,6 +180,17 @@ export class CFCustodyAnswer extends BaseElement {
   async #request(): Promise<void> {
     const { runtime, terms, policy, output } = this;
     if (this.#published || !runtime || !terms || !policy || !output) return;
+    // A room that has not proposed yet has no terms, and so no instance to
+    // publish for: nothing to ask, and nothing to say. The terms
+    // subscription asks once they are written.
+    const proposed = terms.get();
+    if (!proposed || typeof proposed !== "object" || Array.isArray(proposed)) {
+      if (this.#error) {
+        this.#error = "";
+        this.requestUpdate();
+      }
+      return;
+    }
     const generation = this.#generation;
     let instance: string | undefined;
     let error = "";

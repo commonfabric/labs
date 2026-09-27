@@ -19,6 +19,7 @@ class HeadlessAnswer extends CFCustodyAnswer {
 const setup = (
   publishes: Array<() => ReturnType<Publish>>,
   slot: { answer?: string; refuse?: string } = {},
+  termsValue: unknown = {},
 ) => {
   const element = new HeadlessAnswer();
   const requests: Parameters<Publish>[0][] = [];
@@ -36,7 +37,7 @@ const setup = (
         : Promise.reject(new Error(slot.refuse));
     },
   } as unknown as RuntimeClient;
-  const terms = createMockCellHandle<unknown>({}, { id: "of:terms" });
+  const terms = createMockCellHandle<unknown>(termsValue, { id: "of:terms" });
   const policy = createMockCellHandle<unknown>({}, { id: "of:policy" });
   const output = createMockCellHandle<unknown>("sushi", { id: "of:choice" });
   element.terms = terms;
@@ -126,5 +127,14 @@ describe("cf-custody-answer", () => {
     await state.element.accessForTestingOnly.publish();
     expect(state.element.accessForTestingOnly.error).toBe(slot.refuse);
     expect(state.element.accessForTestingOnly.answer).toBeUndefined();
+  });
+
+  it("stays quiet, asking nothing, while the room has no terms", async () => {
+    const state = setup([], {}, null);
+    await state.element.accessForTestingOnly.publish();
+    expect(state.requests).toHaveLength(0);
+    expect(state.reads).toHaveLength(0);
+    expect(state.element.accessForTestingOnly.error).toBe("");
+    expect(state.element.accessForTestingOnly.published).toBe(false);
   });
 });

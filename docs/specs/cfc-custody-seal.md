@@ -298,7 +298,8 @@ A pattern reaches both through `cf-custody-answer` (`$terms`, `$policy`,
 changes, and shows what the seal published. The refusals below are expected
 while an answer is not, or is already, published, and the component stays
 quiet on them; any other failure, such as a lost worker connection or a slot
-the seal did not write, it shows as an alert.
+the seal did not write, it shows as an alert. Before the room has terms it
+asks nothing.
 
 The seal publishes only when all of these hold, read by the worker from the
 cells the host names, never from the request:
