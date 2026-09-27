@@ -428,15 +428,12 @@ export interface CloneForMutationOptions {
    * When `createMissing: true`, at each path step where the container at that
    * key is absent, the helper allocates a fresh plain container and splices it
    * into its parent before descending. Its shape (array vs. plain object) is
-   * chosen from the NEXT segment that will be used as a key against it:
+   * chosen from the NEXT segment that will be used as a key against it, as
+   * `missingContainerIsArray()` decides:
    *
    * - For intermediate path steps, the next segment is `path[i+1]`.
    * - For the final path step, the next segment is `nextKeyAfterPath` if
    *   supplied; otherwise the empty string (which selects a plain object).
-   *
-   * Array-index-shaped keys (`isArrayIndexPropertyName(key)`) and the
-   * JSON-Pointer append marker `"-"` select an array; everything else selects a
-   * plain object.
    */
   createMissing?: boolean;
 
@@ -447,11 +444,8 @@ export interface CloneForMutationOptions {
    * false` or when the final path step already exists. Default: `""` (selects a
    * plain object).
    *
-   * Same shape-selection rule as for intermediate steps: array-index-shaped
-   * values (per `isArrayIndexPropertyName`) and the JSON-Pointer append marker
-   * `"-"` select an array; everything else selects a plain object.
-   *
-   * Mirrors `v2-path.ensureParentContainers`'s `lastKey` parameter.
+   * Same shape-selection rule as for intermediate steps,
+   * `missingContainerIsArray()`.
    */
   nextKeyAfterPath?: string;
 }

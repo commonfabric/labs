@@ -1,7 +1,9 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import type { FabricValue } from "@commonfabric/data-model";
+import { deepFreeze, type FabricValue } from "@commonfabric/data-model";
+import { FabricError } from "@commonfabric/data-model/fabric-instances";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { IMemoryAddress } from "../../../src/storage/interface.ts";
 import { planMutablePathWrite } from "../../../src/storage/transaction/mutable-path-write.ts";
 
@@ -26,6 +28,62 @@ const applyWrite = (
 const ownedRoot = () => {
   const list = Object.freeze([1]);
   return { list, root: { n: 1, list } };
+};
+
+/**
+ * Builders of roots a caller owns and edits in place, each holding frozen
+ * containers that a write would thaw and replace to descend through, alongside
+ * the values no key addresses: a primitive, `null`, a stored `undefined`, a
+ * `FabricInstance`, and a `FabricPrimitive`.
+ */
+const corpusRoots: (() => FabricValue)[] = [
+  () => ({
+    a: deepFreeze({ b: 1, x: [1, 2] }),
+    b: deepFreeze([{ a: 1 }, 5]),
+    x: undefined,
+  }),
+  () => [deepFreeze({ a: { x: 1 } }), deepFreeze([1, 2])],
+  () => ({
+    a: FabricError.fromNativeError(new Error("e")),
+    b: new FabricBytes(new Uint8Array([1])),
+    x: null,
+  }),
+  () => {
+    const sparse: FabricValue[] = [];
+    sparse[1] = deepFreeze({ a: 1 });
+    return { a: sparse, b: deepFreeze([[1], { b: 2 }]) };
+  },
+  () => ({}),
+  () => [],
+];
+
+/**
+ * Every path of one to three keys drawn from `keys`, which hold an index, a
+ * name, `-`, `length`, and a name every record inherits.
+ */
+const corpusPaths = (() => {
+  const keys = ["a", "b", "0", "1", "-", "length", "toString", "x"];
+  const paths: string[][] = keys.map((key) => [key]);
+  for (const first of keys) {
+    for (const second of keys) {
+      paths.push([first, second]);
+      for (const third of ["a", "0", "-", "length"]) {
+        paths.push([first, second, third]);
+      }
+    }
+  }
+  return paths;
+})();
+
+/** The containers reachable from `value`, in the order a walk visits them. */
+const containersIn = (value: unknown, found: object[] = []): object[] => {
+  if (typeof value === "object" && value !== null) {
+    found.push(value);
+    for (const key of Object.keys(value)) {
+      containersIn((value as Record<string, unknown>)[key], found);
+    }
+  }
+  return found;
 };
 
 describe("mutable-path-write", () => {
@@ -197,6 +255,82 @@ describe("mutable-path-write", () => {
         );
 
         expect(result.ok?.root).toEqual({ box: { length: 2 ** 32 } });
+      });
+    });
+
+    describe("over a corpus of roots and paths", () => {
+      // The corpus is `corpusRoots` crossed with `corpusPaths`, each path
+      // written with `5`, `undefined` and `2 ** 32`, and deleted. It is
+      // exhaustive over that set and says nothing past it.
+
+      const cases = corpusRoots.flatMap((makeRoot) =>
+        corpusPaths.flatMap((path) =>
+          [5, undefined, 2 ** 32].map((value) => ({
+            makeRoot,
+            path,
+            value: value as FabricValue,
+            isDelete: false,
+          })).concat({ makeRoot, path, value: undefined, isDelete: true })
+        )
+      );
+
+      it("leaves the root as it was, identities included, for every write it refuses", () => {
+        let refused = 0;
+        for (const { makeRoot, path, value, isDelete } of cases) {
+          const root = makeRoot();
+          const before = containersIn(root);
+          const snapshot = JSON.stringify(root);
+
+          const plan = planMutablePathWrite(
+            root,
+            at(path),
+            value,
+            isDelete ? { delete: true } : undefined,
+          );
+
+          if (plan.error) {
+            refused++;
+            expect({ path, keys: JSON.stringify(root) }).toEqual({
+              path,
+              keys: snapshot,
+            });
+            expect(containersIn(root)).toEqual(before);
+            expect(
+              containersIn(root).every((container, index) =>
+                container === before[index]
+              ),
+            ).toBe(true);
+          }
+        }
+        // The floor keeps the case honest: a corpus that no write were
+        // refused over would pass having checked nothing.
+        expect(refused).toBeGreaterThan(100);
+      });
+
+      it("carries out every write it admits, and puts no key but an index on an array", () => {
+        let admitted = 0;
+        for (const { makeRoot, path, value, isDelete } of cases) {
+          const plan = planMutablePathWrite(
+            makeRoot(),
+            at(path),
+            value,
+            isDelete ? { delete: true } : undefined,
+          );
+          if (plan.error) continue;
+          admitted++;
+
+          const { root } = plan.ok.apply();
+
+          const namedKeysOnArrays = containersIn(root).filter(Array.isArray)
+            .flatMap((array) =>
+              Object.keys(array).filter((key) => !/^(0|[1-9]\d*)$/.test(key))
+            );
+          expect({ path, namedKeysOnArrays }).toEqual({
+            path,
+            namedKeysOnArrays: [],
+          });
+        }
+        expect(admitted).toBeGreaterThan(100);
       });
     });
   });

@@ -1,4 +1,4 @@
-// Covers the no-op (unchanged-value) branches of applyMutablePathWrite,
+// Covers the no-op (unchanged-value) branches of a planned write's apply(),
 // including Fabric-aware equality for FabricPrimitive elements: an equal
 // FabricBytes must be recognized as a no-op, and a different one as a change.
 

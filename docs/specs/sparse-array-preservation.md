@@ -125,9 +125,9 @@ values.
 
 ### v2-transaction write path (`packages/runner/src/storage/v2-transaction.ts`)
 
-The hot write path (since PR #3704) goes through `applyMutablePathWrite`,
-which calls `cloneForMutation` (in
-`packages/data-model/src/value-clone.ts`) to shallow-thaw the
+The hot write path plans each write with `planMutablePathWrite()` and
+carries it out with the plan's `apply()`, which calls `cloneForMutation`
+(in `packages/data-model/src/value-clone.ts`) to shallow-thaw the
 spine and then mutates the leaf parent in place. `cloneForMutation`'s
 shallow-thaw step uses `cloneIfNecessary({ frozen: false, deep: false })`
 on each spine container, which for arrays preserves sparseness: it
@@ -148,7 +148,7 @@ The leaf write itself is one of:
   `applyArrayLengthWrite`) -- JS `length=` truncates the tail, leaving
   holes within the new bound intact. A `.length` delete empties the
   array. A write that would grow the array to `2 ** 32` or more never
-  reaches the leaf: `applyMutablePathWrite` refuses it with an
+  reaches the leaf: `planMutablePathWrite()` refuses it with an
   `InvalidArrayLengthError` before the write mutates anything.
 
 ### Cell write path (`packages/runner/src/data-updating.ts`)
@@ -250,7 +250,7 @@ Test coverage verifies sparse preservation at each layer:
 - **`packages/data-model/test/convertible-js.test.ts`** — 
   `fabricFromConvertibleJsValue()` preserves holes.
 - **`packages/runner/test/cell-core.test.ts`** — sparse-array writes through
-  the full Cell write path (which lands in `applyMutablePathWrite`) preserve
+  the full Cell write path (which lands in a planned write's `apply()`) preserve
   holes; the helper's `cloneForMutation` + leaf-mutation steps round-trip
   sparseness.
 - **`packages/runner/test/array-push-mergeable.test.ts`** — `push` onto a

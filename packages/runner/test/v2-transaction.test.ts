@@ -518,6 +518,33 @@ describe("v2-transaction", () => {
         await storage.close();
       }
     });
+
+    it("deletes nothing through a key an array cannot hold, or through a primitive", async () => {
+      // Neither path reaches a slot, so each delete has nothing to remove;
+      // `writeBatch()` answers the same, below.
+
+      const { storage, address, tx } = await transactionOverEditedValue(
+        "of:v2-transaction-delete-unreachable",
+      );
+      try {
+        expect(tx.write({ ...address, path: ["value", "x"] }, [1, 2]).ok)
+          .toBeTruthy();
+
+        for (
+          const path of [["value", "x", "name", "y"], ["value", "x", "0", "y"]]
+        ) {
+          expect(
+            tx.write({ ...address, path }, undefined, { delete: true }).error,
+          ).toBeUndefined();
+        }
+
+        expect(await committedValue(storage, address, tx)).toEqual({
+          x: [1, 2],
+        });
+      } finally {
+        await storage.close();
+      }
+    });
   });
 
   describe("writeBatch()", () => {
@@ -619,6 +646,36 @@ describe("v2-transaction", () => {
         expect(tx.read({ ...address, path: ["value"] }).ok?.value)
           .toEqual({ x: 2 });
         expect(await committedValue(storage, address, tx)).toEqual({ x: 2 });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("deletes nothing through a key an array cannot hold, alone or beside another write", async () => {
+      const { storage, address, tx } = await transactionOverEditedValue(
+        "of:v2-transaction-batch-delete-unreachable",
+      );
+      try {
+        expect(tx.write({ ...address, path: ["value", "x"] }, [1, 2]).ok)
+          .toBeTruthy();
+        const unreachable = {
+          address: { ...address, path: ["value", "x", "name", "y"] },
+          value: undefined,
+          delete: true,
+        };
+
+        expect(tx.writeBatch!([unreachable]).error).toBeUndefined();
+        expect(
+          tx.writeBatch!([
+            unreachable,
+            { address: { ...address, path: ["value", "y"] }, value: 3 },
+          ]).error,
+        ).toBeUndefined();
+
+        expect(await committedValue(storage, address, tx)).toEqual({
+          x: [1, 2],
+          y: 3,
+        });
       } finally {
         await storage.close();
       }

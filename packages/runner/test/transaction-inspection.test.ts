@@ -598,15 +598,14 @@ describe("transaction inspection", () => {
   });
 
   it(
-    "preserves correct previousValue across distinct-path writes within a single transaction " +
-      "(regression: applyMutablePathWrite mutates current.value in place on 2nd+ write)",
+    "preserves correct previousValue across distinct-path writes within a single transaction",
     async () => {
       // Two writes at *different* leaf paths within one transaction. The
       // second write's `previousValue` must capture what was at path
       // ["value", "b"] BEFORE the second write (= the seed value), not the
       // value that's just been written. Reading the activity-path snapshot
-      // AFTER `applyMutablePathWrite()` would observe the post-mutation
-      // state because the helper mutates `current.value` in place on the
+      // AFTER the write is applied would observe the post-mutation state,
+      // because applying mutates `current.value` in place on the
       // second-and-later write (cloneForMutation short-circuits to
       // identity on an already-mutable root).
       const storageManager = StorageManager.emulate({ as: signer });
@@ -654,10 +653,9 @@ describe("transaction inspection", () => {
     async () => {
       // The first write thaws `doc.current.value` in place (sub-tree at
       // `/value/a` becomes mutable). The second write creates new parents
-      // at a sibling subtree `/value/new/nested`. Its
-      // `findMaterializedParentPath` walks the (already-mutable)
-      // `current.value` and returns `["value"]` as the materialization
-      // point. `previousActivityValue` at that path must capture the
+      // at a sibling subtree `/value/new/nested`. Its plan reads the
+      // (already-mutable) `current.value` and finds `["value"]` as the
+      // materialization point. `previousActivityValue` at that path must capture the
       // PRE-second-write state of `/value` (= `{a: 10}` from the first
       // write's in-place result, not the POST-second-write state with the
       // `new` child added).
