@@ -19,7 +19,8 @@ specific code, and says what they do not cover. The mint lives in
 `packages/runner/src/cfc/input-witness.ts`. The cases are in
 `packages/runner/test/cfc-transformed-by-input-witness.test.ts`, and, run as
 compiled patterns, in
-`packages/runner/test/cfc-transformed-by-input-witness-compiled.test.ts` and
+`packages/runner/test/cfc-transformed-by-input-witness-compiled.test.ts`,
+`packages/runner/test/cfc-transformed-by-input-witness-references.test.ts` and
 `packages/patterns/cfc-exchange-rules/witnessed-chain.test.tsx`.
 
 ## What the specification asks for
@@ -107,8 +108,11 @@ read's confidential locations:
   it would shadow the value stamp of a later whole write above it.
 - A reference probe (`followRef`) keeps its own entries. A pointer's link
   entry is the link write's, with no `TransformedBy`, so a probe that observes
-  which reference sits at a slot retains no witness. A reference followed to
-  confidential content is a location of its own, below.
+  which reference sits at a slot without reading the slot retains no witness.
+  A read of the slot itself resolves the slot's value stamp, which is where a
+  reference the writer supplied carries its writer (see "References the
+  writer supplied" below). A reference followed
+  to confidential content is a location of its own, below.
 
 ### References a transformation follows
 
@@ -128,8 +132,10 @@ A reference a link write put in place carries no value stamp of its own, so a
 slot holding one retains no witness unless its writer's stamp covers it. A
 destination whose value holds a reference is stamped whole only when the
 runtime recorded that reference as the writer's, at that path
-(`CfcAssertedValueRoot.reference`). The custody seal records the link it writes
-into a room's box cell this way ([sealed custody](cfc-custody-seal.md)).
+(`CfcAssertedValueRoot.reference`). Anchoring records the references it stores
+for a list of objects this way ("References the writer supplied", below), and
+the custody seal records the link it writes into a room's box cell this way
+([sealed custody](cfc-custody-seal.md)).
 
 Without this, a document a transformation read only to find its inputs would
 constrain nothing when unlabeled. A member's code could hand an endorsed
@@ -174,14 +180,71 @@ replica makes the writer's commit a conflict, so the retry sets over the
 member rather than stamping it.
 
 Other destinations keep the stamps the diff's own writes get. Collection
-operations (`push`, `addUnique`, `removeByValue`, `increment`) record nothing:
-they carry existing members through without the writer's code consuming them.
+operations (`push`, `addUnique`, `removeByValue`, `increment`) record no
+destination of their own: they carry existing members through without the
+writer's code consuming them. An object they add is anchored like any other,
+below.
 
 The redundant-entry collapse cannot hide an unattributed write from this. The
 collapse removes a derived entry only when the resolution without it gains no
 integrity (`isRedundantWithDeclared` in `prepare.ts`), so a location whose
 writer was not the endorsed code never resolves to an endorsed ancestor's
 witness.
+
+## References the writer supplied
+
+Pattern code that puts a plain object in an array does not store it inline.
+The diff anchors it: it writes the object into an entity document of its own,
+at an id the runtime derives, and stores a reference to that document at the
+object's slot (`anchorValueAsEntity` in
+`packages/runner/src/data-updating.ts`). A list of objects is a list of
+references, and a reader reaches each object in two steps: it reads the slot,
+then the entity the reference names.
+
+Anchoring records both halves as whole-value destinations: the entity's root,
+and the slot, with the entity as its reference. Each is stamped as written
+under the conditions above, and a destination's final value may hold a
+reference only where anchoring stored it: at that exact slot, naming that
+entity's root, and not a write redirect. So:
+
+- the entity's root carries the writer's stamp, as the object's own position
+  would had it been stored inline;
+- the slot carries it too, as a value stamp beside its link entry, so a read
+  of the slot resolves the writer that chose that object for that position;
+  and
+- a `Cell.set` destination whose value holds such references, a record
+  holding a list of objects, say, is stamped whole.
+
+A slot's stamp says who stored the reference there and nothing about what it
+refers to. A reader that follows it reads the entity as well, and each
+location it reads there is a confidential input location of its own, resolved
+over the entity's own stamps. A witness holds only when the slot and every
+location read behind it carried it, which is what refuses each of these:
+
+- an element whose entity another writer rewrote after the reference was
+  stored: the rewritten location resolves to that writer's stamp;
+- a slot other code pointed elsewhere, at a document it wrote or at an object
+  the endorsed step stored in another list: the link write replaces the slot's
+  stamp, and a reference anchoring did not store earns none, so the slot
+  resolves to no writer; and
+- an object other code pushed into the list, or a list it wrote whole: those
+  slots and entities carry that code's stamp.
+
+A step that copies references rather than values, setting its output to the
+list it was handed, stores references to entities another step wrote. Those
+references are not ones anchoring stored, so the step's output carries no
+stamp at them, and a guard pinning the step refuses. An endorsed step whose
+output a rule pins copies the objects' values, which anchoring stores afresh.
+
+The id an anchored entity takes depends on how far arrays enclose its slot:
+the element of an array takes the array's position as its context rather
+than its index. Within what the diff writes, that is read from the value
+written (`DiffWalkState.writtenKinds`), not from what the position held
+before; only an ancestor above the write is read from storage. A step that
+sets a list of objects would otherwise read the list it replaces, a
+confidential input its previous writer stamped, and no chain through it could
+carry a witness. It also gives a fresh array's elements the ids a stored
+array's elements take.
 
 ## How a rule uses it
 
@@ -226,15 +289,34 @@ Each of these refuses an honest release rather than admitting a crafted one:
   the transaction came from one identity and the transaction's join is
   nonempty. A value written by a transaction that read nothing labeled carries
   no `TransformedBy`, so a transformation over it retains no witness. An
-  endorsed writer whose inputs should be witnessed reads something labeled —
-  for a collection, a root that carries its own clause — so its writes are
-  attributed.
-- **References.** A reference slot's label is the link's own (`LinkReference`
-  provenance and the carried confidentiality), with no `TransformedBy`, and a
-  reference followed to confidential content is a location of its own, so a
-  transformation that follows a reference other than one the runtime recorded
-  as its writer's retains no witness, whoever wrote the list. An endorsed
-  transformer's committed input is a value, not a collection of references.
+  endorsed writer whose inputs should be witnessed reads something labeled,
+  so its writes are attributed. For the first member of a list whose clause is
+  on its members (below), the empty list is not that.
+- **References the writer did not supply.** A reference stored any way other
+  than by anchoring an object the writer put in an array — a cell set into a
+  slot, a reference copied from another list — earns its slot no value stamp,
+  and its link entry (`LinkReference` provenance and the carried
+  confidentiality) has no `TransformedBy`. A transformation that reads such a
+  slot retains no witness, whoever wrote it. So does a standalone reference
+  probe, which consumes the link entry alone.
+- **A list whose own node is confidential, grown by collection operations.** A
+  `push` adds a member without writing the list as a whole, so the list's node
+  keeps whatever labeled it before. A list the runtime's setup wrote from a
+  `Default` has no writer there, and one other writers have pushed to has
+  theirs; either way a witness over what reads the list is empty, since
+  reading the list reads its node. Declaring the clause on the members,
+  `Confidential<T, …>[]` rather than `Confidential<T[], …>`, leaves the node
+  itself unlabeled, so it constrains no witness, while each member carries its
+  clause and its writer's stamp. A list an endorsed step sets whole is
+  stamped whole, as above.
+- **An entity made of references alone, under a clause declared above its
+  array.** An entity holding only references, the object of a list of objects
+  that sits in a list of objects, has no scalar the diff stamps, so only its
+  whole-value stamp gives its root a writer. That stamp needs the writer's
+  join to fit the entity's declared ceiling, and a clause declared above the
+  array the entity was anchored from does not reach the entity's own schema.
+  Declaring the clause on the members of each list of objects gives each
+  entity its ceiling.
 - **Structure-only stamps.** A written location whose only derived stamp is a
   membership or shape entry has no value evidence.
 
@@ -287,12 +369,10 @@ not rely on the witness without them.
   mirror, the crafted vote arrives through a set whose destination the step
   never read, the destination is stamped whole, and a one-level guard
   releases it (pinned in `cfc-transformed-by-input-witness.test.ts`). A rule
-  that must not trust the step's inputs pins one more level. That needs the
-  step's inputs to carry their writer's stamp too: a list of objects is stored
-  as references, which retain no witness, and a list whose container another
-  transaction created, such as the runtime's setup writing a `Default`, keeps
-  no writer on its container node, so a two-level guard over such a list
-  releases nothing.
+  that must not trust the step's inputs pins one more level, which needs the
+  step's inputs to carry their writer's stamp too. A list of objects does,
+  through its references
+  (`cfc-transformed-by-input-witness-references.test.ts`).
 - **An output that does not change.** A stamp is replaced when its value is
   written. When an endorsed transformer runs again over inputs other code
   chose and computes the value it had already written, it writes nothing, and
@@ -300,8 +380,9 @@ not rely on the witness without them.
   learns whether they yield the value already released, one comparison per
   run.
 - **Selection among committed values.** A transformation fed a subset of
-  honestly committed inputs computes over a choice. References are refused
-  above; a selection made by endorsed code is that code's semantics.
+  honestly committed inputs computes over a choice. A reference other code
+  stored is refused above; a selection made by endorsed code is that code's
+  semantics.
 - **Public parameters.** A public input does not constrain the witness, so a
   caller-chosen public parameter to the endorsed code (a filter, an index of
   whom to count) chooses what it computes over committed inputs. The witness

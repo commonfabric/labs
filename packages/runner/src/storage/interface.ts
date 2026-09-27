@@ -2102,7 +2102,8 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * Records a destination the runtime wrote a whole value to, so the flow
    * stamp lands there rather than only at the paths the diff changed. See
    * `CfcTxState.assertedValueRoots`. `reference` names the document root a
-   * pointer the runtime stored at `address` refers to. Dropped unless
+   * pointer the runtime stored at `address` refers to (a custody box, or an
+   * entity anchoring split out). Dropped unless
    * `authorization` carries the runtime's mark. The address is
    * `deepFreeze()`d on entry.
    */

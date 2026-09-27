@@ -499,7 +499,28 @@ export interface DiffWalkState {
    * such elements inline.
    */
   nextAnchorId?: () => string | number;
+
+  /**
+   * Each array element this walk anchored: the slot that holds the
+   * reference, and the entity document it refers to. `diffAndUpdate` records
+   * both as whole-value roots once the walk's changes are applied
+   * (`CfcTxState.assertedValueRoots`).
+   */
+  anchored?: { slot: NormalizedFullLink; entity: NormalizedFullLink }[];
+
+  /**
+   * Whether the value this walk writes at each position it reaches, keyed by
+   * `writtenPositionKey()`, is an array. An anchored element's identity
+   * derives from how far arrays enclose it, and within what the walk writes
+   * that is a fact about the written value rather than about what the
+   * position held before.
+   */
+  writtenKinds?: Map<string, boolean>;
 }
+
+/** The key `DiffWalkState.writtenKinds` holds a position under. */
+const writtenPositionKey = (link: NormalizedFullLink): string =>
+  JSON.stringify([link.space, link.id, link.scope ?? null, link.path]);
 
 /**
  * Traverses newValue and updates `current` and any relevant linked documents.
@@ -548,6 +569,13 @@ export function diffAndUpdate(
   // names without reading a member of it. Each member read on one resolves
   // through this transaction and is recorded on it as a dependency the commit
   // has to check.
+  const anchored: NonNullable<DiffWalkState["anchored"]> = [];
+  const state: DiffWalkState = {
+    seen: new Map(),
+    nextAnchorId: anchorIds,
+    anchored,
+    writtenKinds: new Map(),
+  };
   const changes = normalizeAndDiff(
     runtime,
     tx,
@@ -557,13 +585,38 @@ export function diffAndUpdate(
     }),
     context,
     readOptions,
-    { seen: new Map(), nextAnchorId: anchorIds },
+    state,
   );
   diffLogger.debug(
     "diff",
     () => debugStr`[diffAndUpdate] changes: $quote,long${changes}`,
   );
   applyChangeSet(tx, changes);
+  // Each anchored element is a plain object the writer supplied, split into
+  // an entity document and a reference to it, so both halves hold what the
+  // writer supplied: the entity's root holds the object, and the slot the
+  // reference to it. Recorded once the changes are applied, as `Cell.set`
+  // records its own destination; whether each stamps is preparation's
+  // decision (`assertedValueRootPaths` in `cfc/prepare.ts`).
+  for (const { slot, entity } of anchored) {
+    const entityRoot = {
+      space: entity.space,
+      id: entity.id,
+      scope: entity.scope,
+      path: [],
+    };
+    tx.recordCfcAssertedValueRoot(entityRoot, runtimeWritePolicyAuthorization);
+    tx.recordCfcAssertedValueRoot(
+      {
+        space: slot.space,
+        id: slot.id,
+        scope: slot.scope,
+        path: [...slot.path],
+      },
+      runtimeWritePolicyAuthorization,
+      entityRoot,
+    );
+  }
   return changes.length > 0;
 }
 
@@ -843,12 +896,14 @@ export type ChangeSet = {
  * Turns `content` into an entity document of its own: the slot at `link` gets
  * a link to a (possibly new) document whose id derives from `idSeed`, the
  * slot's location, and the passed context, and `content` is diffed into that
- * document. When the slot is an element of a STORED array, the id derives
- * from the nearest non-array ancestor location, so the element's identity
- * does not depend on its position. Array ancestry is read from transaction
- * pre-state, so on a fresh array's first write the indices remain in the
- * derivation and identity IS position-bearing there -- a long-standing
- * limitation.
+ * document. When the slot is an array element, the id derives from the
+ * nearest non-array ancestor location, so the element's identity does not
+ * depend on its position. Under a context, array ancestry within what the
+ * walk writes is the written value's (`DiffWalkState.writtenKinds`), so a
+ * fresh array's first write derives the same identities a rewrite of a
+ * stored one does. Elsewhere, and above what the walk writes, the stored
+ * ancestor's type is read, so without a context a fresh array's first write
+ * keeps its indices in the derivation.
  *
  * `registerKey` is the caller's original value, and `content` a distinct
  * shallow copy of it; `registerKey` is registered in `state.seen` so shared
@@ -877,12 +932,27 @@ function anchorValueAsEntity(
   // If we're setting an array element, make the array the context for the
   // derived id, not the array index. If it's a nested array, take the parent
   // array as context, recursively.
-  while (
-    path.length > 0 &&
-    Array.isArray(
-      tx.readValueOrThrow({ ...link, path: path.slice(0, -1) }, probeOptions),
-    )
-  ) {
+  //
+  // Under a context, which a handler's or a lift's frame supplies, the
+  // parents this walk writes are judged by what it writes there, so the
+  // identity is a function of the written value and its place, not of what
+  // the place held before: a fresh array's elements take the identities a
+  // stored one's would, and nothing the write replaces reaches the
+  // reference it stores. A writer that sets a list of objects therefore
+  // reads nothing of the list it replaces, which is what lets an input
+  // witness hold for it. Without a context, the runtime's own frame, whose
+  // counter restarts with every runtime, keeps judging by the stored
+  // parent: there the index a fresh array's elements keep is what separates
+  // them from what another runtime anchors later. Above what the walk
+  // writes, the stored parent decides either way.
+  while (path.length > 0) {
+    const parent = { ...link, path: path.slice(0, -1) };
+    const written = context === undefined
+      ? undefined
+      : state.writtenKinds?.get(writtenPositionKey(parent));
+    if (
+      !(written ?? Array.isArray(tx.readValueOrThrow(parent, probeOptions)))
+    ) break;
     path = path.slice(0, -1);
   }
 
@@ -907,6 +977,7 @@ function anchorValueAsEntity(
   };
 
   state.seen.set(registerKey, newEntryLink);
+  state.anchored?.push({ slot: link, entity: newEntryLink });
 
   // This helper handles both creation and later writes to an anchored entity.
   // Carry the child schema on every visit so CFC can merge the candidate
@@ -1769,6 +1840,10 @@ export function normalizeAndDiff(
     );
     newValue = minted as FabricValue;
   }
+
+  // Which positions this walk writes an array at, for the identity an
+  // anchored element beneath one takes (`anchorValueAsEntity`).
+  state.writtenKinds?.set(writtenPositionKey(link), Array.isArray(newValue));
 
   // Anchor a plain object sitting in an array into an entity document of its
   // own, so mutable arrays hold links rather than inline objects. Only a
