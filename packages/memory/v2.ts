@@ -2386,6 +2386,13 @@ export const wireMemoryProtocolFlags = (
  * engine's commit/stored-row probes (v2/engine.ts). A pinning test in
  * test/v2-sync-schema-table.test.ts fails loudly if verbatim embedding ever
  * stops holding.
+ *
+ * The engine's document-cache weigh (`encodedGrowth()` in v2/engine.ts)
+ * depends on a second property, and moves with the codec too: a plain record
+ * with no `/`-prefixed key, and an array with no hole, encode as their members
+ * encode alone, joined by one comma each. Tests in
+ * test/v2-document-cache.test.ts hold the weight it carries to a full encode,
+ * over every patch op and over generated patches.
  */
 export const encodeMemoryBoundary = (value: FabricValue): string =>
   jsonFromFabricValue(value);

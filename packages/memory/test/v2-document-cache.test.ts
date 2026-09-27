@@ -101,6 +101,20 @@ const commitCountPatch = (engine: Engine, localSeq: number, count: number) =>
     }),
   } as never);
 
+/** A commit whose one operation adds one to `/value/count` on the first
+ * seeded entity, so a rebuild from a stale base holds a different count. */
+const commitCountIncrement = (engine: Engine, localSeq: number) =>
+  applyCommit(engine, {
+    sessionId: "s:a",
+    commit: commit(localSeq, {
+      operations: [{
+        op: "patch",
+        id: entityId(0),
+        patches: [{ op: "increment", path: "/value/count", by: 1 }],
+      }],
+    }),
+  } as never);
+
 /** A temporary store directory for a Server, removed afterwards. */
 const withStoreDir = async (
   fn: (store: URL) => Promise<void>,
@@ -374,6 +388,7 @@ describe("v2 document cache", () => {
       { op: "increment", path: "/value/n", by: 5 },
       { op: "move", from: "/value/record/added", path: "/value/moved" },
       { op: "replace", path: "/value/holes/0", value: 7 },
+      { op: "splice", path: "/value/holes", index: 1, remove: 1, add: [] },
       { op: "replace", path: "/value/text", value: "字字" },
       { op: "add", path: "/value/record/empty", value: undefined },
       { op: "replace", path: "/value/record", value: { "/weird": 1 } },
@@ -422,10 +437,10 @@ describe("v2 document cache", () => {
     // next rebuild starts there rather than decoding the snapshot.
     await withEngine((engine) => {
       seed(engine, 1, () => ({ count: 0, untouched: { list: [1, 2, 3] } }));
-      commitCountPatch(engine, 2, 1);
-      commitCountPatch(engine, 3, 2);
+      commitCountIncrement(engine, 2);
+      commitCountIncrement(engine, 3);
       const before = documentCacheDiagnostics(engine);
-      commitCountPatch(engine, 4, 3);
+      commitCountIncrement(engine, 4);
       const after = documentCacheDiagnostics(engine);
       const stored = storedValue(engine, 0);
 
@@ -441,27 +456,26 @@ describe("v2 document cache", () => {
     // Weighing a revision by encoding it whole would serialize every entry;
     // weighing it by what its patch changed serializes the same bytes
     // whatever the record around the change holds.
-    const serializedBytes = async (length: number): Promise<number> => {
-      let bytes = 0;
+    const recordOf = (length: number) =>
+      Object.fromEntries(
+        Array.from({ length }, (_, index) => [
+          `key-${index}`,
+          { name: `entry-${index}` },
+        ]),
+      );
+    const serializedCharacters = async (length: number): Promise<number> => {
+      let characters = 0;
       await withEngine((engine) => {
         applyCommit(engine, {
           sessionId: "s:a",
           commit: commit(1, {
-            operations: [setOp(
-              entityId(0),
-              Object.fromEntries(
-                Array.from({ length }, (_, index) => [
-                  `key-${index}`,
-                  { name: `entry-${index}` },
-                ]),
-              ),
-            )],
+            operations: [setOp(entityId(0), recordOf(length))],
           }),
         } as never);
         const stringify = JSON.stringify;
         JSON.stringify = ((...args: Parameters<typeof JSON.stringify>) => {
           const text = stringify(...args);
-          bytes += text?.length ?? 0;
+          characters += text?.length ?? 0;
           return text;
         }) as typeof JSON.stringify;
         try {
@@ -483,17 +497,284 @@ describe("v2 document cache", () => {
           JSON.stringify = stringify;
         }
       });
-      return bytes;
+      return characters;
     };
 
-    const short = await serializedBytes(20);
-    const long = await serializedBytes(2_000);
+    const short = await serializedCharacters(20);
+    const long = await serializedCharacters(2_000);
 
     // Both are needed: the equality alone passes a total that is flat but
     // large, and the bound alone passes one that grows slowly with the record.
-    // The short record alone encodes to more than 500 bytes.
+    // The bound is one encoding of the short document. The floor keeps the
+    // probe honest: were the encoding no longer made through
+    // `JSON.stringify()`, both totals would read zero and agree.
+    expect(short).toBeGreaterThan(0);
     expect(long).toBe(short);
-    expect(long).toBeLessThan(500);
+    expect(long).toBeLessThan(encodedWeight({ value: recordOf(20) }));
+  });
+
+  it("serializes as many bytes removing the first entry of a long list as of a short one", async () => {
+    // The removal moves every later entry down one place. The revision shares
+    // each of them with the one before, so weighing it encodes what left.
+    const listOf = (length: number) => ({
+      list: Array.from({ length }, (_, index) => ({ name: `entry-${index}` })),
+    });
+    const serializedCharacters = async (length: number): Promise<number> => {
+      let characters = 0;
+      await withEngine((engine) => {
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(1, {
+            operations: [setOp(entityId(0), listOf(length))],
+          }),
+        } as never);
+        const stringify = JSON.stringify;
+        JSON.stringify = ((...args: Parameters<typeof JSON.stringify>) => {
+          const text = stringify(...args);
+          characters += text?.length ?? 0;
+          return text;
+        }) as typeof JSON.stringify;
+        try {
+          applyCommit(engine, {
+            sessionId: "s:a",
+            commit: commit(2, {
+              operations: [{
+                op: "patch",
+                id: entityId(0),
+                patches: [{ op: "remove", path: "/value/list/0" }],
+              }],
+            }),
+          } as never);
+        } finally {
+          JSON.stringify = stringify;
+        }
+      });
+      return characters;
+    };
+
+    const short = await serializedCharacters(20);
+    const long = await serializedCharacters(2_000);
+
+    // As for the record above: equality, a bound of one encoding of the short
+    // document, and a floor that keeps the probe honest.
+    expect(short).toBeGreaterThan(0);
+    expect(long).toBe(short);
+    expect(long).toBeLessThan(encodedWeight({ value: listOf(20) }));
+  });
+
+  it("encodes a patch rewriting every entry of a long list in a bounded number of pieces", async () => {
+    // Nothing is shared when each entry is replaced, so weighing the pieces
+    // would encode every one of them; past a bound the revision is encoded
+    // whole instead, which costs what one encode of it costs.
+    const length = 2_000;
+    let encodes = 0;
+    await withEngine((engine) => {
+      applyCommit(engine, {
+        sessionId: "s:a",
+        commit: commit(1, {
+          operations: [setOp(entityId(0), {
+            list: Array.from({ length }, (_, index) => `entry-${index}`),
+          })],
+        }),
+      } as never);
+      const stringify = JSON.stringify;
+      JSON.stringify = ((...args: Parameters<typeof JSON.stringify>) => {
+        encodes++;
+        return stringify(...args);
+      }) as typeof JSON.stringify;
+      try {
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(2, {
+            operations: [{
+              op: "patch",
+              id: entityId(0),
+              patches: Array.from({ length }, (_, index) => ({
+                op: "replace",
+                path: `/value/list/${index}`,
+                value: `rewritten-${index}`,
+              })),
+            }],
+          }),
+        } as never);
+      } finally {
+        JSON.stringify = stringify;
+      }
+      expect(documentCacheDiagnostics(engine).bytes).toBe(
+        encodedWeight(storedValue(engine, 0)),
+      );
+    }, { documentCacheMaxEntries: 1 });
+
+    // The floor keeps the probe honest, and the bound sits far above the
+    // pieces weighing gives up at and far below one per entry.
+    expect(encodes).toBeGreaterThan(0);
+    expect(encodes).toBeLessThan(200);
+  });
+
+  it("weighs a rebuild whose replay passes through a revision the codec refuses by encoding only the result", async () => {
+    // The replay reaches a revision holding a key the runtime reserves, which
+    // the next operation removes. Only the rebuilt document is ever stored,
+    // so only it is owed an encoding.
+    const id = entityId(0);
+    await withEngine((engine) => {
+      applyCommit(engine, {
+        sessionId: "s:a",
+        commit: commit(1, {
+          operations: [setOp(id, { x: {}, keep: 1 })],
+        }),
+      } as never);
+      applyCommit(engine, {
+        sessionId: "s:a",
+        commit: commit(2, {
+          operations: [
+            {
+              op: "patch",
+              id,
+              patches: [{ op: "add", path: "/value/x/constructor", value: 1 }],
+            },
+            {
+              op: "patch",
+              id,
+              patches: [{ op: "remove", path: "/value/x/constructor" }],
+            },
+          ],
+        }),
+      } as never);
+      evictDocumentCacheEntries(engine, Number.MAX_SAFE_INTEGER);
+      const stored = storedValue(engine, 0);
+
+      expect(stored).toEqual({ value: { x: {}, keep: 1 } });
+      expect(documentCacheDiagnostics(engine).bytes).toBe(
+        encodedWeight(stored),
+      );
+    });
+  });
+
+  it("rebuilds the commit after a snapshot from the snapshot row when the revision it holds is no longer cached", async () => {
+    await withEngine((engine) => {
+      seed(engine, 1, () => ({ count: 0, untouched: { list: [1, 2, 3] } }));
+      commitCountIncrement(engine, 2);
+      commitCountIncrement(engine, 3);
+      evictDocumentCacheEntries(engine, Number.MAX_SAFE_INTEGER);
+      const before = documentCacheDiagnostics(engine);
+      commitCountIncrement(engine, 4);
+      const after = documentCacheDiagnostics(engine);
+      const stored = storedValue(engine, 0);
+
+      expect(stored).toEqual({
+        value: { count: 3, untouched: { list: [1, 2, 3] } },
+      });
+      expect(after.resumes - before.resumes).toBe(0);
+      expect(after.bytes).toBe(encodedWeight(stored));
+    }, { documentCacheMaxEntries: 1, snapshotInterval: 2 });
+  });
+
+  it("weighs every revision of a document under generated patches exactly as it would be stored", async () => {
+    // A seeded run of patches over records, lists, a quoted `/`-keyed record
+    // and a list of numbers, each revision weighed from the one before it.
+    let state = 0x5eed;
+    const draw = (limit: number) => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      return Math.floor((state / 0x1_0000_0000) * limit);
+    };
+    const text = () =>
+      ["", "a", "字", "\u2028", "__proto__", "x".repeat(70)][draw(6)];
+    const entry = () => ({ name: text(), nested: { n: draw(1000) - 500 } });
+    const id = entityId(0);
+    const list: unknown[] = [entry(), entry(), entry()];
+    const record: Record<string, unknown> = { a: text(), b: [1, 2] };
+    let keyCount = 0;
+    const patchFor = (): unknown => {
+      switch (draw(9)) {
+        case 0:
+          return list.length === 0
+            ? { op: "append", path: "/value/list", values: [entry()] }
+            : {
+              op: "replace",
+              path: `/value/list/${draw(list.length)}`,
+              value: entry(),
+            };
+        case 1: {
+          const index = draw(list.length + 1);
+          const remove = Math.min(draw(3), list.length - index);
+          const add = Array.from({ length: draw(3) }, entry);
+          list.splice(index, remove, ...add);
+          return { op: "splice", path: "/value/list", index, remove, add };
+        }
+        case 2: {
+          const values = [entry(), entry()];
+          list.push(...values);
+          return { op: "append", path: "/value/list", values };
+        }
+        case 3: {
+          const key = `k${keyCount++}`;
+          record[key] = draw(2) === 0 ? entry() : undefined;
+          return {
+            op: "add",
+            path: `/value/record/${key}`,
+            value: record[key],
+          };
+        }
+        case 4: {
+          const keys = Object.keys(record);
+          const key = keys[draw(keys.length)]!;
+          delete record[key];
+          return { op: "remove", path: `/value/record/${key}` };
+        }
+        case 5:
+          return {
+            op: "replace",
+            path: "/value/tagged/~1/link@1/id",
+            value: text(),
+          };
+        case 6:
+          return {
+            op: "add-unique",
+            path: "/value/numbers",
+            values: [draw(5)],
+          };
+        case 7:
+          return {
+            op: "remove-by-value",
+            path: "/value/numbers",
+            value: draw(5),
+          };
+        default:
+          return { op: "increment", path: "/value/count", by: draw(9) - 4 };
+      }
+    };
+    await withEngine((engine) => {
+      applyCommit(engine, {
+        sessionId: "s:a",
+        commit: commit(1, {
+          operations: [setOp(id, {
+            list,
+            record,
+            tagged: { "/": { "link@1": { id: "of:x", path: [] } } },
+            numbers: [1, 2],
+            count: 0,
+          })],
+        }),
+      } as never);
+      const resumesBefore = documentCacheDiagnostics(engine).resumes;
+      const commits = 60;
+      for (let index = 0; index < commits; index++) {
+        const patch = patchFor();
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(index + 2, {
+            operations: [{ op: "patch", id, patches: [patch] }],
+          }),
+        } as never);
+        expect(
+          documentCacheDiagnostics(engine).bytes,
+          JSON.stringify(patch),
+        ).toBe(encodedWeight(storedValue(engine, 0)));
+      }
+      expect(documentCacheDiagnostics(engine).resumes - resumesBefore).toBe(
+        commits - 1,
+      );
+    }, { documentCacheMaxEntries: 1, snapshotInterval: 1_000 });
   });
 
   it("weighs documents in encoded bytes, not string code units", async () => {
