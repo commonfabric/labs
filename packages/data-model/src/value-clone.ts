@@ -404,10 +404,10 @@ export interface CloneForMutationOptions {
    * `cloneIfNecessary`'s default when `frozen: false` (which is what each
    * per-container thaw effectively requests).
    *
-   * - `force: true` (default) — the caller's input is guaranteed to be left
-   *   untouched. Every container along the spine -- including the root and
-   *   the value at `path` -- is a fresh shallow copy, apart from those
-   *   `owned` names, which are the caller's own.
+   * - `force: true` (default) — the caller's input is left untouched, apart
+   *   from any of its containers the caller put in `owned`. Every container
+   *   along the spine -- including the root and the value at `path` -- is a
+   *   fresh shallow copy, apart from those `owned` names.
    * - `force: false` — spine containers that are already mutable are reused
    *   by identity, and the helper may mutate the caller's input's spine
    *   slots in place when it needs to splice a freshly-thawed child into a
@@ -463,10 +463,11 @@ export interface CloneForMutationOptions {
    * batch of `K` mutations under one `N`-key object copies that object once
    * rather than `K` times.
    *
-   * Only as safe as the caller's discipline: a container in the set must be
-   * one no one but the caller holds a reference to, so a caller that places
-   * one somewhere else in the tree, or hands one out, must first remove it
-   * from the set. Default: no set, so reuse is decided by `force` alone.
+   * A container in the set must be one only the caller holds, in one place in
+   * its tree, since a mutation through it is seen wherever it is referenced.
+   * Before placing one a second time or handing it out, the caller releases
+   * it, by freezing it or by deleting it from the set. Default: no set, so
+   * reuse is decided by `force` alone.
    */
   owned?: WeakSet<object>;
 }

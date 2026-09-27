@@ -95,10 +95,12 @@ export const applyPatchToDocument = (
  * that mutable container, and subtrees off the spine stay frozen-by-reference
  * (structural sharing). A container is copied the first time an op's spine
  * passes through it, and later ops in the same call mutate that copy in place,
- * so `K` ops beneath one `N`-key object cost `O(K + N)` rather than
- * `O(K × N)`. The caller's `state` is never mutated. The assembled tree is
- * then fully deep-frozen at the `applyPatch` boundary, so callers can rely on
- * the return value being deeply frozen.
+ * so each container is copied at most once per call: `K` ops beneath one
+ * `N`-key object copy it once, not `K` times. No op writes to the caller's
+ * `state`. The assembled tree is then fully deep-frozen at the `applyPatch`
+ * boundary, so callers can rely on the return value being deeply frozen; the
+ * subtrees it shares with `state` are frozen in place, `state` itself included
+ * when no op touches it.
  */
 export const applyPatch = (
   state: FabricValue,

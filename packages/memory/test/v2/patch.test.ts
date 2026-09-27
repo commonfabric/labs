@@ -4,7 +4,11 @@ import { expect } from "@std/expect";
 import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
 
 import type { PatchOp } from "../../v2.ts";
-import { applyPatch, patchOpDescriptors } from "../../v2/patch.ts";
+import {
+  applyPatch,
+  PatchApplyError,
+  patchOpDescriptors,
+} from "../../v2/patch.ts";
 
 /** A deep-frozen document whose `value` is an object of `size` keys. */
 const documentOfSize = (size: number) => {
@@ -40,7 +44,11 @@ const largeCopiesDuring = (
   const assign = Object.assign;
   let copies = 0;
   Object.assign = ((target: object, ...sources: object[]) => {
-    if (sources.some((source) => Object.keys(source).length >= size)) {
+    if (
+      sources.some((source) =>
+        source != null && Object.keys(source).length >= size
+      )
+    ) {
       copies++;
     }
     return assign(target, ...sources);
@@ -55,7 +63,7 @@ const largeCopiesDuring = (
 
 describe("patch", () => {
   describe("applyPatch()", () => {
-    it("applies each op to the tree the op before it left", () => {
+    it("returns each op applied to the tree the op before it left", () => {
       const result = applyPatch(deepFreeze({ value: { a: 1, b: 2 } }), [
         { op: "add", path: "/value/x", value: 10 },
         { op: "replace", path: "/value/x", value: 11 },
@@ -68,7 +76,7 @@ describe("patch", () => {
       expect(isDeepFrozen(result)).toBe(true);
     });
 
-    it("leaves its input unchanged, frozen or mutable", () => {
+    it("leaves its input's content unchanged, frozen or mutable", () => {
       for (
         const input of [deepFreeze({ value: { a: 1 } }), { value: { a: 1 } }]
       ) {
@@ -81,6 +89,21 @@ describe("patch", () => {
         expect(input).toEqual({ value: { a: 1 } });
         expect(result).toEqual({ value: { x: 1, y: 2 } });
       }
+    });
+
+    it("leaves its input's content unchanged when a later op throws", () => {
+      // The ops before the one that throws have mutated copies in place, and
+      // those copies must not have been the input's own containers.
+      const input = deepFreeze({ value: { a: { v: 1 }, b: 2 } });
+
+      expect(() =>
+        applyPatch(input, [
+          { op: "replace", path: "/value/a/v", value: 2 },
+          { op: "add", path: "/value/c", value: 3 },
+          { op: "remove", path: "/value/missing" },
+        ])
+      ).toThrow(PatchApplyError);
+      expect(input).toEqual({ value: { a: { v: 1 }, b: 2 } });
     });
 
     it("returns a deep-frozen tree after moving a container an earlier op thawed", () => {
