@@ -514,11 +514,12 @@ export class VisitInProgress<
       // We determine "changedness" for `FabricInstance` by considering the
       // mutability of the instance in addition to whether the state actually
       // got changed from the mapping. This (former part) is to guarantee that
-      // an instance whose mutability doesn't align with
-      // `#freezeMappedContainers` will always get reconstructed.
+      // a mutable instance whose state was unchanged won't get returned in an
+      // operation that is supposed to produce frozen results.
       if (
         (recurseResult === undefined) &&
-        (Object.isFrozen(instance) === this.#freezeMappedContainers)
+        Object.isFrozen(instance) &&
+        this.#freezeMappedContainers
       ) {
         return undefined;
       } else {
