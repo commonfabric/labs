@@ -61,6 +61,14 @@ export default pattern(() => {
       a: { ...entry(1, ["yes", "yes", "yes"]), terms: "{}" },
     },
   });
+  // Terms that parse to JSON `null` rather than an object.
+  const nullTerms = CustodyAnswerRoom({
+    terms: null,
+    policy: true,
+    box: {
+      a: { ...entry(1, ["yes", "yes", "yes"]), terms: "null" },
+    },
+  });
   const empty = CustodyAnswerRoom({} as Input);
 
   const assert_most_yes_without_a_no = assert(() => agreed.choice === "tacos");
@@ -74,7 +82,8 @@ export default pattern(() => {
     empty.choice === NO_AGREEMENT
   );
   const assert_unreadable_terms_agree_on_nothing = assert(() =>
-    unreadable.choice === NO_AGREEMENT && seatless.choice === NO_AGREEMENT
+    unreadable.choice === NO_AGREEMENT && seatless.choice === NO_AGREEMENT &&
+    nullTerms.choice === NO_AGREEMENT
   );
   const assert_first_rating_read = assert(() => agreed.rating === "yes");
   const assert_no_terms_before_proposal = assert(() => empty.terms === null);
@@ -101,6 +110,7 @@ export default pattern(() => {
     mixed,
     unreadable,
     seatless,
+    nullTerms,
     empty,
   };
 });
