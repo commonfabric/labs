@@ -926,6 +926,12 @@ export function resolveLinkTracingDereferences(
           ...link,
           schema: schemaForSpaceCrossing(tx, nextHop.source.space, link.schema),
         };
+      } else if (link.schema !== nextLink.schema) {
+        // A carried reader schema keeps its reference form within a space,
+        // but its documents must still be at hand before anything reads
+        // through it: load the closure from the space the hop starts in,
+        // exactly as a crossing does, so the reader's `$ref` resolves.
+        ensureExternalSchemaClosure(tx, nextHop.source.space, link.schema);
       }
       const mgr = runtime.storageManager;
       const reserved = !crossSpace &&

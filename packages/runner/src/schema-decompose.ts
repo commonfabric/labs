@@ -52,6 +52,10 @@ import {
   type SchemaWalkOptions,
 } from "@commonfabric/data-model-schema/schema-walk";
 import { isEmbeddedCfcSchemaRef } from "./embedded-schemas.ts";
+import {
+  lookupSchemaDocument,
+  onSchemaRegistryClear,
+} from "./schema-registry.ts";
 
 // Every walk in this module must be COMPLETE over the subschema keywords,
 // including the never-emitted tier: a ref a walk misses is a ref the
@@ -276,10 +280,25 @@ export type DecomposeSchemaOptions = {
 
 // Memo for decompositions of interned inputs. `decomposeSchema` interns its
 // input, so in steady state every call after the first for a given schema is
-// one `WeakMap` probe. A memoized success is resolver-independent: supplied
-// documents are hash-verified, so any resolver that succeeds supplies the
-// same closure. A refusal (throw) is never memoized.
+// one `WeakMap` probe. A refusal (throw) is never memoized.
+//
+// A decomposition that consulted no resolver is a pure function of its input
+// and memoizes for the realm. One that resolved an external ref is a fact
+// about what the resolver held at the time: handing it to a later caller
+// whose resolver would miss — no resolver at all, or the registry after its
+// lease epoch cleared — returns a closure that caller could not have built,
+// and callers register what comes back, resurrecting documents the current
+// epoch never received. So a resolver-dependent result memoizes only for the
+// registry's own lookup, and only until the registry clears: within an epoch
+// the registry is monotonic, so a success stays true.
 const decompositionCache = new WeakMap<JSONSchemaObj, DecomposedSchema>();
+let registryDecompositionCache = new WeakMap<
+  JSONSchemaObj,
+  DecomposedSchema
+>();
+onSchemaRegistryClear(() => {
+  registryDecompositionCache = new WeakMap();
+});
 
 /**
  * Decomposes a self-contained schema into content-addressed documents.
@@ -309,7 +328,10 @@ export function decomposeSchema(
   options: DecomposeSchemaOptions = {},
 ): DecomposedSchema {
   const interned = internSchema(schema);
-  const cached = decompositionCache.get(interned);
+  const cached = decompositionCache.get(interned) ??
+    (options.resolveDocument === lookupSchemaDocument
+      ? registryDecompositionCache.get(interned)
+      : undefined);
   if (cached !== undefined) return cached;
 
   const defs = interned.$defs ?? {};
@@ -368,9 +390,11 @@ export function decomposeSchema(
 
   // Pre-existing external refs: resolve their documents (hash-verified) and
   // include the transitive closure, dependencies before dependents.
+  let resolvedExternal = false;
   const includeExternalClosure = (fromFragment: JSONSchema): void => {
     for (const hash of collectExternalSchemaRefHashes(fromFragment)) {
       if (documents.has(hash)) continue;
+      resolvedExternal = true;
       const supplied = options.resolveDocument?.(hash);
       if (supplied === undefined) {
         throw new SchemaNotDecomposableError(
@@ -442,7 +466,10 @@ export function decomposeSchema(
     : formatExternalSchemaRef(addDocument(rewrittenRoot));
 
   const result: DecomposedSchema = { rootRef, documents };
-  decompositionCache.set(interned, result);
+  if (!resolvedExternal) decompositionCache.set(interned, result);
+  else if (options.resolveDocument === lookupSchemaDocument) {
+    registryDecompositionCache.set(interned, result);
+  }
   return result;
 }
 

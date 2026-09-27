@@ -248,14 +248,7 @@ describe("cross-space-cid-schema", () => {
           expect(value?.name).toBe("Ada");
         }
         expect(schemaReads).toContain(`${sourceSpace}/${decomposed.rootRef}`);
-        if (route === "same-space carried reader schema") {
-          expect(
-            schemaReads.every((read) => expectedSchemaReads.includes(read)),
-          )
-            .toBe(true);
-        } else {
-          expect(new Set(schemaReads)).toEqual(new Set(expectedSchemaReads));
-        }
+        expect(new Set(schemaReads)).toEqual(new Set(expectedSchemaReads));
       } finally {
         await runtime.dispose();
         await manager.close();
