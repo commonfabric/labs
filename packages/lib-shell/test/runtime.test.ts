@@ -1067,6 +1067,8 @@ describe("RuntimeInternals", () => {
     type CapturedInitData = {
       forwardWorkerConsole?: boolean;
       concurrentWatchRefresh?: boolean;
+      awaitHealth?: boolean;
+      trustSnapshot?: { actingPrincipal?: string };
       renderDeclassificationPolicy?: string;
       renderConfidentialityCeiling?: {
         atoms?: unknown[];
@@ -1074,10 +1076,17 @@ describe("RuntimeInternals", () => {
       };
     };
 
-    it("includes forwardWorkerConsole, concurrentWatchRefresh, and the render ceiling in the Initialize request", async () => {
-      const identity = await Identity.generate({ implementation: "noble" });
-
+    /**
+     * A worker that reports ready and then refuses every request, recording
+     * the Initialize requests it saw and how often it was terminated.
+     */
+    function refusingWorker(): {
+      StubWorker: unknown;
+      initRequests: Array<{ data: CapturedInitData }>;
+      terminations: number[];
+    } {
       const initRequests: Array<{ data: CapturedInitData }> = [];
+      const terminations: number[] = [];
       class StubWorker extends EventTarget {
         constructor(_url: URL | string) {
           super();
@@ -1114,11 +1123,21 @@ describe("RuntimeInternals", () => {
             )
           );
         }
-        terminate(): void {}
+        terminate(): void {
+          terminations.push(terminations.length + 1);
+        }
       }
+      return { StubWorker, initRequests, terminations };
+    }
 
+    /** Runs `create` against a refusing worker, restoring the real one after. */
+    async function createAgainst(
+      worker: unknown,
+      options: Partial<Parameters<typeof RuntimeInternals.create>[0]> = {},
+    ): Promise<void> {
+      const identity = await Identity.generate({ implementation: "noble" });
       const OriginalWorker = (globalThis as { Worker: unknown }).Worker;
-      (globalThis as { Worker: unknown }).Worker = StubWorker;
+      (globalThis as { Worker: unknown }).Worker = worker;
       try {
         await expect(
           RuntimeInternals.create({
@@ -1126,26 +1145,43 @@ describe("RuntimeInternals", () => {
             apiUrl: new URL("http://shell.test/"),
             workerUrl: new URL("http://shell.test/scripts/worker-runtime.js"),
             getBuildHash: () => Promise.resolve(undefined),
-            forwardWorkerConsole: true,
-            concurrentWatchRefresh: true,
-            cfcRenderCeiling: true,
+            ...options,
           }),
         ).rejects.toThrow("stub init failure");
       } finally {
         (globalThis as { Worker: unknown }).Worker = OriginalWorker;
       }
+    }
+
+    it("includes forwardWorkerConsole, concurrentWatchRefresh, awaitHealth, and the render ceiling in the Initialize request", async () => {
+      const { StubWorker, initRequests } = refusingWorker();
+      await createAgainst(StubWorker, {
+        forwardWorkerConsole: true,
+        concurrentWatchRefresh: true,
+        awaitHealth: true,
+        cfcRenderCeiling: true,
+      });
 
       expect(initRequests).toHaveLength(1);
       expect(initRequests[0].data.forwardWorkerConsole).toBe(true);
       // The dogfood storage toggle rides the same InitializationData path; the
       // worker maps it into StorageManager.open's experimentalConcurrentWatchRefresh.
       expect(initRequests[0].data.concurrentWatchRefresh).toBe(true);
+      expect(initRequests[0].data.awaitHealth).toBe(true);
       // Epic H3a: the ceiling crosses the worker IPC as InitializationData —
       // exactly the fields the worker-side reconciler consumes.
       expect(initRequests[0].data.renderDeclassificationPolicy).toBe("deny");
       expect(initRequests[0].data.renderConfidentialityCeiling).toEqual(
-        defaultRenderConfidentialityCeiling(identity.did()),
+        defaultRenderConfidentialityCeiling(
+          initRequests[0].data.trustSnapshot!.actingPrincipal as DID,
+        ),
       );
+    });
+
+    it("terminates the worker it spawned when the worker refuses Initialize", async () => {
+      const { StubWorker, terminations } = refusingWorker();
+      await createAgainst(StubWorker);
+      expect(terminations).toEqual([1]);
     });
   });
 
@@ -1429,13 +1465,19 @@ describe("RuntimeInternals", () => {
       readonly sent: SentRequest[] = [];
       disposals = 0;
 
+      /** What every request is refused with, once set; acked until then. */
+      refusal: string | undefined;
+
       send(message: unknown): void {
         // A transport is handed the envelope itself; encoding it is the
         // business of the transports that cross a realm boundary.
         const envelope = message as { msgId?: number; data?: SentRequest };
         if (envelope.data) this.sent.push(envelope.data);
         if (typeof envelope.msgId !== "number") return;
-        queueMicrotask(() => this.emit("message", { msgId: envelope.msgId }));
+        const reply = this.refusal === undefined
+          ? { msgId: envelope.msgId }
+          : { msgId: envelope.msgId, error: this.refusal };
+        queueMicrotask(() => this.emit("message", reply));
       }
 
       dispose(): Promise<void> {
@@ -1491,6 +1533,25 @@ describe("RuntimeInternals", () => {
           })
         ),
       ).rejects.toThrow("`attach` needs a `transport`");
+    });
+
+    it("leaves a supplied transport undisposed when the runtime refuses Initialize", async () => {
+      const identity = await Identity.generate({ implementation: "noble" });
+      const transport = new StubTransport();
+      transport.refusal = "stub init failure";
+      await expect(
+        withNoWorkerConstructible(() =>
+          RuntimeInternals.create({
+            identity,
+            apiUrl: new URL("http://shell.test/"),
+            transport: transport as unknown as RuntimeTransport,
+          })
+        ),
+      ).rejects.toThrow("stub init failure");
+      expect(transport.sent.map((request) => request.type)).toEqual([
+        "initialize",
+      ]);
+      expect(transport.disposals).toBe(0);
     });
 
     it("initializes over the supplied transport when not attaching", async () => {

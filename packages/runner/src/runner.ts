@@ -902,7 +902,7 @@ const recordSetupProjectionPolicyInputs = (
         scope: source.scope,
         path: [...source.path],
       }],
-    });
+    }, runtimeWritePolicyAuthorization);
     return;
   }
 
