@@ -185,6 +185,8 @@ const setup = async ({ witnessed = true } = {}) => {
   } as never, install).set({ open: true } as never);
   const terms = host.getCell(S, "custody-terms", undefined, install);
   terms.set(termsFor("Where should we eat?") as never);
+  // The room document whose cells receive the seal's links.
+  host.getCell(S, "room-cells", undefined, install).set({} as never);
   expect((await install.commit()).error).toBeUndefined();
   const roomAcl = new ACLManager(runtimeFor(roomOwner), S);
   await roomAcl.set(alice.did(), "OWNER");
@@ -351,7 +353,7 @@ const writeAsMember = async (
 
 describe("custody answers", () => {
   const boxOf = (fixture: Fixture) =>
-    fixture.runtimes.get(alice)!.getCell(S, "custody-room-box");
+    fixture.runtimes.get(alice)!.getCell(S, "room-cells").key("box");
   const outputOf = (fixture: Fixture) =>
     fixture.runtimes.get(alice)!.getCell(S, "custody-room-choice");
 
@@ -506,6 +508,34 @@ describe("custody answers", () => {
     }
   });
 
+  it("refuses an answer computed over an earlier instance's box", async () => {
+    // An earlier instance may have had other members; its answer is not this
+    // instance's to release.
+    const fixture = await setup();
+    try {
+      const first = boxOf(fixture);
+      const output = outputOf(fixture);
+      await fixture.seal(alice, "sushi", first);
+      await fixture.seal(bob, "sushi", first);
+
+      await fixture.setTerms("Where should we eat tomorrow?");
+      const second = fixture.runtimes.get(alice)!.getCell(S, "room-cells").key(
+        "second",
+      );
+      await fixture.seal(alice, "tacos", second);
+      await fixture.seal(bob, "tacos", second);
+      // The projector reads the earlier instance's genuine box.
+      expect(await fixture.project(bob, first, output)).toBe("sushi");
+      await expect(fixture.publish(bob, output)).rejects.toThrow(
+        "releases to its readers",
+      );
+      expect(await fixture.project(bob, second, output)).toBe("tacos");
+      expect((await fixture.publish(bob, output)).value).toBe("tacos");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it("publishes again for a fresh instance", async () => {
     const fixture = await setup();
     try {
@@ -517,7 +547,9 @@ describe("custody answers", () => {
       const earlier = await fixture.publish(bob, output);
 
       await fixture.setTerms("Where should we eat tomorrow?");
-      const second = fixture.runtimes.get(alice)!.getCell(S, "second-box");
+      const second = fixture.runtimes.get(alice)!.getCell(S, "room-cells").key(
+        "second",
+      );
       await fixture.seal(alice, "tacos", second);
       await fixture.seal(bob, "tacos", second);
       expect(await fixture.project(bob, second, output)).toBe("tacos");

@@ -305,6 +305,12 @@ cells the host names, never from the request:
   label and drops it, leaving only clauses the room space's readers hold. A
   value that never carried the policy is not the room's answer, whatever its
   label admits;
+- the seal's witness on the answer names this instance. The seal acts under
+  `{kind: "builtin", builtinId: "cfc-custody-seal", instance: D}`, so every
+  `TransformedBy` it mints names the instance it acted for, while a rule's
+  guard naming the seal alone still matches it. An answer computed over an
+  earlier instance's box, whose members may differ, is not this instance's
+  to release;
 - the room the seal inspected is the room it publishes for; and
 - the instance has no answer yet.
 
@@ -318,8 +324,17 @@ compute the slot's address and write there first, which blocks publication but
 shows nothing. A host shows the slot's value through `readCustodyAnswer`, never
 a link a room holds, which the room's members could point anywhere. A later
 publication is refused, so what the room shows cannot move once the answer is
-published, whatever later points the projector at other input. A fresh
-instance, a new terms document with new consents, has a slot of its own.
+published, whatever later points the projector at other input. That holds
+per instance: new terms are a new instance, with new consents, a slot of its
+own and an answer of its own, and a room whose terms its members can rewrite
+shows the new instance's answer once it is published. `cf-custody-answer`
+follows the room's terms, so it shows the answer of the instance the terms
+name.
+
+The seal writes a room's box link only into a document that exists: an absent
+document could be the address of a custody document the seal has yet to
+write, such as this instance's answer slot or a later instance's box, and a
+link the seal wrote there would pass for its own write.
 
 ### The blinded entry key
 
@@ -381,7 +396,11 @@ of it.
   requiring the seal's witness refuses these (see
   [Which box the room reads](#which-box-the-room-reads)), except the box of
   another instance under the same `P`, which the seal wrote and whose link the
-  seal may have written too; that is the multi-instance case above. The witness
+  seal may have written too; that is the multi-instance case above, and the
+  rule alone does not tell the instances apart. Publication does, since the
+  seal's witness names its instance (see
+  [One answer per instance](#one-answer-per-instance)), so a room that shows
+  only its published answer does not show another instance's. The witness
   still rests on writer policies on the box and on the releasing code's
   output, and on endorsed releasing code that takes no public selector
   parameters. The preview reports whether every rule of `P` requires the
@@ -400,12 +419,6 @@ of it.
   run left, and the seal refuses to publish it until the answer changes. Once
   the answer is published, what the room shows no longer follows the
   projector.
-- **Which instance's box an answer was computed from.** The witness says the
-  seal wrote what the projector read, not which instance's box it was. A
-  projector pointed at the box of an earlier instance under the same `P`
-  computes that instance's answer, and the seal publishes it as the current
-  instance's. A projector that checks its entries against the current terms
-  closes this, as the multi-instance limit above describes.
 - **A squatted answer slot.** A slot other code wrote first blocks the
   instance's publication, as a squatted box or anchor blocks sealing. It
   shows nothing, since a host reads only a slot the seal stamped.

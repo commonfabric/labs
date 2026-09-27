@@ -105,11 +105,24 @@ export class CFCustodyAnswer extends BaseElement {
   #subscribe(): void {
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
-    const { output } = this;
-    if (!output || !this.isConnected) return;
-    this.#unsubscribe = output.subscribe(() => {
+    const { output, terms } = this;
+    if (!output || !terms || !this.isConnected) return;
+    // New terms are a new instance, with an answer of its own to publish and
+    // show.
+    const cancelTerms = terms.subscribe(() => {
+      this.#generation++;
+      this.#published = false;
+      this.#answer = undefined;
+      this.requestUpdate();
       void this.#publish();
     });
+    const cancelOutput = output.subscribe(() => {
+      void this.#publish();
+    });
+    this.#unsubscribe = () => {
+      cancelTerms();
+      cancelOutput();
+    };
   }
 
   /** Asks the worker to publish; a request made while one runs runs after. */
@@ -141,13 +154,9 @@ export class CFCustodyAnswer extends BaseElement {
         policy: policy.ref(),
         output: output.ref(),
       })).instance;
-    } catch (error) {
+    } catch {
       // Refused: not yet released, not every seat has sealed, or already
-      // published. Only the last ends the requests.
-      if (
-        !(error instanceof Error) ||
-        !error.message.includes("already published")
-      ) return;
+      // published. The slot says which.
     }
     // Shown from the slot itself, whoever published it.
     let answer: JSONValue | undefined;

@@ -312,10 +312,34 @@ const MAX_STANCE_ARRAY_ITEMS = 64;
 
 const ENTRY_KEY_DOMAIN = "cfc-custody-seal/entry-key/v1\n";
 
+/** The witness a release rule names: the seal, of any instance. */
 const SEALED_BY = {
   type: CFC_ATOM_TYPE.TransformedBy,
   identity: { kind: "builtin", builtinId: CUSTODY_SEAL_WRITER },
 };
+
+/** The seal's identity when it acts for `instance`. */
+const sealIdentity = (instance: string) => ({
+  kind: "builtin" as const,
+  builtinId: CUSTODY_SEAL_WRITER,
+  instance,
+});
+
+/**
+ * What the seal's writes for `instance` carry. A witness over them names the
+ * instance, so an answer computed over another instance's box is told apart
+ * from one computed over this one's.
+ */
+const sealedFor = (instance: string) => ({
+  type: CFC_ATOM_TYPE.TransformedBy,
+  identity: sealIdentity(instance),
+});
+
+/** Whether `atom` is the seal's `TransformedBy`, for any instance. */
+const isSealStamp = (atom: unknown): boolean =>
+  isObjectNotArray(atom) && atom.type === CFC_ATOM_TYPE.TransformedBy &&
+  isObjectNotArray(atom.identity) && atom.identity.kind === "builtin" &&
+  atom.identity.builtinId === CUSTODY_SEAL_WRITER;
 
 /** Whether `value` is a record with exactly the keys named. */
 const hasExactKeys = (
@@ -791,6 +815,7 @@ const containsVariable = (pattern: unknown): boolean =>
 const absentOrSealed = (
   tx: IExtendedStorageTransaction,
   link: NormalizedFullLink,
+  instance: string,
 ): boolean => {
   if (
     tx.readValueOrThrow({ ...link, path: [] }, {
@@ -801,7 +826,9 @@ const absentOrSealed = (
   return (readStoredCfcMetadata(tx, link)?.labelMap.entries ?? []).some(
     (entry) =>
       entry.path.length === 0 && entry.origin === "derived" &&
-      (entry.label.integrity ?? []).some((atom) => deepEqual(atom, SEALED_BY)),
+      (entry.label.integrity ?? []).some((atom) =>
+        deepEqual(atom, sealedFor(instance))
+      ),
   );
 };
 
@@ -949,7 +976,7 @@ const linkRoomToBox = (
     scope: destination.scope,
   })?.labelMap.entries ?? []).some((entry) =>
     entry.path.length === 0 && entry.origin === "derived" &&
-    (entry.label.integrity ?? []).some((atom) => deepEqual(atom, SEALED_BY))
+    (entry.label.integrity ?? []).some(isSealStamp)
   );
   const current = tx.readValueOrThrow(destination, {
     meta: internalVerifierRead,
@@ -960,7 +987,7 @@ const linkRoomToBox = (
     : undefined;
   // A cell the seal links from sits in a room document that exists. An
   // instance is the digest of its terms, so a member can derive the address
-  // of an anchor or box the seal has yet to create; an absent document could
+  // of an anchor, box or answer slot the seal has yet to create; an absent document could
   // be one, and cannot be told apart from an ordinary one by its content.
   const documentExists = tx.readValueOrThrow({ ...destination, path: [] }, {
     meta: internalVerifierRead,
@@ -1708,7 +1735,7 @@ const inspect = async (
     if (entry !== undefined) {
       throw new Error("Custody seal refuses a second entry for this actor");
     }
-    if (!absentOrSealed(boxTx, box.getAsNormalizedFullLink())) {
+    if (!absentOrSealed(boxTx, box.getAsNormalizedFullLink(), instance)) {
       throw new Error("Custody seal refuses a box the seal did not create");
     }
   } finally {
@@ -1863,10 +1890,7 @@ export async function commitCustodySeal(
         }
         return;
       }
-      setCfcImplementationIdentity(tx, {
-        kind: "builtin",
-        builtinId: CUSTODY_SEAL_WRITER,
-      });
+      setCfcImplementationIdentity(tx, sealIdentity(instance));
       anchor.withTx(tx).set({ instance });
     },
     undefined,
@@ -1886,10 +1910,7 @@ export async function commitCustodySeal(
   const receiptTx = runtime.edit();
   let receipt: Cell<unknown>;
   try {
-    setCfcImplementationIdentity(receiptTx, {
-      kind: "builtin",
-      builtinId: CUSTODY_SEAL_WRITER,
-    });
+    setCfcImplementationIdentity(receiptTx, sealIdentity(instance));
     receipt = runtime.getCell(actor as never, {
       custodySealReceipt: state.eventId,
     }, {
@@ -1948,10 +1969,7 @@ export async function commitCustodySeal(
           throw new Error("Custody seal review changed before commit");
         }
       }
-      setCfcImplementationIdentity(tx, {
-        kind: "builtin",
-        builtinId: CUSTODY_SEAL_WRITER,
-      });
+      setCfcImplementationIdentity(tx, sealIdentity(instance));
       if (!absentOrAnchor(tx, anchorLink, anchorClause(policy), instance)) {
         throw new Error(
           "Custody seal refuses an anchor the seal did not create",
@@ -1959,7 +1977,7 @@ export async function commitCustodySeal(
       }
       box = boxCell(runtime, policy, instance, tx);
       const boxLink = box.getAsNormalizedFullLink();
-      if (!absentOrSealed(tx, boxLink)) {
+      if (!absentOrSealed(tx, boxLink, instance)) {
         throw new Error("Custody seal refuses a box the seal did not create");
       }
       // The one labeled read in this transaction: it attributes the entry's
@@ -1992,7 +2010,11 @@ export async function commitCustodySeal(
           state.requestedRoom.box,
           boxLink,
           room,
-          [boxLink, anchorLink],
+          [
+            boxLink,
+            anchorLink,
+            answerCell(runtime, policy, instance).getAsNormalizedFullLink(),
+          ],
           state.termsLink,
         );
       }
@@ -2076,6 +2098,7 @@ const releasedToRoom = (
   output: Cell<unknown>,
   policy: CfcModulePolicyRefAtom,
   room: string,
+  instance: string,
 ): { value: JSONValue; released: boolean } => {
   const resolved = output.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
   const value = snapshotJsonValue(
@@ -2090,6 +2113,8 @@ const releasedToRoom = (
   const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(
     output.withTx(tx),
   );
+  // The value's own entries: a link's entry, which labels a pointer crossed
+  // on the way to the value, is a `followRef` entry in the view.
   const entries = (view?.entries ?? []).filter((entry) =>
     entry.path.length === 0 &&
     (entry.observes === undefined || entry.observes === "value")
@@ -2102,11 +2127,23 @@ const releasedToRoom = (
   ) {
     return { value, released: false };
   }
+  // The seal witnessed this instance's writes and no other's: every witness
+  // naming the seal names this instance, and one does.
+  const integrity = entries.flatMap((entry) => entry.label.integrity ?? []);
+  const sealWitnesses = integrity.flatMap((atom) =>
+    isObjectNotArray(atom) && atom.type === CFC_ATOM_TYPE.TransformedBy &&
+      isSealStamp(atom.inputWitness)
+      ? [atom.inputWitness]
+      : []
+  );
+  if (
+    sealWitnesses.length === 0 ||
+    !sealWitnesses.every((witness) => deepEqual(witness, sealedFor(instance)))
+  ) {
+    return { value, released: false };
+  }
   const result = evaluateExchangeRules(
-    {
-      confidentiality,
-      integrity: entries.flatMap((entry) => entry.label.integrity ?? []),
-    },
+    { confidentiality, integrity },
     undefined,
     {
       modulePolicyResolver: (reference) =>
@@ -2135,12 +2172,17 @@ const releasedToRoom = (
 const sealedAnswer = (
   tx: IExtendedStorageTransaction,
   link: NormalizedFullLink,
+  instance: string,
 ): { value: JSONValue } | undefined => {
   const stored = tx.readValueOrThrow({ ...link, path: [] }, {
     meta: internalVerifierRead,
   });
   if (stored === undefined) return undefined;
-  if (!absentOrSealed(tx, link) || !isObjectNotArray(stored)) {
+  if (
+    !absentOrSealed(tx, link, instance) || !isObjectNotArray(stored) ||
+    !hasExactKeys(stored as Record<string, unknown>, ["answer", "instance"]) ||
+    (stored as { instance?: unknown }).instance !== instance
+  ) {
     throw new Error("Custody answer refuses a slot the seal did not write");
   }
   return { value: snapshotJsonValue((stored as { answer?: unknown }).answer) };
@@ -2160,11 +2202,12 @@ export async function readCustodyAnswer(
   const runtime = room.terms.runtime;
   await syncResolved(room.terms);
   const { policy, terms } = await inspectRoom(runtime, room, []);
-  const slot = answerCell(runtime, policy, hashStringOf(terms));
+  const instance = hashStringOf(terms);
+  const slot = answerCell(runtime, policy, instance);
   await slot.sync();
   const tx = runtime.edit();
   try {
-    return sealedAnswer(tx, slot.getAsNormalizedFullLink())?.value;
+    return sealedAnswer(tx, slot.getAsNormalizedFullLink(), instance)?.value;
   } finally {
     tx.abort();
   }
@@ -2221,13 +2264,10 @@ export async function publishCustodyAnswer(
         throw new Error("Custody answer's room changed while publishing");
       }
     }
-    setCfcImplementationIdentity(tx, {
-      kind: "builtin",
-      builtinId: CUSTODY_SEAL_WRITER,
-    });
+    setCfcImplementationIdentity(tx, sealIdentity(instance));
     const answer = answerCell(runtime, policy, instance, tx);
     const answerLink = answer.getAsNormalizedFullLink();
-    if (sealedAnswer(tx, answerLink) !== undefined) {
+    if (sealedAnswer(tx, answerLink, instance) !== undefined) {
       throw new Error("Custody answer is already published for this instance");
     }
     const anchorLink = anchor.getAsNormalizedFullLink();
@@ -2237,7 +2277,7 @@ export async function publishCustodyAnswer(
     });
     if (
       !absentOrAnchor(tx, anchorLink, anchorClause(policy), instance) ||
-      !absentOrSealed(tx, boxLink) || !isObjectNotArray(entries) ||
+      !absentOrSealed(tx, boxLink, instance) || !isObjectNotArray(entries) ||
       Object.keys(entries).length !== seats
     ) {
       throw new Error("Custody answer requires every seat to have sealed");
@@ -2248,6 +2288,7 @@ export async function publishCustodyAnswer(
       output,
       policy,
       space,
+      instance,
     );
     if (!released) {
       throw new Error(
