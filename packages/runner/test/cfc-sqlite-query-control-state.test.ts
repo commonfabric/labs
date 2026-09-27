@@ -383,6 +383,81 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       .toBe(false);
   });
 
+  it("settles a query whose parameter is labeled from its first issue", async () => {
+    // The cases above read the parameter out of a first query's rows, so the
+    // first issue runs with an empty, unlabeled parameter and the labeled one
+    // comes later. A pane opened with a pick already stored issues labeled
+    // from the start: the transaction that CREATES the result store then
+    // carries the parameter's clause, and the settle that writes the rows
+    // must still carry nothing of its own. It carried that clause through
+    // the store's own link resolution, so every row was refused at its root.
+
+    const db = labeledDb();
+    await seedMessages(db);
+    const seedTx = runtime.edit();
+    const picked = runtime.getCell<string>(space, "first-issue-picked", {
+      type: "string",
+      ifc: { confidentiality: KEY_CLAUSE },
+      // deno-lint-ignore no-explicit-any -- `ifc` is not on the schema type
+    } as any, seedTx);
+    picked.set("c-alpha");
+    expect((await seedTx.commit()).error).toBeUndefined();
+
+    const { commonfabric: cf } = createTrustedBuilder(runtime);
+    const parameterOf = parameterLift((pick) => String(pick ?? ""));
+    const testPattern = cf.pattern<{ picked: string }>(({ picked }) => {
+      const bodies = cf.sqliteQuery.asScope("session")(
+        // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
+        {
+          db,
+          reactOn: db,
+          sql: BODIES_SQL,
+          params: parameterOf(picked),
+        } as any,
+      );
+      return { bodies };
+    });
+    const tx = runtime.edit();
+    const resultCell = runtime.getCell(
+      space,
+      "first-issue",
+      testPattern.resultSchema,
+      tx,
+    );
+    const result = runtime.run(
+      tx,
+      testPattern,
+      // deno-lint-ignore no-explicit-any -- a cell stands in for the argument
+      { picked: picked as any },
+      resultCell,
+    );
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit()).error).toBeUndefined();
+    // deno-lint-ignore no-explicit-any -- the builtin's state, as it writes it
+    const bodies = result.key("bodies") as Cell<any>;
+
+    const state = await waitForCellValue<QueryState<BodyRow>>(
+      runtime,
+      bodies,
+      (value) =>
+        (value?.result ?? []).length === 2 || value?.error !== undefined,
+    );
+    expect(state.error).toBeUndefined();
+    expect(state.pending).toBe(false);
+    expect(state.result).toEqual([{ body: "first" }, { body: "second" }]);
+    // The first issue did carry the parameter's clause, which is what makes
+    // this a different case from the ones above.
+    expect(hasClause(declaredAt(bodies, ["requestHash"]), KEY_CLAUSE))
+      .toBe(true);
+    // The rows are the columns' to label, at the root as at the column: a
+    // fix that declared the parameter's clause on each row would settle this
+    // query too.
+    const row = bodies.key("result").key(0) as Cell<unknown>;
+    expect(hasClause(declaredAt(row, []), KEY_CLAUSE)).toBe(false);
+    expect(hasClause(declaredAt(row, ["body"]), KEY_CLAUSE)).toBe(false);
+    expect(hasClause(declaredAt(row, ["body"]), BODY_CLAUSE)).toBe(true);
+  });
+
   describe("a shared result", () => {
     // Space scope, where one materialization serves every reader of the
     // space. A session-scoped result is per-reader, so its membership tells

@@ -295,7 +295,17 @@ minted into the same entries, not the mechanism.
      consumes the target's content but not the slot's membership `J`;
      §2's "probe **or dereference**" overstated what the shipped row-3/
      row-4 boundary distinguishes, and the probe/standalone-read half is
-     what landed.
+     what landed. The resolver's own probes (`dereferenceResolutionProbe`,
+     from `probeAt` in `link-resolution.ts`) sit on the machinery side of
+     the same boundary whether or not they find a link to follow: the
+     caller's read at the resolved position is the observation, and it
+     consumes the `value`/`shape` twins, which carry the same `J`. Where
+     that read is itself excluded — a write destination's, §18.6.2 — a
+     probe consuming the `followRef` twin would carry the `J` of the
+     slot's creation onto every document the transaction writes. The
+     row-3 observations stay standalone and consume templates in full:
+     `readMaybeLink`, raw link handles, and the probes the schema and
+     traversal walks make at a slot they resolved to.
 - **Stage B (Stage-2 full population; one PR, after A):** the
   `/cfc/labels/...` template mints per §5 + `inspectConfLabel` consuming
   them (upgrading WP7's computed-in-hand labels to persisted templates),
