@@ -5931,10 +5931,18 @@ const applyCommitTransaction = (
     }
     return true;
   };
-  // Every read's path is checked before any read's staleness is, so that a
-  // malformed path is refused as such whatever else the commit carries.
-  for (const read of commit.reads.confirmed) requireReadPath(read);
-  for (const read of commit.reads.pending) requireReadPath(read);
+  // Every read is checked before any read's staleness is, so that a malformed
+  // read is refused as such whatever else the commit carries: its path, and a
+  // confirmed read's seq or a pending read's layers and basis.
+  for (const read of commit.reads.confirmed) {
+    requireReadPath(read);
+    requireConfirmedReadSeq(read);
+  }
+  for (const read of commit.reads.pending) {
+    requireReadPath(read);
+    pendingReadLayers(read);
+    requirePendingReadBasisSeq(engine, read);
+  }
   let resolvedPendingReads: Array<{ localSeq: number; seq: number }>;
   const conflictScans: ConflictScans = new Map();
   try {
@@ -6699,51 +6707,80 @@ const requireReadPath = (
 };
 
 /**
- * Validated `basisSeq` of a pending read — the CT-1910 true-basis shape — or
- * `undefined` for the legacy shape. In the SERVER's space-log seq space (an
- * accepted-commit `seq`, NOT the session's localSeq space); see
+ * Returns whether `seq` has the shape of a position in the space's commit log:
+ * a safe integer of zero or more. It does not check that the log has reached
+ * that position. Negative zero is not one: it compares equal to `0`, but the
+ * SQLite binding throws on it rather than binding it as `0`.
+ */
+const isLogSeq = (seq: unknown): boolean =>
+  Number.isSafeInteger(seq) && ((seq as number) > 0 || Object.is(seq, 0));
+
+/**
+ * Helper for `applyCommitTransaction()`, which throws `ProtocolError` unless
+ * the `seq` of confirmed read `read` has the shape of a position in the log,
+ * as `isLogSeq()` decides. The conflict check holds the read stale by the
+ * revisions it finds after that `seq`, and a value of any other kind decides
+ * that by accident: `NaN` or a missing `seq` finds no revision, so the read is
+ * never stale, and `-0` throws from the SQLite binding.
+ */
+const requireConfirmedReadSeq = (
+  read: { id: string; seq: number },
+): void => {
+  if (!isLogSeq(read.seq)) {
+    throw new ProtocolError(
+      debugStr`confirmed read of $quote${read.id} names a malformed seq: $quote${read.seq}`,
+    );
+  }
+};
+
+/**
+ * Helper for `applyCommitTransaction()`, which throws `ProtocolError` unless a
+ * pending read's `basisSeq` — the CT-1910 true-basis shape, absent in the
+ * legacy one — has the shape of a position in the log, as `isLogSeq()`
+ * decides, and is not past its head. It is in the SERVER's space-log seq
+ * space (an accepted-commit `seq`, NOT the session's localSeq space); see
  * {@link PendingRead.basisSeq}. A basis ahead of the log claims knowledge
  * the server never produced. (A basis AT head is legal and yields an empty
  * scan — the same client-trusted claim a confirmed read at head makes.)
  */
-const pendingReadBasisSeq = (
+const requirePendingReadBasisSeq = (
   engine: Engine,
   read: { id: string; basisSeq?: number },
-): number | undefined => {
+): void => {
   const { basisSeq } = read;
   if (basisSeq === undefined) {
-    return undefined;
+    return;
   }
-  if (!Number.isInteger(basisSeq) || basisSeq < 0) {
+  if (!isLogSeq(basisSeq)) {
     throw new ProtocolError(
-      `pending read on ${read.id} names a malformed basisSeq: ${basisSeq}`,
+      debugStr`pending read on $quote${read.id} names a malformed basisSeq: $quote${basisSeq}`,
     );
   }
   if (basisSeq > serverSeq(engine)) {
     throw new ProtocolError(
-      `pending read on ${read.id} claims a basisSeq ahead of the log: ${basisSeq}`,
+      debugStr`pending read on $quote${read.id} claims a basisSeq ahead of the log: $quote${basisSeq}`,
     );
   }
-  return basisSeq;
 };
 
-// Shared normalization/validation for a pending read's dependency set: a
-// non-empty array (or scalar) of integer localSeqs. Malformed shapes are a
-// protocol violation regardless of which validator (ordinary commit or
-// scheduler observation) encounters them.
+/**
+ * Returns the layers a pending read's `localSeq` names, as an array, and throws
+ * `ProtocolError` unless it names at least one and each is an integer other
+ * than `-0`, which the SQLite binding throws on.
+ */
 const pendingReadLayers = (
   read: { id: string; localSeq: number | number[] },
 ): number[] => {
   const layers = Array.isArray(read.localSeq) ? read.localSeq : [read.localSeq];
   if (layers.length === 0) {
     throw new ProtocolError(
-      `pending read on ${read.id} names no localSeq`,
+      debugStr`pending read on $quote${read.id} names no localSeq`,
     );
   }
   for (const layer of layers) {
-    if (!Number.isInteger(layer)) {
+    if (!Number.isInteger(layer) || Object.is(layer, -0)) {
       throw new ProtocolError(
-        `pending read on ${read.id} names a non-integer localSeq`,
+        debugStr`pending read on $quote${read.id} names a malformed localSeq: $quote${layer}`,
       );
     }
   }
@@ -6804,10 +6841,10 @@ const resolvePendingReads = (
     // basisSeq) keeps the max-dependency basis, so the over-advance
     // deviation persists for it alone
     // (docs/specs/memory-v2/09-invariants.md, INV-1).
-    // The declared basis is validated whether or not the scan runs: an
-    // identity commit's reads are exempt from staleness, not from the
-    // protocol.
-    const trueBasis = pendingReadBasisSeq(engine, read);
+    // `applyCommitTransaction()` has validated the declared basis, whether
+    // or not this scan runs: an identity commit's reads are exempt from
+    // staleness, not from the protocol.
+    const trueBasis = read.basisSeq;
     if (!options.checkStaleness) continue;
     const conflictSeq = trueBasis !== undefined
       ? findConflictSeq(
