@@ -5987,6 +5987,51 @@ describe("runtime-processor", () => {
       });
     });
 
+    describe("handleRegisterSpaceHostDetailed()", () => {
+      it("forwards to the runtime and reports each refusal with its reason", () => {
+        const calls: Array<[string, string]> = [];
+        const registrations = {
+          "http://accepted.test/": { accepted: true },
+          "http://other.test/": {
+            accepted: false,
+            reason: "known-different-host",
+            existingHost: "http://known.test/",
+          },
+          "http://late.test/": { accepted: false, reason: "already-opened" },
+          "http://local.test/": {
+            accepted: false,
+            reason: "no-remote-resolution",
+          },
+          "http://plain.test/": { accepted: false, reason: "unspecified" },
+        } as const;
+        const processor = buildProcessor({
+          runtime: {
+            registerSpaceHostDetailed: (
+              space: string,
+              host: keyof typeof registrations,
+            ) => {
+              calls.push([space, host]);
+              return registrations[host];
+            },
+          },
+        });
+        for (
+          const host of Object.keys(registrations) as Array<
+            keyof typeof registrations
+          >
+        ) {
+          expect(processor.handleRegisterSpaceHostDetailed({
+            type: RequestType.RegisterSpaceHostDetailed,
+            space: "did:key:z6Mk-ipc-detailed",
+            host,
+          })).toEqual({ registration: registrations[host] });
+        }
+        expect(calls.map(([, host]) => host)).toEqual(
+          Object.keys(registrations),
+        );
+      });
+    });
+
     describe("setMemoryMessageCompression()", () => {
       it("forwards the requested mode to storage", async () => {
         const modes: boolean[] = [];

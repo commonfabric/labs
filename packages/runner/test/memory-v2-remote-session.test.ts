@@ -447,6 +447,69 @@ describe("StorageManager.registerSpaceHost", () => {
       .toThrow(`Invalid host for space ${spaceLearned}`);
   });
 
+  describe("registerSpaceHostDetailed()", () => {
+    it("reports an accepted hint and its confirmation without a reason", async () => {
+      const manager = await makeManager();
+      expect(
+        manager.registerSpaceHostDetailed(spaceLearned, "http://host-b.test"),
+      ).toEqual({ accepted: true });
+      expect(
+        manager.registerSpaceHostDetailed(spaceLearned, "http://host-b.test/"),
+      ).toEqual({ accepted: true });
+      expect(
+        manager.registerSpaceHostDetailed(spaceSeeded, "http://host-seed.test"),
+      ).toEqual({ accepted: true });
+    });
+
+    it("names the seeded host when a hint would re-point a seeded space", async () => {
+      const manager = await makeManager();
+      expect(
+        manager.registerSpaceHostDetailed(spaceSeeded, "http://host-evil.test"),
+      ).toEqual({
+        accepted: false,
+        reason: "known-different-host",
+        existingHost: "http://host-seed.test/",
+      });
+    });
+
+    it("names the accepted host when a later hint differs from it", async () => {
+      const manager = await makeManager();
+      expect(manager.registerSpaceHost(spaceLearned, "http://host-b.test"))
+        .toBe(true);
+      expect(
+        manager.registerSpaceHostDetailed(spaceLearned, "http://host-c.test"),
+      ).toEqual({
+        accepted: false,
+        reason: "known-different-host",
+        existingHost: "http://host-b.test/",
+      });
+    });
+
+    it("throws on a malformed host, naming the space", async () => {
+      const manager = await makeManager();
+      expect(() =>
+        manager.registerSpaceHostDetailed(spaceLearned, "not a url")
+      ).toThrow(`Invalid host for space ${spaceLearned}`);
+    });
+
+    it("answers no-remote-resolution from an emulated manager", async () => {
+      const signer = await Identity.fromPassphrase("register-space-host");
+      const manager = StorageManager.emulate({ as: signer });
+      try {
+        expect(
+          manager.registerSpaceHostDetailed(
+            spaceLearned,
+            "http://host-b.test",
+          ),
+        ).toEqual({ accepted: false, reason: "no-remote-resolution" });
+        expect(manager.registerSpaceHost(spaceLearned, "http://host-b.test"))
+          .toBe(false);
+      } finally {
+        await manager.close();
+      }
+    });
+  });
+
   it("rejects an unusable first hint without fixing the route", async () => {
     const manager = await makeManager();
     for (

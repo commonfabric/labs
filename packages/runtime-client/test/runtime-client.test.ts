@@ -851,6 +851,56 @@ describe("RuntimeClient", () => {
     });
   });
 
+  describe("registerSpaceHostDetailed", () => {
+    function clientAnswering(registration: unknown) {
+      const requests: unknown[] = [];
+      const conn = {
+        on: () => {},
+        request: (message: unknown) => {
+          requests.push(message);
+          return Promise.resolve({ registration });
+        },
+      } as unknown as never;
+      const client = new (RuntimeClient as unknown as {
+        new (conn: never, options: unknown): RuntimeClient;
+      })(conn, undefined);
+      return { client, requests };
+    }
+
+    const space = "did:key:z6Mk-runtime-client-routed-space";
+
+    it("sends the hint and returns the worker's registration", async () => {
+      const { client, requests } = clientAnswering({ accepted: true });
+
+      expect(await client.registerSpaceHostDetailed(space, "http://b.test/"))
+        .toEqual({ accepted: true });
+      expect(requests).toEqual([{
+        type: RequestType.RegisterSpaceHostDetailed,
+        space,
+        host: "http://b.test/",
+      }]);
+    });
+
+    it("returns each refusal with its reason", async () => {
+      for (
+        const refusal of [
+          {
+            accepted: false,
+            reason: "known-different-host",
+            existingHost: "http://known.test/",
+          },
+          { accepted: false, reason: "already-opened" },
+          { accepted: false, reason: "no-remote-resolution" },
+          { accepted: false, reason: "unspecified" },
+        ]
+      ) {
+        const { client } = clientAnswering(refusal);
+        expect(await client.registerSpaceHostDetailed(space, "http://b.test/"))
+          .toEqual(refusal);
+      }
+    });
+  });
+
   describe("hasPendingWrites", () => {
     // The constructor registers connection listeners; capture them so the
     // pending-writes notification can be driven directly, no worker needed.
