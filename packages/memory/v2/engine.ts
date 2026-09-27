@@ -7045,11 +7045,10 @@ const findConflictSeq = (
   }
 
   // Kept patches decide a read by comparing `seq`s here, which agrees with the
-  // statements' `seq > :after_seq` for a finite numeric basis and not for
-  // every value a read can carry, so a read at any other basis is decided on
-  // its own.
-  const shared = Number.isFinite(afterSeq) ? document : undefined;
-  const kept = shared?.patches;
+  // statements' `seq > :after_seq` because every basis is a safe integer: a
+  // seq the engine assigned, or one a read names, which
+  // `applyCommitTransaction()` refuses in any other form.
+  const kept = document?.patches;
   if (kept !== undefined && kept.basis <= afterSeq) {
     const seq = newestPatchConflict(kept.indexes, readPath, nonRecursive);
     return seq !== null && seq > afterSeq ? seq : null;
@@ -7077,8 +7076,8 @@ const findConflictSeq = (
       }
     }
   }
-  if (shared !== undefined) {
-    shared.patches = { basis: afterSeq, indexes };
+  if (document !== undefined) {
+    document.patches = { basis: afterSeq, indexes };
   }
   return null;
 };
