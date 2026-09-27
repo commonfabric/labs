@@ -17,6 +17,20 @@ two-tier:
 - **Tier-2** (`patch`): path-**aware**. A patch conflicts with a read only if a
   touched path overlaps the read path.
 
+The conflict a read reports is the newest `set` or `delete` after its basis,
+whatever its path, when there is one, and otherwise the newest overlapping
+patch.
+
+The reads of one commit commonly share a document and a basis — a per-key write
+of K keys reads K paths of one map — so a scan of the patches after a basis
+indexes their touched paths, newest first, and a scan that reaches the last of
+them serves every later read of the same document, basis and exclusion. Such a
+read is decided from the index in time proportional to its path's depth,
+whatever the number of patches. A read that conflicts stops the scan at the
+patch it conflicts with. The index decides exactly what the predicates the
+sections below name, `patchOverlapsRead` and `patchOverlapsNonRecursiveRead`,
+decide; they remain the definition of a Tier-2 conflict.
+
 The bug this note addresses: two writers touching **different keys of the same
 container** (e.g. `votes.alice` and `votes.bob`) collided at Tier-2 even though
 neither logically depended on the other, exhausting the retry budget and dropping
@@ -100,9 +114,27 @@ write touching the read path **itself or an ancestor** — `isPrefixPath(touched
 readPath)`. This keeps the **parent-injecting** `touchedPathsForPatch`, so a key
 `add`/`remove` (which injects the container's path) still conflicts with a keyset
 reader — the shape it observed changed. A disjoint deep-value `replace` strictly
-*below* the read path no longer over-conflicts. The shallow predicate is a strict
-subset of the recursive one, so it can only remove spurious conflicts, never miss
-a genuine one.
+*below* the read path does not conflict.
+
+The shallow predicate is not a subset of the recursive one. The parent a key
+`add` or `remove` injects lies above every sibling of that key, so a shallow
+read of a sibling conflicts with it — an `add` at `/value/c` against a shallow
+read of `/value/b` — where a recursive read of the sibling, matched on leaf
+paths alone (§1), does not. The shape reader pays a retry for a key set it did
+not observe.
+
+What a shape read observed changes only by a write at or above its path, or by
+a change to its path's key set, which a patch reports by injecting the path as a
+parent: `add`, `remove` and `move` always, and a mergeable op when it carries
+`createsKey` (below). Whether a patch changes a key set is decided by its
+writer, from the writer's base — `add` rather than `replace` for a key the base
+lacks, `createsKey` on a mergeable op whose path the base lacks — so the match
+is exact where that base is current for the key. It is not where a key was
+removed durably after the writer's base was taken and the writer, not reading
+the key, writes it again: its `replace`, or its mergeable op without
+`createsKey`, creates the key, and a shallow read of the parent taken after the
+removal does not conflict with it. That is an under-approximation, of the kind
+INV-2 in [09-invariants.md](09-invariants.md) rules out.
 
 ### Mergeable creates and parent shape readers
 
@@ -126,12 +158,13 @@ a flagged op. So a cross-session shape-only reader of the parent now conflicts
 with a create-from-absent mergeable op, but not with an append to an
 already-present child.
 
-The writer's base is authoritative for the "never miss a genuine conflict"
-guarantee: the *first* commit to create a key necessarily saw it absent and sets
-the flag, so a shape reader whose base predates the create always conflicts; a
-later append to the now-present key does not carry the flag. A stale base can
-only set the flag when the key already existed durably, which over-conflicts a
-parent shape reader conservatively (an extra retry), never missing one.
+The *first* commit to create a key necessarily saw it absent and sets the flag,
+so a shape reader whose base predates the create always conflicts; a later
+append to the now-present key does not carry the flag. A stale base can set the
+flag when the key already existed durably, which over-conflicts a parent shape
+reader conservatively (an extra retry). A stale base can also hold a key that
+has since been removed, and an append re-creating it then carries no flag: the
+under-approximation the section above describes.
 
 (Recursive readers of the parent already conflict via the leaf-only matcher —
 the read path prefixes the created leaf — independent of `createsKey`; the flag
