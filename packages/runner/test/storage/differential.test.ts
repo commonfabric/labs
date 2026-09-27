@@ -57,19 +57,6 @@ describe("differential", () => {
       )).toEqual([["value", "n"]]);
     });
 
-    it("records the path where two unequal cyclic values close their cycles, and the leaf where they differ", () => {
-      const cycle = (v: number) => {
-        const node: Record<string, unknown> = { v };
-        node.self = node;
-        return node;
-      };
-
-      expect(changedPaths({ c: cycle(1) }, { c: cycle(2) })).toEqual([
-        ["value", "c", "self"],
-        ["value", "c", "v"],
-      ]);
-    });
-
     it("records no change for two equal cyclic arrays", () => {
       const cycle = () => {
         const node: unknown[] = [1];

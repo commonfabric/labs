@@ -1,9 +1,9 @@
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import {
   isFabricObjectOrArray,
-  isFabricPlainContainer,
   isFabricSpecialObject,
   valueEqual,
+  valueEqualByWalk,
 } from "@commonfabric/data-model";
 import {
   resolveScopeKey,
@@ -94,32 +94,12 @@ const pushChangedPath = (
   paths.push(currentPath.slice(0, depth));
 };
 
-/**
- * Helper for {@link addStateChange}, which walks `before` and `after` in step
- * and records the path of every position where they differ.
- *
- * The walk is the whole of the comparison: a pair both values share is passed
- * over by identity, and a pair holding the same content is walked without
- * recording anything. So comparing a document with a copy-on-write revision of
- * itself costs the edited spine, and comparing it with a separately decoded
- * copy costs one walk of the whole.
- *
- * Two things stop the walk short of reading a pair by its keys, and ask
- * `valueEqual()` instead, recording a change at the pair's own path when it
- * says the two differ. A pair that is not two arrays or two plain records is
- * one the walk cannot read by key without misreading it. And a pair whose
- * `after` side is already open on the walk's path closes a cycle, which
- * walking would descend forever; `valueEqual()` compares a cycle where the
- * walk cannot. `ancestors` holds the `after` containers open on the path, and
- * one side suffices: the walk descends only as deep as both values reach.
- */
 const collectChangedPaths = (
   before: FabricValue,
   after: FabricValue,
   currentPath: string[],
   depth: number,
   paths: string[][],
-  ancestors: object[],
 ): void => {
   if (Object.is(before, after)) {
     return;
@@ -131,11 +111,17 @@ const collectChangedPaths = (
   }
 
   if (isFabricObjectOrArray(before) && isFabricObjectOrArray(after)) {
+    // By walk, so that the subtrees a revision shares with what it revised
+    // are settled by identity rather than hashed whole at every level.
+    if (valueEqualByWalk(before, after)) {
+      return;
+    }
+
     // A `FabricSpecialObject` keeps its state in private fields, so the
     // key-walk below sees zero own-keys and would wrongly report "no change"
-    // for two that differ. Compare it by content, record a change at this
-    // path when it differs, and don't decompose; otherwise a `FabricBytes`
-    // value updated in place never reaches reactive consumers.
+    // even though `valueEqual` above already established they differ. Record a
+    // change at this path and don't decompose. (CT-1770: a `FabricBytes` value
+    // updated in place otherwise never reaches reactive consumers.)
     //
     // The `FabricPrimitive` vs `FabricInstance` distinction matters here even
     // though both are handled the same way: a `FabricPrimitive` genuinely IS an
@@ -154,34 +140,15 @@ const collectChangedPaths = (
     if (
       isFabricSpecialObject(before) || isFabricSpecialObject(after)
     ) {
-      if (!valueEqual(before, after)) {
-        pushChangedPath(paths, currentPath, depth);
-      }
+      pushChangedPath(paths, currentPath, depth);
       return;
     }
 
-    if (!isFabricPlainContainer(before) || !isFabricPlainContainer(after)) {
-      if (!valueEqual(before, after)) {
-        pushChangedPath(paths, currentPath, depth);
-      }
-      return;
-    }
-    const beforeIsArray = Array.isArray(before);
-    const afterIsArray = Array.isArray(after);
-
-    if (ancestors.includes(after)) {
-      if (!valueEqual(before, after)) {
-        pushChangedPath(paths, currentPath, depth);
-      }
-      return;
-    }
-
-    if (beforeIsArray && afterIsArray) {
+    if (Array.isArray(before) && Array.isArray(after)) {
       if (before.length !== after.length) {
         pushChangedPath(paths, currentPath, depth);
       }
 
-      ancestors.push(after);
       const maxLength = Math.max(before.length, after.length);
       for (let index = 0; index < maxLength; index += 1) {
         const beforeHas = index in before;
@@ -198,7 +165,6 @@ const collectChangedPaths = (
             currentPath,
             depth + 1,
             paths,
-            ancestors,
           );
           continue;
         }
@@ -208,24 +174,21 @@ const collectChangedPaths = (
           pushChangedPath(paths, currentPath, depth + 1);
         }
       }
-      ancestors.pop();
       currentPath.length = depth;
       return;
     }
 
-    if (beforeIsArray !== afterIsArray) {
+    if (Array.isArray(before) !== Array.isArray(after)) {
       pushChangedPath(paths, currentPath, depth);
       return;
     }
 
-    // Both are plain records here: `FabricSpecialObject`s, arrays, and
-    // everything else returned above. Narrowing does not carry those
-    // exclusions forward, so name it.
+    // Both are plain objects here: `FabricSpecialObject`s and arrays returned
+    // above. Narrowing does not carry those exclusions forward, so name it.
     const beforeObject = before as FabricPlainObject;
     const afterObject = after as FabricPlainObject;
     const beforeKeys = Object.keys(beforeObject);
     const afterKeys = Object.keys(afterObject);
-    ancestors.push(after);
 
     if (beforeKeys.length === afterKeys.length) {
       let sameKeys = true;
@@ -245,10 +208,8 @@ const collectChangedPaths = (
             currentPath,
             depth + 1,
             paths,
-            ancestors,
           );
         }
-        ancestors.pop();
         currentPath.length = depth;
         return;
       }
@@ -266,7 +227,6 @@ const collectChangedPaths = (
           currentPath,
           depth + 1,
           paths,
-          ancestors,
         );
         continue;
       }
@@ -281,7 +241,6 @@ const collectChangedPaths = (
       currentPath[depth] = key;
       pushChangedPath(paths, currentPath, depth + 1);
     }
-    ancestors.pop();
     currentPath.length = depth;
     return;
   }
@@ -297,7 +256,7 @@ const addStateChange = (
   before: State["is"] | undefined,
   after: State["is"] | undefined,
 ): void => {
-  if (Object.is(before, after)) {
+  if (valueEqualByWalk(before, after)) {
     return;
   }
 
@@ -311,7 +270,7 @@ const addStateChange = (
   }
 
   const paths: string[][] = [];
-  collectChangedPaths(before, after, [], 0, paths, []);
+  collectChangedPaths(before, after, [], 0, paths);
   if (paths.length === 0) {
     return;
   }
