@@ -164,11 +164,8 @@ describe("mutable-path-write", () => {
             delete: true,
           });
 
-          expect(result.ok).toEqual({
-            root,
-            previousValue: undefined,
-            changed: false,
-          });
+          expect(result.ok?.root).toBe(root);
+          expect(result.ok?.changed).toBe(false);
           expect(Object.keys(root)).toEqual(["n", "list"]);
           expect(root.list).toBe(list);
         },
@@ -255,6 +252,76 @@ describe("mutable-path-write", () => {
         );
 
         expect(result.ok?.root).toEqual({ box: { length: 2 ** 32 } });
+      });
+    });
+
+    describe("what a write finds", () => {
+      it("reports a slot the value only inherits as absent, with no previous value", () => {
+        const plan = planMutablePathWrite(
+          { value: { x: 1 } },
+          at(["value", "toString"]),
+          1,
+        ).ok!;
+
+        expect(plan.present).toBe(false);
+        expect(plan.previousValue).toBeUndefined();
+      });
+
+      it("reports a missing root absent, for a write of the whole root and for one beneath it", () => {
+        for (const path of [[], ["value", "b"]]) {
+          const plan = planMutablePathWrite(undefined, at(path), 1).ok!;
+
+          expect(plan.present).toBe(false);
+          expect(plan.apply().previousActivityPresent).toBe(false);
+        }
+      });
+
+      it("returns the root as where a write creating it first changes the document", () => {
+        const result = planMutablePathWrite(
+          undefined,
+          at(["value", "b"]),
+          1,
+        ).ok!.apply();
+
+        expect(result.activityPath).toEqual([]);
+        expect(result.previousActivityValue).toBeUndefined();
+        expect(result.root).toEqual({ value: { b: 1 } });
+      });
+
+      it("returns the deepest container already there as where a write creating missing containers first changes the document", () => {
+        // `toString` is a name the record only inherits, so the write
+        // creates it, and the change first shows at `value`.
+
+        const result = planMutablePathWrite(
+          { value: { x: 1 } },
+          at(["value", "toString", "y"]),
+          1,
+        ).ok!.apply();
+
+        expect(result.activityPath).toEqual(["value"]);
+        expect(result.previousActivityPresent).toBe(true);
+      });
+
+      it("returns the value where the write first changes the document as it was, though the write changes it in place", () => {
+        const root = { value: { a: 1 } };
+
+        const result = planMutablePathWrite(
+          root,
+          at(["value", "b", "c"]),
+          1,
+        ).ok!.apply();
+
+        expect(result.previousActivityValue).toEqual({ a: 1 });
+        expect(root.value).toEqual({ a: 1, b: { c: 1 } });
+      });
+
+      it("stores `-` as a plain key of a root the write creates", () => {
+        // Only a container created beneath the root is an array for `-`.
+
+        const result = planMutablePathWrite(undefined, at(["-"]), 5).ok!
+          .apply();
+
+        expect(result.root).toEqual({ "-": 5 });
       });
     });
 

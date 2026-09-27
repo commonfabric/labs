@@ -2121,12 +2121,16 @@ export class V2StorageTransaction implements IStorageTransaction {
     this.#preserveForReaders(doc);
     const current = doc.current;
     // Everything the write needs to know about the document before it is
-    // changed comes from the plan, read BEFORE the write: the write mutates
-    // `current.value` in place on the second-and-later write to this doc
-    // within a transaction (`cloneForMutation({ force: false })`
-    // short-circuits to identity on an already-mutable root), so a read of
-    // `current.value` after it would observe the post-write state and
-    // silently mis-report the previous values to the reactivity log.
+    // changed is read BEFORE the write, by the plan and by `apply()` ahead of
+    // its mutation: the write mutates `current.value` in place on the
+    // second-and-later write to this doc within a transaction
+    // (`cloneForMutation({ force: false })` short-circuits to identity on an
+    // already-mutable root), so a read of `current.value` after it would
+    // observe the post-write state and silently mis-report the previous
+    // values to the reactivity log. For create-parents writes, the activity
+    // path `apply()` reports is the materialization point (deepest
+    // pre-existing parent on the write path), where the observable change
+    // happens for subscribers watching a parent.
     const plan = planMutablePathWrite(
       current.value,
       address,
@@ -2156,20 +2160,6 @@ export class V2StorageTransaction implements IStorageTransaction {
       return { ok: current };
     }
 
-    // For create-parents writes, the materialization point (deepest
-    // pre-existing parent on the write path) is where the observable
-    // change happens for subscribers watching a parent. For simple writes
-    // it falls back to `address.path`.
-    const activityPath = planned.materializedAt ?? address.path;
-    const previousActivityValue = cloneIfNecessary(
-      planned.materializedAt === undefined
-        ? planned.previousValue
-        : planned.materializedValue,
-    ) as FabricValue | undefined;
-    const previousActivityPresent = planned.materializedAt === undefined
-      ? planned.present
-      : planned.materializedValue !== undefined;
-
     const result = this.#writeWorkingRoot(doc, planned);
     // Authoritative mode records the (value-unchanged) write anyway so it
     // reaches the commit as a full-cover re-assert, and an unconfirmed
@@ -2198,19 +2188,19 @@ export class V2StorageTransaction implements IStorageTransaction {
       readValueAtPath(collapsedNext.value, address.path, {
         allowArrayLength: true,
       }),
-      cloneIfNecessary(result.previousValue) as FabricValue | undefined,
+      cloneIfNecessary(planned.previousValue) as FabricValue | undefined,
       doc,
       planned.present,
     );
     this.#recordWriteActivity(
       space,
-      { ...address, path: activityPath },
-      readValueAtPath(collapsedNext.value, activityPath, {
+      { ...address, path: result.activityPath },
+      readValueAtPath(collapsedNext.value, result.activityPath, {
         allowArrayLength: true,
       }),
-      previousActivityValue,
+      result.previousActivityValue,
       doc,
-      previousActivityPresent,
+      result.previousActivityPresent,
     );
 
     return { ok: collapsedNext };
@@ -2284,11 +2274,11 @@ export class V2StorageTransaction implements IStorageTransaction {
     // freshly-thawed spine across the whole batch" without ever needing a
     // deep clone of off-spine subtrees.
     //
-    // Read-before-mutate ordering is load-bearing: the previous value, the
-    // activity path, and the previous activity value all come from the
-    // plan, which reads `nextRoot` BEFORE it is applied. Applying mutates
-    // `nextRoot` in place from the second iteration onward, so a read
-    // after it would observe the post-write state. (See
+    // Read-before-mutate ordering is load-bearing: the previous value comes
+    // from the plan, and the activity path and previous activity value from
+    // `apply()`, both read from `nextRoot` BEFORE it is changed. Applying
+    // mutates `nextRoot` in place from the second iteration onward, so a
+    // read after it would observe the post-write state. (See
     // `#writeWithinBranch` for the same invariant and a regression test.)
     for (const { address, value, delete: isDelete } of writes) {
       const plan = planMutablePathWrite(
@@ -2325,15 +2315,6 @@ export class V2StorageTransaction implements IStorageTransaction {
         this.#retainPendingWriteElision(branch, space, address);
         continue;
       }
-      const activityPath = planned.materializedAt ?? address.path;
-      const previousActivityValue = cloneIfNecessary(
-        planned.materializedAt === undefined
-          ? planned.previousValue
-          : planned.materializedValue,
-      ) as FabricValue | undefined;
-      const previousActivityPresent = planned.materializedAt === undefined
-        ? planned.present
-        : planned.materializedValue !== undefined;
       const result = this.#writeWorkingRoot(doc, planned);
       nextRoot = result.root;
       if (
@@ -2359,13 +2340,13 @@ export class V2StorageTransaction implements IStorageTransaction {
       );
       this.#recordWriteActivity(
         space,
-        { ...address, path: activityPath },
-        readValueAtPath(result.root, activityPath, {
+        { ...address, path: result.activityPath },
+        readValueAtPath(result.root, result.activityPath, {
           allowArrayLength: true,
         }),
-        previousActivityValue,
+        result.previousActivityValue,
         doc,
-        previousActivityPresent,
+        result.previousActivityPresent,
       );
     }
 
@@ -3024,9 +3005,10 @@ export class V2StorageTransaction implements IStorageTransaction {
 
   /**
    * Carries out `planned`, a write to `doc`'s working root. The plan's
-   * `apply()` mutates that root in place when it is already mutable. What the reactivity log derives from the document is dropped
-   * first, so nothing built before the write outlives it; every in-place
-   * write to a working root goes through here for that reason.
+   * `apply()` mutates that root in place when it is already mutable. What
+   * the reactivity log derives from the document is dropped first, so
+   * nothing built before the write outlives it; every in-place write to a
+   * working root goes through here for that reason.
    */
   #writeWorkingRoot(
     doc: WritableDocumentEntry,
