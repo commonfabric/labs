@@ -6,6 +6,7 @@ import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
   type NormalizedFullLink,
@@ -831,7 +832,7 @@ describe("profile owner CFC policy", () => {
             id: target.id,
             path,
           }],
-        });
+        }, runtimeWritePolicyAuthorization);
       }
       tx.prepareCfc();
       const result = await tx.commit();
@@ -872,6 +873,76 @@ describe("profile owner CFC policy", () => {
       tx.prepareCfc();
       const result = await tx.commit();
       expect(result.error?.message).toContain("writeAuthorizedBy");
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("counts a setup-projection marker only when the runtime recorded it", async () => {
+    // Pattern code reaches the transaction its cells are bound to, so it can
+    // record a marker through the public interface. The same write under the
+    // same non-writer identity is refused with a marker recorded that way,
+    // and admitted with one recorded as the runtime records it.
+    const { runtime, storageManager } = createRuntime();
+    const attempt = async (
+      name: string,
+      authorization?: typeof runtimeWritePolicyAuthorization,
+    ) => {
+      const tx = runtime.edit();
+      setCfcTrustSnapshot(tx, { id: name, actingPrincipal: alice.did() });
+      setCfcImplementationIdentity(tx, {
+        kind: "builtin",
+        builtinId: "system.not-the-profile-writer",
+      });
+      const cell = runtime.getCell(
+        alice.did(),
+        name,
+        profileSchema(alice.did()),
+        tx,
+      );
+      cell.set({ name: "Ada", avatar: "", elements: [] });
+      const target = cell.getAsNormalizedFullLink();
+      recordTrustedEdit(tx, target, ["name"]);
+      recordTrustedEdit(tx, target, ["avatar"]);
+      recordTrustedEdit(tx, target, ["elements"]);
+      const resultTarget = runtime.getCell(
+        alice.did(),
+        `${name}-result`,
+        undefined,
+        tx,
+      ).getAsNormalizedFullLink();
+      for (const path of [["name"], ["avatar"], ["elements"]]) {
+        tx.recordCfcWritePolicyInput({
+          kind: "structural-provenance",
+          target: {
+            space: resultTarget.space,
+            scope: resultTarget.scope,
+            id: resultTarget.id,
+            path,
+          },
+          claim: "runtime.setup.result-projection",
+          sources: [{
+            space: target.space,
+            scope: target.scope,
+            id: target.id,
+            path,
+          }],
+        }, authorization);
+      }
+      tx.prepareCfc();
+      return (await tx.commit()).error?.message;
+    };
+    try {
+      expect(await attempt("owner-init-unauthorized-marker")).toContain(
+        "writeAuthorizedBy",
+      );
+      expect(
+        await attempt(
+          "owner-init-authorized-marker",
+          runtimeWritePolicyAuthorization,
+        ),
+      ).toBeUndefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();

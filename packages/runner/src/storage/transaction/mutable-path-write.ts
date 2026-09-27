@@ -20,11 +20,13 @@ import {
 } from "@commonfabric/data-model";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import type {
+  IInvalidArrayLengthError,
   IMemoryAddress,
   ITypeMismatchError,
   Result,
 } from "../interface.ts";
 import { TypeMismatchError } from "./attestation.ts";
+import { InvalidArrayLengthError } from "../transaction-errors.ts";
 import { createPathContainer } from "../v2-path.ts";
 
 export type MutableWriteResult = {
@@ -71,7 +73,10 @@ export const getValueTypeName = (value: FabricValue | undefined): string => {
  * anything changed.
  *
  * Whether the write is refused is settled first, by `checkWritePath()`,
- * which reads `currentRoot` and changes nothing. A write it admits goes to
+ * which reads `currentRoot` and changes nothing: a key its container cannot
+ * hold is refused with a `TypeMismatchError`, and a length write that would
+ * grow an array to `2 ** 32` or more with an `InvalidArrayLengthError`. A
+ * write it admits goes to
  * `cloneForMutation` (with `createMissing: true`) for spine descent, thaw,
  * and missing-intermediate creation, which exposes the parent container at
  * `address.path.slice(0, -1)` as a mutable handle. The function then
@@ -90,9 +95,9 @@ export const getValueTypeName = (value: FabricValue | undefined): string => {
  * intermediates like any other value. Removal is requested explicitly
  * via `options.delete`, which deletes the leaf slot (object key removal
  * or array hole) and never materializes intermediates for a slot that
- * wasn't there. A delete with leaf key `"length"` funnels through the
- * legacy length coercion (undefined → NaN → truncate), matching the
- * historical `tx.write(path/length, undefined)` behavior.
+ * wasn't there. A delete of an array's `"length"` empties the array: it
+ * goes through the legacy length coercion as `undefined` (→ NaN → 0),
+ * whatever value the call carries.
  *
  * `force: false` is passed to `cloneForMutation` because the root, by
  * this point, is either (a) freshly allocated by us (in the
@@ -105,7 +110,10 @@ export const applyMutablePathWrite = (
   address: IMemoryAddress,
   value: FabricValue | undefined,
   options?: MutablePathWriteOptions,
-): Result<MutableWriteResult, ITypeMismatchError> => {
+): Result<
+  MutableWriteResult,
+  ITypeMismatchError | IInvalidArrayLengthError
+> => {
   const isDelete = options?.delete === true;
   if (address.path.length === 0) {
     const nextRoot = isDelete ? undefined : value;
@@ -147,6 +155,7 @@ export const applyMutablePathWrite = (
   const check = checkWritePath(
     currentRoot as Record<string, FabricValue> | FabricValue[],
     address,
+    value,
     isDelete,
   );
   if (check.error) {
@@ -175,7 +184,11 @@ export const applyMutablePathWrite = (
   // Leaf write at `parent[leafKey]`.
   if (Array.isArray(parent)) {
     if (leafKey === "length") {
-      return applyArrayLengthWrite(newRoot, parent, value);
+      return applyArrayLengthWrite(
+        newRoot,
+        parent,
+        isDelete ? undefined : value,
+      );
     }
     // deno-coverage-ignore-start -- the check admits only an index here
     if (!isArrayIndexPropertyName(leafKey)) {
@@ -247,7 +260,10 @@ export const applyMutablePathWrite = (
  * is a value that no path read reports and no commit carries. A key short of
  * the leaf that lands on anything but a plain container is refused too,
  * `length` on an array included. Either way, the error names the path
- * through the offending key.
+ * through the offending key. A `length` written onto an array already there
+ * is refused with an `InvalidArrayLengthError` where no array can have it
+ * (`isOutOfRangeArrayLength()`); a delete of `length` carries no length, and
+ * is not.
  *
  * The descent admits only what `isContainerValue()` does, which is narrower
  * than what `cloneForMutation()` descends through, so every path that
@@ -256,8 +272,12 @@ export const applyMutablePathWrite = (
 const checkWritePath = (
   root: Record<string, FabricValue> | FabricValue[],
   address: IMemoryAddress,
+  value: FabricValue | undefined,
   isDelete: boolean,
-): Result<"apply" | "absent", ITypeMismatchError> => {
+): Result<
+  "apply" | "absent",
+  ITypeMismatchError | IInvalidArrayLengthError
+> => {
   const path = address.path;
   // `undefined` once the walk has passed a missing slot: every container from
   // there down is one the write creates.
@@ -276,7 +296,16 @@ const checkWritePath = (
         ),
       };
     }
-    if (container === undefined || index === path.length - 1) {
+    if (index === path.length - 1) {
+      if (
+        key === "length" && Array.isArray(container) && !isDelete &&
+        typeof value === "number" && isOutOfRangeArrayLength(value)
+      ) {
+        return { error: InvalidArrayLengthError(address, value) };
+      }
+      continue;
+    }
+    if (container === undefined) {
       continue;
     }
     if (!Object.hasOwn(container, key)) {
@@ -302,13 +331,24 @@ const checkWritePath = (
 };
 
 /**
+ * Indicates whether `value`, written as an array's `length`, is one the
+ * length coercion would grow the array to but no array can have: a finite
+ * `2 ** 32` or more. `+Infinity` is not one, since the coercion leaves the
+ * array unchanged for it.
+ */
+const isOutOfRangeArrayLength = (value: number): boolean =>
+  Number.isFinite(value) && value >= 2 ** 32;
+
+/**
  * Helper for the legacy array-length-write semantics, called when
  * `applyMutablePathWrite` reaches a leaf key of `"length"` against an
  * array parent. Replicates `Array.prototype.slice(0, nextLength)`'s
  * coercion rules for truncation (NaN → 0, +Infinity → unchanged,
  * −Infinity → 0, negative → count from end, fractional → floor). Grow
  * with holes uses the JS native semantic of `arr.length = nextLength`
- * (with `Math.floor` to keep length a uint32).
+ * (with `Math.floor` to keep length an integer). A length that assignment
+ * would throw on is one `isOutOfRangeArrayLength()` returns `true` for, and
+ * `applyMutablePathWrite()` refuses it before calling this.
  */
 const applyArrayLengthWrite = (
   newRoot: FabricValue,

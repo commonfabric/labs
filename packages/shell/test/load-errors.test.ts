@@ -284,6 +284,9 @@ describe("load-errors", () => {
           >;
           document.createElement = () => panel;
           document.body = {
+            // CodeMirror reads `document.body.style` when its module loads,
+            // and this case can be the first in the process to load it.
+            style: {},
             appendChild(node: { isConnected: boolean }) {
               node.isConnected = true;
             },
