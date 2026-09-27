@@ -270,10 +270,10 @@ unaffected on any server.
 `patchBaseSeq` advertises that the server reads a `patch` operation's
 declared `baseSeq` and reports, on the revision it writes, whether the head it
 applied the patch over was that one (`03-commit-model.md` section 3.1; section
-4.11.2 says what the committing session's frame then omits). It is build-inherent and
-defaults to `false` when absent. A client sends `baseSeq` only to a server
-advertising it; against an older server it declares nothing, and its own patch
-heads reach it in full as before.
+4.11.2 says what the committing session's frame then omits). It is
+build-inherent and defaults to `false` when absent. A client sends `baseSeq`
+only to a server advertising it; against a server that does not, it declares
+nothing, and every own patch head reaches it in full.
 
 ### 4.1.2 Logical Sessions and Resume
 

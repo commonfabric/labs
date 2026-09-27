@@ -1239,7 +1239,9 @@ the per-epic implementation notes).
   from the client's own ops.
 - **Current default and planned end state.** On by default. The switch exists as
   an operational backstop while the echo field-soaks.
-- **Status on 2026-08-08.** Implemented and on by default.
+- **Status on 2026-09-26.** Implemented and on by default. With it on, an own
+  patch head the engine applied over the base the patch declared is elided
+  too.
 - **Path to removal.** After the echo has soaked in production, delete the
   config trio and the suppression branch it re-enables.
 

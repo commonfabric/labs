@@ -654,12 +654,14 @@ type SessionHandle = {
   sessionId: string;
 };
 
-/** Kind of the LAST operation an origin commit applied to a doc — decides the
- * own-write echo shape at flush (CT-1965). The writer provably holds the
- * outcome of a `set`, a `delete`, and an `exact-patch` — a patch the engine
- * applied over the very document its writer declared it would replay the
- * patch over (`AppliedRevision.exactBase`) — so those heads are elided. A
- * `patch` head rides the frame as the full post-apply document. */
+/**
+ * Kind of the LAST operation an origin commit applied to a doc, which decides
+ * the own-write echo shape at flush. The writer provably holds the outcome of
+ * a `set`, a `delete`, and an `exact-patch` — a patch the engine applied over
+ * the very document its writer declared it would replay the patch over
+ * (`AppliedRevision.exactBase`) — so those heads are elided. A `patch` head
+ * rides the frame as the full post-apply document.
+ */
 type DirtyOp = "set" | "patch" | "exact-patch" | "delete";
 
 type DirtyOrigin = {
@@ -4198,13 +4200,14 @@ export class Server {
           // The frame therefore reflects every decided outcome ≤ W for the
           // docs it covers.
           // Dirty-origin tracking decides the echo shape for the session's
-          // own accepted writes (CT-1965): set- and delete-produced heads are
-          // elided from the frame — the writer provably holds their outcome,
-          // and the verdict plus marker promote it — while patch-produced
-          // heads ride the frame as full post-apply documents, since merged
-          // state is truth the writer cannot extrapolate. REJECTED commits'
-          // docs are staged origin-less (stageConflictRefreshDirtyIds), so
-          // repair frames DO cover them.
+          // own accepted writes: set- and delete-produced heads are elided
+          // from the frame — the writer provably holds their outcome, and the
+          // verdict plus marker promote it — and so are heads of patches the
+          // engine applied over their declared base (`DirtyOp`), while other
+          // patch-produced heads ride the frame as full post-apply documents,
+          // since merged state is truth the writer cannot extrapolate.
+          // REJECTED commits' docs are staged origin-less
+          // (stageConflictRefreshDirtyIds), so repair frames DO cover them.
           session.pendingCaughtUpLocalSeq = Math.max(
             session.pendingCaughtUpLocalSeq,
             message.commit.localSeq,
@@ -6353,8 +6356,8 @@ export class Server {
                     }
                     const dirtyKey = toDirtyKey(entry.id, entry.scopeKey);
                     const origin = dirtyOrigins?.get(dirtyKey);
-                    // Include the doc unless the writer provably holds it
-                    // (CT-1965). An origin matching this session AND the head seq
+                    // Include the doc unless the writer provably holds it.
+                    // An origin matching this session AND the head seq
                     // means the head is exactly this session's own accepted
                     // write; under the per-space publication lock nothing can
                     // have moved it since, so `entry.doc` IS that commit's

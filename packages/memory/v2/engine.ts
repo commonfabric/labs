@@ -1301,7 +1301,7 @@ export type AppliedRevision = {
   patches?: PatchOp[];
 
   /**
-   * Set on a `patch` revision whose operation declared a `baseSeq` equal to
+   * True on a `patch` revision whose operation declared a `baseSeq` equal to
    * the seq of the head it was applied over, with the operation applied
    * exactly as received. The revision's document is then the writer's own
    * operations replayed over a document its replica holds, so the writer

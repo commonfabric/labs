@@ -564,7 +564,7 @@ type ConfirmedVersion = MaterializedVersion & {
   coverClass?: CommitClass;
 
   /**
-   * Set when `value` is the server's stored document at `seq` exactly: a
+   * True when `value` is the server's stored document at `seq` exactly: a
    * version a frame delivered, or one promoted from an own patch the server
    * reported it applied over the very version this replica replayed it over
    * (`AppliedRevision.exactBase`). A patch built over such a version with no
@@ -811,14 +811,14 @@ const materializedVersionThroughPending = (
 };
 
 /**
- * Whether `promoted`, the value of `pending` replayed over `confirmed`, is the
- * server's stored document at the accept's seq: the layer declared
- * `confirmed` as its base, `confirmed` is the server's document at that seq,
- * and the accept reports the head it applied over was that same document.
- * Promotion replays the layer's operations with the patch function the
- * server applied them with, so equal inputs give the equal document. A replay
- * that skipped the layer, whose operations did not apply, leaves `confirmed`'s
- * own value, and is refused.
+ * Returns whether `promoted`, the value of `pending` replayed over
+ * `confirmed`, is the server's stored document at the accept's seq: the layer
+ * declared `confirmed` as its base, `confirmed` is the server's document at
+ * that seq, and the accept reports the head it applied over was that same
+ * document. Promotion replays the layer's operations with the patch function
+ * the server applied them with, so equal inputs give the equal document. A
+ * replay that skipped the layer, whose operations did not apply, leaves
+ * `confirmed`'s own value, and is refused.
  */
 const promotesExactly = (
   confirmed: ConfirmedVersion,
@@ -3658,7 +3658,7 @@ type NativeCommitOperation =
     patches: PatchOp[];
     value: EntityDocument;
 
-    /** Declared on the wire operation; see `PatchOperation.baseSeq`. */
+    /** The declared base; see `PatchOperation.baseSeq`. */
     baseSeq?: number;
   }
   | { op: "delete"; id: URI; scope?: CellScope };
