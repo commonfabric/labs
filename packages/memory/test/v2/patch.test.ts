@@ -19,22 +19,41 @@ const documentOfSize = (size: number) => {
   return deepFreeze({ value: map });
 };
 
-/** `count` ops, each adding a new key to the document's `value`. */
-const addsBeneathValue = (count: number): PatchOp[] =>
-  Array.from({ length: count }, (_, index) => ({
-    op: "add",
-    path: `/value/added-${index}`,
-    value: { name: `added-${index}` },
-  }));
+/**
+ * `count` ops beneath the document's `value`, one per entry: each adds a new
+ * key, changes an existing entry's `name`, or removes an existing key. All
+ * three descend through `value`, so each is one that could copy it again.
+ */
+const opsBeneathValue = {
+  add: (count: number): PatchOp[] =>
+    Array.from({ length: count }, (_, index) => ({
+      op: "add",
+      path: `/value/added-${index}`,
+      value: { name: `added-${index}` },
+    })),
+  replace: (count: number): PatchOp[] =>
+    Array.from({ length: count }, (_, index) => ({
+      op: "replace",
+      path: `/value/key-${index}/name`,
+      value: `renamed-${index}`,
+    })),
+  remove: (count: number): PatchOp[] =>
+    Array.from({ length: count }, (_, index) => ({
+      op: "remove",
+      path: `/value/key-${index}`,
+    })),
+} satisfies Record<string, (count: number) => PatchOp[]>;
 
 /**
- * Applies `ops` to `document`, and reports how many times the application
- * copied a container of at least `size` keys.
+ * Applies `ops` to `document`, whose `value` starts with `size` keys, and
+ * reports how many times the application copied a container of at least half
+ * that many.
  *
  * A container is copied for a mutation by a shallow `Object.assign()` from it,
  * so counting the calls whose source is that large counts the copies of the
- * document's `value`. A count that tracks the number of ops is each op copying
- * it again.
+ * document's `value`. Half, because removals shrink `value` as they go, and a
+ * copy of it after the first removal must still count. A count that tracks the
+ * number of ops is each op copying it again.
  */
 const largeCopiesDuring = (
   document: ReturnType<typeof documentOfSize>,
@@ -46,7 +65,7 @@ const largeCopiesDuring = (
   Object.assign = ((target: object, ...sources: object[]) => {
     if (
       sources.some((source) =>
-        source != null && Object.keys(source).length >= size
+        source != null && Object.keys(source).length >= size / 2
       )
     ) {
       copies++;
@@ -117,24 +136,18 @@ describe("patch", () => {
       expect(isDeepFrozen(result)).toBe(true);
     });
 
-    it("copies a large object as often for many ops beneath it as for few", () => {
-      const size = 1000;
-      const short = largeCopiesDuring(
-        documentOfSize(size),
-        addsBeneathValue(10),
-        size,
-      );
-      const long = largeCopiesDuring(
-        documentOfSize(size),
-        addsBeneathValue(100),
-        size,
-      );
+    for (const [kind, ops] of Object.entries(opsBeneathValue)) {
+      it(`copies a large object as often for many \`${kind}\` ops beneath it as for few`, () => {
+        const size = 1000;
+        const short = largeCopiesDuring(documentOfSize(size), ops(10), size);
+        const long = largeCopiesDuring(documentOfSize(size), ops(100), size);
 
-      // The floor keeps the probe honest: were the copy no longer made through
-      // `Object.assign()`, both counts would read zero and agree.
-      expect(short).toBeGreaterThan(0);
-      expect(long).toBe(short);
-    });
+        // The floor keeps the probe honest: were the copy no longer made
+        // through `Object.assign()`, both counts would read zero and agree.
+        expect(short).toBeGreaterThan(0);
+        expect(long).toBe(short);
+      });
+    }
   });
 
   describe("patchOpDescriptors", () => {
