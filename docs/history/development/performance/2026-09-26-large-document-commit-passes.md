@@ -11,7 +11,11 @@ A commit that changes one value inside a large document cost time in
 proportion to the document, with a large constant, and jumped three- to
 five-fold past roughly 16,700 entries. This pass attributed that cost to the
 passes a commit makes over the whole document, removed the ones that were
-redundant, and recorded what is left.
+redundant, and recorded what is left. It takes up two items that
+[the write-cost investigation of the same map](2026-09-26-large-object-write-cost.md)
+left for later: the per-commit constant, and the hashing cliff. The numbers
+below were taken before that investigation's change landed; a one-value
+commit writes one key, which is where that change costs the same as before.
 
 ## What was measured, against what
 

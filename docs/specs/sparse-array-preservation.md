@@ -146,7 +146,10 @@ The leaf write itself is one of:
   returns `false` afterwards).
 - `parent.length = effective` for `.length` writes (see
   `applyArrayLengthWrite`) -- JS `length=` truncates the tail, leaving
-  holes within the new bound intact.
+  holes within the new bound intact. A `.length` delete empties the
+  array. A write that would grow the array to `2 ** 32` or more never
+  reaches the leaf: `applyMutablePathWrite` refuses it with an
+  `InvalidArrayLengthError` before the write mutates anything.
 
 ### Cell write path (`packages/runner/src/data-updating.ts`)
 

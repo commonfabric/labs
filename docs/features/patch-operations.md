@@ -85,8 +85,13 @@ a missing or mismatched entry a loud failure rather than a silent degradation.
 must have exactly one descriptor and vice versa (a missing or extra one is a
 compile error). Each descriptor owns:
 
-- `apply(state, op)` — the mutation the durable store performs. Used by
-  `applyPatch`.
+- `apply(state, op, owned)` — the mutation the durable store performs. Used by
+  `applyPatch`, which passes every op of one call the same `owned` set: the
+  containers earlier ops copied, which a later op mutates in place rather than
+  copying again. Each container is then copied at most once per call, so a
+  patch of `K` ops beneath one `N`-key object copies it once, not `K` times.
+  That is also why an op's value enters the tree only through a deep-frozen
+  copy, never as a container the set could name.
 - `pointerFields` — which fields hold JSON Pointers (`["path"]`, or
   `["from", "path"]` for `move`). This is the single source for the op's changed
   leaf paths.
