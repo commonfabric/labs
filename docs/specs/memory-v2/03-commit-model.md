@@ -493,7 +493,9 @@ by the read's shape:
   confirmed basis and the top layer's resolution seq, which the legacy
   basis never scanned. A `basisSeq` greater than the server's current head
   is a protocol error; values at or below head are trusted, like a
-  confirmed read's `seq` (lying corrupts only the session's own data).
+  confirmed read's `seq`. A client that misstates its basis can lose a
+  concurrent writer's update, but only on a document it may write, where a
+  commit carrying no reads could overwrite that update just the same.
   The declared-set restriction is server-side VALIDATION of the array's
   completeness attestation, not an extension of what a client may omit:
   the sanctioned omission remains a processed rejection (§3.5), and a
