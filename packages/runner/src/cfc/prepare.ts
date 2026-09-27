@@ -32,6 +32,7 @@ import {
   refuseFabricInstance,
   valueEqual,
 } from "@commonfabric/data-model";
+import { linkProbeSubPath } from "@commonfabric/data-model/cell-rep";
 import { isFabricPrimitiveSchemaType } from "@commonfabric/data-model/fabric-primitives";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { STREAM_ENTRIES_DOC_PREFIX } from "@commonfabric/memory/v2";
@@ -3285,6 +3286,20 @@ const pureLinkContainerPaths = (
   }
 };
 
+/**
+ * The slot a link-resolution probe asked about: its path without the sub-path
+ * at which a link exposes its recognizable form (`linkProbeSubPath`, the
+ * sigil's `["/", "link@1"]` in the legacy layout, nothing in the atomic one).
+ */
+const probedSlotPath = (path: readonly string[]): readonly string[] => {
+  const sigil = linkProbeSubPath();
+  const slotLength = path.length - sigil.length;
+  if (sigil.length === 0 || slotLength < 0) return path;
+  return sigil.every((segment, index) => path[slotLength + index] === segment)
+    ? path.slice(0, slotLength)
+    : path;
+};
+
 const forEachFlowObservation = (
   tx: IExtendedStorageTransaction,
   consume: (
@@ -3417,11 +3432,24 @@ const forEachFlowObservation = (
         logicalPath,
       );
     let shape: ReadObservationShape;
+    let observedPath = logicalPath;
+    let nonRecursive = read.nonRecursive;
     if (isLinkResolutionProbe(read.meta)) {
       if (coveredByTrace() || isMachineryRead(read.meta)) {
         continue;
       }
       shape = "followRef";
+      // A probe observes which reference sits at the ONE slot it asked
+      // about, so it consumes pointer policy at that slot and above it — the
+      // slot's link-origin entry, a parent's `*` template matching the slot —
+      // and never below. Read at the sigil's path, the probe matched the
+      // slot's own `*`-child template through the sigil key, as though "/"
+      // were a child, and a recursive probe at the slot in the atomic layout
+      // would match it too. That template labels which reference sits at
+      // each CHILD. `Cell.set` probing a store's root then carried the J of
+      // the store's creation onto every document the writer wrote.
+      observedPath = probedSlotPath(logicalPath);
+      nonRecursive = true;
     } else {
       shape = read.nonRecursive === true ? "shape" : "value";
     }
@@ -3431,7 +3459,7 @@ const forEachFlowObservation = (
         id,
         scope,
         (read.type ?? "application/json") as MediaType,
-        logicalPath,
+        observedPath,
         // `coveredByTrace` extends the C0 §6.1 row-3/row-4 boundary to
         // PLAIN reads for the one entry kind whose consumption at slot
         // paths is new (the `*`-path class templates): resolution
@@ -3443,7 +3471,7 @@ const forEachFlowObservation = (
         // seeding, result plumbing, coordinator scaffolding).
         {
           shape,
-          nonRecursive: read.nonRecursive,
+          nonRecursive,
           get coveredByTrace() {
             return coveredByTrace();
           },
@@ -10266,39 +10294,6 @@ export function* prepareBoundaryCommitSteps(
       }
       const derivedPrefixes = new PathPrefixIndex();
       for (const path of derivedStampPaths) derivedPrefixes.add(path);
-      // The nodes this transaction wrote values, and no reference, beneath.
-      // A pure-link-structure write at one of them was the diff's
-      // scaffolding rather than a container of references: `Cell.set`
-      // writes `{}` into a document that already exists and then the
-      // members, so a store whose result link was set first is created as
-      // an empty object and filled with values. Computed once, and only for
-      // a document that mints templates.
-      let valueOnlyContainerKeys: Set<string> | undefined;
-      const holdsValuesOnly = (path: readonly string[]): boolean => {
-        if (valueOnlyContainerKeys === undefined) {
-          const properPrefixKeys = (paths: Iterable<readonly string[]>) => {
-            const keys = new Set<string>();
-            for (const written of paths) {
-              for (let depth = 0; depth < written.length; depth++) {
-                keys.add(pathKey(written.slice(0, depth)));
-              }
-            }
-            return keys;
-          };
-          const referenceContainerKeys = properPrefixKeys(
-            flowWrittenPaths.filter((written) =>
-              currentLinkWritePaths.has(pathKey(written)) ||
-              containsCellLink(flowWrittenValues?.get(pathKey(written)))
-            ),
-          );
-          valueOnlyContainerKeys = new Set(
-            [...properPrefixKeys(derivedStampPaths)].filter((key) =>
-              !referenceContainerKeys.has(key)
-            ),
-          );
-        }
-        return valueOnlyContainerKeys.has(pathKey(path));
-      };
       const frozenShapePaths = new Set(
         persistedLabelEntries.filter((entry) =>
           (entry.origin === "derived" || entry.origin === "structure") &&
@@ -10439,30 +10434,13 @@ export function* prepareBoundaryCommitSteps(
         // container's membership/assignment J is consumable by genuine
         // application probes without feeding the runtime's own plumbing
         // traffic.
-        //
-        // A generic container this transaction filled with values, and no
-        // reference, mints no `followRef` template. That template labels
-        // which reference sits at each slot, and no member here is one: the
-        // only reads that consumed it were probes finding no link on the way
-        // to a member — `Cell.set` probing the root, a stale-writeback guard
-        // probing a field — which then carried the creating transaction's J
-        // onto every other document that later transaction wrote. The same
-        // values written whole mint none either. The `shape` and `value`
-        // templates stay, so a read of any member, present or absent, still
-        // consumes J.
         if (
           flowHasLabels && flowConfidentiality.length > 0
         ) {
-          const templateClasses = holdsValuesOnly(path)
-            ? ["shape", "value"] as const
-            : ["shape", "value", "followRef"] as const;
           frozenShapePaths.add(pathKey([...path, "*"]));
           tx.noteCfcPreparationWork?.("flowTemplateContainers");
-          tx.noteCfcPreparationWork?.(
-            "flowTemplateEntriesMinted",
-            templateClasses.length,
-          );
-          for (const observes of templateClasses) {
+          tx.noteCfcPreparationWork?.("flowTemplateEntriesMinted", 3);
+          for (const observes of ["shape", "value", "followRef"] as const) {
             persistedLabelEntries.push(markFlowStampEntry({
               path: [...path, "*"],
               label: {
