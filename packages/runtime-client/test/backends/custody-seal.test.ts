@@ -351,6 +351,35 @@ describe("custody-seal", () => {
     });
   });
 
+  it("reads no answer for an instance nothing has published", async () => {
+    await withFixture(async ({ processor, refs }) => {
+      expect(
+        await processor.handleRequest({
+          type: RequestType.CustodyAnswerRead,
+          terms: refs.terms,
+          policy: refs.policy,
+        }, first),
+      ).toEqual({});
+    });
+  });
+
+  it("refuses publication and reading once the worker is disposed", async () => {
+    await withFixture(async ({ processor, runtime, refs }) => {
+      await processor.dispose();
+      await expect(processor.handleCustodyAnswerPublish({
+        type: RequestType.CustodyAnswerPublish,
+        terms: refs.terms,
+        policy: refs.policy,
+        output: createCellRef(runtime.getCell(S, "custody-room-choice")),
+      })).rejects.toThrow("Custody sealing is unavailable");
+      await expect(processor.handleCustodyAnswerRead({
+        type: RequestType.CustodyAnswerRead,
+        terms: refs.terms,
+        policy: refs.policy,
+      })).rejects.toThrow("Custody sealing is unavailable");
+    });
+  });
+
   it("admits one confirmation, from the client that prepared it", async () => {
     await withFixture(async ({ processor, refs }) => {
       await expect(processor.handleRequest({

@@ -11,10 +11,34 @@ type Publish = RuntimeClient["publishCustodyAnswer"];
 
 /** Supplies connection state without claiming DOM behavior. */
 class HeadlessAnswer extends CFCustodyAnswer {
+  connected = true;
+
   override get isConnected(): boolean {
-    return true;
+    return this.connected;
   }
 }
+
+/** Every string the rendered template interpolates, nested templates included. */
+function renderedText(element: CFCustodyAnswer): string {
+  const parts: string[] = [];
+  const walk = (value: unknown): void => {
+    if (typeof value === "string") parts.push(value);
+    else if (Array.isArray(value)) value.forEach(walk);
+    else if (value && typeof value === "object" && "values" in value) {
+      const template = value as { strings: string[]; values: unknown[] };
+      parts.push(...template.strings);
+      template.values.forEach(walk);
+    }
+  };
+  walk(element.render());
+  return parts.join("");
+}
+
+/** Lets queued publications settle. */
+const settle = async () => {
+  for (let turn = 0; turn < 10; turn++) await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+};
 
 const setup = (
   publishes: Array<() => ReturnType<Publish>>,
@@ -136,5 +160,115 @@ describe("cf-custody-answer", () => {
     expect(state.reads).toHaveLength(0);
     expect(state.element.accessForTestingOnly.error).toBe("");
     expect(state.element.accessForTestingOnly.published).toBe(false);
+  });
+
+  it("shows the published answer, and an unexpected failure as an alert", async () => {
+    const slot: { answer?: string; refuse?: string } = {};
+    const state = setup([
+      () => Promise.reject(new Error("worker connection lost")),
+      () => {
+        slot.answer = "sushi";
+        return Promise.resolve({ instance: "instance", answer: "sushi" });
+      },
+    ], slot);
+    expect(renderedText(state.element)).not.toContain('part="answer"');
+    await state.element.accessForTestingOnly.publish();
+    expect(renderedText(state.element)).toContain("worker connection lost");
+    expect(renderedText(state.element)).toContain('role="alert"');
+    await state.element.accessForTestingOnly.publish();
+    const shown = renderedText(state.element);
+    expect(shown).toContain("sushi");
+    expect(shown).not.toContain('role="alert"');
+  });
+
+  it("asks on each change once bound, and starts over for new terms", async () => {
+    const slot: { answer?: string } = {};
+    const state = setup([
+      () =>
+        Promise.reject(
+          new Error("Custody answer requires every seat to have sealed"),
+        ),
+      () => {
+        slot.answer = "sushi";
+        return Promise.resolve({ instance: "first", answer: "sushi" });
+      },
+      () => {
+        slot.answer = "tacos";
+        return Promise.resolve({ instance: "second", answer: "tacos" });
+      },
+    ], slot);
+    // Binding subscribes: the terms and the answer are each read at once.
+    state.element.willUpdate(new Map([["terms", undefined]]));
+    await settle();
+    expect(state.requests.length).toBeGreaterThanOrEqual(1);
+    // A change to the projected answer asks again, and it publishes.
+    state.output.set("sushi");
+    await settle();
+    expect(state.element.accessForTestingOnly.answer).toBe("sushi");
+    // New terms are a new instance: what was shown is dropped, and the new
+    // instance's answer is asked for and shown.
+    slot.answer = undefined;
+    state.terms.set({ question: "tomorrow" });
+    await settle();
+    expect(state.element.accessForTestingOnly.answer).toBe("tacos");
+    expect(state.published.map((event) => event.detail)).toEqual([
+      { instance: "first" },
+      { instance: "second" },
+    ]);
+    // Unbinding stops the requests.
+    state.element.connected = false;
+    state.element.disconnectedCallback();
+    const asked = state.requests.length;
+    state.output.set("pizza");
+    await settle();
+    expect(state.requests).toHaveLength(asked);
+  });
+
+  it("runs a request made during another once it ends, across a rebinding", async () => {
+    let release: (() => void) | undefined;
+    const slot: { answer?: string } = {};
+    const state = setup([
+      () =>
+        new Promise((_, reject) => {
+          release = () =>
+            reject(
+              new Error("Custody answer requires every seat to have sealed"),
+            );
+        }),
+      () => {
+        slot.answer = "sushi";
+        return Promise.resolve({ instance: "instance", answer: "sushi" });
+      },
+    ], slot);
+    const first = state.element.accessForTestingOnly.publish();
+    const second = state.element.accessForTestingOnly.publish();
+    await settle();
+    // The terms change while the first request is out: its result belongs to
+    // the instance before.
+    state.element.willUpdate(new Map([["policy", undefined]]));
+    release!();
+    await first;
+    await second;
+    expect(state.requests).toHaveLength(2);
+    expect(state.element.accessForTestingOnly.answer).toBe("sushi");
+  });
+
+  it("clears what a failure said once the room has no terms, and asks nothing unbound", async () => {
+    const state = setup([
+      () => Promise.reject(new Error("worker connection lost")),
+    ]);
+    await state.element.accessForTestingOnly.publish();
+    expect(state.element.accessForTestingOnly.error).toBe(
+      "worker connection lost",
+    );
+    state.terms.set(null);
+    await state.element.accessForTestingOnly.publish();
+    expect(state.element.accessForTestingOnly.error).toBe("");
+    // With no projected answer bound there is nothing to subscribe to.
+    const unbound = new HeadlessAnswer();
+    unbound.terms = state.terms;
+    unbound.willUpdate(new Map([["terms", undefined]]));
+    await settle();
+    expect(state.requests).toHaveLength(1);
   });
 });
