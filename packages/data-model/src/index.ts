@@ -28,6 +28,7 @@ export {
   type CloneOptions,
   cloneWithoutValueAtPath,
   cloneWithValueAtPath,
+  missingContainerIsArray,
   shallowMutableClone,
 } from "./value-clone.ts";
 

@@ -65,6 +65,34 @@ const wholeListRead = async (
   }
 };
 
+/**
+ * Commits `{ x: 1 }` as the value of the document `id`, and opens a
+ * transaction that has written it `{ x: 2 }`. That transaction edits its
+ * working value in place from then on, and the commit sends what that value
+ * holds, so a later write that changed it would show in both.
+ */
+const transactionOverEditedValue = async (id: URI) => {
+  const storage = StorageManager.emulate({ as: signer });
+  const address = { space, id, type };
+  const seed = storage.edit();
+  expect(seed.write({ ...address, path: [] }, { value: { x: 1 } }).ok)
+    .toBeTruthy();
+  expect((await seed.commit()).ok).toBeTruthy();
+  const tx = storage.edit();
+  expect(tx.write({ ...address, path: ["value"] }, { x: 2 }).ok).toBeTruthy();
+  return { storage, address, tx };
+};
+
+/** Commits `tx`, and returns the value `storage` then holds at `address`. */
+const committedValue = async (
+  storage: ReturnType<typeof StorageManager.emulate>,
+  address: { space: typeof space; id: URI; type: typeof type },
+  tx: ReturnType<ReturnType<typeof StorageManager.emulate>["edit"]>,
+): Promise<unknown> => {
+  expect((await tx.commit()).ok).toBeTruthy();
+  return storage.edit().read({ ...address, path: ["value"] }).ok?.value;
+};
+
 describe("v2-transaction", () => {
   describe("getPotentiallyExternalReadActivities()", () => {
     it("retains every raw clock position while excluding sealed verifier records", async () => {
@@ -203,6 +231,150 @@ describe("v2-transaction", () => {
       const { value } = await wholeListRead(20);
 
       expect(isDeepFrozen(value)).toBe(true);
+    });
+  });
+
+  describe("write()", () => {
+    it("leaves the value unchanged when it refuses a leaf of `-` beneath a missing parent", async () => {
+      // `a` is missing, and the array a write would create for it takes no
+      // key but an index.
+
+      const { storage, address, tx } = await transactionOverEditedValue(
+        "of:v2-transaction-refused-leaf",
+      );
+      try {
+        const refused = tx.write({ ...address, path: ["value", "a", "-"] }, 5);
+
+        expect(refused.error?.name).toBe("TypeMismatchError");
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value)
+          .toEqual({ x: 2 });
+        expect(await committedValue(storage, address, tx)).toEqual({ x: 2 });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("refuses `-` beneath a missing parent short of the leaf, and leaves the value unchanged", async () => {
+      const { storage, address, tx } = await transactionOverEditedValue(
+        "of:v2-transaction-refused-created-array",
+      );
+      try {
+        const refused = tx.write(
+          { ...address, path: ["value", "a", "-", "b"] },
+          5,
+        );
+
+        expect(refused.error?.name).toBe("TypeMismatchError");
+        expect(
+          refused.error?.name === "TypeMismatchError" && {
+            path: refused.error.address.path,
+            actualType: refused.error.actualType,
+          },
+        ).toEqual({ path: ["value", "a", "-"], actualType: "array" });
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value)
+          .toEqual({ x: 2 });
+        expect(await committedValue(storage, address, tx)).toEqual({ x: 2 });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("refuses a key that is not an index into an existing array short of the leaf", async () => {
+      // An array holds nothing under `name`, so what the write would put
+      // there is a value no read of the array reports and no commit carries.
+
+      const { storage, address, tx } = await transactionOverEditedValue(
+        "of:v2-transaction-refused-array-key",
+      );
+      try {
+        expect(tx.write({ ...address, path: ["value", "x"] }, [1, 2]).ok)
+          .toBeTruthy();
+
+        const refused = tx.write(
+          { ...address, path: ["value", "x", "name", "first"] },
+          "Ada",
+        );
+
+        expect(
+          refused.error?.name === "TypeMismatchError" && {
+            path: refused.error.address.path,
+            actualType: refused.error.actualType,
+          },
+        ).toEqual({ path: ["value", "x", "name"], actualType: "array" });
+        expect(await committedValue(storage, address, tx)).toEqual({
+          x: [1, 2],
+        });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("deletes nothing through a key the value only inherits", async () => {
+      // `toString` names a member of every record's prototype and no slot of
+      // this one, so the delete has nothing to remove.
+
+      const { storage, address, tx } = await transactionOverEditedValue(
+        "of:v2-transaction-delete-inherited",
+      );
+      try {
+        expect(
+          tx.write(
+            { ...address, path: ["value", "toString", "x"] },
+            undefined,
+            { delete: true },
+          ).ok,
+        ).toBeTruthy();
+
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value)
+          .toEqual({ x: 2 });
+        expect(await committedValue(storage, address, tx)).toEqual({ x: 2 });
+      } finally {
+        await storage.close();
+      }
+    });
+  });
+
+  describe("writeBatch()", () => {
+    it("keeps the writes ahead of a refused one, and nothing of the refused one", async () => {
+      const { storage, address, tx } = await transactionOverEditedValue(
+        "of:v2-transaction-batch-refused-later",
+      );
+      try {
+        const result = tx.writeBatch!([
+          { address: { ...address, path: ["value", "y"] }, value: 3 },
+          { address: { ...address, path: ["value", "a", "-"] }, value: 5 },
+          { address: { ...address, path: ["value", "z"] }, value: 4 },
+        ]);
+
+        expect(result.error?.name).toBe("TypeMismatchError");
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value)
+          .toEqual({ x: 2, y: 3 });
+        expect(await committedValue(storage, address, tx)).toEqual({
+          x: 2,
+          y: 3,
+        });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("leaves the value unchanged when its first write is refused", async () => {
+      const { storage, address, tx } = await transactionOverEditedValue(
+        "of:v2-transaction-batch-refused-first",
+      );
+      try {
+        const result = tx.writeBatch!([
+          { address: { ...address, path: ["value", "a", "-"] }, value: 5 },
+          { address: { ...address, path: ["value", "y"] }, value: 3 },
+        ]);
+
+        expect(result.error?.name).toBe("TypeMismatchError");
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value)
+          .toEqual({ x: 2 });
+        expect(await committedValue(storage, address, tx)).toEqual({ x: 2 });
+      } finally {
+        await storage.close();
+      }
     });
   });
 });

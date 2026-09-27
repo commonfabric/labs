@@ -687,15 +687,26 @@ export function cloneForMutation<T extends FabricValue>(
 }
 
 /**
+ * Indicates whether the container `cloneForMutation()` creates for a missing
+ * slot is an array, given `nextKey`, the key that goes on to address it: true
+ * for an array-index-shaped key (per `isArrayIndexPropertyName`) or the
+ * JSON-Pointer append marker `"-"`, false for everything else, which gets a
+ * plain object. A caller deciding ahead of that call whether a key fits the
+ * container it will land in asks this, so that the answer cannot drift from
+ * what the call creates.
+ */
+export function missingContainerIsArray(nextKey: string): boolean {
+  return isArrayIndexPropertyName(nextKey) || nextKey === "-";
+}
+
+/**
  * Allocates a fresh, mutable plain container of the right shape for
- * `nextKey`. Array-index-shaped keys (per `isArrayIndexPropertyName`) and the
- * JSON-Pointer append marker `"-"` produce an array; everything else
- * produces a plain object.
+ * `nextKey`, as `missingContainerIsArray()` decides it.
  */
 function createMissingContainer(
   nextKey: string,
 ): MutableFabricArrayLayer | MutableFabricPlainObjectLayer {
-  return isArrayIndexPropertyName(nextKey) || nextKey === "-" ? [] : {};
+  return missingContainerIsArray(nextKey) ? [] : {};
 }
 
 /**

@@ -11,9 +11,10 @@
 
 import {
   cloneForMutation,
-  CloneForMutationError,
+  debugStr,
   type FabricValue,
   isFabricPlainContainer,
+  missingContainerIsArray,
   toDebugKindString,
   valueEqual,
 } from "@commonfabric/data-model";
@@ -69,15 +70,20 @@ export const getValueTypeName = (value: FabricValue | undefined): string => {
  * (possibly new) root, the previous value at the path, and whether
  * anything changed.
  *
- * Delegates spine descent + thaw + missing-intermediate creation to
- * `cloneForMutation` (with `createMissing: true`), which exposes the
- * parent container at `address.path.slice(0, -1)` as a mutable handle.
- * The function then performs the leaf write -- a property set on an
- * object, an element set on an array, or the legacy length-write
- * coercion when the parent is an array and the leaf key is `"length"`.
- * Subtrees off the spine are preserved by identity, so a subsequent
- * re-freeze short-circuits on everything except the freshly thawed
- * spine.
+ * Whether the write is refused is settled first, by `checkWritePath()`,
+ * which reads `currentRoot` and changes nothing. A write it admits goes to
+ * `cloneForMutation` (with `createMissing: true`) for spine descent, thaw,
+ * and missing-intermediate creation, which exposes the parent container at
+ * `address.path.slice(0, -1)` as a mutable handle. The function then
+ * performs the leaf write -- a property set on an object, an element set
+ * on an array, or the legacy length-write coercion when the parent is an
+ * array and the leaf key is `"length"`. Subtrees off the spine are
+ * preserved by identity, so a subsequent re-freeze short-circuits on
+ * everything except the freshly thawed spine.
+ *
+ * A refused write therefore leaves `currentRoot` exactly as it was, spine
+ * identities included. That is what lets a caller hand in a root it
+ * mutates in place and keep it after an error.
  *
  * Writing `undefined` stores `undefined` (present-but-undefined is a
  * real state, distinct from absent) and materializes missing
@@ -136,70 +142,51 @@ export const applyMutablePathWrite = (
     };
   }
 
-  const leafKey = address.path[address.path.length - 1]!;
-  const parentPath = address.path.slice(0, -1);
-
-  // Thaw the spine and create missing intermediates, all in one call.
-  // The resulting `parent` is the mutable container at `parentPath` --
-  // the slot whose `[leafKey]` we're about to write.
-  let newRoot: FabricValue;
-  let parent: Record<string, FabricValue> | FabricValue[];
-  try {
-    const result = cloneForMutation(currentRoot, parentPath, {
-      createMissing: true,
-      nextKeyAfterPath: leafKey,
-      force: false,
-    });
-    newRoot = result.value;
-    if (!isFabricPlainContainer(result.pathValue)) {
-      // `cloneForMutation()` hands back any container arm at the end of its
-      // path, and `leafKey` addresses none of them but the plain ones. The
-      // offending value is at `parentPath`, whose last key is the one before
-      // the leaf.
-      return {
-        error: TypeMismatchError(
-          { ...address, path: parentPath },
-          toDebugKindString(result.pathValue),
-          "write",
-        ),
-      };
-    }
-    parent = result.pathValue as
-      | Record<string, FabricValue>
-      | FabricValue[];
-  } catch (e) {
-    if (e instanceof CloneForMutationError) {
-      // The descent surfaced a type mismatch (or a non-container value
-      // along the path); convert to the v2-transaction-shaped error.
-      // `e.pathIndex` is the index within `parentPath`, which is the
-      // same as the index within `address.path` (since `parentPath` is
-      // a prefix). The slice end is `e.pathIndex + 1` to include the
-      // offending key, matching `read`/`write`'s error-path semantics.
-      return {
-        error: TypeMismatchError(
-          { ...address, path: address.path.slice(0, e.pathIndex + 1) },
-          e.valueKind,
-          "write",
-        ),
-      };
-    }
-    throw e;
+  // Both branches above leave a plain container here: one freshly made, or
+  // one `isContainerValue()` admitted.
+  const check = checkWritePath(
+    currentRoot as Record<string, FabricValue> | FabricValue[],
+    address,
+    isDelete,
+  );
+  if (check.error) {
+    return { error: check.error };
   }
+  if (!check.ok) {
+    return {
+      ok: { root: currentRoot, previousValue: undefined, changed: false },
+    };
+  }
+
+  const leafKey = address.path[address.path.length - 1]!;
+
+  // Thaw the spine and create missing intermediates, all in one call. The
+  // check above refuses every path this call would throw on, and every
+  // parent but a plain container, so what comes back is the mutable plain
+  // container at the parent path -- the slot whose `[leafKey]` we're about
+  // to write.
+  const { value: newRoot, pathValue } = cloneForMutation(
+    currentRoot,
+    address.path.slice(0, -1),
+    { createMissing: true, nextKeyAfterPath: leafKey, force: false },
+  );
+  const parent = pathValue as Record<string, FabricValue> | FabricValue[];
 
   // Leaf write at `parent[leafKey]`.
   if (Array.isArray(parent)) {
     if (leafKey === "length") {
       return applyArrayLengthWrite(newRoot, parent, value);
     }
+    // deno-coverage-ignore-start -- the check admits only an index here
     if (!isArrayIndexPropertyName(leafKey)) {
-      return {
-        error: TypeMismatchError(
-          { ...address, path: address.path },
-          "array",
-          "write",
-        ),
-      };
+      // Reaching this means the check and `cloneForMutation()` disagree on
+      // the shape of the parent. Going on would write `parent[NaN]`, a slot
+      // no read reports and no commit carries, so this fails loudly instead.
+      throw new Error(
+        debugStr`The key $quote${leafKey} passed the write check, but its parent is an array`,
+      );
     }
+    // deno-coverage-ignore-stop
     const slot = Number(leafKey);
     const previousValue = parent[slot];
     if (isDelete) {
@@ -244,6 +231,73 @@ export const applyMutablePathWrite = (
   }
   obj[leafKey] = value;
   return { ok: { root: newRoot, previousValue, changed: true } };
+};
+
+/**
+ * Helper for `applyMutablePathWrite()`, which decides whether the write to
+ * `address` within `root` is refused, reading `root` and changing nothing.
+ * Returns `true` where the write goes ahead, and `false` for a delete whose
+ * path passes a missing slot, which leaves it nothing to remove.
+ *
+ * Each key is checked against the container that holds it once the write's
+ * missing intermediates exist: the one already there, or the one
+ * `cloneForMutation()` creates, which is an array exactly when
+ * `missingContainerIsArray()` says so of the key addressing it. An array takes an index
+ * or `length` and no other key, since any other slot on one is a value that
+ * no path read reports and no commit carries. A key short of the leaf that
+ * lands on anything but a plain container ends the descent, `length` on an
+ * array included. The error names the path through the offending key.
+ *
+ * The descent admits only what `isContainerValue()` does, which is narrower
+ * than what `cloneForMutation()` descends through, so every path that
+ * function throws on is refused here first.
+ */
+const checkWritePath = (
+  root: Record<string, FabricValue> | FabricValue[],
+  address: IMemoryAddress,
+  isDelete: boolean,
+): Result<boolean, ITypeMismatchError> => {
+  const path = address.path;
+  // `undefined` once the walk has passed a missing slot: every container from
+  // there down is one the write creates.
+  let container: Record<string, FabricValue> | FabricValue[] | undefined = root;
+  for (let index = 0; index < path.length; index++) {
+    const key = path[index]!;
+    const inArray = container === undefined
+      ? missingContainerIsArray(key)
+      : Array.isArray(container);
+    if (inArray && key !== "length" && !isArrayIndexPropertyName(key)) {
+      return {
+        error: TypeMismatchError(
+          { ...address, path: path.slice(0, index + 1) },
+          "array",
+          "write",
+        ),
+      };
+    }
+    if (container === undefined || index === path.length - 1) {
+      continue;
+    }
+    if (!Object.hasOwn(container, key)) {
+      if (isDelete) {
+        return { ok: false };
+      }
+      container = undefined;
+      continue;
+    }
+    const next: FabricValue = (container as Record<string, FabricValue>)[key];
+    if (!isContainerValue(next)) {
+      return {
+        error: TypeMismatchError(
+          { ...address, path: path.slice(0, index + 1) },
+          toDebugKindString(next),
+          "write",
+        ),
+      };
+    }
+    container = next;
+  }
+  return { ok: true };
 };
 
 /**

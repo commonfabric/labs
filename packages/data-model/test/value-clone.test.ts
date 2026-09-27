@@ -28,6 +28,7 @@ import {
   cloneWithValueAtPath,
   deepFreeze,
   isDeepFrozen,
+  missingContainerIsArray,
 } from "@";
 import { FabricError } from "@/fabric-instances";
 import { FabricHash } from "@/fabric-primitives";
@@ -232,6 +233,21 @@ describe("value-clone", () => {
     it("removes the whole value for an `undefined` root or an empty path", () => {
       expect(cloneWithoutValueAtPath(undefined, ["a"])).toBeUndefined();
       expect(cloneWithoutValueAtPath(deepFreeze({ a: 1 }), [])).toBeUndefined();
+    });
+  });
+
+  describe("missingContainerIsArray()", () => {
+    it("returns `true` for a canonical array index and for `-`", () => {
+      expect(["0", "7", "4294967294", "-"].map(missingContainerIsArray))
+        .toEqual([true, true, true, true]);
+    });
+
+    it("returns `false` for any other key", () => {
+      expect(
+        ["length", "08", "-1", "4294967295", "", "a"].map(
+          missingContainerIsArray,
+        ),
+      ).toEqual([false, false, false, false, false, false]);
     });
   });
 });

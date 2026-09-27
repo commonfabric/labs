@@ -2287,9 +2287,8 @@ export class V2StorageTransaction implements IStorageTransaction {
       const previousValue = readValueAtPath(nextRoot, address.path, {
         allowArrayLength: true,
       });
-      // Presence-aware no-op detection (also keeps no-op deletes from
-      // reaching `applyMutablePathWrite`, which would materialize
-      // intermediates into `nextRoot` before the changed check).
+      // Presence-aware no-op detection, which also keeps no-op deletes from
+      // reaching `applyMutablePathWrite`.
       // Authoritative mode records equal-VALUE writes anyway, and an
       // unconfirmed schema document is recorded for its delivery
       // guarantee (see `#writeWithinBranch` for both); delete no-ops
