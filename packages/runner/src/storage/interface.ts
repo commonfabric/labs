@@ -3467,9 +3467,9 @@ export interface IReadOnlyAddressError extends IStorageError {
 }
 
 /**
- * Error returned when a write sets an array's `length` to a number no array
- * can have: a finite value of `2 ** 32` or more. Like a type mismatch, it would
- * persist if the transaction were retried.
+ * Error returned when a write to an array's `length` would grow the array to
+ * `2 ** 32` or more, past the longest an array can be. Like a type mismatch,
+ * it would persist if the transaction were retried.
  */
 export interface IInvalidArrayLengthError extends IStorageError {
   readonly name: "InvalidArrayLengthError";
