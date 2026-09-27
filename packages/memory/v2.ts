@@ -15,6 +15,7 @@ import {
 } from "@commonfabric/data-model/codecs";
 import { internPathSelector } from "@commonfabric/data-model-schema";
 import { isPlainObject, unsafeObjectKeyIn } from "@commonfabric/utils/types";
+import { readEnvironmentVariable } from "./v2/frame-log.ts";
 import { PATCH_SEMANTICS_VERSION } from "./v2/patch-semantics.ts";
 import type { SessionReadCeiling } from "./v2/read-ceiling.ts";
 
@@ -2166,13 +2167,9 @@ export function setPatchReplayConfig(enabled?: boolean): void {
 
 export function getPatchReplayConfig(): boolean {
   if (patchReplayOverride !== undefined) return patchReplayOverride;
-  try {
-    if (typeof Deno === "undefined") return true;
-    const value = Deno.env.get("CF_MEMORY_PATCH_REPLAY")?.trim().toLowerCase();
-    return value !== "off" && value !== "false" && value !== "0";
-  } catch {
-    return true;
-  }
+  const value = readEnvironmentVariable("CF_MEMORY_PATCH_REPLAY")?.trim()
+    .toLowerCase();
+  return value !== "off" && value !== "false" && value !== "0";
 }
 
 export function resetPatchReplayConfig(): void {

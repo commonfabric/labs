@@ -16,6 +16,7 @@ import {
   type EntityDocument,
   getEntityDocumentMetadata,
   getMemoryProtocolFlags,
+  getPatchReplayConfig,
   MEMORY_PROTOCOL,
   parseMemoryProtocolFlags,
   PATCH_SEMANTICS_VERSION,
@@ -319,6 +320,28 @@ describe("parseMemoryProtocolFlags", () => {
       )?.patchReplayVersion,
       PATCH_SEMANTICS_VERSION,
     );
+  });
+
+  it("switches patch replay off when `CF_MEMORY_PATCH_REPLAY` says so", () => {
+    const previous = Deno.env.get("CF_MEMORY_PATCH_REPLAY");
+    try {
+      for (const off of ["off", "FALSE", " 0 "]) {
+        Deno.env.set("CF_MEMORY_PATCH_REPLAY", off);
+        assertEquals(getPatchReplayConfig(), false);
+      }
+      Deno.env.set("CF_MEMORY_PATCH_REPLAY", "on");
+      assertEquals(getPatchReplayConfig(), true);
+      setPatchReplayConfig(true);
+      Deno.env.set("CF_MEMORY_PATCH_REPLAY", "off");
+      assertEquals(getPatchReplayConfig(), true);
+    } finally {
+      resetPatchReplayConfig();
+      if (previous === undefined) {
+        Deno.env.delete("CF_MEMORY_PATCH_REPLAY");
+      } else {
+        Deno.env.set("CF_MEMORY_PATCH_REPLAY", previous);
+      }
+    }
   });
 
   it("advertises no patch replay version while patch replay is switched off", () => {
