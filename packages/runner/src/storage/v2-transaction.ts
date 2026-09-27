@@ -2232,6 +2232,11 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (read.error) throw read.error;
   }
 
+  /**
+   * Helper for `writeBatch()`, which applies `writes`, all addressing one
+   * document, in order. The run stops at the first write that fails, whether it
+   * returns an error or throws, and leaves the writes before it applied.
+   */
   #writeBatchRun(
     space: MemorySpace,
     branch: SpaceBranch,
@@ -2261,10 +2266,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     const { doc: readDoc } = this.#document(branch, writes[0]!.address);
     const doc = ensureWritableDocument(readDoc);
     this.#preserveForReaders(doc);
-    const originalRoot = doc.current.value;
-    let nextRoot = originalRoot;
-    let changed = false;
-    const writtenPaths: (readonly string[])[] = [];
+    let nextRoot = doc.current.value;
 
     // No explicit mutable-root prelude here: a plan's `apply()` calls
     // `cloneForMutation()` with `force: false`, which shallow-thaws the
@@ -2288,17 +2290,6 @@ export class V2StorageTransaction implements IStorageTransaction {
         isDelete ? { delete: true } : undefined,
       );
       if (plan.error) {
-        if (changed) {
-          this.#replaceCurrent(doc, {
-            ...doc.current,
-            value: collapseEmptyJsonDocumentEnvelope(
-              nextRoot,
-            ),
-          });
-          for (const written of writtenPaths) {
-            invalidateFrozenReadsOnChain(doc, written);
-          }
-        }
         return { error: plan.error.from(space) };
       }
       const planned = plan.ok;
@@ -2326,12 +2317,26 @@ export class V2StorageTransaction implements IStorageTransaction {
         this.#retainPendingWriteElision(branch, space, address);
         continue;
       }
-      changed = true;
-      writtenPaths.push(address.path);
+      // Only a write of the whole root, or a delete of one of its keys, can
+      // leave the root empty, so only those pay for counting its keys. The
+      // run goes on from the collapsed root, as the next of separate writes
+      // would.
+      if (
+        address.path.length === 0 || (isDelete && address.path.length === 1)
+      ) {
+        nextRoot = collapseEmptyJsonDocumentEnvelope(nextRoot);
+      }
+      // Installed before the next write begins, as `#writeWithinBranch`
+      // installs its one write, so a run that stops at a later write, by
+      // returning an error or by throwing, leaves nothing about this one
+      // undone: reads, the epoch, and the commit all see it, as its patch
+      // intent says.
+      this.#replaceCurrent(doc, { ...doc.current, value: nextRoot });
+      invalidateFrozenReadsOnChain(doc, address.path);
       this.#recordPatchIntent(
         space,
         address,
-        readValueAtPath(result.root, address.path, {
+        readValueAtPath(nextRoot, address.path, {
           allowArrayLength: true,
         }),
         cloneIfNecessary(planned.previousValue) as FabricValue | undefined,
@@ -2341,27 +2346,13 @@ export class V2StorageTransaction implements IStorageTransaction {
       this.#recordWriteActivity(
         space,
         { ...address, path: result.activityPath },
-        readValueAtPath(result.root, result.activityPath, {
+        readValueAtPath(nextRoot, result.activityPath, {
           allowArrayLength: true,
         }),
         result.previousActivityValue,
         doc,
         result.previousActivityPresent,
       );
-    }
-
-    if (!changed) {
-      return { ok: {} };
-    }
-
-    this.#replaceCurrent(doc, {
-      ...doc.current,
-      value: collapseEmptyJsonDocumentEnvelope(
-        nextRoot,
-      ),
-    });
-    for (const written of writtenPaths) {
-      invalidateFrozenReadsOnChain(doc, written);
     }
     return { ok: {} };
   }

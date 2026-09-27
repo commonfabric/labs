@@ -1612,6 +1612,12 @@ export interface IStorageTransaction {
   /**
    * Optional batched write hook for transactions that can apply multiple path
    * writes more efficiently than one-at-a-time.
+   *
+   * Not atomic: a batch that fails, whether a write returns an error or
+   * something throws, may leave some of its writes applied, and which ones is
+   * unspecified. The writes it does apply are applied consistently: the
+   * transaction's reads, its write details and its commit all include them. A
+   * caller that must not land part of a batch aborts the transaction.
    */
   writeBatch?(
     writes: Iterable<ITransactionWriteRequest>,

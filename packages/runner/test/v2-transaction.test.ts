@@ -548,6 +548,9 @@ describe("v2-transaction", () => {
   });
 
   describe("writeBatch()", () => {
+    /** A value `cloneIfNecessary()` throws on, as a run clones each value. */
+    const unclonable = new (class Unclonable {})() as unknown as FabricValue;
+
     it("keeps the writes ahead of a refused array `length`, and reads and commits them", async () => {
       // The document is stored before the transaction opens, so the batch is
       // the transaction's first write to it.
@@ -629,6 +632,7 @@ describe("v2-transaction", () => {
           [["value", "new", "deep", "k"], 1],
           [["value", "new", "deep", "j"], 2],
         ],
+        [[["value"], undefined, true], [["value", "a"], 1]],
       ];
 
       const outcome = async (steps: Step[], asBatch: boolean) => {
@@ -754,6 +758,118 @@ describe("v2-transaction", () => {
           x: [1, 2],
           y: 3,
         });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("applies the writes before one that throws, for reads and for the commit", async () => {
+      const storage = StorageManager.emulate({ as: signer });
+      try {
+        const tx = storage.edit();
+        const address = { space, id: "of:write-batch-throw" as URI, type };
+        expect(tx.write({ ...address, path: [] }, { value: { list: [1] } }).ok)
+          .toBeDefined();
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value)
+          .toEqual({ list: [1] });
+
+        expect(() =>
+          tx.writeBatch!([
+            { address: { ...address, path: ["value", "z"] }, value: 5 },
+            {
+              address: { ...address, path: ["value", "w"] },
+              value: unclonable,
+            },
+          ])
+        ).toThrow("Cannot clone");
+
+        expect(tx.read({ ...address, path: ["value"] }).ok?.value)
+          .toEqual({ list: [1], z: 5 });
+        expect((await tx.commit()).ok).toBeDefined();
+        expect(storage.edit().read({ ...address, path: ["value"] }).ok?.value)
+          .toEqual({ list: [1], z: 5 });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("applies the writes before one that throws to paths read before the run, on a root it edits in place", async () => {
+      // The second write leaves the document's root mutable, so the run
+      // edits that root where it stands, under reads cached before the run of
+      // each path it writes.
+
+      const storage = StorageManager.emulate({ as: signer });
+      try {
+        const tx = storage.edit();
+        const address = {
+          space,
+          id: "of:write-batch-throw-in-place" as URI,
+          type,
+        };
+        expect(tx.write({ ...address, path: [] }, { value: { list: [1] } }).ok)
+          .toBeDefined();
+        expect(tx.write({ ...address, path: ["value", "list", "0"] }, 2).ok)
+          .toBeDefined();
+        expect(tx.read({ ...address, path: ["value", "z"] }).ok?.value)
+          .toBeUndefined();
+        expect(tx.read({ ...address, path: ["value", "y"] }).ok?.value)
+          .toBeUndefined();
+
+        expect(() =>
+          tx.writeBatch!([
+            { address: { ...address, path: ["value", "z"] }, value: 5 },
+            { address: { ...address, path: ["value", "y"] }, value: 6 },
+            {
+              address: { ...address, path: ["value", "w"] },
+              value: unclonable,
+            },
+          ])
+        ).toThrow("Cannot clone");
+
+        expect(tx.read({ ...address, path: ["value", "z"] }).ok?.value)
+          .toBe(5);
+        expect(tx.read({ ...address, path: ["value", "y"] }).ok?.value)
+          .toBe(6);
+        expect((await tx.commit()).ok).toBeDefined();
+        expect(storage.edit().read({ ...address, path: ["value"] }).ok?.value)
+          .toEqual({ list: [2], z: 5, y: 6 });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("leaves `hasWrites()` returning `true` after a throw only when a write before it changed the document", async () => {
+      const storage = StorageManager.emulate({ as: signer });
+      try {
+        const tx = storage.edit();
+        const address = {
+          space,
+          id: "of:write-batch-throw-first" as URI,
+          type,
+        };
+        expect(tx.hasWrites!()).toBe(false);
+
+        expect(() =>
+          tx.writeBatch!([
+            {
+              address: { ...address, path: ["value", "w"] },
+              value: unclonable,
+            },
+            { address: { ...address, path: ["value", "z"] }, value: 5 },
+          ])
+        ).toThrow("Cannot clone");
+        expect(tx.hasWrites!()).toBe(false);
+
+        expect(() =>
+          tx.writeBatch!([
+            { address: { ...address, path: ["value", "z"] }, value: 5 },
+            {
+              address: { ...address, path: ["value", "w"] },
+              value: unclonable,
+            },
+          ])
+        ).toThrow("Cannot clone");
+        expect(tx.hasWrites!()).toBe(true);
       } finally {
         await storage.close();
       }
