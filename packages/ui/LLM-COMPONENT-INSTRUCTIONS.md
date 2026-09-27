@@ -959,6 +959,28 @@ Only a trusted click on the dialog's **Seal & consent** seals; a scripted click
 cannot. See `docs/common/components/COMPONENTS.md` and
 `docs/specs/cfc-custody-seal.md`.
 
+### cf-custody-answer
+
+**Purpose**: Asks the trusted host to publish a custody room's answer once per
+instance, and shows it. The host publishes it only when a rule of the room's
+policy that requires the seal's witness releases it to the room's readers and
+every seat has sealed, and refuses every later request. What the component shows
+is read by the host from the instance's answer slot and verified to be the
+seal's write, so it cannot move once published. **Tag**: `<cf-custody-answer>`
+
+**Bindings**:
+
+- `$terms` - the room's terms document
+- `$policy` - a cell holding the room's custody policy reference
+- `$output` - the room's projected answer; each change asks for publication
+
+**Events**:
+
+- `cf-published` - `detail.instance` when this component published it; fires
+  once the published answer is shown.
+
+See `docs/specs/cfc-custody-seal.md`.
+
 ## Styling Components
 
 Components expose CSS custom properties and parts for styling:

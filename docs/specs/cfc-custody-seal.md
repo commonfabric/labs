@@ -282,6 +282,45 @@ and scope. Once the seal has written it, the cell carries the seal's
 label, so a link other code writes over it must name a document that carries a
 label of its own.
 
+### One answer per instance
+
+A room's projector is reactive: pointed at other input, or run again, it
+computes again, and a room that rendered it would show each result its rule
+releases. The consent a member gives is per instance, so the room releases one
+answer per instance. `publishCustodyAnswer(room, output)` is the host operation
+that publishes it, and `readCustodyAnswer(room)` the one that reads it back.
+A pattern reaches both through `cf-custody-answer` (`$terms`, `$policy`,
+`$output`), which asks the worker to publish each time the projected answer
+changes, and shows what the seal published.
+
+The seal publishes only when all of these hold, read by the worker from the
+cells the host names, never from the request:
+
+- every exchange rule of the room's policy requires the seal's witness
+  (`witnessedRelease`);
+- the instance's anchor and box are the seal's, and the box holds one entry
+  per seat;
+- the projected answer is a scalar of at most 1,024 characters whose stored
+  label carries the room's policy, and a rule of the policy fires on that
+  label and drops it, leaving only clauses the room space's readers hold. A
+  value that never carried the policy is not the room's answer, whatever its
+  label admits;
+- the room the seal inspected is the room it publishes for; and
+- the instance has no answer yet.
+
+It then writes `{instance, answer}` into the instance's answer slot, a
+create-only document in the room space at
+`{custodyAnswer: {policy: P, instance: D}}` labeled `Space(S)`. The
+transaction reads the anchor, as the entry transaction does, so the slot is
+stamped `TransformedBy{builtin cfc-custody-seal}` like the box. Both reading
+and publishing refuse a slot without that stamp: anyone who can compute `D` can
+compute the slot's address and write there first, which blocks publication but
+shows nothing. A host shows the slot's value through `readCustodyAnswer`, never
+a link a room holds, which the room's members could point anywhere. A later
+publication is refused, so what the room shows cannot move once the answer is
+published, whatever later points the projector at other input. A fresh
+instance, a new terms document with new consents, has a slot of its own.
+
 ### The blinded entry key
 
 An entry's key is `base64url(SHA-256(sign_actor(domain ‖ digest(P, D))))`: a
@@ -350,13 +389,26 @@ of it.
   and when one does not, the confirmation shows a warning that a member's own
   code can learn the actor's stance one answer at a time, in place of a bound
   on what an answer reveals.
-- **An answer that does not change.** A stamp is replaced when its value is
-  written. When a member's code points the room's box at a document of its own
-  and the projector computes the answer it had already released, nothing is
-  written, and the answer keeps the stamp it had. A member can so learn whether
-  a document of their choosing yields the answer the room released, one such
-  comparison per change. This holds of every witnessed release, not of custody
-  alone.
+- **An answer that does not change, before it is published.** A stamp is
+  replaced when its value is written. When a member's code points the room's
+  box at a document of its own and the projector computes the answer it had
+  already computed, nothing is written, and the answer keeps the stamp it had.
+  Until the answer is published, a member can so learn whether a document of
+  their choosing yields the projector's current answer, one comparison per
+  change. The same holds the other way, as a denial of service: an honest run
+  after one over other input that yields the same answer keeps the stamp that
+  run left, and the seal refuses to publish it until the answer changes. Once
+  the answer is published, what the room shows no longer follows the
+  projector.
+- **Which instance's box an answer was computed from.** The witness says the
+  seal wrote what the projector read, not which instance's box it was. A
+  projector pointed at the box of an earlier instance under the same `P`
+  computes that instance's answer, and the seal publishes it as the current
+  instance's. A projector that checks its entries against the current terms
+  closes this, as the multi-instance limit above describes.
+- **A squatted answer slot.** A slot other code wrote first blocks the
+  instance's publication, as a squatted box or anchor blocks sealing. It
+  shows nothing, since a host reads only a slot the seal stamped.
 - **Freezing the room's readers.** Whoever can read `S` when a released value
   is rendered is its audience. Keeping the audience at the seats, whether with
   a room access list fixed at the first seal or with a render fact that admits

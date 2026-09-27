@@ -5,7 +5,7 @@
  * for interacting with cells across the worker boundary.
  */
 
-import type { CellScope } from "@commonfabric/api";
+import type { CellScope, JSONValue } from "@commonfabric/api";
 import type { FabricPlainObject, FabricValue } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { DID, Identity } from "@commonfabric/identity";
@@ -439,6 +439,41 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       box: new CellHandle(this, response.box),
       instance: response.instance,
     };
+  }
+
+  /**
+   * Asks the worker to publish a custody instance's answer once, from the
+   * room's projected answer, into the instance's answer slot. Refused while
+   * the answer is not released to the room's readers or not every seat has
+   * sealed, and once it is published.
+   */
+  async publishCustodyAnswer(cells: {
+    terms: CellRef;
+    policy: CellRef;
+    output: CellRef;
+  }): Promise<{ instance: string; answer: JSONValue }> {
+    return await this.#conn.request<RequestType.CustodyAnswerPublish>({
+      type: RequestType.CustodyAnswerPublish,
+      terms: cells.terms,
+      policy: cells.policy,
+      output: cells.output,
+    });
+  }
+
+  /**
+   * Reads a custody instance's published answer, verified to be the seal's
+   * write, or `undefined` while none is published.
+   */
+  async readCustodyAnswer(cells: {
+    terms: CellRef;
+    policy: CellRef;
+  }): Promise<JSONValue | undefined> {
+    const response = await this.#conn.request<RequestType.CustodyAnswerRead>({
+      type: RequestType.CustodyAnswerRead,
+      terms: cells.terms,
+      policy: cells.policy,
+    });
+    return response.answer;
   }
 
   /** Discards a custody seal preview the host closed or replaced. */

@@ -39,6 +39,8 @@ import {
   commitCustodySeal,
   CUSTODY_SEAL_GESTURE,
   prepareCustodySeal,
+  publishCustodyAnswer,
+  readCustodyAnswer,
   TRUSTED_DECLASSIFIER_CONCEPT,
 } from "@commonfabric/runner/cfc/custody-seal";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
@@ -91,9 +93,9 @@ const trustedClick = () => {
   return event;
 };
 
-// The room's rule as the pattern writes it, naming its projector alone, and
-// the same rule requiring as well that everything confidential the projector
-// read was written by the seal.
+// The room's rule as the pattern writes it, requiring that everything
+// confidential its projector read was written by the seal, and the same rule
+// naming the projector alone.
 const IDENTITY_GUARD = `        symbol: "projectChoice",
       },
     }],`;
@@ -151,14 +153,14 @@ const sealAndRelease = async (witnessed: boolean): Promise<void> => {
       (resolver) => host.harness.resolve(resolver),
       { main: PATTERN, root: ROOT },
     );
-    const program = !witnessed ? resolved : {
+    const program = witnessed ? resolved : {
       ...resolved,
       files: resolved.files.map((file) => {
         if (!file.name.endsWith("custody-projector.tsx")) return file;
-        expect(file.contents).toContain(IDENTITY_GUARD);
+        expect(file.contents).toContain(WITNESSED_GUARD);
         return {
           ...file,
-          contents: file.contents.replace(IDENTITY_GUARD, WITNESSED_GUARD),
+          contents: file.contents.replace(WITNESSED_GUARD, IDENTITY_GUARD),
         };
       }),
     };
@@ -308,7 +310,19 @@ const sealAndRelease = async (witnessed: boolean): Promise<void> => {
     );
     expect(shownTo(bob.did(), room.key("choice"))).toBe(true);
     expect(shownTo(bob.did(), room.key("rating"))).toBe(false);
-    if (!witnessed) return;
+
+    // The host publishes the answer once, as `cf-custody-answer` asks it to,
+    // and shows what the seal published. A rule naming the projector alone
+    // is refused.
+    const hostRoom = { terms: room.key("terms"), policy: room.key("policy") };
+    const publish = () => publishCustodyAnswer(hostRoom, room.key("choice"));
+    if (!witnessed) {
+      await expect(publish()).rejects.toThrow("requires the seal's witness");
+      return;
+    }
+    const published = await publish();
+    expect(published.value).toBe("pizza");
+    expect(await readCustodyAnswer(hostRoom)).toBe("pizza");
 
     // A member's code points the room's `box` at a record of its own that
     // repeats Bob's real entry, so his stance counts for both seats. The
@@ -343,6 +357,10 @@ const sealAndRelease = async (witnessed: boolean): Promise<void> => {
       { stuckLabel: "the projector's answer over the crafted record" },
     );
     expect(shownTo(bob.did(), room.key("choice"))).toBe(false);
+    // What the room shows is the published answer, which has not moved, and
+    // the host publishes nothing again.
+    await expect(publish()).rejects.toThrow("already published");
+    expect(await readCustodyAnswer(hostRoom)).toBe("pizza");
   } finally {
     for (const runtime of runtimes) {
       await runtime.dispose({ closeStorage: false });
@@ -353,13 +371,13 @@ const sealAndRelease = async (witnessed: boolean): Promise<void> => {
 };
 
 describe("sealed custody through a pattern", () => {
-  it("seals two members' stances, and releases only the projector's answer", async () => {
-    await sealAndRelease(false);
-  });
-
-  it("releases the projector's answer under a rule requiring the seal's witness", async () => {
+  it("seals two members' stances, and publishes the projector's answer once", async () => {
     // The projector reads the box through the room's `box`, which holds the
     // link the seal wrote, so everything it read carries the seal's stamp.
     await sealAndRelease(true);
+  });
+
+  it("releases the answer but publishes nothing under a rule naming the projector alone", async () => {
+    await sealAndRelease(false);
   });
 });

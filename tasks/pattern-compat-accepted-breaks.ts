@@ -900,4 +900,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "the witnessed-chain demo's release rule pins the submit step beneath commit, which changes the declared policy's digest",
     record: "docs/history/witnessed-chain-two-level-break.md",
   },
+  {
+    // The example room's release rule now requires the seal's input witness,
+    // so the policy its `policy` cell declares has a new digest, which the
+    // proof reads as a changed label on the argument and the result.
+    pattern: "cfc-exchange-rules/custody-projector.tsx",
+    baselines: ["20260926T003025Z-vb5BZbezEKFEfTfj"],
+    paths: ["argument.policy", "result.policy"],
+    reason:
+      "the example room's release rule moved to the seal's input witness, which changes the declared policy's digest",
+    record: "docs/history/custody-projector-witnessed-rule-break.md",
+  },
 ];

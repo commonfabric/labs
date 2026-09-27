@@ -337,6 +337,20 @@ describe("custody-seal", () => {
     });
   });
 
+  it("routes an answer publication to the seal, which reads the room itself", async () => {
+    await withFixture(async ({ processor, runtime, refs }) => {
+      const output = runtime.getCell(S, "custody-room-choice");
+      // Nothing is sealed yet, so the seal refuses: the request carried the
+      // room's cells, and the worker read them.
+      await expect(processor.handleRequest({
+        type: RequestType.CustodyAnswerPublish,
+        terms: refs.terms,
+        policy: refs.policy,
+        output: createCellRef(output),
+      }, first)).rejects.toThrow("every seat to have sealed");
+    });
+  });
+
   it("admits one confirmation, from the client that prepared it", async () => {
     await withFixture(async ({ processor, refs }) => {
       await expect(processor.handleRequest({

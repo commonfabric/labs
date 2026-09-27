@@ -194,6 +194,12 @@ export enum RequestType {
   /** Discards an unconfirmed custody seal owned by this client. */
   CustodySealCancel = "custodySeal:cancel",
 
+  /** Publishes a custody instance's answer once, into its answer slot. */
+  CustodyAnswerPublish = "custodyAnswer:publish",
+
+  /** Reads a custody instance's published answer, verified as the seal's. */
+  CustodyAnswerRead = "custodyAnswer:read",
+
   /** Lists the operation codecs available for a cell. */
   OperationCapabilities = "operation:capabilities",
 
@@ -1355,6 +1361,49 @@ export type CustodySealCommitResponse = {
 export type CustodySealCancelRequest = BaseRequest & {
   type: RequestType.CustodySealCancel;
   id: string;
+};
+
+/**
+ * The {@link RequestType.CustodyAnswerPublish} request: the room's cells the
+ * worker reads the answer from. The worker reads each at the address named;
+ * whether the answer is published is decided by what it reads there.
+ */
+export type CustodyAnswerPublishRequest = BaseRequest & {
+  type: RequestType.CustodyAnswerPublish;
+
+  /** The room's terms document; its space is the room space. */
+  terms: CellRef;
+
+  /** A cell holding the room's custody policy reference. */
+  policy: CellRef;
+
+  /** The room's projected answer. */
+  output: CellRef;
+};
+
+/** What a custody answer publication wrote. */
+export type CustodyAnswerPublishResponse = {
+  /** The instance the answer was published for. */
+  instance: string;
+
+  /** The answer as published. */
+  answer: JSONValue;
+};
+
+/** The {@link RequestType.CustodyAnswerRead} request: the room's cells. */
+export type CustodyAnswerReadRequest = BaseRequest & {
+  type: RequestType.CustodyAnswerRead;
+
+  /** The room's terms document; its space is the room space. */
+  terms: CellRef;
+
+  /** A cell holding the room's custody policy reference. */
+  policy: CellRef;
+};
+
+/** A custody instance's published answer, absent while none is. */
+export type CustodyAnswerReadResponse = {
+  answer?: JSONValue;
 };
 
 /** The {@link RequestType.OperationQuery} request. */
@@ -3158,6 +3207,8 @@ export type IPCClientRequest =
   | CustodySealPrepareRequest
   | CustodySealCommitRequest
   | CustodySealCancelRequest
+  | CustodyAnswerPublishRequest
+  | CustodyAnswerReadRequest
   | OperationCapabilitiesRequest
   | OperationQueryRequest
   | OperationApplyRequest
@@ -3845,6 +3896,8 @@ export type RemoteResponse =
   | SnapshotSharePreview
   | CustodySealPreview
   | CustodySealCommitResponse
+  | CustodyAnswerPublishResponse
+  | CustodyAnswerReadResponse
   | SqliteQueryResponse
   | GraphSnapshotResponse
   | LoggerCountsResponse
@@ -4083,6 +4136,14 @@ export type Commands = {
   [RequestType.CustodySealCancel]: {
     request: CustodySealCancelRequest;
     response: EmptyResponse;
+  };
+  [RequestType.CustodyAnswerPublish]: {
+    request: CustodyAnswerPublishRequest;
+    response: CustodyAnswerPublishResponse;
+  };
+  [RequestType.CustodyAnswerRead]: {
+    request: CustodyAnswerReadRequest;
+    response: CustodyAnswerReadResponse;
   };
   [RequestType.OperationCapabilities]: {
     request: OperationCapabilitiesRequest;
