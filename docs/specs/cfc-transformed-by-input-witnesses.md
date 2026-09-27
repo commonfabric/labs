@@ -228,7 +228,13 @@ location read behind it carried it, which is what refuses each of these:
   stamp, and a reference anchoring did not store earns none, so the slot
   resolves to no writer; and
 - an object other code pushed into the list, or a list it wrote whole: those
-  slots and entities carry that code's stamp.
+  slots and entities carry that code's stamp; and
+- a list other code truncated, dropping members from its end so that every
+  member left keeps its slot and its stamp: a read that stops at a container
+  observes its membership, and a list's `length` is a value stamped by
+  whoever last changed it, so the value stamps at `length` are a location of
+  that read (a record's key named `length` is read the same way, which can
+  only withhold a witness).
 
 A step that copies references rather than values, setting its output to the
 list it was handed, stores references to entities another step wrote. Those

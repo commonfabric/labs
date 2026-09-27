@@ -3952,12 +3952,43 @@ const deriveFlowJoinImpl = (
                 : undefined,
             ),
         );
+        // A read that stops at a container observes its membership: for a
+        // list, how long it is. The length is a value of its own, stamped by
+        // whoever last changed it, and nothing else the read consumes says
+        // who that was, so a list other code truncated would otherwise keep
+        // every surviving member's witness. Its value stamps are a location
+        // of the read. A record's key named `length` is read the same way,
+        // which can only withhold a witness.
+        document.witnesses.set(
+          `${labelKey}#length`,
+          document.metadata === undefined ||
+            observation.nonRecursive !== true ||
+            observation.shape === "followRef" || identity === undefined ||
+            inputWitnesses?.length === 0
+            ? undefined
+            : (() => {
+              const lengthPath = [...logicalPath, "length"];
+              const lengthEntries = consumedEntriesForRead(
+                document.metadata!,
+                lengthPath,
+                { nonRecursive: true, consumes: "value", ...exclusion },
+                indexFor("value"),
+              ).filter((entry) =>
+                pathKey(canonicalizeLogicalPath(entry.path)) ===
+                  pathKey(lengthPath)
+              );
+              return lengthEntries.length === 0
+                ? undefined
+                : observationInputWitnesses(lengthEntries, lengthPath, true);
+            })(),
+        );
       }
       // Every observation counts toward the input witnesses, `followRef`
       // included: which reference sits at a slot is information the
       // transformation consumed, and a pointer the endorsed writer did not
       // write must not pass as its input.
       noteInputWitnesses(document.witnesses.get(labelKey));
+      noteInputWitnesses(document.witnesses.get(`${labelKey}#length`));
       // Any observation with label CONTENT marks its space as a label
       // contributor. Deliberately over-approximate for integrity (an
       // observation whose hereditary atoms all meet away still marks its

@@ -72,6 +72,7 @@ export default pattern<{ room: Writable<Default<RoomText, "">> }>(
       copyList: chain.copyList,
       dupPush: chain.dupPush,
       dupList: chain.dupList,
+      dropLast: chain.dropLast,
       publish: publish({ from: chain.tally, to: room }),
     };
   },
@@ -233,6 +234,15 @@ export const dupList = handler<
   briefs.set([...stored, stored[0]]);
 });
 
+/** Not the entry point: drops the last brief, keeping the rest in place. */
+export const dropLast = handler<
+  void,
+  { briefs: Writable<Sealed<Brief>[]> }
+>((_, { briefs }) => {
+  const stored = (briefs as any).getRaw() as Sealed<Brief>[];
+  briefs.set(stored.slice(0, -1));
+});
+
 // \`others\` sits inside an object of its own: two inputs defaulting to the
 // same empty list are stored as one list.
 interface ChainInput {
@@ -258,6 +268,7 @@ export default pattern<ChainInput>(
     copyList: copyList({ briefs, others }),
     dupPush: dupPush({ briefs }),
     dupList: dupList({ briefs }),
+    dropLast: dropLast({ briefs }),
     };
   },
 );
@@ -417,6 +428,18 @@ const LAUNDERING: readonly {
     tally: "2",
   },
   {
+    // The dropped brief is an approval, so the tally differs from the
+    // honest one.
+    name: "a list other code truncated",
+    launder: async (send) => {
+      await send("submit", { vote: "reject" });
+      await send("submit", { vote: "approve" });
+      await send("submit", { vote: "approve" });
+      await send("dropLast");
+    },
+    tally: "1",
+  },
+  {
     name: "a list other code copied from submitted objects",
     launder: async (send) => {
       await send("submitOther", { vote: "approve" });
@@ -465,6 +488,19 @@ describe("input witnesses through references", () => {
       await send("plant");
       await send("commit");
       expect((await read()).tally).toBe("2");
+      await send("publish");
+      expect((await read()).room).toBe("");
+    });
+  });
+
+  it("refuses a list other code truncated, nested in a list of objects", async () => {
+    await runChain(TWO_LEVEL_NESTED, "truncated nested", async (send, read) => {
+      await send("submit", { vote: "reject" });
+      await send("submit", { vote: "approve" });
+      await send("submit", { vote: "approve" });
+      await send("dropLast");
+      await send("commit");
+      expect((await read()).tally).toBe("1");
       await send("publish");
       expect((await read()).room).toBe("");
     });
