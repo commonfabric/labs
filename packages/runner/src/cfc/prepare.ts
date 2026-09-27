@@ -10266,6 +10266,39 @@ export function* prepareBoundaryCommitSteps(
       }
       const derivedPrefixes = new PathPrefixIndex();
       for (const path of derivedStampPaths) derivedPrefixes.add(path);
+      // The nodes this transaction wrote values, and no reference, beneath.
+      // A pure-link-structure write at one of them was the diff's
+      // scaffolding rather than a container of references: `Cell.set`
+      // writes `{}` into a document that already exists and then the
+      // members, so a store whose result link was set first is created as
+      // an empty object and filled with values. Computed once, and only for
+      // a document that mints templates.
+      let valueOnlyContainerKeys: Set<string> | undefined;
+      const holdsValuesOnly = (path: readonly string[]): boolean => {
+        if (valueOnlyContainerKeys === undefined) {
+          const properPrefixKeys = (paths: Iterable<readonly string[]>) => {
+            const keys = new Set<string>();
+            for (const written of paths) {
+              for (let depth = 0; depth < written.length; depth++) {
+                keys.add(pathKey(written.slice(0, depth)));
+              }
+            }
+            return keys;
+          };
+          const referenceContainerKeys = properPrefixKeys(
+            flowWrittenPaths.filter((written) =>
+              currentLinkWritePaths.has(pathKey(written)) ||
+              containsCellLink(flowWrittenValues?.get(pathKey(written)))
+            ),
+          );
+          valueOnlyContainerKeys = new Set(
+            [...properPrefixKeys(derivedStampPaths)].filter((key) =>
+              !referenceContainerKeys.has(key)
+            ),
+          );
+        }
+        return valueOnlyContainerKeys.has(pathKey(path));
+      };
       const frozenShapePaths = new Set(
         persistedLabelEntries.filter((entry) =>
           (entry.origin === "derived" || entry.origin === "structure") &&
@@ -10406,13 +10439,30 @@ export function* prepareBoundaryCommitSteps(
         // container's membership/assignment J is consumable by genuine
         // application probes without feeding the runtime's own plumbing
         // traffic.
+        //
+        // A generic container this transaction filled with values, and no
+        // reference, mints no `followRef` template. That template labels
+        // which reference sits at each slot, and no member here is one: the
+        // only reads that consumed it were probes finding no link on the way
+        // to a member — `Cell.set` probing the root, a stale-writeback guard
+        // probing a field — which then carried the creating transaction's J
+        // onto every other document that later transaction wrote. The same
+        // values written whole mint none either. The `shape` and `value`
+        // templates stay, so a read of any member, present or absent, still
+        // consumes J.
         if (
           flowHasLabels && flowConfidentiality.length > 0
         ) {
+          const templateClasses = holdsValuesOnly(path)
+            ? ["shape", "value"] as const
+            : ["shape", "value", "followRef"] as const;
           frozenShapePaths.add(pathKey([...path, "*"]));
           tx.noteCfcPreparationWork?.("flowTemplateContainers");
-          tx.noteCfcPreparationWork?.("flowTemplateEntriesMinted", 3);
-          for (const observes of ["shape", "value", "followRef"] as const) {
+          tx.noteCfcPreparationWork?.(
+            "flowTemplateEntriesMinted",
+            templateClasses.length,
+          );
+          for (const observes of templateClasses) {
             persistedLabelEntries.push(markFlowStampEntry({
               path: [...path, "*"],
               label: {

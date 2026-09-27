@@ -173,8 +173,11 @@ describe("CFC prepare reproduction", () => {
           JSON.stringify({ reproduction: "map50", stats, preparations }),
         );
       }
+      // Three templates per container, less the `followRef` one on each of
+      // the 150 that hold values only: every element's vnode, its `props`
+      // and its `children`.
       expect(stats.flowTemplateEntriesMinted).toBe(
-        3 * stats.flowTemplateContainers,
+        3 * stats.flowTemplateContainers - 150,
       );
       expect(stats.flowTemplateContainers).toBe(251);
       // All fifty instances reuse one source-container template query.

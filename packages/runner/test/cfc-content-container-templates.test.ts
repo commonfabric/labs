@@ -1,25 +1,23 @@
 /**
- * What a transaction that writes a store the runtime owns carries from the
- * store's own `*`-child templates when it merely resolves its way to the
- * store.
+ * Which containers a transaction's creation of a store mints `*`-child
+ * templates on, when that transaction read something labeled.
  *
- * A builtin mints its result store and writes it in one transaction, and
- * when that transaction read something labeled, the store's creation stamps
- * membership templates carrying the label (docs/specs/cfc-template-population.md
- * §3.1). A later transaction that writes the store again resolves the store's
- * links first, and the resolver's probes found no link there — so no
- * dereference trace covered them and they joined the templates' label as if
- * they were standalone pointer observations. That transaction then carried
- * the creation's label onto every other document it wrote, and a document
- * that declares nothing refused it: a `sqliteQuery` whose parameter was
- * labeled on its first issue refused every row it settled.
+ * A builtin mints its result store and writes it in one transaction:
+ * `setResultCell` makes the document exist, so `Cell.set` writes `{}` and
+ * then the members. The `{}` is pure link structure, vacuously, and minted
+ * the membership templates of docs/specs/cfc-template-population.md §3.1 on
+ * a store that ends the transaction holding values. Every later transaction
+ * that resolved its way into the store — `Cell.set` probing the root, a
+ * stale-writeback guard probing a field — consumed the `followRef` template
+ * and carried the creation's label onto every other document it wrote. A
+ * `sqliteQuery` whose parameter was labeled on its first issue refused each
+ * row it settled.
  *
- * The resolver's probes are resolution machinery, which is how the read
- * ceiling already treats them (`dereferenceResolutionProbe`); the read they
- * make on behalf of the caller consumes the templates' `value` and `shape`
- * twins where it has not been excluded itself. A probe the resolver did not
- * issue still observes which reference sits at a slot, and still consumes
- * the template.
+ * A container filled with values, and no reference, mints no `followRef`
+ * template — there is no reference at any of its slots to label — and keeps
+ * the templates through which a read of a member, present or absent,
+ * consumes the label. One holding a reference mints all three, and still
+ * taints whoever observes which reference sits at one of its slots.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -35,9 +33,10 @@ import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import { setResultCell } from "../src/result-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { linkResolutionProbe } from "../src/storage/reactivity-log.ts";
 
-const signer = await Identity.fromPassphrase("runner-cfc-resolver-probes");
+const signer = await Identity.fromPassphrase("runner-cfc-content-containers");
 const space = signer.did();
 
 /** The connector spelling: the owner, and a `Resource` naming the class. */
@@ -88,22 +87,47 @@ describe("a store created under a labeled transaction", () => {
     }
   };
 
+  const templatesOf = (cell: Cell<unknown>): StoredEntry[] =>
+    entriesOf(cell).filter((entry) =>
+      entry.origin === "structure" && entry.path.at(-1) === "*"
+    );
+
+  const sorted = (atom: unknown): string =>
+    JSON.stringify(
+      atom,
+      typeof atom === "object" && atom !== null
+        ? Object.keys(atom).sort()
+        : undefined,
+    );
+
   const carriesPicked = (atoms: readonly unknown[] | undefined): boolean =>
     PICKED_CLAUSE.every((atom) =>
-      (atoms ?? []).some((held) =>
-        JSON.stringify(held, Object.keys(held as object).sort()) ===
-          JSON.stringify(atom, Object.keys(atom as object).sort())
-      )
+      (atoms ?? []).some((held) => sorted(held) === sorted(atom))
     );
+
+  /** The join of what `observe` reads, taken off a transaction that is then
+   * abandoned. */
+  const joinOf = (
+    observe: (tx: IExtendedStorageTransaction) => void,
+  ): unknown[] => {
+    const tx = runtime.edit();
+    try {
+      observe(tx);
+      return deriveFlowJoin(tx).confidentiality;
+    } finally {
+      tx.abort("observation only");
+    }
+  };
 
   /**
    * The shape a builtin's result store takes: named as the runtime's, its
-   * result link set, then written whole — all in a transaction that read a
-   * labeled cell. Returns the store.
+   * result link set, then written whole with `value` — in a transaction that
+   * read a labeled cell. Returns the store and a cell it may reference.
    */
   const storeCreatedUnderLabel = async (
     cause: string,
-  ): Promise<Cell<unknown>> => {
+    value: (element: Cell<unknown>) => Record<string, unknown>,
+  ): Promise<{ store: Cell<unknown>; element: Cell<unknown> }> => {
     const seed = runtime.edit();
     const picked = runtime.getCell<string>(space, `${cause}-picked`, {
       type: "string",
@@ -113,6 +137,8 @@ describe("a store created under a labeled transaction", () => {
     picked.set("c-alpha");
     const owner = runtime.getCell(space, `${cause}-owner`, undefined, seed);
     owner.set({ piece: true });
+    const element = runtime.getCell(space, `${cause}-element`, undefined, seed);
+    element.set({ n: 1 });
     runtime.prepareTxForCommit(seed);
     expect((await seed.commit()).error).toBeUndefined();
 
@@ -121,57 +147,116 @@ describe("a store created under a labeled transaction", () => {
     const store = runtime.getCell(space, `${cause}-store`, undefined, create);
     recordRuntimeOwnedStore(create, owner, store);
     setResultCell(store.withTx(create), owner);
-    store.withTx(create).set({ pending: true, requestHash: "h1" });
+    store.withTx(create).set(value(element));
     runtime.prepareTxForCommit(create);
     expect((await create.commit()).error).toBeUndefined();
-
-    // What makes this the case it is: the creation minted a `followRef`
-    // template at the store's children, carrying the picked label. Were no
-    // template minted, the cases below would pass for a different reason.
-    expect(
-      entriesOf(store).some((entry) =>
-        entry.path.length === 1 && entry.path[0] === "*" &&
-        entry.origin === "structure" && entry.observes === "followRef" &&
-        carriesPicked(entry.label.confidentiality)
-      ),
-    ).toBe(true);
-    return store;
+    return { store, element };
   };
 
-  it("does not carry that label onto what a later write puts beside it", async () => {
-    const store = await storeCreatedUnderLabel("beside");
+  const fieldAddress = (store: Cell<unknown>, path: string[]) => {
+    const link = store.getAsNormalizedFullLink();
+    return {
+      space,
+      scope: link.scope,
+      id: link.id,
+      type: "application/json" as const,
+      path: ["value", ...path],
+    };
+  };
 
-    // Reads nothing labeled: sets the store again, and writes a document
-    // that declares nothing.
-    const later = runtime.edit();
-    store.withTx(later).set({ pending: false, requestHash: "h1" });
-    const other = runtime.getCell(space, "beside-other", undefined, later);
-    other.withTx(later).set({ written: true });
-    runtime.prepareTxForCommit(later);
-    const committed = await later.commit();
-    expect(committed.error).toBeUndefined();
+  describe("and filled with values", () => {
+    const values = () => ({ pending: true, requestHash: "h1" });
+
+    it("mints no pointer template", async () => {
+      const { store } = await storeCreatedUnderLabel("values-mint", values);
+
+      const classes = templatesOf(store).map((entry) => entry.observes);
+      expect(classes).not.toContain("followRef");
+      // What makes the next case mean something: the other two are here.
+      expect(classes).toContain("shape");
+      expect(classes).toContain("value");
+    });
+
+    it("still taints a read of a member, present or absent", async () => {
+      const { store } = await storeCreatedUnderLabel("values-read", values);
+
+      expect(carriesPicked(joinOf((tx) => {
+        tx.readOrThrow(fieldAddress(store, ["requestHash"]));
+      }))).toBe(true);
+      // Which members exist was decided under the label too.
+      expect(carriesPicked(joinOf((tx) => {
+        tx.readOrThrow(fieldAddress(store, ["error"]), { nonRecursive: true });
+      }))).toBe(true);
+    });
+
+    it("does not carry the label onto what a later write puts beside it", async () => {
+      const { store } = await storeCreatedUnderLabel("values-beside", values);
+
+      // Reads nothing labeled: sets the store again, and writes a document
+      // that declares nothing.
+      const later = runtime.edit();
+      store.withTx(later).set({ pending: false, requestHash: "h1" });
+      const other = runtime.getCell(space, "values-other", undefined, later);
+      other.withTx(later).set({ written: true });
+      runtime.prepareTxForCommit(later);
+      expect((await later.commit()).error).toBeUndefined();
+    });
   });
 
-  it("still taints a probe that observes a slot's reference on its own", async () => {
-    // The pointer-identity channel the template closes (SC-8): a link probe
-    // no content read follows observes which reference sits at the slot,
-    // and that was decided under the creation's label. Only the resolver's
-    // own probes are machinery.
-    const store = await storeCreatedUnderLabel("standalone");
-    const link = store.getAsNormalizedFullLink();
+  describe("and filled with values and a reference", () => {
+    it("mints the pointer template", async () => {
+      const { store } = await storeCreatedUnderLabel(
+        "mixed-mint",
+        (element) => ({ first: element, pending: true }),
+      );
 
-    const tx = runtime.edit();
-    try {
-      tx.read({
-        space,
-        scope: link.scope,
-        id: link.id,
-        type: "application/json",
-        path: ["value", "requestHash"],
-      }, { meta: linkResolutionProbe });
-      expect(carriesPicked(deriveFlowJoin(tx).confidentiality)).toBe(true);
-    } finally {
-      tx.abort("probe only");
-    }
+      expect(
+        templatesOf(store).some((entry) =>
+          entry.observes === "followRef" &&
+          carriesPicked(entry.label.confidentiality)
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("and filled with references", () => {
+    // The pointer-identity channel the templates close (SC-8): which
+    // reference sits at a slot — or that none does — was decided under the
+    // creating transaction's label.
+    const references = (element: Cell<unknown>) => ({ first: element });
+
+    it("mints the child templates", async () => {
+      const { store } = await storeCreatedUnderLabel("refs-mint", references);
+
+      expect(
+        templatesOf(store).some((entry) =>
+          entry.observes === "followRef" &&
+          carriesPicked(entry.label.confidentiality)
+        ),
+      ).toBe(true);
+    });
+
+    it("taints a probe of the reference at a slot", async () => {
+      const { store } = await storeCreatedUnderLabel("refs-probe", references);
+
+      const join = joinOf((tx) => {
+        tx.read(fieldAddress(store, ["first"]), { meta: linkResolutionProbe });
+      });
+      expect(carriesPicked(join)).toBe(true);
+    });
+
+    it("taints comparing an absent slot's reference", async () => {
+      // No content read follows: `equals` resolves the slot and compares
+      // links, so the resolver's own probes are the only observation.
+      const { store, element } = await storeCreatedUnderLabel(
+        "refs-equals",
+        references,
+      );
+
+      const join = joinOf((tx) => {
+        store.withTx(tx).key("second").equals(element);
+      });
+      expect(carriesPicked(join)).toBe(true);
+    });
   });
 });

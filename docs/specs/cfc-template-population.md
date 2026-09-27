@@ -105,6 +105,17 @@ before merge.
   and restamped from current `J` each reconcile, cleared (never pooled) on
   covering writes. The container-anchored `enumerate` entry stays — it is
   the container-level `iterate` observation (order/count), correct as-is.
+- **Containers the same transaction fills with values** mint the `shape`
+  and `value` templates and no `followRef` one. `Cell.set` into a document
+  that already exists — a builtin's store, once its result link is set —
+  writes `{}` first and then the members, and that `{}` is pure link
+  structure only vacuously. When the transaction writes values and no
+  reference beneath the node, no slot holds a reference for a `followRef`
+  template to label, and the same values written whole would mint none.
+  Probes that find no link on the way to a member would otherwise consume
+  it, and carry the creation's `J` onto every document a later transaction
+  writes while it merely resolves the store. A read of any member, present
+  or absent, still consumes `J` through the other two.
 - **Metadata population templates** (Stage-2 full, §6): the same entry
   form under `/cfc/labels/<target-path>/...` — §5 below.
 - **Declared `*` entries** (from `items` schemas) are unchanged; this
