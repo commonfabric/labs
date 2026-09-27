@@ -1231,9 +1231,12 @@ the per-epic implementation notes).
 - **Purpose.** A sync frame includes a doc unless the writing session provably
   holds it: own accepted `patch`-produced heads ride the covering frame as full
   post-apply documents (merged state the writer cannot extrapolate), while own
-  `set`- and `delete`-produced heads stay elided. Off restores full echo
-  suppression — the pre-CT-1965 behavior, where promotion extrapolates every own
-  write from the client's own ops.
+  `set`- and `delete`-produced heads stay elided, and so does a patch head the
+  engine applied over the very document the patch named as its base
+  (`exactBase`; see "4.11.2 Server-Side Ordering" in
+  [the memory protocol chapter](../specs/memory-v2/04-protocol.md)). Off
+  restores full echo suppression, where promotion extrapolates every own write
+  from the client's own ops.
 - **Current default and planned end state.** On by default. The switch exists as
   an operational backstop while the echo field-soaks.
 - **Status on 2026-08-08.** Implemented and on by default.

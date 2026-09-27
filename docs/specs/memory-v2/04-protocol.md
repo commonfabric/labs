@@ -59,7 +59,8 @@ The client MUST declare its protocol version in the first WebSocket message:
     "entityIdPagination": true,
     "entityIdLookup": true,
     "sessionHoldings": true,
-    "sessionReadCeiling": true
+    "sessionReadCeiling": true,
+    "patchBaseSeq": true
   }
 }
 ```
@@ -80,7 +81,8 @@ If the server accepts the protocol, it returns:
     "entityIdPagination": true,
     "entityIdLookup": true,
     "sessionHoldings": true,
-    "sessionReadCeiling": true
+    "sessionReadCeiling": true,
+    "patchBaseSeq": true
   },
   "sessionOpen": {
     "audience": "did:key:z6Mk...",
@@ -264,6 +266,14 @@ older server would accept the descriptor and serve every query unbounded, so
 the client refuses to open the session against a server that does not
 advertise it, before signing a `session.open`. A client declaring none is
 unaffected on any server.
+
+`patchBaseSeq` advertises that the server reads a `patch` operation's
+declared `baseSeq` and reports, on the revision it writes, whether the head it
+applied the patch over was that one (`03-commit-model.md` section 3.1; section
+4.11.2 says what the committing session's frame then omits). It is build-inherent and
+defaults to `false` when absent. A client sends `baseSeq` only to a server
+advertising it; against an older server it declares nothing, and its own patch
+heads reach it in full as before.
 
 ### 4.1.2 Logical Sessions and Resume
 
@@ -1278,18 +1288,32 @@ enforced through the catch-up marker and CLIENT-side verdict parking (CT-1927):
   own `set`- and `delete`-produced heads are elided — the writer supplied
   the bytes (or the absence), and the verdict plus marker promote them —
   while own `patch`-produced heads are delivered as full post-apply
-  documents, since merged state is truth the writer cannot extrapolate. A
-  head moved past the session's own write, and all foreign novelty, is
-  delivered in full. REJECTED commits' docs are staged origin-less, so
-  repair frames DO cover them, and a frame lost in flight re-stages its
-  docs origin-less, so the retry delivers full documents.
+  documents, since merged state is truth the writer cannot extrapolate.
+  The exception is a patch whose `baseSeq` (`03-commit-model.md` section
+  3.1) equals the seq of the head the engine applied it over, the
+  operation stored as its writer sent it: its document is the writer's
+  own edits replayed over a document the writer holds, so it is elided
+  like a `set` head, and the verdict's revision for it carries
+  `exactBase: true`. The engine checks only a default-branch,
+  non-delegated operation that no server transform rewrote, and a replayed
+  verdict, read back from the store, carries no `exactBase`. An
+  `apply-op` never declares a base. A head moved past the session's own
+  write, and all foreign novelty, is delivered in full. REJECTED commits'
+  docs are staged origin-less, so repair frames DO cover them, and a frame
+  lost in flight re-stages its docs origin-less, so the retry delivers
+  full documents.
 - the CLIENT MUST NOT apply a verdict's state effects ahead of the marker
   that covers it: an accept's promotion (pending overlay to confirmed
   mirror, removing the pending local copy) is PARKED until
   `caughtUpLocalSeq` reaches its localSeq. For an elided `set` head the
-  promotion installs the client's own value; for a `patch` head the
-  covering frame has already delivered the post-apply document, so
-  promotion retires the overlay against delivered truth. Extrapolating the
+  promotion installs the client's own value; for an elided `exactBase`
+  patch head it replays the patch over the very document the patch named
+  as its base, which reproduces the server's; for any other `patch` head
+  the covering frame has already delivered the post-apply document, so
+  promotion retires the overlay against delivered truth. A client names a
+  base only where its replica holds that document exactly as the server
+  stores it — delivered by a frame, or promoted from an `exactBase` patch —
+  with no pending write of its own beneath the patch. Extrapolating the
   post-apply state from the client's own ops remains the fallback where no
   frame channel exists — unwatched docs, servers that still suppress; a
   conflict rejection's drop/revert is held by the read-repair gate

@@ -27,6 +27,7 @@ interface PatchWriteOperation {
   op: "patch";
   id: EntityId;
   patches: PatchOp[];
+  baseSeq?: number;
 }
 
 interface DeleteOperation {
@@ -37,11 +38,19 @@ interface DeleteOperation {
 type Operation = SetOperation | PatchWriteOperation | DeleteOperation;
 ```
 
-Operations do not include parent hashes or other version identifiers. The server
-validates the read set, assigns a canonical `seq`, and records one or more
-sequenced revisions. `set` carries a logical `EntityDocument`; `patch` carries
-path-targeted edits whose leaf values use the shared FabricValue surface, not
-just a JSON subset.
+No operation's admission depends on a parent hash or other version identifier.
+The server validates the read set, assigns a canonical `seq`, and records one or
+more sequenced revisions. `set` carries a logical `EntityDocument`; `patch`
+carries path-targeted edits whose leaf values use the shared FabricValue
+surface, not just a JSON subset.
+
+A `patch` may also carry `baseSeq`: the seq of the document its writer will
+replay the edits over when the commit's accept promotes, declared only when the
+writer's replica holds that document exactly as the server stores it. It is not
+a precondition, and a mismatch refuses nothing. The server compares it with the
+head it applies the patch over and reports a match on the revision it writes,
+which is what lets the committing session's own sync frame omit the resulting
+document (`04-protocol.md` section 4.11.2).
 
 ## 3.2 Transaction Structure
 

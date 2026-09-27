@@ -160,6 +160,7 @@ describe("memory v2 flags", () => {
       sessionHoldings: true,
       viewScopedReplicationV1: false,
       sessionReadCeiling: true,
+      patchBaseSeq: true,
       syncSchemaTableV2: false,
     });
 
@@ -186,6 +187,7 @@ describe("memory v2 flags", () => {
       sessionHoldings: true,
       viewScopedReplicationV1: false,
       sessionReadCeiling: true,
+      patchBaseSeq: true,
       syncSchemaTableV2: true,
     });
 
@@ -296,6 +298,21 @@ describe("parseMemoryProtocolFlags", () => {
     );
   });
 
+  it("requires explicit patch base capability advertisement", () => {
+    assertEquals(parseMemoryProtocolFlags({})?.patchBaseSeq, false);
+    assertEquals(
+      parseMemoryProtocolFlags({ patchBaseSeq: true })?.patchBaseSeq,
+      true,
+    );
+    assertEquals(parseMemoryProtocolFlags({ patchBaseSeq: "true" }), null);
+    assertEquals(
+      parseMemoryProtocolFlags(
+        wireMemoryProtocolFlags(getMemoryProtocolFlags()),
+      )?.patchBaseSeq,
+      true,
+    );
+  });
+
   it("accepts the modernCellRep key", () => {
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: true }), {
       genesisRoot: false,
@@ -315,6 +332,7 @@ describe("parseMemoryProtocolFlags", () => {
       sessionHoldings: false,
       viewScopedReplicationV1: false,
       sessionReadCeiling: false,
+      patchBaseSeq: false,
     });
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: false }), {
       genesisRoot: false,
@@ -334,6 +352,7 @@ describe("parseMemoryProtocolFlags", () => {
       sessionHoldings: false,
       viewScopedReplicationV1: false,
       sessionReadCeiling: false,
+      patchBaseSeq: false,
     });
   });
 
@@ -360,6 +379,7 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
+        patchBaseSeq: false,
       },
     );
   });
@@ -405,6 +425,7 @@ describe("parseMemoryProtocolFlags", () => {
         entityIdListing: false,
         entityIdPagination: false,
         entityIdLookup: false,
+        patchBaseSeq: false,
       },
     );
   });
@@ -430,6 +451,7 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
+        patchBaseSeq: false,
       },
     );
   });
@@ -457,6 +479,7 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
+        patchBaseSeq: false,
       },
     );
   });
@@ -492,6 +515,7 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
+        patchBaseSeq: false,
       },
     );
   });
@@ -520,6 +544,7 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
+        patchBaseSeq: false,
       },
     );
   });
@@ -545,6 +570,7 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
+        patchBaseSeq: false,
       },
     );
   });
@@ -576,6 +602,7 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
+        patchBaseSeq: false,
       },
     );
   });
