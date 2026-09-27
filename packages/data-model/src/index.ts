@@ -29,7 +29,9 @@ export {
   cloneWithoutValueAtPath,
   cloneWithValueAtPath,
   missingContainerIsArray,
+  type PathTrace,
   shallowMutableClone,
+  tracePath,
 } from "./value-clone.ts";
 
 // Not `@/value-debug`, which names late-bound forwarders: the package should
