@@ -128,6 +128,7 @@ describe("initialize-init-data", () => {
         forwardWorkerConsole: true,
         patternCoverage: true,
         concurrentWatchRefresh: true,
+        awaitHealth: true,
       } satisfies Required<RuntimeClientOptions>;
 
       await RuntimeClient.initialize(transport, options);
