@@ -92,7 +92,7 @@ export const getValueTypeName = (value: FabricValue | undefined): string => {
  * intermediates like any other value. Removal is requested explicitly
  * via `options.delete`, which deletes the leaf slot (object key removal
  * or array hole) and never materializes intermediates for a slot that
- * wasn't there. A delete with leaf key `"length"` empties the array: it
+ * wasn't there. A delete of an array's `"length"` empties the array: it
  * goes through the legacy length coercion as `undefined` (→ NaN → 0),
  * whatever value the call carries.
  *

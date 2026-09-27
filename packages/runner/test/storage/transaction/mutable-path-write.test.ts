@@ -81,7 +81,11 @@ describe("mutable-path-write", () => {
           { delete: true },
         );
 
-        expect(result.ok?.root).toEqual({ list: [] });
+        // `toEqual()` takes an array of holes for `[]`, so the length is what
+        // shows the array was emptied rather than truncated to holes.
+        expect(
+          (result.ok?.root as { list: unknown[] } | undefined)?.list.length,
+        ).toBe(0);
       });
 
       it("empties the array for a delete carrying `2 ** 32`, a length it could not grow to", () => {
@@ -92,7 +96,11 @@ describe("mutable-path-write", () => {
           { delete: true },
         );
 
-        expect(result.ok?.root).toEqual({ list: [] });
+        // `toEqual()` takes an array of holes for `[]`, so the length is what
+        // shows the array was emptied rather than truncated to holes.
+        expect(
+          (result.ok?.root as { list: unknown[] } | undefined)?.list.length,
+        ).toBe(0);
       });
 
       it("stores `2 ** 32` as an ordinary value where the parent is an object", () => {
