@@ -9,7 +9,7 @@ import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
-import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { newSharedServer, tapServer } from "./memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase("own-write-echo-cost");
 const space = signer.did();
@@ -28,7 +28,7 @@ const mapSchema = {
   // deno-lint-ignore no-explicit-any
 } as any;
 
-/** A map of `entries` records, the shape a search index holds. */
+/** Builds a map of `entries` records, the shape a search index holds. */
 const map = (entries: number): Record<string, Entry> =>
   Object.fromEntries(
     Array.from({ length: entries }, (_, index) => [
@@ -37,7 +37,7 @@ const map = (entries: number): Record<string, Entry> =>
     ]),
   );
 
-/** How many objects and arrays `value` holds, itself included. */
+/** Counts the objects and arrays `value` holds, itself included. */
 const containersIn = (value: unknown): number => {
   if (typeof value !== "object" || value === null) return 0;
   let count = 1;
@@ -48,25 +48,15 @@ const containersIn = (value: unknown): number => {
 /**
  * Commits a change to one entry of a watched map of `entries` records, and
  * reports what the server sent the writing session while that commit
- * settled: how many copies of the map, and the size of every frame, in the
- * bytes the client parses and the containers it builds and freezes to do so.
- *
- * The server is the test's own, so every message it sends a session passes
- * through the wrapper below before the loopback transport encodes it.
+ * settled: how many copies of the map, how many frames carried the commit's
+ * marker, and the size of every frame, in the bytes the client parses and the
+ * containers it builds and freezes to do so.
  */
 const oneEntryCommit = async (entries: number) => {
   const server: MemoryV2Server.Server = newSharedServer({
     subscriptionRefreshDelayMs: "manual",
   });
-  const sent: SessionEffectMessage[] = [];
-  const connect = server.connect.bind(server);
-  server.connect = (send) =>
-    connect((message) => {
-      if ((message as { type?: string }).type === "session/effect") {
-        sent.push(message as SessionEffectMessage);
-      }
-      send(message);
-    });
+  const tap = tapServer(server);
   const storage = EmulatedStorageManager.connectTo(server, { as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -99,15 +89,21 @@ const oneEntryCommit = async (entries: number) => {
     await settle();
 
     const id = cell.getAsNormalizedFullLink().id;
-    sent.length = 0;
+    const before = tap.fromServer.length;
     const tx = runtime.edit();
     cell.withTx(tx).key("k0").key("label").set("changed");
     await tx.commit({ resolveAt: "verdict" });
     await settle();
     cancel();
 
+    const sent = tap.fromServer.slice(before).filter((message) =>
+      message.type === "session/effect"
+    ) as SessionEffectMessage[];
     return {
       label: cell.get()["k0"].label,
+      markers: sent.filter((message) =>
+        message.effect.caughtUpLocalSeq !== undefined
+      ).length,
       copies: sent.flatMap((message) => message.effect.upserts)
         .filter((upsert) => upsert.id === id && upsert.doc !== undefined)
         .length,
@@ -139,6 +135,8 @@ describe("own-write echo cost", () => {
 
     expect(short.label).toBe("changed");
     expect(long.label).toBe("changed");
+    expect(short.markers).toBe(1);
+    expect(long.markers).toBe(1);
     expect(short.copies).toBe(0);
     expect(long.copies).toBe(0);
     expect(long.bytes).toBe(short.bytes);
