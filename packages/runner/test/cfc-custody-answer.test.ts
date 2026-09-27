@@ -14,6 +14,7 @@ import {
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import {
   commitCustodySeal,
+  CUSTODY_SEAL_READER,
   type CustodyRoom,
   prepareCustodySeal,
   publishCustodyAnswer,
@@ -62,8 +63,9 @@ const PROJECT: ImplementationIdentity = {
 };
 
 /** The room's policy: it releases what `projectChoice` computed, `witnessed`
- * requiring as well that everything it read was the seal's. */
-const policyArtifact = (witnessed: boolean) =>
+ * requiring as well that everything it read was the seal's, and `toSeal`
+ * releasing it to the seal alone rather than to the room's readers. */
+const policyArtifact = (witnessed: boolean, toSeal: boolean) =>
   buildCfcPolicyArtifactManifest({
     formatVersion: 1,
     moduleIdentity: MODULE,
@@ -84,7 +86,10 @@ const policyArtifact = (witnessed: boolean) =>
             ...(witnessed ? { inputWitness: SEALED_BY } : {}),
           }],
         },
-        postCondition: { confidentiality: [], integrity: [] },
+        postCondition: {
+          confidentiality: toSeal ? [CUSTODY_SEAL_READER] : [],
+          integrity: [],
+        },
       }],
       dependencies: { authorityOnly: [], dataBearing: [] },
       integrityRequirements: {},
@@ -147,8 +152,8 @@ type Fixture = Awaited<ReturnType<typeof setup>>;
 
 /** Three members' runtimes over one server, and a room whose policy is
  * installed in its space. */
-const setup = async ({ witnessed = true } = {}) => {
-  const artifact = policyArtifact(witnessed);
+const setup = async ({ witnessed = true, toSeal = true } = {}) => {
+  const artifact = policyArtifact(witnessed, toSeal);
   const policy = cfcAtom.modulePolicyRef(
     MODULE,
     "custodyRules",
@@ -440,7 +445,7 @@ describe("custody answers", () => {
       }, { type: "object", ifc: { confidentiality: [cfcAtom.space(S)] } });
       expect(await fixture.project(bob, record, output)).toBe("sushi");
       await expect(fixture.publish(bob, output)).rejects.toThrow(
-        "releases to its readers",
+        "releases to the seal",
       );
     } finally {
       await fixture.dispose();
@@ -464,7 +469,7 @@ describe("custody answers", () => {
         { type: "string", ifc: { confidentiality: [cfcAtom.space(S)] } },
       );
       await expect(fixture.publish(mallory, forged)).rejects.toThrow(
-        "releases to its readers",
+        "releases to the seal",
       );
       const output = outputOf(fixture);
       expect(await fixture.project(bob, box, output)).toBe("sushi");
@@ -511,7 +516,7 @@ describe("custody answers", () => {
         },
       });
       await expect(fixture.publish(mallory, forged)).rejects.toThrow(
-        "releases to its readers",
+        "releases to the seal",
       );
       const output = outputOf(fixture);
       expect(await fixture.project(bob, box, output)).toBe("sushi");
@@ -621,6 +626,26 @@ describe("custody answers", () => {
     }
   });
 
+  it("refuses a policy whose rule releases the projection to the room's readers", async () => {
+    // Readable by the room's readers, a projection that a member's code
+    // points at input of its own keeps its earlier witnessed stamp while its
+    // answer does not change, and says whether that input yields the
+    // released answer. Only a policy releasing to the seal is published.
+    const fixture = await setup({ toSeal: false });
+    try {
+      const box = boxOf(fixture);
+      const output = outputOf(fixture);
+      await fixture.seal(alice, "sushi", box);
+      await fixture.seal(bob, "sushi", box);
+      expect(await fixture.project(bob, box, output)).toBe("sushi");
+      await expect(fixture.publish(bob, output)).rejects.toThrow(
+        "releases only to the seal",
+      );
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it("refuses an answer computed over an earlier instance's box", async () => {
     // An earlier instance may have had other members; its answer is not this
     // instance's to release.
@@ -640,7 +665,7 @@ describe("custody answers", () => {
       // The projector reads the earlier instance's genuine box.
       expect(await fixture.project(bob, first, output)).toBe("sushi");
       await expect(fixture.publish(bob, output)).rejects.toThrow(
-        "releases to its readers",
+        "releases to the seal",
       );
       expect(await fixture.project(bob, second, output)).toBe("tacos");
       expect((await fixture.publish(bob, output)).value).toBe("tacos");

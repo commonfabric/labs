@@ -29,9 +29,10 @@
  *
  * Every entry of the box is labeled with the room's policy, and the box
  * itself with the policy or the room's readers, so what the pattern computes
- * from it is shown to anyone only through `releaseChoice`. That rule drops
- * the policy from what `projectChoice` returns, one of the listed answers,
- * when everything confidential `projectChoice` read was written by the seal
+ * from it leaves the policy only through `releaseChoice`. That rule releases
+ * what `projectChoice` returns, one of the listed answers, to the seal alone
+ * (`Builtin{cfc-custody-seal}`, a reader no member holds), when everything
+ * confidential `projectChoice` read was written by the seal
  * (`TransformedBy{builtin cfc-custody-seal}` as its input witness): the box
  * the seal linked into `box`, and not a document other code put there, which
  * could repeat another member's entry or mix it with entries it made up. A
@@ -39,11 +40,15 @@
  * The stances hold a bounded array of closed ratings, one per option, which
  * is the shape the seal admits for a multiple choice.
  *
- * `choice` is reactive, so the room shows the host's `cf-custody-answer`
- * instead, which asks the seal to publish `choice` once every seat has sealed
- * and the rule releases it. The seal writes it once into the instance's
- * answer slot, and the component shows what the slot holds, verified to be
- * the seal's write. What the room's readers are shown then cannot move,
+ * `choice`, the projection, is read by no member. It is reactive, and a
+ * member's code can point the projector at input of its own; an answer that
+ * does not change keeps its earlier stamp, so were `choice` readable, it
+ * would say whether that input yields the released answer. The room shows the
+ * host's `cf-custody-answer` instead, which asks the seal to publish `choice`
+ * once every seat has sealed and the rule releases it to the seal. The seal
+ * declassifies it once into the instance's answer slot, which the room's
+ * readers can read, and the component shows what the slot holds, verified to
+ * be the seal's write. What the room's readers are shown then cannot move,
  * whatever later points the projector at other input.
  * `docs/specs/cfc-custody-seal.md` says what this does not cover.
  */
@@ -83,7 +88,14 @@ export const releaseChoice = exchangeRule({
       },
     }],
   },
-  post: { dropClause: true },
+  // Released to the seal alone, which publishes it once per instance; no
+  // member reads the projection itself.
+  post: {
+    addAlternatives: [{
+      type: "https://commonfabric.org/cfc/atom/Builtin",
+      name: "cfc-custody-seal",
+    }],
+  },
 });
 
 export const custodyRules = exchangeRules([releaseChoice]);
@@ -218,8 +230,9 @@ export interface CustodyAnswerRoomOutput {
   policy: Sealed<boolean>;
   box: Box;
   /**
-   * The projected answer, which moves with what the projector reads. The
-   * room shows the answer the seal published from it instead.
+   * The projected answer, which moves with what the projector reads. It is
+   * released to the seal alone, which publishes it; no member reads it, and
+   * the room shows the answer the seal published instead.
    */
   choice: string;
   /** One member's sealed rating, which no rule releases. */

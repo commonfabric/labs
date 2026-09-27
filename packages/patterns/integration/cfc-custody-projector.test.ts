@@ -253,10 +253,12 @@ const sealAndRelease = async (
     expect(room.key("box").resolveAsCell().getAsNormalizedFullLink().id)
       .toBe(sealed.box.getAsNormalizedFullLink().id);
 
-    // Shown to a reader of the room, only the projector's answer is
-    // released: its label's policy clause is dropped by the room's rule,
-    // and what is left admits the room's readers. A member's rating, read
-    // from the same box by other code, stays sealed.
+    // Of what the pattern computes from the box, only the projector's
+    // answer leaves the policy. The demo room's rule drops the policy's
+    // clause, so a reader of the room is shown the projection; the answer
+    // room's rule releases it to the seal alone, so a reader is shown only
+    // what the seal publishes from it. A member's rating, read from the same
+    // box by other code, stays sealed either way.
     const display = createRenderConfidentialityResolver({
       actingPrincipal: bob.did(),
       memberSpaces: [S],
@@ -288,7 +290,9 @@ const sealAndRelease = async (
       (value) => value === "yes" || value === "maybe",
       { stuckLabel: "a member's rating read from the sealed box" },
     );
-    expect(shownTo(bob.did(), room.key("choice"))).toBe(true);
+    // The demo room's rule releases the projection to the room's readers;
+    // the answer room's releases it to the seal alone, which publishes it.
+    expect(shownTo(bob.did(), room.key("choice"))).toBe(!witnessed);
     expect(shownTo(bob.did(), room.key("rating"))).toBe(false);
 
     // The host publishes the answer once, as `cf-custody-answer` asks it to,
@@ -303,6 +307,9 @@ const sealAndRelease = async (
     const published = await publish();
     expect(published.value).toBe("pizza");
     expect(await readCustodyAnswer(hostRoom)).toBe("pizza");
+    // The published slot is what a reader of the room is shown.
+    await published.answer.sync();
+    expect(shownTo(bob.did(), published.answer)).toBe(true);
 
     // The room's own result must not answer a question the published answer
     // does not. A member's code points the box at a record repeating
@@ -372,7 +379,6 @@ const sealAndRelease = async (
     // the host publishes nothing again.
     await expect(publish()).rejects.toThrow("already published");
     expect(await readCustodyAnswer(hostRoom)).toBe("pizza");
-
   } finally {
     for (const runtime of runtimes) {
       await runtime.dispose({ closeStorage: false });

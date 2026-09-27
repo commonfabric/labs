@@ -745,6 +745,30 @@ const readEvidence = (tx: IExtendedStorageTransaction): ReadEvidence[] => {
 };
 
 /**
+ * The one reader a custody room's rule releases its projection to: the seal
+ * itself. No member's runtime holds a `Builtin` atom as a reader, so a clause
+ * a rule widens with it is still read by no member. A room's projection is
+ * reactive, and a member's code can point it at input of its own; were the
+ * projection readable, an unchanged answer keeping its earlier witnessed
+ * stamp would tell that code whether its input yields the released answer.
+ * Released only to the seal, the projection is read by
+ * {@link publishCustodyAnswer} alone, which declassifies it once per instance
+ * into the instance's answer slot.
+ */
+export const CUSTODY_SEAL_READER = cfcAtom.builtin(CUSTODY_SEAL_WRITER);
+
+/**
+ * Whether every exchange rule of `template` releases what it matches to the
+ * seal alone (`addAlternatives: [CUSTODY_SEAL_READER]`), so that nothing its
+ * rules release is readable by a member. A policy with no rules releases
+ * nothing and passes, as it does {@link releaseRequiresSealWitness}.
+ */
+export const releasesOnlyToSeal = (template: PolicyTemplateV1): boolean =>
+  template.exchangeRules.every((rule) =>
+    deepEqual(rule.postCondition.confidentiality, [CUSTODY_SEAL_READER])
+  );
+
+/**
  * Whether every exchange rule of `template` guards on the code that computed
  * what it releases, and every such `TransformedBy` guard names the seal's own
  * `TransformedBy{builtin cfc-custody-seal}` as its input witness, so that no
@@ -2083,16 +2107,19 @@ const namesPolicy = (clause: unknown, policy: CfcModulePolicyRefAtom) =>
 
 /**
  * The value `output` holds and whether the room's policy releases it to the
- * room's readers by one of its own rules. The answer is a scalar, as a room's
- * projected answer is, and its label is what a display of it resolves: the
- * content entries at its root, joined. It is released when that label carries
- * the room's policy, a rule of the policy fires and drops it, and every clause
- * left admits the room space's readers. The room's rules all require the
- * seal's witness (checked by the caller), so a release here is one whose
- * computation read only what the seal wrote. A value that never carried the
- * policy is not the room's answer, whatever its label admits.
+ * seal by one of its own rules, for the seal to publish to the room's
+ * readers. The answer is a scalar, as a room's projected answer is, and its
+ * label is what a display of it resolves: the content entries at its root,
+ * joined. It is released when that label carries the room's policy, a rule of
+ * that policy fires, every clause naming the policy is left admitting the
+ * seal ({@link CUSTODY_SEAL_READER}), and every other clause admits the room
+ * space's readers. The room's rules all require the seal's witness and
+ * release only to the seal (checked by the caller), so a release here is one
+ * whose computation read only what the seal wrote, and one no member could
+ * read before the seal published it. A value that never carried the policy is
+ * not the room's answer, whatever its label admits.
  */
-const releasedToRoom = (
+const releasedToSeal = (
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
   output: Cell<unknown>,
@@ -2152,15 +2179,24 @@ const releasedToRoom = (
   );
   const left = result.label.confidentiality ?? [];
   const roomReaders = cfcAtom.space(room);
+  // A rule of the room's own policy fired, and released every clause naming
+  // the policy to the seal; every other clause admits the room's readers.
+  const roomRecord =
+    `${policy.moduleIdentity}#${policy.symbol}@${policy.policyDigest}`;
+  const admits = (clause: unknown, reader: unknown) =>
+    clauseAlternatives(clause as CfcConfClause).some((atom) =>
+      deepEqual(atom, reader)
+    );
   return {
     value,
     released: !result.exhausted && result.resolutionFailures.length === 0 &&
-      result.firings.length > 0 &&
-      !left.some((clause) => namesPolicy(clause, policy)) &&
+      result.firings.some((firing) =>
+        firing.recordId === roomRecord && firing.kind === "add"
+      ) &&
       left.every((clause) =>
-        clauseAlternatives(clause as CfcConfClause).some((atom) =>
-          deepEqual(atom, roomReaders)
-        )
+        namesPolicy(clause, policy)
+          ? admits(clause, CUSTODY_SEAL_READER)
+          : admits(clause, roomReaders)
       ),
   };
 };
@@ -2216,18 +2252,20 @@ export async function readCustodyAnswer(
 /**
  * Publishes a custody instance's answer once: the value `output` holds, when
  * a rule of the room's policy, every one of which requires the seal's
- * witness, releases it to the room's readers, and every seat has sealed. The
- * seal writes it into the instance's answer slot, a create-only document in
- * the room space at `{custodyAnswer: {policy, instance}}`, stamped as the
- * seal's own like the box, and refuses a second publication. A host renders
- * the slot through {@link readCustodyAnswer} rather than the room's reactive
- * projection, so what the room's readers are shown cannot move once the
- * answer is published, whatever later points the projector at other input.
+ * witness and releases only to the seal, releases it to the seal, and every
+ * seat has sealed. The seal declassifies it into the instance's answer slot,
+ * a create-only document in the room space at
+ * `{custodyAnswer: {policy, instance}}` labeled for the room's readers and
+ * stamped as the seal's own like the box, and refuses a second publication.
+ * The projection itself is read by no member. A host renders the slot through
+ * {@link readCustodyAnswer}, so what the room's readers are shown cannot move
+ * once the answer is published, whatever later points the projector at other
+ * input.
  *
- * @throws If the room's policy releases anything without the seal's witness,
- *   a seat has not sealed, the policy does not release `output` to the
- *   room's readers, the room changed while the answer was being published,
- *   or the instance's answer is already published.
+ * @throws If the room's policy releases anything without the seal's witness
+ *   or to anyone but the seal, a seat has not sealed, the policy does not
+ *   release `output` to the seal, the room changed while the answer was being
+ *   published, or the instance's answer is already published.
  */
 export async function publishCustodyAnswer(
   room: CustodyRoom,
@@ -2243,6 +2281,11 @@ export async function publishCustodyAnswer(
   if (!inspected.witnessedRelease) {
     throw new Error(
       "Custody answer requires a policy whose every rule requires the seal's witness",
+    );
+  }
+  if (!releasesOnlyToSeal(inspected.template)) {
+    throw new Error(
+      "Custody answer requires a policy whose every rule releases only to the seal",
     );
   }
   const { policy, terms } = inspected;
@@ -2282,7 +2325,7 @@ export async function publishCustodyAnswer(
     ) {
       throw new Error("Custody answer requires every seat to have sealed");
     }
-    const { value, released } = releasedToRoom(
+    const { value, released } = releasedToSeal(
       runtime,
       tx,
       output,
@@ -2292,7 +2335,7 @@ export async function publishCustodyAnswer(
     );
     if (!released) {
       throw new Error(
-        "Custody answer requires a value the room's policy releases to its readers",
+        "Custody answer requires a value the room's policy releases to the seal",
       );
     }
     // The one labeled read, as in the entry transaction: it attributes the

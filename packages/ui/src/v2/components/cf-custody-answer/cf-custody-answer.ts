@@ -19,7 +19,7 @@ import { runtimeContext } from "../../runtime-context.ts";
  */
 const EXPECTED_REFUSALS = [
   "Custody answer requires every seat to have sealed",
-  "Custody answer requires a value the room's policy releases to its readers",
+  "Custody answer requires a value the room's policy releases to the seal",
   "Custody answer is already published for this instance",
   "Custody answer's room changed while publishing",
 ];
@@ -37,7 +37,8 @@ const messageOf = (error: unknown): string =>
  * where `output` is the room's projected answer. Each time the projected
  * answer changes, the component asks the worker to publish it; the seal
  * publishes it once, only when every rule of the room's policy requires the
- * seal's witness, a rule releases it to the room's readers, and every seat has
+ * seal's witness and releases only to the seal, a rule releases it to the
+ * seal, and every seat has
  * sealed, and refuses every later request. Before the room has terms it asks
  * nothing. A failure other than those refusals is shown as an alert, and the
  * next change asks again. The component shows what the seal

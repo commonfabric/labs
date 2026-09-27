@@ -963,13 +963,13 @@ cannot. See `docs/common/components/COMPONENTS.md` and
 
 **Purpose**: Asks the trusted host to publish a custody room's answer once per
 instance, and shows it. The host publishes it only when every rule of the room's
-policy requires the seal's witness, a rule releases the answer to the room's
-readers, and every seat has sealed, and refuses every later request. What the
-component shows is read by the host from the instance's answer slot and verified
-to be the seal's write, so it cannot move once published. A failure other than
-those refusals (a lost worker connection, a slot the seal did not write) is
-shown as an alert; before the room has terms it asks nothing. **Tag**:
-`<cf-custody-answer>`
+policy requires the seal's witness and releases only to the seal, a rule
+releases the answer to the seal, and every seat has sealed, and refuses every
+later request. What the component shows is read by the host from the instance's
+answer slot and verified to be the seal's write, so it cannot move once
+published. A failure other than those refusals (a lost worker connection, a slot
+the seal did not write) is shown as an alert; before the room has terms it asks
+nothing. **Tag**: `<cf-custody-answer>`
 
 **Bindings**:
 

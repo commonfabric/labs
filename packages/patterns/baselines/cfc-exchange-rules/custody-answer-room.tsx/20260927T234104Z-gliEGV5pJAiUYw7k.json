@@ -164,8 +164,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "nV9tEEqAE0liIXw4qmJBZJXQDtL-wS2xsw_Py44RPp8",
-              "policyDigest": "8SqMjR8es-LC5TZ5LXzXvH-sV_UHqTAGaI7OG_UAX7M",
+              "moduleIdentity": "9yXuaWSqng01U6IsS1jV9AgwrAQ9iAS38r55i_0i0Go",
+              "policyDigest": "A34eJIiReShihZT5Mf17GGdnDthjF0sFvwUNd6WbBHk",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -359,15 +359,15 @@
         "$ref": "#/$defs/Box"
       },
       "choice": {
-        "description": "The projected answer, which moves with what the projector reads. The\nroom shows the answer the seal published from it instead.",
+        "description": "The projected answer, which moves with what the projector reads. It is\nreleased to the seal alone, which publishes it; no member reads it, and\nthe room shows the answer the seal published instead.",
         "type": "string"
       },
       "policy": {
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "nV9tEEqAE0liIXw4qmJBZJXQDtL-wS2xsw_Py44RPp8",
-              "policyDigest": "8SqMjR8es-LC5TZ5LXzXvH-sV_UHqTAGaI7OG_UAX7M",
+              "moduleIdentity": "9yXuaWSqng01U6IsS1jV9AgwrAQ9iAS38r55i_0i0Go",
+              "policyDigest": "A34eJIiReShihZT5Mf17GGdnDthjF0sFvwUNd6WbBHk",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true

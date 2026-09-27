@@ -290,8 +290,16 @@ label of its own.
 
 A room's projector is reactive: pointed at other input, or run again, it
 computes again, and a room that rendered it would show each result its rule
-releases. The consent a member gives is per instance, so the room releases one
-answer per instance. `publishCustodyAnswer(room, output)` is the host operation
+releases. Worse, an answer that does not change is not written again, so it
+keeps the stamp its earlier run left, and whether a projection pointed at a
+document of a member's choosing is still readable says whether that document
+yields the released answer. The consent a member gives is per instance, so the
+room releases one answer per instance, and the projection itself to no member:
+the room's rule releases it to the seal alone, adding the reader
+`Builtin{cfc-custody-seal}` (`CUSTODY_SEAL_READER`), which no member's runtime
+holds, to the policy's clause rather than dropping it. The seal declassifies
+the answer once, into the instance's answer slot, which is the one thing the
+room's readers can read. `publishCustodyAnswer(room, output)` is the host operation
 that publishes it, and `readCustodyAnswer(room)` the one that reads it back.
 A pattern reaches both through `cf-custody-answer` (`$terms`, `$policy`,
 `$output`), which asks the worker to publish each time the projected answer
@@ -305,14 +313,17 @@ The seal publishes only when all of these hold, read by the worker from the
 cells the host names, never from the request:
 
 - every exchange rule of the room's policy requires the seal's witness
-  (`witnessedRelease`);
+  (`witnessedRelease`), and releases only to the seal: its post-condition
+  adds `CUSTODY_SEAL_READER` and nothing else (`releasesOnlyToSeal`), so no
+  rule makes the projection readable by a member;
 - the instance's anchor and box are the seal's, and the box holds one entry
   per seat;
 - the projected answer is a scalar of at most 1,024 characters whose stored
-  label carries the room's policy, and a rule of the policy fires on that
-  label and drops it, leaving only clauses the room space's readers hold. A
-  value that never carried the policy is not the room's answer, whatever its
-  label admits;
+  label carries the room's policy, a rule of the room's own policy fires on
+  that label, and every clause naming the policy is left admitting the seal
+  and every other clause the room space's readers. A value that never carried
+  the policy is not the room's answer, whatever its label admits, and a firing
+  of another policy's rule is not the room's release;
 - the seal's witness on the answer names this instance. The seal acts under
   `{kind: "builtin", builtinId: "cfc-custody-seal", instance: D}`, so every
   `TransformedBy` it mints names the instance it acted for, while a rule's
@@ -416,17 +427,20 @@ of it.
   and when one does not, the confirmation shows a warning that a member's own
   code can learn the actor's stance one answer at a time, in place of a bound
   on what an answer reveals.
-- **An answer that does not change, before it is published.** A stamp is
+- **An answer that does not change, through publication.** A stamp is
   replaced when its value is written. When a member's code points the room's
   box at a document of its own and the projector computes the answer it had
-  already computed, nothing is written, and the answer keeps the stamp it had.
-  Until the answer is published, a member can so learn whether a document of
-  their choosing yields the projector's current answer, one comparison per
-  change. The same holds the other way, as a denial of service: an honest run
-  after one over other input that yields the same answer keeps the stamp that
-  run left, and the seal refuses to publish it until the answer changes. Once
-  the answer is published, what the room shows no longer follows the
-  projector.
+  already computed, nothing is written, and the answer keeps the stamp it had;
+  and the other way, an honest run after one over other input that yields the
+  same answer keeps that run's unwitnessed stamp. The projection is read by
+  no member, but whether the seal then publishes still depends on which stamp
+  the answer kept: until the answer is published, a member who points the box
+  at a document of their choosing and watches for publication can learn
+  whether that document yields the answer the room's box yields, one
+  comparison per change, and can hold publication back as a denial of
+  service. Once the answer is published, nothing about the projection shows.
+  A transformation that re-stamps an output it recomputed unchanged would
+  close this; it is a runtime change to how a no-op write is labeled.
 - **A squatted answer slot.** A slot other code wrote first blocks the
   instance's publication, as a squatted box or anchor blocks sealing. It
   shows nothing, since a host reads only a slot the seal stamped.
