@@ -7,6 +7,7 @@ import {
   type PatchDraftCandidate,
   selectPatchOps,
 } from "../../src/storage/v2-transaction.ts";
+import { seededRandom } from "../combine-order.ts";
 
 /** A covering `replace` candidate at `path`. */
 const cover = (path: readonly string[]): PatchDraftCandidate => ({
@@ -116,12 +117,6 @@ const selectComparingAllPairs = (
     .map((candidate) => (candidate.patch as { path: string }).path);
 };
 
-/** A deterministic generator of numbers in `[0, 1)`, from `seed`. */
-const seeded = (seed: number) => () => {
-  seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-  return seed / 0x7fffffff;
-};
-
 describe("selectPatchOps()", () => {
   it("returns a covering candidate once and drops the ones beneath it", () => {
     expect(keptPointers([
@@ -182,7 +177,7 @@ describe("selectPatchOps()", () => {
     // suppressions sit at, above and beneath one another, with the segments
     // a pointer escapes among them.
 
-    const random = seeded(8144);
+    const random = seededRandom(8144);
     const segments = ["value", "a", "0", "1", "2", "~x", "x/y", ""];
     const pick = <T>(items: readonly T[]) =>
       items[Math.floor(random() * items.length)];

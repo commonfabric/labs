@@ -2,8 +2,10 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { deepFreeze, type FabricValue } from "@commonfabric/data-model";
+import { encodePointer } from "@commonfabric/memory/v2/path";
 
 import { buildReactivityPathsForChanges } from "../../src/storage/v2-transaction.ts";
+import { seededRandom, shuffled } from "../combine-order.ts";
 
 /** An object of `size` keys, each holding a small record. */
 const mapOfSize = (size: number, prefix = "key") => {
@@ -53,12 +55,6 @@ const addingKeys = (size: number, added: number) => {
   return { paths, listings };
 };
 
-/** A deterministic generator of numbers in `[0, 1)`, from `seed`. */
-const seeded = (seed: number) => () => {
-  seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-  return seed / 0x7fffffff;
-};
-
 /** Keys chosen to collide, including the ones a pointer escapes. */
 const KEYS = ["a", "b", "0", "~x", "x/y", ""];
 
@@ -98,7 +94,7 @@ const randomChange = (random: () => number) => {
   return {
     before: deepFreeze({ value: before }),
     after: { value: after },
-    written: written.sort(() => random() - 0.5),
+    written: shuffled(written, random),
   };
 };
 
@@ -174,11 +170,7 @@ describe("buildReactivityPathsForChanges()", () => {
     // of paths is the union of the answers for each one alone, sorted as the
     // function sorts: shorter first, then by pointer.
 
-    const random = seeded(8144);
-    const pointer = (path: readonly string[]) =>
-      path.map((segment) =>
-        "/" + segment.replaceAll("~", "~0").replaceAll("/", "~1")
-      ).join("");
+    const random = seededRandom(8144);
     for (let run = 0; run < 3000; run++) {
       const { before, after, written } = randomChange(random);
 
@@ -189,12 +181,12 @@ describe("buildReactivityPathsForChanges()", () => {
             path,
           ])
         ) {
-          alone.set(pointer(reported), reported);
+          alone.set(encodePointer(reported), reported);
         }
       }
       const merged = [...alone.values()].sort((left, right) =>
         left.length - right.length ||
-        (pointer(left) < pointer(right) ? -1 : 1)
+        (encodePointer(left) < encodePointer(right) ? -1 : 1)
       );
 
       expect(buildReactivityPathsForChanges(before, after, written))
