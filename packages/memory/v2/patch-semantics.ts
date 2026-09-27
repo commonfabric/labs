@@ -17,5 +17,11 @@
  * `test/v2-patch-semantics.test.ts` records what this version produces over a
  * corpus of operations, and fails when an output changes; the version changes
  * with it.
+ *
+ * The version covers replay across client and server builds, and nothing
+ * else. The server rebuilds a stored document from its patch revisions with
+ * the patch code it runs, so a change to what an operation produces also
+ * changes documents already stored, including ones a client holds at an
+ * unchanged seq, which no version number re-delivers.
  */
 export const PATCH_SEMANTICS_VERSION = 1;

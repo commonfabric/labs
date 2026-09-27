@@ -275,9 +275,13 @@ applied the patch over was that one (`03-commit-model.md` section 3.1; section
 4.11.2 says what the committing session's frame then omits). A client declares
 `replayBaseSeq` only to a server advertising the version the client was built
 with; against a server advertising another version or none, it declares
-nothing, and every own patch head reaches it in full. A server advertises none
-while its patch replay is switched off (`setPatchReplayConfig(false)`, or
-`CF_MEMORY_PATCH_REPLAY=off` in its environment).
+nothing, and every own patch head reaches it in full. A client advertises its
+own version in its `hello` too, and the server reports an exact base only on
+a session opened over a connection that advertised the server's version, so
+a commit resent to a server of another version after a reconnect is not
+reported exact. A server advertises none while its patch replay is switched
+off (`setPatchReplayConfig(false)`, or `CF_MEMORY_PATCH_REPLAY=off` in its
+environment), and from its next flush delivers every own patch head.
 
 ### 4.1.2 Logical Sessions and Resume
 
@@ -1298,8 +1302,10 @@ enforced through the catch-up marker and CLIENT-side verdict parking (CT-1927):
   head written before the commit, never one an earlier operation of the
   same commit wrote — with the operation stored as its writer sent it; the
   verdict's revision for it carries `exactBase: true`. Such a head is
-  elided like a `set` head while the snapshot the server last sent the
-  session of that document is at `replayBaseSeq`, so that its document is
+  elided like a `set` head while the snapshot of that document the server
+  last sent the session, or left out of its frame, is at `replayBaseSeq`,
+  and the session's connection advertised the server's
+  `PATCH_SEMANTICS_VERSION`, so that its document is
   the writer's own edits replayed over a document the writer holds
   (`09-invariants.md` INV-15); one retracted from the session since is
   delivered. The engine checks only a default-branch, non-delegated

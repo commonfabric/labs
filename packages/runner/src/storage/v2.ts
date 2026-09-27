@@ -831,31 +831,34 @@ const reportsExactBase = (
   )?.exactBase === true;
 
 /**
- * Returns whether `promoted`, the value of `pending` replayed over
- * `confirmed`, equals the server's stored document at an accept that reports
- * its base exact: the layer declared `confirmed` as its replay base, and
- * `confirmed` equals the server's document at that seq. The replay applies the
- * layer's operations with the patch function the server applied them with,
- * at the same {@link PATCH_SEMANTICS_VERSION}, so equal inputs give an equal
- * document. A replay that skipped the layer, because its operations do not
- * apply here, leaves `confirmed`'s own value, and is refused.
+ * Returns whether `confirmed` is still the replay base `pending` declared,
+ * held as the server stores it. It stops being so when a frame retracts the
+ * document from this replica before the accept promotes.
  */
-const replaysServerDocument = (
+const holdsDeclaredBase = (
   confirmed: ConfirmedVersion,
   pending: PendingVersion,
+): pending is Extract<PendingVersion, { op: "patch" }> =>
+  pending.op === "patch" && pending.replayBaseSeq !== undefined &&
+  confirmed.serverEqual === true && confirmed.seq === pending.replayBaseSeq;
+
+/**
+ * Returns whether replaying `patches` over `base` applied them, given that the
+ * replay produced `promoted`. A replay whose operations do not apply here
+ * leaves `base` itself, and so does one whose operations change nothing; only
+ * applying them again tells the two apart. Where the operations apply, the
+ * result equals the server's at the same {@link PATCH_SEMANTICS_VERSION}; a
+ * replay that applies but differs from the server's is not detectable here,
+ * and the version is what guards against it.
+ */
+const replayApplied = (
+  base: EntityDocument | undefined,
+  patches: PatchOp[],
   promoted: EntityDocument | undefined,
 ): boolean => {
-  if (
-    pending.op !== "patch" || pending.replayBaseSeq === undefined ||
-    confirmed.serverEqual !== true || confirmed.seq !== pending.replayBaseSeq
-  ) {
-    return false;
-  }
-  if (promoted !== confirmed.value) return true;
-  // The base came back as it was, which is either operations that changed
-  // nothing or a skipped layer; only applying them again tells which.
+  if (promoted !== base) return true;
   try {
-    applyPatchToDocument(confirmed.value, pending.patches);
+    applyPatchToDocument(base, patches);
     return true;
   } catch (error) {
     if (error instanceof PatchApplyError) return false;
@@ -8884,26 +8887,31 @@ export class SpaceReplica
           }
           if (
             pendingIndexes.length === 1 &&
-            reportsExactBase(applied, id, scope)
+            reportsExactBase(applied, id, scope) &&
+            holdsDeclaredBase(previousConfirmed, pending)
           ) {
             if (
-              replaysServerDocument(previousConfirmed, pending, prefix.value)
+              replayApplied(
+                previousConfirmed.value,
+                pending.patches,
+                prefix.value,
+              )
             ) {
               promoted.serverEqual = true;
             } else {
-              // The server left this document out of the frame because the
-              // replay here should reproduce it, and it did not: the patch
-              // semantics this replica replays with differ from the
-              // server's, or it no longer holds the base it declared.
-              logger.warn("exact-base-replay-refused", () => [
-                "own patch reported applied over its replay base did not " +
-                "replay to the server's document here",
+              // The server applied these operations over this very document
+              // and left the result out of the frame, and here they do not
+              // apply: this replica's patch semantics differ from the
+              // server's, and its document now differs from the server's.
+              logger.error("exact-base-replay-refused", () => [
+                "own patch the server applied over its replay base does not " +
+                "apply to that base here",
                 {
                   space: this.#space,
                   id,
                   localSeq,
                   seq: applied.seq,
-                  confirmedSeq: previousConfirmed.seq,
+                  replayBaseSeq: pending.replayBaseSeq,
                   patchSemanticsVersion: PATCH_SEMANTICS_VERSION,
                 },
               ]);

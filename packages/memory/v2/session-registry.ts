@@ -21,6 +21,14 @@ export type SessionState = {
   /** The read ceiling this session declared at its LAST open
    * (`SessionDescriptor.readCeiling`); fresh per open, never inherited. */
   readCeiling?: SessionReadCeiling;
+
+  /**
+   * The `PATCH_SEMANTICS_VERSION` the client advertised in the `hello` of the
+   * connection that last opened this session; fresh per open. Only a patch
+   * committed at the server's own version is reported applied over an exact
+   * replay base.
+   */
+  patchReplayVersion?: number;
   /** Immutable root intent authenticated by this session's latest open. */
   genesisRoot?: SessionDescriptor["genesisRoot"];
   seenSeq: number;

@@ -1249,8 +1249,8 @@ the per-epic implementation notes).
 
 ### `patchReplay`
 
-- **Toggle via.** `CF_MEMORY_PATCH_REPLAY=off` in the memory server's
-  environment, or `setPatchReplayConfig()` in
+- **Toggle via.** `CF_MEMORY_PATCH_REPLAY` set to `off`, `false` or `0` in the
+  memory server's environment, or `setPatchReplayConfig()` in
   [`packages/memory/v2.ts`](../../packages/memory/v2.ts), which takes
   precedence. Server-side; the server advertises the result to each connecting
   client as the `patchReplayVersion` hello capability.
@@ -1261,17 +1261,21 @@ the per-epic implementation notes).
   with, and the server leaves the head out of the writer's frame when the
   engine applied the patch over that base (INV-15 in
   [the invariants chapter](../specs/memory-v2/09-invariants.md)). Off, the
-  server advertises no version and delivers every own patch head in full at
-  once, including to sessions that connected while it was on: the rollback
-  lever for a suspected divergence between a client's patch replay and the
-  server's.
+  server advertises no version and, from its next flush, delivers every own
+  patch head in full, including heads committed while it was on and to
+  sessions that connected then: the rollback lever for a suspected divergence
+  between a client's patch replay and the server's.
 - **Current default and planned end state.** On by default. The switch stays
-  as that lever; `ct.memory.sync.own_patch_heads` on the server and the
-  `exact-base-replay-refused` warning on a client are what would call for it.
+  as that lever. `ct.memory.sync.own_patch_heads` on the server counts own
+  patch heads by exactness and elision, and a client logs
+  `exact-base-replay-refused` at error level when operations the server
+  applied over its declared base do not apply there; a replay that applies
+  and differs is not detectable on the client, which is what the version
+  guards against.
 - **Status on 2026-09-27.** Implemented and on by default.
 - **Path to removal.** Once a change of `PATCH_SEMANTICS_VERSION` has crossed a
-  fleet of mixed client builds with no `exact-base-replay-refused` reports,
-  delete the config trio and the environment read, and advertise the version
+  fleet of mixed client builds without a divergence traced to replay, delete
+  the config trio and the environment read, and advertise the version
   unconditionally.
 
 ### `syncSchemaTableV2`

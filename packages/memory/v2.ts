@@ -2152,11 +2152,12 @@ export function resetOwnWriteEchoConfig(): void {
  * session's replay of its patch: advertising {@link PATCH_SEMANTICS_VERSION}
  * to connecting clients, and eliding from a writer's frame a head applied
  * over the base the patch declared. Off, the server advertises no version and
- * delivers every own patch head in full, including to sessions that connected
- * while it was on, so a writer holding a replayed document is sent the
- * server's in the frame covering its next patch. The rollback lever for a
- * suspected divergence between a client's patch replay and the server's.
- * Absent an override, `CF_MEMORY_PATCH_REPLAY=off` in the server's
+ * delivers every own patch head from its next flush on, including heads
+ * committed while it was on and to sessions that connected then, so a writer
+ * holding a replayed document is sent the server's with its next patch to
+ * that document. The rollback lever for a suspected divergence between a
+ * client's patch replay and the server's. Absent an override,
+ * `CF_MEMORY_PATCH_REPLAY` set to `off`, `false` or `0` in the server's
  * environment switches it off.
  */
 export function setPatchReplayConfig(enabled?: boolean): void {
@@ -2166,8 +2167,9 @@ export function setPatchReplayConfig(enabled?: boolean): void {
 export function getPatchReplayConfig(): boolean {
   if (patchReplayOverride !== undefined) return patchReplayOverride;
   try {
-    return typeof Deno === "undefined" ||
-      Deno.env.get("CF_MEMORY_PATCH_REPLAY") !== "off";
+    if (typeof Deno === "undefined") return true;
+    const value = Deno.env.get("CF_MEMORY_PATCH_REPLAY")?.trim().toLowerCase();
+    return value !== "off" && value !== "false" && value !== "0";
   } catch {
     return true;
   }

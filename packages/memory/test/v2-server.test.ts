@@ -12,6 +12,7 @@ import {
   type HelloOkMessage,
   MAX_ENTITY_ID_PAGE_SIZE,
   MEMORY_PROTOCOL,
+  PATCH_SEMANTICS_VERSION,
   resetOwnWriteEchoConfig,
   resetPatchReplayConfig,
   type ResponseMessage,
@@ -3112,6 +3113,100 @@ Deno.test("memory v2 server delivers an exact own patch head to a session its ba
   }
 });
 
+for (
+  const [label, patchReplayVersion] of [
+    ["another patch semantics version", PATCH_SEMANTICS_VERSION + 1],
+    ["no patch semantics version", undefined],
+  ] as const
+) {
+  Deno.test(`memory v2 server reports no exact base to a client advertising ${label}`, async () => {
+    // A client replays its own patches at the version it advertised, which
+    // need not reproduce what this server stored, so the head reaches it in
+    // full and its verdict claims nothing exact, whatever base it declared.
+
+    const server = createServer(
+      `memory://memory-v2-server-exact-base-version-${patchReplayVersion}`,
+    );
+    const messages: ServerMessage[] = [];
+    const writer = server.connect((message) => messages.push(message));
+    const space = "did:key:z6Mk-memory-v2-exact-base-version";
+    const id = "of:doc:exact-base-version";
+    const { patchReplayVersion: _, ...flags } = HELLO_FLAGS;
+
+    try {
+      await writer.receive(encodeMemoryBoundary({
+        ...HELLO,
+        flags: {
+          ...flags,
+          ...(patchReplayVersion === undefined ? {} : { patchReplayVersion }),
+        },
+      }));
+      const sessionOpen = expectHelloOk(messages);
+      await writer.receive(encodeMemoryBoundary({
+        type: "session.open",
+        requestId: "open",
+        space,
+        session: {},
+        invocation: authInvocation(sessionOpen),
+      }));
+      const sessionId = assertResponse<{ sessionId: string }>(
+        shiftMessage(messages),
+      ).ok!.sessionId;
+      await writer.receive(encodeMemoryBoundary({
+        type: "session.watch.set",
+        requestId: "watch",
+        space,
+        sessionId,
+        watches: [{
+          id: "root",
+          kind: "graph",
+          query: { roots: [{ id, selector: { path: [], schema: false } }] },
+        }],
+      }));
+      assertResponse<unknown>(shiftMessage(messages));
+      const transact = async (localSeq: number, operation: FabricValue) => {
+        await writer.receive(encodeMemoryBoundary({
+          type: "transact",
+          requestId: `version-${localSeq}`,
+          space,
+          sessionId,
+          commit: {
+            localSeq,
+            reads: { confirmed: [], pending: [] },
+            operations: [operation],
+          },
+        }));
+        return nextResponse<any>(messages).ok!;
+      };
+      const seeded = await transact(1, {
+        op: "set",
+        id,
+        value: { value: { label: "seed" } },
+      });
+      await server.flushSessions([space]);
+      shiftMessage(messages);
+
+      const patched = await transact(2, {
+        op: "patch",
+        id,
+        patches: [{ op: "replace", path: "/value/label", value: "mine" }],
+        replayBaseSeq: seeded.seq,
+      });
+      await server.flushSessions([space]);
+
+      assertEquals(patched.revisions[0].exactBase, undefined);
+      assertEquals(
+        assertEffect(shiftMessage(messages)).effect.upserts.map((upsert) =>
+          upsert.seq
+        ),
+        [patched.seq],
+      );
+    } finally {
+      await server.close();
+    }
+  });
+}
+
 Deno.test("memory v2 server delivers an exact own patch head while patch replay is switched off", async () => {
   setPatchReplayConfig(false);
   const server = createServer("memory://memory-v2-server-patch-replay-off");
@@ -3172,6 +3267,71 @@ Deno.test("memory v2 server delivers an exact own patch head while patch replay 
       seq: patched.seq,
       doc: { value: { label: "mine" } },
     }]);
+  } finally {
+    resetPatchReplayConfig();
+    await server.close();
+  }
+});
+
+Deno.test("memory v2 server delivers an exact own patch head committed before patch replay was switched off", async () => {
+  const server = createServer("memory://memory-v2-server-patch-replay-flip");
+  const messages: ServerMessage[] = [];
+  const writer = server.connect((message) => messages.push(message));
+  const space = "did:key:z6Mk-memory-v2-patch-replay-flip";
+  const id = "of:doc:replay-flip";
+
+  try {
+    const sessionId = await openTestSession(writer, messages, space, "writer");
+    await writer.receive(encodeMemoryBoundary({
+      type: "session.watch.set",
+      requestId: "watch",
+      space,
+      sessionId,
+      watches: [{
+        id: "root",
+        kind: "graph",
+        query: { roots: [{ id, selector: { path: [], schema: false } }] },
+      }],
+    }));
+    assertResponse<unknown>(shiftMessage(messages));
+    const transact = async (localSeq: number, operation: FabricValue) => {
+      await writer.receive(encodeMemoryBoundary({
+        type: "transact",
+        requestId: `replay-flip-${localSeq}`,
+        space,
+        sessionId,
+        commit: {
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [operation],
+        },
+      }));
+      return nextResponse<any>(messages).ok!;
+    };
+    const seeded = await transact(1, {
+      op: "set",
+      id,
+      value: { value: { label: "seed" } },
+    });
+    await server.flushSessions([space]);
+    shiftMessage(messages);
+
+    const patched = await transact(2, {
+      op: "patch",
+      id,
+      patches: [{ op: "replace", path: "/value/label", value: "mine" }],
+      replayBaseSeq: seeded.seq,
+    });
+    assertEquals(patched.revisions[0].exactBase, true);
+    setPatchReplayConfig(false);
+    await server.flushSessions([space]);
+
+    assertEquals(
+      assertEffect(shiftMessage(messages)).effect.upserts.map((upsert) =>
+        upsert.seq
+      ),
+      [patched.seq],
+    );
   } finally {
     resetPatchReplayConfig();
     await server.close();

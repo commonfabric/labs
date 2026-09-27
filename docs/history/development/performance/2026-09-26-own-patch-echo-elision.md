@@ -123,6 +123,15 @@ change would have cost later; the branch took the following before landing.
   `ct.memory.sync.own_patch_heads` counts own patch heads by outcome, and a
   replica warns when a head reported exact does not replay to the server's
   document.
+- **The version, checked on one side only.** A review of those changes found
+  the client checked the server's version when building a commit, and the
+  server ignored the client's, so a commit resent to a server of a new
+  version after a restart would still be elided. The server now records the
+  version each connection's client advertised and reports an exact base only
+  at its own. The same review moved the switch to act at flush time, split the
+  client's warning so a benign retraction is silent and a refused replay is an
+  error, and tied the recorded patch results to their version with a released
+  fingerprint.
 - **Key order.** The flag claiming the promoted value was the server's
   document exactly was false in key order: the codec delivers keys in
   canonical order, and a replay keeps the order its own operations inserted

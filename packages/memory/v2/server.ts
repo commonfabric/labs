@@ -61,6 +61,7 @@ import {
   type OperationWatchSpec,
   parseMemoryProtocolFlags,
   parseSessionReadCeiling,
+  PATCH_SEMANTICS_VERSION,
   resolveScopeKey,
   type ResponseMessage,
   type ScopeKey,
@@ -686,7 +687,8 @@ type DirtyOrigin = { sessionId: string; seq: number } & DirtyWrite;
  * so that its own frame may omit the head. `previous` is the snapshot of the
  * doc the session was last sent or had elided, which an exact patch's replay
  * has to be over: a doc retracted from the session since the commit is
- * delivered, even though the engine applied the patch over its base. With the
+ * delivered, even though the engine applied the patch over its base, and so
+ * is every exact patch head while patch replay is switched off. With the
  * own-write echo off every own head is elided.
  */
 const writerHolds = (
@@ -698,7 +700,8 @@ const writerHolds = (
     case "delete":
       return true;
     case "exact-patch":
-      return previous?.seq === origin.replayBaseSeq ||
+      return (getPatchReplayConfig() &&
+        previous?.seq === origin.replayBaseSeq) ||
         !getOwnWriteEchoConfig();
     case "patch":
       return !getOwnWriteEchoConfig();
@@ -876,6 +879,7 @@ class Connection {
   #closed = false;
   #syncSchemaTable = false;
   #stableExpressionResultIds = false;
+  #patchReplayVersion: number | undefined;
   #sessions = new Map<string, SessionHandle>();
   #sessionOpenChallenge: SessionOpenChallengeState | null = null;
   #receiving: Promise<void> = Promise.resolve();
@@ -908,6 +912,14 @@ class Connection {
   /** Whether the peer declared the expression result identity contract. */
   get stableExpressionResultIds(): boolean {
     return this.#stableExpressionResultIds;
+  }
+
+  /**
+   * The `PATCH_SEMANTICS_VERSION` the peer advertised in its `hello`: the
+   * version it replays its own patches at, if it replays any.
+   */
+  get patchReplayVersion(): number | undefined {
+    return this.#patchReplayVersion;
   }
 
   hasSession(space: string, sessionId: string): boolean {
@@ -1159,6 +1171,7 @@ class Connection {
         clientFlags?.stableExpressionResultIds === true;
       this.#syncSchemaTable = clientFlags?.syncSchemaTableV2 === true &&
         serverFlags?.syncSchemaTableV2 === true;
+      this.#patchReplayVersion = clientFlags?.patchReplayVersion;
       this.#ready = true;
       return;
     }
@@ -3487,6 +3500,17 @@ export class Server {
           "taken-over",
         );
       }
+      // Fresh per open, like the read ceiling: a commit replayed or resent
+      // over this connection is judged by the version its client replays
+      // at now, not the one it was built under.
+      const openedState = this.#sessions.get(message.space, opened.sessionId);
+      if (openedState !== null) {
+        if (connection.patchReplayVersion === undefined) {
+          delete openedState.patchReplayVersion;
+        } else {
+          openedState.patchReplayVersion = connection.patchReplayVersion;
+        }
+      }
       // A resuming client that declares its holdings REPLACES the
       // server's delivery memory of it: the catch-up below diffs against
       // what the client says it holds, so a document the server remembers
@@ -4150,6 +4174,21 @@ export class Server {
               detachDatabase(engine.database, alias);
             }
           }
+          // An exact base promises the writer's replay reproduces the head,
+          // which holds only while it replays at this server's patch
+          // semantics; otherwise the revision reports nothing exact, so the
+          // writer's verdict and this server's elision agree.
+          if (
+            session.patchReplayVersion !== PATCH_SEMANTICS_VERSION &&
+            commit.revisions.some((revision) => revision.exactBase === true)
+          ) {
+            commit = {
+              ...commit,
+              revisions: commit.revisions.map(({ exactBase: _, ...revision }) =>
+                revision
+              ),
+            };
+          }
           for (const resolution of commit.operationResolutions ?? []) {
             const operation =
               message.commit.operations[resolution.operationIndex];
@@ -4175,14 +4214,13 @@ export class Server {
           // decides the flush-time echo shape.
           const committedWrites: Array<{ id: string; scopeKey: ScopeKey }> = [];
           const dirtyWrites = new Map<string, DirtyWrite>();
-          const patchReplay = getPatchReplayConfig();
           for (const revision of commit.revisions) {
             const scopeKey = revision.scopeKey as ScopeKey;
             committedWrites.push({ id: revision.id, scopeKey });
             const operation = message.commit.operations[revision.opIndex];
             dirtyWrites.set(
               toDirtyKey(revision.id, scopeKey),
-              patchReplay && revision.exactBase === true &&
+              revision.exactBase === true &&
                 operation?.op === "patch" &&
                 operation.replayBaseSeq !== undefined
                 ? { op: "exact-patch", replayBaseSeq: operation.replayBaseSeq }
