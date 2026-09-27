@@ -159,6 +159,12 @@ type WritableDocumentEntry = {
   writeDetails: Map<string, TransactionWriteDetail>;
   patchDetails: Map<string, TransactionWriteDetail>;
   displaced?: DisplacedRoot[];
+  // The paths this transaction's writes to the document report for
+  // reactivity, from `buildReactivityPathsForChanges()`. They depend only on
+  // `initial`, `current` and `patchDetails`, so a read leaves them standing and
+  // a write to this document clears them; that is what lets every build of the
+  // reactivity log during one commit share them.
+  reactivityPaths?: readonly (readonly string[])[];
   // Mergeable-write intents recorded by recordMergeableOp, keyed by document
   // path. The commit emits these as the corresponding mergeable op (which the
   // server resolves against durable state) instead of a value diffed against a
@@ -478,10 +484,24 @@ const findMaterializedParentPath = (
   return undefined;
 };
 
-type PatchDraftCandidate = {
+/** One op a document's commit may send, before `selectPatchOps()` chooses. */
+export type PatchDraftCandidate = {
+  /** The op itself. */
   patch: PatchOp;
+
+  /** The document path the op writes. */
   path: readonly string[];
+
+  /**
+   * Whether the op replaces everything beneath `path`, so that a candidate at
+   * or below it is redundant. Value ops do; an array's element splice does not.
+   */
   coversDescendants: boolean;
+
+  /**
+   * For a splice that adds or removes an array's tail, the first index it
+   * touches: a candidate at an element index at or past it is subsumed.
+   */
   tailSpliceStartIndex?: number;
 };
 
@@ -777,6 +797,116 @@ const isSubsumedByTailSplice = (
     Number(childSegment) >= spliceCandidate.tailSpliceStartIndex;
 };
 
+/**
+ * The ops a document's commit sends, chosen from its patch candidates. A
+ * covering candidate is dropped when a tail splice subsumes it, or when a
+ * covering candidate already kept sits at or above its path, shorter paths
+ * being kept first. A non-covering candidate is dropped when a kept covering
+ * candidate or a tail splice covers it. And either kind is dropped when
+ * `suppress` names it, since a mergeable op carries that change instead.
+ *
+ * Every one of those checks asks which of a set of paths prefix a candidate's
+ * path, and a transaction writing `K` keys yields `K` candidates. So each set
+ * is indexed by pointer and a candidate looks up its own prefixes, which keeps
+ * the work per candidate to the depth of its path rather than the number of
+ * candidates.
+ *
+ * Exported for direct unit testing.
+ */
+export const selectPatchOps = (
+  fullCoverCandidates: readonly PatchDraftCandidate[],
+  nonCoverCandidates: readonly PatchDraftCandidate[],
+  suppress: readonly OpSuppression[],
+): PatchOp[] => {
+  const tailSplicesByPointer = new Map<string, PatchDraftCandidate[]>();
+  for (const candidate of nonCoverCandidates) {
+    if (candidate.tailSpliceStartIndex === undefined) continue;
+    const pointer = encodePointer(candidate.path);
+    const splices = tailSplicesByPointer.get(pointer);
+    if (splices === undefined) {
+      tailSplicesByPointer.set(pointer, [candidate]);
+    } else {
+      splices.push(candidate);
+    }
+  }
+  // A tail splice subsumes only what sits strictly beneath it, so a
+  // candidate's own pointer, the last of its prefixes, is not looked up.
+  const isSubsumedByAnyTailSplice = (
+    candidatePath: readonly string[],
+  ): boolean =>
+    prefixPointers(candidatePath).slice(0, -1).some((pointer) =>
+      tailSplicesByPointer.get(pointer)?.some((spliceCandidate) =>
+        isSubsumedByTailSplice(spliceCandidate, candidatePath)
+      ) ?? false
+    );
+
+  const retainedCoverCandidates = fullCoverCandidates
+    .filter((candidate) => !isSubsumedByAnyTailSplice(candidate.path))
+    .sort((left, right) => left.path.length - right.path.length);
+  // Shortest first, so a candidate overlaps one already kept exactly when
+  // that one's path is a prefix of its own.
+  const nonOverlappingCoverCandidates: typeof retainedCoverCandidates = [];
+  const coverPointers = new Set<string>();
+  const isUnderCover = (path: readonly string[]): boolean =>
+    prefixPointers(path).some((pointer) => coverPointers.has(pointer));
+  for (const detail of retainedCoverCandidates) {
+    if (isUnderCover(detail.path)) {
+      continue;
+    }
+    nonOverlappingCoverCandidates.push(detail);
+    coverPointers.add(encodePointer(detail.path));
+  }
+
+  const retainedNonCoverCandidates = nonCoverCandidates.filter((detail) =>
+    !isUnderCover(detail.path) && !isSubsumedByAnyTailSplice(detail.path)
+  );
+
+  // Drop the candidates the append op replaces: the whole-array op at the
+  // append path, and element candidates in the appended tail (index >= start).
+  // Edits to existing elements (index < start) and unrelated sibling/ancestor
+  // candidates are kept.
+  const suppressionsByPointer = new Map<string, OpSuppression[]>();
+  for (const suppression of suppress) {
+    const pointer = encodePointer(suppression.path);
+    const suppressions = suppressionsByPointer.get(pointer);
+    if (suppressions === undefined) {
+      suppressionsByPointer.set(pointer, [suppression]);
+    } else {
+      suppressions.push(suppression);
+    }
+  }
+  const isSuppressed = (candidatePath: readonly string[]): boolean =>
+    prefixPointers(candidatePath).some((pointer, length) =>
+      suppressionsByPointer.get(pointer)?.some(({ tailStart, subtree }) => {
+        // Any suppression at the candidate's own path suppresses it.
+        if (length === candidatePath.length) {
+          return true;
+        }
+        // A remove-by-value suppresses the whole subtree (any descendant); a
+        // tail op suppresses only appended-tail element candidates; an
+        // increment suppresses only the exact scalar path.
+        if (subtree) {
+          return true;
+        }
+        if (tailStart === undefined) {
+          return false;
+        }
+        const childSegment = candidatePath[length]!;
+        return isArrayIndexPropertyName(childSegment) &&
+          Number(childSegment) >= tailStart;
+      }) ?? false
+    );
+
+  return [
+    ...nonOverlappingCoverCandidates
+      .filter((candidate) => !isSuppressed(candidate.path))
+      .map((candidate) => candidate.patch),
+    ...retainedNonCoverCandidates
+      .filter((candidate) => !isSuppressed(candidate.path))
+      .map((candidate) => candidate.patch),
+  ];
+};
+
 // A `FabricSpecialObject` on either side falls to the `valueEqual` comparison
 // below rather than being compared by key set: its state sits behind no key,
 // so two distinct ones would compare by their empty key sets and report
@@ -834,8 +964,10 @@ const compareDocPaths = (
  * written path beneath it shares the answer, so each ancestor is compared once
  * per call rather than once per written path. That keeps `K` writes under one
  * `N`-key object at `O(K + N)` rather than `O(K × N)`.
+ *
+ * Exported for direct unit testing.
  */
-const buildReactivityPathsForChanges = (
+export const buildReactivityPathsForChanges = (
   beforeRoot: FabricValue | undefined,
   afterRoot: FabricValue | undefined,
   writtenPaths: Iterable<readonly string[]>,
@@ -2465,6 +2597,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       previousValue,
       previousPresent,
     );
+    doc.reactivityPaths = undefined;
     this.#invalidateReactivityLog();
   }
 
@@ -3122,13 +3255,12 @@ export class V2StorageTransaction implements IStorageTransaction {
 
         const { id, scope } = this.#parseDocKey(key);
         const instance = this.#instanceOf(scope);
-        for (
-          const path of buildReactivityPathsForChanges(
-            doc.initial.value,
-            doc.current.value,
-            doc.patchDetails.values().map((detail) => detail.address.path),
-          )
-        ) {
+        doc.reactivityPaths ??= buildReactivityPathsForChanges(
+          doc.initial.value,
+          doc.current.value,
+          doc.patchDetails.values().map((detail) => detail.address.path),
+        );
+        for (const path of doc.reactivityPaths) {
           writes.push({
             space,
             scope,
@@ -3634,101 +3766,11 @@ export class V2StorageTransaction implements IStorageTransaction {
       }
     }
 
-    if (fullCoverCandidates.length === 0 && nonCoverCandidates.length === 0) {
-      return null;
-    }
-
-    // Every filter below asks which of a set of paths prefix a candidate's
-    // path. A transaction writing `K` keys yields `K` candidates, so each set
-    // is indexed by pointer and a candidate looks up its own prefixes, rather
-    // than comparing against every member of the set in turn.
-    const tailSplicesByPointer = new Map<string, PatchDraftCandidate[]>();
-    for (const candidate of nonCoverCandidates) {
-      if (candidate.tailSpliceStartIndex === undefined) continue;
-      const pointer = encodePointer(candidate.path);
-      const splices = tailSplicesByPointer.get(pointer);
-      if (splices === undefined) {
-        tailSplicesByPointer.set(pointer, [candidate]);
-      } else {
-        splices.push(candidate);
-      }
-    }
-    // A tail splice subsumes only what sits strictly beneath it, so a
-    // candidate's own pointer, the last of its prefixes, is not looked up.
-    const isSubsumedByAnyTailSplice = (
-      candidatePath: readonly string[],
-    ): boolean =>
-      prefixPointers(candidatePath).slice(0, -1).some((pointer) =>
-        tailSplicesByPointer.get(pointer)?.some((spliceCandidate) =>
-          isSubsumedByTailSplice(spliceCandidate, candidatePath)
-        ) ?? false
-      );
-
-    const retainedCoverCandidates = fullCoverCandidates
-      .filter((candidate) => !isSubsumedByAnyTailSplice(candidate.path))
-      .sort((left, right) => left.path.length - right.path.length);
-    // Shortest first, so a candidate overlaps one already kept exactly when
-    // that one's path is a prefix of its own.
-    const nonOverlappingCoverCandidates: typeof retainedCoverCandidates = [];
-    const coverPointers = new Set<string>();
-    const isUnderCover = (path: readonly string[]): boolean =>
-      prefixPointers(path).some((pointer) => coverPointers.has(pointer));
-    for (const detail of retainedCoverCandidates) {
-      if (isUnderCover(detail.path)) {
-        continue;
-      }
-      nonOverlappingCoverCandidates.push(detail);
-      coverPointers.add(encodePointer(detail.path));
-    }
-
-    const retainedNonCoverCandidates = nonCoverCandidates.filter((detail) =>
-      !isUnderCover(detail.path) && !isSubsumedByAnyTailSplice(detail.path)
+    const patches = selectPatchOps(
+      fullCoverCandidates,
+      nonCoverCandidates,
+      suppress,
     );
-
-    // Drop the candidates the append op replaces: the whole-array op at the
-    // append path, and element candidates in the appended tail (index >= start).
-    // Edits to existing elements (index < start) and unrelated sibling/ancestor
-    // candidates are kept.
-    const suppressionsByPointer = new Map<string, OpSuppression[]>();
-    for (const suppression of suppress) {
-      const pointer = encodePointer(suppression.path);
-      const suppressions = suppressionsByPointer.get(pointer);
-      if (suppressions === undefined) {
-        suppressionsByPointer.set(pointer, [suppression]);
-      } else {
-        suppressions.push(suppression);
-      }
-    }
-    const isSuppressed = (candidatePath: readonly string[]): boolean =>
-      prefixPointers(candidatePath).some((pointer, length) =>
-        suppressionsByPointer.get(pointer)?.some(({ tailStart, subtree }) => {
-          // Any suppression at the candidate's own path suppresses it.
-          if (length === candidatePath.length) {
-            return true;
-          }
-          // A remove-by-value suppresses the whole subtree (any descendant); a
-          // tail op suppresses only appended-tail element candidates; an
-          // increment suppresses only the exact scalar path.
-          if (subtree) {
-            return true;
-          }
-          if (tailStart === undefined) {
-            return false;
-          }
-          const childSegment = candidatePath[length]!;
-          return isArrayIndexPropertyName(childSegment) &&
-            Number(childSegment) >= tailStart;
-        }) ?? false
-      );
-
-    const patches: PatchOp[] = [
-      ...nonOverlappingCoverCandidates
-        .filter((candidate) => !isSuppressed(candidate.path))
-        .map((candidate) => candidate.patch),
-      ...retainedNonCoverCandidates
-        .filter((candidate) => !isSuppressed(candidate.path))
-        .map((candidate) => candidate.patch),
-    ];
 
     if (patches.length === 0) {
       return null;

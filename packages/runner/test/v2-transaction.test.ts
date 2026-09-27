@@ -65,6 +65,73 @@ const wholeListRead = async (
   }
 };
 
+/** An object of `size` keys, each holding a small record. */
+const recordsOfSize = (size: number, prefix: string) => {
+  const records: Record<string, { name: string }> = {};
+  for (let index = 0; index < size; index++) {
+    records[`${prefix}-${index}`] = { name: `${prefix}-${index}` };
+  }
+  return records;
+};
+
+/**
+ * Commits a document whose `value` holds `size` keys, then commits a second
+ * transaction writing `added` new keys beneath it, and reports how many times
+ * that second commit copied a container of at least `size` keys, and what the
+ * document held afterward.
+ *
+ * A container is copied for a mutation by a shallow `Object.assign()` from it,
+ * so counting the calls whose source is that large counts the copies of the
+ * document's `value`, in the client's replay of its pending write and in the
+ * emulated server's application of it alike. A count that tracks `added` is
+ * each written key copying the whole object again.
+ */
+const largeCopiesAddingKeys = async (
+  size: number,
+  added: number,
+): Promise<{ copies: number; keys: number }> => {
+  const storage = StorageManager.emulate({ as: signer });
+  try {
+    const address = {
+      space,
+      id: `of:v2-transaction-add-${added}` as URI,
+      type,
+    };
+    const seed = storage.edit();
+    expect(
+      seed.write({ ...address, path: [] }, {
+        value: recordsOfSize(size, "key"),
+      }).ok,
+    ).toBeTruthy();
+    expect((await seed.commit()).ok).toBeTruthy();
+
+    const tx = storage.edit();
+    for (const [key, record] of Object.entries(recordsOfSize(added, "added"))) {
+      expect(tx.write({ ...address, path: ["value", key] }, record).ok)
+        .toBeTruthy();
+    }
+
+    const assign = Object.assign;
+    let copies = 0;
+    Object.assign = ((target: object, ...sources: object[]) => {
+      if (sources.some((source) => Object.keys(source).length >= size)) {
+        copies++;
+      }
+      return assign(target, ...sources);
+    }) as typeof Object.assign;
+    try {
+      expect((await tx.commit()).ok).toBeTruthy();
+    } finally {
+      Object.assign = assign;
+    }
+
+    const read = storage.edit().read({ ...address, path: ["value"] });
+    return { copies, keys: Object.keys(read.ok!.value as object).length };
+  } finally {
+    await storage.close();
+  }
+};
+
 describe("v2-transaction", () => {
   describe("getPotentiallyExternalReadActivities()", () => {
     it("retains every raw clock position while excluding sealed verifier records", async () => {
@@ -203,6 +270,91 @@ describe("v2-transaction", () => {
       const { value } = await wholeListRead(20);
 
       expect(isDeepFrozen(value)).toBe(true);
+    });
+  });
+
+  describe("getReactivityLog()", () => {
+    // A document's written paths are computed once and kept until the next
+    // write to it, so what these cases pin is that the log still follows the
+    // writes: a write after the log was built shows up in the next one, and a
+    // read in between changes nothing about them.
+
+    /** Commits a document holding `{ value: { a: 1 } }` and opens a writer. */
+    const writerOverCommittedDocument = async (id: URI) => {
+      const storage = StorageManager.emulate({ as: signer });
+      const address = { space, id, type };
+      const seed = storage.edit();
+      expect(seed.write({ ...address, path: [] }, { value: { a: 1 } }).ok)
+        .toBeTruthy();
+      expect((await seed.commit()).ok).toBeTruthy();
+      return { storage, address, tx: storage.edit() };
+    };
+
+    it("returns a write made after the log was last built", async () => {
+      const { storage, address, tx } = await writerOverCommittedDocument(
+        "of:v2-transaction-log-after-build",
+      );
+      try {
+        expect(tx.write({ ...address, path: ["value", "b"] }, 2).ok)
+          .toBeTruthy();
+        expect(tx.getReactivityLog!().writes.map(({ path }) => path))
+          .toEqual([["value"], ["value", "b"]]);
+
+        expect(tx.write({ ...address, path: ["value", "c"] }, 3).ok)
+          .toBeTruthy();
+        expect(tx.getReactivityLog!().writes.map(({ path }) => path))
+          .toEqual([["value"], ["value", "b"], ["value", "c"]]);
+
+        expect(tx.write({ ...address, path: ["value", "c"] }, 4).ok)
+          .toBeTruthy();
+        expect(
+          tx.write({ ...address, path: ["value", "b"] }, undefined, {
+            delete: true,
+          }).ok,
+        ).toBeTruthy();
+        // `b` is back where it began, so only `c` and the key set it grew are
+        // left to report.
+        expect(tx.getReactivityLog!().writes.map(({ path }) => path))
+          .toEqual([["value"], ["value", "c"]]);
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("returns the same writes after a read as before it", async () => {
+      const { storage, address, tx } = await writerOverCommittedDocument(
+        "of:v2-transaction-log-across-read",
+      );
+      try {
+        expect(tx.write({ ...address, path: ["value", "b"] }, 2).ok)
+          .toBeTruthy();
+        const before = tx.getReactivityLog!();
+
+        expect(tx.read({ ...address, path: ["value", "a"] }).ok).toBeTruthy();
+        const after = tx.getReactivityLog!();
+
+        expect(after.writes).toEqual(before.writes);
+        expect(after.reads.map(({ path }) => path)).toContainEqual([
+          "value",
+          "a",
+        ]);
+      } finally {
+        await storage.close();
+      }
+    });
+  });
+
+  describe("commit()", () => {
+    it("copies a large object as often for many written keys beneath it as for few", async () => {
+      const short = await largeCopiesAddingKeys(1000, 10);
+      const long = await largeCopiesAddingKeys(1000, 100);
+
+      expect(short.keys).toBe(1010);
+      expect(long.keys).toBe(1100);
+      // The floor keeps the probe honest: were the copy no longer made through
+      // `Object.assign()`, both counts would read zero and agree.
+      expect(short.copies).toBeGreaterThan(0);
+      expect(long.copies).toBe(short.copies);
     });
   });
 });
