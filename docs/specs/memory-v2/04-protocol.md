@@ -59,7 +59,8 @@ The client MUST declare its protocol version in the first WebSocket message:
     "entityIdPagination": true,
     "entityIdLookup": true,
     "sessionHoldings": true,
-    "sessionReadCeiling": true
+    "sessionReadCeiling": true,
+    "presenceV1": true
   }
 }
 ```
@@ -80,7 +81,8 @@ If the server accepts the protocol, it returns:
     "entityIdPagination": true,
     "entityIdLookup": true,
     "sessionHoldings": true,
-    "sessionReadCeiling": true
+    "sessionReadCeiling": true,
+    "presenceV1": true
   },
   "sessionOpen": {
     "audience": "did:key:z6Mk...",
@@ -264,6 +266,13 @@ older server would accept the descriptor and serve every query unbounded, so
 the client refuses to open the session against a server that does not
 advertise it, before signing a `session.open`. A client declaring none is
 unaffected on any server.
+
+`presenceV1` advertises that the server relays presence rooms over this
+connection — the `presence.join`, `presence.publish`, and `presence.leave`
+commands and the `presence/upsert` and `presence/remove` pushes of section
+4.13. It is build-inherent and defaults to `false` when absent: a client
+connected to an older server does not send a presence message, and reports
+presence as unavailable to whatever asked for it.
 
 ### 4.1.2 Logical Sessions and Resume
 
@@ -458,7 +467,10 @@ interface RequestMessage {
     | "session.watch.set"
     | "session.watch.add"
     | "session.ack"
-    | "event.attention.resolve";
+    | "event.attention.resolve"
+    | "presence.join"
+    | "presence.publish"
+    | "presence.leave";
   requestId: string;
   space: SpaceId;
   sessionId?: SessionId;
@@ -490,9 +502,10 @@ Per-commit invocation / authorization persistence is deferred in this pass.
 
 Every position where a message names fields holds a plain object. Those
 positions are the message itself, and within it `session`, `invocation`,
-`commit`, `query`, `db`, `db.tables`, each entry of `holdings`, and a
-`hello` message's `flags`. Both sides refuse anything else there, and the
-refusal is the one a string or a number in that position gets.
+`commit`, `query`, `db`, `db.tables`, each entry of `holdings`, a
+`hello` message's `flags`, and a `presence.publish` message's `facets`
+together with each value in it. Both sides refuse anything else there, and
+the refusal is the one a string or a number in that position gets.
 
 The value codec that decodes a frame builds class instances as well as
 records: a `FabricBytes`, a `FabricLink`, a `FabricRegExp`, a
@@ -513,6 +526,8 @@ The server sends:
 - `response` for command results
 - `session/effect` for catch-up sync on an open logical session
 - `session/revoked` when a session loses ownership to a newer connection
+- `presence/upsert` and `presence/remove` for the presence rooms the
+  session has joined (section 4.13)
 
 ```typescript
 // Shown at module scope.
@@ -1328,3 +1343,192 @@ view — so no frame stream to order against) also applies immediately.
 | Per-subscription routing                   | Watch-set union + session cache                           | Overlap is deduped at the session layer                   |
 | Re-subscribe each live query independently | Restore one watch set                                     | The client still restores interests after reconnect       |
 | Hash-centric semantic commit identity      | `(sessionId, localSeq)` before accept, `seq` after accept | UCAN envelope refs remain content-addressed               |
+
+## 4.13 Presence
+
+Presence is the ephemeral, per-participant state one client shows another —
+a display name with a caret and selection, a pointer — relayed over the
+memory connection because every client already holds one. It shares the
+connection, the `hello` negotiation, and the session's admission to a space,
+and nothing else of the memory protocol: a presence message is not a commit,
+carries no `seq`, is never acknowledged, and is handled outside the ordered
+frame queue the commands wait in. The server keeps room state in memory only
+and forgets a participant the moment their membership ends. The server
+advertises the capability as `presenceV1` (section 4.1.1).
+
+### 4.13.1 Rooms and Membership
+
+A room is addressed by an opaque identifier under a space. Joining requires an
+open session for that space on the same connection: space access, decided by
+the memory ACL, is what admits a participant, and there is no separate
+presence authentication. A connection is in a room at most once, keyed by the
+connection itself; a session that opens several rooms, or several observers
+of one room on a client, share that one membership.
+
+The server assigns the participant id at join and identifies every later
+publication by the membership it arrives on, never by a claimed id. A
+membership ends, and the room's other members are told, on an explicit
+`presence.leave`, on the connection closing, and on the joining session being
+revoked or detached — a takeover by another connection resuming the same
+session included.
+
+### 4.13.2 Record
+
+```typescript
+// Shown at module scope.
+
+/** Latest published state of one room participant. */
+interface PresenceRecord {
+  /** Server-assigned id for this membership; unpredictable and never reused. */
+  participantId: string;
+
+  /**
+   * DID the publishing session was opened as, stamped by the server from
+   * its session registry. Absent when the session has no bound principal.
+   */
+  principal?: string;
+
+  /** Strictly increasing within one membership. */
+  revision: number;
+
+  /** Plain-text display name, bounded; never rendered as HTML. */
+  name: string;
+
+  /**
+   * Per-kind state keyed by facet name. The server bounds the map and reads
+   * nothing inside a facet; a consumer decodes the facets it knows and
+   * ignores the rest.
+   */
+  facets: Record<string, Record<string, unknown>>;
+}
+```
+
+The server holds a publication to these bounds and refuses one outside them
+with a `PresenceError` on the request's own response; the connection and its
+sessions are unaffected:
+
+| Bound | Value |
+| --- | --- |
+| Room id | `^[A-Za-z0-9_-]{22,128}$` |
+| Display name | 1–80 code points, ≤ 256 UTF-8 bytes, no control or surrogate code points |
+| Facet name | `^[a-z][a-z0-9-]{0,31}$` |
+| Facets per record | ≤ 8 |
+| Published record | ≤ 8 KiB, name and facets wire-encoded |
+| Members per room | ≤ 128 |
+
+### 4.13.3 Messages
+
+Client to server, each a request envelope that receives a `response`:
+
+```typescript
+// Shown at module scope.
+
+type SpaceId = string;
+type SessionId = string;
+
+interface PresenceJoinRequest {
+  type: "presence.join";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  room: string;
+}
+
+/** `ok` of the join response. */
+interface PresenceJoinResult {
+  participantId: string;
+  /** Every other member that has published, at its latest record. */
+  participants: PresenceRecord[];
+}
+
+interface PresencePublishRequest {
+  type: "presence.publish";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  room: string;
+  revision: number;
+  name: string;
+  facets: Record<string, Record<string, unknown>>;
+}
+
+interface PresenceLeaveRequest {
+  type: "presence.leave";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  room: string;
+}
+
+interface PresenceRecord {
+  participantId: string;
+  principal?: string;
+  revision: number;
+  name: string;
+  facets: Record<string, Record<string, unknown>>;
+}
+```
+
+A join on a membership that already exists returns the same participant id
+and a current snapshot. A publish before a join, and a publish whose
+`revision` does not exceed the membership's last accepted one, are refused. A
+member that has never published is in no snapshot and announced to nobody.
+
+Server to client, pushes with no request id, addressed to the session the
+receiving membership joined through:
+
+```typescript
+// Shown at module scope.
+
+type SpaceId = string;
+type SessionId = string;
+
+interface PresenceUpsert {
+  type: "presence/upsert";
+  space: SpaceId;
+  sessionId: SessionId;
+  room: string;
+  participant: PresenceRecord;
+}
+
+interface PresenceRemove {
+  type: "presence/remove";
+  space: SpaceId;
+  sessionId: SessionId;
+  room: string;
+  participantId: string;
+}
+
+interface PresenceRecord {
+  participantId: string;
+  principal?: string;
+  revision: number;
+  name: string;
+  facets: Record<string, Record<string, unknown>>;
+}
+```
+
+### 4.13.4 Ordering
+
+The connection parses each frame as it arrives. A `presence.*` message is
+handled at that point; every other message enters the connection's ordered
+queue (section 4.11.2). A presence publish therefore reaches the room while a
+`transact` ahead of it in arrival order is still being decided. Within one
+membership the revision orders publications: the server relays only a record
+whose revision exceeds the last it accepted for that membership, and a client
+applies only a record whose revision exceeds the last it holds for that
+participant. Outbound, presence pushes take the same send path as every other
+server message, which preserves order.
+
+### 4.13.5 Client Library
+
+`SpaceSession.joinPresenceRoom(room, observer)` returns a membership after
+delivering the room's current snapshot to the observer. Several observers may
+join one room on a session and share one membership and one published record.
+`publish()` sends the record at the next revision without waiting; a
+publication overtaken by a newer one before it is sent is dropped, and one the
+server refuses reaches the observer as a `failure` event. A session restore
+rejoins every room the session was in, delivers the new snapshot — the server
+assigned a new participant id with the new connection — and republishes the
+last record at a fresh revision. A session that terminates ends its rooms with
+a `failure` event carrying the cause, and nothing follows it.

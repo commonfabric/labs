@@ -60,6 +60,12 @@ import {
   type OperationWatchSpec,
   parseMemoryProtocolFlags,
   parseSessionReadCeiling,
+  type PresenceJoinRequest,
+  type PresenceJoinResult,
+  type PresenceLeaveRequest,
+  type PresencePublishRequest,
+  type PresenceRemoveMessage,
+  type PresenceUpsertMessage,
   resolveScopeKey,
   type ResponseMessage,
   type ScopeKey,
@@ -124,6 +130,12 @@ import {
   createDefaultOperationCodecRegistry,
   type OperationCodecRegistry,
 } from "./operation-codec.ts";
+import {
+  isPresenceRoom,
+  parsePresenceFacets,
+  PresenceError,
+  PresenceRooms,
+} from "./presence.ts";
 import {
   cloneTrackedGraphState,
   createQueryEvaluationCache,
@@ -924,6 +936,9 @@ class Connection {
     if (!this.#sessions.delete(key) || this.#closed) {
       return;
     }
+    // A membership is admitted by the session it joined through, so losing
+    // the session ends it.
+    this.#server.endPresenceForSession(space, sessionId, this.id);
     this.#send({
       type: "session/revoked",
       space,
@@ -996,7 +1011,22 @@ class Connection {
     }
   }
 
+  /** Pushes one presence message to this connection's peer. */
+  sendPresence(message: PresenceUpsertMessage | PresenceRemoveMessage): void {
+    if (this.#closed) return;
+    this.#send(message);
+  }
+
   async receive(payload: string): Promise<void> {
+    const parsed = parseClientMessage(payload);
+    // A presence message is handled as it arrives, not behind the frames
+    // already queued: it carries no seq and settles nothing, so a large
+    // transact ahead of it has no claim on its timing (04-protocol.md
+    // §4.13). Everything else keeps the connection's order.
+    if (parsed !== null && isPresenceClientMessage(parsed)) {
+      this.#receivePresence(parsed);
+      return;
+    }
     this.#pendingReceives += 1;
     // A connection handles its frames one at a time, so a frame's cost has
     // two halves that are fixed at opposite ends of the stack: how long it
@@ -1012,7 +1042,7 @@ class Connection {
         const startedAt = performance.now();
         timing.time(arrivedAt, startedAt, "memory", "frame", "queue");
         try {
-          await this.#receiveOrdered(payload);
+          await this.#receiveOrdered(parsed);
         } finally {
           timing.time(startedAt, "memory", "frame", "handle");
         }
@@ -1076,12 +1106,34 @@ class Connection {
     return false;
   }
 
-  async #receiveOrdered(payload: string): Promise<void> {
+  #receivePresence(
+    message:
+      | PresenceJoinRequest
+      | PresencePublishRequest
+      | PresenceLeaveRequest,
+  ): void {
+    if (this.#closed) return;
+    if (!this.#ready) {
+      this.#send({
+        type: "response",
+        requestId: message.requestId,
+        error: toError("ProtocolError", "memory hello is required first"),
+      });
+      return;
+    }
+    if (
+      !this.#requireSession(message.requestId, message.space, message.sessionId)
+    ) {
+      return;
+    }
+    this.#send(this.#server.receivePresence(message, this));
+  }
+
+  async #receiveOrdered(parsed: ClientMessage | null): Promise<void> {
     if (this.#closed) {
       return;
     }
 
-    const parsed = parseClientMessage(payload);
     if (parsed === null) {
       this.#send({
         type: "response",
@@ -1484,12 +1536,22 @@ class Connection {
       return;
     }
     this.#closed = true;
+    this.#server.endPresenceForConnection(this.id);
     for (const { space, sessionId } of this.#sessions.values()) {
       this.#server.detachSession(space, sessionId, this.id);
     }
     this.#server.disconnect(this);
   }
 }
+
+const isPresenceClientMessage = (
+  message: ClientMessage,
+): message is
+  | PresenceJoinRequest
+  | PresencePublishRequest
+  | PresenceLeaveRequest =>
+  message.type === "presence.join" || message.type === "presence.publish" ||
+  message.type === "presence.leave";
 
 /**
  * The engine opener a test supplies in place of `Server`'s own step, which
@@ -1655,6 +1717,9 @@ export class Server {
   #ensuredSchemas = new Map<string, true>();
 
   #ensuredSchemasMax = 4096;
+
+  /** The presence rooms this server relays; in memory only. */
+  #presence = new PresenceRooms();
 
   constructor(
     readonly options: {
@@ -2367,6 +2432,91 @@ export class Server {
     ownerConnectionId: string,
   ): void {
     this.#sessions.detach(space, sessionId, ownerConnectionId);
+  }
+
+  /**
+   * Handles one presence request on behalf of `connection`, which has already
+   * established that the request's session is open on it, and returns the
+   * response to send. A refused request gets a `PresenceError`; a session
+   * the connection no longer owns gets a `SessionRevokedError`.
+   */
+  receivePresence(
+    message:
+      | PresenceJoinRequest
+      | PresencePublishRequest
+      | PresenceLeaveRequest,
+    connection: Connection,
+  ): ResponseMessage<PresenceJoinResult | Record<PropertyKey, never>> {
+    const { requestId, space, sessionId, room } = message;
+    if (!this.isSessionAttached(space, sessionId, connection.id)) {
+      return respondTypedError(
+        requestId,
+        toError("SessionRevokedError", "Session is not attached"),
+      );
+    }
+    if (!isPresenceRoom(room)) {
+      return respondTypedError(
+        requestId,
+        toError("PresenceError", "Presence room id is invalid"),
+      );
+    }
+    try {
+      switch (message.type) {
+        case "presence.join":
+          return {
+            type: "response",
+            requestId,
+            ok: this.#presence.join({
+              space,
+              room,
+              connectionId: connection.id,
+              sessionId,
+              principal: this.#sessions.get(space, sessionId)?.principal,
+              send: (push) => connection.sendPresence(push),
+            }),
+          };
+        case "presence.publish":
+          this.#presence.publish({
+            space,
+            room,
+            connectionId: connection.id,
+            revision: message.revision,
+            name: message.name,
+            facets: message.facets,
+          });
+          return { type: "response", requestId, ok: {} };
+        case "presence.leave":
+          this.#presence.leave(space, room, connection.id);
+          return { type: "response", requestId, ok: {} };
+      }
+    } catch (error) {
+      if (error instanceof PresenceError) {
+        return respondTypedError(
+          requestId,
+          toError(error.name, error.message),
+        );
+      }
+      throw error;
+    }
+  }
+
+  /** Ends every presence membership the connection holds. */
+  endPresenceForConnection(connectionId: string): void {
+    this.#presence.leaveConnection(connectionId);
+  }
+
+  /** Ends every presence membership the connection joined through the session. */
+  endPresenceForSession(
+    space: string,
+    sessionId: string,
+    connectionId: string,
+  ): void {
+    this.#presence.leaveSession(space, sessionId, connectionId);
+  }
+
+  /** How many connections are in a presence room; `0` when nobody is. */
+  presenceMemberCount(space: string, room: string): number {
+    return this.#presence.memberCount(space, room);
   }
 
   /**
@@ -8459,6 +8609,48 @@ export const parseClientMessage = (
       space: parsed.space,
       sessionId: parsed.sessionId,
       seenSeq: parsed.seenSeq,
+    };
+  }
+
+  if (
+    (parsed.type === "presence.join" || parsed.type === "presence.leave") &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string" &&
+    typeof parsed.room === "string"
+  ) {
+    return {
+      type: parsed.type,
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      room: parsed.room,
+    };
+  }
+
+  // The name and the facets are held to the relay's bounds by the handler,
+  // which reports a failed bound as the request's own error; the parser
+  // settles only that the record positions hold plain objects.
+  if (
+    parsed.type === "presence.publish" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string" &&
+    typeof parsed.room === "string" &&
+    typeof parsed.revision === "number" &&
+    typeof parsed.name === "string"
+  ) {
+    const facets = parsePresenceFacets(parsed.facets);
+    if (facets === null) return null;
+    return {
+      type: "presence.publish",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      room: parsed.room,
+      revision: parsed.revision,
+      name: parsed.name,
+      facets,
     };
   }
 
