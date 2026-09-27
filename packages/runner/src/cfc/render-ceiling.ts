@@ -1,9 +1,11 @@
 import {
   CFC_ATOM_TYPE,
+  CFC_RUNTIME_SUBJECT,
   type CfcAtom,
   cfcAtom,
   type CfcModulePolicyRefAtom,
 } from "@commonfabric/api/cfc";
+import { isDID } from "@commonfabric/identity/did";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
@@ -88,11 +90,11 @@ const SPACE_READER_ACCESS_DISPLAY: ExchangeRule = {
 };
 
 /**
- * The owner-self rule, bound to `actingPrincipal`: at the display boundary, a
- * `Resource` alternative whose `subject` is `actingPrincipal`, whatever its
- * `class` and `scope`, gains a `User(actingPrincipal)` alternative in its own
- * clause, so the acting user sees their own resources under the §8.10.6
- * ceiling. The rule adds and never drops (§4.4.5), and rewrites no clause but
+ * Returns the owner-self rule bound to `actingPrincipal`: at the display
+ * boundary, a `Resource` alternative whose `subject` is `actingPrincipal`,
+ * whatever its `class` and `scope`, gains a `User(actingPrincipal)` alternative
+ * in its own clause, so the acting user sees their own resources under the
+ * §8.10.6 ceiling. The rule adds and never drops (§4.4.5), and rewrites no clause but
  * the one it matched, so a sibling clause naming another principal, a facet
  * context, an expiry or a caveat still blocks the value.
  *
@@ -100,8 +102,9 @@ const SPACE_READER_ACCESS_DISPLAY: ExchangeRule = {
  * general rule, and allow an attested deployment a narrowly specified
  * owner-self standard-profile rule instead; this is that rule, and three
  * properties keep it narrow. Its reader is the acting principal from the
- * trusted acting context, fixed before any label is matched (§4.9.2, §8.17.3),
- * never learned from the atom it releases (§8.10.3). It releases only to that
+ * trusted acting context, written into the rule before any label is matched
+ * (§4.9.2; cf. §8.17.3), never learned from the atom it releases (cf.
+ * §8.10.3). It releases only to that
  * principal, the audience a display sink already has (§8.10.6). And its
  * `sinkClass` guard is applicability rather than authority: it keeps the rule
  * off network, agent and storage sinks, whose audience is not the acting user.
@@ -120,18 +123,22 @@ const resourceOwnerSelfDisplay = (actingPrincipal: string): ExchangeRule => ({
 });
 
 /**
- * The standard render exchange rule set for a display audience of
+ * Returns the standard render exchange rule set for a display audience of
  * `actingPrincipal`: `SpaceReaderAccess`, and the owner-self rule bound to
- * `actingPrincipal` when there is one. `PersonalSpace(actingUser)` needs no
- * rule, since the §8.10.6 ceiling admits it by exact match.
+ * `actingPrincipal` when that is a user's DID. `PersonalSpace(actingUser)`
+ * needs no rule, since the §8.10.6 ceiling admits it by exact match.
  */
 export const standardRenderExchangeRules = (
   actingPrincipal: string | undefined,
 ): readonly ExchangeRule[] => {
-  // Without an acting principal the owner-self rule has nobody to release to,
-  // and built around `undefined` its `subject` would read as an absence
-  // requirement that a subject-less `Resource` satisfies.
-  if (actingPrincipal === undefined) return [SPACE_READER_ACCESS_DISPLAY];
+  // The owner-self rule needs a user to release to. Built around `undefined`
+  // its `subject` would read as an absence requirement, which a subject-less
+  // `Resource` satisfies; and `CFC_RUNTIME_SUBJECT` is the service a
+  // `Resource` names by default, credentials among them, not an owner who
+  // views (§8.10.6: service principals fail closed).
+  if (!isDID(actingPrincipal) || actingPrincipal === CFC_RUNTIME_SUBJECT) {
+    return [SPACE_READER_ACCESS_DISPLAY];
+  }
   return [
     SPACE_READER_ACCESS_DISPLAY,
     resourceOwnerSelfDisplay(actingPrincipal),
@@ -142,7 +149,7 @@ export type RenderConfidentialityResolverConfig = {
   /**
    * The display audience: the acting user whose `HasRole` facts are minted,
    * and to whom the owner-self rule releases the acting user's own `Resource`
-   * atoms. Absent, neither happens.
+   * atoms when it is a user's DID. Absent, neither happens.
    */
   readonly actingPrincipal?: string;
 

@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import {
   CFC_ATOM_TYPE,
   CFC_CONCEPT_KIND,
+  CFC_RUNTIME_SUBJECT,
   cfcAtom,
 } from "@commonfabric/api/cfc";
 import {
@@ -26,7 +27,7 @@ import {
   RENDER_DISPLAY_SINK_CLASS,
   standardRenderExchangeRules,
 } from "../src/cfc/render-ceiling.ts";
-import { sinkClassOf } from "../src/cfc/sink-inventory.ts";
+import { SINK_CLASSES, sinkClassOf } from "../src/cfc/sink-inventory.ts";
 import type { SpaceMembershipProvider } from "../src/cfc/space-membership.ts";
 
 // Epic H3b (docs/history/plans/cfc-future-work-implementation.md §7): the display-sink
@@ -825,8 +826,8 @@ describe("CFC render resolver — the owner-self Resource rule", () => {
     });
 
     it("fires at no sink class but display", () => {
-      // The classes come from the sink inventory the egress gate mints them
-      // from, so the model-call sinks are among the network ones.
+      // Every class the egress gate mints from the sink inventory, the
+      // model-call sinks' network class among them.
       const snapshot = buildCfcPolicySnapshot([{
         id: "cfc-standard-render",
         rules: standardRenderExchangeRules(ALICE),
@@ -839,16 +840,10 @@ describe("CFC render resolver — the owner-self Resource rule", () => {
         });
       expect(evaluateAt(RENDER_DISPLAY_SINK_CLASS).label.confidentiality)
         .toEqual([userAlice, ownerSelf(message(ALICE))]);
-      for (
-        const sink of [
-          "fetchJson",
-          "llm",
-          "generateText",
-          "agent",
-          "sqliteQuery",
-        ]
-      ) {
-        const result = evaluateAt(sinkClassOf(sink));
+      const sinkClasses = new Set(Object.values(SINK_CLASSES));
+      expect(sinkClasses.has(sinkClassOf("llm"))).toBe(true);
+      for (const sinkClass of sinkClasses) {
+        const result = evaluateAt(sinkClass);
         expect(result.firings).toEqual([]);
         expect(result.label.confidentiality).toEqual(label);
       }
@@ -866,6 +861,36 @@ describe("CFC render resolver — the owner-self Resource rule", () => {
         memberSpaces: [ALICE],
       });
       expect(resolve({ confidentiality: label })).toEqual(label);
+    });
+
+    it("rewrites nothing for an acting principal that is not a user's DID", () => {
+      // A `Resource` minted without a subject names the runtime, as a stored
+      // credential's does; the runtime is a service, not an owner who views.
+      for (
+        const [acting, atom] of [
+          [CFC_RUNTIME_SUBJECT, cfcAtom.resource("oauth-token")],
+          ["alice", cfcAtom.resource("message", "alice")],
+        ] as const
+      ) {
+        const resolve = createRenderConfidentialityResolver({
+          actingPrincipal: acting,
+        });
+        expect(resolve({ confidentiality: [atom] })).toEqual([atom]);
+      }
+    });
+
+    it("releases a committed subject that digests to the acting user, and no other", () => {
+      // The commitment is compared against the acting user's DID and never
+      // opened.
+      const committed = (subject: string) => ({
+        type: CFC_ATOM_TYPE.Resource,
+        class: "message",
+        subject: commitCfcFieldValue(subject),
+      });
+      expect(resolveForAlice()({ confidentiality: [committed(ALICE)] }))
+        .toEqual([ownerSelf(committed(ALICE))]);
+      expect(resolveForAlice()({ confidentiality: [committed(MALLORY)] }))
+        .toEqual([committed(MALLORY)]);
     });
 
     it("returns the original label when the rule runs out of fuel", () => {
