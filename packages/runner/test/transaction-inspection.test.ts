@@ -626,6 +626,56 @@ describe("transaction inspection", () => {
     }
   });
 
+  it("names the direct reactivity log's spaces as written when the journal cannot replay its activity", () => {
+    const journal = {
+      activity: () => {
+        throw new Error("no replay");
+      },
+      novelty: () => [],
+      history: () => [],
+    };
+    const tx = {
+      journal,
+      getReactivityLog: () => ({
+        reads: [],
+        shallowReads: [],
+        writes: [{
+          space: "did:key:written" as any,
+          scope: "space",
+          id: "of:write" as any,
+          path: ["field"],
+        }],
+        attemptedWrites: [{
+          space: "did:key:attempted" as any,
+          scope: "space",
+          id: "of:attempt" as any,
+          path: ["field"],
+        }],
+      }),
+      tx: {} as any,
+    } as unknown as IExtendedStorageTransaction;
+
+    expect(getTransactionWrittenSpaces(tx)).toEqual([
+      "did:key:written",
+      "did:key:attempted",
+    ]);
+  });
+
+  it("throws the journal's error when a transaction can report its written spaces no other way", () => {
+    const tx = {
+      journal: {
+        activity: () => {
+          throw new Error("no replay");
+        },
+        novelty: () => [],
+        history: () => [],
+      },
+      tx: {} as any,
+    } as unknown as IExtendedStorageTransaction;
+
+    expect(() => getTransactionWrittenSpaces(tx)).toThrow("no replay");
+  });
+
   it("leaves a space the transaction only read out of the written spaces", async () => {
     const storageManager = StorageManager.emulate({ as: signer });
     try {

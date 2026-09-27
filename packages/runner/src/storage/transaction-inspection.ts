@@ -179,8 +179,11 @@ export function getTransactionWriteDetails(
 /**
  * The spaces `tx` recorded a write in (`IStorageTransaction.getWrittenSpaces`).
  * A transaction without the native list reports the spaces its journal's write
- * activities name; a V2 journal cannot replay its activity, so a V2
- * transaction always provides the list.
+ * activities name. One whose journal cannot replay its activity either
+ * reports the spaces its direct reactivity log names, which leaves out a space
+ * whose every write returned to where it started, since the log's `writes`
+ * list only changed paths. A transaction offering none of the three throws
+ * the journal's error. A V2 transaction always provides the list.
  */
 export function getTransactionWrittenSpaces(
   tx: TxLike,
@@ -191,10 +194,24 @@ export function getTransactionWrittenSpaces(
   }
 
   const spaces = new Set<MemorySpace>();
-  for (const activity of tx.journal.activity()) {
-    if ("write" in activity && activity.write) {
-      spaces.add(activity.write.space);
+  try {
+    for (const activity of tx.journal.activity()) {
+      if ("write" in activity && activity.write) {
+        spaces.add(activity.write.space);
+      }
     }
+  } catch (error) {
+    const log = getDirectTransactionReactivityLog(tx);
+    if (log === undefined) {
+      throw error;
+    }
+    return [
+      ...new Set(
+        [...log.writes, ...(log.attemptedWrites ?? [])].map((write) =>
+          write.space
+        ),
+      ),
+    ];
   }
   return [...spaces];
 }
