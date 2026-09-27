@@ -150,6 +150,12 @@ type ReadDocumentEntry = {
   // the overwhelming majority of documents: one is created the first time a
   // write displaces a root some materialized read may still describe.
   displaced?: DisplacedRoot[];
+
+  /**
+   * Never set on a document this transaction has only read. Present so that
+   * `V2StorageTransaction.#invalidateWrittenState()` takes either kind of
+   * entry; `WritableDocumentEntry.reactivityPaths` says what it holds.
+   */
   reactivityPaths?: readonly (readonly string[])[];
 };
 
