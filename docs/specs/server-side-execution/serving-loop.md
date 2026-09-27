@@ -1474,7 +1474,10 @@ For `fetch*`, `generate*`, `sqlite*` (the §3.5 effectful class):
 - **Memo key** = stable hash of (builtin id, canonical JSON of the
   resolved request inputs — after cell dereference, before any network
   activity). Canonicalization: sorted keys, no undefined, links by entity
-  id + path.
+  id + path. `sqlite*` hashes its inputs without `reactOn`, hashes
+  `reactOn` alone, and joins the two digests with `.` (sqlite-builtin 05,
+  "A refresh keeps the previous answer readable"); a comparison that
+  recomputes its key composes it the same way.
 - **Storage**: the result is an ordinary cell commit; the memo key is
   written alongside the result (same doc, `requestHash` field). A builtin
   may also write this field with `pending: true` to select the current

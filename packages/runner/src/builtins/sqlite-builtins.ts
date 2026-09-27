@@ -867,8 +867,8 @@ export function sqliteQueryMemoDecision(options: {
  * question, then `.`, then the digest of its `reactOn`. The question is every
  * request input except `reactOn` — the database, statement, parameters,
  * reader and ceilings that decide which rows answer it — so two requests that
- * differ only in `reactOn` ask the same question again. Neither digest can
- * contain `.`, since both are base64url.
+ * differ only in `reactOn` ask the same question again. No digest contains
+ * `.`, so what precedes the first one is exactly the question's digest.
  *
  * Exported for unit testing only — not part of the builtin surface.
  */

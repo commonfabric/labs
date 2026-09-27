@@ -108,22 +108,22 @@ const leaderboard = db.query<{ author: Cell<User>; n: number }>(
 );
 
 return lift((
-  { rows, pending, error }: {
+  { rows, error }: {
     rows?: Array<{ author: Cell<User>; n: number }>;
-    pending: boolean;
     error?: unknown;
   },
 ) => {
-  if (pending) return "Loading…";
   if (error) return `Query failed: ${String(error)}`;
+  // A refresh after a write keeps the previous rows beside `pending`, so
+  // only a query with no rows yet is loading.
+  if (!rows) return "Loading…";
   // `author` decoded back into Cell<User> despite the `AS author` alias.
-  return rows!.map((r) => ({
+  return rows.map((r) => ({
     name: lift((u: User | undefined) => u?.name)(r.author),
     count: r.n,
   }));
 })({
   rows: leaderboard.result,
-  pending: leaderboard.pending,
   error: leaderboard.error,
 });
 ```
