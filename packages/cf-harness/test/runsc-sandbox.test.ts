@@ -322,10 +322,18 @@ Deno.test("RunscSandboxRuntime omits the CFC flags and reports no result without
     config({ cfcPolicyPath: undefined }),
     runner,
   );
-  const result = await runtime.run({ argv: ["/bin/true"] });
+  // With a context in hand, as an observing run has: without a policy runsc
+  // runs with no `--cfc`, and a runsc that is not tracking refuses the CFC
+  // descriptors outright rather than take a context it would drop.
+  const result = await runtime.run({
+    argv: ["/bin/true"],
+    cfcInvocationContext: await context("observe"),
+  });
   const argv = runner.requests[0].args;
   assert(!argv.includes("--cfc"));
   assert(!argv.includes("--cfc-result-fd"));
+  assert(!argv.includes("--cfc-invocation-context-fd"));
+  assertEquals(argv[3], "/dev/null");
   assertEquals(argv[4], "/dev/null");
   assertEquals(result.cfcResult, undefined);
 });
@@ -1129,7 +1137,11 @@ Deno.test("a session call without a policy asks for no result and reports none",
     config({ cfcPolicyPath: undefined }),
     runner,
   );
-  const result = await runtime.run({ argv: ["/bin/true"], session: "s" });
+  const result = await runtime.run({
+    argv: ["/bin/true"],
+    session: "s",
+    cfcInvocationContext: await context("observe"),
+  });
   const exec = runner.requests.find((r) =>
     r.command === "/bin/sh" && r.args.includes("exec")
   )!;

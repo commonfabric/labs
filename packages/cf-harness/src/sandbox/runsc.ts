@@ -828,7 +828,10 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     );
     const contextPath = joinHostPath(bundleDir, "cfc-invocation-context.json");
     const resultPath = joinHostPath(bundleDir, "cfc-result.json");
-    const withContext = request.cfcInvocationContext !== undefined;
+    // Both descriptors go with `--cfc` or not at all: a runsc that is not
+    // tracking refuses them rather than take a context it would drop.
+    const withContext = request.cfcInvocationContext !== undefined &&
+      this.config.cfcPolicyPath !== undefined;
     if (withContext) {
       await Deno.writeTextFile(
         contextPath,
@@ -1093,7 +1096,10 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     await Deno.mkdir(callDir, { recursive: true, mode: 0o700 });
     const contextPath = joinHostPath(callDir, "cfc-invocation-context.json");
     const resultPath = joinHostPath(callDir, "cfc-result.json");
-    const withContext = request.cfcInvocationContext !== undefined;
+    // Both descriptors go with `--cfc` or not at all: a runsc that is not
+    // tracking refuses them rather than take a context it would drop.
+    const withContext = request.cfcInvocationContext !== undefined &&
+      this.config.cfcPolicyPath !== undefined;
     const withResult = this.config.cfcPolicyPath !== undefined;
     try {
       if (withContext) {
