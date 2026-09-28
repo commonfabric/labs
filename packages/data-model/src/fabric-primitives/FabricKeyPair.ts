@@ -267,11 +267,11 @@ export class FabricKeyPair extends BaseFabricPrimitive {
           );
         }
 
-        return {
+        return Object.freeze({
           algorithm: value.#algorithm,
           publicKey: toUnpaddedBase64url(value.publicKeyBytes.slice()),
           privateKey: toUnpaddedBase64url(value.privateKeyBytes.slice()),
-        };
+        });
       }
 
       /** @inheritDoc */
@@ -322,17 +322,17 @@ export class FabricKeyPair extends BaseFabricPrimitive {
        */
       encode(value: FabricKeyPair, _env: LiveEnvironment): RealmCodecValue {
         if (!value.hasMaterial) {
-          return {
+          return Object.freeze({
             publicKey: value.#publicKey as CryptoKey,
             privateKey: value.#privateKey as CryptoKey,
-          };
+          });
         }
 
-        return {
+        return Object.freeze({
           algorithm: value.#algorithm,
           publicKey: value.publicKeyBytes.sliceBuffer(),
           privateKey: value.privateKeyBytes.sliceBuffer(),
-        };
+        });
       }
 
       /** @inheritDoc */

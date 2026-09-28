@@ -259,7 +259,8 @@ export class FabricUnavailable extends BaseFabricPrimitive
 
   /**
    * The encoded state of `this`, which is what both codecs emit: the reason,
-   * the kind when there is one, and the message when one is stored.
+   * the kind when there is one, and the message when one is stored, as a
+   * frozen record.
    */
   #state(): FabricUnavailableState {
     const reason = this.#reason;
@@ -267,11 +268,11 @@ export class FabricUnavailable extends BaseFabricPrimitive
     const errorMessage = this.#errorMessage;
 
     if (errorKind === null) {
-      return { reason };
+      return Object.freeze({ reason });
     } else if (errorMessage === null) {
-      return { reason, errorKind };
+      return Object.freeze({ reason, errorKind });
     } else {
-      return { reason, errorKind, errorMessage };
+      return Object.freeze({ reason, errorKind, errorMessage });
     }
   }
 

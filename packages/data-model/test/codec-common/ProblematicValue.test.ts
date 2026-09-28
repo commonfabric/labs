@@ -203,6 +203,16 @@ describe("ProblematicValue", () => {
               error: "oops",
             });
         });
+
+        it("returns a frozen record", () => {
+          const pv = new ProblematicValue("Weird@7", { x: 1 }, "oops");
+
+          expect(
+            Object.isFrozen(
+              ProblematicValue[CODEC].encode(pv, NULL_LIVE_ENVIRONMENT),
+            ),
+          ).toBe(true);
+        });
       });
 
       describe("canDecode()", () => {

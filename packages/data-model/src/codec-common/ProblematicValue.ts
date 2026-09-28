@@ -166,11 +166,11 @@ export class ProblematicValue extends BaseFabricInstance {
         value: ProblematicValue,
         _env: LiveEnvironment,
       ): ProblematicValueState {
-        return {
+        return Object.freeze({
           tag: value.wireTypeTag,
           state: value.state,
           error: value.error,
-        };
+        });
       }
 
       /**
