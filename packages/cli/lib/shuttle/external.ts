@@ -7,17 +7,17 @@
  * a position of its own, and this is it: `xcd` moves it and `xpwd` prints
  * it.
  *
- * A location is a {@link URL}, which is what lets one position stand for a
- * place on either plane and what gives a relative move its arithmetic on the
- * plane that has no paths of its own.
+ * The position stands on {@link FILE_SCHEME} and nowhere else, so it is
+ * always a directory on this machine. A location is a {@link URL} all the
+ * same: that is the form `where` prints, the form that reads back as the
+ * same place, and the form the rest of the family will arrive in if a scheme
+ * with a listing ever joins.
  *
- * On the `file:` plane a token is a path rather than a URL reference, and the
- * two are not the same language: a URL reads `#` as a fragment, `?` as a
- * query and a leading blank as nothing at all, where a directory may be named
- * with any of them. So a token there is resolved as a path and converted at
- * the end ({@link toFileUrl}), which is the conversion's one home. On every
- * other plane a token is a URL reference and is resolved as one, because
- * that is the language those planes are written in.
+ * A token is a path rather than a URL reference, and the two are not the
+ * same language: a URL reads `#` as a fragment, `?` as a query and a leading
+ * blank as nothing at all, where a directory may be named with any of them.
+ * So a token is resolved as a path and converted at the end
+ * ({@link toFileUrl}), which is the conversion's one home.
  *
  * Nothing here opens anything: where a token lands is decided before any of
  * it reaches disk, and the reading is the same whether the place is there or
@@ -260,11 +260,11 @@ export class ExternalLocation {
    * Moves as `token` says, and returns what that did. The location changes
    * only where the move lands, so a refusal leaves it where it was.
    *
-   * `token` is read on the external plane already, which is what lets a plain
-   * path move the location without naming a scheme — `xcd ../foo` and
-   * `xcd /tmp` both land on whatever plane the location stands on. A scheme
-   * moves it to another plane, and is legal only on an absolute complete
-   * path.
+   * `token` is read on the external plane already, which is what lets a
+   * plain path move the location without naming a scheme — `xcd ../foo` and
+   * `xcd /tmp`. A scheme may be written, and must then name this plane and
+   * an absolute path: there is nowhere else a location may stand, a place
+   * being stood in by moving through it.
    *
    * A token holding a character a terminal acts on is refused first, as a
    * place refuses a part holding one (`place.ts`). It is the same rule for

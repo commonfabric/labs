@@ -1904,13 +1904,14 @@ const VERBS: ReadonlyMap<string, VerbEntry> = new Map<string, VerbEntry>([
     summary: "Moves the external working location, and writes where it lands.",
     detail:
       "The operand is read on the external plane already, so a plain path " +
-      "moves\nthe location without naming a scheme — `xcd ../foo` and " +
-      "`xcd /tmp` both\nstay on the plane it stands on — and a whole " +
-      "schemed path moves it to\nanother: `xcd file:~/data`, " +
-      "`xcd https://example.test/a/b/`.\n\nA scheme is legal only on an " +
-      "absolute complete path. Nothing is opened\nhere, so a location that " +
-      "is not there is one this takes, and what the\nplane holds is the " +
-      "read's to find out.",
+      "moves\nthe location without naming a scheme: `xcd ../foo`, " +
+      "`xcd /tmp`. A schemed\npath may be written and must be absolute, " +
+      "as in `xcd file:~/data`.\n\nThe location stands on `file:` and " +
+      "nowhere else. A place is stood in by\nmoving through it, and " +
+      "`https:` answers a read rather than what stands\nunder a path, so " +
+      "there is nothing there for a move to land on.\n\nNothing is opened " +
+      "here, so a location that is not there is one this\ntakes, and what " +
+      "the plane holds is the read's to find out.",
   }],
   ["xpwd", {
     run: xpwd,

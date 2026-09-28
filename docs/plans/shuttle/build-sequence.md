@@ -704,10 +704,12 @@ reaches its v1 surface: every dimension printed, the light ones settable
 Landed:
 
 - **The external working location, and `where`'s setting half.** `xcd` moves
-  the position and `xpwd` prints it. The location is a URL, because the
-  arithmetic a relative move wants is the arithmetic a URL already does over
-  `file:` and `https:` alike (`lib/shuttle/external.ts`). It stands beside the
-  place rather than inside it, and the two move independently. The
+  the position and `xpwd` prints it. The location stands on `file:` and is
+  held as a URL, that being the form `where` prints and the form that reads
+  back as the same place (`lib/shuttle/external.ts`). A token is resolved as
+  a path rather than as a URL reference, the two not being the same language.
+  It stands beside the place rather than inside it, and the two move
+  independently. The
   scheme-absolute rule is shuttle's own check rather than the URL parser's,
   which does not enforce it — `new URL("file:out.json")` answers with a path
   of `/out.json`, turning a relative spelling into a place at the root. `~`
