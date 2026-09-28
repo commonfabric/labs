@@ -1840,7 +1840,7 @@ const storedMetadataFor = (
   });
 
 /**
- * Resolves input envelopes during one synchronous boundary preparation.
+ * Resolves input envelopes during one boundary preparation.
  *
  * Target verification shares successful reads, including absent envelopes.
  * The transaction's applied-write log invalidates every document changed since
@@ -7357,7 +7357,7 @@ type DerivedLink = {
 /** Resolves recorded links through the references staged into their sources. */
 type LinkLabelDeriver = {
   /** Derives the labels a recorded link persists at its receiving slot. */
-  persisted: (input: LinkWritePolicyInput) => DerivedLink;
+  persisted: (input: LinkWritePolicyInput) => Generator<void, DerivedLink>;
 
   /**
    * Derives the label a recorded link carries at `relativePath` below its
@@ -7367,7 +7367,7 @@ type LinkLabelDeriver = {
   labelAt: (
     input: LinkWritePolicyInput,
     relativePath: readonly string[],
-  ) => IFCLabel | undefined;
+  ) => Generator<void, IFCLabel | undefined>;
 };
 
 /** Whether repeated pending sources form a document graph without cycles. */
@@ -7421,6 +7421,8 @@ const hasSharedAcyclicLinkSources = (
  * or above a link's source path supplies the label there; one below it supplies
  * the labels beneath it. Object back-references have a finite label view;
  * pointer chains that never reach an object or scalar refuse derivation.
+ * Suspension points separate recursive calls and label-map construction;
+ * the preparation driver decides when to yield to the event loop.
  */
 const createLinkLabelDeriver = (
   tx: IExtendedStorageTransaction,
@@ -7475,10 +7477,10 @@ const createLinkLabelDeriver = (
 
   // The labels the references staged into the source document bring to the
   // source path, or the refusals of the first one that cannot be derived.
-  const pendingSourceView = (
+  const pendingSourceView = function* (
     input: LinkWritePolicyInput,
     walk: Walk,
-  ): { view?: CfcLabelView; reasons: string[] } => {
+  ): Generator<void, { view?: CfcLabelView; reasons: string[] }> {
     const views: (CfcLabelView | undefined)[] = [];
     const sourcePath = canonicalizeLogicalPath(input.source.path);
     for (const upstream of linkWrites.get(targetKey(input.source)) ?? []) {
@@ -7526,13 +7528,14 @@ const createLinkLabelDeriver = (
       if (!covers && walk.expanded.has(upstream) && requested.length === 0) {
         continue;
       }
-      const resolved = derive(upstream, {
+      const resolved = yield* derive(upstream, {
         aliases: covers ? walk.aliases : new Set(),
         expanded: walk.expanded,
         requested,
         memo: walk.memo,
       });
       if (resolved.reasons.length > 0) return { reasons: resolved.reasons };
+      yield;
       // A downstream hop sees the representation the upstream hop persists,
       // including protected fields when it crosses a space boundary.
       const entries =
@@ -7573,10 +7576,14 @@ const createLinkLabelDeriver = (
         views.push({ version: 1, entries: [{ path: [], label }] });
       }
     }
+    yield;
     return { view: mergeCfcLabelViews(views), reasons: [] };
   };
 
-  const derive = (input: LinkWritePolicyInput, walk: Walk): DerivedLink => {
+  const derive = function* (
+    input: LinkWritePolicyInput,
+    walk: Walk,
+  ): Generator<void, DerivedLink> {
     const requested = [
       ...walk.requested,
       ...(walk.expanded.has(input)
@@ -7608,7 +7615,8 @@ const createLinkLabelDeriver = (
       return cached;
     }
     tx.noteCfcPreparationWork?.("stagedReferenceDerivations");
-    const pending = pendingSourceView(input, {
+    yield;
+    const pending = yield* pendingSourceView(input, {
       aliases: new Set([...walk.aliases, input]),
       expanded: new Set([...walk.expanded, input]),
       requested,
@@ -7617,6 +7625,7 @@ const createLinkLabelDeriver = (
     if (pending.reasons.length > 0) {
       return { entries: [], reasons: pending.reasons };
     }
+    yield;
     const identity = identityForInput(input);
     const result = derivePersistedLinkLabel(
       tx,
@@ -7629,6 +7638,7 @@ const createLinkLabelDeriver = (
     if (result.reason !== undefined) {
       return { entries: [], reasons: [result.reason] };
     }
+    yield;
     // A back-edge supplies only the finite projection its caller requested.
     // Its complete carried view is checked at the first occurrence of this
     // link, where all of that view's authoritative paths are expanded.
@@ -7660,19 +7670,23 @@ const createLinkLabelDeriver = (
     return resolved;
   };
 
-  const persisted = (input: LinkWritePolicyInput): DerivedLink =>
-    derive(input, emptyWalk());
+  const persisted = (
+    input: LinkWritePolicyInput,
+  ): Generator<void, DerivedLink> => derive(input, emptyWalk());
 
   // The label below the receiving slot is the source's own label at the
   // matching path, credited only when the link itself derives. The carried
   // view is relative to the receiving slot, so `persisted` checks it against
   // the source path it was written for, never against the nested one.
-  const labelAt = (
+  const labelAt = function* (
     input: LinkWritePolicyInput,
     relativePath: readonly string[],
-  ): IFCLabel | undefined => {
+  ): Generator<void, IFCLabel | undefined> {
     if (
-      derive(input, { ...emptyWalk(), requested: [requestPath(relativePath)] })
+      (yield* derive(input, {
+        ...emptyWalk(),
+        requested: [requestPath(relativePath)],
+      }))
         .reasons.length > 0
     ) return undefined;
     const nested: LinkWritePolicyInput = {
@@ -7686,7 +7700,7 @@ const createLinkLabelDeriver = (
         path: [...canonicalizeLogicalPath(input.target.path), ...relativePath],
       },
     };
-    const pending = pendingSourceView(nested, emptyWalk());
+    const pending = yield* pendingSourceView(nested, emptyWalk());
     if (pending.reasons.length > 0) return undefined;
     return derivePersistedLinkLabel(
       tx,
@@ -8976,7 +8990,7 @@ const attemptedWritePathsUnder = (
  * (`addIntegrity`), fail-closed; a pure delete (no written value) is not a
  * floored write — the floor governs values, not absence.
  */
-const verifyWriteFloor = (
+const verifyWriteFloor = function* (
   tx: IExtendedStorageTransaction,
   schema: JSONSchema,
   target: {
@@ -8992,7 +9006,7 @@ const verifyWriteFloor = (
     linkLabels: LinkLabelDeriver;
     flowIntegrity: readonly CfcAtom[];
   },
-): string[] => {
+): Generator<void, string[]> {
   const failures: string[] = [];
   // Built once per verify (not per entry/contribution): the closure and acting
   // principal are tx-wide. Concept floors on the written value resolve through
@@ -9074,7 +9088,7 @@ const verifyWriteFloor = (
     // when plain data was written (crediting the flow meet when available).
     const contributions: (readonly CfcAtom[])[] = [];
     for (const input of linksHere) {
-      const derived = ctx.linkLabels.persisted(input);
+      const derived = yield* ctx.linkLabels.persisted(input);
       // An underivable link (`reasons` set, `label` undefined) contributes empty
       // integrity — it fails the floor, fail-closed, alongside the persist
       // loop's own missing-source reason (both reject).
@@ -9088,7 +9102,7 @@ const verifyWriteFloor = (
       const linkPath = canonicalizeLogicalPath(input.target.path);
       const relative = entry.path.slice(linkPath.length);
       contributions.push(
-        ctx.linkLabels.labelAt(input, relative)?.integrity ?? [],
+        (yield* ctx.linkLabels.labelAt(input, relative))?.integrity ?? [],
       );
     }
     const written = writeValueForTarget(tx, { ...target, path: entry.path });
@@ -9153,7 +9167,7 @@ export const prepareBoundaryCommit = (
   return step.value;
 };
 
-/** Runs the boundary checks with suspension points between target documents. */
+/** Runs boundary checks with suspension points between targets and link steps. */
 export function* prepareBoundaryCommitSteps(
   tx: IExtendedStorageTransaction,
   instrumentation?: CfcPrepareInstrumentation,
@@ -9730,8 +9744,9 @@ export function* prepareBoundaryCommitSteps(
     // `observe` diagnoses; `enforce` records a reason (rejecting the commit
     // under the enforcing enforcement modes, mirroring requirementFailure).
     if (state.writeFloorMode !== "off") {
-      const floorFailures = firstFailure((schema) => {
-        const failures = verifyWriteFloor(tx, schema, target, {
+      let floorFailures: string[] = [];
+      for (const schema of verificationSchemas) {
+        const failures = yield* verifyWriteFloor(tx, schema, target, {
           identityForPath: (path) =>
             identityForSchemaPath(writeAuthorIdentities.get(key), path),
           linkWriteInputs,
@@ -9743,8 +9758,11 @@ export function* prepareBoundaryCommitSteps(
           // writes the derived component.
           flowIntegrity: flowPersist ? flowIntegrity : [],
         });
-        return failures.length > 0 ? failures : undefined;
-      }) ?? [];
+        if (failures.length > 0) {
+          floorFailures = failures;
+          break;
+        }
+      }
       if (floorFailures.length > 0) {
         if (state.writeFloorMode === "enforce") {
           reasons.push(...floorFailures);
@@ -10318,7 +10336,7 @@ export function* prepareBoundaryCommitSteps(
       }
     }
     for (const input of linkWriteInputs) {
-      const result = linkLabels.persisted(input);
+      const result = yield* linkLabels.persisted(input);
       reasons.push(...result.reasons);
       for (const entry of result.entries) {
         const persisted: LabelMapEntry = {
