@@ -154,8 +154,9 @@ These are measured, not assumed. Each names where it was measured.
    trivial migration, not a property to prove. No schema-subset proof runs over
    a piece's own state. What replaces the proof is not trust in a single
    writer but two checks that look at values rather than schemas: setup
-   validates what is stored (fact 5), and the writer-version guard (D2) keeps
-   an older writer from adding to it afterward.
+   validates what is stored where it can read it (fact 5, with its two
+   deferrals), and the writer-version guard (D2) keeps an older writer from
+   adding to it afterward.
 - **P2. Contracts between pieces are checked three times, at different
    strengths.** A demand is proved against the producer's declared contract, a
    universal claim over what the producer promises; the values currently
@@ -358,7 +359,11 @@ accepted. Fact 2 says the proof cannot guarantee that field's type, so two
 more checks bound what the proof cannot:
 
 - The values currently linked are validated at setup (fact 5), and a readable
-  wrong-typed value refuses the update, flag or no flag.
+  wrong-typed value refuses the update, flag or no flag. Two cases are not
+  judged there: a link the setup transaction cannot dereference, and any value
+  under a root carrying no setup-completion marker. Both defer to the typed
+  read that first reaches them, which is the next bullet, so for those values
+  the read is the only check.
 - A typed read of an optional declared path drops a wrong-typed value and
   reads it as absent (fact 2). For an optional demand this is the whole of the
   reader-side check the lifecycle spec asks for, and it exists.
@@ -493,7 +498,7 @@ global flag.
 | S7. Restructure a collection (list to keyed map, split a record) | Refused; override                                                              | Step rewrites, reaching entries through their links                                                      | declared     |
 | S8. Change a default's value                                     | Refused; defaults are compared                                                 | Two meanings, made explicit: a new default for new records is automatic; a new meaning for existing absent values is a step | automatic or declared |
 | S9. Narrow a legacy `unknown` to a type                          | Refused; override                                                              | Step reads the actual values and converts or defaults; the same as S5                                    | declared     |
-| S10. Clean up values the old code wrote wrongly                  | Setup refuses a readable wrong-typed value; undeclared fields are stripped on read | Step cleans; undeclared fields stay ignored                                                            | declared     |
+| S10. Clean up values the old code wrote wrongly                  | Setup refuses a readable wrong-typed value and defers one it cannot read to the first typed read; undeclared fields are stripped on read | Step cleans; undeclared fields stay ignored                                                            | declared     |
 | S11. Roll the code back after a migration                        | Old code runs; no guard                                                        | D2 refuses the old code's writes; old code reads what it can. No down-migrations: restore from a snapshot | operator     |
 | S12. Old clients still running during the rollout                | Both versions write; measured at 96% of commits                                | D2 refuses the old writes as conflicts                                                                   | automatic    |
 | S13. A step needs a document not yet synced                      | Topics' lift suspends and re-runs; handlers defer                              | Proposal T4: fail and retry, or sync first                                                               | automatic    |
