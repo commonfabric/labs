@@ -21,10 +21,6 @@ import {
   waitForRuntimeIdle,
 } from "./cfc-browser-helpers.ts";
 import {
-  type PresenceRelay,
-  startPresenceRelay,
-} from "./code-editor-presence-relay.ts";
-import {
   initializePiecesController,
   type PieceController,
   type PiecesController,
@@ -38,7 +34,6 @@ const TITLE_SELECTOR = 'cf-input[aria-label="Note title"]';
 
 type EditorHost = Element & {
   participantName?: string;
-  presenceUrl?: string;
   updateComplete?: Promise<unknown>;
   _presenceParticipantId?: string;
   _collaboration?: { active?: boolean };
@@ -76,6 +71,15 @@ const remoteSelectionVisible = (probe: ProbeApi, name: string): boolean =>
     element.getAttribute("title") === `${name}'s selection`
   );
 
+/**
+ * The editor has joined the shared field's presence room. The pattern names the
+ * viewer from their Fabric profile, and the editor joins over its connection to
+ * the memory server.
+ */
+const presenceJoined = (probe: ProbeApi): boolean =>
+  typeof (probe.collect("cf-code-editor")[0] as EditorHost | undefined)
+    ?._presenceParticipantId === "string";
+
 /** Reads the rendered editor, or changes its selection without writing text. */
 async function editorState(
   page: Page,
@@ -101,33 +105,6 @@ async function editorState(
     }
     return view.state.doc.toString();
   }, { args: [selection] });
-}
-
-/** Supplies the host's presence service; the pattern supplies the identity. */
-async function connectPresence(page: Page, url: string): Promise<void> {
-  await page.evaluate(async (url) => {
-    const collect = (root: Document | ShadowRoot): Element[] => {
-      const found: Element[] = [];
-      for (const element of root.querySelectorAll("*")) {
-        found.push(element);
-        if (element.shadowRoot) found.push(...collect(element.shadowRoot));
-      }
-      return found;
-    };
-    const editor = collect(document).find((element) =>
-      element.localName === "cf-code-editor"
-    ) as EditorHost | undefined;
-    if (!editor) throw new Error("Shared note editor is not mounted");
-    editor.presenceUrl = url;
-    await editor.updateComplete;
-    editor._editorView?.focus();
-  }, { args: [url] });
-  await waitForCondition(
-    page,
-    (probe) =>
-      typeof (probe.collect("cf-code-editor")[0] as EditorHost | undefined)
-        ?._presenceParticipantId === "string",
-  );
 }
 
 async function createProfile(page: Page, name: string): Promise<void> {
@@ -187,7 +164,6 @@ describe("shared-note", () => {
   let grace: Identity;
   let controller: PiecesController;
   let piece: PieceController;
-  let presence: PresenceRelay;
   let cancel: (() => void) | undefined;
 
   beforeAll(async () => {
@@ -195,7 +171,6 @@ describe("shared-note", () => {
       Identity.generate({ implementation: "noble" }),
       Identity.generate({ implementation: "noble" }),
     ]);
-    presence = startPresenceRelay();
     controller = await initializePiecesController({
       space: SPACE_NAME,
       apiUrl: new URL(API_URL),
@@ -223,7 +198,6 @@ describe("shared-note", () => {
   afterAll(async () => {
     cancel?.();
     await controller?.dispose();
-    await presence?.close();
   });
 
   it("shares imported Markdown and edits while labeling cursors with each viewer's Fabric profile", async () => {
@@ -288,7 +262,9 @@ describe("shared-note", () => {
       ),
     );
 
-    await Promise.all(pages.map((page) => connectPresence(page, presence.url)));
+    await Promise.all(
+      pages.map((page) => waitForCondition(page, presenceJoined)),
+    );
     await editorState(adaPage, {
       anchor: MARKDOWN.indexOf("Café"),
       head: MARKDOWN.indexOf("Café") + 4,
@@ -319,7 +295,7 @@ describe("shared-note", () => {
           element.textContent !== "Ada Lovelace"
         ),
     );
-    await connectPresence(adaPage, presence.url);
+    await waitForCondition(adaPage, presenceJoined);
     await editorState(adaPage, {
       anchor: MARKDOWN.indexOf("Café"),
       head: MARKDOWN.indexOf("Café") + 4,

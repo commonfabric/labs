@@ -12,9 +12,12 @@ create/pick surface. Text editing remains available; named cursor presence
 starts when the profile name resolves. Cursor labels are presence information,
 not attested authorship of individual edits.
 
-The host supplies the presence service URL. The editor derives the presence room
-from the shared content field, so everyone must open the same piece to edit the
-same document. Creating a piece per person creates independent documents.
+Presence travels over each viewer's existing connection to the memory server.
+The editor joins the presence room of the shared content field, and the memory
+server admits a viewer to that room through their session on the space, so only
+viewers who can read the space see each other's cursors. Everyone must open the
+same piece to edit the same document. Creating a piece per person creates
+independent documents.
 
 ## Create with Markdown
 
