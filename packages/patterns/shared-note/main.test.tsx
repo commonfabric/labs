@@ -1,4 +1,7 @@
-/** Tests imported text, editor bindings, and recovery without a notebook. */
+/**
+ * Tests imported text, editor bindings, recovery, and the live-cursor notice,
+ * without a notebook.
+ */
 
 import {
   action,
@@ -71,6 +74,39 @@ export default pattern(() => {
       ) ===
       "My unsent text" && subject.content === MARKDOWN
   );
+  const action_presence_error = action(() =>
+    fireEvent(
+      findElement(subject[UI], "cf-code-editor"),
+      "oncf-presence-error",
+      { detail: { category: "connection" } },
+    )
+  );
+  const assert_presence_notice_visible = assert(() =>
+    hasText(subject[UI], "Live cursors are unavailable") &&
+    hasText(subject[UI], "click into the note to try again") &&
+    subject.content === MARKDOWN
+  );
+  const action_presence_join = action(() =>
+    fireEvent(
+      findElement(subject[UI], "cf-code-editor"),
+      "oncf-presence-join",
+      {},
+    )
+  );
+  const assert_presence_notice_cleared = assert(() =>
+    !hasText(subject[UI], "Live cursors are unavailable")
+  );
+  const action_presence_unsupported = action(() =>
+    fireEvent(
+      findElement(subject[UI], "cf-code-editor"),
+      "oncf-presence-error",
+      { detail: { category: "configuration" } },
+    )
+  );
+  const assert_presence_unsupported_notice = assert(() =>
+    hasText(subject[UI], "Live cursors are unavailable on this server") &&
+    !hasText(subject[UI], "click into the note to try again")
+  );
   return {
     [TESTS]: [
       { assertion: assert_imported_content },
@@ -81,6 +117,12 @@ export default pattern(() => {
       { assertion: assert_error_visible },
       { action: action_reconcile },
       { assertion: assert_recovery_visible },
+      { action: action_presence_error },
+      { assertion: assert_presence_notice_visible },
+      { action: action_presence_join },
+      { assertion: assert_presence_notice_cleared },
+      { action: action_presence_unsupported },
+      { assertion: assert_presence_unsupported_notice },
     ],
     subject,
   };

@@ -51,6 +51,27 @@ const preserveUnsentText = handler<
   recovery.set(event.detail.localValue);
 });
 
+// A presence failure removes live cursors and leaves editing alone. The editor
+// tries a `configuration` failure again only when the room or name changes,
+// and any other failure on the next focus.
+const reportPresenceError = handler<
+  { detail: { category?: string } },
+  { presenceNotice: Writable<string> }
+>((event, { presenceNotice }) => {
+  presenceNotice.set(
+    event.detail.category === "configuration"
+      ? "Live cursors are unavailable on this server. Editing still works."
+      : "Live cursors are unavailable. Editing still works; click into the note to try again.",
+  );
+});
+
+const clearPresenceNotice = handler<
+  unknown,
+  { presenceNotice: Writable<string> }
+>((_, { presenceNotice }) => {
+  presenceNotice.set("");
+});
+
 export default pattern<SharedNoteInput, SharedNoteOutput>(
   ({ title, content }) => {
     const profile = wish<{ name?: string; avatar?: string }>({
@@ -67,6 +88,8 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
     const error = new Writable.perSession("");
     const recovery = new Writable.perSession<string | null>(null);
     const hasError = computed(() => error.get() !== "");
+    const presenceNotice = new Writable.perSession("");
+    const hasPresenceNotice = computed(() => presenceNotice.get() !== "");
     const hasRecovery = computed(() => recovery.get() !== null);
     const recoveryText = computed(() => recovery.get() ?? "");
 
@@ -100,6 +123,9 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
             )}
         </cf-hstack>
         {hasError ? <cf-text role="alert">{error}</cf-text> : null}
+        {hasPresenceNotice
+          ? <cf-text role="status">{presenceNotice}</cf-text>
+          : null}
         {hasRecovery
           ? (
             <cf-vstack gap="2">
@@ -128,6 +154,8 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
           placeholder="Start writing…"
           oncf-error={reportError({ error })}
           oncf-collaboration-reconcile={preserveUnsentText({ recovery })}
+          oncf-presence-error={reportPresenceError({ presenceNotice })}
+          oncf-presence-join={clearPresenceNotice({ presenceNotice })}
           style={{ minHeight: "20rem" }}
         />
       </cf-vstack>

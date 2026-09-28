@@ -278,6 +278,8 @@ const getLangExtFromMimeType = (mime: MimeType) => {
  *   edits are pending. Detail preserves localValue, canonicalValue, and cursors.
  * @fires cf-presence-error - Fired when ephemeral presence fails independently
  *   of document collaboration. Detail contains a safe failure category.
+ * @fires cf-presence-join - Fired each time the editor joins its presence room,
+ *   including a rejoin after `cf-presence-error`. It carries no detail.
  * @fires backlink-click - Fired when a backlink is clicked with Cmd/Ctrl+Enter with detail: { text, piece }
  * @fires backlink-create - Fired when a novel backlink is activated (Cmd/Ctrl+Click)
  *   or confirmed with Enter during autocomplete with no matches. Detail:
@@ -2063,6 +2065,7 @@ export class CFCodeEditor extends BaseElement {
       );
       this._applyPresenceSnapshot(handle.participants);
       this._publishPresence();
+      this.emit("cf-presence-join");
     }, (error) => {
       if (generation !== this._presenceGeneration) return;
       this._presenceJoining = false;
