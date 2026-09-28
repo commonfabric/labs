@@ -3,8 +3,8 @@
 Status: proposed design (see [`README.md`](README.md)).
 
 What a reply says about the message it replies to: which message, and where the
-reply is shown. A [`ChatMessage`](ChatMessage.md) that is a reply carries one
-as `replyTo`.
+reply is shown. A [`ChatMessage`](ChatMessage.md) that is a reply carries one as
+`replyTo`.
 
 ```ts
 // Shown for illustration only.
@@ -34,9 +34,9 @@ conversation. A message shown only in a thread can't be quoted there, since
 readers of the main conversation wouldn't see it in context: a reply to it is a
 `"thread"` or `"both"` reply.
 
-`shownIn` is part of what the person chose when they sent the reply, so a
-client that draws its own composer shows it and sends exactly what it showed
-(see [`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)).
+`shownIn` is part of what the person chose when they sent the reply, so a client
+that draws its own composer shows it and sends exactly what it showed (see
+[`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)).
 
 ## Threads
 
@@ -60,8 +60,8 @@ another. A room never holds a thread within a thread.
 - **A thread** is its root, followed by every message in that thread, oldest
   first.
 
-A `"both"` message appears in both. A `"main"` reply is in no thread, and
-quotes a message that the main conversation also shows.
+A `"both"` message appears in both. A `"main"` reply is in no thread, and quotes
+a message that the main conversation also shows.
 
 Neither view is stored. Both are derived from `messages`, the same way in every
 client.

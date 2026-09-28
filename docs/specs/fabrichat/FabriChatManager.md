@@ -24,9 +24,9 @@ each, and a row in the built-in targets table of
 
 ## State
 
-The manager keeps `rooms`, `direct`, `requests`, and `outgoingInvitations` in
-the home space. `direct` is maintained alongside `rooms` by the same handlers,
-so the two can't disagree.
+The manager keeps `rooms`, `direct`, `requests`, and `outgoingNotices` in the
+home space. `direct` is maintained alongside `rooms` by the same handlers, so
+the two can't disagree.
 
 ## Creating a room
 
@@ -35,8 +35,9 @@ create a room of its own in four steps:
 
 1. Create the room's space, with only this user granted (OWNER), and instantiate
    `FabriChatRoom` there with its `about`.
-2. Grant each other member access, or issue each an invitation.
-3. Add each invitation to `outgoingInvitations`, for a client to deliver.
+2. Grant each other member WRITE on the room's space, by principal.
+3. Add a notice for each other member to `outgoingNotices`, for a client to
+   deliver.
 4. Record the entry in `rooms`, and in `direct` for a direct room, and mark the
    request `done`.
 
@@ -60,17 +61,20 @@ creating another room.
 
 ### First contact
 
-An invitation has to reach a principal who may share no space with the sender.
-Nothing reachable from a pattern delivers one today:
+A notice has to reach a principal who may share no space with the sender.
+Nothing in this repository lets a pattern deliver one today:
 
 - DID inboxes ([`did-inboxes.md`](../../features/did-inboxes.md)) deliver to a
   principal, but patterns can't reach them.
-- A profile's `inbox` field can point at a receiving piece, but this repository
-  provides no such piece.
+- A profile's `inbox` field (`inbox.piece`,
+  `packages/patterns/system/profile-home.tsx`) points at a receiving piece in a
+  space of its own, which a host outside this repository provides. It is the
+  likeliest path for notices: a pattern could send a notice to that piece, if
+  the piece takes one and its space admits the sender. Whether it does is for
+  that host to say.
 - A space's access list can admit any writer, but that is the `"*"` grant a room
   must not have.
 
-That is why step 3 hands invitations to a client through `outgoingInvitations`
-(see [`ChatManagerOutput`](ChatManagerOutput.md#delivering-invitations)). Once
-one of these is usable from a pattern, the manager can deliver invitations
-itself.
+That is why step 3 hands notices to a client through `outgoingNotices` (see
+[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). Once one of
+these is usable from a pattern, the manager can deliver notices itself.

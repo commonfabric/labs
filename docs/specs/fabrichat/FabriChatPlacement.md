@@ -43,8 +43,10 @@ client that can't learn it MUST treat the container as admitting others.
 
 - `room`: the link, so a client can reach the room's own streams.
 - `[VIEWS]`: a `chat` group, the placement's whole data face:
-  - `state`: `"member"`, `"not-member"`, or `"unavailable"` (the room can't be
-    read right now).
+  - `state`: `"member"` (the room space admits the viewer, at any level),
+    `"not-member"`, or `"unavailable"` (the room can't be read right now). A
+    member with READ only sees the room but can't send to it (see
+    [`ChatRoomOutput`](ChatRoomOutput.md#membership)).
   - `about`, `messages`, `participants`, and `reactionTallies` (per message:
     emoji, count, whether the viewer is among them, and the reactors' profiles),
     each read through the link. They're empty unless `state` is `"member"`.

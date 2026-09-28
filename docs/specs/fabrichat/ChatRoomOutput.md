@@ -29,8 +29,9 @@ interface ChatRoomOutput {
   sendMessage: Stream<{ body: string; replyTo?: ChatReply }>;
   react: Stream<{ message: Cell<ChatMessage>; emoji: string }>;
   join: Stream<void>;
-  invite: Stream<{ principal: string; access: "WRITE" | "OWNER" }>;
-  remove: Stream<{ principal: string }>;
+  /** Group rooms of their own only. */
+  add?: Stream<{ principal: string; access: "WRITE" | "OWNER" }>;
+  remove?: Stream<{ principal: string }>;
 
   [UI]: VNode;
   [VIEWS]: { room: object };
@@ -60,9 +61,12 @@ space's access list as it is, and adds nothing to it.
 
 ## Membership
 
-The room space's access list is the room's membership. Its member set is how a
-room and its clients read the membership: who the members are, and which profile
-shows each of them. A room keeps no membership of its own.
+The room space's access list is the room's membership. A member is any principal
+it admits, at any level. A member with READ can read the room; sending,
+reacting, and joining append to the room's streams, so they need WRITE; adding
+and removing members needs OWNER. The space's member set is how a room and its
+clients read the membership: who the members are, their access, and which
+profile shows each of them. A room keeps no membership of its own.
 
 Until the runtime provides member sets, a room offers `roster`, a set of profile
 claims that members contribute with `join`, and consumers combine it with the
@@ -70,24 +74,28 @@ access list themselves. The two can disagree: a member who has never joined has
 no roster entry, and a roster entry whose principal has lost access stays until
 it's cleaned up. A consumer MUST NOT treat a roster entry as proof of access.
 
-A direct room's membership is fixed at creation. A group room's changes through
-`invite` and `remove`. A space's own chat changes when the space's membership
-does, and offers neither stream.
+A direct room's membership is decided at creation, and never changes after. A
+group room of its own changes through `add` and `remove`. A space's own chat
+changes when the space's membership does. Only group rooms of their own offer
+`add` and `remove`; the others have no such streams.
 
 ## Facts
 
 - **`about`** is a [`ChatAbout`](ChatAbout.md), set once when the room is
   created.
-- **`messages`** are [`ChatMessage`](ChatMessage.md)s, oldest first, and
-  **`reactions`** are [`ChatReaction`](ChatReaction.md)s. Each is labeled
-  `authored-by` the principal who wrote it, and is never edited or deleted
-  (reactions are removed only by their own reactor).
+- **`messages`** are [`ChatMessage`](ChatMessage.md)s, oldest first, each
+  labeled `authored-by` the principal who sent it. Messages are append-only:
+  never edited or deleted.
+- **`reactions`** are [`ChatReaction`](ChatReaction.md)s, each labeled
+  `authored-by` its reactor. A reaction is removed only by its own reactor.
 - The room stores no names or avatars. Messages, reactions, and the roster link
   people's profiles ([`ChatProfile`](ChatProfile.md)) and copy nothing from
   them.
 - **`roster`** and **`participants`** are links to profiles, compared with
   `equals()`. `participants` is `roster` plus any author without a roster entry.
   Neither is proof of access.
+- The lists here are projections. An implementation may keep reactions and the
+  roster as keyed collections, as long as what it offers satisfies these rules.
 
 ## Streams
 
@@ -97,9 +105,8 @@ value: a sender observes the effect in the room's facts. An event is appended in
 the room's space, so sending needs write access there, and the room acts on it
 later, possibly in another runtime.
 
-Each stream below is written as a call, with its event's keys as the
-parameters: `react(message: Cell<ChatMessage>, emoji: string)` sends
-`{ message, emoji }`.
+Each stream below is written as a call, with its event's keys as the parameters:
+`react(message: Cell<ChatMessage>, emoji: string)` sends `{ message, emoji }`.
 
 These rules hold for every stream:
 
@@ -108,6 +115,10 @@ These rules hold for every stream:
   [`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)), and the
   record it writes is labeled `authored-by` the principal who sent it.
 - An event that arrives before the viewer's profile resolves is refused.
+- A refusal is silent: the room records no outcome, so a sender can't tell a
+  refused event from one that hasn't taken effect yet. A client MUST check an
+  event against the stream's rules before sending it (see
+  [`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)).
 - A refused event is spent: it is not retried, and the sender sends again.
 
 | Stream | Reviewed surface | Effect |
@@ -115,84 +126,98 @@ These rules hold for every stream:
 | [`sendMessage`](#sendmessagebody-string-replyto-chatreply) | `ChatSendSurface` | appends a message from the viewer |
 | [`react`](#reactmessage-cellchatmessage-emoji-string) | `ChatReactSurface` | adds the viewer's reaction, or removes it |
 | [`join`](#join) | none | adds the viewer's own profile to `roster` |
-| [`invite`](#inviteprincipal-string-access-write--owner) | `ChatMembersSurface` | grants a principal access, or issues an invitation |
+| [`add`](#addprincipal-string-access-write--owner) | `ChatMembersSurface` | grants a principal access |
 | [`remove`](#removeprincipal-string) | `ChatMembersSurface` | revokes a principal's access |
 
 ### `sendMessage(body: string, replyTo?: ChatReply)`
 
+- `body: string` — The message's text, exactly as the person saw it when they
+  sent it. Must not be empty, or only whitespace.
+- `replyTo?: ChatReply` — What the message replies to, and where it is shown
+  (see [`ChatReply`](ChatReply.md)). Absent for a message that isn't a reply,
+  which is shown in the main conversation. `replyTo.message` must be a message
+  in this room, and a `"main"` reply must be to a message the main conversation
+  shows.
+
 Sends a message from the viewer.
 
-- **Event:** `body` is the text exactly as the person saw it when they sent it.
-  `replyTo` optionally says which message this one replies to, and whether it
-  is shown in the main conversation, in that message's thread, or both (see
-  [`ChatReply`](ChatReply.md)).
 - **Admitted:** as a trusted gesture on `ChatSendSurface`.
 - **Effect:** appends a [`ChatMessage`](ChatMessage.md) to `messages`, with the
   viewer's profile as `authorProfile` and the handler's clock as `sentAt`.
-- **Refused:** an empty `body`, a `replyTo` whose `message` is in another room,
-  a `shownIn` other than `"main"`, `"thread"`, or `"both"`, or a `"main"` reply
-  to a message shown only in a thread.
+- **Refused:** an empty or whitespace-only `body`, a `replyTo` whose `message`
+  is in another room, a `shownIn` other than `"main"`, `"thread"`, or `"both"`,
+  or a `"main"` reply to a message shown only in a thread.
 
 ### `react(message: Cell<ChatMessage>, emoji: string)`
 
+- `message: Cell<ChatMessage>` — The message reacted to. Must be a message in
+  this room.
+- `emoji: string` — A single emoji: exactly one emoji sequence that [Unicode
+  Technical Standard #51](https://www.unicode.org/reports/tr51/) recommends for
+  general interchange (`RGI_Emoji`). It may be more than one code point, as with
+  a skin-tone modifier or a ZWJ-joined sequence, but it is one emoji. Not text,
+  and not two emoji together.
+
 Adds the viewer's reaction to a message, or removes it.
 
-- **Event:** `message` links a message in this room. `emoji` is a single emoji
-  (see [`ChatReaction`](ChatReaction.md)).
 - **Admitted:** as a trusted gesture on `ChatReactSurface`.
 - **Effect:** if the viewer has no reaction with `emoji` on `message`, adds a
-  [`ChatReaction`](ChatReaction.md) to `reactions`. If they have one, removes it.
-  No one else's reaction changes.
+  [`ChatReaction`](ChatReaction.md) to `reactions`. If they have one, removes
+  it. No one else's reaction changes.
 - **Refused:** a `message` in another room, or an `emoji` that isn't a single
   emoji.
 
 ### `join()`
 
+No parameters. The profile added is always the viewer's own `#profile`, never
+one the sender names.
+
 Adds the viewer's own profile to `roster`.
 
-- **Event:** none. The profile is the viewer's own `#profile`, never one the
-  sender names.
 - **Admitted:** without a reviewed gesture. It asserts nothing but the viewer's
-  own profile, and an entry stays a claim, as
-  [shared-profile rosters](../shared-profile-rosters.md) describe.
+  own profile, and an entry stays a claim, as [shared-profile
+  rosters](../shared-profile-rosters.md) describe.
 - **Effect:** adds the profile to `roster`, unless it's already there.
 - **When to send:** a client SHOULD send it when it first shows a room to a
   member. It has no effect once the room's space has a member set.
 
-### `invite(principal: string, access: "WRITE" | "OWNER")`
+### `add(principal: string, access: "WRITE" | "OWNER")`
 
-Admits another person to a group room. This is an outward act: it grants
-someone else access.
+- `principal: string` — The DID of the person to admit.
+- `access: "WRITE" | "OWNER"` — What to grant. WRITE lets them send, react, and
+  join; OWNER also lets them add and remove members.
 
-- **Event:** `principal` is the DID to admit, and `access` what to grant.
+Admits another person to a group room of its own. This is an outward act: it
+grants someone else access.
+
 - **Admitted:** as a trusted gesture on `ChatMembersSurface`, and only from a
   member the room space's access list makes OWNER.
-- **Effect:** grants `principal` the access, or issues a space invitation for
-  them to redeem.
-- **Open:** an invitation issued here has to be delivered, as the manager's are
-  (see [`ChatManagerOutput`](ChatManagerOutput.md#delivering-invitations)), but
-  the room has no way to hand it to the sender's client yet. The manager's
-  `outgoingInvitations` holds only invitations its own requests issue.
-- **Refused:** on a direct room, and on a space's own chat, neither of which
-  offers it.
+- **Effect:** grants `principal` the access to the room's space, by principal.
+  It issues no space invitation, for the reason
+  [`ChatManagerOutput`](ChatManagerOutput.md#admission-to-a-room) gives.
+- **Notice:** the grant tells `principal` nothing. The client that sent `add`
+  delivers them a notice, as it delivers the manager's (see
+  [`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)).
 
 ### `remove(principal: string)`
 
-Removes a person from a group room. This is an outward act: it withdraws
-someone else's access.
+- `principal: string` — The DID of the member to remove. Must not be the room's
+  last OWNER, since a space's access list always keeps one.
 
-- **Event:** `principal` is the DID to remove.
+Removes a person from a group room of its own. This is an outward act: it
+withdraws someone else's access.
+
 - **Admitted:** as a trusted gesture on `ChatMembersSurface`, and only from a
   member the room space's access list makes OWNER.
 - **Effect:** revokes `principal`'s access to the room's space. Their messages
   and reactions stay in the history.
-- **Refused:** on a direct room, and on a space's own chat, neither of which
-  offers it.
+- **Refused:** removing the room's last OWNER.
 
 ## Renderings
 
-- **`[UI]`** is the room's own rendering, with its reviewed surfaces. An
-  adapter's rendering embeds it, so a composer is always the room's own surface.
+- **`[UI]`** is the room's own rendering, with its reviewed surfaces and its
+  composer's state: the draft, and the reply being composed. An adapter's
+  rendering embeds it, so a composer is always the room's own surface.
 - **`[VIEWS]`** holds a `room` group with the facts and streams above, for hosts
   that draw natively. A client uses it to show a room outside any container.
   Inside a container, it reads the placement's `chat` group instead

@@ -18,8 +18,7 @@ requires of the runtime and of the programs that use it.
     to.
 - Records a room holds:
   - [`ChatMessage`](ChatMessage.md)
-  - [`ChatReply`](ChatReply.md): what a reply replies to, and where it's
-    shown.
+  - [`ChatReply`](ChatReply.md): what a reply replies to, and where it's shown.
   - [`ChatReaction`](ChatReaction.md)
   - [`ChatAbout`](ChatAbout.md)
   - [`ChatProfile`](ChatProfile.md): the part of a profile the room reads.
@@ -98,10 +97,9 @@ provide, the document says so, under the heading "Prerequisites".
    [`ChatManagerOutput.md`](ChatManagerOutput.md), named for the roles rather
    than the patterns that fill them.
 6. The records a room holds: [`ChatMessage.md`](ChatMessage.md),
-   [`ChatReply.md`](ChatReply.md),
-   [`ChatReaction.md`](ChatReaction.md), [`ChatAbout.md`](ChatAbout.md), and
-   [`ChatProfile.md`](ChatProfile.md), the part of a person's profile the room
-   reads.
+   [`ChatReply.md`](ChatReply.md), [`ChatReaction.md`](ChatReaction.md),
+   [`ChatAbout.md`](ChatAbout.md), and [`ChatProfile.md`](ChatProfile.md), the
+   part of a person's profile the room reads.
 7. The record a manager holds: [`ChatIndexEntry.md`](ChatIndexEntry.md).
 8. [`clients.md`](clients.md): the requirements on a separate program that uses
    FabriChat, including one that renders natively.
@@ -110,8 +108,9 @@ provide, the document says so, under the heading "Prerequisites".
 
 - **Room.** One conversation: a `FabriChatRoom` piece, in a space created for it
   or in the shared space whose own chat it is.
-- **Member.** A principal the room space's access list grants WRITE or OWNER.
-  Membership is the access list, and nothing kept beside it.
+- **Member.** A principal the room space's access list admits, at any level. A
+  member with READ can read the room, WRITE is needed to send, and OWNER to add
+  or remove members. Membership is the access list, and nothing kept beside it.
 - **Direct room.** A room created for exactly two members, found by the manager
   from either member's side by the other member's principal.
 - **Group room.** Any other room. Two group rooms can have the same members.
@@ -129,8 +128,8 @@ provide, the document says so, under the heading "Prerequisites".
 - **Client.** A program that reads and writes FabriChat on a person's behalf:
   the shell, or a separate application embedding the runtime.
 - **Reviewed surface.** The part of a rendering whose gestures the runtime
-  admits as the person's own act (`TrustedActionWrite`,
-  `docs/specs/ts-transformer/cfc_ui_helper_contract.md`).
+  admits as the person's own act (`TrustedActionWrite`, in [the CFC authoring
+  contract](../ts-transformer/cfc_authoring_contract.md)).
 
 ## Decisions
 
@@ -142,9 +141,10 @@ provide, the document says so, under the heading "Prerequisites".
 2. **Membership is the room space's access list**, read through the space's
    member set. A profile shown for a member is one that member contributed. The
    access list, not a list kept beside it, decides who can read and write.
-3. **History is attested and append-only.** Messages and reactions are
-   `AuthoredByCurrentUser` and `TrustedActionWrite`, as in today's FabriChat. A
-   room has no edit or delete.
+3. **History is attested, and messages are append-only.** Messages and reactions
+   are `AuthoredByCurrentUser` and `TrustedActionWrite`, as in today's
+   FabriChat. A message is never edited or deleted, and a reaction is removed
+   only by its own reactor.
 4. **Each user has one manager, in their home space**, found with a well-known
    `wish` target. A user's index of conversations is private to that user.
 5. **A direct room is keyed by the other member's principal**, not by a profile.
@@ -214,16 +214,19 @@ names the ones it needs, and they are gathered here:
 
 - **A member set for a shared space**, readable by the space's members and by
   patterns running there (see [Shared spaces](#shared-spaces)).
-- **Creating a private space from a pattern.** `Factory.inSpace()` creates a
-  space today, but with the default genesis grants (`{ [creator]: "OWNER", "*":
-  "WRITE" }`), which open it to any authenticated principal. A room needs a
-  space whose genesis grants only its creator: the target of [random space
-  identities](../random-space-identities.md).
-- **Granting access from a pattern.** Only a host can change an access list or
-  issue a space invitation today (`ACLManager`, `SpaceInviteClient`, the runtime
-  client's `space:setAclEntry`). A room's creator needs a pattern-facing way to
-  grant and revoke members, gated as an outward act and implemented by the host.
-- **Delivering an invitation.** Nothing reachable from a pattern delivers a
+- **Creating a private space from a pattern.** A host can already create a space
+  whose genesis grants only its creator (`registerSpaceIdentity` with a
+  `genesisAcl`). A pattern can't: `Factory.inSpace()` creates a space with the
+  default genesis grants (`{ [creator]: "OWNER", "*": "WRITE" }`), which open it
+  to any authenticated principal. Exposing creator-only creation to patterns is
+  the direction of [random space identities](../random-space-identities.md).
+- **Granting access from a pattern.** Only a host can change an access list
+  today (`ACLManager`, the runtime client's `space:setAclEntry`). A room's
+  creator needs a pattern-facing way to grant and revoke members by principal,
+  gated as an outward act and implemented by the host. Space invitations don't
+  serve: they are bearer credentials, not bound to the person they are meant for
+  (see [`ChatManagerOutput`](ChatManagerOutput.md#admission-to-a-room)).
+- **Delivering a notice.** Nothing in this repository lets a pattern deliver a
   message to a principal who shares no space with the sender (see
   [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
 - **Host-issued trusted gestures.** A client that draws natively needs a
@@ -246,7 +249,8 @@ patterns](../../common/patterns/multi-user-patterns.md#what-a-spec-should-captur
    [`ChatProfile.md`](ChatProfile.md)).
 3. **Shared and per-user state.** A room's history is `PerSpace` in the room's
    space, and its members are that space's member set. The manager's index is in
-   the user's home space. Drafts are `PerSession` in the adapter.
+   the user's home space. Drafts are `PerSession` in the room, whose composer
+   they belong to.
 4. **A person is identified** by cell reference with `equals()` for display, and
    by principal for direct-room lookup. Never by display name.
 5. **Authorship is attested.** Every message and reaction carries an

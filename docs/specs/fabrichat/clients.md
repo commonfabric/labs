@@ -29,10 +29,11 @@ a room to anyone its space doesn't admit.
   is a shared space that has one.
 - **The people a client offers** when starting a conversation from a shared
   space are that space's member set.
-- **An invitation** is redeemed under the person's own signature, followed by
-  `accept` to their manager. Joining a room is the person's decision, so a
-  client SHOULD redeem only after a gesture that shows who is inviting them, and
-  to what.
+- **A notice** says the person has been admitted to a room, and by whom. The
+  client follows it with `accept` to their manager, passing the sender as
+  `counterpart` for a direct room. Whether to add the room to their list is the
+  person's decision, so a client SHOULD accept only after showing them who
+  admitted them, and to what.
 
 ## Showing a room
 
@@ -62,9 +63,9 @@ A client that draws natively MUST:
   [`ChatReaction`](ChatReaction.md)), and show any that others have used, even
   ones the client wouldn't offer itself.
 - **Use each message's entity as its id.**
-- **Show replies where they say they are shown**: the main conversation and
-  each thread, derived from `replyTo` as
-  [`ChatReply`](ChatReply.md#the-two-views) states, with flat threads.
+- **Show replies where they say they are shown**: the main conversation and each
+  thread, derived from `replyTo` as [`ChatReply`](ChatReply.md#the-two-views)
+  states, with flat threads.
 - **Show a room it can't read as unreadable**, and nothing more (see
   [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
 
@@ -81,11 +82,18 @@ gesture on the reviewed surface its policy names:
 | --- | --- | --- | --- |
 | send a message | room | `sendMessage` | `ChatSendSurface` |
 | add or remove a reaction | room | `react` | `ChatReactSurface` |
-| add or remove a member | room | `invite`, `remove` | `ChatMembersSurface` |
+| add or remove a member | room | `add`, `remove` | `ChatMembersSurface` |
 | start a conversation | manager | `openDirect`, `createGroup` | `ChatStartSurface` |
 
 A client sends to the room's own streams, never through a placement or an
 adapter.
+
+A room refuses a bad event silently, so a client MUST check each event against
+its stream's rules before sending it: a non-empty body, a reply whose target is
+in the same room and allowed for its `shownIn`, a single emoji (see
+[`ChatRoomOutput`](ChatRoomOutput.md#streams)). A client that resumes an
+interrupted manager request MUST resend it with its original `requestId` (see
+[`ChatManagerOutput`](ChatManagerOutput.md#creating-a-room-partial-states)).
 
 **A client that renders the patterns' `[UI]`** meets this by construction. The
 renderer marks a gesture on the pattern's own markup, and the mark travels with
@@ -140,14 +148,15 @@ one (`packages/cli/lib/trusted-action-event.ts`, the pattern test runner's
 - It carries the mark to wherever the handler runs, as `rendererTrusted` already
   does between runtimes.
 
-## Delivering invitations
+## Delivering notices
 
-Until a pattern can deliver to a principal it shares no space with, delivering
-an invitation is the client's job. A client finds the invitations waiting in its
-user's manager and reports each one once it's delivered (see
-[`ChatManagerOutput`](ChatManagerOutput.md#delivering-invitations)). A client
-MUST deliver only the invitation: who it's from, which room, and how to redeem
-it. It MUST NOT deliver any of the room's contents.
+Until a pattern can deliver to a principal it shares no space with, delivering a
+notice is the client's job. A client finds the notices waiting in its user's
+manager and reports each one once it's delivered (see
+[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). A client that
+sends a room's `add` delivers that notice itself. A client MUST deliver only the
+notice: which room, and who sent it. It MUST NOT deliver any of the room's
+contents.
 
 ## What a client must not do, in one place
 

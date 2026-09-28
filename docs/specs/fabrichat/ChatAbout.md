@@ -9,7 +9,7 @@ once, when the room is created.
 ```ts
 // Shown for illustration only.
 interface ChatAbout {
-  /** `"direct"` for exactly two members; `"group"` otherwise. */
+  /** `"direct"` if created as a direct room; `"group"` otherwise. */
   kind: "direct" | "group";
 
   /** A group room's title. A direct room has none. */
@@ -20,8 +20,9 @@ interface ChatAbout {
 }
 ```
 
-- **`kind`** never changes. A direct room's membership is fixed at creation, and
-  it is what the manager finds by the other member's principal
+- **`kind`** says how the room was created, not how many members it has, and
+  never changes. A direct room's membership is decided at creation, and it is
+  what the manager finds by the other member's principal
   ([`ChatManagerOutput`](ChatManagerOutput.md)). A group room can gain and lose
   members.
 - **`title`** is only for group rooms. A client shows a direct room by its other

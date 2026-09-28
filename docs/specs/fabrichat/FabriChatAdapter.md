@@ -14,9 +14,11 @@ An adapter is a piece in the container's space, beside its placement. It holds:
 
 - **`placement`** (`PerSpace`): a link to one `FabriChatPlacement`. It is set
   when the adapter is created, and never changes afterward.
-- **`draft`** and **`replyingTo`** (`PerSession`): the viewer's composer state.
 
-Like a placement, it MUST NOT hold anything read from the room.
+That is all it holds. Like a placement, it MUST NOT hold anything read from the
+room. It holds no composer state either: the composer is the room's own reviewed
+surface, so the room keeps the draft and the reply target (see
+[`FabriChatRoom.md`](FabriChatRoom.md#state)).
 
 ## How a container holds it
 
@@ -38,10 +40,9 @@ and removed together.
 
 - `placement`: the link.
 - `[UI]`: the rendering. When the placement's `state` is `"member"`, it embeds
-  the room's own `[UI]`, so the composer and the reaction controls are the
-  room's reviewed surfaces, and it adds its framing: the draft and the reply
-  target. Otherwise it shows the non-member or unavailable state, and nothing of
-  the room.
+  the room's own `[UI]`, composer and all, so the composer and the reaction
+  controls are the room's reviewed surfaces. Otherwise it shows the non-member
+  or unavailable state, and nothing of the room.
 
 An adapter offers no `[VIEWS]`, since the placement is the data face, and no
 stream that sends or reacts. Every write reaches the room's own writers, through

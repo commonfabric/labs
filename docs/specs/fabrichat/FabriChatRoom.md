@@ -18,7 +18,15 @@ example, today's `FabriChatMessage` and `FabriChatSendSurface` become
 
 The room keeps four `PerSpace` values, shared by everyone the space admits:
 `about`, `messages`, `reactions`, and `roster`. `participants` is computed from
-`roster` and the messages' authors, keyed by profile cell.
+`roster` and the messages' authors, keyed by profile cell. `messages` is a list;
+`reactions` and `roster` are keyed collections, projected as lists in the
+contract.
+
+The room also keeps its composer's state, `PerSession`: the draft, the message
+being replied to, and where the reply is to be shown. The composer is the room's
+own reviewed surface, so the state it shows, and sends, is the room's. Two
+placements of the same room open in one session show the same composer state, as
+one conversation shown twice should.
 
 ## Writers
 
@@ -29,7 +37,7 @@ Every write goes through one handler per stream:
 | `commitSend` | `sendMessage` | `ChatSendSurface` |
 | `commitReact` | `react` | `ChatReactSurface` |
 | `commitJoin` | `join` | none |
-| `commitInvite` | `invite` | `ChatMembersSurface` |
+| `commitAdd` | `add` | `ChatMembersSurface` |
 | `commitRemove` | `remove` | `ChatMembersSurface` |
 
 `commitSend` and `commitReact` keep today's types: the stored value is
@@ -48,19 +56,21 @@ without reading the list.
 a mergeable set add, so concurrent joins all land and a profile is not listed
 twice.
 
-`commitInvite` and `commitRemove` ask the host to change the room space's access
-list, or to issue a space invitation. They are the only handlers that reach
-beyond the room's own record.
+`commitAdd` and `commitRemove` ask the host to change the room space's access
+list. They are the only handlers that reach beyond the room's own record.
 
 ## Prerequisites
 
-- **A private space.** Creating a room's space with only its creator granted
-  needs [random space identities](../random-space-identities.md).
-  `FabriChatRoom.inSpace()` works today, but the space it creates also grants
-  `"*": "WRITE"`. A prototype MAY use it, and MUST say that the room is open to
-  any authenticated principal.
-- **Pattern-facing access control.** `commitInvite` and `commitRemove` need a
-  way for a pattern to ask its host to change an access list or issue a space
-  invitation. Today only hosts can do that (`ACLManager`, `SpaceInviteClient`).
+- **A private space, created from a pattern.** A host can already create a space
+  whose genesis grants only its creator (`registerSpaceIdentity` with a
+  `genesisAcl`). A pattern can't: `FabriChatRoom.inSpace()` works today, but the
+  space it creates takes the default grants, including `"*": "WRITE"`. Exposing
+  creator-only creation to patterns is the direction of [random space
+  identities](../random-space-identities.md). Until then, a prototype MAY use
+  `inSpace()`, and MUST say that the room is open to any authenticated
+  principal.
+- **Pattern-facing access control.** `commitAdd` and `commitRemove` need a way
+  for a pattern to ask its host to change an access list. Today only hosts can
+  do that (`ACLManager`, the runtime client's `space:setAclEntry`).
 - **Member sets.** Until the runtime provides them, the room keeps `roster` (see
   [shared spaces](README.md#shared-spaces)).
