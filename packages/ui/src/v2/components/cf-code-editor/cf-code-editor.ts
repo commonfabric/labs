@@ -2183,6 +2183,7 @@ export class CFCodeEditor extends BaseElement {
     if (focused) this._presenceHasSelection = true;
     const provisional = synchronization.pendingChanges.length !== 0;
     presence.setName(this.participantName);
+    presence.setFocused(focused);
     presence.setFacet(
       CARET_FACET,
       caretFacetOf({

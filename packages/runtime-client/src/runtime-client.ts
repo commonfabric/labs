@@ -194,9 +194,10 @@ function assertRenderDeclassificationPolicy(policy: unknown): void {
  * A consumer's hold on one presence room, obtained from
  * {@link RuntimeClient.joinPresenceRoom}. Every handle on one room shares
  * the room's membership and its record: the name is the room's, and each
- * handle owns the facets it sets, which leave the record when it leaves.
- * Changes coalesce at the browser's animation-frame boundary into one
- * publication.
+ * handle owns the facets it sets, which leave the record when it leaves. A
+ * facet two handles both set is the focused handle's, and among handles
+ * alike in focus the one that set it last. Changes coalesce at the
+ * browser's animation-frame boundary into one publication.
  */
 export interface PresenceRoomHandle {
   /** The id the relay assigned this membership; changes on reconnect. */
@@ -218,6 +219,14 @@ export interface PresenceRoomHandle {
   clearFacet(facet: string): void;
 
   /**
+   * Marks this handle as the one holding the user's attention, which makes
+   * its facets win those another handle on the room sets under the same
+   * name. A room's record may carry one caret, and this is how two editors
+   * of one field on a page settle whose it is.
+   */
+  setFocused(focused: boolean): void;
+
+  /**
    * Listens for the room's events after they are applied to
    * `.participants`. A `failure` ends the room: nothing follows it, and a
    * consumer that still wants the room leaves and joins again.
@@ -234,6 +243,10 @@ export interface PresenceRoomHandle {
 /** One handle's share of a room: its facets and its listeners. */
 type PresenceHandleState = {
   facets: Map<string, FabricPlainObject>;
+
+  /** When each facet was last set, on the client's single counter. */
+  writes: Map<string, number>;
+  focused: boolean;
   listeners: Set<(event: PresenceEvent) => void>;
   left: boolean;
 };
@@ -297,6 +310,9 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   >();
   #presenceRooms = new Map<string, PresenceRoomState>();
   #presenceBySubscription = new Map<string, PresenceRoomState>();
+
+  /** Orders facet writes across every handle, for the merge to rank by. */
+  #presenceWrites = 0;
 
   /**
    * Derived-room joins by the cell each was made through, kept after the
@@ -588,6 +604,8 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     }
     const handle: PresenceHandleState = {
       facets: new Map(),
+      writes: new Map(),
+      focused: false,
       listeners: new Set(),
       left: false,
     };
@@ -610,10 +628,17 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       setFacet: (facet, value) => {
         if (handle.left) return;
         handle.facets.set(facet, value);
+        handle.writes.set(facet, ++this.#presenceWrites);
         this.#schedulePresencePublish(room);
       },
       clearFacet: (facet) => {
         if (handle.left || !handle.facets.delete(facet)) return;
+        handle.writes.delete(facet);
+        this.#schedulePresencePublish(room);
+      },
+      setFocused: (focused) => {
+        if (handle.left || handle.focused === focused) return;
+        handle.focused = focused;
         this.#schedulePresencePublish(room);
       },
       subscribe: (listener) => {
@@ -1686,9 +1711,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
 
   /**
    * Sends the room's record as it stands: the room's name and every
-   * handle's facets merged, a later handle's facet replacing an earlier
-   * one's of the same name. Nothing is sent without a name. A refusal ends
-   * the room with a `failure`.
+   * handle's facets merged. A facet two handles set is the focused
+   * handle's, and among handles alike in focus the one that set it last.
+   * Nothing is sent without a name. A refusal ends the room with a
+   * `failure`.
    */
   #publishPresence(room: PresenceRoomState): void {
     if (
@@ -1698,8 +1724,23 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       return;
     }
     const facets: Record<string, FabricPlainObject> = {};
+    const ranks = new Map<string, [number, number]>();
     for (const handle of room.handles) {
-      for (const [facet, value] of handle.facets) facets[facet] = value;
+      for (const [facet, value] of handle.facets) {
+        const rank: [number, number] = [
+          handle.focused ? 1 : 0,
+          handle.writes.get(facet) ?? 0,
+        ];
+        const held = ranks.get(facet);
+        if (
+          held !== undefined &&
+          (held[0] > rank[0] || (held[0] === rank[0] && held[1] > rank[1]))
+        ) {
+          continue;
+        }
+        ranks.set(facet, rank);
+        facets[facet] = value;
+      }
     }
     void this.#conn.request<RequestType.PresencePublish>({
       type: RequestType.PresencePublish,

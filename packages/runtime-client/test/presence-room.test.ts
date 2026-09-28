@@ -239,6 +239,40 @@ describe("RuntimeClient presence rooms", () => {
     });
   });
 
+  describe("focus", () => {
+    it("lets the focused handle's facet stand over an unfocused sibling's of the same name", async () => {
+      const { client, cell, requests } = buildClient();
+      const editorA = await client.joinPresenceRoom(cell);
+      const editorB = await client.joinPresenceRoom(cell);
+      editorA.setName("Ada");
+      editorA.setFocused(true);
+      editorA.setFacet("caret", { focused: true, at: "a" });
+      editorB.setFacet("caret", { focused: false, at: "b" });
+      await settle();
+      expect(publishes(requests).at(-1)?.facets).toEqual({
+        caret: { focused: true, at: "a" },
+      });
+
+      // Focus moves: the other editor's caret is the record's now, even
+      // though it was set earlier.
+      editorA.setFocused(false);
+      editorA.setFacet("caret", { focused: false, at: "a" });
+      editorB.setFocused(true);
+      await settle();
+      expect(publishes(requests).at(-1)?.facets).toEqual({
+        caret: { focused: false, at: "b" },
+      });
+
+      // Alike in focus, the later write wins.
+      editorB.setFocused(false);
+      editorA.setFacet("caret", { focused: false, at: "a2" });
+      await settle();
+      expect(publishes(requests).at(-1)?.facets).toEqual({
+        caret: { focused: false, at: "a2" },
+      });
+    });
+  });
+
   describe("events", () => {
     it("applies newer records, ignores older ones, and delivers each applied event", async () => {
       const { client, cell, notify } = buildClient();

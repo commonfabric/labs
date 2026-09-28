@@ -1019,10 +1019,12 @@ class Connection {
 
   async receive(payload: string): Promise<void> {
     const parsed = parseClientMessage(payload);
-    // A presence message is handled as it arrives, not behind the frames
-    // already queued: it carries no seq and settles nothing, so a large
-    // transact ahead of it has no claim on its timing (04-protocol.md
-    // §4.13). Everything else keeps the connection's order.
+    // A presence message is handled as it is handed over, not behind the
+    // frames already queued here: it carries no seq and settles nothing.
+    // Whether it can overtake a frame ahead of it on the socket is the
+    // host's business — one that hands frames over one at a time keeps it
+    // behind them (04-protocol.md §4.13.4). Everything else keeps the
+    // connection's order.
     if (parsed !== null && isPresenceClientMessage(parsed)) {
       this.#receivePresence(parsed);
       return;

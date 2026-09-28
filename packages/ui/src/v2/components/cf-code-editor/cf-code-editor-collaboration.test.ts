@@ -58,6 +58,7 @@ class FakePresenceHandle implements PresenceRoomHandle {
   participants: PresenceRecord[] = [];
   readonly names: string[] = [];
   readonly facets: Array<[string, unknown]> = [];
+  readonly focus: boolean[] = [];
   leaves = 0;
   readonly #listeners = new Set<(event: PresenceEvent) => void>();
 
@@ -72,6 +73,10 @@ class FakePresenceHandle implements PresenceRoomHandle {
   }
 
   clearFacet(): void {}
+
+  setFocused(focused: boolean): void {
+    this.focus.push(focused);
+  }
 
   subscribe(listener: (event: PresenceEvent) => void): () => void {
     this.#listeners.add(listener);
@@ -521,6 +526,8 @@ describe("CFCodeEditor collaboration", () => {
       expect(runtime.joins).toHaveLength(2);
       expect(focusedOf(runtime.handles[0])).toEqual([false, true, false]);
       expect(focusedOf(runtime.handles[1])).toEqual([false, true]);
+      expect(runtime.handles[0].focus).toEqual([false, true, false]);
+      expect(runtime.handles[1].focus).toEqual([false, true]);
       expect(runtime.handles.map((handle) => handle.leaves)).toEqual([0, 0]);
 
       (second as any)._cleanupPresence();

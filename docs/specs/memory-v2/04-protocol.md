@@ -1514,15 +1514,23 @@ interface PresenceRecord {
 
 ### 4.13.4 Ordering
 
-The connection parses each frame as it arrives. A `presence.*` message is
-handled at that point; every other message enters the connection's ordered
-queue (section 4.11.2). A presence publish therefore reaches the room while a
-`transact` ahead of it in arrival order is still being decided. Within one
-membership the revision orders publications: the server relays only a record
-whose revision exceeds the last it accepted for that membership, and a client
-applies only a record whose revision exceeds the last it holds for that
-participant. Outbound, presence pushes take the same send path as every other
-server message, which preserves order.
+The connection parses each frame as it is handed to it. A `presence.*`
+message is handled at that point; every other message enters the connection's
+ordered queue (section 4.11.2), so a presence message never waits for the
+commands already queued there. What that buys depends on how frames reach the
+connection, and on the WebSocket hosts today it is bounded: both hand frames
+to the connection one at a time, each after the one before it has been
+handled, so a presence frame behind a large `transact` on the same socket
+shares that command's latency and reaches the room only once it is decided.
+That is an accepted cost of sharing the socket. A host that handed frames over
+as they arrived would let presence overtake the queue without any change to
+the protocol.
+
+Within one membership the revision orders publications: the server relays only
+a record whose revision exceeds the last it accepted for that membership, and
+a client applies only a record whose revision exceeds the last it holds for
+that participant. Outbound, presence pushes take the same send path as every
+other server message, which preserves order.
 
 ### 4.13.5 Client Library
 

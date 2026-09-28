@@ -41,6 +41,8 @@ class ReconnectableTransport implements Transport {
   #closeReceiver: (error?: Error) => void = () => {};
   #connection: ReturnType<Server["connect"]> | null = null;
   #connections = 0;
+  #sessionOpenGate: PromiseWithResolvers<void> | undefined;
+  #sessionOpenHeld: PromiseWithResolvers<void> | undefined;
   readonly #server: Server;
 
   constructor(server: Server) {
@@ -51,7 +53,28 @@ class ReconnectableTransport implements Transport {
     return this.#connections;
   }
 
+  /**
+   * Holds the next `session.open` frame until `releaseSessionOpen()`, and
+   * resolves the returned promise once that frame is being held.
+   */
+  holdSessionOpen(): Promise<void> {
+    this.#sessionOpenGate = Promise.withResolvers<void>();
+    this.#sessionOpenHeld = Promise.withResolvers<void>();
+    return this.#sessionOpenHeld.promise;
+  }
+
+  releaseSessionOpen(): void {
+    this.#sessionOpenGate?.resolve();
+    this.#sessionOpenGate = undefined;
+  }
+
   async send(payload: string): Promise<void> {
+    const message = decodeMemoryBoundary(payload) as { type?: string };
+    if (message.type === "session.open" && this.#sessionOpenGate) {
+      const gate = this.#sessionOpenGate.promise;
+      this.#sessionOpenHeld?.resolve();
+      await gate;
+    }
     await this.#connect().receive(payload);
   }
 
@@ -415,6 +438,54 @@ describe("v2-presence-client", () => {
           facets: { caret: { focused: true } },
         });
         expect(transportA.connections).toBe(2);
+      } finally {
+        await clientA.close();
+        await clientB.close();
+        await server.close();
+      }
+    });
+
+    it("holds a publication made while the session is reopening until the room is rejoined", async () => {
+      const server = createServer("publish-while-reopening");
+      const space = "did:key:z6Mk-presence-client-reopening";
+      const transportA = new ReconnectableTransport(server);
+      const clientA = await connect({ transport: transportA });
+      const clientB = await connect({ transport: loopback(server) });
+      try {
+        const a = await clientA.mount(space, {}, testSessionOpenAuthFactory);
+        const b = await clientB.mount(space, {}, testSessionOpenAuthFactory);
+        const observerA = new Observer();
+        const observerB = new Observer();
+        await b.joinPresenceRoom(ROOM, observerB.observe);
+        const membershipA = await a.joinPresenceRoom(ROOM, observerA.observe);
+        const first = observerB.next("upsert");
+        membershipA.publish({ name: "Ada", facets: {} });
+        await first;
+
+        // The reconnect's `session.open` is held, so the socket is up while
+        // the session is not yet open; a publication made now must wait.
+        const held = transportA.holdSessionOpen();
+        transportA.disconnect();
+        await held;
+        membershipA.publish({ name: "Ada, moved", facets: {} });
+        await server.idle();
+        expect(
+          observerB.events.filter((event) =>
+            event.kind === "upsert" && event.participant.name === "Ada, moved"
+          ),
+        ).toEqual([]);
+
+        const moved = (async () => {
+          for (;;) {
+            const event = await observerB.next("upsert");
+            if (event.participant.name === "Ada, moved") return event;
+          }
+        })();
+        transportA.releaseSessionOpen();
+        const { participant } = await moved;
+        expect(participant.participantId).toBe(membershipA.participantId);
+        expect(observerA.events.some((event) => event.kind === "failure"))
+          .toBe(false);
       } finally {
         await clientA.close();
         await clientB.close();

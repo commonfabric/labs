@@ -26,9 +26,12 @@ relays ([`../specs/memory-v2/04-protocol.md`](../specs/memory-v2/04-protocol.md)
 section 4.13). A room lives under a space and holds one membership per
 connection, owned by the session that joined it; the server remembers each
 member's latest record and nothing else, receives no document contents or
-changes, and forgets a member the moment their membership ends. A presence message is handled outside the
-ordered frame queue that memory commands wait in, so it cannot delay, alter,
-or disable a memory operation, and a memory operation cannot delay it.
+changes, and forgets a member the moment their membership ends. A presence
+message is handled outside the ordered frame queue that memory commands wait
+in, so it cannot delay, alter, or disable a memory operation. It shares the
+socket with those commands, and the WebSocket hosts hand frames to the
+connection one at a time, so a presence message behind a large command shares
+that command's latency — an accepted cost of the shared socket.
 
 Joining is admitted by the runtime's session on the space: space access,
 decided by the memory ACL, is what lets a participant in, and there is no

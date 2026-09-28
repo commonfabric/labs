@@ -1976,17 +1976,27 @@ export class SpaceSession {
   }
 
   /**
-   * Sends the room's record at `revision` once the current join has settled.
-   * A publication overtaken by a newer one while it waited is not sent: the
-   * relay wants only the latest, and it refuses a revision that does not
-   * advance. A connection error is not reported, since the reconnect that
-   * follows rejoins and republishes; any other refusal reaches the observers.
+   * Sends the room's record at `revision` once the session is restored and
+   * the current join has settled — a reconnect in progress reopens the
+   * session and rejoins the room, and a publication sent before either has
+   * completed would be refused as not joined. A publication overtaken by a
+   * newer one while it waited is not sent: the relay wants only the latest,
+   * and it refuses a revision that does not advance. A connection error is
+   * not reported, since the reconnect that follows rejoins and republishes;
+   * any other refusal reaches the observers.
    */
   #publishPresence(state: PresenceRoomState, revision: number): void {
     const publication = state.publication;
     if (publication === null) return;
     const send = async (): Promise<void> => {
-      await state.joined;
+      // A restore that begins while the join is awaited replaces it, so the
+      // wait is repeated until the join awaited is still the room's.
+      for (;;) {
+        const joined = state.joined;
+        await this.#ensureSessionRestored();
+        await joined;
+        if (state.joined === joined) break;
+      }
       if (
         this.#closed || state.revision !== revision ||
         this.#presenceRooms.get(state.room) !== state

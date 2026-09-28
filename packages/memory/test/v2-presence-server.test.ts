@@ -355,7 +355,7 @@ describe("v2-presence-server", () => {
       }
     });
 
-    it("is relayed while an ordered frame ahead of it is still waiting", async () => {
+    it("is handled ahead of a frame already waiting in the connection's queue", async () => {
       const server = createServer("ordering");
       const space = "did:key:z6Mk-presence-ordering";
       const slowSpace = "did:key:z6Mk-presence-ordering-slow";
@@ -370,8 +370,9 @@ describe("v2-presence-server", () => {
         await join(a);
         await join(b);
         // The open is admitted, then waits at the gate for its engine; the
-        // publish behind it in the connection's frame order is handled
-        // without waiting for it.
+        // publish handed to the connection behind it is handled without
+        // waiting for it. This is the connection's own queue: what a host's
+        // transport delivers in what order is that host's to settle.
         const slowOpen = a.connection.receive(encodeMemoryBoundary({
           type: "session.open",
           requestId: "slow-open",
