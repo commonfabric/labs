@@ -381,6 +381,34 @@ const writeAsMember = async (
   expect(written.error).toBeUndefined();
 };
 
+/** {@link writeAsMember}, answering the refusal's message if refused. */
+const attemptAsMember = async (
+  fixture: Fixture,
+  cell: Cell<unknown>,
+  write: (local: Cell<unknown>, runtime: Runtime) => void,
+): Promise<string | undefined> => {
+  const runtime = fixture.runtimes.get(mallory)!;
+  // Through the member's own handle: no schema, so nothing the seal's
+  // handle declares comes with it.
+  const local = runtime.getCellFromLink({
+    ...cell.getAsNormalizedFullLink(),
+    schema: undefined,
+  });
+  await local.sync();
+  const written = await runtime.editWithRetry((tx) => {
+    setCfcImplementationIdentity(tx, {
+      kind: "verified",
+      moduleIdentity: "sha256:member-code",
+      symbol: "rewrite",
+      bindingPath: ["rewrite"],
+    });
+    write(local.withTx(tx), runtime);
+  });
+  return written.error === undefined
+    ? undefined
+    : String(written.error.message);
+};
+
 describe("custody answers", () => {
   const boxOf = (fixture: Fixture) =>
     fixture.runtimes.get(alice)!.getCell(S, "room-cells").key("box");
@@ -590,6 +618,85 @@ describe("custody answers", () => {
       await expect(fixture.publish(bob, output)).rejects.toThrow(
         "slot the seal did not write",
       );
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("keeps a published answer as the seal wrote it, whatever a member writes beneath it", async () => {
+    const fixture = await setup();
+    try {
+      const box = boxOf(fixture);
+      const output = outputOf(fixture);
+      await fixture.seal(alice, "sushi", box);
+      await fixture.seal(bob, "sushi", box);
+      expect(await fixture.project(bob, box, output)).toBe("sushi");
+      const { instance, answer: slot } = await fixture.publish(bob, output);
+      expect(await fixture.shown(mallory)).toBe("sushi");
+      const writes: [string, (local: Cell<unknown>) => void][] = [
+        ["the answer", (local) => local.key("answer").set("tacos")],
+        ["the instance", (local) => local.key("instance").set("other")],
+        ["a key beside them", (local) => local.key("extra").set("tacos")],
+        [
+          "an object in place of the answer",
+          (local) => local.key("answer").set({ choice: "tacos" } as never),
+        ],
+        // A claim whose schema names a type governs writes of that type.
+        [
+          "a string in place of the slot",
+          (local) => local.set("tacos" as never),
+        ],
+        [
+          "a list in place of the slot",
+          (local) => local.set(["tacos"] as never),
+        ],
+        [
+          "another slot in place of this one",
+          (local) => local.set({ instance, answer: "tacos" } as never),
+        ],
+      ];
+      for (const [what, write] of writes) {
+        const refused = await attemptAsMember(fixture, slot, write);
+        // Refused, or else a read refuses the slot or shows what the seal
+        // wrote; never the member's value.
+        if (refused === undefined) {
+          const shown = await fixture.shown(mallory).then(
+            (answer) => answer,
+            (error: Error) => error.message,
+          );
+          expect({ what, shown }).toEqual({
+            what,
+            shown: expect.stringMatching(/^sushi$|did not write/),
+          });
+        } else {
+          expect({ what, refused }).toEqual({
+            what,
+            refused: expect.stringContaining("writeAuthorizedBy"),
+          });
+        }
+      }
+      // And through a write redirect a member's own cell holds.
+      const redirect = fixture.runtimes.get(mallory)!.getCell(S, "to-answer");
+      await writeAsMember(
+        fixture,
+        redirect,
+        (runtime, tx) =>
+          runtime.getCellFromLink(
+            { ...slot.getAsNormalizedFullLink(), path: ["answer"] },
+            undefined,
+            tx,
+          ).getAsWriteRedirectLink(),
+      );
+      const throughRedirect = await attemptAsMember(
+        fixture,
+        redirect,
+        (local) => local.set("tacos" as never),
+      );
+      expect(throughRedirect).toEqual(
+        expect.stringContaining("writeAuthorizedBy"),
+      );
+      expect(await fixture.shown(mallory)).toBe("sushi");
+      expect(instance).toBeDefined();
     } finally {
       await fixture.dispose();
     }
