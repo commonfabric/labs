@@ -15,6 +15,7 @@ import {
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import {
   commitCustodySeal,
+  CUSTODY_SEAL_READER,
   type CustodyRoom,
   type CustodySealConsent,
   type CustodySealOptions,
@@ -2951,8 +2952,12 @@ describe("cfc-custody-seal", () => {
 
     it("previews whether the room's policy witnesses its release", async () => {
       // A policy whose one rule releases what its projector computes, named
-      // by identity alone or with the seal's witness.
-      const policyReleasing = (witnessed: boolean) =>
+      // by identity alone or with the seal's witness, to the room's readers
+      // or to the seal alone. Only the witnessed release to the seal bounds
+      // what a member learns: a projection the room's readers can read says,
+      // by keeping or losing its stamp, whether input of a member's choosing
+      // yields the released answer.
+      const policyReleasing = (witnessed: boolean, toSeal: boolean) =>
         buildCfcPolicyArtifactManifest({
           formatVersion: 1,
           moduleIdentity: MODULE,
@@ -2973,14 +2978,23 @@ describe("cfc-custody-seal", () => {
                   ...(witnessed ? { inputWitness: sealedBy } : {}),
                 }],
               },
-              postCondition: { confidentiality: [], integrity: [] },
+              postCondition: {
+                confidentiality: toSeal ? [CUSTODY_SEAL_READER] : [],
+                integrity: [],
+              },
             }],
             dependencies: { authorityOnly: [], dataBearing: [] },
             integrityRequirements: {},
           },
         } as never);
-      for (const witnessed of [false, true]) {
-        const artifact = policyReleasing(witnessed);
+      for (
+        const [witnessed, toSeal] of [
+          [false, true],
+          [true, false],
+          [true, true],
+        ]
+      ) {
+        const artifact = policyReleasing(witnessed, toSeal);
         const policy = policyOf(artifact);
         const fixture = await setup({
           trust: {
@@ -3014,7 +3028,7 @@ describe("cfc-custody-seal", () => {
             draft,
             fixture.room(alice, policy),
           );
-          expect(prepared.witnessedRelease).toBe(witnessed);
+          expect(prepared.witnessedRelease).toBe(witnessed && toSeal);
         } finally {
           await fixture.dispose();
         }

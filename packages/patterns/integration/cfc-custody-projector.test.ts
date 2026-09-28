@@ -337,9 +337,24 @@ const sealAndRelease = async (
       room.key("box").withTx(tx).set(record as never);
     });
     expect(repeatedAlice.error).toBeUndefined();
-    // The projector runs over the record; its answer is the same.
     await host.idle();
     await host.storageManager.synced();
+    // Its answer is the same, so whether or not the projector has run over
+    // the record yet, the output holds the published answer under the stamp
+    // the honest run earned, while the box points elsewhere: the state that
+    // answered the question. The room's readers still cannot read it.
+    const choiceIntegrity = (cfcLabelViewForResolvedCell(room.key("choice"))
+      ?.entries ?? [])
+      .filter((entry) => entry.path.length === 0)
+      .flatMap((entry) => entry.label.integrity ?? []);
+    expect(room.key("choice").get()).toBe("pizza");
+    expect(
+      choiceIntegrity.some((atom) =>
+        (atom as { type?: string; inputWitness?: unknown }).type ===
+          CFC_ATOM_TYPE.TransformedBy &&
+        (atom as { inputWitness?: unknown }).inputWitness !== undefined
+      ),
+    ).toBe(true);
     expect(shownTo(bob.did(), room.key("choice"))).toBe(false);
 
     // A member's code points the room's `box` at a record of its own that

@@ -198,12 +198,15 @@ export interface PreparedCustodySeal {
 
   /**
    * Whether every release rule of the room's policy requires that everything
-   * confidential its releasing code read was written by this seal: an
+   * confidential its releasing code read was written by this seal (an
    * integrity guard on `TransformedBy` with the seal's builtin identity as its
-   * input witness. When it is `false`, a member's own code can run the
-   * room's releasing code over the actor's entry and values it made up, and
-   * learn the entry one answer at a time; the confirmation must say so rather
-   * than state a bound on what an answer reveals.
+   * input witness), and releases what it matches to the seal alone
+   * (`releasesOnlyToSeal`), which publishes it once per instance. When it is
+   * `false`, a member's own code can run the room's releasing code over the
+   * actor's entry and values it made up, or read a projection whose stamp
+   * says whether such values yield the released answer, and learn the entry
+   * one answer at a time; the confirmation must say so rather than state a
+   * bound on what an answer reveals.
    */
   readonly witnessedRelease: boolean;
 
@@ -1718,8 +1721,19 @@ const inspect = async (
     );
   }
 
-  const { policy, room, termsLink, terms, witnessedRelease } =
-    await inspectRoom(runtime, requestedRoom, evidence, reviewed?.policy);
+  const inspectedRoom = await inspectRoom(
+    runtime,
+    requestedRoom,
+    evidence,
+    reviewed?.policy,
+  );
+  const { policy, room, termsLink, terms } = inspectedRoom;
+  // A bound on what an answer reveals needs the release witnessed and made
+  // to the seal alone: a projection the room's readers can read says, by
+  // keeping or losing its stamp, whether input of a member's choosing yields
+  // the released answer.
+  const witnessedRelease = inspectedRoom.witnessedRelease &&
+    releasesOnlyToSeal(inspectedRoom.template);
   const acl = runtime.getCellFromLink({
     space: room,
     id: aclDocId(room),

@@ -296,8 +296,10 @@ document of a member's choosing is still readable says whether that document
 yields the released answer. The consent a member gives is per instance, so the
 room releases one answer per instance, and the projection itself to no member:
 the room's rule releases it to the seal alone, adding the reader
-`Builtin{cfc-custody-seal}` (`CUSTODY_SEAL_READER`), which no member's runtime
-holds, to the policy's clause rather than dropping it. The seal declassifies
+`Builtin{cfc-custody-seal}` (`CUSTODY_SEAL_READER`) to the policy's clause
+rather than dropping it. No render ceiling or deployment sink ceiling lists
+that atom, and an atom admits a clause only by equality, so no member's
+rendering or sink admits the clause. The seal declassifies
 the answer once, into the instance's answer slot, which is the one thing the
 room's readers can read. `publishCustodyAnswer(room, output)` is the host operation
 that publishes it, and `readCustodyAnswer(room)` the one that reads it back.
@@ -433,14 +435,26 @@ of it.
   already computed, nothing is written, and the answer keeps the stamp it had;
   and the other way, an honest run after one over other input that yields the
   same answer keeps that run's unwitnessed stamp. The projection is read by
-  no member, but whether the seal then publishes still depends on which stamp
-  the answer kept: until the answer is published, a member who points the box
-  at a document of their choosing and watches for publication can learn
-  whether that document yields the answer the room's box yields, one
-  comparison per change, and can hold publication back as a denial of
-  service. Once the answer is published, nothing about the projection shows.
-  A transformation that re-stamps an output it recomputed unchanged would
-  close this; it is a runtime change to how a no-op write is labeled.
+  no member, but whether the seal publishes still depends on which stamp the
+  answer kept. Before the answer is published, a member who points the box at
+  a document of their choosing, a record repeating one member's entry say,
+  learns whether it yields the room's answer: the answer then publishes, or
+  it never does. That is at most one comparison per instance: once every
+  seat has sealed, the box link the member wrote over the seal's leaves every
+  later run unwitnessed, so an answer not published by then never is, a
+  denial of service that one write by any member causes and that lasts for
+  the instance. New terms start
+  a new instance. A transformation that re-stamps an output it recomputed
+  unchanged would close both; it is a runtime change to how a no-op write is
+  labeled.
+- **Cell-valued properties and bindings.** A confidentiality ceiling gates
+  what a render shows as text, but not a cell a pattern passes to an element
+  as a property or a `$` binding, and the worker answers a host's read of or
+  subscription to a cell without one. A member's own pattern that takes the
+  room as input can so show `choice`, or a rating read from the box, through
+  a property. This predates the answer slot and reaches every policy-labeled
+  value, not only custody; gating those paths belongs to the renderer and
+  the worker, not to this operation.
 - **A squatted answer slot.** A slot other code wrote first blocks the
   instance's publication, as a squatted box or anchor blocks sealing. It
   shows nothing, since a host reads only a slot the seal stamped.
