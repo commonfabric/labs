@@ -273,8 +273,10 @@ export class PresenceRooms {
     facets: PresenceFacets;
   }): void {
     const room = this.#rooms.get(roomKey(input.space, input.room));
+    if (room === undefined) {
+      throw new PresenceError("Presence room is not joined");
+    }
     const member = this.#memberOf(room, input.connectionId, input.sessionId);
-    if (room === undefined) return;
     if (
       !Number.isSafeInteger(input.revision) || input.revision <= member.revision
     ) {
@@ -307,9 +309,9 @@ export class PresenceRooms {
     sessionId: string,
   ): void {
     const key = roomKey(space, room);
-    const room_ = this.#rooms.get(key);
-    if (room_?.get(connectionId) === undefined) return;
-    this.#memberOf(room_, connectionId, sessionId);
+    const members = this.#rooms.get(key);
+    if (members === undefined || !members.has(connectionId)) return;
+    this.#memberOf(members, connectionId, sessionId);
     this.#end(key, connectionId);
   }
 
@@ -345,11 +347,11 @@ export class PresenceRooms {
    * `PresenceError` when there is none or it is another session's.
    */
   #memberOf(
-    room: Map<string, Member> | undefined,
+    room: Map<string, Member>,
     connectionId: string,
     sessionId: string,
   ): Member {
-    const member = room?.get(connectionId);
+    const member = room.get(connectionId);
     if (member === undefined) {
       throw new PresenceError("Presence room is not joined");
     }

@@ -3211,8 +3211,6 @@ type ProviderPresenceMembership = {
   /** The replica `inner` was joined through. */
   replica?: SpaceReplica;
 
-  /** The last publication, republished on a replacement's session. */
-  publication?: PresencePublication;
   install?: Promise<void>;
   closed: boolean;
 };
@@ -3247,6 +3245,13 @@ class Provider
   #routeAbort = new AbortController();
   #operationSubscriptions = new Set<ProviderOperationSubscription>();
   #presenceMemberships = new Set<ProviderPresenceMembership>();
+
+  /**
+   * The last publication per room, republished on a replacement's session.
+   * Kept per room rather than per membership: every membership of a room
+   * shares one record, so the latest across them is what stands.
+   */
+  #presencePublications = new Map<string, PresencePublication>();
 
   constructor(
     readonly options: ProviderOptions,
@@ -3411,13 +3416,18 @@ class Provider
       publish: (publication) => {
         if (membership.closed) return;
         validatePresencePublication(publication);
-        membership.publication = publication;
+        this.#presencePublications.set(room, publication);
         membership.inner?.publish(publication);
       },
       leave: async () => {
         if (membership.closed) return;
         membership.closed = true;
         this.#presenceMemberships.delete(membership);
+        if (
+          ![...this.#presenceMemberships].some((other) => other.room === room)
+        ) {
+          this.#presencePublications.delete(room);
+        }
         await membership.inner?.leave();
       },
     };
@@ -3461,17 +3471,17 @@ class Provider
       }
       membership.inner = inner;
       membership.replica = replica;
-      if (membership.publication !== undefined) {
-        inner.publish(membership.publication);
-      }
+      const latest = this.#presencePublications.get(membership.room);
+      if (latest !== undefined) inner.publish(latest);
       return;
     }
   }
 
   /**
-   * Forwards a room event to the consumer. A `failure` from a replica that
-   * has been replaced is the replacement's to make good, with the snapshot
-   * its own join delivers, so it is not forwarded.
+   * Forwards a room event to the consumer. Nothing from a replica that has
+   * been replaced is forwarded: its failure is the replacement's to make
+   * good, with the snapshot its own join delivers, and any other event of
+   * its would be a view the replacement's snapshot has superseded.
    */
   #forwardPresence(
     membership: ProviderPresenceMembership,
@@ -3479,11 +3489,7 @@ class Provider
     event: MemoryV2Client.PresenceEvent,
   ): void {
     if (membership.closed) return;
-    if (
-      event.kind === "failure" && replica !== this.replica && !this.#destroyed
-    ) {
-      return;
-    }
+    if (replica !== this.replica && !this.#destroyed) return;
     membership.observer(event);
   }
 

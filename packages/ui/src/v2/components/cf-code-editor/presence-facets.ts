@@ -123,19 +123,28 @@ export function decodeCaretFacet(value: unknown): CaretFacet {
 /**
  * Writes a `caret` facet in the form `decodeCaretFacet()` reads, and holds
  * it to the same shape first: a facet a peer would drop is refused here,
- * where the bug is, rather than published to be ignored.
+ * where the bug is, rather than published to be ignored. A selection with
+ * more ranges than the facet carries is published as its main range alone,
+ * since the caret is what peers follow and the editor places no bound on
+ * how many ranges a selection holds.
  */
 export function caretFacetOf(caret: CaretFacet): FabricPlainObject {
+  const selection = caret.selection;
+  const ranges = selection === null
+    ? null
+    : selection.ranges.length > maximumSelectionRanges
+    ? [selection.ranges[selection.main]]
+    : selection.ranges;
   const facet: FabricPlainObject = {
     focused: caret.focused,
     cursor: { epoch: caret.cursor.epoch, version: caret.cursor.version },
-    selection: caret.selection === null ? null : {
-      ranges: caret.selection.ranges.map((range) => ({
+    selection: selection === null || ranges === null ? null : {
+      ranges: ranges.map((range) => ({
         anchor: range.anchor,
         head: range.head,
         assoc: range.assoc,
       })),
-      main: caret.selection.main,
+      main: ranges.length === selection.ranges.length ? selection.main : 0,
     },
     basis: caret.basis,
   };

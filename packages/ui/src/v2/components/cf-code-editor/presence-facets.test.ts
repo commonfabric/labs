@@ -62,6 +62,17 @@ describe("presence-facets", () => {
   });
 
   describe("caretFacetOf()", () => {
+    it("publishes only the main range of a selection wider than the facet carries", () => {
+      const ranges = Array.from({ length: 20 }, (_, index) => ({
+        anchor: index,
+        head: index,
+        assoc: 0 as const,
+      }));
+      expect(
+        caretFacetOf({ ...caret, selection: { ranges, main: 7 } }).selection,
+      ).toEqual({ ranges: [{ anchor: 7, head: 7, assoc: 0 }], main: 0 });
+    });
+
     it("refuses a caret its decoder would drop", () => {
       expect(() => caretFacetOf({ ...caret, selection: null })).toThrow(
         "caret facet",

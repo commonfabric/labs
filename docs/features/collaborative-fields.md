@@ -24,9 +24,9 @@ Live participant names, carets, and selections travel over the memory
 connection the runtime already holds, as presence rooms the memory server
 relays ([`../specs/memory-v2/04-protocol.md`](../specs/memory-v2/04-protocol.md),
 section 4.13). A room lives under a space and holds one membership per
-connection; the server remembers each member's latest record and nothing
-else, receives no document contents or changes, and forgets a member the
-moment their membership ends. A presence message is handled outside the
+connection, owned by the session that joined it; the server remembers each
+member's latest record and nothing else, receives no document contents or
+changes, and forgets a member the moment their membership ends. A presence message is handled outside the
 ordered frame queue that memory commands wait in, so it cannot delay, alter,
 or disable a memory operation, and a memory operation cannot delay it.
 

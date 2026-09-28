@@ -1362,8 +1362,10 @@ A room is addressed by an opaque identifier under a space. Joining requires an
 open session for that space on the same connection: space access, decided by
 the memory ACL, is what admits a participant, and there is no separate
 presence authentication. A connection is in a room at most once, keyed by the
-connection itself; a session that opens several rooms, or several observers
-of one room on a client, share that one membership.
+connection itself, and the membership belongs to the session that joined: a
+join, publish, or leave of that room through another session on the same
+connection is refused with a `PresenceError`. Several observers of one room on
+a client share the one membership their session holds.
 
 The server assigns the participant id at join and identifies every later
 publication by the membership it arrives on, never by a claimed id. A
@@ -1469,10 +1471,12 @@ interface PresenceRecord {
 }
 ```
 
-A join on a membership that already exists returns the same participant id
-and a current snapshot. A publish before a join, and a publish whose
-`revision` does not exceed the membership's last accepted one, are refused. A
-member that has never published is in no snapshot and announced to nobody.
+A join on a membership that already exists, through the session that holds
+it, returns the same participant id and a current snapshot. A publish before
+a join, a publish whose `revision` does not exceed the membership's last
+accepted one, and a join, publish, or leave through another session on the
+connection are refused with a `PresenceError`. A member that has never
+published is in no snapshot and announced to nobody.
 
 Server to client, pushes with no request id, addressed to the session the
 receiving membership joined through:

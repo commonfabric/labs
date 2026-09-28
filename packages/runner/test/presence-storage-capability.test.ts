@@ -129,11 +129,20 @@ describe("presence storage capability", () => {
     ).toBe(true);
     await storage.crossSpaceSettled();
 
-    // The retired session's failure is not the consumer's to see: the
+    // Nothing from the retired session is the consumer's to see: the
     // replacement's snapshot is what tells it where it now stands.
     sessions[0].observer?.({
       kind: "failure",
       error: new Error("memory session closed"),
+    });
+    sessions[0].observer?.({
+      kind: "upsert",
+      participant: {
+        participantId: "stale",
+        revision: 1,
+        name: "Stale",
+        facets: {},
+      },
     });
     expect(sessions).toHaveLength(2);
     expect(sessions[1].joins).toEqual([ROOM]);
@@ -157,6 +166,33 @@ describe("presence storage capability", () => {
     expect(sessions[0].published).toHaveLength(1);
     await membership.leave();
     expect(sessions[1].leaves).toBe(1);
+    await storage.closeNow();
+  });
+
+  it("republishes a room's latest record, whichever membership made it", async () => {
+    const { storage, sessions } = buildStorage();
+    const provider = storage.open(signer.did());
+    if (!hasPresenceStorageCapability(provider)) return;
+    const first = await provider.joinPresenceRoom(ROOM, () => {});
+    const second = await provider.joinPresenceRoom(ROOM, () => {});
+    first.publish({ name: "Ada", facets: { caret: { at: 1 } } });
+    second.publish({ name: "Ada", facets: { pointer: { x: 1 } } });
+    first.publish({ name: "Ada", facets: { caret: { at: 2 } } });
+
+    expect(
+      storage.registerSpaceHost(signer.did(), "https://hinted-toolshed.test"),
+    ).toBe(true);
+    await storage.crossSpaceSettled();
+
+    expect(sessions[1].published.length).toBeGreaterThan(0);
+    for (const publication of sessions[1].published) {
+      expect(publication).toEqual({
+        name: "Ada",
+        facets: { caret: { at: 2 } },
+      });
+    }
+    await first.leave();
+    await second.leave();
     await storage.closeNow();
   });
 });
