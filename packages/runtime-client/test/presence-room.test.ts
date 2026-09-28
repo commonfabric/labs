@@ -282,6 +282,30 @@ describe("RuntimeClient presence rooms", () => {
       }
     });
 
+    it("keeps a replacement's room when the reply to the failed join it replaced arrives after it", async () => {
+      const { client, cell, requests, notify, answerJoin } = buildClient({
+        holdJoins: true,
+      });
+      const failed = client.joinPresenceRoom(cell, { room: ROOM });
+      const rejected = expect(failed).rejects.toThrow(
+        "presence room ended while it was being joined",
+      );
+      notify({
+        kind: "failure",
+        error: { name: "SessionRevokedError", message: "taken over" },
+      });
+      const replacing = client.joinPresenceRoom(cell, { room: ROOM });
+      answerJoin(1);
+      const replacement = await replacing;
+      answerJoin(0);
+      await rejected;
+      replacement.setName("Ada");
+      replacement.setFacet("caret", {});
+      await settle();
+      expect(publishes(requests).map(({ subscriptionId }) => subscriptionId))
+        .toEqual([requests[1].subscriptionId]);
+    });
+
     it("shares an alias's join in flight with a later join through the alias while it waits on a named join", async () => {
       const { client, cell, requests, answerJoin } = buildClient({
         holdJoins: true,

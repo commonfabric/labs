@@ -1800,6 +1800,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
         ended: false,
       };
       for (const event of join.early) this.#receivePresence(room, event);
+      // A failure ahead of the reply let a replacement join start, which may
+      // hold the room's key by now. The ended room is handed only to its own
+      // callers, and the last of them to release it leaves the membership.
+      if (room.ended) return room;
       this.#presenceRooms.set(key, room);
       this.#presenceBySubscription.set(room.subscriptionId, room);
       if (requested === undefined) this.#presenceByCell.set(cellKey, room);
