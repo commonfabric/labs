@@ -33,6 +33,7 @@ import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
 import {
   denotesSameType,
+  getTypeAliasDeclaration,
   holdsFreeTypeParameter,
   holdsTypeParameter,
   readAuthoredTypeNode,
@@ -1901,13 +1902,104 @@ export class SchemaGenerator {
     // Where the checker's instantiation at the position is known, it says what
     // the arguments denote, so a recursion whose arguments settle reads under
     // the same key however deep their bindings nest; the arguments as written
-    // tell apart only what their syntax adds, such as a `Default`.
+    // tell apart what their syntax adds, such as a `Default`. A `typeof`
+    // reached through an outer binding retains its authored identity too.
     const instantiatedAs = context.instantiatedAs;
     return instantiatedAs
       ? `as:${this.#bindingId(instantiatedAs)}|${
         this.#bindingsKey(bound, false)
-      }`
+      }|queries:${this.#bindingQueriesKey(bound, context.typeChecker)}`
       : this.#bindingsKey(bound);
+  }
+
+  /**
+   * Helper for `#bindingKey()`, which retains the ordered `typeof` bindings
+   * each argument reaches through its outer bindings and fixed alias bodies.
+   * The checker can give distinct writers the same type, so their authored
+   * queries remain part of a recursive definition's identity. Repeated union
+   * and intersection members contribute once so their recursion can settle.
+   */
+  #bindingQueriesKey(
+    bound: BoundTypeParameters,
+    checker: ts.TypeChecker,
+  ): string {
+    /** Query origins, grouped where union or intersection repetition can settle. */
+    type Queries = number | {
+      kind: "sequence" | "union" | "intersection";
+      parts: Queries[];
+    };
+
+    /** Combines origins, flattening repetitions that do not add another policy. */
+    const combine = (
+      kind: Exclude<Queries, number>["kind"],
+      children: Queries[],
+    ): Queries | undefined => {
+      const parts = children.flatMap((child) =>
+        typeof child !== "number" && child.kind === kind ? child.parts : [child]
+      );
+      const distinct = kind === "sequence" ? parts : [
+        ...new Map(parts.map((part) => [JSON.stringify(part), part]))
+          .values(),
+      ];
+      return distinct.length === 0
+        ? undefined
+        : distinct.length === 1
+        ? distinct[0]
+        : { kind, parts: distinct };
+    };
+
+    return [...bound.arguments].map(([parameter, argument]) => {
+      const aliases = new Set<ts.TypeAliasDeclaration>();
+      const argumentsBeingRead = new Set<BoundTypeArgument>();
+
+      /** Visits an argument in the scope where its node is written. */
+      const readArgument = (value: BoundTypeArgument): Queries | undefined => {
+        if (!value.node || argumentsBeingRead.has(value)) return undefined;
+        argumentsBeingRead.add(value);
+        const queries = visit(value.node, value.bound);
+        argumentsBeingRead.delete(value);
+        return queries;
+      };
+
+      /** Collects query nodes in source order, resolving bound parameters. */
+      const visit = (
+        node: ts.Node,
+        under?: BoundTypeParameters,
+      ): Queries | undefined => {
+        if (ts.isTypeReferenceNode(node)) {
+          const parameter = typeParameterOfReference(node, checker);
+          const value = parameter && under?.arguments.get(parameter);
+          if (value) return readArgument(value);
+        }
+        const children: Queries[] = [];
+        if (ts.isTypeQueryNode(node)) children.push(this.#bindingId(node));
+        ts.forEachChild(node, (child) => {
+          const queries = visit(child, under);
+          if (queries !== undefined) children.push(queries);
+        });
+        if (ts.isTypeReferenceNode(node)) {
+          const declaration = getTypeAliasDeclaration(node, checker);
+          if (declaration && !aliases.has(declaration)) {
+            aliases.add(declaration);
+            const queries = visit(declaration.type);
+            if (queries !== undefined) children.push(queries);
+            aliases.delete(declaration);
+          }
+        }
+        return combine(
+          ts.isUnionTypeNode(node)
+            ? "union"
+            : ts.isIntersectionTypeNode(node)
+            ? "intersection"
+            : "sequence",
+          children,
+        );
+      };
+
+      return `${this.#bindingId(parameter)}=${
+        JSON.stringify(readArgument(argument))
+      }`;
+    }).sort().join(";");
   }
 
   /**
