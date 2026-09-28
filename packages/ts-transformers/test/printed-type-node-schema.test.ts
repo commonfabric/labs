@@ -1496,6 +1496,61 @@ interface Meta { confidentiality: [{ type: "https://commonfabric.org/cfc/atom/Us
       expect(output).toMatchObject({ confidentiality: [policy] });
     });
 
+    describe("a default-library alias mapping a labelled type's members", () => {
+      // The alias folds the label's carrier into the object it builds, and
+      // over a primitive builds an object of its methods. Both sides keep
+      // the label and the payload, and neither holds the carrier.
+      const secret = { confidentiality: ["secret"] };
+      const x = { type: "string" };
+      const y = { type: "number" };
+      for (
+        const [a, expected] of [
+          [
+            "Readonly<Sec<{ x?: string; y: number }>>",
+            {
+              type: "object",
+              properties: { x, y },
+              required: ["y"],
+              ifc: secret,
+            },
+          ],
+          [
+            "Required<Sec<{ x?: string; y: number }>>",
+            {
+              type: "object",
+              properties: { x, y },
+              required: ["x", "y"],
+              ifc: secret,
+            },
+          ],
+          [
+            'Pick<Sec<{ x?: string; y: number }>, "y">',
+            {
+              type: "object",
+              properties: { y },
+              required: ["y"],
+              ifc: secret,
+            },
+          ],
+          ["Readonly<Sec<string>>", { type: "string", ifc: secret }],
+        ] as const
+      ) {
+        it(`keeps the label of \`${a}\` on both sides`, async () => {
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Sec<T> = Confidential<T, ["secret"]>;
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          expect((input.properties as Schema).a).toEqual(expected);
+          expect((output.properties as Schema).a).toEqual(expected);
+        });
+      }
+    });
+
     describe("an annotation whose syntax the label reader does not evaluate", () => {
       for (
         const [spelling, declarations, expected] of [

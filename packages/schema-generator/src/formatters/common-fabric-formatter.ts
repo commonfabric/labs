@@ -25,6 +25,7 @@ import {
   getArrayElementInfo,
   getPropertyNameText,
   isEmptyObjectDefaultType,
+  literalKeysOfType,
   resolveWrapperNode,
   type TypeWithInternals,
 } from "../type-utils.ts";
@@ -54,6 +55,7 @@ import {
   wrapperKindToBrand,
 } from "../typescript/cell-brand.ts";
 import { hasDefaultMarker } from "../typescript/default-brand.ts";
+import { isDefaultLibrarySourceFile } from "../typescript/default-library.ts";
 import { isDefaultAliasSymbol } from "../typescript/property-optionality.ts";
 import {
   getScopeBrand,
@@ -392,12 +394,31 @@ const soleConditionalBranch = (
 };
 
 /**
+ * The member a CFC metadata carrier holds (`Cfc` in `packages/api/cfc.ts`).
+ * It is a phantom: no value holds it.
+ */
+export const CFC_CARRIER_PROPERTY = "__ct_cfc__";
+
+/**
+ * The default-library aliases that map an object's members, which fold a
+ * labelled operand's carrier into the object they build as one more member.
+ */
+const MEMBER_MAPPING_LIBRARY_ALIASES: ReadonlySet<string> = new Set([
+  "Readonly",
+  "Partial",
+  "Required",
+  "Pick",
+  "Omit",
+]);
+
+/**
  * The `__ct_cfc__` member of `member` when that is all `member` holds: a CFC
  * metadata carrier, which a CFC alias intersects its payload with.
  */
 const cfcCarrierProperty = (member: ts.Type): ts.Symbol | undefined => {
   const properties = member.getProperties();
-  return properties.length === 1 && properties[0]!.name === "__ct_cfc__"
+  return properties.length === 1 &&
+      properties[0]!.name === CFC_CARRIER_PROPERTY
     ? properties[0]
     : undefined;
 };
@@ -723,6 +744,10 @@ export class CommonFabricFormatter implements TypeFormatter {
       return true;
     }
 
+    if (this.#libraryView(type, context)) {
+      return true;
+    }
+
     // Check via typeNode for Default (erased at type-level)
     const wrapperViaNode = detectWrapperViaNode(
       context.typeNode,
@@ -822,6 +847,33 @@ export class CommonFabricFormatter implements TypeFormatter {
         resolvedCfcAlias,
         () => this.#formatResolvedCfcAlias(resolvedCfcAlias, context),
       );
+    }
+
+    // A default-library alias mapping a labelled type's members folds the
+    // label's carrier into the object it builds, as one more member, and over
+    // a primitive or an array builds an object of its methods. The operand is
+    // read instead, labels and all, and its payload viewed as the alias views
+    // a written operand (`SchemaGenerator.viewThroughLibraryAlias()`).
+    const view = this.#libraryView(type, context);
+    if (view) {
+      const operand = this.#schemaGenerator.formatChildType(
+        view.operand,
+        context,
+        undefined,
+      );
+      const { ifc, ...payload } = isObjectOrArray(operand) &&
+          !Array.isArray(operand)
+        ? operand as Record<string, unknown>
+        : { ifc: undefined };
+      const viewed = this.#schemaGenerator.viewThroughLibraryAlias(
+        view.name,
+        ifc === undefined ? operand : payload as MutableJSONSchema,
+        view.keys,
+        context,
+      ) ?? (ifc === undefined ? operand : payload as MutableJSONSchema);
+      return isObjectOrArray(ifc) && !Array.isArray(ifc)
+        ? withIfcLabels(viewed, ifc as Record<string, unknown>)
+        : viewed;
     }
 
     // With no alias name left to follow, and no reference naming the policy,
@@ -1729,6 +1781,71 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     return valueSchema;
+  }
+
+  /**
+   * The labels `carrier`, a CFC metadata carrier an object holds as one of its
+   * members, attaches: one per metadata type, an intersection holding one per
+   * label that was folded into it, or `undefined` where any is not read in
+   * full. Read in part, a policy could claim what its author never wrote
+   * together, so it is read in full or not at all, as the carriers of an
+   * intersection are.
+   */
+  labelsCarriedBy(
+    carrier: ts.Symbol,
+    context: GenerationContext,
+  ): Record<string, unknown>[] | undefined {
+    const checker = context.typeChecker;
+    const value = memberValueType(
+      carrier,
+      checker.getTypeOfSymbol(carrier),
+      checker,
+    );
+    const labels = (value.isIntersection() ? value.types : [value]).map(
+      (part) => this.#extractLiteralLikeValue(part, undefined, context),
+    );
+    return labels.every((label) =>
+        isObjectOrArray(label) && !Array.isArray(label) && readInFull(label)
+      )
+      ? labels as Record<string, unknown>[]
+      : undefined;
+  }
+
+  /**
+   * The operand and alias of `type` where it is a default-library alias
+   * mapping a labelled type's members (`Readonly<Sec<X>>`), which folds the
+   * label's carrier into the object it builds; `undefined` for any other
+   * type, and for a `Pick` or `Omit` whose keys are no list of string
+   * literals. A labelled operand is an intersection holding carriers, or such
+   * an alias in turn.
+   */
+  #libraryView(
+    type: ts.Type,
+    context: GenerationContext,
+  ): { name: string; operand: ts.Type; keys: ts.Type | undefined } | undefined {
+    const { aliasSymbol, aliasTypeArguments } = type as TypeWithInternals;
+    const operand = aliasTypeArguments?.[0];
+    if (
+      !aliasSymbol || !operand ||
+      !MEMBER_MAPPING_LIBRARY_ALIASES.has(aliasSymbol.name) ||
+      !aliasSymbol.declarations?.length ||
+      !aliasSymbol.declarations.every((declaration) =>
+        isDefaultLibrarySourceFile(declaration.getSourceFile(), context)
+      )
+    ) {
+      return undefined;
+    }
+    const keys = aliasTypeArguments[1];
+    if (
+      (aliasSymbol.name === "Pick" || aliasSymbol.name === "Omit") &&
+      !(keys && literalKeysOfType(keys))
+    ) {
+      return undefined;
+    }
+    return cfcCarriedParts(operand, context.typeChecker) ||
+        this.#libraryView(operand, context)
+      ? { name: aliasSymbol.name, operand, keys }
+      : undefined;
   }
 
   /**

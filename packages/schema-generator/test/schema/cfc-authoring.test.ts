@@ -2583,4 +2583,166 @@ describe("Schema: CFC authoring aliases", () => {
       expect(diagnostics).toEqual([]);
     });
   });
+
+  describe("a default-library alias mapping a labelled type's members", () => {
+    // `Readonly`, `Partial`, `Required`, `Pick` and `Omit` over a labelled
+    // type fold the label's carrier into the object they build, as one more
+    // member, and over a primitive or an array build an object of its
+    // methods. Read by type, the value keeps its label and its payload, and
+    // no schema holds the carrier as a member.
+
+    const ALIASES = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Sec<T> = Confidential<T, readonly ["a"]>;
+      type Pair = { x?: string; y: number };
+    `;
+
+    const generate = async (value: string) => {
+      const { checker, sourceFile } = await createTestProgram(
+        ALIASES + `interface Holder { value: ${value} }`,
+      );
+      const holder = checker.getSymbolsInScope(
+        sourceFile,
+        ts.SymbolFlags.Interface,
+      ).find((candidate) => candidate.name === "Holder")!;
+      const property = checker.getDeclaredTypeOfSymbol(holder).getProperty(
+        "value",
+      )!;
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      const schema = new SchemaGenerator().generateSchema(
+        checker.getTypeOfSymbolAtLocation(property, sourceFile),
+        checker,
+        undefined,
+        { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
+      );
+      return { schema, diagnostics };
+    };
+
+    const secret = { confidentiality: ["a"] };
+    const x = { type: "string" };
+    const y = { type: "number" };
+    // `Readonly` views its operand as it is, so a named payload stays a
+    // reference to its definition, labelled where it is referred to.
+    const pair = {
+      $ref: "#/$defs/Pair",
+      $defs: {
+        Pair: { type: "object", properties: { x, y }, required: ["y"] },
+      },
+    };
+
+    for (
+      const [value, expected] of [
+        ["Readonly<Sec<Pair>>", { ...pair, ifc: secret }],
+        [
+          "Partial<Sec<Pair>>",
+          { type: "object", properties: { x, y }, ifc: secret },
+        ],
+        [
+          "Required<Sec<Pair>>",
+          {
+            type: "object",
+            properties: { x, y },
+            required: ["x", "y"],
+            ifc: secret,
+          },
+        ],
+        [
+          'Pick<Sec<Pair>, "x">',
+          { type: "object", properties: { x }, ifc: secret },
+        ],
+        [
+          'Omit<Sec<Pair>, "x">',
+          {
+            type: "object",
+            properties: { y },
+            required: ["y"],
+            ifc: secret,
+          },
+        ],
+        ["Readonly<Sec<string>>", { type: "string", ifc: secret }],
+        [
+          "Readonly<Sec<string[]>>",
+          { type: "array", items: x, ifc: secret },
+        ],
+        [
+          'Readonly<Confidential<Sec<Pair>, readonly ["b"]>>',
+          { ...pair, ifc: { confidentiality: ["a", "b"] } },
+        ],
+        [
+          "Partial<Readonly<Sec<Pair>>>",
+          { type: "object", properties: { x, y }, ifc: secret },
+        ],
+        [
+          '{ readonly [K in keyof Confidential<Sec<{ y: number }>, readonly ["b"]>]: Confidential<Sec<{ y: number }>, readonly ["b"]>[K] }',
+          {
+            type: "object",
+            properties: { y },
+            required: ["y"],
+            ifc: { confidentiality: ["a", "b"] },
+          },
+        ],
+        [
+          "{ readonly [K in keyof Sec<Pair>]: Sec<Pair>[K] }",
+          {
+            type: "object",
+            properties: { x, y },
+            required: ["y"],
+            ifc: secret,
+          },
+        ],
+      ] as const
+    ) {
+      it(`keeps the label of \`${value}\` and holds no carrier`, async () => {
+        const { schema, diagnostics } = await generate(value);
+        expect(schema).toEqual(expected);
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    it("reads such an alias over an unlabelled type as the type it builds", async () => {
+      // Only a labelled operand is read in the alias's place; any other is
+      // the mapped type the checker builds, a named one no reference to it.
+      const { schema } = await generate("Readonly<Pair>");
+      expect(schema).toEqual({
+        type: "object",
+        properties: { x, y },
+        required: ["y"],
+      });
+    });
+
+    it("reads a module's own alias of such a name as its own", async () => {
+      const { checker, sourceFile } = await createTestProgram(
+        ALIASES + `
+        type Partial<T> = { inner: T };
+        interface Holder { value: Partial<Sec<{ y: number }>> }
+        export {};
+      `,
+      );
+      const holder = checker.getSymbolsInScope(
+        sourceFile,
+        ts.SymbolFlags.Interface,
+      ).find((candidate) => candidate.name === "Holder")!;
+      const property = checker.getDeclaredTypeOfSymbol(holder).getProperty(
+        "value",
+      )!;
+      const schema = new SchemaGenerator().generateSchema(
+        checker.getTypeOfSymbolAtLocation(property, sourceFile),
+        checker,
+        undefined,
+      );
+      expect(schema).toEqual({
+        type: "object",
+        properties: {
+          inner: {
+            type: "object",
+            properties: { y },
+            required: ["y"],
+            ifc: secret,
+          },
+        },
+        required: ["inner"],
+      });
+    });
+  });
 });

@@ -49,6 +49,7 @@ import {
   instantiatedPropertyType,
   instantiatedValueType,
   isFunctionLike,
+  literalKeysOfType,
   safeGetIndexTypeOfType,
   safeGetTypeOfSymbolAtLocation,
   soleNonNullishMember,
@@ -1501,6 +1502,51 @@ export class SchemaGenerator {
       this.#formatType(readType, childContext, false),
       childContext,
     );
+  }
+
+  /**
+   * `schema` viewed as `name`, a default-library alias that maps an object's
+   * members (`Readonly`, `Partial`, `Required`, `Pick`, `Omit`), is viewed
+   * where it is written (`#analyzeLibraryAliasReference()`), with `keys` the
+   * type of a `Pick`'s or `Omit`'s key argument; `undefined` for keys that are
+   * no list of string literals, and for a name that is none of these.
+   */
+  public viewThroughLibraryAlias(
+    name: string,
+    schema: MutableJSONSchema,
+    keys: ts.Type | undefined,
+    context: GenerationContext,
+  ): MutableJSONSchema | undefined {
+    switch (name) {
+      case "Readonly":
+        return schema;
+      case "Partial":
+        return mapArms(schema, context, partialArm);
+      case "Required":
+        return mapArms(schema, context, (arm) => requiredArm(arm, context));
+      case "Pick":
+      case "Omit": {
+        const names = keys && literalKeysOfType(keys);
+        return names && pickedView(
+          schema,
+          context,
+          name === "Pick" ? { pick: names } : { omit: names },
+        );
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * The labels `carrier`, a CFC metadata carrier an object holds as one of its
+   * members, attaches, each read in full, or `undefined` where any is not
+   * (`CommonFabricFormatter.labelsCarriedBy()`).
+   */
+  public labelsCarriedBy(
+    carrier: ts.Symbol,
+    context: GenerationContext,
+  ): Record<string, unknown>[] | undefined {
+    return this.#commonFabricFormatter.labelsCarriedBy(carrier, context);
   }
 
   /**

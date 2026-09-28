@@ -967,6 +967,22 @@ Mechanics:
   policy read in part could claim what its author never wrote together, such
   as an `ownerPrincipal` without its `writeAuthorizedBy`. Then the value is its
   payload alone. The `null` the checker dropped is in the schema neither way.
+- A default-library alias that maps an object's members (`Readonly`,
+  `Partial`, `Required`, `Pick`, `Omit`) does not keep a labelled operand's
+  carrier as a member of its own: over an object it folds the carrier into
+  the object it builds, as one more property, and over a primitive or an
+  array it builds an object of the payload's methods, so neither the label
+  nor, for a primitive, the payload survives in the type it builds. Read by
+  type, such an alias over a labelled operand (an intersection holding
+  carriers, or such an alias in turn) reads its operand, labels and all, and
+  views the operand's payload as it views a written operand: `Readonly` as
+  it is, `Partial` and `Required` arm by arm, `Pick` and `Omit` through their
+  literal keys. So `Readonly<Sec<string>>` is a labelled string, and
+  `Pick<Sec<X>, "a">` keeps the label though `Pick` drops the carrier. Any
+  other object that holds a carrier as a property, as a mapped type its
+  author wrote does (`{ readonly [K in keyof Sec<X>]: Sec<X>[K] }`), is
+  labelled by it, each metadata the carrier's type holds read in full or
+  none, and never holds the carrier as a member: no value does.
 - User alias chains are followed with type-parameter node substitution until a
   canonical name is reached (`#resolveAliasChainFromDeclaration` /
   `substituteTypeNode`), and the labels read the substituted argument nodes.
