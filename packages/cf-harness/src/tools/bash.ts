@@ -133,7 +133,7 @@ const bashToolDescriptorWithSessions: HarnessToolDescriptor = {
         // check made on the name are one rule.
         pattern: SANDBOX_SESSION_NAME_PATTERN.source,
         description:
-          "Name a sandbox session to keep state between commands (files outside the mounts, background processes). Only some sandbox runtimes offer sessions: where one is unavailable the call does not run and returns a recoverable error saying so, and you rerun it without a session. Omit for a fresh sandbox per command.",
+          "Name a sandbox session to keep state between commands (files outside the mounts, background processes). A session lasts for this run or chat turn only: it starts empty in a new turn or a resumed run. A session that has ended (a command in it timed out, its process was killed) is reported as an error once and starts empty when named again. Omit `session` to run the command in a fresh sandbox of its own.",
       },
     },
   } satisfies JSONSchema,
@@ -281,12 +281,15 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
         };
       }
       if (error instanceof SandboxSessionUnavailableError) {
-        // The runtime has sessions but not for this call: the model can act
-        // on that by dropping the session.
+        // The runtime has sessions but not for this call (an enforcing
+        // mode, a session that ended, too many sessions): recoverable, and
+        // the message tells the model which.
         return sessionRefusal(
           outputId,
           context.currentDir,
-          `${error.message}; rerun the command without \`session\``,
+          // The runtime's message says what to do next: for a lost session
+          // that is naming it again, not dropping it.
+          error.message,
         );
       }
       // Anything else from runShell — docker spawn/infra, CFC transport — is not
