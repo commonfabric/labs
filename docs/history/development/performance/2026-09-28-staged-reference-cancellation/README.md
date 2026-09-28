@@ -102,9 +102,27 @@ on these synthetic graphs.
 
 ## Output and work preservation
 
-Every baseline/candidate pair, including the discarded timing warmups, had
-identical complete-map hashes, serialized byte counts, entry counts and derivation
-counts for its case, depth, width and staging order. Staging orders also agreed.
+Every successful baseline/candidate completion comparison, including the
+synchronous samples excluded from timing summaries, had identical complete-map
+hashes, serialized byte counts, entry counts and derivation counts for its case,
+depth, width and staging order. This covers 320 records. Staging orders also
+agreed within each case.
+
+The remaining 20 records are canceled runs. They have no complete-map hashes,
+byte counts or entry counts; output equality does not apply to them. Every
+canceled run returned `StorageTransactionAborted` and left the holder absent.
+Derivation counts differ because cancellation stops the two arms at different
+points. In process-pair order (0 through 4):
+
+| Depth | Baseline derivations before abort | Candidate derivations before abort |
+| --- | --- | --- |
+| 12 | 71, 71, 25, 71, 71 | 23, 21, 23, 22, 23 |
+| 14 | 83, 29, 29, 29, 29 | 25, 25, 25, 25, 25 |
+
+The candidate stops earlier in each matched cancellation sample. These counts
+are observations, not a fixed cancellation budget.
+
+Completed runs preserve these totals:
 
 | Case | Total entries | Serialized bytes | Derivations | Cache hits |
 | --- | --- | --- | --- | --- |
