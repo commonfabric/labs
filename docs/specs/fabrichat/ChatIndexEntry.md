@@ -2,9 +2,8 @@
 
 Status: proposed design (see [`README.md`](README.md)).
 
-One room in a user's chat manager
-([`FabriChatManager.md`](FabriChatManager.md)). A manager's `rooms` and `direct`
-hold these ([`ChatManagerOutput`](ChatManagerOutput.md)).
+One room in a user's chat manager. A manager's `rooms` and `direct` hold these
+([`ChatManagerOutput`](ChatManagerOutput.md)).
 
 ```ts
 // Shown for illustration only.

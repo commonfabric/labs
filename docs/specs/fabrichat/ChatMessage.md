@@ -2,7 +2,7 @@
 
 Status: proposed design (see [`README.md`](README.md)).
 
-One message in a room ([`FabriChatRoom.md`](FabriChatRoom.md)). A room keeps its
+One message in a room ([`ChatRoomOutput`](ChatRoomOutput.md)). A room offers its
 messages, oldest first, as `messages`.
 
 ```ts
@@ -26,8 +26,8 @@ interface ChatMessage {
 
 A message is stored as `AuthoredByCurrentUser<TrustedActionWrite<ChatMessage,
 …>>`: the runtime labels it `authored-by` the principal who sent it, and admits
-it only from `commitSend` on the room's send surface (see
-[`FabriChatRoom.md`](FabriChatRoom.md#writers)).
+it only through the room's `sendMessage` stream, as a trusted gesture on
+`ChatSendSurface` (see [`ChatRoomOutput`](ChatRoomOutput.md#streams)).
 
 ## Fields
 

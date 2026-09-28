@@ -59,8 +59,8 @@ A client that draws natively MUST:
   Where a room still keeps its own roster, a roster entry is a claim, not proof
   that someone can read the room.
 - **Offer any single emoji as a reaction** (see
-  [`FabriChatRoom.md`](FabriChatRoom.md#the-record)), and show any that others
-  have used, even ones the client wouldn't offer itself.
+  [`ChatReaction`](ChatReaction.md)), and show any that others have used, even
+  ones the client wouldn't offer itself.
 - **Use each message's entity as its id.**
 - **Show a room it can't read as unreadable**, and nothing more (see
   [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
@@ -138,10 +138,12 @@ one (`packages/cli/lib/trusted-action-event.ts`, the pattern test runner's
 
 ## Delivering invitations
 
-Until a pattern can deliver to a principal it shares no space with (see [first
-contact](FabriChatManager.md#first-contact)), delivering an invitation is the
-client's job. A client MUST deliver only the invitation: who it's from, which
-room, and how to redeem it. It MUST NOT deliver any of the room's contents.
+Until a pattern can deliver to a principal it shares no space with, delivering
+an invitation is the client's job. A client finds the invitations waiting in its
+user's manager and reports each one once it's delivered (see
+[`ChatManagerOutput`](ChatManagerOutput.md#delivering-invitations)). A client
+MUST deliver only the invitation: who it's from, which room, and how to redeem
+it. It MUST NOT deliver any of the room's contents.
 
 ## What a client must not do, in one place
 

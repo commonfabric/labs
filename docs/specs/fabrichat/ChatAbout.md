@@ -3,7 +3,7 @@
 Status: proposed design (see [`README.md`](README.md)).
 
 What a room says about itself: its kind, its title, and when it was created. A
-room ([`FabriChatRoom.md`](FabriChatRoom.md)) keeps one, as `about`, and sets it
+room ([`ChatRoomOutput`](ChatRoomOutput.md)) offers one, as `about`, and sets it
 once, when the room is created.
 
 ```ts
@@ -22,7 +22,7 @@ interface ChatAbout {
 
 - **`kind`** never changes. A direct room's membership is fixed at creation, and
   it is what the manager finds by the other member's principal
-  ([`FabriChatManager.md`](FabriChatManager.md)). A group room can gain and lose
+  ([`ChatManagerOutput`](ChatManagerOutput.md)). A group room can gain and lose
   members.
 - **`title`** is only for group rooms. A client shows a direct room by its other
   member, read from that member's profile ([`ChatProfile.md`](ChatProfile.md)),

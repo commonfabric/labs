@@ -2,33 +2,18 @@
 
 Status: proposed design (see [`README.md`](README.md)).
 
-`FabriChatManager` is each user's index of the rooms they belong to. It finds
-the direct room a user shares with a given person, and it creates new rooms. It
-is how a single conversation with a person is found again, whichever container a
-client is showing at the time.
+`FabriChatManager` is an implementation of
+[`ChatManagerOutput`](ChatManagerOutput.md), which states everything a chat
+manager does: where it lives, what its indexes mean, and what each request does.
+This document says how this implementation does it.
 
 ## Where it lives
 
-The manager is a field of the home pattern
-(`packages/patterns/system/home.tsx`), so each user has exactly one, and it
-resolves through a well-known `wish` target:
-
-```ts
-// Shown for illustration only.
-const chats = wish<ChatManagerOutput>({ query: "#chatManager" });
-```
-
-`#chatManager` is a home target, like `#agent_queue` and `#profile`. It names
-the role, not the pattern that fills it: a client asks for the user's chat
-manager, and `FabriChatManager` is what fills the role. The spelling follows the
-camel case of the other multi-word targets (`#learnedSummary`, `#pieceRegistry`,
-`#profileName`). The target resolves to a
-[`ChatManagerOutput`](ChatManagerOutput.md), the role's contract, and
-`FabriChatManager` is an implementation of it. On a serving runtime, it resolves
-against the demanding identity's home space and never the service's
-([server-side builtins](../server-side-execution/builtins.md)). Because home is
-private to its user, so is the index: nobody else learns whom a user talks to by
-reading it.
+`FabriChatManager` is a field of the home pattern
+(`packages/patterns/system/home.tsx`), which is what gives each user exactly
+one. The home target `#chatManager` resolves to that field. The spelling follows
+the camel case of the other multi-word targets (`#learnedSummary`,
+`#pieceRegistry`, `#profileName`).
 
 Adding the target takes the same steps `#agent_queue` took: the field and child
 piece in `home.tsx`, a case in `getResolutionKind` and in
@@ -37,68 +22,27 @@ each, and a row in the built-in targets table of
 [`wish`](../../common/conventions/wish.md) and in
 [`HOME_SPACE.md`](../../common/conventions/HOME_SPACE.md).
 
-## The index
+## State
 
-The manager keeps two indexes of [`ChatIndexEntry`](ChatIndexEntry.md)s:
-
-- **`rooms`**: every entry, newest first.
-- **`direct`**: for each counterpart principal, the entry of the direct room
-  this user shares with them. There is at most one per counterpart.
-
-An entry is a link to the room, never a copy of the room's data. What a room
-holds is read from the room, under the reader's own access.
-
-## Requests
-
-A client asks the manager for something by sending an event on one of its
-streams, and then reads the outcome from the manager's outputs. Each request
-carries a `requestId` the client chooses. The manager records the outcome under
-that id in `requests`, as `pending`, `done` (with the entry), or `refused` (with
-a reason), and a client watches for it there. The streams, their events, and
-their outcomes are in [`ChatManagerOutput`](ChatManagerOutput.md#streams).
-
-`openDirect` first looks in `direct`. It creates a room only when there is no
-entry for that counterpart. That is what keeps one person's conversation from
-splitting.
-
-`openDirect` and `createGroup` are outward acts: they create a space and grant
-another person access to it. They are admitted only from a reviewed surface
-(`ChatStartSurface`). `accept` and `forget` change only the user's own index,
-and they need none.
+The manager keeps `rooms`, `direct`, `requests`, and `outgoingInvitations` in
+the home space. `direct` is maintained alongside `rooms` by the same handlers,
+so the two can't disagree.
 
 ## Creating a room
 
-The manager creates rooms of their own. A shared space's own chat is created
-with the space, not by a manager. A manager records it in `rooms` when this user
-first opens it, as it would any other room.
-
-Creating a room is one operation from the client's point of view, and several
-steps for the manager:
+`openDirect` (when there is no entry for the counterpart) and `createGroup`
+create a room of its own in four steps:
 
 1. Create the room's space, with only this user granted (OWNER), and instantiate
    `FabriChatRoom` there with its `about`.
 2. Grant each other member access, or issue each an invitation.
-3. Deliver each invitation to its recipient ([first contact](#first-contact)).
-4. Record the entry in `rooms`, and in `direct` for a direct room.
+3. Add each invitation to `outgoingInvitations`, for a client to deliver.
+4. Record the entry in `rooms`, and in `direct` for a direct room, and mark the
+   request `done`.
 
-A creation interrupted between steps leaves a room that only its creator can
-use. On retry with the same `requestId`, the manager resumes that room rather
-than creating another.
-
-## Accepting a room
-
-The recipient of an invitation redeems it under their own signature, which is
-what adds them to the room's access list. Their client then sends `accept` to
-their own manager, which records the entry. A direct room is recorded under
-`direct` by its other member, the inviter.
-
-## Crossing creations
-
-Each user's index is their own. If two people each `openDirect` to the other
-before either invitation arrives, there are two rooms. Each manager keeps the
-room it recorded first in `direct`. The other stays in `rooms` and can be
-forgotten. This design accepts that for now. A deterministic tie-break, such as
-the room whose creator's principal sorts first, is future work.
+Each step is recorded under the request's `requestId` as it completes, which is
+how a repeated request resumes where the last attempt stopped instead of
+creating another room.
 
 ## Prerequisites
 
@@ -116,9 +60,8 @@ the room whose creator's principal sorts first, is future work.
 
 ### First contact
 
-Step 3 of creation needs a way to deliver an invitation to a principal who
-shares no space with the sender. Nothing reachable from a pattern does that
-today:
+An invitation has to reach a principal who may share no space with the sender.
+Nothing reachable from a pattern delivers one today:
 
 - DID inboxes ([`did-inboxes.md`](../../features/did-inboxes.md)) deliver to a
   principal, but patterns can't reach them.
@@ -127,6 +70,7 @@ today:
 - A space's access list can admit any writer, but that is the `"*"` grant a room
   must not have.
 
-Until one of these is usable from a pattern, delivery is the client's job: the
-manager records the invitation, and the client delivers it by whatever means it
-has (see [`clients.md`](clients.md)).
+That is why step 3 hands invitations to a client through `outgoingInvitations`
+(see [`ChatManagerOutput`](ChatManagerOutput.md#delivering-invitations)). Once
+one of these is usable from a pattern, the manager can deliver invitations
+itself.

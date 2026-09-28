@@ -181,7 +181,7 @@ a principal the access list admits, plus any admitted principal with no entry.
 This design treats a member set as a property of the space, the same for every
 pattern in it, rather than something each pattern keeps. Until the runtime
 provides one, a room keeps its own roster, as `loom` does (see
-[`FabriChatRoom.md`](FabriChatRoom.md#membership)).
+[`ChatRoomOutput`](ChatRoomOutput.md#membership)).
 
 With a member set:
 
