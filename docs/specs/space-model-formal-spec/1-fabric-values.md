@@ -2314,12 +2314,16 @@ export interface FabricCodec<PlusType, Encoded> {
    * whole of `Encoded` here because this interface is what a registry holds,
    * and the codecs in one agree on nothing narrower.
    *
-   * A `state` need not come from `encode()`, so an implementation which
-   * keeps a container from `state` as part of the value it builds may do so
-   * only when that container is frozen and stays frozen in that value.
-   * Anything else it keeps, it copies. A mutable value may keep frozen state
-   * this way, so long as nothing that makes it mutable depends on changing
-   * that state.
+   * A `state` need not come from `encode()`, so a nonterminal codec's
+   * implementation which keeps a container from `state` as part of the value
+   * it builds may do so only when that container is frozen and stays frozen
+   * in that value. Anything else it keeps, it copies. A mutable value may
+   * keep frozen state this way, so long as nothing that makes it mutable
+   * depends on changing that state. A value from `state` which the codec's
+   * values hold as an external reference is not a container of theirs, and
+   * is kept as it is. What a terminal codec may keep from its state is its
+   * wire format's business, as a transferred `ArrayBuffer` taken over whole
+   * shows.
    *
    * `mutable` decides the frozenness of the value built, and of nothing
    * else: when `false`, the default, the result is frozen, and when `true`,
@@ -2350,14 +2354,20 @@ export interface FabricCodec<PlusType, Encoded> {
    * `env` is what a codec reaches the running system through, the same one
    * `decode()` is handed.
    *
-   * The result is a snapshot of `value`: it represents `value`'s internal
-   * state as frozen data, and its external references as themselves, with
-   * their frozenness left as it is. This holds whether or not `value` is
-   * itself frozen. A mutable value's internal state is copied into the
-   * result, never frozen in place, and a result may be cached so long as it
-   * is dropped when the value changes. A value whose state effectively is an
-   * external reference may return that reference as itself, frozen or not;
-   * so a caller must not freeze a result in place, or otherwise change it.
+   * For a nonterminal codec, the result is a snapshot of `value`: it
+   * represents `value`'s internal state as frozen data, and its external
+   * references as themselves, with their frozenness left as it is. This
+   * holds whether or not `value` is itself frozen. A mutable value's internal
+   * state is copied into the result, never frozen in place, and a result may
+   * be cached so long as it is dropped when the value changes. A value whose
+   * state effectively is an external reference may return that reference as
+   * itself, frozen or not; so a caller must not freeze a result in place, or
+   * otherwise change it.
+   *
+   * A terminal codec's result is in its wire format's own domain, and what
+   * it may be is that format's business. It is best made as frozen as the
+   * format allows: a record is frozen, though an `ArrayBuffer` in it cannot
+   * be.
    */
   encode(value: FabricValuePlus<PlusType>, env: LiveEnvironment): Encoded;
 }
@@ -2517,11 +2527,13 @@ Key contracts:
   tag-wrapping (Section 4.5), which keeps the format mechanics in one place
   rather than spread across every codec.
 - **`encode()` returns a snapshot; `decode()` freezes only what it builds.**
-  An encoded state represents internal state as frozen data (copied, never
-  frozen in place) and external references as themselves, so a caller never
-  freezes or changes one. A decode's `mutable` argument decides the frozenness
-  of the one value it builds, and it keeps a container from `state` only when
-  that container is frozen and stays frozen.
+  A nonterminal codec's encoded state represents internal state as frozen data
+  (copied, never frozen in place) and external references as themselves, so a
+  caller never freezes or changes one. A decode's `mutable` argument decides
+  the frozenness of the one value it builds, and a nonterminal codec keeps a
+  container from `state` only when that container is frozen and stays frozen,
+  or when its values hold it as an external reference. A terminal codec's state
+  belongs to its wire format, and is best made as frozen as the format allows.
 - **`canDecode()` runs before every decode.** The engine asks it of each state
   it is about to dispatch, so a state reaches `decode()` only once that codec
   has accepted it and is of the type that method declares. A refusal is a
@@ -2952,6 +2964,8 @@ export class UnknownValue extends BaseFabricInstance {
         _env: LiveEnvironment,
         mutable = false,
       ): FabricValue {
+        // The state is an external reference, as `encode()` treats it, so it
+        // is kept as it is.
         const result = new UnknownValue(typeTag, state);
         return mutable ? result : Object.freeze(result);
       }
@@ -3063,16 +3077,19 @@ export class ProblematicValue extends BaseFabricInstance {
         super(CODEC_TYPE_TAGS.Problematic, ProblematicValue);
       }
 
-      /** All three preserved facts; the tag is data here, not structure. */
+      /**
+       * All three preserved facts, as a frozen record; the tag is data here,
+       * not structure, and the preserved state is held as it is.
+       */
       encode(
         value: ProblematicValue,
         _env: LiveEnvironment,
       ): FabricValue {
-        return {
+        return Object.freeze({
           tag: value.wireTypeTag,
           state: value.state,
           error: value.error,
-        };
+        });
       }
 
       decode(

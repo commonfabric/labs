@@ -136,6 +136,8 @@ export class UnknownValue extends BaseFabricInstance {
         _env: LiveEnvironment,
         mutable = false,
       ): FabricValue {
+        // The state is an external reference, as `encode()` treats it, so it
+        // is kept as it is.
         const result = new UnknownValue(typeTag, state);
         return mutable ? result : Object.freeze(result);
       }
