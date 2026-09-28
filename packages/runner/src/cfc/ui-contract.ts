@@ -49,6 +49,12 @@ export type UiContractEntry = {
 
   /** The schema document that resolves local references inside `.schema`. */
   root?: JSONSchema;
+
+  /**
+   * Set when the contract sits inside an `anyOf` or `oneOf` branch, so it
+   * holds only for the values that branch matches.
+   */
+  conditional?: true;
 };
 
 const uiContractEntry = (
@@ -56,8 +62,15 @@ const uiContractEntry = (
   contract: UiContract,
   schema?: JSONSchema,
   root?: JSONSchema,
+  conditional = false,
 ): UiContractEntry => {
   const entry: UiContractEntry = { path, contract };
+  if (conditional) {
+    Object.defineProperty(entry, "conditional", {
+      value: true,
+      enumerable: false,
+    });
+  }
   if (schema !== undefined) {
     Object.defineProperty(entry, "schema", {
       value: schema,
@@ -90,6 +103,14 @@ type TrustedEventPolicyTx = Pick<
   IExtendedStorageTransaction,
   "getCfcState" | "recordCfcWritePolicyInput"
 >;
+
+/**
+ * The schema envelope a document stores, in the form the commit boundary
+ * verifies against, or `undefined` when it stores none or cannot be read.
+ */
+export type StoredSchemaResolver = (
+  write: NormalizedFullLink,
+) => JSONSchema | undefined;
 
 type AddressLike = {
   space: string;
@@ -269,6 +290,7 @@ const uiContractsFromSchemaInternal = (
   root: JSONSchema | undefined,
   path: string[],
   seenRefs: Set<string>,
+  conditional = false,
 ): UiContractEntry[] => {
   const branchRefs = new Set(seenRefs);
   const resolvedSchema = followSchemaRef(schema, root, branchRefs);
@@ -283,6 +305,7 @@ const uiContractsFromSchemaInternal = (
       resolvedRoot,
       path,
       seenRefsBelow(branchRefs, root, resolvedRoot),
+      conditional,
     );
   }
   if (!isObjectOrArray(resolvedSchema)) {
@@ -298,7 +321,13 @@ const uiContractsFromSchemaInternal = (
   );
   if (contract !== undefined) {
     entries.push(
-      uiContractEntry([...path], contract, resolvedSchema, childRoot),
+      uiContractEntry(
+        [...path],
+        contract,
+        resolvedSchema,
+        childRoot,
+        conditional,
+      ),
     );
   }
 
@@ -333,7 +362,15 @@ const uiContractsFromSchemaInternal = (
       )
       .map((entry) => entry.contract);
     if (definitionContracts.length === 1) {
-      entries.push(uiContractEntry([...path], definitionContracts[0]));
+      entries.push(
+        uiContractEntry(
+          [...path],
+          definitionContracts[0],
+          undefined,
+          undefined,
+          conditional,
+        ),
+      );
     }
   }
 
@@ -345,23 +382,31 @@ const uiContractsFromSchemaInternal = (
           childRoot,
           [...path, key],
           seenRefs,
+          conditional,
         ),
       );
     }
   }
 
-  const compound = [
+  const compound: [JSONSchema, boolean][] = [
     ...(Array.isArray(resolvedSchema.anyOf) ? resolvedSchema.anyOf : []),
     ...(Array.isArray(resolvedSchema.oneOf) ? resolvedSchema.oneOf : []),
-    ...(Array.isArray(resolvedSchema.allOf) ? resolvedSchema.allOf : []),
-  ];
-  for (const child of compound) {
+  ].map((child) => [child as JSONSchema, true]);
+  for (
+    const child of Array.isArray(resolvedSchema.allOf)
+      ? resolvedSchema.allOf
+      : []
+  ) {
+    compound.push([child as JSONSchema, conditional]);
+  }
+  for (const [child, childConditional] of compound) {
     entries.push(
       ...uiContractsFromSchemaInternal(
-        child as JSONSchema,
+        child,
         childRoot,
         path,
         seenRefs,
+        childConditional,
       ),
     );
   }
@@ -382,6 +427,7 @@ const uiContractsFromSchemaInternal = (
         childRoot,
         [...path, "*"],
         seenRefs,
+        conditional,
       ),
     );
   }
@@ -394,6 +440,7 @@ const uiContractsFromSchemaInternal = (
           childRoot,
           [...path, String(index)],
           seenRefs,
+          conditional,
         ),
       );
     }
@@ -566,9 +613,36 @@ const sameDocument = (
   target.id === write.id &&
   target.scope === write.scope;
 
+/**
+ * The contracts the write's stored envelope declares at a path above or below
+ * the write rather than at it. The commit boundary judges a write against a
+ * contract wherever the two paths overlap, and looks for the evidence at the
+ * contract's own path, so that is where it is recorded.
+ */
+const storedContractsAroundWrite = (
+  write: NormalizedFullLink,
+  storedSchemaFor: StoredSchemaResolver,
+): UiContractEntry[] =>
+  uiContractsFromSchema(storedSchemaFor(write)).filter((entry) =>
+    !pathPatternMatches(entry.path, write.path) &&
+    pathsOverlap(entry.path, write.path)
+  );
+
+// Whether one path, `*` matching any segment, lies on the other's line of
+// descent: equal, or one a prefix of the other.
+const pathsOverlap = (
+  pattern: readonly unknown[],
+  path: readonly unknown[],
+): boolean =>
+  pattern.every((segment, index) =>
+    index >= path.length || String(segment) === "*" ||
+    String(segment) === String(path[index])
+  );
+
 const contractCandidatesForWrite = (
   tx: TrustedEventPolicyTx,
   write: NormalizedFullLink,
+  storedSchemaFor: StoredSchemaResolver,
 ): UiContract[] => {
   const contracts: UiContract[] = [];
   if (write.schema !== undefined) {
@@ -578,6 +652,15 @@ const contractCandidatesForWrite = (
       ) {
         contracts.push(entry.contract);
       }
+    }
+  }
+  // The contract the document stores binds every writer, including one
+  // whose own schema declares a label without restating the contract, and
+  // the commit boundary verifies the write against it. Matching the event
+  // here is what records the evidence that check looks for.
+  for (const entry of uiContractsFromSchema(storedSchemaFor(write))) {
+    if (pathPatternMatches(entry.path, write.path)) {
+      contracts.push(entry.contract);
     }
   }
   for (const input of tx.getCfcState().writePolicyInputs) {
@@ -744,10 +827,11 @@ export const recordTrustedEventPolicyInputs = (
   tx: TrustedEventPolicyTx,
   writes: readonly NormalizedFullLink[],
   event: unknown,
+  storedSchemaFor: StoredSchemaResolver,
 ): void => {
   for (const write of writes) {
     const contracts = [
-      ...contractCandidatesForWrite(tx, write),
+      ...contractCandidatesForWrite(tx, write, storedSchemaFor),
       ...contractCandidatesFromEventContext(event, write),
     ];
     for (const contract of contracts) {
@@ -774,6 +858,27 @@ export const recordTrustedEventPolicyInputs = (
         provenance: (matchingEvent as SerializedTrustedEvent).provenance,
       });
       break;
+    }
+    for (const entry of storedContractsAroundWrite(write, storedSchemaFor)) {
+      const matchingEvent = trustedEventMatchCandidates(event).find(
+        (candidate) => trustedEventMatchesUiContract(candidate, entry.contract),
+      );
+      if (matchingEvent === undefined) continue;
+      const at = { ...write, path: [...entry.path] };
+      const target = {
+        space: write.space,
+        id: write.id,
+        scope: write.scope,
+        path: [...entry.path],
+      };
+      const eventId = trustedEventId(matchingEvent, at);
+      if (trustedEventPolicyInputAlreadyRecorded(tx, target, eventId)) continue;
+      tx.recordCfcWritePolicyInput({
+        kind: "trusted-event",
+        target,
+        eventId,
+        provenance: (matchingEvent as SerializedTrustedEvent).provenance,
+      });
     }
   }
 };

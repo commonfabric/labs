@@ -33,21 +33,11 @@ import {
   type SessionFactory,
   StorageManager as V2StorageManager,
 } from "../src/storage/v2.ts";
-import { TEST_MEMORY_SERVER_AUTH } from "./memory-v2-test-utils.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("map-conflict-element-setup");
 const space = signer.did();
-
-const newSharedServer = () =>
-  new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
 
 /**
  * Holds server-push `session/effect` frames while closed, delivering every

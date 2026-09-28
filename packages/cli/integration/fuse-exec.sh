@@ -8,7 +8,7 @@ export CF_FUSE_DEBUG=1
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 
-# The phases to run. A CI leg or a lane asks for one; a bare run does all of
+# The phases to run. A lane asks for one section; a bare run does all of
 # them. The variable is this suite's own: CF_CLI_INTEGRATION_SECTION names
 # integration.sh's sections, which are a different set, and neither script
 # accepts the other's.
@@ -19,9 +19,9 @@ SECTION="${CF_FUSE_INTEGRATION_SECTION:-${1:-all}}"
 # written from the existing cleanup trap, which owns EXIT; registering a
 # second trap would replace it. Neither name carries the dispatched section:
 # which section scheduled a phase is run context, and the same phase joins
-# across a CI section leg and a local `all` run. With recording off this
-# initializes nothing, so the suite carries no dependency on the timing
-# helper.
+# across a lane's run of one section and a local `all` run. With recording
+# off this initializes nothing, so the suite carries no dependency on the
+# timing helper.
 source "$SCRIPT_DIR/test-records.sh"
 CF_TEST_RECORD_NAME="fuse-exec.sh"
 CF_TEST_RECORD_START_MS=0
@@ -571,11 +571,11 @@ force_detach() {
 
 # Unmount, bounded by the shared outer deadline (WAIT_DEADLINE_EPOCH) rather than a
 # fixed duration, so a slow-but-succeeding unmount is never cut short — the bound is
-# whatever is left before the CI step's 'timeout' fires, minutes more than an
-# unmount ever needs. Only a genuinely hung teardown reaches it. bounded's
-# 'timeout' cannot exec a shell function, and local dev's 'cf' is one, so only an
-# external 'cf' (the compiled binary CI runs) is bounded; a 'cf' function runs
-# unbounded, the same as the no-'timeout' local path.
+# whatever is left of the run's overall bound, minutes more than an unmount ever
+# needs. Only a genuinely hung teardown reaches it. bounded's 'timeout' cannot
+# exec a shell function, and local dev's 'cf' is one, so only an external 'cf'
+# (the bin/cf a lane puts on PATH) is bounded; a 'cf' function runs unbounded,
+# the same as the no-'timeout' local path.
 unmount_until_deadline() {
   local remaining
   remaining=$((WAIT_DEADLINE_EPOCH - $(date +%s)))
@@ -705,11 +705,12 @@ run_mount() {
   ENTITY_DEEP_PROBE="${FUSE_DEEP_ENTITY_PROBE:-0}"
 
   # The deadline for every wait that fails the test (see wait_deadline_reached).
-  # The default overall bound matches the CI step's 'timeout' in
-  # .github/workflows/deno.yml, which sets FUSE_EXEC_OVERALL_TIMEOUT_SECONDS to keep
-  # the two in step; the waits give up a few minutes before it so error() can print
-  # the daemon's state before the step is cancelled. The floor guards a
-  # misconfigured tiny outer bound from making every wait fire at once.
+  # The overall bound is the time the whole run is allowed:
+  # FUSE_EXEC_OVERALL_TIMEOUT_SECONDS where the caller sets it, and 480 seconds
+  # otherwise. The waits give up a few minutes before it, so error() can print
+  # the daemon's state before anything outside the script stops the run. The
+  # floor guards a misconfigured tiny outer bound from making every wait fire
+  # at once.
   OVERALL_TIMEOUT_SECONDS="${FUSE_EXEC_OVERALL_TIMEOUT_SECONDS:-480}"
   WAIT_BUDGET_SECONDS=$((OVERALL_TIMEOUT_SECONDS - 300))
   [ "$WAIT_BUDGET_SECONDS" -ge 30 ] || WAIT_BUDGET_SECONDS=$((OVERALL_TIMEOUT_SECONDS / 2 + 1))
@@ -1207,8 +1208,8 @@ PRELUDE=(mount entity-listing piece-paths entities-entry)
 # first, and `all` runs it once.
 #
 # This table is read as well as run. packages/cli/test/fuse-sections.test.ts
-# holds it to reaching every phase, from `all` and from what
-# .github/workflows/deno.yml dispatches, and to naming phases the script
+# holds it to reaching every phase, from `all` and from the sections the test
+# topology's `cli-fuse` suite makes units of, and to naming phases the script
 # defines. Choosing the arm here, before the mount, is what makes an unknown
 # section cost a second rather than a mount.
 case "$SECTION" in

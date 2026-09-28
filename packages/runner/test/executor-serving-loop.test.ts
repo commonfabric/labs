@@ -54,7 +54,7 @@ import {
   watermarkCell,
   watermarkDocLink,
 } from "../src/executor/watermark.ts";
-import { TEST_MEMORY_SERVER_AUTH } from "./memory-v2-test-utils.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { getArtifactEntryRef } from "../src/builder/pattern-metadata.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -84,24 +84,6 @@ class SharedServerStorageManager extends EmulatedStorageManager {
     if (this.settleGate !== undefined) await this.settleGate;
   }
 }
-
-const newSharedServer = (
-  options: { sessionTtlMs?: number; subscriptionRefreshDelayMs?: number } = {},
-) =>
-  new MemoryV2Server.Server({
-    ...(options.sessionTtlMs === undefined ? {} : {
-      sessions: new MemoryV2Server.SessionRegistry({
-        ttlMs: options.sessionTtlMs,
-      }),
-    }),
-    subscriptionRefreshDelayMs: options.subscriptionRefreshDelayMs ?? 0,
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
 
 const spaceSigner = await Identity.fromPassphrase("serving loop space");
 const space = spaceSigner.did() as MemorySpace;
@@ -180,8 +162,12 @@ describe("stage F serving loop", () => {
         ? {}
         : { decorateWaveCommitSink }),
       onWaveCycle: cycles.record,
-      onActivationSettled: (activatedSpace, outcome) =>
-        activations.record({ space: activatedSpace, outcome }),
+      onActivationSettled: (activatedSpace, outcome) => {
+        activations.record({ space: activatedSpace, outcome });
+        if (activationObserverThrows) {
+          throw new Error("activation observer failure (test-injected)");
+        }
+      },
       onSpaceParked: (parkedSpace, reason) => {
         parks.record({ space: parkedSpace, reason });
         if (parkObserverThrows) {
@@ -198,8 +184,12 @@ describe("stage F serving loop", () => {
   let parks: ArrivalLog<{ space: string; reason: string }>;
   /** When set, the park report throws. */
   let parkObserverThrows = false;
+  /** When set, the activation report throws. */
+  let activationObserverThrows = false;
   /** How many of the next runtime builds reject before building anything. */
   let factoryFailures = 0;
+  /** How many of the next opens of a space's engine reject. */
+  let engineOpenFailures = 0;
   /** Each survived renewal blip the loop reports to the memory server.
    * The renew arm is timer-driven, so this is the only edge it has. */
   let reacquires: ArrivalLog<void>;
@@ -216,13 +206,15 @@ describe("stage F serving loop", () => {
     parks.matching((entry) => entry.space === space);
 
   beforeEach(() => {
-    server = newSharedServer();
+    server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     servingRuntime = undefined;
     onServingRuntime = undefined;
     servingFetch = undefined;
     decorateWaveCommitSink = undefined;
     parkObserverThrows = false;
+    activationObserverThrows = false;
     factoryFailures = 0;
+    engineOpenFailures = 0;
     cycles = new ArrivalLog();
     activations = new ArrivalLog();
     parks = new ArrivalLog();
@@ -231,6 +223,12 @@ describe("stage F serving loop", () => {
     server.noteLeaseReacquired = (notice) => {
       reacquires.record();
       return noteLeaseReacquired(notice);
+    };
+    const engineForSpace = server.engineForSpace.bind(server);
+    server.engineForSpace = (openedSpace) => {
+      if (engineOpenFailures === 0) return engineForSpace(openedSpace);
+      engineOpenFailures -= 1;
+      return Promise.reject(new Error("induced engine open failure"));
     };
   });
 
@@ -969,19 +967,22 @@ describe("stage F serving loop", () => {
     // address-level blind write mints no watch root (the cell route
     // registers a watch), so the demanded-root set stays exactly the
     // three never-a-piece ids.
+    const kickId = "of:r2-exclusion-kick";
     for (const n of [1, 2, 3]) {
       const tx = clientRuntime.edit();
       tx.writeValueOrThrow(
-        {
-          space,
-          id: "of:r2-exclusion-kick" as never,
-          scope: "space",
-          path: ["n"],
-        },
+        { space, id: kickId as never, scope: "space", path: ["n"] },
         n,
       );
       expect((await tx.commit()).error).toBeUndefined();
-      const kickSeq = Engine.serverSeq(engine);
+      // The kick's own seq, read from its document's head rather than the
+      // space's: the commit resolves only once the client's view reflects
+      // it, so the wave commit that advances W over the kick can land
+      // first, and W never covers that advance-only commit.
+      const kickSeq = Engine.selectDocHead(engine, {
+        id: kickId as never,
+        scopeKey: "space",
+      });
       // Each kick gets its own cycle rather than sharing one, which is
       // what makes the deferral counter below a per-root observation.
       // The target is THIS kick's seq: a watermark that already covers an
@@ -1670,36 +1671,60 @@ describe("stage F serving loop", () => {
     await awaitAdmitted(server, () => readWatermarkSeq(engine) >= authoredSeq);
   });
 
-  it("re-activates a space whose activation failed while its client's session is still live, after the failure-park backoff (serving-loop.md §1)", async () => {
-    // As above, the session opens with a read, so the session-open
-    // activation that fails is the only trigger there is.
-    factoryFailures = 1;
-    host = newHost({ idleParkMs: 600_000 });
-    onServingRuntime = () => Promise.resolve();
-    openClient();
-    const input = clientRuntime.getCell<{ value: number }>(
-      space,
-      "activation-failure-recovery-input",
-      undefined,
-    );
-    await input.sync();
+  for (
+    const { failure, induce, expectedParks } of [
+      {
+        failure: "activation failed",
+        induce: () => {
+          factoryFailures = 1;
+        },
+        expectedParks: [{ space, reason: "activation-failed" }],
+      },
+      {
+        failure: "engine failed to open on activation",
+        induce: () => {
+          engineOpenFailures = 1;
+        },
+        // No tenure exists yet, so nothing parks.
+        expectedParks: [],
+      },
+    ]
+  ) {
+    it(`re-activates a space whose ${failure} while its client's session is still live, after the failure-park backoff (serving-loop.md §1)`, async () => {
+      // As above, the session opens with a read, so the session-open
+      // activation that fails is the only trigger there is.
+      induce();
+      host = newHost({ idleParkMs: 600_000 });
+      onServingRuntime = () => Promise.resolve();
+      openClient();
+      const input = clientRuntime.getCell<{ value: number }>(
+        space,
+        "activation-failure-recovery-input",
+        undefined,
+      );
+      await input.sync();
 
-    await activated();
-    expect(activations.entries).toEqual([
-      { space, outcome: "failed" },
-      { space, outcome: "active" },
-    ]);
-    expect(parks.entries).toEqual([{ space, reason: "activation-failed" }]);
-    expect(host.stats().reactivationBackoffs).toBe(1);
+      await activated();
+      expect(activations.entries).toEqual([
+        { space, outcome: "failed" },
+        { space, outcome: "active" },
+      ]);
+      expect(parks.entries).toEqual(expectedParks);
+      expect(host.stats().reactivationBackoffs).toBe(1);
+      expect(host.accessForTestingOnly.failureParkStreaks.get(space)).toBe(1);
 
-    // The successor serves: the client's first write is covered.
-    const engine = await server.engineForSpace(space);
-    const tx = clientRuntime.edit();
-    input.withTx(tx).set({ value: 1 });
-    expect((await tx.commit()).error).toBeUndefined();
-    const authoredSeq = Engine.serverSeq(engine);
-    await awaitAdmitted(server, () => readWatermarkSeq(engine) >= authoredSeq);
-  });
+      // The successor serves: the client's first write is covered.
+      const engine = await server.engineForSpace(space);
+      const tx = clientRuntime.edit();
+      input.withTx(tx).set({ value: 1 });
+      expect((await tx.commit()).error).toBeUndefined();
+      const authoredSeq = Engine.serverSeq(engine);
+      await awaitAdmitted(
+        server,
+        () => readWatermarkSeq(engine) >= authoredSeq,
+      );
+    });
+  }
 
   it("leaves a space parked on a rival's lease to the rival: no activation attempt of its own and no backoff, though the client's session is still live (serving-loop.md §1, §2)", async () => {
     host = newHost({ idleParkMs: 600_000, renewIntervalMs: 25 });
@@ -1865,6 +1890,9 @@ describe("stage F serving loop", () => {
     // successfully served wave.
     const activationTimes: number[] = [];
     const activationLog = new ArrivalLog<void>();
+    // When each park reached the host's park handler, which is where the
+    // re-activation it chains, backoff included, begins.
+    const parkTimes: number[] = [];
     let blowUp = true; // permanent failure, from the very first tenure
     host = new ExecutorHost({
       server,
@@ -1905,8 +1933,10 @@ describe("stage F serving loop", () => {
       onWaveCycle: cycles.record,
       onActivationSettled: (activatedSpace, outcome) =>
         activations.record({ space: activatedSpace, outcome }),
-      onSpaceParked: (parkedSpace, reason) =>
-        parks.record({ space: parkedSpace, reason }),
+      onSpaceParked: (parkedSpace, reason) => {
+        parkTimes.push(Date.now());
+        parks.record({ space: parkedSpace, reason });
+      },
     });
     onServingRuntime = () => Promise.resolve();
     openClient();
@@ -1975,7 +2005,18 @@ describe("stage F serving loop", () => {
     // #waitForInput and is lost when the loop is mid-cycle (the
     // healthy wave's self-echo drain) — a feed record instead
     // guarantees the next cycle runs and reads the throwing policy.
+    //
+    // The gap runs from the failing tenure's park as the host's park
+    // handler saw it, which is where the backoff starts. The test resumes
+    // from the failing commit and from `whenParked` only after that, by
+    // however long a loaded process takes to run it, and a gap measured
+    // from there comes out short by exactly that delay. The park and
+    // activation counts are taken while the healthy tenure still serves,
+    // so the entries they index are this park and the rebuild after it,
+    // however late the test observes either.
     const failing = host.spaceServer(space)!;
+    const parksBefore = parkTimes.length;
+    const countBefore = activationTimes.length;
     blowUp = true;
     const failTx = clientRuntime.edit();
     input.withTx(failTx).set({ value: 1_001 });
@@ -1984,8 +2025,7 @@ describe("stage F serving loop", () => {
       failing.whenParked,
       "the failing tenure's park to complete",
     );
-    const failedAgainAt = Date.now();
-    const countBefore = activationTimes.length;
+    const failedAgainAt = parkTimes[parksBefore];
     const trigger = clientRuntime.edit();
     input.withTx(trigger).set({ value: 1_002 });
     expect((await trigger.commit()).error).toBeUndefined();
@@ -2150,7 +2190,10 @@ describe("stage F serving loop", () => {
   });
 
   it("parks an idle space with no live sessions (IDLE_PARK_MS), releasing the lease", async () => {
-    server = newSharedServer({ sessionTtlMs: 50 });
+    server = newSharedServer({
+      sessions: new MemoryV2Server.SessionRegistry({ ttlMs: 50 }),
+      subscriptionRefreshDelayMs: 0,
+    });
     host = newHost({
       flushDeadlineMs: 500,
       idleParkMs: 100,
@@ -2211,6 +2254,37 @@ describe("stage F serving loop", () => {
     );
     await parks.matching((entry) => entry.reason === "test-park-observer");
     expect(host.spaceServer(space)).toBeUndefined();
+  });
+
+  it("serves a space whose activation report throws, and recovers it from a failed activation all the same", async () => {
+    // The report is a test diagnostic. Here it throws on both of the
+    // activation's outcomes: the failure the host recovers from, and the
+    // activation that recovery starts, which goes on serving.
+    activationObserverThrows = true;
+    factoryFailures = 1;
+    host = newHost({ idleParkMs: 600_000 });
+    onServingRuntime = () => Promise.resolve();
+    openClient();
+    const input = clientRuntime.getCell<{ value: number }>(
+      space,
+      "activation-observer-throw-input",
+      undefined,
+    );
+    await input.sync();
+
+    await activated();
+    expect(activations.entries).toEqual([
+      { space, outcome: "failed" },
+      { space, outcome: "active" },
+    ]);
+    expect(host.spaceServer(space)?.active).toBe(true);
+
+    const engine = await server.engineForSpace(space);
+    const tx = clientRuntime.edit();
+    input.withTx(tx).set({ value: 1 });
+    expect((await tx.commit()).error).toBeUndefined();
+    const authoredSeq = Engine.serverSeq(engine);
+    await awaitAdmitted(server, () => readWatermarkSeq(engine) >= authoredSeq);
   });
 
   it("serves an effectful node behind request-hash memoization: miss fires ONCE via the outbox; recovery memo-hits; retries are input-driven (serving-loop.md §4–§6; T7.Q5, T10.Q4, OW7)", async () => {

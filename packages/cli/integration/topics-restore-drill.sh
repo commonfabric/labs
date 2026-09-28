@@ -23,8 +23,9 @@
 #   API_URL=http://localhost:8000 \
 #     packages/cli/integration/topics-restore-drill.sh
 #
-# CI runs it through integration.sh's `piece-call` section; `topics-drill`
-# runs it alone.
+# CI runs it through integration.sh's `topics-drill` section, which the test
+# topology's `cli-core` suite makes a unit of. The `piece-call` section runs it
+# too, among the other steps a person running that group by hand gets.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

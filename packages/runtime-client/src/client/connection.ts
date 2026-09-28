@@ -26,6 +26,7 @@ import {
   isNavigateRequestNotification,
   isOperationUpdateNotification,
   isPendingWritesNotification,
+  isPresenceUpdateNotification,
   isSpaceAccessLostNotification,
   isTelemetryNotification,
   isVDomBatchNotification,
@@ -33,6 +34,7 @@ import {
   NotificationType,
   OperationUpdateNotification,
   PendingWritesNotification,
+  PresenceUpdateNotification,
   RequestType,
   type RuntimeSecurityContext,
   SerializedDomEvent,
@@ -134,6 +136,7 @@ export type RuntimeConnectionEvents = {
   vdombatch: [VDomBatchNotification];
   pendingwriteschange: [PendingWritesNotification];
   operationupdate: [OperationUpdateNotification];
+  presenceupdate: [PresenceUpdateNotification];
   eventneedsattention: [EventNeedsAttentionNotification];
   eventintentoutcome: [EventIntentOutcomeNotification];
 };
@@ -602,6 +605,8 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
         this.emit("pendingwriteschange", message);
       } else if (isOperationUpdateNotification(message)) {
         this.emit("operationupdate", message);
+      } else if (isPresenceUpdateNotification(message)) {
+        this.emit("presenceupdate", message);
       } else if (isEventNeedsAttentionNotification(message)) {
         this.emit("eventneedsattention", message);
       } else {

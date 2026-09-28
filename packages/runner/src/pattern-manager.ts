@@ -547,6 +547,14 @@ export class PatternManager {
   readonly #modulesByIdentity = new Map<string, { exports: Exports }>();
 
   /**
+   * Program entry module identity → the identities of every module that
+   * program evaluated with, from the latest evaluation that ran it as its
+   * main module. A release of a pattern reads it to say which modules' writer
+   * stamps the release's schema can carry (see `programModuleIdentities`).
+   */
+  readonly #programModules = new Map<string, ReadonlySet<string>>();
+
+  /**
    * In-flight compiled-cache write-backs; awaited by
    * `flushCompileCacheWrites()` for graceful shutdown and deterministic tests.
    * Cold compile write-backs are awaited by `compilePattern()`; recovery and
@@ -2694,6 +2702,10 @@ export class PatternManager {
     const byId = result.exportsByIdentity;
     if (byId) {
       assertNoReservedHoistExports(byId);
+      const main = [...byId].find(([, exports]) => exports === result.main);
+      if (main !== undefined) {
+        this.#programModules.set(main[0], new Set(byId.keys()));
+      }
       for (const [identity, exports] of byId) {
         // `#modulesByIdentity` keeps the whole namespace for MODULE reuse on a
         // by-identity reload (a separate concern from artifact addressing).
@@ -2739,6 +2751,15 @@ export class PatternManager {
     // No eviction for `#addressableByIdentity` — the artifact index is
     // session-lifetime (see its declaration): sync by-identity resolution
     // must keep working for every module evaluated this session.
+  }
+
+  /**
+   * The identities of the modules evaluated in the program `identity` is the
+   * main module of, or `undefined` when no evaluation this session ran it as
+   * one.
+   */
+  programModuleIdentities(identity: string): ReadonlySet<string> | undefined {
+    return this.#programModules.get(identity);
   }
 
   /**
@@ -2854,22 +2875,6 @@ export class PatternManager {
     this.#modulesByIdentity.set(entryIdentity, cached);
     setArtifactEntryRef(pattern, { identity: entryIdentity, symbol });
     return pattern;
-  }
-
-  /**
-   * Attaches the trigger's delegated carriage (`protocol.md` §2b) ONLY for a
-   * write target FOREIGN to the serving manager's home space. Home-space
-   * writebacks and every client writeback are plain bookkeeping and carry
-   * none.
-   */
-  #writebackDelegationFor(
-    space: MemorySpace,
-    delegated: WritebackDelegation | undefined,
-  ): { delegated?: WritebackDelegation } {
-    const home = this.#runtime.storageManager.servingHomeSpace;
-    return delegated !== undefined && home !== undefined && space !== home
-      ? { delegated }
-      : {};
   }
 
   /**
@@ -3111,7 +3116,7 @@ export class PatternManager {
       this.#runtime.stampServerRun(tx, {
         actionId: `compile-cache/source-writeback/${entryIdentity}`,
         kind: "bookkeeping",
-        ...this.#writebackDelegationFor(space, delegated),
+        ...this.#runtime.delegationForWriteTo(space, delegated),
       });
       committedModuleDelegations = writeSourceDocs(
         this.#runtime,
@@ -3202,7 +3207,7 @@ export class PatternManager {
         this.#runtime.stampServerRun(tx, {
           actionId: `compile-cache/writeback/${entryIdentity}`,
           kind: "bookkeeping",
-          ...this.#writebackDelegationFor(space, delegated),
+          ...this.#runtime.delegationForWriteTo(space, delegated),
         });
         chunkDelegations = writeSourceAndCompiledDocs(
           this.#runtime,

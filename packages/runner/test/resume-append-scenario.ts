@@ -11,7 +11,7 @@ import {
 import { Runtime } from "../src/runtime.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
 
@@ -126,19 +126,13 @@ class GatedStorageManager extends StorageManager {
   private constructor(o: Options, server: MemoryV2Server.Server, gate?: Gate) {
     super(o, new GatedSessionFactory(() => server, gate));
   }
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed() {
+    return { accepted: false, reason: "no-remote-resolution" } as const;
   }
 }
 
 export function makeServer(): MemoryV2Server.Server {
-  return new MemoryV2Server.Server({
-    authorizeSessionOpen(m) {
-      const p = (m.authorization as { principal?: unknown })?.principal;
-      return typeof p === "string" ? p : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
+  return newSharedServer();
 }
 
 export interface AppendScenario {

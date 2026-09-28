@@ -62,7 +62,7 @@ import {
 } from "../typescript/scope-brand.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 import { scopeInsideUnionError } from "../scope-placement.ts";
-import { combineIfcLabels } from "../ifc-labels.ts";
+import { withIfcLabels } from "../ifc-labels.ts";
 import {
   holdsUnreadLabel,
   holdsUnreadMetadataLabel,
@@ -846,7 +846,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         )
         ? metadata.reduce<MutableJSONSchema>(
           (schema, labels) =>
-            this.#mergeIfcMetadata(schema, labels as Record<string, unknown>),
+            withIfcLabels(schema, labels as Record<string, unknown>),
           payload,
         )
         : payload;
@@ -1801,7 +1801,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       return baseSchema;
     }
 
-    return this.#mergeIfcMetadata(baseSchema, ifc);
+    return withIfcLabels(baseSchema, ifc);
   }
 
   /**
@@ -2711,18 +2711,6 @@ export class CommonFabricFormatter implements TypeFormatter {
       return undefined;
     }
     return typeNode.typeArguments ? [...typeNode.typeArguments] : undefined;
-  }
-
-  #mergeIfcMetadata(
-    schema: MutableJSONSchema,
-    ifc: Record<string, unknown>,
-  ): MutableJSONSchema {
-    if (typeof schema === "boolean") {
-      return schema === false ? { not: true, ifc } : { ifc };
-    }
-
-    const existingIfc = isObjectOrArray(schema.ifc) ? schema.ifc : {};
-    return { ...schema, ifc: combineIfcLabels(existingIfc, ifc) };
   }
 
   #encodeJsonPointerPath(value: unknown): string | undefined {

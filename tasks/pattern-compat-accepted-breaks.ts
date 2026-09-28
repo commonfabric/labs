@@ -889,4 +889,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "a Loom panel's new optional addedByProfile reads as a narrowed union branch under the baseline recorded before it",
     record: "docs/history/loom-panel-adder-profile-break.md",
   },
+  {
+    // The demo's release rule now pins two levels, `commit` and the `submit`
+    // step beneath it, so the policy its briefs declare has a new digest,
+    // which the proof reads as a changed label on the briefs.
+    pattern: "cfc-exchange-rules/witnessed-chain.tsx",
+    baselines: ["20260926T005010Z-wTSqH_JN5Vg6LFNp"],
+    paths: ["argument.briefs[]"],
+    reason:
+      "the witnessed-chain demo's release rule pins the submit step beneath commit, which changes the declared policy's digest",
+    record: "docs/history/witnessed-chain-two-level-break.md",
+  },
 ];

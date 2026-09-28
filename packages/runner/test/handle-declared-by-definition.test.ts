@@ -10,7 +10,7 @@
 
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-import { spy } from "@std/testing/mock";
+import { spy, stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
 
@@ -495,6 +495,43 @@ describe("handle declared by a definition", () => {
           },
         }),
       ).toBe(true);
+    });
+
+    it("returns `false` for a union whose options read one list against two definition maps", () => {
+      // The union has no definitions to hand its options, so each option
+      // reads `A` against its own, and both maps name one list, which reaches
+      // itself under each. The list is read to a verdict once under each map,
+      // and the reading settles. One that did not settle would resolve
+      // without end, which the stub turns into a failure.
+
+      const list = [{ $ref: "#/$defs/X" }, { $ref: "#/$defs/H" }];
+      const definitions = () => ({
+        A: { anyOf: list },
+        X: { anyOf: [{ $ref: "#/$defs/A" }], oneOf: [{ $ref: "#/$defs/H" }] },
+        H: { type: "string", asCell: ["cell"] },
+      });
+      const resolve = ContextualFlowControl.resolveSchemaRefs;
+      let resolutions = 0;
+      using _bounded = stub(
+        ContextualFlowControl,
+        "resolveSchemaRefs",
+        (...args: Parameters<typeof resolve>) => {
+          if (++resolutions > 1000) {
+            throw new Error("the reading did not settle");
+          }
+          return resolve.apply(ContextualFlowControl, args);
+        },
+      );
+
+      expect(
+        SchemaObjectTraverser.hasAsCell({
+          anyOf: [
+            { $ref: "#/$defs/A", $defs: definitions() },
+            { $ref: "#/$defs/A", $defs: definitions() },
+            { type: "string" },
+          ],
+        } as JSONSchema),
+      ).toBe(false);
     });
 
     it("resolves each reference at most twice for definitions that each name the next two", () => {

@@ -37,14 +37,8 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import * as Engine from "@commonfabric/memory/v2/engine";
-import {
-  ExecutionLeaseCycle,
-  executionLeaseHolder,
-} from "@commonfabric/memory/v2/execution-lease";
-import { Runtime } from "../src/runtime.ts";
+import type { Runtime } from "../src/runtime.ts";
 import type { Cell } from "../src/cell.ts";
-import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import type {
   IExtendedStorageTransaction,
   MemorySpace,
@@ -54,13 +48,8 @@ import { isRawBuiltinResult, raw } from "../src/module.ts";
 import { map } from "../src/builtins/map.ts";
 import { filter } from "../src/builtins/filter.ts";
 import { flatMap } from "../src/builtins/flatmap.ts";
-import {
-  stampWaveRunContext,
-  WaveAccumulator,
-  waveSettlementOf,
-} from "../src/executor/wave.ts";
-import { EngineWaveCommitSink } from "../src/executor/engine-wave-sink.ts";
-import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { stampWaveRunContext, waveSettlementOf } from "../src/executor/wave.ts";
+import { ServingWaves } from "./support/serving-waves.ts";
 
 const signer = await Identity.fromPassphrase("list container link withdrawal");
 const space = signer.did() as MemorySpace;
@@ -181,108 +170,17 @@ function observeCoordinator(
 }
 
 describe("list container link withdrawal", () => {
-  let server: ReturnType<typeof newSharedServer>;
-  let storageManager: EmulatedStorageManager;
+  let waves: ServingWaves;
   let runtime: Runtime;
-  let engine: Engine.Engine;
-  let lease: ExecutionLeaseCycle;
-  let waves: WaveAccumulator[];
-  let peer: Runtime | undefined;
-
-  // The wave the next seal joins. A seal arriving while there is none opens
-  // one on the store as it stands.
-  let current: WaveAccumulator | undefined;
 
   beforeEach(async () => {
-    waves = [];
-    peer = undefined;
-    current = undefined;
-    server = newSharedServer();
-    storageManager = EmulatedStorageManager.connectTo(server, {
-      as: signer,
-      id: executionLeaseHolder(`service:${space}`),
-    });
-    runtime = new Runtime({
-      apiUrl: new URL(import.meta.url),
-      storageManager,
-      servingPosture: true,
-      experimental: { serverExecution: true },
-    });
-    engine = await server.engineForSpace(space);
-    lease = new ExecutionLeaseCycle({
-      engine,
-      space,
-      holder: executionLeaseHolder(`service:${space}`),
-    });
-    expect(lease.acquire()).toBe(true);
+    waves = await ServingWaves.open(signer);
+    runtime = waves.runtime;
   });
 
   afterEach(async () => {
-    runtime.clearSealDestination();
-    for (const wave of waves) wave.abandon("test cleanup");
-    await Promise.all(waves.map((wave) => wave.settled()));
-    lease.release();
-    await storageManager.synced();
-    await runtime.dispose();
-    await peer?.dispose();
-    await server.close();
+    await waves.dispose();
   });
-
-  const newWave = () => {
-    const wave = new WaveAccumulator({
-      space,
-      basisSeq: Engine.serverSeq(engine),
-      lease,
-      foreignWrites: "accept",
-      foreignWriteGrant: () => true,
-      scopeKeyIdentity: { principal: signer.did(), sessionId: "wave-test" },
-      replicaFor: (target) => storageManager.open(target).replica,
-    });
-    waves.push(wave);
-    return wave;
-  };
-
-  // Every wave commits under the lease holder's session, so its sinks share
-  // one commit counter, as a serving host's do.
-  const localSeqRef = { value: 0 };
-  const newSink = () =>
-    new EngineWaveCommitSink({
-      engineFor: () => engine,
-      sessionId: executionLeaseHolder(`service:${space}`),
-      localSeqRef,
-    });
-
-  // A serving loop runs one action at a time per space, so a wave takes one
-  // seal at a time. Seals queue here in the order the runtime issues them.
-  const serve = () => {
-    let sealing: Promise<unknown> = Promise.resolve();
-    runtime.installSealDestination({
-      seal: (tx) => {
-        const sealed = sealing.then(() => (current ??= newWave()).seal(tx));
-        sealing = sealed.catch(() => {});
-        return sealed;
-      },
-    }, {
-      runStamper: (tx, info) =>
-        stampWaveRunContext(tx, { actionId: info.actionId, kind: info.kind }),
-    });
-  };
-
-  const commitCurrentWave = async () => {
-    const wave = current!;
-    current = undefined;
-    await wave.commitWave(newSink());
-    await wave.settled();
-    await runtime.scheduler.idleWithPendingCommits();
-  };
-
-  const abandonCurrentWave = async () => {
-    const wave = current!;
-    current = undefined;
-    wave.abandon("the serving loop lost its lease");
-    await wave.settled();
-    await runtime.scheduler.idleWithPendingCommits();
-  };
 
   const newSource = async (name: string, list: number[]) => {
     const source = runtime.getCell<{ list: number[]; tag?: string }>(
@@ -293,34 +191,16 @@ describe("list container link withdrawal", () => {
     const seed = runtime.edit();
     source.withTx(seed).set({ list });
     expect((await seed.commit()).error).toBeUndefined();
-    await storageManager.synced();
+    await waves.storageManager.synced();
     return source;
   };
 
   // Another client replaces the list, and the serving runtime reconciles what
-  // it sees. Waiting for the storage manager to settle here would wait on the
-  // open wave, which settles only when it commits.
-  const replaceList = async (
+  // it sees.
+  const replaceList = (
     source: Cell<{ list: number[]; tag?: string }>,
     list: number[],
-  ) => {
-    peer ??= new Runtime({
-      apiUrl: new URL(import.meta.url),
-      storageManager: EmulatedStorageManager.connectTo(server, {
-        as: signer,
-        id: "peer",
-      }),
-    });
-    const peerSource = peer.getCellFromLink<{ list: number[] }>(
-      source.getAsNormalizedFullLink(),
-    );
-    await peerSource.sync();
-    const tx = peer.edit();
-    peerSource.withTx(tx).key("list").set(list);
-    expect((await tx.commit()).error).toBeUndefined();
-    await source.sync();
-    await runtime.scheduler.idleWithPendingCommits();
-  };
+  ) => waves.writeAsPeer(source, (cell) => cell.key("list").set(list));
 
   // Starts the program over the source's list, and reads its aggregate as a
   // viewer would, so the coordinator runs.
@@ -364,11 +244,11 @@ describe("list container link withdrawal", () => {
 
         // The wave opens before an authored write moves the source on, so the
         // rewrite sealed into it below reads a stale basis.
-        current = newWave();
+        waves.openWave();
         const authored = runtime.edit();
         source.withTx(authored).key("tag").set("authored");
         expect((await authored.commit()).error).toBeUndefined();
-        serve();
+        waves.serve();
         const doomed = runtime.edit();
         stampWaveRunContext(doomed, {
           actionId: "rewrite-source",
@@ -383,25 +263,25 @@ describe("list container link withdrawal", () => {
           source,
         );
         try {
-          await commitCurrentWave();
+          await waves.commitWave();
           expect(
             await record.firstWithdrawn,
             "the wave withdrew the coordinator's first reconcile",
           ).toBe(true);
           expect(
-            current,
+            waves.current,
             "the re-armed reconcile was sealed into the next wave",
           ).toBeDefined();
-          await commitCurrentWave();
-          expect(current, "nothing further was sealed").toBeUndefined();
+          await waves.commitWave();
+          expect(waves.current, "nothing further was sealed").toBeUndefined();
 
           await replaceList(source, [1, 2, 3]);
           expect(
-            current,
+            waves.current,
             "the reconcile of the filled list was sealed into a wave",
           ).toBeDefined();
-          await commitCurrentWave();
-          await storageManager.synced();
+          await waves.commitWave();
+          await waves.storageManager.synced();
 
           const container = record.linked.at(-1);
           expect(container, "the coordinator linked a container")
@@ -423,29 +303,29 @@ describe("list container link withdrawal", () => {
 
       it("sets up an element again after the wave that added it is abandoned", async () => {
         const source = await newSource(coordinator.name, [1]);
-        serve();
+        waves.serve();
         const { resultCell, stopReading } = await start(
           coordinator.name,
           coordinator.body,
           source,
         );
         try {
-          await commitCurrentWave();
+          await waves.commitWave();
 
           await replaceList(source, [1, 2]);
           expect(
-            current,
+            waves.current,
             "the reconcile that added an element was sealed into a wave",
           ).toBeDefined();
-          await abandonCurrentWave();
+          await waves.abandonWave();
 
           await replaceList(source, [1, 2, 3]);
           expect(
-            current,
+            waves.current,
             "the next reconcile was sealed into a wave",
           ).toBeDefined();
-          await commitCurrentWave();
-          await storageManager.synced();
+          await waves.commitWave();
+          await waves.storageManager.synced();
 
           expect(
             await resultCell.key("aggregate").pull(),

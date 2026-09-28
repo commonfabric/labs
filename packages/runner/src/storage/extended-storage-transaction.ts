@@ -176,6 +176,7 @@ import {
   getTransactionReadActivities,
   getTransactionWriteAttempts,
   getTransactionWriteDetails,
+  getTransactionWrittenSpaces,
 } from "./transaction-inspection.ts";
 
 /**
@@ -248,7 +249,12 @@ const reservedSiblingCarriedForward = (
   typeof carried !== "function" &&
   valueEqual(carried as FabricValue, stored as FabricValue);
 
-type CfcInstrumentationHooks = {
+/**
+ * What a transaction reports its CFC work through, and the runtime services it
+ * asks for. A hook that acts on a transaction is handed it, so one object can
+ * serve every transaction a runtime opens.
+ */
+export type CfcInstrumentationHooks = {
   /** The runtime's ceiling check, applied before a payload leaves a read. */
   checkReadCeiling?(
     tx: IExtendedStorageTransaction,
@@ -434,6 +440,25 @@ export const readOnlyCfcView = <T>(value: T): T => {
   return view as T;
 };
 
+// The transaction's trust state — who is acting, and which implementation is
+// writing — is what the CFC gates decide on, and pattern-authored code reaches
+// the transaction its cells are bound to. So no method sets it. The classes
+// below hand these module-private functions their private fields, and the
+// exported `setCfcTrustSnapshot` and `setCfcImplementationIdentity` are the
+// only way in: a module the sandbox does not let pattern code import, and a
+// brand check no object pattern code builds or reshapes can pass.
+let assignCfcTrustSnapshot: (
+  tx: object,
+  snapshot: TrustSnapshot | undefined,
+) => boolean;
+let assignCfcImplementationIdentity: (
+  tx: object,
+  identity: ImplementationIdentity | undefined,
+) => boolean;
+let unwrapTransaction: (
+  tx: object,
+) => IExtendedStorageTransaction | undefined;
+
 export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   #commitCallbacks = new Set<
     (
@@ -524,10 +549,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     prepare: { status: "unprepared" },
     dereferenceTraces: [],
     structureContainers: [],
+    assertedValueRoots: [],
     triggerReads: [],
     writePolicyInputs: [],
     writePolicyInputIdentities: new Map(),
     writeIdentity: { sawWrite: false, multiple: false },
+    attributedInitialization: false,
     moduleDelegations: new Map(),
     outbox: [],
     diagnostics: [],
@@ -722,8 +749,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   /**
    * The prepared-digest input and epoch-bound computation, which tests and
-   * benchmarks drive directly to check binding and cache reuse, and the
-   * privileged write a fixture installs stored runtime state with.
+   * benchmarks drive directly to check binding and cache reuse, the
+   * privileged write a fixture installs stored runtime state with, and the
+   * instrumentation hooks the transaction was opened with.
    *
    * `privilegedSystemWrite()` runs one write inside the privileged
    * persistence scope, so it lands a document's reserved siblings the way
@@ -741,8 +769,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       value: FabricValue,
       options?: IWriteOptions,
     ): void;
+    readonly cfcInstrumentation: CfcInstrumentationHooks;
   } {
     return {
+      cfcInstrumentation: this.#cfcInstrumentation,
       buildPreparedDigestInput: () => this.#buildPreparedDigestInput(),
       preparedDigest: () => this.#preparedDigest(),
       privilegedSystemWrite: (address, value, options) =>
@@ -1863,27 +1893,70 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   recordCfcStructureContainer(address: CfcAddress): void {
+    // A container decides where preparation stamps membership, so recording
+    // one retires the digest memo and aborts a preparation it interrupts.
+    this.#noteCfcActivity();
     this.#cfcState.structureContainers.push(deepFreeze(address));
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("structure-container-added");
     }
   }
 
-  setCfcTrustSnapshot(snapshot: TrustSnapshot | undefined): void {
+  recordCfcAssertedValueRoot(
+    address: CfcAddress,
+    authorization?: RuntimeWritePolicyAuthorization,
+    reference?: CfcAddress,
+  ): void {
+    // A root widens where a flow stamp lands, so a record without the
+    // runtime's mark is dropped: pattern code reaches this transaction, and
+    // a root it named could re-stamp values it never wrote.
+    if (!runtimeWritePolicyAuthorized(authorization)) return;
+    // A root decides where preparation stamps the writer's flow label, so
+    // recording one retires the digest memo and aborts a preparation it
+    // interrupts.
     this.#noteCfcActivity();
-    this.#cfcState.trustSnapshot = deepFreeze(snapshot);
+    this.#cfcState.assertedValueRoots.push(deepFreeze({
+      address,
+      identity: this.#cfcState.implementationIdentity,
+      ...(reference !== undefined ? { reference } : {}),
+    }));
     if (this.#cfcState.prepare.status === "prepared") {
-      this.invalidateCfc("trust-snapshot-changed");
+      this.invalidateCfc("asserted-value-root-added");
     }
   }
 
-  setCfcImplementationIdentity(
-    identity: ImplementationIdentity | undefined,
+  static {
+    assignCfcTrustSnapshot = (tx, snapshot) => {
+      if (!(#cfcState in tx)) return false;
+      tx.#noteCfcActivity();
+      tx.#cfcState.trustSnapshot = deepFreeze(snapshot);
+      if (tx.#cfcState.prepare.status === "prepared") {
+        tx.invalidateCfc("trust-snapshot-changed");
+      }
+      return true;
+    };
+    assignCfcImplementationIdentity = (tx, identity) => {
+      if (!(#cfcState in tx)) return false;
+      tx.#noteCfcActivity();
+      tx.#cfcState.implementationIdentity = deepFreeze(identity);
+      if (tx.#cfcState.prepare.status === "prepared") {
+        tx.invalidateCfc("implementation-identity-changed");
+      }
+      return true;
+    };
+  }
+
+  markCfcAttributedInitialization(
+    authorization: RuntimeWritePolicyAuthorization,
   ): void {
+    // The mark is what lets an initialization claim the acting principal, so
+    // a call without the runtime's authorization changes nothing.
+    if (!runtimeWritePolicyAuthorized(authorization)) return;
+    if (this.#cfcState.attributedInitialization) return;
     this.#noteCfcActivity();
-    this.#cfcState.implementationIdentity = deepFreeze(identity);
+    this.#cfcState.attributedInitialization = true;
     if (this.#cfcState.prepare.status === "prepared") {
-      this.invalidateCfc("implementation-identity-changed");
+      this.invalidateCfc("attributed-initialization-marked");
     }
   }
 
@@ -2366,10 +2439,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     );
 
     const writes: AttemptedWrite[] = [];
-    const seenWriteSpaces = new Set<MemorySpace>(
-      (log.writes ?? []).map((write) => write.space),
-    );
-    for (const space of seenWriteSpaces) {
+    for (const space of getTransactionWrittenSpaces(this)) {
       for (const write of this.getWriteDetails(space)) {
         writes.push(deepFreeze({
           ...write.address,
@@ -2401,6 +2471,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       dereferenceTraces: [...this.#cfcState.dereferenceTraces],
       triggerReads: [...this.#cfcState.triggerReads],
       writePolicyInputs: [...this.#cfcState.writePolicyInputs],
+      ...(this.#cfcState.assertedValueRoots.length > 0
+        ? { assertedValueRoots: [...this.#cfcState.assertedValueRoots] }
+        : {}),
+      ...(this.#cfcState.structureContainers.length > 0
+        ? { structureContainers: [...this.#cfcState.structureContainers] }
+        : {}),
       implementationIdentity: this.#cfcState.implementationIdentity,
       trustSnapshot: this.#cfcState.trustSnapshot,
       ...(this.#cfcState.moduleDelegations.size > 0
@@ -2521,13 +2597,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    */
   #materializeReferencedSchemaDocuments(): void {
     if (!getContentAddressedSchemasConfig()) return;
-    const log = this.getReactivityLog();
-    const spaces = new Set(
-      [...(log.writes ?? []), ...(log.attemptedWrites ?? [])].map((write) =>
-        write.space
-      ),
-    );
-    for (const space of spaces) {
+    for (const space of getTransactionWrittenSpaces(this)) {
       for (const detail of this.getWriteDetails(space)) {
         this.#stageSchemaDocsForValue(space, detail.address, detail.value);
       }
@@ -3359,8 +3429,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // still open and still writable, so a caller that swallows the error and
       // commits anyway lands the prefix. Callers must treat a throw from
       // `writeValuesOrThrow` as poisoning the transaction (abort it, or let the
-      // throw propagate past the commit, which is what every caller does
-      // today). See `writeValuesOrThrow` partial-batch coverage in
+      // throw propagate past the commit). See `writeValuesOrThrow`
+      // partial-batch coverage in
       // `packages/runner/test/memory-v2-acl-mutation.test.ts`.
       // The value reaches the chokepoint's meta-seam and reserved-sibling
       // arms, both of which read the envelope of a document-root write. A
@@ -3452,6 +3522,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.#preparedDigestMemo = undefined;
     this.#cfcState.dereferenceTraces = [];
     this.#cfcState.structureContainers = [];
+    this.#cfcState.assertedValueRoots = [];
     const result = this.tx.abort(reason);
     // An abort is a terminal outcome, and it discards the staged writes the
     // same way a rejected commit does. Settle callbacks compensate for writes
@@ -4101,6 +4172,14 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     this.#wrapped.recordCfcStructureContainer(address);
   }
 
+  recordCfcAssertedValueRoot(
+    address: CfcAddress,
+    authorization?: RuntimeWritePolicyAuthorization,
+    reference?: CfcAddress,
+  ): void {
+    this.#wrapped.recordCfcAssertedValueRoot(address, authorization, reference);
+  }
+
   prepareForCommit(): void {
     this.#wrapped.prepareForCommit();
   }
@@ -4113,14 +4192,14 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     return this.#wrapped.prepareCfc();
   }
 
-  setCfcTrustSnapshot(snapshot: TrustSnapshot | undefined): void {
-    this.#wrapped.setCfcTrustSnapshot(snapshot);
+  static {
+    unwrapTransaction = (tx) => #wrapped in tx ? tx.#wrapped : undefined;
   }
 
-  setCfcImplementationIdentity(
-    identity: ImplementationIdentity | undefined,
+  markCfcAttributedInitialization(
+    authorization: RuntimeWritePolicyAuthorization,
   ): void {
-    this.#wrapped.setCfcImplementationIdentity(identity);
+    this.#wrapped.markCfcAttributedInitialization(authorization);
   }
 
   recordCfcWritePolicyInput(
@@ -4554,4 +4633,64 @@ function schemaMetaCarrierOf(
     return { [SCHEMA_META_MEMBER]: value };
   }
   return undefined;
+}
+
+/**
+ * Runs `assign` on the transaction `tx` is, or wraps, and throws when neither
+ * is one this module built.
+ */
+const assignTrustState = (
+  tx: IExtendedStorageTransaction,
+  assign: (tx: object) => boolean,
+  what: string,
+): void => {
+  let current: IExtendedStorageTransaction | undefined = tx;
+  while (current !== undefined) {
+    if (assign(current)) return;
+    current = unwrapTransaction(current);
+  }
+  throw new Error(
+    `${what} requires a transaction the runtime created`,
+  );
+};
+
+/**
+ * Sets (or clears) the CFC trust snapshot for `tx`: the acting principal the
+ * CFC gates take this transaction's trust from.
+ *
+ * The runtime sets it when it creates a transaction. Only host code calls
+ * this: the sandbox does not let pattern code import it, and the transaction
+ * has no method that does the same.
+ */
+export function setCfcTrustSnapshot(
+  tx: IExtendedStorageTransaction,
+  snapshot: TrustSnapshot | undefined,
+): void {
+  assignTrustState(
+    tx,
+    (target) => assignCfcTrustSnapshot(target, snapshot),
+    "setCfcTrustSnapshot()",
+  );
+}
+
+/**
+ * Sets (or clears) the implementation identity that authors `tx`'s writes
+ * from here on. Each write-policy input captures the identity current when it
+ * is recorded, and `writeAuthorizedBy`, the runtime-minted integrity gate and
+ * the grant writer all trust it.
+ *
+ * The runner sets it for the handlers and builtins it runs, and host code sets
+ * it for the writes it makes as a trusted builtin. The sandbox does not let
+ * pattern code import this, and the transaction has no method that does the
+ * same.
+ */
+export function setCfcImplementationIdentity(
+  tx: IExtendedStorageTransaction,
+  identity: ImplementationIdentity | undefined,
+): void {
+  assignTrustState(
+    tx,
+    (target) => assignCfcImplementationIdentity(target, identity),
+    "setCfcImplementationIdentity()",
+  );
 }

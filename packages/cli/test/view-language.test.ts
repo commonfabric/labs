@@ -37,6 +37,11 @@ import {
 import { yamlLanguage } from "../lib/view/languages/yaml/language.ts";
 import { pythonLanguage } from "../lib/view/languages/python/language.ts";
 import { swiftLanguage } from "../lib/view/languages/swift/language.ts";
+import { kotlinLanguage } from "../lib/view/languages/kotlin/language.ts";
+import { tomlLanguage } from "../lib/view/languages/toml/language.ts";
+import { propertiesLanguage } from "../lib/view/languages/properties/language.ts";
+import { proguardLanguage } from "../lib/view/languages/proguard/language.ts";
+import { xmlLanguage } from "../lib/view/languages/xml/language.ts";
 import { binaryLanguage } from "../lib/view/languages/binary/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
 import {
@@ -133,6 +138,16 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("python"), pythonLanguage);
   assertEquals(languageForName("py"), pythonLanguage);
   assertEquals(languageForName("swift"), swiftLanguage);
+  assertEquals(languageForName("kotlin"), kotlinLanguage);
+  assertEquals(languageForName("kt"), kotlinLanguage);
+  assertEquals(languageForName("toml"), tomlLanguage);
+  assertEquals(languageForName("properties"), propertiesLanguage);
+  assertEquals(languageForName("java-properties"), propertiesLanguage);
+  assertEquals(languageForName("proguard"), proguardLanguage);
+  assertEquals(languageForName("r8"), proguardLanguage);
+  assertEquals(languageForName("xml"), xmlLanguage);
+  assertEquals(languageForName("svg"), xmlLanguage);
+  assertEquals(languageForName("plist"), xmlLanguage);
   expect(languageForName("binary")).toBe(binaryLanguage);
   expect(languageForName("bytes")).toBe(binaryLanguage);
   assertEquals(languageForName("plain-text"), plainTextLanguage);
@@ -147,6 +162,11 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "yaml",
     "python",
     "swift",
+    "kotlin",
+    "toml",
+    "properties",
+    "proguard",
+    "xml",
     "binary",
     "plain-text",
   ]);
@@ -167,6 +187,16 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "python",
     "py",
     "swift",
+    "kotlin",
+    "kt",
+    "toml",
+    "properties",
+    "java-properties",
+    "proguard",
+    "r8",
+    "xml",
+    "svg",
+    "plist",
     "binary",
     "bytes",
     "plain-text",
@@ -531,6 +561,11 @@ Deno.test("distinctLanguages: dedupes in first-seen order", () => {
     "e.yaml",
     "f.py",
     "Package.swift",
+    "build.gradle.kts",
+    "libs.versions.toml",
+    "gradle.properties",
+    "proguard-rules.pro",
+    "AndroidManifest.xml",
     "image.png",
     "LICENSE",
     undefined,
@@ -544,6 +579,11 @@ Deno.test("distinctLanguages: dedupes in first-seen order", () => {
       "yaml",
       "python",
       "swift",
+      "kotlin",
+      "toml",
+      "properties",
+      "proguard",
+      "xml",
       "binary",
       "plain-text",
     ],

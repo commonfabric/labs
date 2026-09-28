@@ -1423,9 +1423,8 @@ the binding takes its instantiated declared type, which holds every branch.
 
 Pattern result inference reads returned input bindings through the same
 function when a returned binding carries a scope wrapper. Scope detection reads
-both the emitted node and the recovered declaration: the printer can emit
-`unknown` for a scoped generic array, while its declaration still names the
-scope the result must retain. A node printed from a type is registered with that
+the emitted node, and a node printed from a type names the scope wrapper that
+type carries. A node printed from a type is registered with that
 type rather than with the type at the expression, which is the pattern body's
 view: the names a printed node spells
 resolve to nothing where it is emitted, so schema generation reads it by the
@@ -1939,6 +1938,22 @@ adjustments:
   candidate holds an authored `Default` (`getScopeWrapper` and
   `restoreDefault` in `transformers/type-shrinking.ts`;
   `test/shrunk-capture-wrappers.test.ts`)
+- a node built from part of a value keeps the value's CFC labels. The literal
+  a property chain builds, each node a type-driven or node-driven shrink
+  builds, and a node the narrowing of cells rebuilds is recorded as narrowing
+  the value it stands for, through the `narrowedFrom` schema hint, with the
+  node the value's declaration writes where one is at hand; schema generation
+  adds the labels that value's own formatting attaches at its top (the
+  schema-generator mapping spec's §13). A capture leaf printed from its type
+  stands for the value its declaration spells, which the print may not, as
+  with a `typeof` binding in a label. A node built from part of a narrowed
+  node or of such a print, rebuilt from one by a later pass, or built from the
+  type of one narrows the same value, its parts matched by property name and
+  array element (`recordNarrowedFrom` and `recordDeclaredValue` in
+  `core/cross-stage-state.ts`; `recordNarrowing` and `carryNarrowing` in
+  `transformers/type-shrinking.ts`; `test/narrowed-capture-labels.test.ts`).
+  A rest binding (`{ ...rest }`), and a binding under a computed key, reads
+  no one property, so no property's declaration spells its value
 - a pass that reads the structure of a node printed from a type reads the
   print's unfolding in its place: a node of the print's own kind built from the
   type it was printed from, each type node below it printed afresh from its own
@@ -1955,17 +1970,19 @@ adjustments:
   for its type would, every part a pass keeps is read by its type, and no pass
   builds a node from a piece of a print
   (`test/printed-type-node-schema.test.ts`). A scoped cell
-  (`PerUser<Writable<T>>`), whose scope only its alias names, is rebuilt by the
-  narrowing of cells: its cell, printed afresh, is narrowed inside a rebuilt
-  scope wrapper registered with the scoped cell's type, through which
-  node-driven shrinking and identity-only paths then reach the cell. Schema
-  generation reads the scope from the wrapper's name and the cell from the node
-  inside it. Node-driven shrinking keeps the print of a scoped cell whole. Two
-  rules keep what a print says through the unfolding: a narrowed wrapper around
-  a nullable cell's value alternatives is not registered with the union's type,
-  which schema generation would read in the wrapper's place; and the declared
-  members of a generic declaration, written in terms of parameters an
-  instantiation binds, do not shrink that instantiation
+  (`PerUser<Writable<T>>`), whose scope only its alias names, is rebuilt when
+  the narrowing of cells reaches its scope wrapper directly: its cell, printed
+  afresh, is narrowed inside a rebuilt scope wrapper registered with the scoped
+  cell's type, through which node-driven shrinking and identity-only paths then
+  reach the cell. Schema generation reads the scope from the wrapper's name and
+  the cell from the node inside it. Capability narrowing does not reach a scoped
+  cell through the printed union of an optional member, so that cell keeps its
+  authored capability and value shape. Node-driven shrinking keeps the print of
+  a scoped cell whole. Two rules keep what a print says through the unfolding: a
+  narrowed wrapper around a nullable cell's value alternatives is not registered
+  with the union's type, which schema generation would read in the wrapper's
+  place; and the declared members of a generic declaration, written in terms of
+  parameters an instantiation binds, do not shrink that instantiation
   (`resolveMembersFromDeclaration`)
 - tuple types and numeric-indexed object types are not rewritten to
   array-with-unknown-items during this optimization
@@ -3184,8 +3201,11 @@ stage gated on a harness-supplied option rather than on source content: its
 `filter` requires `TransformationOptions.patternCoverage` to be set and the
 file not to be a declaration file, and a filtered-out stage returns the source
 file untouched (`Transformer.toFactory`, `src/core/transformers.ts`). Nothing
-inside this package ever sets the option; it exists for the runner's `cf test`
-pattern-coverage mechanism described in `docs/development/COVERAGE.md`.
+inside this package ever sets the option; it exists for the authored-pattern
+coverage mechanism described in `docs/development/COVERAGE.md`. In the full
+run, that coverage comes from three suites: `pattern-unit`, through `cf test`,
+and `pattern-reload` and the arm of `pattern-integration` with server execution
+off, through the browser worker's runtime.
 
 ### 16.1 Enablement and plumbing
 
@@ -3200,10 +3220,15 @@ The option is constructed end-to-end by the runner/CLI chain:
 
 1. `cf test` resolves a coverage directory from the `--pattern-coverage-dir`
    flag, falling back to the `CF_PATTERN_COVERAGE_DIR` environment variable
-   (`packages/cli/commands/test.ts`). Per `docs/development/COVERAGE.md`, that
-   variable is read in exactly this one place — jobs running plain `deno test`
-   or talking to a Toolshed server never reach this code, so setting it there
-   has no effect.
+   (`packages/cli/commands/test-command.ts`). The browser-driven integration
+   suites do not run through `cf test`. Their harness,
+   `packages/integration/pattern-coverage.ts`, reads the same variable to turn
+   the browser worker's collector on. The worker's runtime takes its collector
+   through `RuntimeOptions.patternCoverage`, as `docs/development/COVERAGE.md`
+   describes. Two pattern integration tests also read it, since they run a
+   pattern in the test process: `recommend-a-book.test.ts` builds a collector
+   of its own, and `agent-book-inputs.test.ts` hands the directory to
+   `runTestPattern`.
 2. The test runner builds one `PatternCoverageCollector` per test file and
    passes it as the `patternCoverage` harness option to
    `engine.compileAndEvaluateModules` (`packages/cli/lib/test-runner.ts`; the
@@ -3434,10 +3459,10 @@ end_of_record
 `<url-encoded relative test path>[--<participant>].pattern-coverage.lcov`
 file per test into the coverage directory (`patternCoverageOutputPath`;
 `packages/cli/lib/test-runner.ts`). Per `docs/development/COVERAGE.md`, those
-files feed the CI coverage-debt gate as the sole source of covered-line data
-for authored pattern files (currently only the `pattern-unit-test` job), and
-`DA` records exist only for lines the instrumentation could name — the
-denominator caveat documented there.
+files feed the repository-wide coverage figure as a source of covered-line data
+for authored pattern files (the `pattern-unit` suite), and `DA` records exist
+only for lines the instrumentation could name — the denominator caveat
+documented there.
 
 Test inventory for this stage: transformer unit suite
 `test/pattern-coverage-transformer.test.ts`; end-to-end line mapping and LCOV

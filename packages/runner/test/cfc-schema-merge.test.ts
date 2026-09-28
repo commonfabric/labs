@@ -10,6 +10,7 @@ import {
   storedCfcEnvelopeMergeIssue,
   storedSchemaCoversCandidateEnvelope,
 } from "../src/cfc/prepare.ts";
+import { cfcSchemaEntries } from "../src/cfc/schema-label-view.ts";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 
 describe("mergeCfcSchemaEnvelopes", () => {
@@ -689,6 +690,131 @@ describe("mergeCfcSchemaEnvelopes", () => {
     ).toEqual(uiContract);
   });
 
+  it("keeps the claims a reference carries when the candidate declares a label at that position", () => {
+    // Resolving a reference lets an `ifc` beside it replace the referenced
+    // body's `ifc`, so the merge has to meet the two declarations rather than
+    // set the candidate's beside the stored reference.
+
+    const stored = {
+      type: "object",
+      properties: { pin: { $ref: "#/$defs/Pin" } },
+      $defs: {
+        Pin: {
+          type: "string",
+          ifc: {
+            uiContract: { helper: "UiAction", action: "PinNote" },
+            writeAuthorizedBy: ["pin-builtin"],
+            requiredIntegrity: ["pin-approved"],
+          },
+        },
+      },
+    } as const;
+    const candidate = {
+      type: "object",
+      properties: {
+        pin: { type: "string", ifc: { confidentiality: ["writer-clause"] } },
+      },
+    } as const;
+
+    const entries = cfcSchemaEntries(
+      mergeCfcSchemaEnvelopes(stored, candidate),
+    );
+    expect(entries.map((entry) => entry.path)).toEqual([["pin"]]);
+    expect((entries[0].schema as JSONSchemaObj).ifc).toEqual({
+      confidentiality: ["writer-clause"],
+      uiContract: { helper: "UiAction", action: "PinNote" },
+      writeAuthorizedBy: ["pin-builtin"],
+      requiredIntegrity: ["pin-approved"],
+    });
+  });
+
+  it("keeps the claims a reference carries when the candidate refers to another definition at that position", () => {
+    const stored = {
+      type: "object",
+      properties: { pin: { $ref: "#/$defs/Pin" } },
+      $defs: {
+        Pin: {
+          type: "string",
+          ifc: { uiContract: { helper: "UiAction", action: "PinNote" } },
+        },
+      },
+    } as const;
+    const candidate = {
+      type: "object",
+      properties: { pin: { $ref: "#/$defs/Endorsed" } },
+      $defs: {
+        Endorsed: { type: "string", ifc: { addIntegrity: ["endorsed"] } },
+      },
+    } as const;
+
+    const entries = cfcSchemaEntries(
+      mergeCfcSchemaEnvelopes(stored, candidate),
+    );
+    expect(entries.map((entry) => entry.path)).toEqual([["pin"]]);
+    expect((entries[0].schema as JSONSchemaObj).ifc).toEqual({
+      uiContract: { helper: "UiAction", action: "PinNote" },
+      addIntegrity: ["endorsed"],
+    });
+  });
+
+  it("keeps the claims a reference's body declares beneath an `ifc` beside the reference", () => {
+    const stored = {
+      type: "object",
+      properties: {
+        pin: {
+          $ref: "#/$defs/Pin",
+          ifc: { confidentiality: ["store-clause"] },
+        },
+      },
+      $defs: {
+        Pin: {
+          type: "string",
+          ifc: { uiContract: { helper: "UiAction", action: "PinNote" } },
+        },
+      },
+    } as const;
+    const candidate = {
+      type: "object",
+      properties: {
+        pin: {
+          type: "string",
+          ifc: { confidentiality: ["store-clause", "writer-clause"] },
+        },
+      },
+    } as const;
+
+    const merged = mergeCfcSchemaEnvelopes(stored, candidate) as JSONSchemaObj;
+    expect((merged.properties?.pin as JSONSchemaObj).ifc).toEqual({
+      confidentiality: ["store-clause", "writer-clause"],
+      uiContract: { helper: "UiAction", action: "PinNote" },
+    });
+  });
+
+  it("keeps the claims a reference carries when the candidate refers to a definition declaring nothing", () => {
+    const stored = {
+      type: "object",
+      properties: { pin: { $ref: "#/$defs/Pin" } },
+      $defs: {
+        Pin: {
+          type: "string",
+          ifc: { uiContract: { helper: "UiAction", action: "PinNote" } },
+        },
+      },
+    } as const;
+    const candidate = {
+      type: "object",
+      properties: { pin: { $ref: "#/$defs/Plain" } },
+      $defs: { Plain: { type: "string" } },
+    } as const;
+
+    const merged = mergeCfcSchemaEnvelopes(stored, candidate) as JSONSchemaObj;
+    const pin = merged.properties?.pin as JSONSchemaObj;
+    expect(pin.$ref).toBeUndefined();
+    expect(pin.ifc).toEqual({
+      uiContract: { helper: "UiAction", action: "PinNote" },
+    });
+  });
+
   it("rejects branch-local ifc labels in divergent schemas", () => {
     expect(() =>
       mergeCfcSchemaEnvelopes({
@@ -1054,6 +1180,192 @@ describe("mergeCfcSchemaEnvelopes", () => {
         ).ifc?.writeAuthorizedBy,
       ).toEqual(stamped);
     }
+  });
+
+  describe("an unstamped stored claim meeting a stamped one from another root", () => {
+    // A claim stored before writer stamps existed carries only the file its
+    // compile spelled, relative to whatever root that compile used. A stamped
+    // claim from the pattern's next release adopts it when both name the same
+    // export of the same file below a known pattern root. Main replaced such
+    // claims outright, whatever they named.
+
+    const claim = (file: string, path: string[], moduleIdentity?: string) => ({
+      __ctWriterIdentityOf: {
+        file,
+        path,
+        ...(moduleIdentity !== undefined && { moduleIdentity }),
+      },
+    });
+    // `release` stands for a caller that vouches for the stamp (a release
+    // installing its module, or the writer the stamp names).
+    type Claim = ReturnType<typeof claim>;
+    const merge = (stored: Claim, candidate: Claim, release = true) =>
+      (
+        (mergeCfcSchemaEnvelopes({
+          type: "object",
+          properties: {
+            mru: { type: "array", ifc: { writeAuthorizedBy: stored } },
+          },
+        }, {
+          type: "object",
+          properties: {
+            mru: { type: "array", ifc: { writeAuthorizedBy: candidate } },
+          },
+        }, { adoptsStamp: release ? () => true : undefined }) as JSONSchemaObj)
+          .properties?.mru as JSONSchemaObj
+      ).ifc?.writeAuthorizedBy;
+
+    it("adopts the stamp for the same export below a pattern root", () => {
+      const stamped = claim(
+        "/packages/patterns/system/profile-create.tsx",
+        ["setMruProfile"],
+        "release-2",
+      );
+      for (
+        const stored of [
+          "/system/profile-create.tsx",
+          "/api/patterns/system/profile-create.tsx",
+          "/patterns/system/profile-create.tsx",
+        ]
+      ) {
+        expect(merge(claim(stored, ["setMruProfile"]), stamped)).toEqual(
+          stamped,
+        );
+      }
+    });
+
+    it("refuses to adopt outside a release", () => {
+      expect(() =>
+        merge(
+          claim("/system/profile-create.tsx", ["setMruProfile"]),
+          claim(
+            "/packages/patterns/system/profile-create.tsx",
+            ["setMruProfile"],
+            "release-2",
+          ),
+          false,
+        )
+      ).toThrow("writeAuthorizedBy must remain stable at /mru");
+    });
+
+    it("refuses an unstamped claim over a stamped one, and a root further in", () => {
+      expect(() =>
+        merge(
+          claim(
+            "/api/patterns/system/profile-create.tsx",
+            ["setMruProfile"],
+            "release-1",
+          ),
+          claim("/packages/patterns/system/profile-create.tsx", [
+            "setMruProfile",
+          ]),
+        )
+      ).toThrow("writeAuthorizedBy must remain stable at /mru");
+      for (
+        const [stored, candidate] of [
+          [
+            "/evil/api/patterns/system/profile-create.tsx",
+            "/packages/patterns/system/profile-create.tsx",
+          ],
+          ["//profile-create.tsx", "/packages/patterns//profile-create.tsx"],
+          [
+            "/system/../profile-create.tsx",
+            "/packages/patterns/system/../profile-create.tsx",
+          ],
+          // A stamp spelled below no known root.
+          [
+            "/api/patterns/system/profile-create.tsx",
+            "/system/profile-create.tsx",
+          ],
+        ]
+      ) {
+        expect(() =>
+          merge(
+            claim(stored, ["setMruProfile"]),
+            claim(candidate, ["setMruProfile"], "release-2"),
+          )
+        ).toThrow("writeAuthorizedBy must remain stable at /mru");
+      }
+    });
+
+    it("refuses a stored claim that names no file", () => {
+      expect(() =>
+        merge(
+          { __ctWriterIdentityOf: { path: ["setMruProfile"] } } as never,
+          claim(
+            "/packages/patterns/system/profile-create.tsx",
+            ["setMruProfile"],
+            "release-2",
+          ),
+        )
+      ).toThrow("writeAuthorizedBy must remain stable at /mru");
+    });
+
+    it("refuses the same file name in another directory", () => {
+      expect(() =>
+        merge(
+          claim("/system/profile-create.tsx", ["setMruProfile"]),
+          claim(
+            "/packages/patterns/other/profile-create.tsx",
+            ["setMruProfile"],
+            "release-2",
+          ),
+        )
+      ).toThrow("writeAuthorizedBy must remain stable at /mru");
+    });
+
+    it("refuses another export of the same file", () => {
+      expect(() =>
+        merge(
+          claim("/system/profile-create.tsx", ["setMruProfile"]),
+          claim(
+            "/packages/patterns/system/profile-create.tsx",
+            ["setDefaultProfile"],
+            "release-2",
+          ),
+        )
+      ).toThrow("writeAuthorizedBy must remain stable at /mru");
+    });
+
+    it("refuses a file with no directory below the root", () => {
+      // A temporary stage names the file alone. (A spelling one leading
+      // segment away, which the toolchain's old strip produced, corresponds
+      // by the rule that predates this one.)
+      for (
+        const [stored, candidate] of [
+          ["/profile-create.tsx", "/packages/patterns/profile-create.tsx"],
+          ["/profile-create.tsx", "/api/patterns/profile-create.tsx"],
+        ]
+      ) {
+        expect(() =>
+          merge(
+            claim(stored, ["setMruProfile"]),
+            claim(candidate, ["setMruProfile"], "release-2"),
+          )
+        ).toThrow("writeAuthorizedBy must remain stable at /mru");
+      }
+    });
+
+    it("keeps a stored stamp against another release's", () => {
+      // Stamped against stamped is a version boundary: the stored stamp stays,
+      // and the new release writes the field only with a delegation
+      // (module-delegation.test.ts).
+      const stored = claim(
+        "/api/patterns/system/profile-create.tsx",
+        ["setMruProfile"],
+        "release-1",
+      );
+      expect(
+        merge(
+          stored,
+          claim(
+            "/packages/patterns/system/profile-create.tsx",
+            ["setMruProfile"],
+            "release-2",
+          ),
+        ),
+      ).toEqual(stored);
+    });
   });
 
   it("strips a legacy bundleId stamp from pre-migration claims", () => {

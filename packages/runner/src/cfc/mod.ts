@@ -8,8 +8,8 @@ export type {
 export {
   type CfcCellLinkRefPayload,
   linkCfcLabelView,
-  setLinkCfcLabelView,
   stripSigilCfcLabelViews,
+  withLinkCfcLabelView,
 } from "./link-label-view.ts";
 export {
   CLASSIFIED_KIND_FAMILIES,
@@ -253,6 +253,7 @@ export {
   gatedSinkRequestExists,
   loadStoredCfcEnvelope,
   prepareBoundaryCommit,
+  releaseMergeOptions,
   storedCfcEnvelopeMergeIssue,
 } from "./prepare.ts";
 export type {

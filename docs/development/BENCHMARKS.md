@@ -112,14 +112,14 @@ compares across jobs. Adding a bench file to the list does not place it, so
 neither the calibration's position nor any other file's can be arranged from
 here.
 
-Benchmark results are not gated, and neither is CI wall time. The counts gated
-on every pull request include the coverage-debt ratchet
-(`tasks/coverage-check.ts`, in the Coverage Check job), the read limits of the
-headless lunch-poll render fixtures
-([below](#headless-render-read-limits), in Pattern Unit Tests), and the Topics
-read and graph limits ([below](#the-read-budget), in Pattern Integration
-Tests). None of them ingests benchmark results, so a bench regression shows up
-as trend drift on the dashboard rather than as a failing check.
+Benchmark results are not gated, and neither is CI wall time. The counts CI
+gates on include the measured-set coverage gate (`tasks/coverage-gate.ts`, a step
+of `Status`), the read limits of the headless lunch-poll render fixtures
+([below](#headless-render-read-limits), tests of the `pattern-unit` suite), and
+the Topics read and graph limits ([below](#the-read-budget), tests of the
+`pattern-integration` and `pattern-integration-opposite` suites). None of them ingests benchmark results, so a bench
+regression shows up as trend drift on the dashboard rather than as a failing
+check.
 
 Most packages with benches define a `bench` task for running them locally
 (see `packages/runner/deno.jsonc`); otherwise invoke `deno bench` on a
@@ -145,6 +145,16 @@ proof over 10, 14, 18, and 36 producers, where each producer reads the preceding
 two outputs. This shared ancestry exercises repeated paths to the same upstream
 value. Replica setup and plan indexing stay outside timing; the timed interval
 covers one proof against unchanged values.
+
+`packages/runner/test/executor-sustained-input.bench.ts` measures how long the
+serving watermark takes to cover an input while input keeps arriving. Each
+iteration opens a fresh served space outside the timed interval, then starts a
+stream that commits one input at every settle barrier and stops after eight wave
+cycles. The timed interval runs from the stream's start, which commits its first
+input, to the watermark document covering that input. Each iteration writes the
+per-input admission-to-coverage times and cycle counts, summarized as P50, P90
+and maximum over every streamed input, and the loop's exhaustion counters, to
+stderr.
 
 `packages/runner/test/materializer-writers.bench.ts` measures
 `collectMaterializerWritersForLog()` over logs of 100, 1,000, and 3,500 deep
@@ -704,9 +714,9 @@ the topic citing it, and a comment added that the thread then shows. Its board
 comes from `seedTopicBoard`, shaped so exactly one topic cites exactly one
 earlier one. That fixture derives every title and body from the topic's index,
 so two runs of the same size build boards holding the same material, and the
-demo seeds into a space of its own so nothing else a shard left in the shared
+demo seeds into a space of its own so nothing else a lane left in the shared
 space appears on it. `CF_TOPICS_DEMO_TOPICS` sets how many topics that board
-carries; the default is small because CI runs this on every pull request.
+carries; the default is small because CI runs it.
 
 Record it with:
 
@@ -1318,7 +1328,7 @@ probe uses, with no browser and no server.
 the rules below, and `topics-read-budget-limits.ts` beside it holds the limits.
 The cases are divided into groups, and each group runs in a test file of its
 own, `topics-read-budget-<group>.test.ts`, so that no one file takes too large a
-share of a pattern integration job.
+share of a lane.
 
 The gated cases are:
 
@@ -1390,8 +1400,9 @@ deno test --v8-flags=--max-old-space-size=4096 -A \
   ./integration/topics-read-budget-high-degree.test.ts
 ```
 
-Continuous integration runs the files in the Pattern Integration Tests job, each
-with a weight in `tasks/select-pattern-integration-files.ts`.
+Continuous integration runs these files as units of the `pattern-integration`
+and `pattern-integration-opposite` suites, packed into lanes by what each has
+cost before.
 
 To derive the limits again, run from the repository root:
 
@@ -1461,6 +1472,28 @@ deno bench --no-lock --json packages/memory/test/v2-path.bench.ts
 The
 [local encoding measurement](../history/development/performance/2026-09-14-encode-pointer.md)
 records interleaved comparisons and their limits.
+
+## Refresh schema-closure walk
+
+`packages/memory/test/v2-refresh-schema-closure.bench.ts` measures a push
+refresh of a tracked graph after a commit to a tally document whose one link
+schema references a schema document the graph already holds, for a graph
+already delivered 10, 100, or 1,000 schema documents through a carrier whose
+links reference each of them. Each sample commits the next tally value and then
+times `refreshTrackedGraph()` over that one dirty document; fixture
+construction, the commit, and the check that the refresh delivered only the
+tally are outside the timed interval.
+
+The tally's schema reference is a root of the refresh's schema-closure walk.
+The walk covers only the closures its changed documents reference and stops at
+schema documents the graph already established, so its cost should not grow
+with the schema count. The documents one untimed refresh reads go to stderr per
+fixture — one, the tally, at every size — which is the count to compare when a
+timing moves. Run with:
+
+```sh
+deno bench -A --json packages/memory/test/v2-refresh-schema-closure.bench.ts
+```
 
 ## String tuple keys
 

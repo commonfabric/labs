@@ -345,8 +345,8 @@ What is not done yet:
     Timeline places the model-facing result beside the full fields withheld from
     it, labeled by omission rule. See [console/README.md](console/README.md)
 - [integration/](integration/)
-  - the deployed-topology posture gate, which a continuous-integration job runs
-    against a toolshed it starts
+  - the deployed-topology posture gate, which the `deployed-topology` suite of
+    the test topology runs against a toolshed it starts
 - [docs/SKILLS_SUPPORT_SPEC.md](docs/SKILLS_SUPPORT_SPEC.md)
   - staged Agent Skills support design
 - [../../docs/plans/cf-harness-codex-subscription-auth.md](../../docs/plans/cf-harness-codex-subscription-auth.md)
@@ -3351,10 +3351,11 @@ deno task test
 ```
 
 `integration/` holds one file, `fabric-session-posture-gate.test.ts`, and the
-"Deployed Topology Posture Gates" job in `.github/workflows/deno.yml` names it
-directly against a toolshed it starts. There is no package task for it: the gate
-needs a serving deployment, so `API_URL` is what admits it, and every case is
-skipped without one. That file's own header carries a local invocation.
+test topology's `deployed-topology` suite (`tasks/test-topology/`) runs it
+against a toolshed its `toolshed` capability starts. There is no package task
+for it: the gate needs a serving deployment, so `API_URL` is what admits it, and
+every case is skipped without one. That file's own header carries a local
+invocation.
 
 On Linux, Docker/runsc runs default to the host UID/GID. On macOS, the default
 omits `--user` because Docker Desktop bind mounts may expose host files as

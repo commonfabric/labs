@@ -2775,11 +2775,26 @@ describe("verbs", () => {
         .toEqual({ kind: "text", text: "file:///other/" });
     });
 
-    it("moves it to another plane with a whole schemed path", async () => {
+    it("refuses a plane a location cannot be stood in, and moves nowhere", async () => {
+      // A place is stood in by moving through it, and `https:` answers a
+      // read rather than what stands under a path (decision 30). The
+      // refusal names what the plane cannot answer, not what shuttle has
+      // left undone.
+
       const shuttle = shuttleIn();
-      await runLine("xcd https://example.test/a/b/", shuttle, READS_NOTHING);
-      expect(textOf(await runLine("xpwd", shuttle, READS_NOTHING)))
-        .toBe("https://example.test/a/b/");
+      const before = textOf(await runLine("xpwd", shuttle, READS_NOTHING));
+      expect(
+        reasonOf(
+          await runLine(
+            "xcd https://example.test/a/b/",
+            shuttle,
+            READS_NOTHING,
+          ),
+        ),
+      ).toContain("nothing to move through");
+      expect(textOf(await runLine("xpwd", shuttle, READS_NOTHING))).toBe(
+        before,
+      );
     });
 
     it("refuses a scheme on a path that is not absolute, and moves nowhere", async () => {

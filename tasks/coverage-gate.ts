@@ -16,7 +16,12 @@
  * reported. Two answers to that question would let a lane talk this into
  * gating something it did not measure, or into skipping something it did.
  *
- *   deno run -A tasks/coverage-gate.ts --base origin/main --reports artifacts
+ * On a pull request it also writes the comment the pull request is left
+ * with, which the Pull Request Comments workflow posts: a fork's pull
+ * request gets a read-only token here, and cannot be commented on.
+ *
+ *   deno run -A tasks/coverage-gate.ts --base origin/main --reports artifacts \
+ *     [--comment coverage-comment.json --pr 123]
  */
 
 import * as path from "@std/path";
@@ -29,7 +34,8 @@ import {
 } from "./ci-lane.ts";
 import {
   acceptedCoverageDebt,
-  namesCoverageSourceGroup,
+  COVERAGE_SUGGESTION_MARKER,
+  type CoverageCommentPayload,
 } from "./ci-check-lib.ts";
 import { collectMeasuredSetDebt } from "./coverage-metrics.ts";
 import { say } from "./step-summary.ts";
@@ -41,6 +47,7 @@ import {
   type CoverageGateSelection,
   measuredSetDirectory,
   measuredSetName,
+  measuredSets,
 } from "./test-selection/coverage.ts";
 import { fetchManifest } from "./test-selection/store.ts";
 import type { CoverageBaseline } from "./test-selection/manifest.ts";
@@ -69,6 +76,12 @@ export interface GateOptions {
    */
   testsFailed: boolean;
 
+  /**
+   * Where to write the pull-request comment, and the pull request it is
+   * for. Absent where there is no pull request to comment on.
+   */
+  comment?: { path: string; prNumber: number };
+
   root: string;
 }
 
@@ -83,6 +96,8 @@ export function parseGateArgs(
     testsFailed: false,
     root,
   };
+  let commentPath: string | undefined;
+  let prNumber: number | undefined;
   const rest = [...args];
   while (rest.length > 0) {
     const flag = rest.shift()!;
@@ -102,12 +117,27 @@ export function parseGateArgs(
       case "--body":
         options.body = value;
         break;
+      case "--comment":
+        commentPath = value;
+        break;
+      case "--pr":
+        if (!/^[1-9][0-9]*$/.test(value)) return undefined;
+        prNumber = Number(value);
+        break;
       default:
         return undefined;
     }
   }
-  if (options.base === undefined) return undefined;
-  return { ...options, base: options.base };
+  const base = options.base;
+  if (base === undefined) return undefined;
+  if (commentPath === undefined && prNumber === undefined) {
+    return { ...options, base };
+  }
+  // A comment with no pull request has nowhere to go, and a pull request
+  // with no comment file would be told nothing; either is a workflow that
+  // lost a flag.
+  if (commentPath === undefined || prNumber === undefined) return undefined;
+  return { ...options, base, comment: { path: commentPath, prNumber } };
 }
 
 /**
@@ -198,20 +228,20 @@ export interface GateReport {
 }
 
 /**
- * The accepted names nothing could ever consult: neither a workspace
- * member, which is what this gate scores, nor a coverage source group,
- * which is what the repository-wide ratchet scores.
+ * The accepted names that are not a member some measured set scores, which
+ * is the only thing an acceptance is read for.
  *
- * An acceptance that names nothing was written to have an effect and has
- * none, so it fails here rather than passing for one that worked.
+ * An acceptance naming anything else was written to have an effect and has
+ * none, so it fails here rather than passing for one that worked. That
+ * includes a workspace member no set scores, whose rise nothing gates.
  */
 export function unknownAcceptances(
   accepted: ReadonlyMap<string, number>,
-  members: readonly string[],
+  measured: readonly string[],
 ): string[] {
-  const known = new Set(members);
+  const known = new Set(measured);
   return [...accepted.keys()]
-    .filter((name) => !known.has(name) && !namesCoverageSourceGroup(name))
+    .filter((name) => !known.has(name))
     .sort();
 }
 
@@ -224,6 +254,10 @@ export interface GateInput {
   reports: ReadonlyMap<string, readonly string[]>;
 
   members: readonly string[];
+
+  /** The members some measured set scores, which an acceptance may name. */
+  measured: readonly string[];
+
   baselines: readonly CoverageBaseline[];
 
   /** Which of these commits the tree under test holds most recently. */
@@ -292,7 +326,7 @@ export async function nearestBaseline(
  * measures was written to have an effect and has none.
  */
 export async function runGate(input: GateInput): Promise<GateReport> {
-  const unknown = unknownAcceptances(input.accepted, input.members);
+  const unknown = unknownAcceptances(input.accepted, input.measured);
   const forced = new Set(input.gate.sets.map(measuredSetName));
   const verdicts: SetVerdict[] = [];
   let ok = unknown.length === 0;
@@ -404,11 +438,24 @@ const OUTCOME_PROSE: Record<SetVerdict["outcome"], string> = {
 
 /** The lines the job summary carries. */
 export function formatGateReport(report: GateReport): string[] {
-  const lines = ["## Coverage gate", ""];
+  return underHeading(gateFindings(report));
+}
+
+/**
+ * Puts what the gate found under the heading that the job summary and the
+ * comment both open with.
+ */
+function underHeading(findings: readonly string[]): string[] {
+  return ["## Coverage gate", "", ...findings];
+}
+
+/** What the gate found, as the lines that go under its heading. */
+function gateFindings(report: GateReport): string[] {
+  const lines: string[] = [];
   if (report.unknownAcceptances.length > 0) {
     lines.push(
-      "These acceptances name neither a workspace member nor a coverage " +
-        "source group, so nothing would ever consult them:",
+      "These acceptances name no workspace member a measured set scores, " +
+        "so nothing would ever consult them:",
       "",
     );
     for (const name of report.unknownAcceptances) lines.push(`- \`${name}\``);
@@ -478,6 +525,42 @@ export function formatGateReport(report: GateReport): string[] {
     lines.push("```");
   }
   return lines;
+}
+
+/**
+ * The comment a pull request is left with, given what the gate found.
+ *
+ * A gate that did not pass says what it found in full. One that passed says
+ * so in a collapsed summary, which the poster only ever writes over an
+ * earlier failure's comment, so that a failure the author was told about
+ * does not stand once it is fixed.
+ */
+export function gateComment(
+  prNumber: number,
+  passed: boolean,
+  findings: readonly string[],
+): CoverageCommentPayload {
+  if (!passed) {
+    return {
+      prNumber,
+      state: "regressed",
+      body: [COVERAGE_SUGGESTION_MARKER, ...underHeading(findings)].join("\n"),
+    };
+  }
+  return {
+    prNumber,
+    state: "resolved",
+    body: [
+      COVERAGE_SUGGESTION_MARKER,
+      "<details>",
+      "<summary>The coverage gate in the <strong>Status</strong> job " +
+      "passes.</summary>",
+      "",
+      ...findings,
+      "",
+      "</details>",
+    ].join("\n"),
+  };
 }
 
 /**
@@ -558,7 +641,7 @@ export async function main(
   if (options === undefined) {
     console.error(
       "usage: coverage-gate.ts --base <ref> [--reports <dir>] " +
-        "[--body <text>] [--tests-failed]",
+        "[--body <text>] [--tests-failed] [--comment <path> --pr <number>]",
     );
     return 2;
   }
@@ -575,8 +658,7 @@ export async function main(
     // A marker this cannot read was written to have an effect. Saying so
     // and stopping is the answer; carrying on would gate the change as
     // though nobody had accepted anything.
-    say(["## Coverage gate", "", `${error}`]);
-    return 1;
+    return await conclude(options, false, [`${error}`]);
   }
   const report = await runGate({
     root: options.root,
@@ -587,13 +669,37 @@ export async function main(
     members: (await readWorkspaceMembers(
       path.join(options.root, "deno.jsonc"),
     )).map((member) => member.replace(/^\.\//, "")),
+    measured: [...new Set(measuredSets(suites).map((ref) => ref.set.member))],
     baselines,
     nearest: nearestOnBranch(options.root),
     accepted,
     testsFailed: options.testsFailed,
   });
-  say(formatGateReport(report));
-  return report.ok ? 0 : 1;
+  return await conclude(options, report.ok, gateFindings(report));
+}
+
+/**
+ * Helper for {@link main}, which says what the gate found in the job's
+ * summary, and in the pull-request comment where one was asked for, and
+ * returns the gate's exit status.
+ */
+async function conclude(
+  options: GateOptions,
+  passed: boolean,
+  findings: readonly string[],
+): Promise<number> {
+  say(underHeading(findings));
+  // A run whose tests failed scored nothing, so a pass says nothing about
+  // the rise a comment may already report, and the comment is left as it
+  // was. A failure the gate found in such a run is still written.
+  if (options.comment !== undefined && !(passed && options.testsFailed)) {
+    const payload = gateComment(options.comment.prNumber, passed, findings);
+    await Deno.writeTextFile(
+      path.resolve(options.root, options.comment.path),
+      `${JSON.stringify(payload, null, 2)}\n`,
+    );
+  }
+  return passed ? 0 : 1;
 }
 
 if (import.meta.main) Deno.exitCode = await main();

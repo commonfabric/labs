@@ -44,12 +44,19 @@ export function linkCfcLabelView(link: SigilLink): CfcLabelView | undefined {
   return (linkRefPayload(link) as CfcCellLinkRefPayload).cfcLabelView;
 }
 
-/** Attaches a CFC label view to a sigil link's inner, in place. */
-export function setLinkCfcLabelView(
+/**
+ * Returns a sigil link which is `link` with `view` attached to its inner as the
+ * CFC label view, replacing any view it already carried. `link` is left as it
+ * is: a link's inner is fixed once the link is made.
+ */
+export function withLinkCfcLabelView(
   link: SigilLink,
   view: CfcLabelView,
-): void {
-  (linkRefPayload(link) as CfcCellLinkRefPayload).cfcLabelView = view;
+): SigilLink {
+  return linkRefFrom<CfcCellLinkRefPayload>({
+    ...(linkRefPayload(link) as CfcCellLinkRefPayload),
+    cfcLabelView: view,
+  });
 }
 
 /**

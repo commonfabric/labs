@@ -24,6 +24,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { spy } from "@std/testing/mock";
 
 import { FabricInstance, type FabricValue, isDeepFrozen } from "@";
 import {
@@ -35,7 +36,7 @@ import {
   ProblematicValue,
   UnknownValue,
 } from "@/codec-common";
-import { JsonCodecEngine } from "@/codec-json";
+import { JsonCodecEngine, SlotLimitError } from "@/codec-json";
 import { JSON_FORMAT, type JsonCodecValue } from "@/codec-json/interface.ts";
 import {
   createDefaultJsonRegistry,
@@ -62,14 +63,9 @@ import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 /**
  * Shared test `LiveEnvironment`: `getCell()` always throws (no test
- * here reaches it); `shouldDeepFreeze` is inherited from
- * `BaseLiveEnvironment` (defaults to `true`).
+ * here reaches it).
  */
 class TestLiveEnvironment extends BaseLiveEnvironment {
-  constructor() {
-    super(true);
-  }
-
   override getCell(): never {
     throw new Error("getCell not implemented in test runtime");
   }
@@ -200,6 +196,287 @@ describe("JsonCodecEngine", () => {
 
       expect(result).toBeInstanceOf(UnknownValue);
       expect((result as UnknownValue).wireTypeTag).toBe("Error@1");
+    });
+  });
+
+  describe("`mutable` constructor option", () => {
+    /** A lenient engine over the default registry that decodes mutable. */
+    const mutableEngine = new JsonCodecEngine({
+      registry: createDefaultJsonRegistry(),
+      lenient: true,
+      mutable: true,
+    });
+
+    /** Decodes one codec-value tree through `mutableEngine`. */
+    function decodeMutable(
+      data: JsonCodecValue,
+      malformed = false,
+    ): FabricValue {
+      return mutableEngine.decode(
+        JsonCodecEngine.wrapEncodedValueForTesting(
+          JSON.stringify(data),
+          malformed,
+        ),
+        new TestLiveEnvironment(),
+      );
+    }
+
+    it("is `false` by default, and `true` when given", () => {
+      expect(newDefaultJsonCodecEngine().mutable).toBe(false);
+      expect(mutableEngine.mutable).toBe(true);
+    });
+
+    it("leaves decoded arrays and objects mutable at every level", () => {
+      const result = decodeMutable(
+        { a: [1, { b: 2 }] } as JsonCodecValue,
+      ) as { a: [number, { b: number }] };
+
+      expect(Object.isFrozen(result)).toBe(false);
+      expect(Object.isFrozen(result.a)).toBe(false);
+      expect(Object.isFrozen(result.a[1])).toBe(false);
+    });
+
+    it("leaves an `/object`-unwrapped object mutable", () => {
+      const result = decodeMutable(
+        { "/object": { "/myKey": { v: 1 } } } as JsonCodecValue,
+      ) as Record<string, object>;
+
+      expect(Object.isFrozen(result)).toBe(false);
+      expect(Object.isFrozen(result["/myKey"])).toBe(false);
+    });
+
+    it("leaves a `/quote` result mutable at every level", () => {
+      const result = decodeMutable(
+        { "/quote": { "/Nope@1": [1, { c: 3 }] } } as JsonCodecValue,
+      ) as { "/Nope@1": [number, object] };
+
+      expect(Object.isFrozen(result)).toBe(false);
+      expect(Object.isFrozen(result["/Nope@1"])).toBe(false);
+      expect(Object.isFrozen(result["/Nope@1"][1])).toBe(false);
+    });
+
+    it("leaves an instance, and the containers it holds, mutable", () => {
+      const encoded = newDefaultJsonCodecEngine().encode(
+        FabricError.fromNativeError(new Error("boom", { cause: { x: 1 } })),
+      );
+      const result = mutableEngine.decode(encoded, new TestLiveEnvironment());
+
+      expect(result).toBeInstanceOf(FabricError);
+      expect(Object.isFrozen(result)).toBe(false);
+      expect(Object.isFrozen((result as FabricError).cause)).toBe(false);
+    });
+
+    it("leaves an `UnknownValue`, and its state, mutable", () => {
+      const result = decodeMutable(
+        { "/Nope@1": { a: [1] } } as JsonCodecValue,
+      ) as UnknownValue;
+
+      expect(result).toBeInstanceOf(UnknownValue);
+      expect(Object.isFrozen(result)).toBe(false);
+      expect(Object.isFrozen(result.state)).toBe(false);
+    });
+
+    it("leaves a `ProblematicValue` the engine reports mutable", () => {
+      const result = decodeMutable({ "/": { a: 1 } } as JsonCodecValue, true);
+
+      expect(result).toBeInstanceOf(ProblematicValue);
+      expect(Object.isFrozen(result)).toBe(false);
+    });
+
+    it("leaves a `ProblematicValue` for a refused serialized form mutable", () => {
+      const result = mutableEngine.decode(
+        "not this format",
+        new TestLiveEnvironment(),
+      );
+
+      expect(result).toBeInstanceOf(ProblematicValue);
+      expect(Object.isFrozen(result)).toBe(false);
+    });
+
+    it("leaves a `ProblematicValue` a codec returns mutable", () => {
+      const result = decodeMutable({ "/Bytes@1": "!!!" } as JsonCodecValue);
+
+      expect(result).toBeInstanceOf(ProblematicValue);
+      expect(Object.isFrozen(result)).toBe(false);
+    });
+
+    it("returns a `FabricPrimitive` frozen, as it always is", () => {
+      const encoded = newDefaultJsonCodecEngine().encode(
+        new FabricBytes(new Uint8Array([1, 2, 3])),
+      );
+      const result = mutableEngine.decode(encoded, new TestLiveEnvironment());
+
+      expect(result).toBeInstanceOf(FabricBytes);
+      expect(Object.isFrozen(result)).toBe(true);
+    });
+  });
+
+  describe("nesting too deep to freeze", () => {
+    it("is refused as malformed JSON", () => {
+      const depth = 20_000;
+      const text = JsonCodecEngine.wrapEncodedValueForTesting(
+        "[".repeat(depth) + "]".repeat(depth),
+        true,
+      );
+
+      expect(() =>
+        newDefaultJsonCodecEngine().decode(text, new TestLiveEnvironment())
+      ).toThrow("Malformed JSON");
+    });
+  });
+
+  describe("`slotLimit` constructor option", () => {
+    /** Decodes one codec-value tree through an engine limited to `limit`. */
+    function decodeLimited(
+      data: JsonCodecValue,
+      limit: number,
+      lenient = false,
+    ): FabricValue {
+      return newDefaultJsonCodecEngine({ slotLimit: limit, lenient }).decode(
+        JsonCodecEngine.wrapEncodedValueForTesting(JSON.stringify(data), true),
+        new TestLiveEnvironment(),
+      );
+    }
+
+    /** Returns what decoding `data` under `limit` throws. */
+    function refusal(data: JsonCodecValue, limit: number): SlotLimitError {
+      try {
+        decodeLimited(data, limit);
+      } catch (e) {
+        if (e instanceof SlotLimitError) return e;
+        throw e;
+      }
+      throw new Error("decode was not refused");
+    }
+
+    it("is `undefined` by default, and the limit when given", () => {
+      expect(newDefaultJsonCodecEngine().slotLimit).toBeUndefined();
+      expect(newDefaultJsonCodecEngine({ slotLimit: 7 }).slotLimit).toBe(7);
+      expect(newDefaultJsonCodecEngine({ slotLimit: 0 }).slotLimit).toBe(0);
+    });
+
+    it("throws given a limit that is not a non-negative integer", () => {
+      for (const slotLimit of [NaN, -1, 1.5, Infinity]) {
+        expect(() => newDefaultJsonCodecEngine({ slotLimit })).toThrow(
+          "must be a non-negative integer",
+        );
+      }
+    });
+
+    it("refuses when holes counted earlier carry an array's length past the limit", () => {
+      // The text writes seven slots, so the scan passes it at ten. The walk
+      // reaches the run of holes first, and the array after it takes the
+      // count to eleven.
+      const value = [[1, 2, 3], [{ "/hole": 5 }]] as JsonCodecValue;
+
+      expect(refusal(value, 10).slotLimit).toBe(10);
+      expect((decodeLimited(value, 11) as FabricValue[]).length).toBe(2);
+    });
+
+    it("decodes a value standing for exactly the limit, and refuses one more", () => {
+      // Two slots for the outer array, two and one for the inner ones, and
+      // two for the record's members.
+      const value = [[1, 2], [{ a: 3, b: 4 }]] as JsonCodecValue;
+
+      expect(decodeLimited(value, 7)).toEqual([[1, 2], [{ a: 3, b: 4 }]]);
+      expect(refusal(value, 6).slotLimit).toBe(6);
+    });
+
+    it("counts a `/hole` run as its written member plus each hole past the first", () => {
+      // Three elements, the run's one member, and one more hole.
+      const value = ["a", { "/hole": 2 }, "b"] as JsonCodecValue;
+
+      expect((decodeLimited(value, 5) as FabricValue[]).length).toBe(4);
+      expect(refusal(value, 4).slotLimit).toBe(4);
+      expect(refusal([{ "/hole": 2 ** 32 - 1 }], 1_000_000).slotLimit).toBe(
+        1_000_000,
+      );
+    });
+
+    it("counts a run with a count below one as its written member alone", () => {
+      // A negative count is refused by the decode proper, after the count has
+      // run, so the count has to hold without it: such a run may not take
+      // back the holes a later run adds.
+      const value = [
+        { "/hole": -1000 },
+        "x",
+        { "/hole": 1000 },
+      ] as JsonCodecValue;
+
+      expect(() => decodeLimited(value, 100)).toThrow(SlotLimitError);
+    });
+
+    it("refuses text writing too many members without parsing it", () => {
+      // The root record's scalar members are still read for the error, so
+      // the parse sees the pieces holding them, but never the whole text.
+      const json = JSON.stringify({ requestId: "r3", items: [1, 2, 3, 4] });
+      const text = JsonCodecEngine.wrapEncodedValueForTesting(json, true);
+      const parse = spy(JSON, "parse");
+      try {
+        let refused: unknown;
+        try {
+          newDefaultJsonCodecEngine({ slotLimit: 5 }).decode(
+            text,
+            new TestLiveEnvironment(),
+          );
+        } catch (e) {
+          refused = e;
+        }
+        expect(refused).toBeInstanceOf(SlotLimitError);
+        expect((refused as SlotLimitError).rootScalar("requestId")).toBe(
+          "r3",
+        );
+        expect(parse.calls.map((call) => call.args[0])).not.toContain(json);
+
+        newDefaultJsonCodecEngine({ slotLimit: 6 }).decode(
+          text,
+          new TestLiveEnvironment(),
+        );
+        expect(parse.calls.map((call) => call.args[0])).toContain(json);
+      } finally {
+        parse.restore();
+      }
+    });
+
+    it("counts the members of a record, scalar or not", () => {
+      const value = { a: 1, b: "x", c: null } as JsonCodecValue;
+
+      expect(decodeLimited(value, 3)).toEqual({ a: 1, b: "x", c: null });
+      expect(refusal(value, 2).slotLimit).toBe(2);
+    });
+
+    it("returns a `ProblematicValue` when lenient", () => {
+      const result = decodeLimited([1, 2, 3], 2, true);
+
+      expect(result).toBeInstanceOf(ProblematicValue);
+      expect((result as unknown as ProblematicValue).error).toContain(
+        "more than 2 slots",
+      );
+      expect((result as unknown as ProblematicValue).state).toBe("[1,2,3]");
+    });
+
+    it("reads scalar members of the refused root record by name", () => {
+      const error = refusal(
+        {
+          type: "commit",
+          requestId: "r1",
+          seq: 4,
+          none: null,
+          commit: [1, 2, 3],
+          nested: { requestId: "not this one" },
+        } as JsonCodecValue,
+        3,
+      );
+
+      expect(error.rootScalar("requestId")).toBe("r1");
+      expect(error.rootScalar("seq")).toBe(4);
+      expect(error.rootScalar("none")).toBeNull();
+      expect(error.rootScalar("commit")).toBeUndefined();
+      expect(error.rootScalar("absent")).toBeUndefined();
+    });
+
+    it("reads no members when the root is not a record", () => {
+      expect(refusal([1, 2, 3], 2).rootScalar("0")).toBeUndefined();
     });
   });
 

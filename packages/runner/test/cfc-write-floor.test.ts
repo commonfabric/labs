@@ -19,6 +19,7 @@ import { recordReferencedArgumentFields } from "../src/cfc/reference-initializat
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-write-floor");
 
@@ -143,7 +144,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
         integrity: [LLM_DERIVED_ATOM],
       }, ["nested"]);
       const tx = runtime.edit();
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "floor-test",
       });
@@ -168,7 +169,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
         },
       }, tx);
       sink.set({ out: source });
-      tx.setCfcImplementationIdentity(undefined);
+      setCfcImplementationIdentity(tx, undefined);
       tx.prepareCfc();
       expect((await tx.commit()).error).toBeUndefined();
     } finally {

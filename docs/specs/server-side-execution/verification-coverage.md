@@ -250,7 +250,12 @@ Delta 2026-08-05 — stage F lands (the serving loop; this PR):
   tests pin the same re-activation after a serving-loop failure and
   after a failed activation; each opens the client's session with a
   read, so that no write races the park and re-activates the space by
-  the admission path instead.
+  the admission path instead. A space with no client session comes
+  back the same way for a warm request its tenure received and did not
+  serve: `packages/runner/test/executor-warm-request.test.ts` pins that
+  after a loop failure, after a failed activation, and after an
+  activation that threw before parking. It also pins that an idle park
+  ends the request.
 - serving-loop §6 step 2's re-mark: PARTIAL by design in Phase 1 —
   activation runs `selectStaleBasisInstances` and surfaces the stale
   set (counted, logged), and recovery CORRECTNESS rides
@@ -3145,10 +3150,13 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   (vii) CLOSED for read-triggered remount. An admitted ACL change latches
   `Provider.noteAclChanged`; the next load discards a session terminated by
   an ACL verdict and reopens through the server's full `session.open`
-  admission. The watched-document tracker is cleared so a previously watched
-  document is fetched again on its next read. `executor-session-remount.test.ts`
-  pins the ACL-change/host path, owner rebinding, denial without widened
-  authority, and refetch after remount. Automatic replay of the entire dead
+  admission. A document load already in flight when the revocation lands
+  fails on the terminated session; that failure consumes the remount, and the
+  load is made once more on the new session. The watched-document tracker is
+  cleared so a previously watched document is fetched again on its next read.
+  `executor-session-remount.test.ts` pins the ACL-change/host path, owner
+  rebinding, denial without widened authority, the in-flight load in both
+  outcomes, and refetch after remount. Automatic replay of the entire dead
   session's watch set remains a distinct follow-up; read-triggered refetch
   does not establish that stronger guarantee.
   Acceptance beyond the executor pins rides the PR's CI ON lanes and
@@ -3716,8 +3724,9 @@ discharge OW28. The flip's changes and validation record follow:
   CONSEQUENCE through the soak: `coverage-check` now `needs` the OFF
   pattern lane, so ANY red in that lane also SKIPS Coverage Check and
   reds Status — board 33239003881 shows exactly that shape behind the
-  owned-elsewhere firebreak red. The coupling retires when the OWED
-  re-homing above lands. (3) CLI
+  owned-elsewhere firebreak red. The coupling retired with the lane
+  refactor (commonfabric/labs#8108): the coverage gate is a step of
+  `Status`, which runs it whatever the lanes did. (3) CLI
   `core-piece-values`: the "cannot project in a fresh session"
   refusal DISSOLVES under ON by design (the serving loop
   materializes the session-derived result; a fresh session projects
@@ -9700,7 +9709,7 @@ supply; OW29/OW32/OW34 closed):
     provider refactored onto it, so a trust-config change invalidates
     per-run served digests exactly as ambient ones — INV-G); the
     SpaceServer's `#stampRun` attaches the per-run snapshot via
-    `tx.setCfcTrustSnapshot(...)` with the ruled precedence —
+    `setCfcTrustSnapshot(tx, ...)` with the ruled precedence —
     `delegated.acting.user`, else the handler's acting
     (LT6-inherited pairs included), else a demanded derivation's
     `scopeKeyIdentity.principal` (the Q2 arm — ships, severable),

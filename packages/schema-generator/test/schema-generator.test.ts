@@ -8,26 +8,6 @@ import {
   getTypeFromCode,
 } from "./utils.ts";
 
-/**
- * A mirror of the `FabricValuePlus` family and the `FabricExecPlainObject`
- * alias as `@commonfabric/api` declares them, for a program that resolves no
- * package specifier. The generator identifies the base by name, so the name
- * is what has to match.
- */
-const EXEC_PLAIN_OBJECT_MIRROR = `
-  type FabricValue = string | number | boolean | null;
-  type FabricExecFunction = (...args: any[]) => any;
-  type FabricValuePlus<P> =
-    | FabricValue
-    | P
-    | FabricArrayPlus<P>
-    | FabricPlainObjectPlus<P>;
-  interface FabricArrayPlus<P> extends ReadonlyArray<FabricValuePlus<P>> {}
-  interface FabricPlainObjectPlus<P>
-    extends Readonly<Record<string, FabricValuePlus<P>>> {}
-  type FabricExecPlainObject = FabricPlainObjectPlus<FabricExecFunction>;
-`;
-
 describe("SchemaGenerator", () => {
   describe("formatter chain", () => {
     it("should route primitive types to PrimitiveFormatter", async () => {
@@ -3900,43 +3880,6 @@ namespace Local {
     });
   });
 
-  describe("interfaces extending `FabricExecPlainObject`", () => {
-    it("emits no additionalProperties for an interface extending `FabricExecPlainObject`", async () => {
-      // The base is a type alias, so what the interface extends resolves to
-      // the aliased type; the generator has to identify it through the alias
-      // symbol that type carries.
-      const { type, checker } = await getTypeFromCode(
-        `${EXEC_PLAIN_OBJECT_MIRROR}
-        interface Pattern extends FabricExecPlainObject { foo: number }`,
-        "Pattern",
-      );
-      const schema = new SchemaGenerator().generateSchema(
-        type,
-        checker,
-      ) as Record<string, unknown>;
-
-      expect(schema.additionalProperties).toBeUndefined();
-      expect(Object.keys(schema.properties as object)).toEqual(["foo"]);
-    });
-
-    it("emits additionalProperties for an interface extending an index-signature base of another name", async () => {
-      // The control for the case above: the same shape under a different
-      // alias name keeps its index signature.
-      const { type, checker } = await getTypeFromCode(
-        `${EXEC_PLAIN_OBJECT_MIRROR}
-        type OtherPlainObject = FabricPlainObjectPlus<FabricExecFunction>;
-        interface Pattern extends OtherPlainObject { foo: number }`,
-        "Pattern",
-      );
-      const schema = new SchemaGenerator().generateSchema(
-        type,
-        checker,
-      ) as Record<string, unknown>;
-
-      expect(schema.additionalProperties).toBeDefined();
-    });
-  });
-
   describe("union members", () => {
     it("uses source union member nodes when semantic order is canonicalized", async () => {
       const generator = new SchemaGenerator();
@@ -4179,6 +4122,185 @@ interface HasImage {
       // Should collapse to a single permissive schema instead of a union,
       // since at least one option was just true
       expect(props?.image).toEqual(true);
+    });
+  });
+
+  describe("nodes narrowed from a value", () => {
+    const LABELS = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> =
+        Cfc<T, { confidentiality: X }>;
+      type Integrity<T, X extends readonly unknown[]> =
+        Cfc<T, { integrity: X }>;
+      interface Secret { a: string; b: string }
+      interface Other { a: string; c: number }
+      declare const DEFAULT_MARKER: unique symbol;
+      type DefaultMarker<T> = { readonly [DEFAULT_MARKER]: T };
+      type Default<T, V extends T = T> = (T & DefaultMarker<V>) | T;
+    `;
+
+    /**
+     * The schema of `Root`'s `narrowed`, a node recorded as narrowing the value
+     * the first property of `Wholes` declares, spelled by its node, or by the
+     * node of the property `spelledBy` names. With `inner`, the hint is on the
+     * node inside `narrowed`'s parentheses.
+     */
+    const narrowedSchema = async (
+      root: string,
+      whole: string,
+      { inner = false, spelledBy }: { inner?: boolean; spelledBy?: string } =
+        {},
+    ) => {
+      const { checker, sourceFile } = await createTestProgram(`${LABELS}
+        type Root = ${root};
+        interface Wholes { ${whole} }`);
+      let rootNode: ts.TypeNode | undefined;
+      let value: ts.PropertySignature | undefined;
+      let spelling: ts.PropertySignature | undefined;
+      ts.forEachChild(sourceFile, (node) => {
+        if (ts.isTypeAliasDeclaration(node) && node.name.text === "Root") {
+          rootNode = node.type;
+        } else if (
+          ts.isInterfaceDeclaration(node) && node.name.text === "Wholes"
+        ) {
+          const properties = node.members.filter(ts.isPropertySignature);
+          value = properties[0];
+          spelling = properties.find((property) =>
+            (property.name as ts.Identifier).text === (spelledBy ?? "")
+          ) ?? value;
+        }
+      });
+      const narrowed = (rootNode as ts.TypeLiteralNode).members.find((
+        member,
+      ): member is ts.PropertySignature =>
+        ts.isPropertySignature(member) &&
+        (member.name as ts.Identifier).text === "narrowed"
+      )!.type!;
+      const hinted = inner && ts.isParenthesizedTypeNode(narrowed)
+        ? narrowed.type
+        : narrowed;
+      const symbol = checker.getSymbolAtLocation(value!.name)!;
+      const schema = new SchemaGenerator().generateSchema(
+        checker.getTypeFromTypeNode(rootNode!),
+        checker,
+        rootNode,
+        undefined,
+        new WeakMap([[hinted, {
+          narrowedFrom: {
+            type: checker.getTypeOfSymbol(symbol),
+            typeNode: spelling!.type!,
+          },
+        }]]),
+      ) as { properties: Record<string, unknown> };
+      return schema.properties;
+    };
+
+    const A_ONLY = {
+      type: "object",
+      properties: { a: { type: "string" } },
+      required: ["a"],
+    };
+
+    it("gives a node the labels of the value it narrows", async () => {
+      const { narrowed } = await narrowedSchema(
+        "{ narrowed: { a: string } }",
+        'value: Confidential<Secret, ["x"]>',
+      );
+
+      expect(narrowed).toEqual({ ...A_ONLY, ifc: { confidentiality: ["x"] } });
+    });
+
+    it("gives a node narrowed from an optional property its value's labels", async () => {
+      const { narrowed } = await narrowedSchema(
+        "{ narrowed: { a: string } }",
+        'value?: Confidential<Secret, ["x"]>',
+      );
+
+      expect(narrowed).toEqual({ ...A_ONLY, ifc: { confidentiality: ["x"] } });
+    });
+
+    it("gives a node narrowed from a nullable union its value member's labels", async () => {
+      const { narrowed } = await narrowedSchema(
+        "{ narrowed: { a: string } }",
+        'value: Confidential<Secret, ["x"]> | null',
+      );
+
+      expect(narrowed).toEqual({ ...A_ONLY, ifc: { confidentiality: ["x"] } });
+    });
+
+    it("gives a node narrowed from a union the confidentiality of every member and the labels all share", async () => {
+      const { narrowed } = await narrowedSchema(
+        "{ narrowed: { a: string } }",
+        `value:
+          | Integrity<Confidential<Secret, ["x"]>, ["i"]>
+          | Integrity<Confidential<Other, ["y"]>, ["i"]>`,
+      );
+
+      expect(narrowed).toEqual({
+        ...A_ONLY,
+        ifc: { confidentiality: ["x", "y"], integrity: ["i"] },
+      });
+    });
+
+    it("gives a node narrowed from a labeled union the union's labels and its members' confidentiality", async () => {
+      const { narrowed } = await narrowedSchema(
+        "{ narrowed: { a: string } }",
+        `value: Confidential<
+          Confidential<Secret, ["x"]> | Confidential<Other, ["y"]>,
+          ["outer"]
+        >`,
+      );
+
+      expect(narrowed).toEqual({
+        ...A_ONLY,
+        ifc: { confidentiality: ["outer", "x", "y"] },
+      });
+    });
+
+    it("leaves a node that holds the value's labels already as it is", async () => {
+      const { narrowed } = await narrowedSchema(
+        '{ narrowed: Confidential<{ a: string }, ["x"]> }',
+        'value: Confidential<Secret, ["x"]>',
+      );
+
+      expect(narrowed).toEqual({ ...A_ONLY, ifc: { confidentiality: ["x"] } });
+    });
+
+    it("adds the labels of the value a node does not hold", async () => {
+      const { narrowed } = await narrowedSchema(
+        '{ narrowed: Integrity<{ a: string }, ["i"]> }',
+        'value: Confidential<Secret, ["x"]>',
+      );
+
+      expect(narrowed).toEqual({
+        ...A_ONLY,
+        ifc: { integrity: ["i"], confidentiality: ["x"] },
+      });
+    });
+
+    it("reads the hint of a parenthesized node from the node inside", async () => {
+      const { narrowed } = await narrowedSchema(
+        "{ narrowed: ({ a: string }) }",
+        'value: Confidential<Secret, ["x"]>',
+        { inner: true },
+      );
+
+      expect(narrowed).toEqual({ ...A_ONLY, ifc: { confidentiality: ["x"] } });
+    });
+
+    it("names no type while reading a value whose reading comes back to it", async () => {
+      // The checker reduces the spelled `Writable<boolean | Default<true>>` to
+      // `Cell<boolean>`, whose value reads `boolean` through the written union,
+      // whose member `boolean` is that value again.
+      const properties = await narrowedSchema(
+        "{ narrowed: { a: string }; flag: boolean }",
+        `value: Writable<boolean>;
+         spelled: Writable<boolean | Default<true>>`,
+        { spelledBy: "spelled" },
+      );
+
+      expect(properties.narrowed).toEqual(A_ONLY);
+      expect(properties.flag).toEqual({ type: "boolean" });
     });
   });
 

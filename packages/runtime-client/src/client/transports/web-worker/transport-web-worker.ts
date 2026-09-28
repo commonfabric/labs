@@ -32,6 +32,7 @@ export class WebWorkerRuntimeTransport
   implements RuntimeTransport {
   #ready = false;
   #readyPromise = defer<void>();
+  #lifetimeLock: string | undefined;
   #worker: Worker;
   constructor(options: WebWorkerRuntimeTransportOptions = {}) {
     super();
@@ -105,11 +106,24 @@ export class WebWorkerRuntimeTransport
     );
   }
 
-  /** @inheritDoc */
-  dispose(): Promise<void> {
+  /**
+   * Terminates the worker, and settles once its runtime has been torn down.
+   *
+   * `terminate()` returns while the worker is still shutting down, and under
+   * Deno's coverage collection that shutdown is when the worker writes its
+   * coverage profiles. A process that exits before they are written leaves
+   * them missing or truncated, and one truncated profile makes `deno coverage`
+   * refuse the whole directory it is in. The lock named by the worker's ready
+   * notification is released only by that teardown, so waiting for it covers
+   * the write. A worker that never reported ready, or whose ready notification
+   * named no lock, is not waited for.
+   */
+  async dispose(): Promise<void> {
     this.removeAllListeners();
     this.#worker.terminate();
-    return Promise.resolve();
+    if (this.#lifetimeLock !== undefined) {
+      await navigator.locks.request(this.#lifetimeLock, () => {});
+    }
   }
 
   async [Symbol.asyncDispose]() {
@@ -199,6 +213,7 @@ export class WebWorkerRuntimeTransport
 
     if (!this.#ready && isWorkerReadyNotification(data)) {
       this.#ready = true;
+      this.#lifetimeLock = data.lifetimeLock;
       this.#readyPromise.resolve();
       return;
     }

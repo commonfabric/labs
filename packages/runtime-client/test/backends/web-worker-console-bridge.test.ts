@@ -64,6 +64,7 @@ describe("web-worker-console-bridge", () => {
         await import("@/backends/web-worker/index.ts");
         expect(posted).toContainEqual({
           type: TransportNotificationType.WorkerReady,
+          lifetimeLock: expect.any(String),
         });
 
         const consoleMessages = () =>

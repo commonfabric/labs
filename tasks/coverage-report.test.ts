@@ -21,14 +21,17 @@ import {
   coverageMetricForGroup,
   measuredSetCoverageMetric,
 } from "./ci-check-lib.ts";
-import type { CoverageDebtMetric } from "./coverage-metrics.ts";
+import {
+  collectSourceFiles,
+  type CoverageDebtMetric,
+  parseLcov,
+} from "./coverage-metrics.ts";
 import {
   COMPILE_CACHE_STATE_FILE,
   COVERAGE_FAILURE_MARKER,
   COVERAGE_REPORT_DIR,
   COVERAGE_REPORT_FILE,
 } from "./ci-lane.ts";
-import { UNLAUNCHED_MEMBERS_FILE } from "./unlaunched-members.ts";
 import { loadTopology } from "./test-topology.ts";
 import {
   measuredSetDirectory,
@@ -132,16 +135,24 @@ async function markerPathIn(lane: string): Promise<string> {
   );
 }
 
+/**
+ * A report holding a record for every file the repository-wide figure
+ * charges, each with one line covered and one line not.
+ *
+ * Scoring compiles a tracked file the report holds no record for, unless
+ * the file opts out of coverage, to learn whether it holds any code, and
+ * this repository has thousands of them. A report naming every one of
+ * them leaves none to compile.
+ */
+async function everyFileReport(): Promise<string> {
+  return (await collectSourceFiles(REPOSITORY))
+    .map((file) => `SF:${file.absolutePath}\nDA:1,1\nDA:2,0\nend_of_record\n`)
+    .join("");
+}
+
 /** The measured-set figures a reports directory yields. */
-function setFiguresFrom(
-  reports: string,
-  unlaunchedMembers: string[] = [],
-): Promise<CoverageDebtMetric[]> {
-  return measuredSetFigures(optionsFor(REPOSITORY, reports), {
-    lcov: [],
-    unlaunchedMembers,
-    cold: false,
-  });
+function setFiguresFrom(reports: string): Promise<CoverageDebtMetric[]> {
+  return measuredSetFigures(optionsFor(REPOSITORY, reports));
 }
 
 describe("coverage-report", () => {
@@ -175,27 +186,28 @@ describe("coverage-report", () => {
       });
       try {
         const reports = await collectReports(root);
-        expect(reports.lcov.join("\n")).toContain("SF:/a.ts");
-        expect(reports.lcov.join("\n")).toContain("SF:/b.ts");
-        expect(reports.lcov.join("\n")).not.toContain("not a report");
+        expect([...reports.coverage.keys()].sort()).toEqual(["/a.ts", "/b.ts"]);
       } finally {
         await Deno.remove(root, { recursive: true });
       }
     });
 
-    it("returns the members every lane's record says it never launched", async () => {
+    it("merges what two lanes measured of one file, line by line", async () => {
+      // Each report is read into the merge as it is found rather than
+      // joined with the others: a full run's reports joined are past the
+      // longest string a process can hold.
+
       const root = await directoryOf({
         "lane-1/lcov/sets/workspace-unit/packages_memory/coverage.lcov":
-          "SF:/a.ts\nend_of_record\n",
-        [`lane-1/lcov/sets/workspace-unit/packages_memory/${UNLAUNCHED_MEMBERS_FILE}`]:
-          "./packages/runner\n",
-        [`lane-2/lcov/sets/runner-unit/packages_runner/${UNLAUNCHED_MEMBERS_FILE}`]:
-          "./packages/shell\n./packages/runner\n",
+          "SF:/a.ts\nDA:1,1\nDA:2,0\nend_of_record\n",
+        "lane-2/lcov/sets/runner-unit/packages_runner/coverage.lcov":
+          "SF:/a.ts\nDA:1,0\nDA:2,3\nend_of_record\n",
       });
       try {
-        expect((await collectReports(root)).unlaunchedMembers).toEqual([
-          "./packages/runner",
-          "./packages/shell",
+        const reports = await collectReports(root);
+        expect([...reports.coverage.get("/a.ts")!.lineHits]).toEqual([
+          [1, 1],
+          [2, 3],
         ]);
       } finally {
         await Deno.remove(root, { recursive: true });
@@ -253,8 +265,7 @@ describe("coverage-report", () => {
 
     it("returns nothing for a directory nothing was downloaded into", async () => {
       expect(await collectReports("/nonexistent-coverage-artifacts")).toEqual({
-        lcov: [],
-        unlaunchedMembers: [],
+        coverage: new Map(),
         cold: false,
       });
     });
@@ -283,8 +294,7 @@ describe("coverage-report", () => {
 
         expect(
           await repositoryFigures(optionsFor(root, "artifacts"), {
-            lcov: [`SF:${alpha}\nDA:1,1\nDA:2,0\nend_of_record\n`],
-            unlaunchedMembers: [],
+            coverage: parseLcov(`SF:${alpha}\nDA:1,1\nDA:2,0\nend_of_record\n`),
             cold: false,
           }),
         ).toEqual([
@@ -306,8 +316,7 @@ describe("coverage-report", () => {
       try {
         expect(
           await repositoryFigures(optionsFor(root, "artifacts"), {
-            lcov: ["TN:\nend_of_record\n"],
-            unlaunchedMembers: [],
+            coverage: parseLcov("TN:\nend_of_record\n"),
             cold: false,
           }),
         ).toEqual([]);
@@ -326,32 +335,10 @@ describe("coverage-report", () => {
       try {
         expect(
           await repositoryFigures(optionsFor(root, "artifacts"), {
-            lcov: [],
-            unlaunchedMembers: [],
+            coverage: new Map(),
             cold: false,
           }),
         ).toEqual([]);
-      } finally {
-        await Deno.remove(root, { recursive: true });
-      }
-    });
-
-    it("returns no workspace total where a member never launched", async () => {
-      // A member no lane started has unknown coverage rather than none,
-      // so its group goes unscored and the total that would have held it
-      // goes with it.
-
-      const { root, alpha } = await workspaceOfTwo();
-      try {
-        expect(
-          await repositoryFigures(optionsFor(root, "artifacts"), {
-            lcov: [`SF:${alpha}\nDA:1,1\nDA:2,0\nend_of_record\n`],
-            unlaunchedMembers: ["./packages/beta"],
-            cold: false,
-          }),
-        ).toEqual([
-          { name: coverageMetricForGroup("packages/alpha"), uncoveredLines: 1 },
-        ]);
       } finally {
         await Deno.remove(root, { recursive: true });
       }
@@ -475,24 +462,6 @@ describe("coverage-report", () => {
       }
     });
 
-    it("returns no figure for a set over a member nothing launched", async () => {
-      // A set is compared between runs on the understanding that it ran
-      // whole. A run that started only part of the member's tests reaches
-      // fewer of its lines, so the figure is above what the set measures,
-      // and published it becomes a bar the gate cannot catch a rise past.
-
-      const source = path.join(REPOSITORY, MEMBER, "src/index.ts");
-      const root = await directoryOf({
-        [await reportPathIn("lane-1")]:
-          `SF:${source}\nDA:1,1\nDA:2,0\nend_of_record\n`,
-      });
-      try {
-        expect(await setFiguresFrom(root, [`./${MEMBER}`])).toEqual([]);
-      } finally {
-        await Deno.remove(root, { recursive: true });
-      }
-    });
-
     it("returns no figure where the report reached none of the member's files", async () => {
       // A report with a record for none of the member's files measured
       // nothing, whatever it says about the lines it does carry, and a
@@ -521,12 +490,6 @@ describe("coverage-report", () => {
       expect(summary).toContain("2 figures published");
     });
 
-    it("returns a summary naming the member that withheld the total", () => {
-      expect(summarize([], ["./packages/beta"])).toContain(
-        "Nothing launched ./packages/beta",
-      );
-    });
-
     it("returns a summary saying so where no lane reported", () => {
       expect(summarize([])).toContain("No lane reported coverage");
     });
@@ -534,16 +497,18 @@ describe("coverage-report", () => {
 
   describe("report()", () => {
     it("publishes every figure as a measurement in the run's spool", async () => {
-      const source = path.join(REPOSITORY, MEMBER, "src/index.ts");
       const reports = await directoryOf({
-        [await reportPathIn("lane-1")]:
-          `SF:${source}\nDA:1,1\nDA:2,0\nend_of_record\n`,
+        [await reportPathIn("lane-1")]: await everyFileReport(),
       });
       try {
         const { summary, coverage } = await reportInto(reports);
         expect([...coverage.sets.keys()]).toEqual([`${SUITE}/${MEMBER}`]);
-        expect(coverage.groups.get("workspace")).toBeGreaterThan(0);
-        expect(coverage.groups.get(MEMBER)).toBeGreaterThan(0);
+        // Each file's record leaves exactly one of its lines uncovered.
+        const files = await collectSourceFiles(REPOSITORY);
+        expect(coverage.groups.get("workspace")).toBe(files.length);
+        expect(coverage.groups.get(MEMBER)).toBe(
+          files.filter((file) => file.metricGroup === MEMBER).length,
+        );
         expect(summary).toContain("uncovered lines");
       } finally {
         await Deno.remove(reports, { recursive: true });
@@ -554,11 +519,10 @@ describe("coverage-report", () => {
       // The dashboard leaves a cold run out of the repository-wide trend,
       // and reads that from here.
 
-      const source = path.join(REPOSITORY, MEMBER, "src/index.ts");
+      const lcov = await everyFileReport();
       for (const state of ["cold", "warm"] as const) {
         const reports = await directoryOf({
-          [await reportPathIn("lane-1")]:
-            `SF:${source}\nDA:1,1\nDA:2,0\nend_of_record\n`,
+          [await reportPathIn("lane-1")]: lcov,
           [`lane-1/lcov/${COMPILE_CACHE_STATE_FILE}`]: `${state}\n`,
         });
         try {

@@ -15,7 +15,7 @@
     // Resvg's Linux loader reads system information besides, so they run
     // under `--allow-all`. The preload gives each process a cache directory of
     // its own.
-    "deno-test": "deno run --allow-env --allow-read --allow-write --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-sharded-test-files.ts DASHBOARD_TEST_SHARD dashboard . --all-access=favicon-raster.test.ts,regenerate-favicons.test.ts -- --preload=test/cache-directory-preload.ts --allow-env --allow-read --allow-write --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" --ignore='**/*.browser.test.ts' --shuffle=$(deno task -q test-seed)",
+    "deno-test": "deno run --allow-read --allow-write --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-test-batches.ts . --all-access=favicon-raster.test.ts,regenerate-favicons.test.ts -- --preload=test/cache-directory-preload.ts --allow-env --allow-read --allow-write --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" --ignore='**/*.browser.test.ts' --shuffle=$(deno task -q test-seed)",
     "browser-test": "deno run --allow-env --allow-read --allow-write --allow-run --allow-net ../deno-web-test/cli.ts **/*.browser.test.ts",
     "regenerate-favicons": "deno run --allow-read --allow-write=favicon-png.generated.ts --allow-ffi --allow-sys=cpus,networkInterfaces,hostname regenerate-favicons.ts"
   }

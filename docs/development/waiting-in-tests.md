@@ -1140,9 +1140,9 @@ text inside a comment or a string is not an import. A type-only import, whether
 `import type { waitFor }` or an inline `{ type waitFor }`, is erased before the
 test runs and polls nothing, so it does not count either. Run it with
 `deno task check-no-waitfor`;
-the CI "Check" job runs it on every pull request. The error names the offending
-file and points at `waitForCondition`, `awaitViewSettled`, the in-process
-`defer()` replacement, and this report.
+CI runs it as the `check-no-waitfor` gate of the `repo-gates` suite. The error
+names the offending file and points at `waitForCondition`, `awaitViewSettled`,
+the in-process `defer()` replacement, and this report.
 
 The check is a speed bump against reaching for `waitFor` out of habit, not a seal
 against a determined evasion. It reads the import statement and nothing else, so

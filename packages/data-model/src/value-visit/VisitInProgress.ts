@@ -1,13 +1,20 @@
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
+import { isUnsafeObjectKey } from "@commonfabric/utils/types";
 import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
 
-import { codecOf, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
+import {
+  codecOf,
+  NonterminalCodec,
+  NULL_LIVE_ENVIRONMENT,
+} from "@/codec-common";
 import type {
   FabricArrayPlus,
   FabricContainerValuePlus,
   FabricInstancePlus,
   FabricPlainObjectPlus,
   FabricValuePlus,
+  MutableFabricArrayPlusLayer,
+  MutableFabricPlainObjectPlusLayer,
 } from "@/interface.ts";
 import {
   type FabricContainerValueTag,
@@ -20,7 +27,8 @@ import {
 import { debugStr } from "@/value-debug";
 
 import {
-  type BaselineVisitorMethodResult,
+  type MainResultForm,
+  type MapToForm,
   type RecurseForm,
   type ReplaceForm,
   type ValueVisitor,
@@ -38,16 +46,23 @@ type RecurseOfForm<PlusType> = {
   readonly containerTag: FabricContainerValueTag;
   readonly container: FabricContainerValuePlus<PlusType>;
   readonly doKeys: boolean;
-  readonly doValues: boolean;
 };
 
 /**
  * Possible results from the top `#visitValue()` method, and some of the
  * methods that effectively feed into it.
  */
-type MainVisitResult<ResultType> = BaselineVisitorMethodResult<
-  ResultType
+type MainVisitResult<PlusType, ResultType> = Exclude<
+  VisitResult<PlusType, ResultType>,
+  RecurseForm | ReplaceForm<PlusType>
 >;
+
+/**
+ * Configuration for `VisitInProgress`
+ */
+export type VisitInProgressConfig =
+  | { mode: "visit" }
+  | { mode: "map"; freeze: boolean };
 
 /**
  * State of a visit currently in progress, along with most of the visit
@@ -55,28 +70,52 @@ type MainVisitResult<ResultType> = BaselineVisitorMethodResult<
  *
  * This class is _intentionally_ omitted from the barrel `export` file for the
  * submodule.
+ *
+ * TODO(danfuzz): Honor the configuration's `freeze`. Until then, a
+ * structural-map operation behaves the same whatever `freeze` says: an
+ * unchanged value is its own result, and nothing is frozen.
  */
 export class VisitInProgress<
   PlusType = never,
   ResultType = FabricValuePlus<PlusType>,
 > {
   /** Concrete visitor implementation. */
-  #visitor: ValueVisitor<PlusType, ResultType>;
+  readonly #visitor: ValueVisitor<PlusType, ResultType>;
+
+  /** Whether mapping results are to be collected. */
+  readonly #mapMode: boolean;
+
+  /** When in mapping mode, whether to freeze mapped containers. */
+  readonly #freezeMappedContainers: boolean;
 
   /** Bound method call to `#visitor.isPlusType()`. */
-  #isPlusType: PlusTypePredicate<PlusType>;
+  readonly #isPlusType: PlusTypePredicate<PlusType>;
 
   /** Container stack of the visit currently in progress. */
-  #stack = new IndexTrackingStack<FabricValuePlus<PlusType>>();
+  readonly #stack = new IndexTrackingStack<FabricValuePlus<PlusType>>();
 
   /** Indicates if a visit is now actually in-progress. */
   #inProgress = false;
 
   /**
+   * Cached result of a call to `#visitor.isDomainAssignableToResultType()`, if
+   * ever called.
+   */
+  #isDomainAssignableToResultType: boolean | undefined = undefined;
+
+  /**
    * Constructs an instance.
    */
-  constructor(visitor: ValueVisitor<PlusType, ResultType>) {
+  constructor(
+    visitor: ValueVisitor<PlusType, ResultType>,
+    config: VisitInProgressConfig,
+  ) {
     this.#visitor = visitor;
+    this.#mapMode = config.mode === "map";
+    this.#freezeMappedContainers = (config.mode === "map")
+      ? config.freeze
+      : false;
+
     this.#isPlusType = visitor.isPlusType.bind(visitor);
   }
 
@@ -85,33 +124,41 @@ export class VisitInProgress<
   //
 
   /**
-   * Visits the indicated value as a top-level operation. See the top-level
-   * `visitValue()` for the extent to which encountered values are inspected.
+   * Performs a visit over the indicated value, as a top-level operation. This
+   * does either a plain visit or a map, depending on how this instance was
+   * configured.
    */
   visit(
     value: FabricValuePlus<PlusType>,
   ): ResultType {
-    if (this.#inProgress) {
-      // This is a defense-in-depth protection against bugs in this submodule,
-      // and also serves as documentation for the intended use of this class.
-      throw new Error(
-        "Shouldn't happen: Cannot use `VisitInProgress` for multiple concurrent top-level visits.",
-      );
-    }
+    this.#assertNoConcurrentUse();
 
     this.#inProgress = true;
     try {
       const result = this.#visitValue(value);
       switch (result?.type) {
         case undefined: {
-          // `ResultType` might or might not include `undefined`, so we have to
-          // check.
-          return this.#assertResultType(undefined);
+          if (this.#mapMode) {
+            return this.#assertResultType(value);
+          } else {
+            // `ResultType` might or might not include `undefined`, so we have to
+            // check.
+            return this.#assertResultType(undefined);
+          }
         }
 
-        case "mainResult": {
+        case "mainResult":
+        case "mapTo": {
+          // At the top level (where we are), the most sensible thing to do with
+          // a `mapTo` is treat it just like a `mainResult`, so we do.
           return result.value;
         }
+
+        default: {
+          // deno-coverage-ignore-start
+          this.#throwShouldntHappenResultType(result);
+        }
+          // deno-coverage-ignore-stop
       }
     } finally {
       this.#inProgress = false;
@@ -129,28 +176,34 @@ export class VisitInProgress<
    */
   #visitValue(
     value: FabricValuePlus<PlusType>,
-  ): MainVisitResult<ResultType> {
+  ): MainVisitResult<PlusType, ResultType> {
     const tag = this.#tagOfValueElseNull(value);
     const result = this.#visitResolvingCyclesAndReplacement(value, tag);
 
     switch (result?.type) {
       case "mainResult":
+      case "mapTo":
       case undefined: {
         return result;
       }
 
       case "recurseOf": {
+        let recurseResult: MainVisitResult<PlusType, ResultType>;
+
         switch (result.containerTag) {
           case VALUE_TAGS.Array: {
-            return this.#recurseFabricArray(result);
+            recurseResult = this.#recurseFabricArray(result);
+            break;
           }
 
           case VALUE_TAGS.FabricInstance: {
-            return this.#recurseFabricInstance(result);
+            recurseResult = this.#recurseFabricInstance(result);
+            break;
           }
 
           case VALUE_TAGS.Object: {
-            return this.#recurseFabricPlainObject(result);
+            recurseResult = this.#recurseFabricPlainObject(result);
+            break;
           }
 
           default: {
@@ -165,6 +218,18 @@ export class VisitInProgress<
           }
             // deno-coverage-ignore-stop
         }
+
+        const { container } = result;
+        if (
+          (recurseResult === undefined) && this.#mapMode &&
+          !Object.is(container, value)
+        ) {
+          // The recursion found no changes, but it was a recursion into a
+          // `replace`ment, which stands in place of the original value.
+          return { type: "mapTo", value: this.#assertResultType(container) };
+        }
+
+        return recurseResult;
       }
 
       default: {
@@ -184,7 +249,9 @@ export class VisitInProgress<
 
   /**
    * Iteratively calls `visitValue()` and `visitCycle()` on the visitor, until
-   * the visitor returns something other than a `replace` result.
+   * the visitor returns something other than a `replace` result. When doing a
+   * structural-map operation, an `undefined` ("no change") result for a
+   * replacement becomes a `mapTo` of the replacement.
    */
   #visitResolvingCyclesAndReplacement(
     value: FabricValuePlus<PlusType>,
@@ -196,6 +263,7 @@ export class VisitInProgress<
       ReplaceForm<PlusType> | RecurseForm
     > {
     const vis = this.#visitor;
+    const original = value;
 
     for (;;) {
       let result;
@@ -226,6 +294,15 @@ export class VisitInProgress<
         }
 
         default: {
+          if (
+            (result === undefined) && this.#mapMode &&
+            !Object.is(value, original)
+          ) {
+            // "No change" to a `replace`ment means that the replacement stands
+            // in place of the original value.
+            return { type: "mapTo", value: this.#assertResultType(value) };
+          }
+
           return result;
         }
       }
@@ -238,17 +315,14 @@ export class VisitInProgress<
    */
   #recurseFabricArray(
     result: RecurseOfForm<PlusType>,
-  ): MainVisitResult<ResultType> {
-    const { container, doValues } = result;
+  ): MainVisitResult<PlusType, ResultType> {
+    const { container } = result;
+
     const array = container as FabricArrayPlus<PlusType>;
     const vis = this.#visitor;
-
-    if (!doValues) {
-      // `result` represents a no-op `recurse`. Though pointless, nothing
-      // prevents a client from returning it as a visit result, so just handle
-      // it gracefully here.
-      return undefined;
-    }
+    const mapResult: MutableFabricArrayPlusLayer<ResultType> | undefined =
+      this.#mapMode ? new Array(array.length) : undefined;
+    let anyChanges = false;
 
     this.#stack.push(array);
 
@@ -265,7 +339,7 @@ export class VisitInProgress<
 
         if (idxNumber !== (lastIdx + 1)) {
           // There's a gap just before this element.
-          const result = vis.visitedFabricArrayGap(
+          const result = vis.visitingFabricArrayGap(
             array,
             lastIdx + 1,
             idxNumber - lastIdx - 1,
@@ -278,33 +352,75 @@ export class VisitInProgress<
         lastIdx = idxNumber;
 
         const element = array[idxNumber]!;
-        const elemResult = this.#visitValue(element);
-        if (elemResult?.type === "mainResult") {
-          return elemResult;
+        const visitingResult = vis.visitingFabricArrayElement(
+          array,
+          idxNumber,
+          element,
+        );
+
+        if (visitingResult?.type === "mainResult") {
+          return visitingResult;
         }
 
-        // TODO(danfuzz): When we have a non-`mainResult` visit-result type,
-        // we'll want to pass the result value from `elemResult` into
-        // `visitedFabricArrayElement()` and not the original `element`.
-        const result = vis.visitedFabricArrayElement(array, idxNumber, element);
-        if (result?.type === "mainResult") {
-          return result;
+        const elemResult = this.#handleMappingAsAppropriate(
+          element,
+          this.#visitValue(element),
+        );
+
+        switch (elemResult?.type) {
+          case "mainResult": {
+            return elemResult;
+          }
+
+          case "mapTo": {
+            const mappedTo = elemResult.value;
+
+            // `!` is valid, because we'll only see `mapTo` when we're actually
+            // mapping.
+            mapResult![idxNumber] = mappedTo;
+            anyChanges ||= !Object.is(element, mappedTo);
+
+            const result = vis.mappedFabricArrayElement(
+              array,
+              idxNumber,
+              mappedTo,
+            );
+
+            if (result?.type === "mainResult") {
+              return result;
+            }
+
+            break;
+          }
+
+          case undefined: {
+            break;
+          }
+
+          default: {
+            // deno-coverage-ignore-start
+            this.#throwShouldntHappenResultType(elemResult);
+          }
+            // deno-coverage-ignore-stop
         }
       }
 
       if (array.length !== (lastIdx + 1)) {
         // There's a gap at the end of the array.
-        const result = vis.visitedFabricArrayGap(
+        const result = vis.visitingFabricArrayGap(
           array,
           lastIdx + 1,
           array.length - lastIdx - 1,
         );
+
         if (result?.type === "mainResult") {
           return result;
         }
       }
 
-      return undefined;
+      return (mapResult && anyChanges)
+        ? { type: "mapTo", value: this.#assertResultType(mapResult) }
+        : undefined;
     } finally {
       this.#stack.popExpect(array);
     }
@@ -317,36 +433,119 @@ export class VisitInProgress<
    */
   #recurseFabricInstance(
     result: RecurseOfForm<PlusType>,
-  ): MainVisitResult<ResultType> {
-    const { container, doValues } = result;
+  ): MainVisitResult<PlusType, ResultType> {
+    const { container } = result;
+
     const instance = container as FabricInstancePlus<PlusType>;
     const vis = this.#visitor;
+    const codec = codecOf(instance);
+    const state = codec.encode(instance, NULL_LIVE_ENVIRONMENT);
 
-    if (!doValues) {
-      // `result` represents a no-op `recurse`. Though pointless, nothing
-      // prevents a client from returning it as a visit result, so just handle
-      // it gracefully here.
-      return undefined;
-    }
-
-    const state = codecOf(instance).encode(instance, NULL_LIVE_ENVIRONMENT);
     this.#stack.push(instance);
 
     try {
-      const stateResult = this.#visitValue(state);
-      if (stateResult?.type === "mainResult") {
-        return stateResult;
+      const visitingResult = vis.visitingFabricInstanceState(
+        instance,
+        state,
+      );
+
+      if (visitingResult?.type === "mainResult") {
+        return visitingResult;
       }
 
-      // TODO(danfuzz): When we have a non-`mainResult` visit-result type, we'll
-      // want to pass the result value from the visits immediately above instead
-      // of the original `state`.
-      const result = vis.visitedFabricInstance(instance, state);
+      const stateResult = this.#handleMappingAsAppropriate(
+        state,
+        this.#visitValue(state),
+      );
+
+      switch (stateResult?.type) {
+        case "mainResult": {
+          return stateResult;
+        }
+
+        case undefined: {
+          // Not mapping.
+          return undefined;
+        }
+
+        case "mapTo": {
+          // We are doing a structural-map operation. (The `mapTo` might have
+          // been transformed from a "no change" `undefined`.) Handled below.
+          break;
+        }
+
+        default: {
+          // deno-coverage-ignore-start
+          this.#throwShouldntHappenResultType(stateResult);
+        }
+          // deno-coverage-ignore-stop
+      }
+
+      const mappedTo = stateResult.value;
+      const result = vis.mappedFabricInstanceState(instance, mappedTo);
       if (result?.type === "mainResult") {
         return result;
       }
 
-      return undefined;
+      if (Object.is(mappedTo, state)) {
+        // The state visit returned the original state value, so we in turn
+        // return the original `FabricInstance`.
+        return undefined;
+      }
+
+      // This cast is sound because `FabricInstance` implementations aren't
+      // supposed to care about what their `PlusType` is. What we're saying
+      // here is that whatever codec was used to encode the instance as
+      // `FabricInstancePlus<PlusType>` is fine to use as a
+      // `FabricInstancePlus<ResultType>` on state of type
+      // `FabricValuePlus<ResultType>` to decode back into an instance.
+      const codecForResultType = codec as NonterminalCodec<
+        unknown
+      > as NonterminalCodec<ResultType>;
+
+      let canDecode;
+      try {
+        canDecode = codecForResultType.canDecode(mappedTo);
+      } catch (cause) {
+        throw new Error(
+          debugStr`Codec of $quote${instance} failed while checking replacement state $quote${mappedTo}`,
+          { cause },
+        );
+      }
+
+      if (!canDecode) {
+        throw new Error(
+          debugStr`Codec of $quote${instance} refused replacement state $quote${mappedTo}`,
+        );
+      }
+
+      let codecTag;
+      try {
+        codecTag = codec.tagForValue(instance);
+      } catch (cause) {
+        throw new Error(
+          debugStr`Codec of $quote${instance} failed when asked for a tag.`,
+          { cause },
+        );
+      }
+
+      try {
+        return {
+          type: "mapTo",
+          value: this.#assertResultType(
+            codecForResultType.decode(
+              codecTag,
+              mappedTo,
+              NULL_LIVE_ENVIRONMENT,
+            ),
+          ),
+        };
+      } catch (cause) {
+        throw new Error(
+          debugStr`Codec of $quote${instance} accepted but then failed to decode replacement state $quote${mappedTo}`,
+          { cause },
+        );
+      }
     } finally {
       this.#stack.popExpect(instance);
     }
@@ -358,48 +557,114 @@ export class VisitInProgress<
    */
   #recurseFabricPlainObject(
     result: RecurseOfForm<PlusType>,
-  ): MainVisitResult<ResultType> {
-    const { container, doKeys, doValues } = result;
+  ): MainVisitResult<PlusType, ResultType> {
+    const { container, doKeys } = result;
+
     const plainObj = container as FabricPlainObjectPlus<PlusType>;
-    const vis = this.#visitor;
-
-    if (!(doKeys || doValues)) {
-      // `result` represents a no-op `recurse`. Though pointless, nothing
-      // prevents a client from returning it as a visit result, so just handle
-      // it gracefully here.
-      return undefined;
-    }
-
     const entries = Object.entries(plainObj);
+    const vis = this.#visitor;
+    const mapResult: MutableFabricPlainObjectPlusLayer<ResultType> | undefined =
+      this.#mapMode ? {} : undefined;
+    let anyChanges = false;
 
     this.#stack.push(plainObj);
 
     try {
       for (const [key, value] of entries) {
-        if (doKeys) {
-          const keyResult = this.#visitValue(key);
-          if (keyResult?.type === "mainResult") {
+        const visitingResult = vis.visitingFabricPlainObjectEntry(
+          plainObj,
+          key,
+          value,
+        );
+
+        if (visitingResult?.type === "mainResult") {
+          return visitingResult;
+        }
+
+        const keyResult = this.#handlePlainObjectKeyMappingAsAppropriate(
+          key,
+          doKeys ? this.#visitValue(key) : undefined,
+        );
+        let keyMappedTo: string | undefined;
+
+        switch (keyResult?.type) {
+          case "mainResult": {
             return keyResult;
           }
+
+          case "mapTo": {
+            keyMappedTo = keyResult.value;
+            if (Object.hasOwn(mapResult!, keyMappedTo)) {
+              throw new Error(
+                debugStr`Visit of key $quote${key} mapped to already-mapped key: $quote${keyMappedTo}`,
+              );
+            }
+            break;
+          }
+
+          case undefined: {
+            keyMappedTo = undefined;
+            break;
+          }
+
+          default: {
+            // deno-coverage-ignore-start
+            this.#throwShouldntHappenResultType(keyResult);
+          }
+            // deno-coverage-ignore-stop
         }
 
-        if (doValues) {
-          const valueResult = this.#visitValue(value);
-          if (valueResult?.type === "mainResult") {
+        const valueResult = this.#handleMappingAsAppropriate(
+          value,
+          this.#visitValue(value),
+        );
+        let valueMappedTo: ResultType | undefined;
+
+        switch (valueResult?.type) {
+          case "mainResult": {
             return valueResult;
           }
+
+          case "mapTo": {
+            valueMappedTo = valueResult.value;
+            break;
+          }
+
+          case undefined: {
+            valueMappedTo = undefined;
+            break;
+          }
+
+          default: {
+            // deno-coverage-ignore-start
+            this.#throwShouldntHappenResultType(valueResult);
+          }
+            // deno-coverage-ignore-stop
         }
 
-        // TODO(danfuzz): When we have a non-`mainResult` visit-result type,
-        // we'll want to pass the result value(s) from the visits immediately
-        // above instead of the original `key` and `value`.
-        const result = vis.visitedFabricPlainObjectEntry(plainObj, key, value);
-        if (result?.type === "mainResult") {
-          return result;
+        if (mapResult) {
+          // `keyMappedTo!` is safe, because if we made it here, it necessarily
+          // got set to a `string`.
+          const finalKey: string = keyMappedTo!;
+          const result = vis.mappedFabricPlainObjectEntry(
+            plainObj,
+            finalKey,
+            valueMappedTo,
+          );
+
+          if (result?.type === "mainResult") {
+            return result;
+          }
+
+          mapResult[finalKey] = valueMappedTo;
+          anyChanges ||= !Object.is(key, finalKey) ||
+            !Object.is(value, valueMappedTo);
         }
       }
 
-      return undefined;
+      return (mapResult && anyChanges)
+        ? { type: "mapTo", value: this.#assertResultType(mapResult) }
+        : undefined;
     } finally {
       this.#stack.popExpect(plainObj);
     }
@@ -426,7 +691,6 @@ export class VisitInProgress<
           containerTag: finalValueTag,
           container: finalValue as FabricContainerValuePlus<PlusType>,
           doKeys: result.doKeys,
-          doValues: result.doValues,
         };
       }
     }
@@ -437,19 +701,68 @@ export class VisitInProgress<
   }
 
   /**
+   * Throws a "no concurrent use" error, if this instance is currently in the
+   * middle of a top-level operation. This is called both as defense-in-depth
+   * protection against bugs in this submodule, and to serve as documentation
+   * for the intended use of this class.
+   */
+  #assertNoConcurrentUse() {
+    if (this.#inProgress) {
+      throw new Error(
+        "Shouldn't happen: Cannot use `VisitInProgress` for multiple concurrent top-level visits.",
+      );
+    }
+  }
+
+  /**
    * Asserts that the given value is a member of the visitor's `ResultType`,
    * returning it or `throw`ing if the assertion doesn't hold.
    */
   #assertResultType(
     value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
   ): ResultType {
-    if (this.#visitor.isResultType(value)) {
+    if (this.#isDomainAssignableToResultType === undefined) {
+      this.#isDomainAssignableToResultType = this.#visitor
+        .isDomainAssignableToResultType();
+    }
+
+    if (this.#isDomainAssignableToResultType) {
+      // This cast is based on the assurance of `#visitor` that the cast is
+      // correct, as far as the visitor is concerned.
+      return value as ResultType;
+    } else if (this.#visitor.isResultType(value)) {
       return value;
     }
 
     throw new Error(
       debugStr`Not a \`ResultType\` value: $quote${value}`,
     );
+  }
+
+  /**
+   * Asserts that the given value is a valid `FabricPlainObject` property key.
+   */
+  #assertValidPlainObjectKey(
+    original: string,
+    value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
+  ): string {
+    if (typeof value !== "string") {
+      throw new Error(
+        debugStr`Visit of key $quote${original} mapped to non-string: $quote${value}`,
+      );
+    } else if (isUnsafeObjectKey(value)) {
+      if (original === value) {
+        throw new Error(
+          debugStr`Visit of unsafe key $quote${original} mapped to itself.`,
+        );
+      } else {
+        throw new Error(
+          debugStr`Visit of key $quote${original} mapped to unsafe key: $quote${value}`,
+        );
+      }
+    }
+
+    return value;
   }
 
   /**
@@ -461,4 +774,88 @@ export class VisitInProgress<
   ): FabricValuePlusTag | null {
     return tagOfFabricValueElseNull(value, this.#isPlusType);
   }
+
+  /**
+   * Converts a `#visitValue()` result being used as a plain object key, from a
+   * `recurse`-induced sub-value iteration, as appropriate, based on `#mapMode`.
+   */
+  #handlePlainObjectKeyMappingAsAppropriate(
+    original: string,
+    visitResult: MainVisitResult<PlusType, ResultType>,
+  ): MainResultForm<ResultType> | MapToForm<string> | undefined {
+    if (!this.#mapMode) {
+      return (visitResult?.type === "mainResult") ? visitResult : undefined;
+    }
+
+    switch (visitResult?.type) {
+      case "mainResult": {
+        return visitResult;
+      }
+
+      case "mapTo": {
+        this.#assertValidPlainObjectKey(original, visitResult.value);
+        return visitResult as MapToForm<string>;
+      }
+
+      case undefined: {
+        return {
+          type: "mapTo",
+          value: this.#assertValidPlainObjectKey(original, original),
+        };
+      }
+
+      default: {
+        // deno-coverage-ignore-start
+        this.#throwShouldntHappenResultType(visitResult);
+      }
+        // deno-coverage-ignore-stop
+    }
+  }
+
+  /**
+   * Converts a `#visitValue()` result from a `recurse`-induced sub-value
+   * iteration as appropriate, based on `#mapMode`. Specifically, a
+   * `mainResult` is always returned as-is. Other than that, this always returns
+   * a `mapTo` result when mapping (furthermore validating the result as
+   * necessary), and always returns `undefined` when _not_ mapping.
+   */
+  #handleMappingAsAppropriate(
+    original: FabricValuePlus<PlusType>,
+    visitResult: MainVisitResult<PlusType, ResultType>,
+  ): MainVisitResult<PlusType, ResultType> {
+    if (!this.#mapMode) {
+      return (visitResult?.type === "mainResult") ? visitResult : undefined;
+    }
+
+    switch (visitResult?.type) {
+      case "mainResult":
+      case "mapTo": {
+        return visitResult;
+      }
+
+      case undefined: {
+        return { type: "mapTo", value: this.#assertResultType(original) };
+      }
+
+      default: {
+        // deno-coverage-ignore-start
+        this.#throwShouldntHappenResultType(visitResult);
+      }
+        // deno-coverage-ignore-stop
+    }
+  }
+
+  // deno-coverage-ignore-start
+  /**
+   * Throws a "shouldn't happen" error, used in `default` cases of `switch`
+   * statements that should never end up called by virtue of all the possible
+   * result types being handled. `result` is typed `never` so that a `switch`
+   * which fails to handle one of its result types is a compile-time error at
+   * the call site.
+   */
+  #throwShouldntHappenResultType(result: never): never {
+    const type = (result as { type: string }).type;
+    throw new Error(`Shouldn't happen: Got result type \`${type}\`.`);
+  }
+  // deno-coverage-ignore-stop
 }

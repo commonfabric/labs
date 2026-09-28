@@ -9,7 +9,7 @@ import {
   serializePatternGraph,
   withAliasBindings,
 } from "../src/builder/to-encodable-form.ts";
-import type { FactoryInput, Pattern } from "../src/builder/types.ts";
+import type { Pattern } from "../src/builder/types.ts";
 import {
   resolveOpPattern,
   resolveStoredPattern,
@@ -195,7 +195,7 @@ describe("refs-only pattern JSON at the boundary", () => {
     expect(Array.isArray((internal as { nodes: unknown }).nodes)).toBe(true);
 
     const viaLegacyAliases = withAliasBindings(
-      compiled as unknown as FactoryInput<unknown>,
+      compiled,
     ) as Record<string, unknown>;
     expect("$patternRef" in viaLegacyAliases).toBe(false);
     expect(Array.isArray(viaLegacyAliases.nodes)).toBe(true);

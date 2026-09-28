@@ -14,6 +14,7 @@ import type { Cell } from "../src/cell.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import { Runtime } from "../src/runtime.ts";
 import { decomposeSchema } from "../src/schema-decompose.ts";
+import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { URI } from "../src/storage/interface.ts";
@@ -248,18 +249,85 @@ describe("cross-space-cid-schema", () => {
           expect(value?.name).toBe("Ada");
         }
         expect(schemaReads).toContain(`${sourceSpace}/${decomposed.rootRef}`);
-        if (route === "same-space carried reader schema") {
-          expect(
-            schemaReads.every((read) => expectedSchemaReads.includes(read)),
-          )
-            .toBe(true);
-        } else {
-          expect(new Set(schemaReads)).toEqual(new Set(expectedSchemaReads));
-        }
+        expect(new Set(schemaReads)).toEqual(new Set(expectedSchemaReads));
       } finally {
         await runtime.dispose();
         await manager.close();
       }
     });
   }
+
+  // A same-space hop keeps a carried reader schema in reference form, so a
+  // closure that is not at hand yet must stay recoverable: the read selects
+  // nothing while the documents are missing, and reads once they arrive. A
+  // link narrowed to `false` at resolution would stay blind after arrival.
+  it("reads through a same-space carried reader schema once its missing documents arrive", async () => {
+    const signer = await Identity.fromPassphrase("cid schema late closure");
+    const space = signer.did();
+    const manager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      storageManager: manager,
+      apiUrl: new URL(import.meta.url),
+    });
+    const sourceId = "of:cid-schema-late-source" as URI;
+    const targetId = "of:cid-schema-late-target" as URI;
+    const readerSchema = decomposeSchema({
+      type: "object",
+      properties: { lateName: { type: "string" } },
+      required: ["lateName"],
+      additionalProperties: false,
+    });
+    const docs = new Map<string, EntityDocument>([
+      [sourceId, {
+        value: {
+          target: {
+            "/": { [LINK_V1_TAG]: { id: targetId, path: [] } },
+          },
+        },
+      }],
+      [targetId, { value: { lateName: "Ada", extra: "outside the schema" } }],
+    ]);
+    manager.installStoreReadThrough(space, ({ id, scopeKey }) => {
+      const doc = docs.get(id);
+      return {
+        branch: "",
+        id,
+        scope: "space",
+        scopeKey,
+        ...(doc === undefined
+          ? { seq: 0, deleted: true as const }
+          : { seq: 1, doc }),
+      };
+    });
+    try {
+      const cell = runtime.getCellFromLink({ space, id: sourceId, path: [] });
+      await cell.sync();
+      const tx = runtime.edit();
+      let target;
+      try {
+        target = runtime.getCellFromLink(resolveLink(runtime, tx, {
+          ...cell.key("target").getAsNormalizedFullLink(),
+          schema: { $ref: readerSchema.rootRef },
+        }));
+      } finally {
+        tx.abort();
+      }
+      expect(target.getAsNormalizedFullLink().schema).toEqual({
+        $ref: readerSchema.rootRef,
+      });
+      expect(await target.pull()).toBeUndefined();
+      for (const [hash, schema] of readerSchema.documents) {
+        registerSchemaDocument(hash, schema);
+      }
+      const value = await target.pull() as {
+        lateName: string;
+        extra?: string;
+      };
+      expect(value?.lateName).toBe("Ada");
+      expect(value.extra).toBeUndefined();
+    } finally {
+      await runtime.dispose();
+      await manager.close();
+    }
+  });
 });

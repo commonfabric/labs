@@ -20,6 +20,7 @@ import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, Signer, URI } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   type Options,
   type SessionFactory,
@@ -120,11 +121,7 @@ class TestStorageManager extends StorageManager {
 const createServer = (label: string): MemoryV2Server.Server =>
   new MemoryV2Server.Server({
     store: new URL(`memory://${label}`),
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
+    authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: TEST_AUDIENCE },
     acl: { mode: "enforce" },
     subscriptionRefreshDelayMs: 0,

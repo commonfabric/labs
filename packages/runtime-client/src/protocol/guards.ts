@@ -30,6 +30,7 @@ import {
   NotificationType,
   OperationUpdateNotification,
   PendingWritesNotification,
+  PresenceUpdateNotification,
   RequestType,
   SpaceAccessLostNotification,
   TelemetryNotification,
@@ -155,6 +156,7 @@ export function isIPCRemoteNotification(
     isNavigateRequestNotification(value) || isErrorNotification(value) ||
     isVDomBatchNotification(value) || isPendingWritesNotification(value) ||
     isOperationUpdateNotification(value) ||
+    isPresenceUpdateNotification(value) ||
     isEventNeedsAttentionNotification(value) ||
     isSpaceAccessLostNotification(value) ||
     isEventIntentOutcomeNotification(value);
@@ -171,6 +173,22 @@ export function isOperationUpdateNotification(
     value.type === NotificationType.OperationUpdate &&
     typeof value.subscriptionId === "string" &&
     isObjectNotArray(value.field);
+}
+
+/**
+ * Is `value` a {@link PresenceUpdateNotification}? The event is checked as
+ * an object carrying a `kind`; its record contents remain the consumer's
+ * concern.
+ */
+export function isPresenceUpdateNotification(
+  value: unknown,
+): value is PresenceUpdateNotification {
+  return isObjectNotArray(value) &&
+    value.type === NotificationType.PresenceUpdate &&
+    typeof value.subscriptionId === "string" &&
+    isObjectNotArray(value.event) &&
+    (value.event.kind === "snapshot" || value.event.kind === "upsert" ||
+      value.event.kind === "remove" || value.event.kind === "failure");
 }
 
 /**
@@ -340,7 +358,9 @@ export function isWorkerReadyNotification(
 ): value is WorkerReadyNotification {
   return (
     isObjectNotArray(value) &&
-    value.type === TransportNotificationType.WorkerReady
+    value.type === TransportNotificationType.WorkerReady &&
+    (value.lifetimeLock === undefined ||
+      typeof value.lifetimeLock === "string")
   );
 }
 

@@ -153,8 +153,9 @@ export abstract class FabricInstance extends BaseFabricSpecialObject {
    * shared structure for any unfrozen data in the original. When `frozen ===
    * true`, produces a frozen instance with maximal structural sharing,
    * including returning `this` if it is already deep-frozen. When `frozen ===
-   * false`, produces a deeply-mutable instance with no visible shared reference
-   * structure with the original.
+   * false`, produces an instance which is mutable at every layer its class
+   * lets change, and which has no visible shared reference structure with the
+   * original.
    *
    * The concrete template-method implementation lives on `BaseFabricInstance`
    * (deferring to the `[DEEP_CLONE_CORE]` sibling, mirroring the

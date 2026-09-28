@@ -17,12 +17,12 @@
  * The workflow half runs beside it, over the step definitions under
  * `.github`. A step can wrap a command in `run-recorded`. The three
  * words after it are the command's identity, and every record the
- * command writes carries that identity. The topology is the other place
- * an identity is written down. A lane builds its commands from the
- * topology, so a step whose identity no suite holds runs while that step
- * stands and stops when a lane takes over the job holding it. Nothing in
- * the tree carries such an identity, which is what puts it out of the
- * tree half's reach.
+ * command writes carries that identity. The lanes run every test and
+ * gate the topology declares, so a workflow step that records by hand is
+ * either one the topology already holds, which records that check twice
+ * against one commit, or one it does not, which no lane will ever run
+ * or select. Either way the step fails. Nothing in the tree carries such
+ * an identity, which is what puts it out of the tree half's reach.
  *
  * The store half runs over the records of the run that checked this tree
  * out, and fails on any identity no suite recognizes,
@@ -361,8 +361,9 @@ export function checkTree(
 }
 
 /**
- * The workflow half: every identity a workflow step records by hand is
- * claimed by exactly one suite.
+ * The workflow half: no step under `.github` records by hand. Each
+ * identity is named once, however many steps write it, and the message
+ * says whether a suite already holds it.
  */
 export function checkWorkflows(
   suites: readonly Suite[],
@@ -374,14 +375,16 @@ export function checkWorkflows(
     const key = testIdentityKey(record.test);
     if (seen.has(key)) continue;
     seen.add(key);
-    const claims = claimsFor(suites, record);
-    if (claims.length === 1) continue;
+    const claims = claimsFor(suites, record).map((claim) => claim.suite.id);
     findings.push({
       fails: true,
       message: claims.length === 0
-        ? `no suite claims ${key}, which ${record.where} records`
-        : `${claims.map((claim) => claim.suite.id).join(" and ")} ` +
-          `both claim ${key}, which ${record.where} records`,
+        ? `${record.where} records ${key} by hand, and no suite claims ` +
+          "it, so no lane will ever run or select it: declare it in the " +
+          "topology and take the step out"
+        : `${record.where} records ${key} by hand, which ` +
+          `${claims.join(" and ")} already runs in the lanes, so the ` +
+          "step records that check a second time: take the step out",
     });
   }
   return findings;
@@ -465,6 +468,20 @@ export function checkStore(
     ];
     return parts.length === 0 ? "" : `, ${parts.join(" ")}`;
   };
+  /**
+   * One way a test's record comes to name no file. A suite of test files
+   * finds a record by its file, and the file comes from the name each
+   * file registers; two files in one run registering one name leave the
+   * name naming neither, which reads here as a test no suite runs. A
+   * harness that recorded no file is another way, and the record alone
+   * cannot say which.
+   */
+  const fileless = (record: StoredIdentity): string =>
+    record.file === undefined &&
+      (record.test.k === "unit" || record.test.k === "integration")
+      ? ". It names no file, which is what a test comes to when two " +
+        "files in one run register tests of its name, among other ways"
+      : "";
   for (const record of records) {
     const key = testIdentityKey(record.test);
     if (seen.has(key)) continue;
@@ -479,7 +496,7 @@ export function checkStore(
       findings.push({
         fails: true,
         message: `no suite claims the recorded identity ${key}` +
-          whence(record),
+          whence(record) + fileless(record),
       });
       continue;
     }

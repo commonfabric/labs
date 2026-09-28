@@ -1400,8 +1400,9 @@ Deno.test("memory v2 schema-closure assembly fails loudly on a corrupted depende
       `UPDATE head SET seq = seq + 1 WHERE id = :id`,
     ).run({ id: `cid:${leafHash}` });
 
-    // An established watch's refresh revalidates the whole delivered state
-    // and fails loudly even though the referrer did not change.
+    // A refresh delivering the leaf at its new version walks the hash its
+    // earlier version verified as, and fails loudly even though no
+    // referrer changed.
     assertThrows(
       () =>
         refreshTrackedGraph(

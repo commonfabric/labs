@@ -4030,7 +4030,6 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "collaborative"?: boolean;
   "presenceRoom"?: string;
   "participantName"?: string;
-  "presenceUrl"?: string;
   "placeholder"?: string;
   "timingStrategy"?: string;
   "timingDelay"?: number;
@@ -4343,7 +4342,10 @@ interface CFCustodySealAttributes<T> extends CFHTMLAttributes<T> {
   "$policy"?: CellLike<unknown>;
   /** The actor's source policy, in the actor's home space. */
   "$sources"?: CellLike<unknown>;
-  "oncf-sealed"?: EventHandler<{}>;
+  /** Writable cell receiving a link to the instance's box once sealed. */
+  "$box"?: CellLike<unknown>;
+  /** Fires once sealed; `instance` is the digest of the resolved terms. */
+  "oncf-sealed"?: EventHandler<{ instance: string }>;
 }
 
 interface CFOwnerViewAttributes<T> extends CFHTMLAttributes<T> {

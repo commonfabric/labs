@@ -12,6 +12,7 @@ import { NullLiveEnvironment } from "@commonfabric/data-model/codec-common";
 import {
   fabricFromJsonValue,
   jsonFromFabricValue,
+  newDefaultJsonCodecEngine,
 } from "@commonfabric/data-model/codecs";
 import { internPathSelector } from "@commonfabric/data-model-schema";
 import { isPlainObject, unsafeObjectKeyIn } from "@commonfabric/utils/types";
@@ -1199,6 +1200,17 @@ export type MemoryProtocolFlags = {
    * and the client refuses to open the session.
    */
   sessionReadCeiling?: boolean;
+
+  /**
+   * Server capability: the server relays ephemeral presence rooms under a
+   * space over this connection — `presence.join`, `presence.publish`,
+   * `presence.leave`, and the `presence/upsert` and `presence/remove`
+   * pushes (04-protocol.md §4.13). Build-inherent, so a server of this
+   * version always advertises it. Absent (an older server) parses to
+   * false, and a client then reports presence as unavailable rather than
+   * sending a message the server would refuse.
+   */
+  presenceV1?: boolean;
 };
 
 /**
@@ -1226,6 +1238,7 @@ export type WireMemoryProtocolFlags = {
   sessionHoldings?: boolean;
   viewScopedReplicationV1?: boolean;
   sessionReadCeiling?: boolean;
+  presenceV1?: boolean;
 };
 
 export type HelloMessage = {
@@ -1860,6 +1873,87 @@ export type EventAttentionResolveResult = {
   resolution: EventAttentionResolution;
 };
 
+/**
+ * Per-kind presence state, keyed by facet name. The relay bounds the map and
+ * treats each value as an opaque plain object; a consumer decodes the facets
+ * it knows and ignores the rest (04-protocol.md §4.13).
+ */
+export type PresenceFacets = Record<string, FabricPlainObject>;
+
+/** What a participant publishes: the envelope fields it owns. */
+export type PresencePublication = {
+  /** Plain-text display name, bounded; never rendered as HTML. */
+  name: string;
+
+  facets: PresenceFacets;
+};
+
+/** Latest published state of one room participant, as the relay holds it. */
+export type PresenceRecord = PresencePublication & {
+  /** Relay-assigned id for the membership; unpredictable and never reused. */
+  participantId: string;
+
+  /**
+   * DID the publishing session was opened as, stamped by the relay from its
+   * session registry. Absent when the session has no bound principal.
+   */
+  principal?: string;
+
+  /** Strictly increasing within one membership. */
+  revision: number;
+};
+
+export type PresenceJoinRequest = {
+  type: "presence.join";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  room: string;
+};
+
+/** The `ok` of a `presence.join` response. */
+export type PresenceJoinResult = {
+  participantId: string;
+
+  /** Every other member that has published, at its latest record. */
+  participants: PresenceRecord[];
+};
+
+export type PresencePublishRequest = PresencePublication & {
+  type: "presence.publish";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  room: string;
+  revision: number;
+};
+
+export type PresenceLeaveRequest = {
+  type: "presence.leave";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  room: string;
+};
+
+/** A room member's record replaced, pushed to the room's other members. */
+export type PresenceUpsertMessage = {
+  type: "presence/upsert";
+  space: string;
+  sessionId: SessionId;
+  room: string;
+  participant: PresenceRecord;
+};
+
+/** A room member gone, pushed to the room's other members. */
+export type PresenceRemoveMessage = {
+  type: "presence/remove";
+  space: string;
+  sessionId: SessionId;
+  room: string;
+  participantId: string;
+};
+
 export type ResponseMessage<Result> = {
   type: "response";
   requestId: string;
@@ -1930,15 +2024,19 @@ export type ClientMessage =
   | WatchSetRequest
   | WatchAddRequest
   | SessionAckRequest
-  | EventAttentionResolveRequest;
+  | EventAttentionResolveRequest
+  | PresenceJoinRequest
+  | PresencePublishRequest
+  | PresenceLeaveRequest;
 export type ServerMessage =
   | HelloOkMessage
   | ResponseMessage<FabricValue>
   | SessionEffectMessage
-  | SessionRevokedMessage;
+  | SessionRevokedMessage
+  | PresenceUpsertMessage
+  | PresenceRemoveMessage;
 
 const memoryLiveEnvironment = new NullLiveEnvironment(
-  true,
   "no cell decoding at the memory boundary",
 );
 
@@ -2149,6 +2247,8 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records a session's declared read
   // ceiling and its serving runtime stamps it onto the runs it serves.
   sessionReadCeiling: true,
+  // Build-inherent: this build's server relays presence rooms.
+  presenceV1: true,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
 });
 
@@ -2311,6 +2411,11 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const presenceV1 = value.presenceV1;
+  if (presenceV1 !== undefined && typeof presenceV1 !== "boolean") {
+    return null;
+  }
+
   return {
     modernCellRep: modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
@@ -2344,6 +2449,10 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: a client carrying a read
     // ceiling refuses such a server rather than reading unbounded.
     sessionReadCeiling: sessionReadCeiling === true,
+    // Absent (an older server) parses to false: a client then refuses to
+    // join a presence room rather than send a message the server would
+    // refuse.
+    presenceV1: presenceV1 === true,
   };
 };
 
@@ -2373,6 +2482,7 @@ export const wireMemoryProtocolFlags = (
   sessionHoldings: flags.sessionHoldings,
   viewScopedReplicationV1: flags.viewScopedReplicationV1,
   sessionReadCeiling: flags.sessionReadCeiling,
+  presenceV1: flags.presenceV1,
 });
 
 /**
@@ -2386,6 +2496,13 @@ export const wireMemoryProtocolFlags = (
  * engine's commit/stored-row probes (v2/engine.ts). A pinning test in
  * test/v2-sync-schema-table.test.ts fails loudly if verbatim embedding ever
  * stops holding.
+ *
+ * The engine's document-cache weigh (`encodedGrowth()` in v2/engine.ts)
+ * depends on a second property, and moves with the codec too: a plain record
+ * with no `/`-prefixed key, and an array with no hole, encode as their members
+ * encode alone, joined by one comma each. Tests in
+ * test/v2-document-cache.test.ts hold the weight it carries to a full encode,
+ * over every patch op and over generated patches.
  */
 export const encodeMemoryBoundary = (value: FabricValue): string =>
   jsonFromFabricValue(value);
@@ -2393,16 +2510,45 @@ export const encodeMemoryBoundary = (value: FabricValue): string =>
 export const commitPreconditionValueHash = (value: FabricValue): string =>
   hashStringOf(encodeMemoryBoundary(value));
 
+/**
+ * The most slots one memory message from an untrusted sender may stand for:
+ * the places its values fill or leave absent, an array counting as its length
+ * with holes included and a record as its number of members. It bounds the
+ * work that decoding, applying, and re-encoding one message can cost the
+ * server, whatever the message's size on the wire.
+ */
+export const MAX_UNTRUSTED_MESSAGE_SLOTS = 1_000_000;
+
+const untrustedMemoryCodec = newDefaultJsonCodecEngine({
+  slotLimit: MAX_UNTRUSTED_MESSAGE_SLOTS,
+});
+
+/**
+ * Decodes wire text from an untrusted sender. Text standing for more than
+ * {@link MAX_UNTRUSTED_MESSAGE_SLOTS} slots is refused with `SlotLimitError`
+ * before any of it is walked.
+ *
+ * This is the decoder for anything a client sent. Text the memory system wrote
+ * itself -- a stored row, a frame the server sent -- goes through
+ * {@link decodeTrustedMemoryBoundary} instead, which applies no limit.
+ */
 export const decodeMemoryBoundary = <Value extends FabricValue = FabricValue>(
   source: string,
-): Value & FabricValue => {
-  const decoded = fabricFromJsonValue(
-    source,
-    memoryLiveEnvironment,
-  );
+): Value & FabricValue =>
+  untrustedMemoryCodec.decode(source, memoryLiveEnvironment) as Value;
 
-  return decoded as Value;
-};
+/**
+ * Like {@link decodeMemoryBoundary}, except that no slot limit applies: for
+ * text the memory system wrote itself, such as a stored row or a frame the
+ * server sent. A stored document may stand for more slots than one message
+ * may, and refusing to read it would break every reader of that document.
+ */
+export const decodeTrustedMemoryBoundary = <
+  Value extends FabricValue = FabricValue,
+>(
+  source: string,
+): Value & FabricValue =>
+  fabricFromJsonValue(source, memoryLiveEnvironment) as Value;
 
 export const toDocumentPath = (path: readonly string[]): DocumentPath =>
   path as DocumentPath;
@@ -2433,17 +2579,18 @@ export const isEntityDocument = (
  *
  * `decode` is the caller's, because the readers disagree on which payloads they
  * accept and only on that: the engine reads what it wrote, through
- * {@link decodeMemoryBoundary}, while an offline reader over a durable file may
- * also meet untagged plain-JSON rows and route accordingly. Everything else is
- * one rule shared here, since a reader that tests the payload for truthiness
- * instead takes an empty string for an absent one and rebuilds a document the
- * engine would have rejected.
+ * {@link decodeTrustedMemoryBoundary}, while an offline reader over a durable
+ * file may also meet untagged plain-JSON rows and route accordingly.
+ * Everything else is one rule shared here, since a reader that tests the
+ * payload for truthiness instead takes an empty string for an absent one and
+ * rebuilds a document the engine would have rejected.
  *
  * An absent payload never reaches the decoder. Handing one a placeholder string
- * makes the rule depend on which decoder was passed — `decodeMemoryBoundary`
- * refuses any untagged payload, a plain-JSON decoder accepts one — and two
- * readers that disagree about an absent payload do not share a rule at all. An
- * absent document is `null`, which the root check below refuses on its own.
+ * makes the rule depend on which decoder was passed —
+ * `decodeTrustedMemoryBoundary` refuses any untagged payload, a plain-JSON
+ * decoder accepts one — and two readers that disagree about an absent payload
+ * do not share a rule at all. An absent document is `null`, which the root
+ * check below refuses on its own.
  */
 export const decodeStoredDocumentPayload = (
   decode: (source: string) => FabricValue,

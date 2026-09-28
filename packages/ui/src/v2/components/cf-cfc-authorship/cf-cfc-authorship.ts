@@ -1,5 +1,10 @@
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
-import { authorPrincipalCandidates } from "@commonfabric/runner/cfc/represents-principal";
+import {
+  authorPrincipalCandidates,
+  PRINCIPAL_CLAIM_KINDS,
+  principalClaimSubject,
+  representsPrincipalSubject,
+} from "@commonfabric/runner/cfc/represents-principal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { css, html } from "lit";
 
@@ -74,21 +79,35 @@ const hasReadableClaim = (
   (typeof (value as { get?: unknown }).get === "function" ||
     typeof (value as { sync?: unknown }).sync === "function");
 
+/**
+ * The subject a claim of `kind` names, read as every check here reads it:
+ * `principalClaimSubject` for a kind in `PRINCIPAL_CLAIM_KINDS`, and for
+ * `represents-principal` only a well-formed DID, as
+ * `representsPrincipalSubject` requires. The runtime refuses a
+ * pattern-authored claim of those kinds in any spelling that names someone
+ * else and guards no other kind, so an atom of any other kind names nobody.
+ */
+const authorshipClaimSubject = (
+  atom: unknown,
+  kind: string,
+): string | undefined => {
+  if (!PRINCIPAL_CLAIM_KINDS.has(kind)) return undefined;
+  return kind === "represents-principal"
+    ? representsPrincipalSubject(atom)
+    : principalClaimSubject(atom, kind);
+};
+
 const labelHasRootIntegrityKind = (
   view: CfcLabelView,
   kind: string,
 ): boolean =>
   view.entries.some((entry) =>
-    entry.path.length === 0 &&
-    (entry.label.integrity ?? []).some((atom) => {
-      if (typeof atom === "string") {
-        return atom.startsWith(`${kind}:`);
-      }
-      if (!isObjectNotArray(atom)) {
-        return false;
-      }
-      return (atom as Record<string, unknown>).kind === kind;
-    })
+    // An entry a link carried describes the linked document, so it does not
+    // stand in for reading that document's own label.
+    entry.path.length === 0 && entry.observes !== "followRef" &&
+    (entry.label.integrity ?? []).some((atom) =>
+      authorshipClaimSubject(atom, kind) !== undefined
+    )
   );
 
 const mergeLabelViews = (
@@ -306,33 +325,18 @@ const principalAuthorClaim = (
   };
 };
 
+/**
+ * Whether `atom` says its value was written by the author `author` claims:
+ * the subject `authorshipClaimSubject` reads from it is one of the claim's
+ * author ids.
+ */
 export const integrityAtomMatchesAuthor = (
   atom: unknown,
   author: unknown,
   kind: string = DEFAULT_AUTHORSHIP_KIND,
 ): boolean => {
-  const authorIds = authorIdsForClaim(author);
-  if (authorIds.length === 0) {
-    return false;
-  }
-
-  if (typeof atom === "string") {
-    return authorIds.some((authorId) => atom === `${kind}:${authorId}`);
-  }
-
-  if (!isObjectNotArray(atom)) {
-    return false;
-  }
-
-  const atomRecord = atom as Record<string, unknown>;
-  if (objectField(atomRecord, "kind") !== kind) {
-    return false;
-  }
-
-  return AUTHOR_FIELDS.some((field) => {
-    const atomAuthor = objectField(atomRecord, field);
-    return atomAuthor !== undefined && authorIds.includes(atomAuthor);
-  });
+  const subject = authorshipClaimSubject(atom, kind);
+  return subject !== undefined && authorIdsForClaim(author).includes(subject);
 };
 
 const rootEntries = (view: CfcLabelView) =>
@@ -344,10 +348,7 @@ const hasAuthorshipIntegrity = (
 ): boolean =>
   entries.some((entry) =>
     (entry.label.integrity ?? []).some((atom) =>
-      typeof atom === "string"
-        ? atom.startsWith(`${kind}:`)
-        : isObjectNotArray(atom) &&
-          objectField(atom as Record<string, unknown>, "kind") === kind
+      authorshipClaimSubject(atom, kind) !== undefined
     )
   );
 
@@ -396,7 +397,8 @@ export const authorshipStateForLabel = (
  *   integrity verification.
  * @prop {"ok"|"blocked"} textIntegrityState - Renderer-reported descendant text
  *   integrity state.
- * @attr {string} kind - Integrity object kind; defaults to `authored-by`.
+ * @attr {string} kind - Integrity object kind, `authored-by` (the default) or
+ *   `represents-principal`; any other kind never verifies.
  */
 export class CFCFCAuthorship extends BaseElement {
   static override styles = [

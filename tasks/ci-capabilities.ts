@@ -103,6 +103,15 @@ export interface CapabilityContext {
    * answered, the way `exec` says what the machine would have answered.
    */
   fetch?: typeof fetch;
+
+  /**
+   * Where opening says what it is doing, a line at a time: each
+   * capability as it begins to open and once it has opened, and each
+   * command a capability runs, before it runs. Setup runs its commands
+   * with their output captured, so a step that never finishes is named in
+   * the log only by the line said before it. Absent, opening says nothing.
+   */
+  report?: (line: string) => void;
 }
 
 /** A capability that has been opened. */
@@ -141,17 +150,29 @@ export interface Capability {
 
 /**
  * What a lane keeps between runs, relative to the repository root. The
- * lane's workflow carries one fixed cache step covering this directory,
- * so everything a lane wants restored has to sit inside it, and it has
- * to outlive the lane: a directory the lane made for itself would be
- * empty on every run, and everything in it would be built again.
+ * lane's workflow restores and saves each part of it with a cache step of
+ * its own, so everything a lane wants restored has to sit at a path one
+ * of those steps names, and it has to outlive the lane: a directory the
+ * lane made for itself would be empty on every run, and everything in it
+ * would be built again.
  */
 export const CACHE_DIR = ".ci-cache";
 
-/** Where a built binary is kept, inside that directory. */
+/**
+ * Where a built binary is kept, inside that directory. The workflow
+ * caches each binary in it with a step of its own, under an exact key
+ * naming what that binary is built from and no restore prefix, because a
+ * lane uses a binary it finds without asking what it was built from.
+ */
 export const BINARY_CACHE_DIR = `${CACHE_DIR}/binaries`;
 
-/** Where the pattern compile byte cache is kept, inside that directory. */
+/**
+ * Where the pattern compile byte cache is kept, inside that directory.
+ * The workflow caches the file's directory with one step, under a key
+ * naming the compiler fingerprint, the lane and the pattern sources, and
+ * restores from the prefix naming the fingerprint alone, because a
+ * compiled pattern is reused only where its source is unchanged.
+ */
 export const COMPILE_CACHE_FILE = `${CACHE_DIR}/compile/lane.json`;
 
 /**
@@ -240,7 +261,11 @@ const run: Exec = async (command, args, options = {}) => {
 
 /** How this context runs commands. */
 function execOf(context: CapabilityContext): Exec {
-  return context.exec ?? run;
+  const exec = context.exec ?? run;
+  return (command, args, options) => {
+    context.report?.(`ci-lane: running ${[command, ...args].join(" ")}`);
+    return exec(command, args, options);
+  };
 }
 
 /** A probe answering whether `command` is on the path. */
@@ -894,14 +919,14 @@ export async function openCapabilities(
   try {
     for (const id of resolveCapabilities(requested, registry)) {
       const capability = registry.get(id)!;
+      context.report?.(`ci-lane: opening ${id}: ${capability.description}`);
       const startedAt = performance.now();
       const open = await capability.open(context);
       opened.push(open);
       exported.set(id, open.env);
-      timings.push({
-        capability: id,
-        seconds: (performance.now() - startedAt) / 1000,
-      });
+      const seconds = (performance.now() - startedAt) / 1000;
+      timings.push({ capability: id, seconds });
+      context.report?.(`ci-lane: opened ${id} in ${seconds.toFixed(1)}s`);
       for (const log of open.logs ?? []) {
         logs.push({ capability: id, path: log });
       }

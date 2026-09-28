@@ -4,12 +4,12 @@ import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { EntityDocument } from "@commonfabric/memory/v2";
-import { verifySessionOpenAuthorization } from "@commonfabric/memory/v2/session-open-auth";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { entityIdFrom, isStream, Runtime } from "@commonfabric/runner";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
 import { LoopbackStorageManager } from "@commonfabric/runner/executor/loopback-storage";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   createAclServer,
   genesisAcl,
@@ -168,13 +168,7 @@ describe("pattern-lifecycle verbs (transport half)", () => {
     await server.close();
     server = new MemoryV2Server.Server({
       store: new URL(`memory://private-registration-${crypto.randomUUID()}`),
-      authorizeSessionOpen(message, context) {
-        const principal = (message.authorization as { principal?: unknown })
-          ?.principal;
-        return typeof principal === "string"
-          ? principal
-          : verifySessionOpenAuthorization(message, context);
-      },
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: {
         audience: "did:key:z6Mk-private-registration-audience",
       },

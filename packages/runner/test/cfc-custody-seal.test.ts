@@ -20,6 +20,7 @@ import {
   type CustodySealOptions,
   prepareCustodySeal as prepareWithOptions,
   readCustodySourcePolicy,
+  releaseRequiresSealWitness,
   TRUSTED_DECLASSIFIER_CONCEPT,
 } from "../src/cfc/custody-seal.ts";
 import { ACLManager } from "../src/acl-manager.ts";
@@ -35,7 +36,9 @@ import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { isAllowedAuthoredImportSpecifier } from "../src/sandbox/runtime-module-policy.ts";
 import { getRuntimeModuleExports } from "../src/sandbox/runtime-modules.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const alice = await Identity.fromPassphrase("custody-seal-alice");
 const bob = await Identity.fromPassphrase("custody-seal-bob");
@@ -222,6 +225,8 @@ const setup = async (
   } as never, install).set({ open: true } as never);
   const terms = host.getCell(S, "custody-terms", undefined, install);
   terms.set((options.terms ?? TERMS) as never);
+  // The room document whose cells receive the seal's links.
+  host.getCell(S, "room-cells", undefined, install).set({} as never);
   expect((await install.commit()).error).toBeUndefined();
   // The room space's access list: its identity owns it, and the members read
   // and write it.
@@ -239,11 +244,14 @@ const setup = async (
     runtimeFor,
     roomAcl,
     terms: terms.withTx(undefined),
-    room(identity: Identity, policy = P): CustodyRoom {
+    room(identity: Identity, policy = P, box?: Cell<unknown>): CustodyRoom {
       const runtime = runtimes.get(identity)!;
       return {
         terms: runtime.getCellFromLink(terms.getAsNormalizedFullLink()),
         policy,
+        ...(box === undefined
+          ? {}
+          : { box: runtime.getCellFromLink(box.getAsNormalizedFullLink()) }),
       };
     },
     /** Writes a draft into the actor's home space under a stored label. */
@@ -277,10 +285,68 @@ const setup = async (
       expect((await tx.commit()).error).toBeUndefined();
       return cell.withTx(undefined);
     },
+    /**
+     * Writes a cell in the room space whose stored label attests each of
+     * `subjects` with a root `represents-principal` atom, the evidence a
+     * principal's own runtime mints on a cell it creates.
+     */
+    async attestation(
+      subjects: readonly string[],
+      cause: string,
+      atoms: readonly unknown[] = subjects.map((subject) => ({
+        kind: "represents-principal",
+        subject,
+      })),
+      confidentiality?: readonly unknown[],
+    ): Promise<Cell<unknown>> {
+      const runtime = runtimes.get(alice)!;
+      const tx = runtime.edit();
+      const cell = runtime.getCell(S, cause, undefined, tx);
+      writeSeedEnvelopeDoc(tx, S);
+      seedStoredEnvelope(tx, {
+        space: S,
+        scope: "space",
+        id: cell.getAsNormalizedFullLink().id,
+        path: [],
+      }, {
+        value: {},
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: {
+                integrity: [...atoms],
+                ...(confidentiality === undefined ? {} : { confidentiality }),
+              },
+            }],
+          },
+        },
+      } as FabricValue);
+      expect((await tx.commit()).error).toBeUndefined();
+      return cell.withTx(undefined);
+    },
+    /** Replaces the room's terms; a seat given as a cell is stored as a link. */
+    async setTerms(value: Record<string, unknown>): Promise<void> {
+      const runtime = runtimes.get(alice)!;
+      const tx = runtime.edit();
+      runtime.getCellFromLink(terms.getAsNormalizedFullLink(), undefined, tx)
+        .set(value as never);
+      expect((await tx.commit()).error).toBeUndefined();
+    },
     /** Prepares and commits one seal with a trusted click. */
-    async seal(identity: Identity, value: FabricValue = honestStance) {
+    async seal(
+      identity: Identity,
+      value: FabricValue = honestStance,
+      box?: Cell<unknown>,
+    ) {
       const draft = await fixture.draft(identity, value);
-      const prepared = await prepareCustodySeal(draft, fixture.room(identity));
+      const prepared = await prepareCustodySeal(
+        draft,
+        fixture.room(identity, P, box),
+      );
       return await commitCustodySeal(prepared.consent, trustedClick());
     },
     async dispose() {
@@ -345,7 +411,7 @@ const project = async (
     await runtime.getCellFromLink(cell.getAsNormalizedFullLink()).sync();
   }
   const tx = runtime.edit();
-  tx.setCfcImplementationIdentity(PROJECT);
+  setCfcImplementationIdentity(tx, PROJECT);
   const entries = local.withTx(tx).getRaw() as Record<string, unknown>;
   for (const cell of extra) {
     runtime.getCellFromLink(cell.getAsNormalizedFullLink()).withTx(tx)
@@ -364,6 +430,113 @@ const project = async (
   );
 };
 
+/**
+ * One run of the room's projector that reads its box through `from`, as a
+ * pattern's projector reads it through the room's box cell: it follows the
+ * reference there, reads each entry's stance, and writes a tally into a
+ * policy-labeled output.
+ */
+const projectThrough = async (
+  fixture: Fixture,
+  identity: Identity,
+  from: Cell<unknown>,
+  into = "ballot-through",
+): Promise<unknown[]> => {
+  const runtime = fixture.runtimes.get(identity)!;
+  await syncManifest(runtime);
+  const local = runtime.getCellFromLink(from.getAsNormalizedFullLink());
+  await local.sync();
+  await local.pull();
+  const tx = runtime.edit();
+  setCfcImplementationIdentity(tx, PROJECT);
+  const entries = (local.withTx(tx).get() ?? {}) as Record<
+    string,
+    { stance?: { choice?: string } }
+  >;
+  const choices = Object.values(entries).map((entry) =>
+    entry?.stance?.choice ?? ""
+  );
+  projectedChoices = [...choices].sort();
+  const output = runtime.getCell(S, into, {
+    type: "object",
+    ifc: {
+      confidentiality: [{ ...P, subject: { __ctOwningSpace: true } }],
+    },
+  } as never, tx);
+  output.set({ sushi: choices.filter((c) => c === "sushi").length } as never);
+  expect((await tx.commit()).error).toBeUndefined();
+  return storedEntries(runtime, output).flatMap((entry) =>
+    entry.label.integrity ?? []
+  );
+};
+
+/** The choices `projectThrough` last counted, sorted. */
+let projectedChoices: string[] = [];
+
+/** Writes `value` into `cell` as other code, in `identity`'s runtime. */
+const writeAsOtherCode = async (
+  fixture: Fixture,
+  identity: Identity,
+  cell: Cell<unknown>,
+  value: (runtime: Runtime, tx: IExtendedStorageTransaction) => unknown,
+  schema?: unknown,
+  options?: { raw?: boolean },
+): Promise<void> => {
+  expect(
+    await attemptAsOtherCode(fixture, identity, cell, value, schema, options),
+  ).toBeUndefined();
+};
+
+/** {@link writeAsOtherCode}, answering the refusal's message if refused. */
+const attemptAsOtherCode = async (
+  fixture: Fixture,
+  identity: Identity,
+  cell: Cell<unknown>,
+  value: (runtime: Runtime, tx: IExtendedStorageTransaction) => unknown,
+  schema: unknown = { type: "object" },
+  options: { raw?: boolean } = {},
+): Promise<string | undefined> => {
+  const runtime = fixture.runtimes.get(identity)!;
+  await syncManifest(runtime);
+  const local = runtime.getCellFromLink(
+    cell.getAsNormalizedFullLink(),
+    schema as never,
+  );
+  await local.sync();
+  // Retried on a conflict, as a handler's commit is: another member's seal
+  // may have landed since this runtime last synced.
+  const written = await runtime.editWithRetry((tx) => {
+    setCfcImplementationIdentity(tx, {
+      kind: "verified",
+      moduleIdentity: "sha256:attacker",
+      symbol: "repeatEntry",
+      bindingPath: ["repeatEntry"],
+    });
+    const target = local.withTx(tx);
+    const next = value(runtime, tx);
+    if (options.raw) target.setRaw(next as never);
+    else target.set(next as never);
+  });
+  return written.error?.message;
+};
+
+/**
+ * Runs `step` once the commit's checks are done and its anchor is written,
+ * just before the transaction that writes the entry: the seal's second
+ * `editWithRetry` call. What `step` changes can then be caught only by the
+ * entry transaction's own verification of the reviewed reads.
+ */
+const beforeEntry = (runtime: Runtime, step: () => Promise<void>) => {
+  const original = runtime.editWithRetry.bind(runtime);
+  let calls = 0;
+  runtime.editWithRetry = (async (
+    ...args: Parameters<Runtime["editWithRetry"]>
+  ) => {
+    if (calls++ === 1) await step();
+    return await original(...args);
+  }) as Runtime["editWithRetry"];
+};
+
 const witnessed = {
   type: CFC_ATOM_TYPE.TransformedBy,
   identity: PROJECT,
@@ -376,7 +549,7 @@ describe("cfc-custody-seal", () => {
       const fixture = await setup();
       try {
         const { box } = await fixture.seal(alice);
-        await fixture.seal(bob);
+        const { entryKey } = await fixture.seal(bob);
         const reader = fixture.runtimes.get(carol)!;
         const local = reader.getCellFromLink(box.getAsNormalizedFullLink());
         await local.sync();
@@ -384,8 +557,10 @@ describe("cfc-custody-seal", () => {
           entry.origin === "derived" && entry.observes === "value"
         );
         const paths = valueEntries.map((entry) => entry.path.join("/"));
+        // The first seal creates the box, and each later one sets its own
+        // entry whole, so each is stamped where it wrote.
         expect(paths).toContain("");
-        expect(valueEntries.length).toBeGreaterThan(2);
+        expect(paths).toContain(entryKey);
         for (const entry of valueEntries) {
           expect(entry.label.integrity).toContainEqual(sealedBy);
         }
@@ -407,6 +582,51 @@ describe("cfc-custody-seal", () => {
       }
     });
 
+    it("seals a bounded array of closed values, and a projector over it keeps the witness", async () => {
+      const ratings = {
+        type: "object",
+        properties: {
+          ratings: {
+            type: "array",
+            items: { enum: ["no", "maybe", "yes"] },
+            minItems: 3,
+            maxItems: 3,
+          },
+        },
+        required: ["ratings"],
+        additionalProperties: false,
+      };
+      const fixture = await setup({
+        terms: { ...TERMS, stanceSchema: ratings },
+      });
+      try {
+        const { box } = await fixture.seal(alice, {
+          ratings: ["yes", "no", "maybe"],
+        });
+        const { entryKey } = await fixture.seal(bob, {
+          ratings: ["no", "no", "yes"],
+        });
+        const reader = fixture.runtimes.get(carol)!;
+        const local = reader.getCellFromLink(box.getAsNormalizedFullLink());
+        await local.sync();
+        const valueEntries = storedEntries(reader, local).filter((entry) =>
+          entry.origin === "derived" && entry.observes === "value"
+        );
+        // The seal sets the entry whole, array included, so its stamp is at
+        // the entry and covers each element.
+        expect(valueEntries.map((entry) => entry.path.join("/"))).toContain(
+          entryKey,
+        );
+        for (const entry of valueEntries) {
+          expect(entry.label.integrity).toContainEqual(sealedBy);
+        }
+        const integrity = await project(fixture, carol, box);
+        expect(integrity).toContainEqual(witnessed);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
     it("mints no witness when the projector also reads one value the seal did not write", async () => {
       const fixture = await setup();
       try {
@@ -416,7 +636,7 @@ describe("cfc-custody-seal", () => {
         // room; what matters is its identity, not whose runtime it is.
         const runtime = fixture.runtimes.get(alice)!;
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: "sha256:attacker",
           symbol: "bitOfNote",
@@ -539,7 +759,7 @@ describe("cfc-custody-seal", () => {
         const outcomes: Record<string, boolean> = {};
         for (const [where, write] of writes) {
           const tx = runtime.edit();
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "verified",
             moduleIdentity: "sha256:attacker",
             symbol: "overwrite",
@@ -557,11 +777,10 @@ describe("cfc-custody-seal", () => {
       }
     });
 
-    it("leaves the projector no witness after other code replaces the whole box with a primitive", async () => {
-      // The runtime does not refuse this one write: a primitive written over
-      // the root of a document whose writer claim is on that root. What keeps
-      // it from laundering anything is that the replacement is not the seal's,
-      // so the projector's inputs no longer carry the seal's witness.
+    it("refuses other code replacing the whole box with a primitive", async () => {
+      // A primitive written over the root of a document whose writer claim is
+      // on that root changes the claimed value, so the claim refuses it
+      // (#8024). The box keeps what the seal wrote, and its witness.
       const fixture = await setup();
       try {
         const { box } = await fixture.seal(alice);
@@ -570,21 +789,22 @@ describe("cfc-custody-seal", () => {
         await syncManifest(runtime);
         const local = runtime.getCellFromLink(box.getAsNormalizedFullLink());
         await local.sync();
+        const before = local.getRaw();
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: "sha256:attacker",
           symbol: "replace",
           bindingPath: ["replace"],
         });
         local.withTx(tx).set("gone" as never);
-        expect((await tx.commit()).error).toBeUndefined();
-        const integrity = await project(fixture, carol, box);
-        expect(integrity).toContainEqual({
-          type: CFC_ATOM_TYPE.TransformedBy,
-          identity: PROJECT,
-        });
-        expect(integrity).not.toContainEqual(witnessed);
+        const { error } = await tx.commit();
+        expect(String((error as Error | undefined)?.message)).toContain(
+          "writeAuthorizedBy requires a trusted builtin identity at /",
+        );
+        expect(local.getRaw()).toEqual(before);
+        // The projector still reads the box the seal wrote.
+        expect(await project(fixture, carol, box)).toContainEqual(witnessed);
       } finally {
         await fixture.dispose();
       }
@@ -599,7 +819,7 @@ describe("cfc-custody-seal", () => {
           const instance = hashStringOf(TERMS);
           const runtime = fixture.runtimes.get(mallory)!;
           const tx = runtime.edit();
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "verified",
             moduleIdentity: "sha256:attacker",
             symbol: "squat",
@@ -635,7 +855,7 @@ describe("cfc-custody-seal", () => {
         const runtime = fixture.runtimes.get(alice)!;
         await syncManifest(runtime);
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: "sha256:attacker",
           symbol: "squat",
@@ -680,7 +900,7 @@ describe("cfc-custody-seal", () => {
         const runtime = fixture.runtimes.get(mallory)!;
         await syncManifest(runtime);
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: "sha256:attacker",
           symbol: "squat",
@@ -736,6 +956,469 @@ describe("cfc-custody-seal", () => {
         tx.abort();
         expect(entries.flatMap((entry) => entry.label.confidentiality ?? []))
           .toContainEqual(cfcAtom.user(alice.did()));
+      } finally {
+        await fixture.dispose();
+      }
+    });
+  });
+
+  describe("which box the room reads", () => {
+    // A member's code can put a record of its own where the room's projector
+    // reads its box: one repeating a real entry makes the projector count
+    // that member's stance twice. The seal writes the room's link to the box
+    // itself, and a reference the projector follows to what the seal wrote
+    // is an input of its own, so only the link the seal wrote keeps the
+    // witness.
+    // A record labeled for the room's readers, as a member's code can write.
+    const ROOM_RECORD = {
+      type: "object",
+      ifc: { confidentiality: [cfcAtom.space(S)] },
+    };
+    // Bob's stance differs from Alice's, so what the projector counted shows
+    // which entries it read.
+    const bobStance = { choice: "tacos", budget: 20 };
+    const honestCount = ["sushi", "tacos"];
+    const bobTwice = ["tacos", "tacos"];
+    const roomBox = (fixture: Fixture) =>
+      fixture.runtimes.get(alice)!.getCell(S, "room-cells").key("box");
+
+    it("keeps the witness for a projector reading the box through the link the seal wrote", async () => {
+      const fixture = await setup();
+      try {
+        const binding = roomBox(fixture);
+        await fixture.seal(alice, honestStance, binding);
+        await fixture.seal(bob, bobStance, binding);
+        const integrity = await projectThrough(fixture, carol, binding);
+        expect(projectedChoices).toEqual(honestCount);
+        expect(integrity).toContainEqual(witnessed);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("mints no witness over a record other code wrote that repeats a real entry", async () => {
+      const fixture = await setup();
+      try {
+        const binding = roomBox(fixture);
+        await fixture.seal(alice, honestStance, binding);
+        const { box, entryKey } = await fixture.seal(bob, bobStance, binding);
+        const record = fixture.runtimes.get(mallory)!.getCell(
+          S,
+          "repeated-entries",
+        );
+        await writeAsOtherCode(fixture, mallory, record, (runtime, tx) => {
+          const entry = runtime.getCellFromLink(
+            { ...box.getAsNormalizedFullLink(), path: [entryKey] },
+            undefined,
+            tx,
+          );
+          return { first: entry, second: entry };
+        });
+        const integrity = await projectThrough(fixture, carol, record);
+        expect(projectedChoices).toEqual(bobTwice);
+        expect(integrity).toContainEqual({
+          type: CFC_ATOM_TYPE.TransformedBy,
+          identity: PROJECT,
+        });
+        expect(integrity).not.toContainEqual(witnessed);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("mints no witness through the room's box cell once other code pointed it at such a record", async () => {
+      const fixture = await setup();
+      try {
+        const binding = roomBox(fixture);
+        await fixture.seal(alice, honestStance, binding);
+        const { box, entryKey } = await fixture.seal(bob, bobStance, binding);
+        const repeat = (runtime: Runtime, tx: IExtendedStorageTransaction) => {
+          const entry = runtime.getCellFromLink(
+            { ...box.getAsNormalizedFullLink(), path: [entryKey] },
+            undefined,
+            tx,
+          );
+          return { first: entry, second: entry };
+        };
+        const pointAt = (record: Cell<unknown>) =>
+          attemptAsOtherCode(
+            fixture,
+            mallory,
+            binding,
+            (runtime, tx) =>
+              runtime.getCellFromLink(
+                record.getAsNormalizedFullLink(),
+                undefined,
+                tx,
+              ),
+          );
+        const runtime = fixture.runtimes.get(mallory)!;
+        // A record carrying no label cannot be linked into the cell the seal
+        // labeled.
+        const unlabeled = runtime.getCell(S, "repeated-entries");
+        expect(await attemptAsOtherCode(fixture, mallory, unlabeled, repeat))
+          .toBeUndefined();
+        expect(await pointAt(unlabeled)).toContain(
+          "missing link source metadata",
+        );
+        // One labeled for the room's readers can, and its own root, which
+        // the seal did not write, withholds the witness.
+        const labeled = runtime.getCell(S, "repeated-entries-labeled");
+        expect(
+          await attemptAsOtherCode(
+            fixture,
+            mallory,
+            labeled,
+            repeat,
+            ROOM_RECORD,
+          ),
+        ).toBeUndefined();
+        expect(await pointAt(labeled)).toBeUndefined();
+        const integrity = await projectThrough(fixture, carol, binding);
+        expect(projectedChoices).toEqual(bobTwice);
+        expect(integrity).not.toContainEqual(witnessed);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("mints no witness through a link to the real box that other code wrote", async () => {
+      const fixture = await setup();
+      try {
+        const binding = roomBox(fixture);
+        await fixture.seal(alice);
+        const { box } = await fixture.seal(bob, bobStance);
+        await writeAsOtherCode(
+          fixture,
+          mallory,
+          binding,
+          (runtime, tx) =>
+            runtime.getCellFromLink(
+              box.getAsNormalizedFullLink(),
+              undefined,
+              tx,
+            ),
+        );
+        const integrity = await projectThrough(fixture, carol, binding);
+        expect(projectedChoices).toEqual(honestCount);
+        expect(integrity).not.toContainEqual(witnessed);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("mints no witness over a record of write redirects that repeats a real entry", async () => {
+      // A write redirect is followed like any other reference, and pattern
+      // code can store one as data.
+      const fixture = await setup();
+      try {
+        const binding = roomBox(fixture);
+        await fixture.seal(alice, honestStance, binding);
+        const { box, entryKey } = await fixture.seal(bob, bobStance, binding);
+        const record = fixture.runtimes.get(mallory)!.getCell(
+          S,
+          "redirected-entries",
+        );
+        await writeAsOtherCode(fixture, mallory, record, (runtime, tx) => {
+          const entry = runtime.getCellFromLink(
+            { ...box.getAsNormalizedFullLink(), path: [entryKey] },
+            undefined,
+            tx,
+          ).getAsWriteRedirectLink();
+          return { first: entry, second: entry };
+        });
+        const integrity = await projectThrough(fixture, carol, record);
+        expect(projectedChoices).toEqual(bobTwice);
+        expect(integrity).toContainEqual({
+          type: CFC_ATOM_TYPE.TransformedBy,
+          identity: PROJECT,
+        });
+        expect(integrity).not.toContainEqual(witnessed);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("mints no witness through a box cell redirected elsewhere after the seal wrote through it", async () => {
+      // The room's box cell redirects to a slot of the member's own, which
+      // the seal writes and stamps. The redirect itself is the member's
+      // write, and the member points it at a record of redirects repeating
+      // an entry once the seals are in.
+      const fixture = await setup();
+      try {
+        const runtime = fixture.runtimes.get(mallory)!;
+        const binding = roomBox(fixture);
+        const holder = runtime.getCell(S, "room-cells").key("holder");
+        const redirectTo = (cell: Cell<unknown>) =>
+        (
+          runtime: Runtime,
+          tx: IExtendedStorageTransaction,
+        ) =>
+          runtime.getCellFromLink(cell.getAsNormalizedFullLink(), undefined, tx)
+            .getAsWriteRedirectLink();
+        await writeAsOtherCode(
+          fixture,
+          mallory,
+          binding,
+          redirectTo(holder),
+          undefined,
+          { raw: true },
+        );
+        await fixture.seal(alice, honestStance, binding);
+        const { box, entryKey } = await fixture.seal(bob, bobStance, binding);
+        // The seal wrote and stamped the slot the redirect leads to. Each
+        // projection writes an output of its own, so an answer equal to an
+        // earlier one is still written and stamped.
+        expect(await projectThrough(fixture, carol, holder, "from-holder"))
+          .toContainEqual(witnessed);
+        expect(projectedChoices).toEqual(honestCount);
+        const record = runtime.getCell(S, "redirected-record");
+        await writeAsOtherCode(fixture, mallory, record, (runtime, tx) => {
+          const entry = runtime.getCellFromLink(
+            { ...box.getAsNormalizedFullLink(), path: [entryKey] },
+            undefined,
+            tx,
+          ).getAsWriteRedirectLink();
+          return { first: entry, second: entry };
+        });
+        await writeAsOtherCode(
+          fixture,
+          mallory,
+          binding,
+          redirectTo(record),
+          undefined,
+          { raw: true },
+        );
+        const repeated = await projectThrough(
+          fixture,
+          carol,
+          binding,
+          "from-repeated",
+        );
+        expect(projectedChoices).toEqual(bobTwice);
+        expect(repeated).toContainEqual({
+          type: CFC_ATOM_TYPE.TransformedBy,
+          identity: PROJECT,
+        });
+        expect(repeated).not.toContainEqual(witnessed);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a box cell that leads into a document the seal governs or into data", async () => {
+      // The seal writes under its own identity, which the box admits, so a
+      // box cell redirected into the box would have it overwrite another
+      // member's entry or add a key of its own.
+      const fixture = await setup();
+      try {
+        const binding = roomBox(fixture);
+        await fixture.seal(alice, honestStance, binding);
+        const { box, entryKey } = await fixture.seal(bob, bobStance, binding);
+        for (
+          const path of [[entryKey], [entryKey, "stance"], ["another-key"]]
+        ) {
+          const redirected = fixture.runtimes.get(carol)!.getCell(
+            S,
+            `box-cell-${path.join("-")}`,
+          );
+          await writeAsOtherCode(
+            fixture,
+            carol,
+            redirected,
+            (runtime, tx) =>
+              runtime.getCellFromLink(
+                { ...box.getAsNormalizedFullLink(), path },
+                undefined,
+                tx,
+              ).getAsWriteRedirectLink(),
+          );
+          await expect(fixture.seal(carol, honestStance, redirected)).rejects
+            .toThrow("only from a cell that holds nothing else");
+        }
+        const reader = fixture.runtimes.get(bob)!;
+        const local = reader.getCellFromLink(box.getAsNormalizedFullLink());
+        await local.sync();
+        await local.pull();
+        const entries = local.getRaw() as Record<string, unknown>;
+        expect(Object.keys(entries).sort()).toEqual(
+          Object.keys(entries).filter((key) => key !== "another-key").sort(),
+        );
+        expect((entries[entryKey] as { stance: unknown }).stance).toEqual(
+          bobStance,
+        );
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a box cell that leads into the reviewed terms or holds data", async () => {
+      const fixture = await setup();
+      try {
+        const runtime = fixture.runtimes.get(carol)!;
+        const intoTerms = runtime.getCell(S, "box-cell-terms");
+        await writeAsOtherCode(
+          fixture,
+          carol,
+          intoTerms,
+          (runtime, tx) =>
+            runtime.getCellFromLink(
+              { ...fixture.terms.getAsNormalizedFullLink(), path: ["extra"] },
+              undefined,
+              tx,
+            ).getAsWriteRedirectLink(),
+        );
+        await expect(fixture.seal(carol, honestStance, intoTerms)).rejects
+          .toThrow("only from a cell that holds nothing else");
+        const holdingData = runtime.getCell(S, "box-cell-data");
+        await writeAsOtherCode(
+          fixture,
+          carol,
+          holdingData,
+          () => ({ note: "the room's own" }),
+        );
+        await expect(fixture.seal(carol, honestStance, holdingData)).rejects
+          .toThrow("only from a cell that holds nothing else");
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("mints no witness over a chain of references a member made to the box", async () => {
+      const fixture = await setup();
+      try {
+        const binding = roomBox(fixture);
+        await fixture.seal(alice, honestStance, binding);
+        const { box } = await fixture.seal(bob, bobStance, binding);
+        const chain = fixture.runtimes.get(mallory)!.getCell(S, "chain");
+        await writeAsOtherCode(fixture, mallory, chain, (runtime, tx) => {
+          const links: Record<string, unknown> = {
+            last: runtime.getCellFromLink(
+              box.getAsNormalizedFullLink(),
+              undefined,
+              tx,
+            ),
+          };
+          const cell = runtime.getCellFromLink(
+            chain.getAsNormalizedFullLink(),
+            undefined,
+            tx,
+          );
+          for (let index = 0; index < 50; index++) {
+            links[`hop${index}`] = cell.key(
+              index === 49 ? "last" : `hop${index + 1}`,
+            );
+          }
+          return links;
+        }, ROOM_RECORD);
+        const integrity = await projectThrough(
+          fixture,
+          carol,
+          fixture.runtimes.get(mallory)!.getCellFromLink({
+            ...chain.getAsNormalizedFullLink(),
+            path: ["hop0"],
+          }),
+        );
+        expect(projectedChoices).toEqual(honestCount);
+        expect(integrity).not.toContainEqual(witnessed);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a box cell in another instance's custody documents", async () => {
+      // The anchor carries no integrity, by design, so it does not look like
+      // a document the seal wrote. A box cell led into an earlier instance's
+      // anchor would have the seal write a key there under its own identity,
+      // which the anchor admits, and every later seal of that instance would
+      // then refuse the anchor.
+      const fixture = await setup();
+      try {
+        const binding = roomBox(fixture);
+        const { instance } = await fixture.seal(alice, honestStance, binding);
+        await fixture.setTerms({ ...TERMS, question: "Somewhere else?" });
+        const runtime = fixture.runtimes.get(alice)!;
+        const earlier = runtime.getCell(S, {
+          custodyAnchor: { policy: P, instance },
+        });
+        await expect(
+          fixture.seal(alice, honestStance, earlier.key("x")),
+        ).rejects.toThrow("only from a cell that holds nothing else");
+        await fixture.setTerms(TERMS);
+        await fixture.seal(bob, bobStance, binding);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a box cell in a later instance's anchor before it exists", async () => {
+      // An instance is the digest of its terms, so a member can derive a
+      // later instance's anchor before anyone seals into it. A box cell led
+      // there would have the seal create the anchor with a key of its own,
+      // and the instance's first seal would then refuse the anchor.
+      const fixture = await setup();
+      try {
+        const binding = roomBox(fixture);
+        const later = { ...TERMS, question: "Somewhere else?" };
+        const runtime = fixture.runtimes.get(alice)!;
+        const anchor = runtime.getCell(S, {
+          custodyAnchor: { policy: P, instance: hashStringOf(later) },
+        });
+        for (const target of [anchor.key("x"), anchor]) {
+          await expect(fixture.seal(alice, honestStance, target)).rejects
+            .toThrow("only from a cell that holds nothing else");
+        }
+        await fixture.setTerms(later);
+        await fixture.seal(bob, bobStance, binding);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("tells a room document in another scope from the anchor sharing its id", async () => {
+      // A user-scoped document may share an anchor's id, and even hold what an
+      // anchor holds; it is another document, so the seal may link from it.
+      const fixture = await setup();
+      try {
+        const runtime = fixture.runtimes.get(alice)!;
+        const anchor = runtime.getCell(S, {
+          custodyAnchor: { policy: P, instance: hashStringOf(TERMS) },
+        }).getAsNormalizedFullLink();
+        const scoped = runtime.getCellFromLink({ ...anchor, scope: "user" });
+        await writeAsOtherCode(
+          fixture,
+          alice,
+          scoped,
+          () => ({ instance: hashStringOf(TERMS) }),
+          {
+            type: "object",
+            ifc: {
+              confidentiality: [{
+                anyOf: [
+                  { ...P, subject: { __ctOwningSpace: true } },
+                  cfcAtom.space(S),
+                ],
+              }],
+            },
+          },
+        );
+        await fixture.seal(alice, honestStance, scoped.key("box"));
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a box cell outside the room space", async () => {
+      const fixture = await setup();
+      try {
+        const elsewhere = fixture.runtimes.get(alice)!.getCell(
+          alice.did(),
+          "custody-room-box",
+        );
+        const draft = await fixture.draft(alice, honestStance);
+        await expect(
+          prepareCustodySeal(draft, fixture.room(alice, P, elsewhere)),
+        ).rejects.toThrow("only from a cell in the room space");
       } finally {
         await fixture.dispose();
       }
@@ -1019,6 +1702,112 @@ describe("cfc-custody-seal", () => {
       }
     });
 
+    it("takes the room's policy from the label a policy cell declares", async () => {
+      // A pattern cannot write its own policy's reference as a value: the
+      // reference names the module's content identity and manifest digest.
+      // It can declare a cell `PolicyOf` its rules, and the runtime binds
+      // that reference, with the room as its subject, into the cell's label.
+      const fixture = await setup();
+      try {
+        const runtime = fixture.runtimes.get(alice)!;
+        const declaring = runtime.getCell(S, "custody-room-state");
+        const draft = await fixture.draft(alice, honestStance);
+        const prepared = await prepareCustodySeal(draft, {
+          ...fixture.room(alice),
+          policy: declaring,
+        });
+        expect(prepared.policy).toEqual(P);
+        const { box } = await commitCustodySeal(
+          prepared.consent,
+          trustedClick(),
+        );
+        expect(box.getAsNormalizedFullLink().space).toBe(S);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("reads the policy declared on the policy cell itself, not on what it holds", async () => {
+      const fixture = await setup();
+      try {
+        const runtime = fixture.runtimes.get(alice)!;
+        const tx = runtime.edit();
+        const cell = runtime.getCell(S, "declaring-cell", undefined, tx);
+        writeSeedEnvelopeDoc(tx, S);
+        seedStoredEnvelope(tx, {
+          space: S,
+          scope: "space",
+          id: cell.getAsNormalizedFullLink().id,
+          path: [],
+        }, {
+          value: { inner: true },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [
+                { path: [], label: { confidentiality: [P] } },
+                // A field's own policy, and a shape label, name no policy
+                // for the cell.
+                {
+                  path: ["inner"],
+                  label: { confidentiality: [policyOf(SCRATCH)] },
+                },
+                {
+                  path: [],
+                  observes: "shape",
+                  label: { confidentiality: [policyOf(SCRATCH)] },
+                },
+              ],
+            },
+          },
+        } as FabricValue);
+        expect((await tx.commit()).error).toBeUndefined();
+        const draft = await fixture.draft(alice, honestStance);
+        const prepared = await prepareCustodySeal(draft, {
+          ...fixture.room(alice),
+          policy: cell.withTx(undefined),
+        });
+        expect(prepared.policy).toEqual(P);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a policy cell whose label declares no policy, or more than one", async () => {
+      const fixture = await setup();
+      try {
+        const runtime = fixture.runtimes.get(alice)!;
+        runtime.registerCfcPolicyManifests(undefined, [SCRATCH]);
+        const tx = runtime.edit();
+        const plain = runtime.getCell(S, "plain-room-state", undefined, tx);
+        plain.set({ open: true } as never);
+        const twice = runtime.getCell(S, "twice-declared", {
+          type: "object",
+          ifc: {
+            confidentiality: [
+              { ...P, subject: { __ctOwningSpace: true } },
+              { ...policyOf(SCRATCH), subject: { __ctOwningSpace: true } },
+            ],
+          },
+        } as never, tx);
+        twice.set({ open: true } as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        const draft = await fixture.draft(alice, honestStance);
+        await expect(prepareCustodySeal(draft, {
+          ...fixture.room(alice),
+          policy: plain.withTx(undefined),
+        })).rejects.toThrow(/exact module policy reference/);
+        await expect(prepareCustodySeal(draft, {
+          ...fixture.room(alice),
+          policy: twice.withTx(undefined),
+        })).rejects.toThrow(/declares more than one module policy/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
     it("refuses a policy whose subject is not the room space", async () => {
       const fixture = await setup();
       try {
@@ -1123,6 +1912,374 @@ describe("cfc-custody-seal", () => {
       }
     });
 
+    it("names a seat by a cell whose stored label attests its principal, and seals the DID", async () => {
+      const fixture = await setup();
+      try {
+        const aliceSeat = await fixture.attestation([alice.did()], "seat-a");
+        const bobSeat = await fixture.attestation([bob.did()], "seat-b");
+        // A seat may still be a DID the terms write out.
+        await fixture.setTerms({
+          ...TERMS,
+          seats: [aliceSeat, bobSeat, carol.did()],
+        });
+        const resolved = { ...TERMS, seats: TERMS.seats };
+        const draft = await fixture.draft(bob, honestStance);
+        const prepared = await prepareCustodySeal(draft, fixture.room(bob));
+        expect(prepared.terms).toEqual(resolved);
+        expect(prepared.instance).toBe(hashStringOf(resolved));
+        const { box, entryKey, instance } = await commitCustodySeal(
+          prepared.consent,
+          trustedClick(),
+        );
+        expect(instance).toBe(prepared.instance);
+        const reader = fixture.runtimes.get(carol)!;
+        const local = reader.getCellFromLink(box.getAsNormalizedFullLink());
+        await local.sync();
+        const entry = (local.getRaw() as Record<string, { terms: string }>)[
+          entryKey
+        ];
+        expect(JSON.parse(entry.terms).seats).toEqual(TERMS.seats);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a seat cell that attests no principal, or more than one", async () => {
+      for (
+        const [subjects, refusal] of [
+          [[], /attests no principal/],
+          [[bob.did(), mallory.did()], /attests more than one principal/],
+          [[`${bob.did()} (you)`], /not in the form a runtime mints/],
+        ] as const
+      ) {
+        const fixture = await setup();
+        try {
+          const seat = await fixture.attestation(subjects, "seat-b");
+          await fixture.setTerms({
+            ...TERMS,
+            seats: [alice.did(), seat, carol.did()],
+          });
+          const draft = await fixture.draft(alice, honestStance);
+          await expect(prepareCustodySeal(draft, fixture.room(alice)))
+            .rejects.toThrow(refusal);
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
+    it("refuses a seat cell whose attestation is not in the exact form a runtime mints", async () => {
+      // A runtime refuses a literal subject in the object form a profile
+      // carries, but these spellings name the principal without being that
+      // form, so a pattern could write them for someone else.
+      for (
+        const atom of [
+          { kind: "represents-principal", subject: ` ${bob.did()}` },
+          `represents-principal:${bob.did()}`,
+          { kind: "represents-principal", subject: bob.did(), extra: true },
+        ]
+      ) {
+        const fixture = await setup();
+        try {
+          const seat = await fixture.attestation([], "seat-b", [atom]);
+          await fixture.setTerms({
+            ...TERMS,
+            seats: [alice.did(), seat, carol.did()],
+          });
+          const draft = await fixture.draft(alice, honestStance);
+          await expect(prepareCustodySeal(draft, fixture.room(alice)))
+            .rejects.toThrow(/attestation that is not in the form/);
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
+    it("refuses a seat cell whose label the room's readers do not hold", async () => {
+      // The seal writes the DID a seat cell attests into terms every reader
+      // of the room sees, so the cell must be one they could read.
+      const fixture = await setup();
+      try {
+        const seat = await fixture.attestation(
+          [carol.did()],
+          "seat-c",
+          undefined,
+          [cfcAtom.user(bob.did())],
+        );
+        // Written as a bare link, the seat's label does not travel into the
+        // terms document, so the terms' own label check cannot see it.
+        const runtime = fixture.runtimes.get(alice)!;
+        const tx = runtime.edit();
+        runtime.getCellFromLink(fixture.terms, undefined, tx).setRaw({
+          ...TERMS,
+          seats: [alice.did(), bob.did(), seat.getAsLink()],
+        } as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        const draft = await fixture.draft(alice, honestStance);
+        await expect(prepareCustodySeal(draft, fixture.room(alice)))
+          .rejects.toThrow(/seat 2 .*the room's readers do not hold/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("resolves seat cells labeled for the room's readers or its policy", async () => {
+      const fixture = await setup();
+      try {
+        const bobSeat = await fixture.attestation(
+          [bob.did()],
+          "seat-b",
+          undefined,
+          [cfcAtom.space(S)],
+        );
+        const carolSeat = await fixture.attestation(
+          [carol.did()],
+          "seat-c",
+          undefined,
+          [P],
+        );
+        const runtime = fixture.runtimes.get(alice)!;
+        const tx = runtime.edit();
+        runtime.getCellFromLink(fixture.terms, undefined, tx).setRaw({
+          ...TERMS,
+          seats: [alice.did(), bobSeat.getAsLink(), carolSeat.getAsLink()],
+        } as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        const draft = await fixture.draft(alice, honestStance);
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        expect((prepared.terms as { seats: string[] }).seats).toEqual(
+          TERMS.seats,
+        );
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("reads a seat cell's attestation and its clauses from the same entries", async () => {
+      const cases: [unknown[], RegExp][] = [
+        // An attestation a link carries from the document it points to says
+        // whom that document represents, not whom the seat cell does.
+        [[{
+          path: [],
+          observes: "followRef",
+          label: {
+            integrity: [{ kind: "represents-principal", subject: carol.did() }],
+          },
+        }], /attests no principal/],
+        // A private clause on the cell's shape is as much the cell's as one
+        // on its value.
+        [[{
+          path: [],
+          label: {
+            integrity: [{ kind: "represents-principal", subject: carol.did() }],
+          },
+        }, {
+          path: [],
+          observes: "shape",
+          label: { confidentiality: [cfcAtom.user(bob.did())] },
+        }], /the room's readers do not hold/],
+      ];
+      for (const [entries, refusal] of cases) {
+        const fixture = await setup();
+        try {
+          const runtime = fixture.runtimes.get(alice)!;
+          const tx = runtime.edit();
+          const seat = runtime.getCell(S, "seat-entries", undefined, tx);
+          writeSeedEnvelopeDoc(tx, S);
+          seedStoredEnvelope(tx, {
+            space: S,
+            scope: "space",
+            id: seat.getAsNormalizedFullLink().id,
+            path: [],
+          }, {
+            value: {},
+            cfc: {
+              version: 1,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: { version: 1, entries },
+            },
+          } as FabricValue);
+          expect((await tx.commit()).error).toBeUndefined();
+          const write = runtime.edit();
+          runtime.getCellFromLink(fixture.terms, undefined, write).setRaw({
+            ...TERMS,
+            seats: [alice.did(), bob.did(), seat.withTx(undefined).getAsLink()],
+          } as never);
+          expect((await write.commit()).error).toBeUndefined();
+          const draft = await fixture.draft(alice, honestStance);
+          await expect(prepareCustodySeal(draft, fixture.room(alice)))
+            .rejects.toThrow(refusal);
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
+    it("refuses a seat cell whose attesting field the room's readers do not hold", async () => {
+      // The attestation sits on a top-level field, as a profile's does, and
+      // that field alone is private.
+      const fixture = await setup();
+      try {
+        const runtime = fixture.runtimes.get(alice)!;
+        const tx = runtime.edit();
+        const seat = runtime.getCell(S, "seat-field", undefined, tx);
+        writeSeedEnvelopeDoc(tx, S);
+        seedStoredEnvelope(tx, {
+          space: S,
+          scope: "space",
+          id: seat.getAsNormalizedFullLink().id,
+          path: [],
+        }, {
+          value: { name: "Carol" },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: ["name"],
+                label: {
+                  confidentiality: [cfcAtom.user(bob.did())],
+                  integrity: [{
+                    kind: "represents-principal",
+                    subject: carol.did(),
+                  }],
+                },
+              }],
+            },
+          },
+        } as FabricValue);
+        expect((await tx.commit()).error).toBeUndefined();
+        const write = runtime.edit();
+        runtime.getCellFromLink(fixture.terms, undefined, write).setRaw({
+          ...TERMS,
+          seats: [alice.did(), bob.did(), seat.withTx(undefined).getAsLink()],
+        } as never);
+        expect((await write.commit()).error).toBeUndefined();
+        const draft = await fixture.draft(alice, honestStance);
+        await expect(prepareCustodySeal(draft, fixture.room(alice)))
+          .rejects.toThrow(/seat 2 .*the room's readers do not hold/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses terms that are not an object, or whose seats are not a list", async () => {
+      for (
+        const [terms, refusal] of [
+          [["not", "an", "object"], /Custody terms must be an object/],
+          [{ ...TERMS, seats: alice.did() }, /distinct, well-formed DIDs/],
+          [
+            { ...TERMS, seats: [alice.did(), { name: "not a link" }] },
+            /distinct, well-formed DIDs/,
+          ],
+        ] as const
+      ) {
+        const fixture = await setup();
+        try {
+          const runtime = fixture.runtimes.get(alice)!;
+          const tx = runtime.edit();
+          runtime.getCellFromLink(fixture.terms, undefined, tx)
+            .setRaw(terms as never);
+          expect((await tx.commit()).error).toBeUndefined();
+          const draft = await fixture.draft(alice, honestStance);
+          await expect(prepareCustodySeal(draft, fixture.room(alice)))
+            .rejects.toThrow(refusal);
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
+    it("refuses two seats that resolve to one principal", async () => {
+      const fixture = await setup();
+      try {
+        const first = await fixture.attestation([bob.did()], "seat-b1");
+        const second = await fixture.attestation([bob.did()], "seat-b2");
+        await fixture.setTerms({
+          ...TERMS,
+          seats: [alice.did(), first, second],
+        });
+        const draft = await fixture.draft(alice, honestStance);
+        await expect(prepareCustodySeal(draft, fixture.room(alice)))
+          .rejects.toThrow(/distinct, well-formed DIDs/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a seal whose seat attests another principal after review", async () => {
+      const fixture = await setup();
+      try {
+        const seat = await fixture.attestation([bob.did()], "seat-b");
+        await fixture.setTerms({
+          ...TERMS,
+          seats: [alice.did(), seat, carol.did()],
+        });
+        const draft = await fixture.draft(alice, honestStance);
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        await fixture.attestation([mallory.did()], "seat-b");
+        await expect(commitCustodySeal(prepared.consent, trustedClick()))
+          .rejects.toThrow(/stale/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a seal whose seat attests another principal before its entry is written", async () => {
+      const fixture = await setup();
+      try {
+        const seat = await fixture.attestation([bob.did()], "seat-b");
+        await fixture.setTerms({
+          ...TERMS,
+          seats: [alice.did(), seat, carol.did()],
+        });
+        const draft = await fixture.draft(alice, honestStance);
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        // After the commit's own checks, before the entry's transaction.
+        beforeEntry(
+          fixture.runtimes.get(alice)!,
+          () => fixture.attestation([mallory.did()], "seat-b").then(() => {}),
+        );
+        await expect(commitCustodySeal(prepared.consent, trustedClick()))
+          .rejects.toThrow(/changed before commit/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a seal whose policy cell names another policy after review", async () => {
+      for (const stage of ["review", "entry"] as const) {
+        const fixture = await setup();
+        try {
+          const runtime = fixture.runtimes.get(alice)!;
+          runtime.registerCfcPolicyManifests(undefined, [SCRATCH]);
+          const declaring = runtime.getCell(S, "custody-room-state");
+          const draft = await fixture.draft(alice, honestStance);
+          const prepared = await prepareCustodySeal(draft, {
+            ...fixture.room(alice),
+            policy: declaring,
+          });
+          // Another member's code writes another policy's reference into the
+          // cell, which now names that policy by value.
+          const redeclare = async () => {
+            const tx = runtime.edit();
+            runtime.getCell(S, "custody-room-state", undefined, tx)
+              .set(policyOf(SCRATCH) as never);
+            expect((await tx.commit()).error).toBeUndefined();
+          };
+          if (stage === "review") await redeclare();
+          else beforeEntry(runtime, redeclare);
+          await expect(commitCustodySeal(prepared.consent, trustedClick()))
+            .rejects.toThrow(
+              stage === "review" ? /stale/ : /changed before commit/,
+            );
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
     it("refuses a stance its schema does not bound", async () => {
       const cases: [unknown, unknown, RegExp][] = [
         [
@@ -1154,10 +2311,140 @@ describe("cfc-custody-seal", () => {
           honestStance,
           /additionalProperties: false/,
         ],
+        [{ type: "array", items: { type: "boolean" } }, [true], /`maxItems`/],
+        [
+          { type: "array", items: { type: "boolean" }, maxItems: 1000 },
+          [true],
+          /`maxItems`/,
+        ],
+        [
+          { type: "array", items: { type: "string" }, maxItems: 2 },
+          ["free text"],
+          /admits open-ended values at `\/items`/,
+        ],
+        [
+          { type: "array", items: [{ type: "boolean" }], maxItems: 2 },
+          [true],
+          /the schema is not an object at `\/items`/,
+        ],
+        [
+          { type: "array", prefixItems: [{ type: "boolean" }], maxItems: 2 },
+          [true],
+          /keyword `prefixItems`/,
+        ],
         [
           { type: "array", items: { type: "boolean" }, maxItems: 2 },
+          [true, false, true],
+          /the array's length is outside its bounds/,
+        ],
+        [
+          {
+            type: "array",
+            items: { type: "boolean" },
+            minItems: 2,
+            maxItems: 3,
+          },
           [true],
-          /keyword `items`/,
+          /the array's length is outside its bounds/,
+        ],
+        [
+          { type: "array", items: { enum: [1, 2] }, maxItems: 2 },
+          [1, 3],
+          /not one of the enumerated values at `\/1`/,
+        ],
+        [
+          {
+            type: "array",
+            items: { type: "array", items: { type: "boolean" }, maxItems: 2 },
+            maxItems: 2,
+          },
+          [[true]],
+          /array inside an array's elements/,
+        ],
+        [
+          {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                x: { type: "array", items: { type: "boolean" }, maxItems: 2 },
+              },
+              additionalProperties: false,
+            },
+            maxItems: 2,
+          },
+          [{ x: [true] }],
+          /array inside an array's elements/,
+        ],
+        [
+          {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                o: {
+                  type: "object",
+                  properties: {
+                    x: {
+                      type: "array",
+                      items: { type: "boolean" },
+                      maxItems: 2,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              additionalProperties: false,
+            },
+            maxItems: 2,
+          },
+          [],
+          /array inside an array's elements/,
+        ],
+        [
+          {
+            type: "array",
+            items: { type: "boolean" },
+            minItems: 3,
+            maxItems: 2,
+          },
+          [true],
+          /`minItems` must be an integer no greater than `maxItems`/,
+        ],
+        [
+          {
+            type: "array",
+            items: { type: "boolean" },
+            minItems: 0.5,
+            maxItems: 2,
+          },
+          [true],
+          /`minItems` must be an integer/,
+        ],
+        [
+          { type: "array", items: { type: "boolean" }, maxItems: 2 },
+          { 0: true },
+          /the value is not an array/,
+        ],
+        [
+          { type: "boolean", maxItems: 2 },
+          true,
+          /`maxItems` applies only to an array/,
+        ],
+        [
+          {
+            ...STANCE_SCHEMA,
+            properties: {
+              ...STANCE_SCHEMA.properties,
+              tags: {
+                type: "array",
+                items: { type: "string" },
+                maxItems: 2,
+              },
+            },
+          },
+          honestStance,
+          /admits open-ended values at `\/tags\/items`/,
         ],
         [{ anyOf: [{ type: "boolean" }] }, true, /keyword `anyOf`/],
         [
@@ -1494,6 +2781,196 @@ describe("cfc-custody-seal", () => {
             /the actor's own `Context` and `Resource` atoms/,
           );
         }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+  });
+
+  describe("the release it previews", () => {
+    const rule = (integrity: readonly unknown[]) => ({
+      name: "release",
+      preCondition: {
+        confidentiality: [{ type: CFC_ATOM_TYPE.Policy }],
+        integrity,
+      },
+      postCondition: { confidentiality: [], integrity: [] },
+    });
+    const byProjector = {
+      type: CFC_ATOM_TYPE.TransformedBy,
+      identity: {
+        kind: "verified",
+        moduleIdentity: MODULE,
+        symbol: "projectBallot",
+      },
+    };
+    const template = (rules: readonly unknown[]) => ({
+      templateVersion: 1 as const,
+      exchangeRules: rules as never,
+      dependencies: { authorityOnly: [], dataBearing: [] },
+      integrityRequirements: {},
+    });
+
+    it("counts a release witnessed only when every rule requires the seal's witness", () => {
+      const witnessedRule = rule([{ ...byProjector, inputWitness: sealedBy }]);
+      expect(releaseRequiresSealWitness(template([witnessedRule]))).toBe(true);
+      expect(releaseRequiresSealWitness(template([]))).toBe(true);
+      expect(releaseRequiresSealWitness(template([rule([byProjector])])))
+        .toBe(false);
+      expect(
+        releaseRequiresSealWitness(
+          template([witnessedRule, rule([byProjector])]),
+        ),
+      ).toBe(false);
+      // A witnessed guard beside an unwitnessed one on the releasing code
+      // does not witness the release.
+      expect(
+        releaseRequiresSealWitness(template([rule([
+          {
+            type: CFC_ATOM_TYPE.TransformedBy,
+            identity: {
+              kind: "verified",
+              moduleIdentity: MODULE,
+              symbol: "helper",
+            },
+            inputWitness: sealedBy,
+          },
+          byProjector,
+        ])])),
+      ).toBe(false);
+      // A witnessed guard that does not name the releasing code matches any
+      // code under subset matching, so it witnesses nothing: no identity, a
+      // variable identity or field, or an identity missing its symbol.
+      for (
+        const identity of [
+          undefined,
+          { var: "code" },
+          { kind: "verified", moduleIdentity: MODULE, symbol: { var: "s" } },
+          { kind: "verified", moduleIdentity: MODULE },
+          { kind: "verified", symbol: "projectBallot" },
+          { kind: "builtin" },
+        ]
+      ) {
+        expect(
+          releaseRequiresSealWitness(template([rule([{
+            type: CFC_ATOM_TYPE.TransformedBy,
+            ...(identity === undefined ? {} : { identity }),
+            inputWitness: sealedBy,
+          }])])),
+        ).toBe(false);
+      }
+      // A code hash names one piece of code outright, exported or not.
+      expect(
+        releaseRequiresSealWitness(template([rule([{
+          type: CFC_ATOM_TYPE.TransformedBy,
+          identity: { kind: "verified", codeHash: "fid1:projector" },
+          inputWitness: sealedBy,
+        }])])),
+      ).toBe(true);
+      // THIS_POLICY's module identity names the policy's own module.
+      expect(
+        releaseRequiresSealWitness(template([rule([{
+          type: CFC_ATOM_TYPE.TransformedBy,
+          identity: {
+            kind: "verified",
+            moduleIdentity: { thisPolicyField: "moduleIdentity" },
+            symbol: "projectBallot",
+          },
+          inputWitness: sealedBy,
+        }])])),
+      ).toBe(true);
+      // A rule with no transformer guard at all is not witnessed.
+      expect(releaseRequiresSealWitness(template([rule([])]))).toBe(false);
+      // A witness naming some other writer is not the seal's.
+      expect(
+        releaseRequiresSealWitness(template([rule([{
+          ...byProjector,
+          inputWitness: {
+            type: CFC_ATOM_TYPE.TransformedBy,
+            identity: { kind: "builtin", builtinId: "cfc-share-snapshot" },
+          },
+        }])])),
+      ).toBe(false);
+    });
+
+    it("previews whether the room's policy witnesses its release", async () => {
+      // A policy whose one rule releases what its projector computes, named
+      // by identity alone or with the seal's witness.
+      const policyReleasing = (witnessed: boolean) =>
+        buildCfcPolicyArtifactManifest({
+          formatVersion: 1,
+          moduleIdentity: MODULE,
+          symbol: "custodyRules",
+          template: {
+            templateVersion: 1,
+            exchangeRules: [{
+              name: "releaseBallot",
+              preCondition: {
+                confidentiality: [{ thisPolicy: true }],
+                integrity: [{
+                  type: CFC_ATOM_TYPE.TransformedBy,
+                  identity: {
+                    kind: "verified",
+                    moduleIdentity: { thisPolicyField: "moduleIdentity" },
+                    symbol: "projectBallot",
+                  },
+                  ...(witnessed ? { inputWitness: sealedBy } : {}),
+                }],
+              },
+              postCondition: { confidentiality: [], integrity: [] },
+            }],
+            dependencies: { authorityOnly: [], dataBearing: [] },
+            integrityRequirements: {},
+          },
+        } as never);
+      for (const witnessed of [false, true]) {
+        const artifact = policyReleasing(witnessed);
+        const policy = policyOf(artifact);
+        const fixture = await setup({
+          trust: {
+            ...TRUST,
+            statements: [{
+              ...TRUST.statements![0],
+              concrete: {
+                ...TRUST.statements![0].concrete as object,
+                policyDigest: artifact.policyDigest,
+              },
+            }],
+          },
+        });
+        try {
+          const runtime = fixture.runtimes.get(alice)!;
+          runtime.registerCfcPolicyManifests(undefined, [artifact]);
+          // A room document declaring the policy installs its manifest.
+          const tx = runtime.edit();
+          runtime.getCell(S, "rule-room-state", {
+            type: "object",
+            ifc: {
+              confidentiality: [{
+                ...policy,
+                subject: { __ctOwningSpace: true },
+              }],
+            },
+          } as never, tx).set({ open: true } as never);
+          expect((await tx.commit()).error).toBeUndefined();
+          const draft = await fixture.draft(alice, honestStance);
+          const prepared = await prepareCustodySeal(
+            draft,
+            fixture.room(alice, policy),
+          );
+          expect(prepared.witnessedRelease).toBe(witnessed);
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
+    it("previews a policy with no rules as releasing nothing unwitnessed", async () => {
+      const fixture = await setup();
+      try {
+        const draft = await fixture.draft(alice, honestStance);
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        expect(prepared.witnessedRelease).toBe(true);
       } finally {
         await fixture.dispose();
       }

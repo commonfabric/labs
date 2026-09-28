@@ -18,20 +18,10 @@ import {
   spoolWriteArgument,
 } from "@commonfabric/test-support/records";
 import { DENO_TEST_TASK } from "./run-member-tests.ts";
-import { parseShard, type Shard } from "./shard-utils.ts";
-import { WORKSPACE_TEST_WEIGHTS } from "./test-timing-weights.ts";
-import { writeUnlaunchedMembers } from "./unlaunched-members.ts";
-import { assignWeightedShards } from "./weighted-shards.ts";
-
-export const ALL_DISABLED: string[] = [];
 
 export function getPackageName(memberPath: string): string {
   const relativePath = memberPath.replace(/^\.\//, "");
   return relativePath.replace(/^packages\//, "");
-}
-
-export function parseDisabledPackageList(raw: string | undefined): string[] {
-  return (raw ?? "").split(/[,\s]+/).filter((name) => name.length > 0);
 }
 
 export async function initializeDb(cwd: string = Deno.cwd()): Promise<boolean> {
@@ -190,32 +180,6 @@ export function assertTaskTestsIncluded(members: string[]): void {
   );
 }
 
-// One `deno task test` invocation: a workspace member, plus environment
-// variables when the member is one slice of an internally sharded package.
-export interface TestUnit {
-  memberPath: string;
-  packageName: string;
-  env?: Record<string, string>;
-}
-
-// Packages whose test runner supports internal sharding via an environment
-// variable. When the workspace run itself is sharded, such a package is
-// expanded into `total` weighted units so one heavy package can run across
-// several workspace shards. Without a workspace shard (local runs), the
-// package runs as a single unit and the variable stays unset.
-const INTERNALLY_SHARDED_PACKAGES: Record<
-  string,
-  { total: number; envVar: string }
-> = {
-  "connectors/agents/host": {
-    total: 5,
-    envVar: "AGENTS_HOST_TEST_SHARD",
-  },
-  cli: { total: 10, envVar: "CLI_TEST_SHARD" },
-  piece: { total: 3, envVar: "PIECE_TEST_SHARD" },
-  tasks: { total: 3, envVar: "TASK_TEST_SHARD" },
-};
-
 // A member's leaf — its `test` task, or the `deno-test` that task hands
 // the flags to when it runs `tasks/run-member-tests.ts` — takes an
 // appended `--junit-path` whole when it runs exactly one `deno test`.
@@ -225,12 +189,12 @@ const INTERNALLY_SHARDED_PACKAGES: Record<
 // test command, and takes it for none.
 //
 // A leaf that runs a script of its own cannot show what the script does
-// with the flags it is handed. `tasks/run-sharded-test-files.ts` is the
-// script known to forward them: it hands them to its `deno test` runs and
-// leaves one report where the flag names. A leaf running any other script
-// is kept out: `identity` drives a browser harness that records through
-// the deno-web-test reporter instead.
-const FLAG_FORWARDING_RUNNER = "run-sharded-test-files.ts";
+// with the flags it is handed. `tasks/run-test-batches.ts` is the script
+// known to forward them: it hands them to its `deno test` runs and leaves
+// one report where the flag names. A leaf running any other script is kept
+// out: `identity` drives a browser harness that records through the
+// deno-web-test reporter instead.
+const FLAG_FORWARDING_RUNNER = "run-test-batches.ts";
 
 /** Whether a leaf task runs the script that forwards its flags. */
 function runsForwardingRunner(task: string): boolean {
@@ -496,66 +460,9 @@ export async function junitCapableMembers(
   return capable;
 }
 
-// The identity scope of a unit: the package name with any internal slice
-// label stripped, so the records of "cli (3/10)" and "cli (7/10)" join.
-export function unitScope(packageName: string): string {
-  return packageName.replace(/ \(\d+\/\d+\)$/, "");
-}
-
-// A filename-safe slug for a unit's JUnit file, unique per slice.
-export function unitSlug(packageName: string): string {
+// A filename-safe slug for a member's JUnit file, unique per member.
+function memberSlug(packageName: string): string {
   return packageName.replaceAll("/", "__").replace(/[^A-Za-z0-9_.-]+/g, "-");
-}
-
-// Enabled workspace members are split by observed test cost. Without a shard,
-// every enabled member is selected as a single unit.
-export function selectShardMembers(
-  members: string[],
-  disabledPackages: string[],
-  shard: Shard | undefined,
-): TestUnit[] {
-  const enabled = members.filter(
-    (memberPath) => !disabledPackages.includes(getPackageName(memberPath)),
-  );
-  if (!shard) {
-    return enabled.map((memberPath) => ({
-      memberPath,
-      packageName: getPackageName(memberPath),
-    }));
-  }
-
-  const units: TestUnit[] = [];
-  for (const memberPath of enabled) {
-    const packageName = getPackageName(memberPath);
-    const split = INTERNALLY_SHARDED_PACKAGES[packageName];
-    if (!split) {
-      units.push({ memberPath, packageName });
-      continue;
-    }
-    for (let slice = 1; slice <= split.total; slice++) {
-      units.push({
-        memberPath,
-        packageName: `${packageName} (${slice}/${split.total})`,
-        env: { [split.envVar]: `${slice}/${split.total}` },
-      });
-    }
-  }
-
-  const assignments = assignWeightedShards(
-    units.map((unit) => ({
-      name: unit.packageName,
-      weight: WORKSPACE_TEST_WEIGHTS[unit.packageName] ?? 1,
-      group: unit.memberPath,
-    })),
-    shard.total,
-  );
-  return units
-    .filter((unit) => assignments.get(unit.packageName) === shard.index)
-    .sort((a, b) =>
-      (WORKSPACE_TEST_WEIGHTS[b.packageName] ?? 1) -
-        (WORKSPACE_TEST_WEIGHTS[a.packageName] ?? 1) ||
-      a.packageName.localeCompare(b.packageName)
-    );
 }
 
 // Cap on concurrently running package test tasks. Individual packages may also
@@ -577,31 +484,28 @@ export function testConcurrency(
 }
 
 /**
- * Runs the enabled members of the workspace at `workspaceCwd`, or this shard's
- * share of them, and returns whether every one of them passed.
+ * Runs every member of the workspace at `workspaceCwd`, and returns whether
+ * every one of them passed.
  *
- * Workers stop taking new members once one fails, so a failing run leaves the
- * rest unstarted. With coverage collection on, the members it never started
- * are recorded in the coverage profile directory, since their coverage is
- * unknown rather than absent; see `unlaunched-members.ts`.
+ * Without `DENO_COVERAGE_DIR`, workers stop taking new members once one
+ * fails, so a failing run leaves the rest unstarted, and names them. With it,
+ * every member runs whatever fails, so the coverage profile holds a record
+ * for every member: the coverage-debt metric reads a member with no record as
+ * source no test loaded.
  */
 export async function runTests(
-  disabledPackages: string[],
-  shard?: Shard,
   workspaceCwd: string = Deno.cwd(),
 ): Promise<boolean> {
   const suiteStartedAt = Date.now();
   const members = await readWorkspaceMembers(
     path.join(workspaceCwd, "deno.jsonc"),
   );
-  // No member's test task is spawned until every member has been checked,
-  // and every member is checked rather than this shard's: one with no `test`
-  // task of its own is what turns a single run into an unbounded number of
-  // them.
+  // No member's test task is spawned until every member has been checked:
+  // one with no `test` task of its own is what turns a single run into an
+  // unbounded number of them.
   await assertMemberTestTasksDefined(members, workspaceCwd);
-  const units = selectShardMembers(members, disabledPackages, shard);
-  if (units.length === 0) {
-    console.error("No workspace packages selected to test.");
+  if (members.length === 0) {
+    console.error("No workspace packages to test.");
     return false;
   }
   // Resolve to an absolute path: each package's test subprocess runs with its
@@ -630,39 +534,37 @@ export async function runTests(
   const fragment = spoolDir !== undefined && junitRoot !== undefined
     ? FragmentWriter.open(spoolDir)
     : undefined;
-  // Read once here rather than per unit: an internally sharded package
-  // appears as several units that share one manifest.
-  const memberPaths = units.map((unit) => unit.memberPath);
   const workspaceUrl = new URL(`file://${path.resolve(workspaceCwd)}/`);
   const capable = junitRoot !== undefined
-    ? await junitCapableMembers(memberPaths, workspaceUrl)
+    ? await junitCapableMembers(members, workspaceUrl)
     : new Set<string>();
   const recording = junitRoot !== undefined && spoolDir !== undefined
-    ? await memberRecordingArguments(memberPaths, spoolDir, workspaceUrl)
+    ? await memberRecordingArguments(members, spoolDir, workspaceUrl)
     : new Map<string, string[]>();
 
   const results: PackageResult[] = [];
-  let nextUnit = 0;
-  let failureSeen = false;
-  const workerCount = Math.min(testConcurrency(), units.length);
+  let next = 0;
+  let stopped = false;
+  const workerCount = Math.min(testConcurrency(), members.length);
   const workers = Array.from({ length: workerCount }, async () => {
-    while (!failureSeen && nextUnit < units.length) {
-      const unit = units[nextUnit++];
-      console.log(`Testing ${unit.packageName}...`);
-      const packagePath = path.resolve(workspaceCwd, unit.memberPath);
-      const junitPath = junitRoot !== undefined && capable.has(unit.memberPath)
-        ? path.join(junitRoot, `${unitSlug(unit.packageName)}.xml`)
+    while (!stopped && next < members.length) {
+      const memberPath = members[next++]!;
+      const packageName = getPackageName(memberPath);
+      console.log(`Testing ${packageName}...`);
+      const packagePath = path.resolve(workspaceCwd, memberPath);
+      const junitPath = junitRoot !== undefined && capable.has(memberPath)
+        ? path.join(junitRoot, `${memberSlug(packageName)}.xml`)
         : undefined;
       const result = await testPackage(
-        unit.memberPath,
-        unit.packageName,
+        memberPath,
+        packageName,
         packagePath,
         coverageRoot,
         spoolDir === undefined
-          ? unit.env
-          : { ...unit.env, [RECORDS_DIR_VARIABLE]: spoolDir },
+          ? undefined
+          : { [RECORDS_DIR_VARIABLE]: spoolDir },
         junitPath,
-        recording.get(unit.memberPath),
+        recording.get(memberPath),
       );
       results.push(result);
       if (
@@ -673,12 +575,12 @@ export async function runTests(
           fragment,
           spoolDir,
           junitPath,
-          unitScope(unit.packageName),
-          unit.memberPath,
+          packageName,
+          memberPath,
         );
       }
       if (!result.result.success) {
-        failureSeen = true;
+        if (coverageRoot === undefined) stopped = true;
         reportPackageFailure(result);
       }
     }
@@ -688,17 +590,9 @@ export async function runTests(
   if (junitRoot !== undefined) {
     await Deno.remove(junitRoot, { recursive: true }).catch(() => {});
   }
-  // Every unit below `nextUnit` was handed to a worker; the units above it are
-  // the ones the stop after a failure left unstarted. An internally sharded
-  // package is several units over one member, and a member with any unstarted
-  // slice is measured over less than its own tests, so the member is named
-  // whichever of its slices went unstarted.
-  const unlaunchedMembers = [
-    ...new Set(units.slice(nextUnit).map((unit) => unit.memberPath)),
-  ];
-  if (coverageRoot !== undefined) {
-    await writeUnlaunchedMembers(coverageRoot, unlaunchedMembers);
-  }
+  // Every member below `next` was handed to a worker; the members above it
+  // are the ones a stop after a failure left unstarted.
+  const unstarted = members.slice(next);
 
   const durationResults = [...results].sort((a, b) =>
     b.durationMs - a.durationMs
@@ -725,9 +619,9 @@ export async function runTests(
     }
   }
 
-  if (unlaunchedMembers.length > 0) {
-    console.error("Packages this run selected and never started:");
-    for (const member of unlaunchedMembers) {
+  if (unstarted.length > 0) {
+    console.error("Packages this run never started:");
+    for (const member of unstarted) {
       console.error(`- ${member}`);
     }
   }
@@ -736,17 +630,9 @@ export async function runTests(
 }
 
 export async function main(): Promise<boolean> {
-  const shardRaw = Deno.env.get("TEST_SHARD");
-  const shard = shardRaw ? parseShard(shardRaw) : undefined;
   assertTaskTestsIncluded(await readWorkspaceMembers());
   // A failure here returns rather than exits: the entry point's recording
   // teardown runs in a finally that an exit would skip.
   if (!await initializeDb()) return false;
-  return await runTests(
-    [
-      ...ALL_DISABLED,
-      ...parseDisabledPackageList(Deno.env.get("TEST_DISABLED_PACKAGES")),
-    ],
-    shard,
-  );
+  return await runTests();
 }

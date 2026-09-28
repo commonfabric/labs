@@ -24,7 +24,7 @@ import {
   TEXTURE_WIDTH,
 } from "./palette.ts";
 import { FAVICON_VERSION } from "./favicon.ts";
-import { liveUpdateStream } from "./stream-client.ts";
+import { followUpdates, liveUpdateStream } from "./stream-client.ts";
 import { reconcileTiles } from "./tiles-client.ts";
 import { TILE_LABEL_RULE } from "./chart-layout.ts";
 
@@ -361,12 +361,14 @@ Deno.test("shell: the freshness age and the refresh interval reach both the text
   );
   assertStringIncludes(html, "let base = 7;");
   assertStringIncludes(html, `new EventSource('/events')`);
-  assertStringIncludes(html, `es.addEventListener('update'`);
-  assertStringIncludes(html, `es.addEventListener('ping', alive)`);
-  assertStringIncludes(html, `es.addEventListener('open', alive)`);
   assertStringIncludes(
     html,
-    `es.addEventListener('error', () => { updates.lost(); paint(); });`,
+    `const updates = followUpdates(() => new EventSource('/events'), RED_AFTER, paint, {`,
+  );
+  assertStringIncludes(html, `update: (data) => {`);
+  assertStringIncludes(
+    html,
+    `const followUpdates = ${followUpdates.toString()};`,
   );
   assertStringIncludes(html, `updateTiles(grid, update.gridHtml)`);
   assertStringIncludes(html, `updateTiles(wide, update.wideHtml)`);
@@ -390,7 +392,7 @@ Deno.test("shell: the page watches its own stream and reopens one that stops del
   // The silence the page reconnects on is the silence that turns the dot red.
   assertStringIncludes(html, "const RED_AFTER = REFRESH + 10000;");
   assertStringIncludes(html, `ago * 1000 <= RED_AFTER ? 'amber' : 'red'`);
-  assertStringIncludes(html, `const updates = liveUpdateStream(RED_AFTER, () => {`);
+  assertStringIncludes(html, `followUpdates(() => new EventSource('/events'), RED_AFTER, paint, {`);
   assertStringIncludes(
     html,
     `badge.textContent = updates.check(now) ? '● LIVE' : '● OFFLINE';`,
@@ -416,7 +418,7 @@ Deno.test("shell: the injected script is JavaScript, and each injected function 
   // Evaluated on its own, outside its module, so a reference to anything at
   // module scope throws instead of quietly resolving.
   const source = script.match(
-    /const liveUpdateStream = ([\s\S]*?);\n {2}const badge =/,
+    /const liveUpdateStream = ([\s\S]*?);\n {2}const followUpdates =/,
   )![1];
   const injected = new Function(`return (${source});`)() as typeof liveUpdateStream;
 
@@ -441,6 +443,22 @@ Deno.test("shell: the injected script is JavaScript, and each injected function 
   assertEquals(live.check(55_000), false, "and one that goes quiet is replaced");
   assertEquals(opened.length, 2);
   assert(opened[0].closed);
+
+  // The only name it reaches outside itself is the one injected before it.
+  const follow = new Function(
+    "liveUpdateStream",
+    `return (${script.match(/const followUpdates = ([\s\S]*?);\n {2}const badge =/)![1]});`,
+  )(injected) as typeof followUpdates;
+  const listeners = new Map<string, (event: { data: string }) => void>();
+  let painted = 0;
+  const followed = follow(() => ({
+    readyState: 1,
+    close() {},
+    addEventListener: (type, listener) => listeners.set(type, listener),
+  }), 55_000, () => painted++, {});
+  followed.check(Date.now());
+  listeners.get("ping")!({ data: "1" });
+  assertEquals(painted, 1, "a heartbeat repaints the page");
 });
 
 Deno.test("shell: live data and runtime settings keep the compatibility version", () => {

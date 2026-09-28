@@ -322,10 +322,11 @@ export interface ExecutedCallable {
 /** Read a tool callable's stored `pattern` slot as the pattern the runner
  * will run. Only the record shape is checked here; a record missing the
  * schemas reaches `runtime.run` the same way any malformed stored pattern
- * does. */
+ * does. The cast goes by way of `unknown` because a `Pattern` is not a record
+ * type, so a record says nothing about being one. */
 function asCallablePattern(value: unknown): Pattern | undefined {
   if (!isObjectNotArray(value)) return undefined;
-  return value as Pattern;
+  return value as unknown as Pattern;
 }
 
 function asExtraParams(value: unknown): Record<string, unknown> {

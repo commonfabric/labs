@@ -465,6 +465,42 @@ Deno.test("memory v2 add-unique compares special objects by content", () => {
   ]);
 });
 
+Deno.test("memory v2 add-unique adds only absent elements when adding many", () => {
+  // Enough distinct values that elements are looked up in a set of them
+  // rather than compared one by one; the result is the same.
+  const incoming = Array.from({ length: 20 }, (_, i) => ({ id: i }));
+  const out = applyPatch({ value: [{ id: 3 }, "x", { id: 17 }] }, [
+    {
+      op: "add-unique",
+      path: "/value",
+      values: [...incoming, { id: 5 }, "x", -0, 0, NaN, NaN],
+    },
+  ]) as { value: unknown[] };
+  assertEquals(out.value, [
+    { id: 3 },
+    "x",
+    { id: 17 },
+    ...incoming.filter(({ id }) => id !== 3 && id !== 17),
+    -0,
+    0,
+    NaN,
+  ]);
+  assert(Object.is(out.value[out.value.length - 3], -0));
+});
+
+Deno.test("memory v2 add-unique adds a hole among the values as `undefined`", () => {
+  const out = applyPatch({ value: ["a"] }, [
+    // deno-lint-ignore no-sparse-arrays
+    { op: "add-unique", path: "/value", values: ["b", , "b"] },
+  ]) as { value: unknown[] };
+  assertEquals(out.value.length, 3);
+  assertEquals([out.value[1], 2 in out.value, out.value[2]], [
+    "b",
+    true,
+    undefined,
+  ]);
+});
+
 Deno.test("memory v2 add-unique on the weird numbers", () => {
   // `NaN` is the same value as `NaN`; `-0` and `+0` are different values.
   const nan = applyPatch({ value: [NaN] }, [
@@ -610,6 +646,17 @@ Deno.test("memory v2 remove-by-value on the weird numbers", () => {
   ]) as { value: number[] };
   assertEquals(zero.value.length, 1);
   assert(Object.is(zero.value[0], -0), "only the +0 may be removed");
+});
+
+Deno.test("memory v2 remove-by-value keeps holes, closing up only removed slots", () => {
+  // deno-lint-ignore no-sparse-arrays
+  const out = applyPatch({ value: ["a", , "b", "a", , "c"] }, [
+    { op: "remove-by-value", path: "/value", value: "a" },
+  ]) as { value: string[] };
+  assertEquals(out.value.length, 4);
+  assertEquals([0 in out.value, 1 in out.value], [false, true]);
+  assertEquals([2 in out.value, 3 in out.value], [false, true]);
+  assertEquals([out.value[1], out.value[3]], ["b", "c"]);
 });
 
 Deno.test("memory v2 remove-by-value is a no-op when absent", () => {

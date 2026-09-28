@@ -97,6 +97,7 @@ jobs:
             packages/memory/test/v2-cached-patch-replay.bench.ts \
             packages/memory/test/v2-engine-read.bench.ts \
             packages/memory/test/v2-path.bench.ts \
+            packages/memory/test/v2-refresh-schema-closure.bench.ts \
             packages/data-model/bench/hashing.bench.ts \
             packages/data-model/bench/codec-json.bench.ts \
             packages/dashboard/machine-calibration.bench.ts \

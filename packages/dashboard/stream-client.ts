@@ -107,3 +107,44 @@ export function liveUpdateStream<S extends UpdateStream>(
     },
   };
 }
+
+/** The parts of `EventSource` a page following its updates uses. */
+export interface UpdateSource extends UpdateStream {
+  addEventListener(type: string, listener: (event: { data: string }) => void): void;
+}
+
+/**
+ * Follows the stream `open` connects, through `liveUpdateStream`, which has to
+ * be in scope under that name. Each handler in `on` takes the data of the
+ * events it is named for. The page is repainted whenever the server is heard
+ * from or the connection drops. Returns the watcher whose `check` `paint` asks
+ * whether the page can hear the server.
+ */
+export function followUpdates(
+  open: () => UpdateSource,
+  silenceMs: number,
+  paint: () => void,
+  on: Record<string, (data: string) => void>,
+): LiveUpdateStream {
+  const updates = liveUpdateStream(silenceMs, () => {
+    const stream = open();
+    // The connection's own events repaint, so the badge follows the connection
+    // as it changes.
+    const heard = (handle: (data: string) => void) => (event: { data: string }) => {
+      updates.heard(Date.now());
+      handle(event.data);
+      paint();
+    };
+    stream.addEventListener("open", heard(() => {}));
+    stream.addEventListener("ping", heard(() => {}));
+    for (const [name, handle] of Object.entries(on)) {
+      stream.addEventListener(name, heard(handle));
+    }
+    stream.addEventListener("error", () => {
+      updates.lost();
+      paint();
+    });
+    return stream;
+  });
+  return updates;
+}

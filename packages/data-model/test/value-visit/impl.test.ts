@@ -3,14 +3,80 @@ import { expect } from "@std/expect";
 
 import {
   DefaultValueVisitor,
+  makeMapValueFunction,
+  makeMutableMapValueFunction,
   makeVisitValueFunction,
+  mapValue,
+  mutableMapValue,
   type VisitResult,
   visitValue,
 } from "@/value-visit";
 
-import { mainResult, Recorder } from "./Recorder.ts";
+import { mainResult, mapTo, Recorder } from "./Recorder.ts";
 
 describe("value-visit/impl", () => {
+  describe("mapValue()", () => {
+    it("maps the value with the given visitor", () => {
+      const rec = new Recorder();
+      rec.onPrimitive = () => mapTo("one");
+
+      expect(mapValue([1], rec)).toEqual(["one"]);
+      expect(rec.names).toEqual([
+        "value",
+        "array",
+        "visitingFabricArrayElement",
+        "value",
+        "primitive",
+        "mappedFabricArrayElement",
+      ]);
+    });
+
+    it("returns the value itself when the visitor changes nothing", () => {
+      const value = { a: [1] };
+
+      expect(mapValue(value, new Recorder())).toBe(value);
+    });
+  });
+
+  describe("makeMapValueFunction()", () => {
+    it("returns a function that maps with the bound visitor", () => {
+      const rec = new Recorder();
+      rec.onPrimitive = () => mapTo("one");
+      const map = makeMapValueFunction(rec);
+
+      expect(map([1])).toEqual(["one"]);
+      expect(map({ a: 2 })).toEqual({ a: "one" });
+    });
+  });
+
+  describe("mutableMapValue()", () => {
+    it("maps the value with the given visitor", () => {
+      const rec = new Recorder();
+      rec.onPrimitive = () => mapTo("one");
+
+      expect(mutableMapValue([1], rec)).toEqual(["one"]);
+      expect(rec.names).toEqual([
+        "value",
+        "array",
+        "visitingFabricArrayElement",
+        "value",
+        "primitive",
+        "mappedFabricArrayElement",
+      ]);
+    });
+  });
+
+  describe("makeMutableMapValueFunction()", () => {
+    it("returns a function that maps with the bound visitor", () => {
+      const rec = new Recorder();
+      rec.onPrimitive = () => mapTo("one");
+      const map = makeMutableMapValueFunction(rec);
+
+      expect(map([1])).toEqual(["one"]);
+      expect(map({ a: 2 })).toEqual({ a: "one" });
+    });
+  });
+
   describe("visitValue()", () => {
     it("visits the value with the given visitor", () => {
       const rec = new Recorder();
@@ -19,9 +85,9 @@ describe("value-visit/impl", () => {
       expect(rec.names).toEqual([
         "value",
         "array",
+        "visitingFabricArrayElement",
         "value",
         "primitive",
-        "visitedElement",
       ]);
     });
 
@@ -33,6 +99,10 @@ describe("value-visit/impl", () => {
       class FirstNumber extends DefaultValueVisitor<never, number> {
         override visitNumber(value: number): VisitResult<never, number> {
           return mainResult(value);
+        }
+
+        override visitUnhandledValue(): VisitResult<never, number> {
+          return undefined;
         }
       }
 

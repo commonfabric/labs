@@ -1904,24 +1904,26 @@ const VERBS: ReadonlyMap<string, VerbEntry> = new Map<string, VerbEntry>([
     summary: "Moves the external working location, and writes where it lands.",
     detail:
       "The operand is read on the external plane already, so a plain path " +
-      "moves\nthe location without naming a scheme — `xcd ../foo` and " +
-      "`xcd /tmp` both\nstay on the plane it stands on — and a whole " +
-      "schemed path moves it to\nanother: `xcd file:~/data`, " +
-      "`xcd https://example.test/a/b/`.\n\nA scheme is legal only on an " +
-      "absolute complete path. Nothing is opened\nhere, so a location that " +
-      "is not there is one this takes, and what the\nplane holds is the " +
-      "read's to find out.",
+      "moves\nthe location without naming a scheme: `xcd ../foo`, " +
+      "`xcd /tmp`. A schemed\npath may be written and must be absolute, " +
+      "as in `xcd file:~/data`.\n\nThe location stands on `file:` and " +
+      "nowhere else. A place is stood in by\nmoving through it, and " +
+      "`https:` answers a read rather than what stands\nunder a path, so " +
+      "there is nothing there for a move to land on.\n\nNothing is opened " +
+      "here, so a location that is not there is one this\ntakes, and what " +
+      "the plane holds is the read's to find out.",
   }],
   ["xpwd", {
     run: xpwd,
     arity: { operands: "none" },
     usage: "xpwd",
     summary: "Writes the external working location, whole.",
-    detail:
-      "It is the position `x:` roots a relative external path at, and it " +
-      "prints\nin the one spelling that reads back as the same place. The " +
-      "prompt carries\nthe fabric place and carries nothing about this " +
-      "one, which is what this is\nfor.",
+    detail: "Shuttle stands in two places at once: one in the fabric, which " +
+      "`pwd`\nprints, and one outside it, which is this. It prints in the " +
+      "one spelling\nthat reads back as the same place.\n\nThe prompt " +
+      "carries the fabric place and carries nothing about this one,\nwhich " +
+      "is what this is for. `where` prints it beside every other " +
+      "dimension;\nthis is the form to copy.",
   }],
 ]);
 

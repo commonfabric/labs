@@ -86,14 +86,16 @@ export class FabricEpochDay extends BaseFabricPrimitive
         typeTag: string,
         state: string,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         try {
           return new FabricEpochDay(bigintFromUnpaddedBase64url(state));
         } catch {
-          return new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `EpochDay: invalid base64: ${state}`,
+            mutable,
           );
         }
       }
