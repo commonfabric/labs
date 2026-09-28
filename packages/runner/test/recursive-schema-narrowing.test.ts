@@ -120,6 +120,58 @@ describe("recursive schema narrowing", () => {
       .toEqual({ type: "number" });
   });
 
+  for (const keyword of ["anyOf", "oneOf"] as const) {
+    it(`returns \`false\` beneath a stored recursive \`${keyword}\` in a document with local definitions`, () => {
+      const stored = externalizeSchema({
+        $ref: "#/$defs/R",
+        $defs: {
+          R: {
+            [keyword]: [
+              { type: "null" },
+              { $ref: "#/$defs/R", asCell: ["cell"] },
+            ],
+          },
+        },
+      });
+      const schema: JSONSchemaObj = {
+        type: "object",
+        properties: { node: stored },
+        $defs: { Other: { type: "string" } },
+      };
+
+      expect(C.schemaAtPath(schema, ["node", "foo"])).toBe(false);
+    });
+  }
+
+  it("returns the child of distinct cursors sharing one type list", () => {
+    const types = ["object", "null"] as const;
+    const schema: JSONSchemaObj = {
+      type: types,
+      anyOf: [{ type: types, properties: { a: { type: "number" } } }],
+    };
+
+    expect(C.schemaAtPath(schema, ["a"]))
+      .toEqual({ type: "number" });
+  });
+
+  it("returns a child through a recursive union beside a type list", () => {
+    const schema: JSONSchemaObj = {
+      $ref: "#/$defs/R",
+      $defs: {
+        R: {
+          type: ["object", "null"],
+          anyOf: [
+            { type: "object", properties: { v: { type: "number" } } },
+            { $ref: "#/$defs/R", asCell: ["cell"] },
+          ],
+        },
+      },
+    };
+
+    expect(C.schemaAtPath(schema, ["v"]))
+      .toEqual({ type: "number" });
+  });
+
   it("reads a shared branch list against each document's definitions", () => {
     const union: JSONSchemaObj = {
       anyOf: [{ $ref: "#/$defs/Leaf" }, { $ref: "#/$defs/Hop" }],
@@ -148,5 +200,29 @@ describe("recursive schema narrowing", () => {
 
     expect(C.schemaAtPath(source, ["value"]))
       .toEqual({ type: "number" });
+  });
+
+  it("keeps a target's unresolved name outside the referrer's definition scope", () => {
+    const target: JSONSchemaObj = {
+      type: "object",
+      properties: { value: { $ref: "#/$defs/Missing" } },
+    };
+    const hash = internSchemaAsTaggedHashString(target);
+    registerSchemaDocument(hash, target);
+    const schema: JSONSchemaObj = {
+      type: "object",
+      properties: {
+        node: { $ref: `cid:${hash}`, description: "external node" },
+      },
+      $defs: {
+        Missing: {
+          type: "object",
+          properties: { secret: { type: "string" } },
+        },
+      },
+    };
+
+    expect(() => C.schemaAtPath(schema, ["node", "value", "secret"]))
+      .toThrow("Failed to resolve $ref: #/$defs/Missing");
   });
 });

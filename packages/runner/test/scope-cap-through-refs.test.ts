@@ -187,6 +187,10 @@ describe("scope-cap-through-refs", () => {
             const form of [
               withMetadata,
               { ...withMetadata, $defs: {} },
+              {
+                ...withMetadata,
+                $defs: { Unused: { type: "string" } },
+              } satisfies JSONSchemaObj,
               internSchema(cloneSchemaMutable(withMetadata)),
               cloneSchemaMutable(stored),
             ]
@@ -218,6 +222,40 @@ describe("scope-cap-through-refs", () => {
         ...stored,
         description: "root description",
       })).toBe("user");
+    });
+
+    it("returns `undefined` while retaining the local definitions reached by ref-site metadata", () => {
+      const stored = externalizeSchema({
+        $ref: "#/$defs/R",
+        $defs: {
+          R: {
+            anyOf: [
+              { type: "null" },
+              { $ref: "#/$defs/R", asCell: ["cell"] },
+            ],
+          },
+        },
+      }) as JSONSchemaObj;
+      const schema: JSONSchemaObj = {
+        ...stored,
+        properties: { label: { $ref: "#/$defs/Label" } },
+        $defs: {
+          Label: { $ref: "#/$defs/Text" },
+          Text: { type: "string" },
+          Unused: { type: "number" },
+        },
+      };
+
+      expect(ContextualFlowControl.getAsCellFollowScopeCap(schema))
+        .toBeUndefined();
+      const resolved = ContextualFlowControl.resolveSchemaRefs(
+        schema,
+      ) as JSONSchemaObj;
+      expect(Object.keys(resolved.$defs!)).toHaveLength(2);
+      expect(ContextualFlowControl.resolveSchemaRefs(
+        resolved.properties!.label as JSONSchemaObj,
+        resolved,
+      )).toMatchObject({ type: "string" });
     });
 
     it("returns the entry scope declared by the definition a handle names", () => {

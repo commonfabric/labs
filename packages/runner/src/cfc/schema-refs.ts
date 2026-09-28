@@ -977,16 +977,17 @@ const resolveCfcSchemaRefsUncached = (
           : undefined;
         if (siblingRoot !== resolvedRoot) {
           // The `$ref` target and the ref-site siblings belong to different
-          // documents. Namespace even an empty ref-site definition map: its
-          // unresolved local refs must not begin resolving against target
-          // definitions merely because the two documents are flattened into
-          // one object.
+          // documents. Carry only the definitions the siblings reach, so
+          // unrelated definitions do not mint new scopes at recursive hops.
+          // Unresolved local refs must still be namespaced even when that
+          // closure is empty, to keep them from binding in the target.
           const targetDefinitions = isObjectOrArray(resolvedDefinitions)
             ? resolvedDefinitions
             : {};
-          const refSiteDefinitions = isObjectOrArray(siblingDefinitions)
-            ? siblingDefinitions
-            : {};
+          const refSiteDefinitions = selectReferencedCfcSchemaDefs(
+            siblings,
+            siblingDefinitions,
+          ) ?? {};
           scopedSiblings = namespaceLocalDefinitionScope(
             siblings,
             refSiteDefinitions,

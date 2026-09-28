@@ -90,8 +90,8 @@ interface SchemaPathExpansion {
   /** Definition map against which the branches resolve local references. */
   defs: JSONSchemaObj["$defs"];
 
-  /** The original type list or compound branch list, before arm expansion. */
-  branches: readonly unknown[];
+  /** The compound branch list being expanded. */
+  branches: readonly JSONSchema[];
 
   /** A co-declared `oneOf`, when `branches` is the `anyOf` list. */
   oneOf: JSONSchemaObj["oneOf"];
@@ -704,11 +704,9 @@ export class ContextualFlowControl {
           cursor,
           { $defs: defs },
         );
-        // Resolve schema refs can resolve to a fullSchema, in which case we
-        // need to replace our defs.
-        if (isObjectOrArray(cursor) && cursor.$defs) {
-          defs = cursor.$defs;
-        }
+        // The resolved view carries the definitions its local refs need.
+        // A view without a map must also clear the referrer's definitions.
+        defs = isObjectOrArray(cursor) ? cursor.$defs : undefined;
       }
       // A false schema spelled as an object — `{ not: true }`, which is how a
       // reference to a `false` definition resolves — admits nothing, and
@@ -747,14 +745,14 @@ export class ContextualFlowControl {
       ) {
         const armSchemas: JSONSchema[] = [];
         const cursorObject = cursor;
+        // A type-list arm replaces its type with a scalar. Only a compound
+        // can recur here without consuming a path segment.
         const branches = Array.isArray(cursorObject.type)
-          ? cursorObject.type
+          ? undefined
           : cursorObject.anyOf ?? cursorObject.oneOf;
         let nextExpansion = expanding;
         if (branches !== undefined) {
-          const oneOf = Array.isArray(cursorObject.type)
-            ? undefined
-            : cursorObject.oneOf;
+          const oneOf = cursorObject.oneOf;
           const remaining = path.length - index;
           for (let visit = expanding; visit; visit = visit.parent) {
             if (
