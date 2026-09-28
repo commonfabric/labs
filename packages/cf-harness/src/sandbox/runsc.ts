@@ -22,6 +22,7 @@ import {
   DenoProcessRunner,
   type ProcessHandle,
   type ProcessRunner,
+  type ProcessRunRequest,
   type ProcessRunResult,
 } from "./process-runner.ts";
 import {
@@ -33,6 +34,7 @@ import {
   type DockerRunscAdditionalMount,
   type DockerRunscAdditionalMountConfig,
   SANDBOX_SESSION_NAME_PATTERN,
+  SandboxSessionUnavailableError,
   type SandboxCommandRequest,
   type SandboxCommandResult,
   type SandboxRuntime,
@@ -55,17 +57,28 @@ import {
  *   directory is registered anywhere and nothing is keyed by container id.
  *   About a hundred milliseconds of sandbox boot per call.
  * - A session: one long-lived container per (run, session name), started on
- *   first use as an attached `runsc run` child of this process (so it dies
- *   with the harness, whatever else happens) and driven with `runsc exec`
- *   per call at about ten milliseconds. Sessions never share a sandbox: the
- *   container id carries the run id, and two names are two containers.
+ *   first use as an attached `runsc run` child of this process and driven
+ *   with `runsc exec` per call at about ten milliseconds. Its init reads a
+ *   stdin pipe this process holds open, so the container ends when the
+ *   harness does, a SIGKILL included. Sessions never share a sandbox: each
+ *   gets a container id minted here, fixed in width, so no id is a prefix
+ *   of another (runsc resolves abbreviated ids).
  *
- * A session call carries its own CFC invocation context in on fd 3 and gets
- * its own trusted result out on fd 4, exactly as a fresh call does: `runsc
- * exec --cfc-invocation-context-fd/--cfc-result-fd` seeds the exec'd
- * process from that context and reports its final taint at exit. The
- * session container itself starts with no context, so nothing leaks from one
- * call to the next through the container's own labels.
+ * Sessions and CFC. A session call carries its own invocation context in on
+ * fd 3 and gets a result out on fd 4, but that result is NOT a sound basis
+ * for enforcement, and sessions are refused in enforcing modes:
+ *
+ * - the result is a snapshot taken when the exec'd process exits, while the
+ *   call's output keeps draining and the session's background processes
+ *   keep running, so labelled data can reach the output after a public
+ *   result was computed (review, verified live);
+ * - processes in one container share its PID namespace and tmpfs, and
+ *   taint does not travel through metadata such as `/proc/<pid>/environ`
+ *   or directory names, so one call can read what another call learned;
+ * - once a tainted write reaches a sink in the container, every later
+ *   result in that session carries the taint.
+ *
+ * In observe mode the result is reported for what it is, an observation.
  */
 
 export const DEFAULT_RUNSC_BINARY = "runsc";
@@ -80,6 +93,15 @@ export const DEFAULT_RUNSC_SHELL = "/bin/sh";
  */
 export const DEFAULT_RUNSC_NETWORK_MODE: RunscNetworkMode = "sandbox";
 export const DEFAULT_RUNSC_FABRIC_MOUNT_PATH = "/fabric";
+/**
+ * Sessions live in memory: the rootfs overlay and `/tmp` of every session
+ * come out of the one VM (or host) every run on the machine shares. Both
+ * are bounded; a call past the session bound is refused recoverably.
+ */
+export const RUNSC_MAX_SESSIONS = 8;
+export const RUNSC_TMPFS_SIZE = "512m";
+/** How long a runsc control command (state, kill, delete) may take. */
+export const RUNSC_CONTROL_TIMEOUT_MS = 15_000;
 export const RUNSC_ROOTFS_ENV = "CF_HARNESS_SANDBOX_ROOTFS";
 export const RUNSC_CFC_POLICY_ENV = "CF_HARNESS_RUNSC_CFC_POLICY";
 export const RUNSC_BINARY_ENV = "CF_HARNESS_RUNSC_BINARY";
@@ -118,6 +140,11 @@ export interface RunscSandboxConfig {
   cfcPolicyPath?: string;
   /** Host directory for bundles, contexts and results; private to the run. */
   scratchDir: string;
+  /**
+   * Set when `scratchDir` is the default: its parent, which the runtime
+   * creates 0700 or verifies is this user's and private before first use.
+   */
+  scratchParentToVerify?: string;
   /** Distinguishes this run's sessions from every other run's. */
   runId: string;
   containerUser?: string;
@@ -168,7 +195,13 @@ const requireAbsoluteSandboxPath = (label: string, path: string): string => {
   if (!isAbsoluteSandboxPath(path)) {
     throw new Error(`${label} must be an absolute sandbox path: ${path}`);
   }
-  return normalizeSandboxRoot(path);
+  const normalized = normalizeSandboxRoot(path);
+  if (normalized === "/") {
+    // A root at `/` contains every path, so every containment check the
+    // tools make against the mounts would pass.
+    throw new Error(`${label} must not be the sandbox root: ${path}`);
+  }
+  return normalized;
 };
 
 const resolveAdditionalMounts = (
@@ -186,7 +219,9 @@ const resolveAdditionalMounts = (
           "fabric mount sandbox path",
           mount.sandboxPath ?? DEFAULT_RUNSC_FABRIC_MOUNT_PATH,
         ),
-        readOnly: mount.readOnly ?? true,
+        // The docker runtime's default, so `/fabric` is writable or not on
+        // both runtimes alike.
+        readOnly: mount.readOnly ?? false,
       };
     }
     if (mount.name.trim() === "") {
@@ -231,12 +266,26 @@ export const resolveRunscSandboxConfig = (
     workspaceMountPath,
     ...additionalMounts.map((m) => m.sandboxPath),
   ];
-  for (const a of roots) {
-    for (const b of roots) {
-      if (a !== b && isWithinRoot(a, b)) {
-        throw new Error(`sandbox roots overlap: ${a} contains ${b}`);
+  // By index, so two mounts at the very same path are an overlap too: the
+  // later bind would shadow the earlier one while the description still
+  // reported both.
+  for (let i = 0; i < roots.length; i += 1) {
+    for (let j = i + 1; j < roots.length; j += 1) {
+      const a = roots[i]!;
+      const b = roots[j]!;
+      if (isWithinRoot(a, b) || isWithinRoot(b, a)) {
+        throw new Error(`sandbox roots overlap: ${a} and ${b}`);
       }
     }
+  }
+  if (
+    options.containerUser !== undefined &&
+    !/^\d+(:\d+)?$/.test(options.containerUser)
+  ) {
+    // A name would reach the spec as NaN and run the container as root.
+    throw new Error(
+      `container user must be numeric uid or uid:gid: ${options.containerUser}`,
+    );
   }
   const runId = options.runId ?? crypto.randomUUID();
   const workspaceHostPath = requireAbsoluteHostPath(
@@ -252,11 +301,18 @@ export const resolveRunscSandboxConfig = (
   // The directory name carries a readable slice of the run id and a nonce:
   // the sanitizer truncates, and sibling subagent ids (`<uuid>.subagent.N`)
   // agree on their first 40 characters.
+  // The default's parent is a fixed name under the temp dir. Where that is
+  // shared (`/tmp` when TMPDIR is unset) another user could own the parent
+  // and swap a bundle under us, so the runtime verifies it before first use:
+  // see `verifyPrivateScratchParent`.
+  const defaultScratchParent = joinHostPath(
+    (Deno.env.get("TMPDIR") ?? "/tmp").replace(/\/+$/, "") || "/",
+    "cf-harness-runsc",
+  );
   const scratchDir = requireAbsoluteHostPath(
     "scratch directory",
     options.scratchDir ?? joinHostPath(
-      (Deno.env.get("TMPDIR") ?? "/tmp").replace(/\/+$/, "") || "/",
-      "cf-harness-runsc",
+      defaultScratchParent,
       `${sanitizeIdPart(runId).slice(0, 24)}-${
         crypto.randomUUID().slice(0, 8)
       }`,
@@ -266,20 +322,48 @@ export const resolveRunscSandboxConfig = (
   // at scratch (or the reverse) would put the files inside the sandbox's
   // reach while the strings say otherwise. Existing ancestors resolve; the
   // part that does not exist yet is put back unchanged.
-  const realScratch = realPathOfNearestExisting(scratchDir);
-  for (
-    const root of [
-      workspaceHostPath,
-      ...additionalMounts.map((m) => m.hostPath),
-    ]
-  ) {
-    const normalized = realPathOfNearestExisting(root).replace(/\/+$/, "");
-    if (
-      realScratch === normalized || realScratch.startsWith(normalized + "/")
-    ) {
+  // macOS volumes are case-insensitive by default: a path that differs only
+  // in case from a mount is inside it once created.
+  const comparable = (path: string): string => {
+    const real = realPathOfNearestExisting(path).replace(/\/+$/, "");
+    return platform === "darwin" ? real.toLowerCase() : real;
+  };
+  const inside = (path: string, root: string): boolean => {
+    const p = comparable(path);
+    const r = comparable(root);
+    return p === r || p.startsWith(r + "/");
+  };
+  const hostMounts = [
+    { hostPath: workspaceHostPath, readOnly: false },
+    ...additionalMounts.map((m) => ({
+      hostPath: m.hostPath,
+      readOnly: m.readOnly,
+    })),
+  ];
+  for (const mount of hostMounts) {
+    if (inside(scratchDir, mount.hostPath)) {
       throw new Error(
-        `sandbox scratch directory ${scratchDir} lies inside the mount ${root}: the CFC result and context files there would be writable from the sandbox`,
+        `sandbox scratch directory ${scratchDir} lies inside the mount ${mount.hostPath}: the CFC result and context files there would be writable from the sandbox`,
       );
+    }
+  }
+  // What decides how the sandbox is built and labelled must be out of the
+  // sandbox's reach as well: a policy inside a writable mount was rewritten
+  // from inside one container and the next read a labelled file as public
+  // (review, verified live). The rootfs and the runsc binary likewise.
+  const trusted: Array<[string, string | undefined]> = [
+    ["CFC policy", options.cfcPolicyPath],
+    ["sandbox rootfs", rootfs],
+    ["runsc binary", options.runscBinary],
+  ];
+  for (const [label, path] of trusted) {
+    if (path === undefined || !isAbsoluteHostPath(path)) continue;
+    for (const mount of hostMounts) {
+      if (!mount.readOnly && inside(path, mount.hostPath)) {
+        throw new Error(
+          `${label} ${path} lies inside the writable mount ${mount.hostPath}: the sandbox could rewrite it`,
+        );
+      }
     }
   }
   // Frozen, mounts included: the engine checks containment against this
@@ -305,6 +389,9 @@ export const resolveRunscSandboxConfig = (
       }
       : {}),
     scratchDir,
+    ...(options.scratchDir === undefined
+      ? { scratchParentToVerify: defaultScratchParent }
+      : {}),
     runId,
     ...(options.containerUser !== undefined
       ? { containerUser: options.containerUser }
@@ -339,11 +426,47 @@ interface OciMount {
 }
 
 interface SessionState {
+  name: string;
   containerId: string;
   bundleDir: string;
   handle?: ProcessHandle;
   ready: Promise<void>;
+  /** Set once the container's `runsc run` child has exited. */
+  ended: boolean;
 }
+
+/**
+ * The scratch parent must be this user's alone. Created 0700 when absent;
+ * when present it must be a real directory (not a symlink) owned by this
+ * user with no group or other access, or the run is refused: whoever owns
+ * the parent can swap a bundle or a result under the run.
+ */
+export const verifyPrivateScratchParent = async (
+  parent: string,
+): Promise<void> => {
+  await Deno.mkdir(dirnameHost(parent), { recursive: true }).catch(() =>
+    undefined
+  );
+  try {
+    await Deno.mkdir(parent, { mode: 0o700 });
+    return;
+  } catch (error) {
+    if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
+  }
+  const info = await Deno.lstat(parent);
+  const uid = Deno.uid();
+  if (
+    !info.isDirectory || info.isSymlink ||
+    (uid !== null && info.uid !== null && info.uid !== uid) ||
+    (info.mode !== null && (info.mode & 0o077) !== 0)
+  ) {
+    throw new Error(
+      `sandbox scratch parent ${parent} is not a private directory of this user (owner ${info.uid}, mode ${
+        info.mode === null ? "unknown" : (info.mode & 0o777).toString(8)
+      }); remove it or set TMPDIR to a private directory`,
+    );
+  }
+};
 
 /** Resolve when `promise` does or after `ms`, without leaving a timer behind. */
 const waitUpTo = (promise: Promise<unknown>, ms: number): Promise<void> => {
@@ -396,6 +519,17 @@ export class RunscSandboxRuntime implements SandboxRuntime {
   readonly config: RunscSandboxConfig;
   readonly #runner: ProcessRunner;
   readonly #sessions = new Map<string, SessionState>();
+  /**
+   * Sessions that ended underneath the run (their init died, a call in
+   * them timed out, they failed to start) and have not been named since.
+   * The next call that names one is told its state is lost, once; the call
+   * after that starts an empty session.
+   */
+  readonly #lostSessions = new Map<string, string>();
+  /** Fresh-call containers in flight, so `close()` can take them down. */
+  readonly #liveCalls = new Set<string>();
+  #sessionsStarted = 0;
+  #scratchVerified: Promise<void> | undefined;
   /**
    * What names this runtime's containers: a readable slice of the run id
    * plus a nonce minted here, so two runs whose ids share a prefix — or
@@ -511,6 +645,39 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     ];
   }
 
+  /** A call's working directory: inside the mounts, as the docker runtime requires. */
+  #cwd(cwd: string | undefined): string {
+    return cwd === undefined
+      ? this.defaultWorkingDirectory()
+      : this.resolvePath(cwd);
+  }
+
+  /**
+   * The docker runtime refuses, per call, an enforcing invocation context it
+   * has no transport for. The counterpart here: without a policy runsc runs
+   * with no `--cfc`, the context would be dropped and no result produced.
+   * The engine refuses such a run at its start, but a runtime constructed
+   * or injected directly has no engine in front of it.
+   */
+  #refusedForEnforcement(
+    request: SandboxCommandRequest,
+  ): SandboxCommandResult | undefined {
+    const mode = request.cfcInvocationContext?.cfcEnforcementMode;
+    if (
+      mode === undefined ||
+      cfcEnforcementStrictness(mode) < CFC_ENFORCING_STRICTNESS ||
+      this.config.cfcPolicyPath !== undefined
+    ) {
+      return undefined;
+    }
+    return {
+      stdout: "",
+      stderr:
+        `refusing to start a container under cfc enforcement mode '${mode}': the runsc sandbox has no CFC policy, so this invocation's CFC input labels would be dropped and no result produced\n`,
+      exitCode: 125,
+    };
+  }
+
   /** The OCI spec for a container running argv, as `config.json` text. */
   #spec(
     request: { argv: string[]; cwd?: string; env?: Record<string, string> },
@@ -551,7 +718,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         destination: "/tmp",
         type: "tmpfs",
         source: "tmpfs",
-        options: ["nosuid", "nodev", "mode=1777"],
+        options: ["nosuid", "nodev", "mode=1777", `size=${RUNSC_TMPFS_SIZE}`],
       },
       ...this.#mounts().map((m) => ({
         destination: m.sandboxPath,
@@ -577,7 +744,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         env: Object.entries(env).sort(([a], [b]) => a.localeCompare(b)).map((
           [k, v],
         ) => `${k}=${v}`),
-        cwd: request.cwd ?? this.defaultWorkingDirectory(),
+        cwd: this.#cwd(request.cwd),
       },
       root: { path: this.config.rootfs, readonly: false },
       hostname: "cf-harness",
@@ -595,7 +762,44 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     return `${JSON.stringify(spec, null, 2)}\n`;
   }
 
+  /** Before anything is written under scratch: see verifyPrivateScratchParent. */
+  #verifyScratch(): Promise<void> {
+    this.#scratchVerified ??= this.config.scratchParentToVerify === undefined
+      ? Promise.resolve()
+      : verifyPrivateScratchParent(this.config.scratchParentToVerify);
+    return this.#scratchVerified;
+  }
+
+  /** A runsc control command: bounded, and never throwing. */
+  async #control(args: string[]): Promise<ProcessRunResult | undefined> {
+    const request: ProcessRunRequest = {
+      command: this.config.runscBinary,
+      args: [...this.#globalArgs(), ...args],
+      timeoutMs: RUNSC_CONTROL_TIMEOUT_MS,
+    };
+    try {
+      return await this.#runner.run(request);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Take a container down and make sure it is gone: `delete --force`, and
+   * when runsc still knows the container afterwards, kill and delete once
+   * more. An ignored failure here is a sandbox left running.
+   */
+  async #destroyContainer(id: string): Promise<void> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await this.#control(["delete", "--force", id]);
+      const state = await this.#control(["state", id]);
+      if (state === undefined || state.exitCode !== 0) return;
+      await this.#control(["kill", "--all", id, "KILL"]);
+    }
+  }
+
   async #writeBundle(id: string, specText: string): Promise<string> {
+    await this.#verifyScratch();
     const dir = joinHostPath(this.config.scratchDir, "bundles", id);
     await Deno.mkdir(dir, { recursive: true, mode: 0o700 });
     await Deno.writeTextFile(joinHostPath(dir, "config.json"), specText);
@@ -613,7 +817,15 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     request: SandboxCommandRequest,
   ): Promise<SandboxCommandResult> {
     const callId = `c-${this.#runTag}-${crypto.randomUUID().slice(0, 8)}`;
-    const bundleDir = await this.#writeBundle(callId, this.#spec(request));
+    // Validated before anything is written or registered.
+    const specText = this.#spec(request);
+    this.#liveCalls.add(callId);
+    const bundleDir = await this.#writeBundle(callId, specText).catch(
+      (error) => {
+        this.#liveCalls.delete(callId);
+        throw error;
+      },
+    );
     const contextPath = joinHostPath(bundleDir, "cfc-invocation-context.json");
     const resultPath = joinHostPath(bundleDir, "cfc-result.json");
     const withContext = request.cfcInvocationContext !== undefined;
@@ -661,10 +873,8 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       } finally {
         // A timed-out or killed run leaves the container registered; make
         // sure the sandbox is gone before the bundle it was started from.
-        await this.#runner.run({
-          command: this.config.runscBinary,
-          args: [...this.#globalArgs(), "delete", "--force", callId],
-        }).catch(() => undefined);
+        await this.#destroyContainer(callId);
+        this.#liveCalls.delete(callId);
       }
       const commandResult: SandboxCommandResult = {
         stdout: result.stdout,
@@ -695,70 +905,155 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     }
   }
 
-  #sessionContainerId(session: string): string {
-    if (!SANDBOX_SESSION_NAME_PATTERN.test(session)) {
-      throw new Error(
-        `invalid sandbox session name: ${JSON.stringify(session)}`,
+  /**
+   * A container id for a new session. Minted, not derived from the name:
+   * runsc resolves abbreviated ids, so with the name in the id a session
+   * `build` ran inside the container of `build2`, and `a` became ambiguous
+   * once `ab` existed (review, verified live). A fixed-width counter under
+   * this runtime's tag makes no id a prefix of another, differs for names
+   * that differ only in case, and is never reused, so a session started
+   * again after it ended does not meet what the old one left behind.
+   */
+  #mintSessionContainerId(): string {
+    this.#sessionsStarted += 1;
+    return `s-${this.#runTag}-${
+      String(this.#sessionsStarted).padStart(4, "0")
+    }`;
+  }
+
+  /** Whether the session's container is there and running, asked of runsc. */
+  async #containerRunning(state: SessionState): Promise<boolean> {
+    if (state.ended) return false;
+    const st = await this.#control(["state", state.containerId]);
+    return st !== undefined && st.exitCode === 0 &&
+      /"status":\s*"running"/.test(st.stdout);
+  }
+
+  /** Forget a session and take down everything it held. */
+  async #dropSession(state: SessionState, lostBecause?: string): Promise<void> {
+    if (this.#sessions.get(state.name) === state) {
+      this.#sessions.delete(state.name);
+      if (lostBecause !== undefined) {
+        this.#lostSessions.set(state.name, lostBecause);
+      }
+    }
+    state.handle?.kill("SIGKILL");
+    await this.#destroyContainer(state.containerId);
+    await waitUpTo(state.handle?.exited ?? Promise.resolve(), 5_000);
+    if (state.bundleDir !== "") {
+      await Deno.remove(state.bundleDir, { recursive: true }).catch(() =>
+        undefined
       );
     }
-    return `s-${this.#runTag}-${session}`;
   }
 
   /**
-   * Start a session's container on first use: an attached `runsc run` whose
-   * init just waits, kept as a child of this process. Ready once `runsc
-   * state` says running.
+   * Start a session's container on first use: an attached `runsc run` kept
+   * as a child of this process, whose init reads the stdin pipe this
+   * process holds. Ready once `runsc state` says running.
    */
   #ensureSession(session: string): SessionState {
+    if (!SANDBOX_SESSION_NAME_PATTERN.test(session)) {
+      throw new SandboxSessionUnavailableError(
+        `invalid sandbox session name ${
+          JSON.stringify(session)
+        }: use 1 to 32 letters, digits, '_', '.' or '-', starting with a letter or digit`,
+      );
+    }
+    const lost = this.#lostSessions.get(session);
+    if (lost !== undefined) {
+      // Told once. The model must not carry on as if the files and
+      // processes it left in the session were still there.
+      this.#lostSessions.delete(session);
+      throw new SandboxSessionUnavailableError(
+        `sandbox session "${session}" ended (${lost}) and its state is lost; name it again to start an empty session`,
+      );
+    }
     const existing = this.#sessions.get(session);
     if (existing !== undefined) return existing;
     if (this.#closed) {
       throw new Error("sandbox runtime is closed");
     }
-    const containerId = this.#sessionContainerId(session);
+    if (this.#sessions.size >= RUNSC_MAX_SESSIONS) {
+      throw new SandboxSessionUnavailableError(
+        `this run already holds ${RUNSC_MAX_SESSIONS} sandbox sessions (${
+          [...this.#sessions.keys()].join(", ")
+        }); reuse one of them, or run without a session`,
+      );
+    }
     const state: SessionState = {
-      containerId,
+      name: session,
+      containerId: this.#mintSessionContainerId(),
       bundleDir: "",
       ready: Promise.resolve(),
+      ended: false,
     };
-    state.ready = (async () => {
+    const start = async (): Promise<void> => {
       const spec = this.#spec({
-        argv: [this.config.shellPath, "-c", "while :; do sleep 3600; done"],
+        // Waits on stdin, which this process holds open: EOF is the harness
+        // going away, and the container goes with it.
+        argv: [this.config.shellPath, "-c", "while read -r _; do :; done"],
         cwd: this.defaultWorkingDirectory(),
       });
-      state.bundleDir = await this.#writeBundle(containerId, spec);
+      state.bundleDir = await this.#writeBundle(state.containerId, spec);
       const spawn = this.#runner.spawn;
       if (spawn === undefined) {
         throw new Error(
           "process runner cannot keep a session alive (no spawn)",
         );
       }
-      state.handle = spawn.call(this.#runner, {
+      const handle = spawn.call(this.#runner, {
         command: this.config.runscBinary,
         args: [
           ...this.#globalArgs(),
           "run",
           "--bundle",
           state.bundleDir,
-          containerId,
+          state.containerId,
         ],
+        stdin: "held",
+      });
+      state.handle = handle;
+      let exitCode: number | undefined;
+      handle.exited.then((status) => {
+        exitCode = status.exitCode;
+        state.ended = true;
+      }).catch(() => {
+        state.ended = true;
       });
       const deadline = Date.now() + this.config.sessionStartTimeoutMs;
       while (Date.now() < deadline) {
-        const st = await this.#runner.run({
-          command: this.config.runscBinary,
-          args: [...this.#globalArgs(), "state", containerId],
-        });
-        if (st.exitCode === 0 && /"status":\s*"running"/.test(st.stdout)) {
+        if (state.ended) {
+          throw new Error(
+            `its container exited with code ${exitCode ?? "unknown"} before it was running`,
+          );
+        }
+        const st = await this.#control(["state", state.containerId]);
+        if (
+          st !== undefined && st.exitCode === 0 &&
+          /"status":\s*"running"/.test(st.stdout)
+        ) {
           return;
         }
-        await new Promise((r) => setTimeout(r, 25));
+        await waitUpTo(handle.exited, 25);
       }
-      state.handle.kill("SIGKILL");
       throw new Error(
-        `sandbox session "${session}" did not start within ${this.config.sessionStartTimeoutMs}ms`,
+        `it did not start within ${this.config.sessionStartTimeoutMs}ms`,
       );
-    })();
+    };
+    state.ready = start().catch(async (error) => {
+      // A start that failed is not cached: the entry goes, so does whatever
+      // the attempt created, and the refusal is one the model can act on.
+      await this.#dropSession(state);
+      throw new SandboxSessionUnavailableError(
+        `sandbox session "${session}" could not start: ${
+          error instanceof Error ? error.message : String(error)
+        }; run without a session, or try again`,
+      );
+    });
+    // Awaited by every caller; marked handled so a session nobody awaits
+    // (a close racing the start) is not an unhandled rejection.
+    state.ready.catch(() => undefined);
     this.#sessions.set(session, state);
     return state;
   }
@@ -767,8 +1062,29 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     request: SandboxCommandRequest,
     session: string,
   ): Promise<SandboxCommandResult> {
+    const mode = request.cfcInvocationContext?.cfcEnforcementMode;
+    if (
+      mode !== undefined &&
+      cfcEnforcementStrictness(mode) >= CFC_ENFORCING_STRICTNESS
+    ) {
+      // See the header: a session's result cannot vouch for what reaches
+      // the call's output, so an enforcing run gets no session at all.
+      throw new SandboxSessionUnavailableError(
+        `sandbox sessions are not available under cfc enforcement mode '${mode}': a session's CFC result cannot vouch for everything that reaches its output; run this command without a session`,
+      );
+    }
+    const cwd = this.#cwd(request.cwd);
     const state = this.#ensureSession(session);
     await state.ready;
+    if (this.#closed) {
+      throw new Error("sandbox runtime is closed");
+    }
+    if (state.ended) {
+      await this.#dropSession(state);
+      throw new SandboxSessionUnavailableError(
+        `sandbox session "${session}" ended (its container exited) and its state is lost; name it again to start an empty session`,
+      );
+    }
     // Per call, the same transport a fresh container gets: the context on
     // fd 3, the result on fd 4, both private files under scratch that go
     // when the call does.
@@ -792,7 +1108,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         ...(withContext ? ["--cfc-invocation-context-fd", "3"] : []),
         ...(withResult ? ["--cfc-result-fd", "4"] : []),
         "--cwd",
-        request.cwd ?? this.defaultWorkingDirectory(),
+        cwd,
         ...Object.entries(request.env ?? {})
           .sort(([a], [b]) => a.localeCompare(b))
           .flatMap(([k, v]) => ["--env", `${k}=${v}`]),
@@ -802,20 +1118,51 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         state.containerId,
         ...request.argv,
       ];
-      const result = await this.#runner.run({
-        command: "/bin/sh",
-        args: [
-          "-c",
-          'exec 3<"$1" 4>"$2"; shift 2; exec "$@"',
-          "sh",
-          withContext ? contextPath : "/dev/null",
-          withResult ? resultPath : "/dev/null",
-          this.config.runscBinary,
-          ...runscArgs,
-        ],
-        stdinText: request.stdinText,
-        timeoutMs: request.timeoutMs,
-      });
+      let result: ProcessRunResult;
+      try {
+        result = await this.#runner.run({
+          command: "/bin/sh",
+          args: [
+            "-c",
+            'exec 3<"$1" 4>"$2"; shift 2; exec "$@"',
+            "sh",
+            withContext ? contextPath : "/dev/null",
+            withResult ? resultPath : "/dev/null",
+            this.config.runscBinary,
+            ...runscArgs,
+          ],
+          stdinText: request.stdinText,
+          timeoutMs: request.timeoutMs,
+        });
+      } catch (error) {
+        // A timeout stops the host side of the exec only: the command would
+        // keep running in the session, with the workspace and the network,
+        // and a retry would stack another on top (review, verified live).
+        // There is no handle on the one process, so the session goes.
+        await this.#dropSession(
+          state,
+          error instanceof Error && error.name === "ProcessTimeoutError"
+            ? "a command in it timed out and was stopped with the session"
+            : "a command in it could not be run",
+        );
+        throw error;
+      }
+      if (result.exitCode !== 0 && !(await this.#containerRunning(state))) {
+        // runsc answers 128 with nothing on stdout when it could not reach
+        // the container at all: the command never ran, the session was
+        // already gone. Anything else is a command that took the container
+        // down with it, whose own result stands.
+        const neverRan = result.exitCode === 128 && result.stdout === "";
+        await this.#dropSession(
+          state,
+          neverRan ? undefined : "its container exited",
+        );
+        if (neverRan) {
+          throw new SandboxSessionUnavailableError(
+            `sandbox session "${session}" ended (its container exited) and its state is lost; name it again to start an empty session`,
+          );
+        }
+      }
       const commandResult: SandboxCommandResult = {
         stdout: result.stdout,
         stderr: result.stderr,
@@ -849,14 +1196,16 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     }
   }
 
-  run(request: SandboxCommandRequest): Promise<SandboxCommandResult> {
+  async run(request: SandboxCommandRequest): Promise<SandboxCommandResult> {
     if (this.#closed) {
-      return Promise.reject(new Error("sandbox runtime is closed"));
+      throw new Error("sandbox runtime is closed");
     }
+    const refusal = this.#refusedForEnforcement(request);
+    if (refusal !== undefined) return refusal;
     if (request.session !== undefined) {
-      return this.#runInSession(request, request.session);
+      return await this.#runInSession(request, request.session);
     }
-    return this.#runOnce(request);
+    return await this.#runOnce(request);
   }
 
   runShell(request: SandboxShellRequest): Promise<SandboxCommandResult> {
@@ -882,28 +1231,26 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     return [...this.#sessions.values()].map((s) => s.containerId);
   }
 
-  /** Stop every session: kill, delete, remove the bundle. Idempotent. */
+  /**
+   * Stop everything this runtime started: every session, and every fresh
+   * call still in flight (a call racing the close, or one whose run was
+   * interrupted). Idempotent.
+   */
   async close(): Promise<void> {
     this.#closed = true;
     const sessions = [...this.#sessions.values()];
     this.#sessions.clear();
+    this.#lostSessions.clear();
     for (const state of sessions) {
       await state.ready.catch(() => undefined);
-      await this.#runner.run({
-        command: this.config.runscBinary,
-        args: [...this.#globalArgs(), "kill", state.containerId, "KILL"],
-      }).catch(() => undefined);
-      state.handle?.kill("SIGTERM");
-      await waitUpTo(state.handle?.exited ?? Promise.resolve(), 5_000);
-      await this.#runner.run({
-        command: this.config.runscBinary,
-        args: [...this.#globalArgs(), "delete", "--force", state.containerId],
-      }).catch(() => undefined);
-      if (state.bundleDir !== "") {
-        await Deno.remove(state.bundleDir, { recursive: true }).catch(() =>
-          undefined
-        );
-      }
+      await this.#dropSession(state);
+    }
+    for (const callId of [...this.#liveCalls]) {
+      await this.#destroyContainer(callId);
+      await Deno.remove(
+        joinHostPath(this.config.scratchDir, "bundles", callId),
+        { recursive: true },
+      ).catch(() => undefined);
     }
     // The scratch tree is this run's; take it down when nothing is left in
     // it (non-recursive on purpose: anything still there is evidence).
