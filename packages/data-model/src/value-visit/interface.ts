@@ -30,6 +30,9 @@ export type MainResultForm<ResultType> = {
 /**
  * A `mapTo` form. `value` is a value in the domain of `ResultType` which is to
  * be substituted in place of the visited value in the structural-map result.
+ * The visitor engine places `value` as given, frozen or not, whether or not the
+ * operation freezes the structure it builds: it is the visitor's statement of
+ * what it wants in that position.
  */
 export type MapToForm<ResultType> = {
   readonly type: "mapTo";

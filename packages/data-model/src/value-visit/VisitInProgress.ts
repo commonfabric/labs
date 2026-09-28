@@ -489,38 +489,27 @@ export class VisitInProgress<
         return result;
       }
 
-      // This is a little less than ideal, because in the case of a mapping, the
-      // `mapTo` we might get back is for the _state_ and not the
-      // `FabricInstance`. We do this so that `#makeRecurseResult()` doesn't
-      // have to have a special case for `FabricInstance` (because we don't want
-      // to construct a new `FabricInstance` unless we have to). In the end,
-      // it's one small additional allocation during a procedure which involves
-      // a _lot_ of allocations, so we accept the cost.
-      const recurseResult = this.#makeRecurseResult(
-        state,
-        mappedTo,
-        !Object.is(mappedTo, state),
-      );
-
-      // We determine "changedness" for `FabricInstance` by considering the
-      // mutability of the instance in addition to whether the state actually
-      // got changed from the mapping. This (former part) is to guarantee that
-      // a mutable instance whose state was unchanged won't get returned in an
-      // operation that is supposed to produce frozen results.
+      // Under freezing, a frozen instance whose state came back as itself is
+      // the result as it stands. Anything else is rebuilt from the mapped
+      // state, as given: a container the walk recursed into has already been
+      // built with the frozenness this operation calls for, and a value a
+      // visitor supplied is the visitor's, so neither is the walk's to freeze.
+      // The rebuilt instance is left as its codec's `decode()` returned it,
+      // having been asked for the frozenness this operation calls for.
       if (
-        (recurseResult === undefined) &&
-        Object.isFrozen(instance) &&
-        this.#freezeMappedContainers
+        this.#freezeMappedContainers && Object.isFrozen(instance) &&
+        Object.is(mappedTo, state)
       ) {
         return undefined;
-      } else {
-        const instanceResult = this.#reconstructFabricInstance(
-          instance,
-          codec,
-          recurseResult ? recurseResult.value : mappedTo,
-        );
-        return this.#makeRecurseResult(instance, instanceResult, true);
       }
+
+      const instanceResult = this.#reconstructFabricInstance(
+        instance,
+        codec,
+        mappedTo,
+      );
+
+      return { type: "mapTo", value: this.#assertResultType(instanceResult) };
     } finally {
       this.#stack.popExpect(instance);
     }

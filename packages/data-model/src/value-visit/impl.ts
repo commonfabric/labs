@@ -9,12 +9,15 @@ import { VisitInProgress } from "./VisitInProgress.ts";
 
 /**
  * Performs a one-off structural-map of a value, with the given visitor, with
- * all resulting mapped containers frozen.
+ * the structure it builds frozen: every container the map builds, and every
+ * `FabricInstance` it rebuilds, is frozen.
  *
- * In cases where a visited value or subvalue is itself frozen _and_ the
- * structural-map operation resulted in no change to the value (that is, it
- * mapped to itself), then the result of this operation includes those unchanged
- * values directly (as opposed to including copies of them).
+ * What the map places into that structure without building it is left as it
+ * is, frozen or not. A visited value or subvalue which is itself frozen _and_
+ * which the operation left unchanged (that is, which mapped to itself) is
+ * included directly rather than as a copy, and so is a value a visitor supplies
+ * with a `mapTo`, which is the visitor's statement of what it wants in that
+ * position.
  *
  * See `visitValue()` in re `value` validation.
  */
@@ -31,11 +34,13 @@ export function mapValue<PlusType, ResultType>(
 
 /**
  * Performs a one-off structural-map of a value, with the given visitor, with
- * all resulting mapped containers left mutable.
+ * the structure it builds left mutable: every container the map builds, and
+ * every `FabricInstance` it rebuilds, is mutable.
  *
- * The result of this operation always includes copies of containers encountered
- * during the structural map, even if those containers were not changed by the
- * map (that is, they mapped to themselves).
+ * The map copies every container it recurses into, even one it leaves
+ * unchanged (that is, which mapped to itself). A value a visitor supplies with
+ * a `mapTo` is included as given, frozen or not, being the visitor's statement
+ * of what it wants in that position.
  *
  * See `visitValue()` in re `value` validation.
  */

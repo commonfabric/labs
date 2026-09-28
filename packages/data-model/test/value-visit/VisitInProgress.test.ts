@@ -1530,6 +1530,66 @@ describe("VisitInProgress", () => {
             expect(Object.isFrozen(result.state)).toBe(true);
             expect(Object.isFrozen(state)).toBe(false);
           });
+
+          it("places a container the visitor supplies through `mapTo` as given", () => {
+            const supplied = { b: 2 };
+            const rec = new Recorder();
+            rec.onPrimitive = () => mapTo(supplied);
+            const result = map([1], rec) as unknown[];
+
+            expect(Object.isFrozen(result)).toBe(true);
+            expect(result[0]).toBe(supplied);
+            expect(Object.isFrozen(supplied)).toBe(false);
+          });
+
+          it("rebuilds an unfrozen instance around a state the visitor maps to itself, leaving that state as given", () => {
+            const state = { a: 1 };
+            const original = new UnknownValue("Test@1", state);
+            const rec = new Recorder();
+            rec.onPlainObject = (v) => mapTo(v);
+            const result = map(original, rec) as UnknownValue;
+
+            expect(result).not.toBe(original);
+            expect(Object.isFrozen(result)).toBe(true);
+            expect(result.state).toBe(state);
+            expect(Object.isFrozen(state)).toBe(false);
+          });
+
+          it("returns a frozen instance as itself when the visitor maps its state to itself", () => {
+            const state = { a: 1 };
+            const original = Object.freeze(new UnknownValue("Test@1", state));
+            const rec = new Recorder();
+            rec.onPlainObject = (v) => mapTo(v);
+
+            expect(map(original, rec)).toBe(original);
+            expect(Object.isFrozen(state)).toBe(false);
+          });
+
+          it("places a state the visitor supplies through `mapTo` as given", () => {
+            const supplied = { b: 2 };
+            const rec = new Recorder();
+            rec.onPlainObject = () => mapTo(supplied);
+            const result = map(
+              new UnknownValue("Test@1", { a: 1 }),
+              rec,
+            ) as UnknownValue;
+
+            expect(result.state).toBe(supplied);
+            expect(Object.isFrozen(supplied)).toBe(false);
+          });
+
+          it("returns the instance its codec's `decode()` returns, as it is", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = (v) => (v === "boom") ? mapTo("bang") : undefined;
+            const decoded = error("decoded");
+            const instance = errorWithCodec("boom", {
+              canDecode: () => true,
+              decode: () => decoded,
+            });
+
+            expect(map(instance, rec)).toBe(decoded);
+            expect(Object.isFrozen(decoded)).toBe(false);
+          });
         });
 
         describe("without freezing", () => {
