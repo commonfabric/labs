@@ -151,6 +151,18 @@ describe("external", () => {
         .toThrow("stands on");
     });
 
+    it("refuses a location holding an escape no path can be made of", () => {
+      // `%FF` is well formed as an escape and names no character, so a URL
+      // takes it and a path cannot be read back from it. Every move from a
+      // location reads it as a path, so one taken here would fail on the
+      // next line instead, naming a token the person did not type.
+
+      const location = at("file:///work/");
+      expect(refusal(location.xcd("file:///%FF"))).toContain("spells no place");
+      expect(location.render()).toBe("file:///work/");
+      expect(location.xcd("child").kind).toBe("external");
+    });
+
     it("refuses a `file:` token naming a host, which is another machine", () => {
       // The host would be dropped in silence by the conversion to a path,
       // leaving a location that looks like the one asked for and is not.

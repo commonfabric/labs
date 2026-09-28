@@ -228,12 +228,12 @@ export class ExternalLocation {
    * `undefined`, and every `~` it is handed is refused rather than expanded
    * against a guess.
    *
-   * @throws Error if `at` is not on {@link FILE_SCHEME}. Every move below
-   * reads the location as a path, so a location on another plane would not
-   * be refused — it would be resolved against nonsense. `xcd` turns such a
-   * scheme down at the door, which leaves only a caller building one
-   * directly, and that is a mistake in this process rather than in a line
-   * somebody typed.
+   * @throws Error if `at` is not on {@link FILE_SCHEME}, or holds an escape
+   * no path can be made of. Every move below reads the location as a path,
+   * so one that cannot be read that way would fail on a later line naming a
+   * token the person did not type. `xcd` turns both down at the door, which
+   * leaves only a caller building one directly, and that is a mistake in
+   * this process rather than in a line somebody typed.
    */
   constructor(at: URL, home: string | undefined) {
     if (at.protocol !== `${FILE_SCHEME}:`) {
@@ -242,6 +242,10 @@ export class ExternalLocation {
           `\`${at.protocol}\` is not one.`,
       );
     }
+    // Throws where `at` holds an escape no path can be made of, which is the
+    // same invariant read the same way: every move below converts the
+    // location back to a path.
+    fromFileUrl(at);
     this.#at = asContainer(at);
     this.#home = home;
   }
@@ -324,9 +328,16 @@ export class ExternalLocation {
     if (rest.startsWith("//")) {
       try {
         const at = new URL(`${scheme}:${rest}`);
-        return at.host === ""
-          ? { kind: "external", at }
-          : { kind: "refused", reason: NAMES_ANOTHER_MACHINE };
+        if (at.host !== "") {
+          return { kind: "refused", reason: NAMES_ANOTHER_MACHINE };
+        }
+        // Read back as a path before it is taken. A URL may hold an escape
+        // no path can be made of — `%FF` is well formed as an escape and
+        // names no character — and every move from this location reads it
+        // as a path, so one taken here would fail on the next line instead,
+        // naming a token the person did not type.
+        fromFileUrl(at);
+        return { kind: "external", at };
       } catch {
         return { kind: "refused", reason: spellsNoPlace(token) };
       }

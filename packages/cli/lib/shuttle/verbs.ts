@@ -1919,10 +1919,11 @@ const VERBS: ReadonlyMap<string, VerbEntry> = new Map<string, VerbEntry>([
     usage: "xpwd",
     summary: "Writes the external working location, whole.",
     detail:
-      "It is the position `x:` roots a relative external path at, and it " +
-      "prints\nin the one spelling that reads back as the same place. The " +
-      "prompt carries\nthe fabric place and carries nothing about this " +
-      "one, which is what this is\nfor.",
+      "It is the position a relative external operand is read against — " +
+      "`file:out.json`\nnames a file beside it, where `file:/tmp/out.json` " +
+      "names one whole — and it\nprints in the one spelling that reads " +
+      "back as the same place.\n\nThe prompt carries the fabric place and " +
+      "carries nothing about this one,\nwhich is what this is for.",
   }],
 ]);
 
