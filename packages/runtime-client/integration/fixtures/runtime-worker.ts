@@ -9,4 +9,5 @@
 import { holdWorkerExitLock } from "../worker-exit-lock.ts";
 
 holdWorkerExitLock(import.meta.url);
+// deno-lint-ignore cf-imports/no-inline-module-import -- deferred on purpose: the lock must be held before the runtime loads
 await import("../../src/backends/web-worker/index.ts");
