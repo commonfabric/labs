@@ -127,37 +127,30 @@ function holdsTypeQuery(
 }
 
 /**
- * `schema` as a text two schemas share where they accept the same values by
- * the same structure: object keys in order, and an `anyOf` flattened into the
- * `anyOf`s it holds, each member once, in order. A union read by its written
- * members nests where the checker's would not (`(T | undefined) | undefined`).
+ * A node's written form (`SchemaGenerator.#writtenForm()`): a text, or a union
+ * or intersection of forms, which `writtenFormText()` flattens.
  */
-function canonicalSchemaText(schema: unknown): string {
-  return JSON.stringify(canonicalSchema(schema));
-}
+type WrittenForm =
+  | string
+  | { readonly op: "|" | "&"; readonly members: readonly WrittenForm[] };
 
-/** Helper for {@link canonicalSchemaText}. */
-function canonicalSchema(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalSchema);
-  if (!isObjectOrArray(value)) return value;
-  const source = value as Record<string, unknown>;
-  const canonical: Record<string, unknown> = Object.create(null);
-  for (const key of Object.keys(source).sort()) {
-    canonical[key] = canonicalSchema(source[key]);
-  }
-  if (Array.isArray(canonical.anyOf)) {
-    const members = canonical.anyOf.flatMap((member) =>
-      isObjectOrArray(member) && !Array.isArray(member) &&
-        Object.keys(member).length === 1 &&
-        Array.isArray((member as Record<string, unknown>).anyOf)
-        ? (member as { anyOf: unknown[] }).anyOf
-        : [member]
-    );
-    canonical.anyOf = [
-      ...new Set(members.map((member) => JSON.stringify(member))),
-    ].sort().map((text) => JSON.parse(text));
-  }
-  return canonical;
+/** How deep a written form follows its node and the arguments it names. */
+const MAX_WRITTEN_FORM_DEPTH = 64;
+
+/**
+ * `form` as text: a union or an intersection as its members, those of a
+ * member of the same kind among them, each once, in order, since `A | B` and
+ * `B | (A | A)` are one type.
+ */
+function writtenFormText(form: WrittenForm): string {
+  if (typeof form === "string") return form;
+  const flat = (of: WrittenForm): WrittenForm[] =>
+    typeof of !== "string" && of.op === form.op
+      ? of.members.flatMap(flat)
+      : [of];
+  const members = [...new Set(form.members.flatMap(flat).map(writtenFormText))]
+    .sort();
+  return `${form.op}(${members.join(",")})`;
 }
 
 /** Whether a schema is an object schema the alias rules can rewrite. */
@@ -1155,8 +1148,8 @@ export class SchemaGenerator {
    */
   #chainReadings: WeakMap<object, ChainReading[]> = new WeakMap();
 
-  /** Each chain reading's arguments reading (`#argumentsReadingOf()`). */
-  #argumentReadings: WeakMap<ChainReading, string | undefined> = new WeakMap();
+  /** Each chain reading's arguments form (`#argumentsFormOf()`). */
+  #argumentForms: WeakMap<ChainReading, string | undefined> = new WeakMap();
 
   /** Identities of the types and declarations a binding key names. */
   #bindingIds: WeakMap<object, number> = new WeakMap();
@@ -1537,16 +1530,15 @@ export class SchemaGenerator {
    * with `context` settles to, where the checker instantiates `instantiated`.
    * One whose instantiation is a different type assignable both ways with
    * this one (`Sec<Readonly<Readonly<X>>>` and `Sec<Readonly<X>>`) is the same
-   * reading up to assignability. So is one whose arguments read as this
-   * one's do (`#argumentsReading()`), which settles a recursion wherever the
-   * reading has lost the instantiation at its position: a bound parameter is
-   * read only as its argument is, so two readings whose arguments read alike
-   * read alike. `Nest<T[]>` inside `Nest<T>` reads `T[]` differently at each
-   * step, and settles to none. Where the arguments of any of these readings
-   * hold a `typeof` query, none settles: a writer binding is an identity that
-   * neither a type nor a schema shows, and two readings with different
-   * writers can have one type. That recursion ends where it meets the same
-   * reading again, which `#formatType` finds.
+   * reading up to assignability. So is one whose type arguments denote the
+   * same types as this one's (`#argumentsForm()`), which settles a recursion
+   * wherever the reading has lost the instantiation at its position: the
+   * same reference over the same types is the same reading. `Nest<T[]>`
+   * inside `Nest<T>` denotes a deeper array at each step, and settles to
+   * none. Where the arguments of any of these readings hold a `typeof` query,
+   * none settles: a writer binding is an identity that no type shows, and
+   * two readings with different writers can have one type. That recursion
+   * ends where it meets the same reading again, which `#formatType` finds.
    */
   #settledReading(
     reference: ts.TypeNode,
@@ -1577,99 +1569,184 @@ export class SchemaGenerator {
         checker.isTypeAssignableTo(instantiated, reading.instantiated)
       );
     if (byInstantiation) return byInstantiation;
-    const arguments_ = this.#argumentsReading(reference, context);
-    return arguments_ === undefined
+    const form = this.#argumentsForm(reference, context);
+    return form === undefined
       ? undefined
-      : again.find((reading) =>
-        this.#argumentsReadingOf(reading) === arguments_
-      );
+      : again.find((reading) => this.#argumentsFormOf(reading) === form);
   }
 
   /**
-   * Helper for {@link #settledReading}: the arguments reading of `reading`,
-   * read once for the reading's lifetime.
+   * Helper for {@link #settledReading}: the arguments form of `reading`, taken
+   * once for the reading's lifetime.
    */
-  #argumentsReadingOf(reading: ChainReading): string | undefined {
-    if (!this.#argumentReadings.has(reading)) {
-      this.#argumentReadings.set(
+  #argumentsFormOf(reading: ChainReading): string | undefined {
+    if (!this.#argumentForms.has(reading)) {
+      this.#argumentForms.set(
         reading,
-        this.#argumentsReading(reading.entry as ts.TypeNode, reading.context),
+        this.#argumentsForm(reading.entry as ts.TypeNode, reading.context),
       );
     }
-    return this.#argumentReadings.get(reading);
+    return this.#argumentForms.get(reading);
   }
 
   /**
-   * Helper for {@link #settledReading}: the schemas the type arguments
-   * `reference` writes read as under `context`'s bindings, as one canonical
-   * text (`canonicalSchemaText()`), or `undefined` where they cannot stand for
-   * the arguments. Each is read apart from the reading in progress, into a
-   * definitions table, stacks, and names of its own, and reports nothing.
-   * Arguments any of which reads only in part stand for nothing.
+   * Helper for {@link #settledReading}: the type arguments `reference` writes,
+   * each in its written form under `context`'s bindings (`#writtenForm()`),
+   * as one text two references share only where their arguments denote the
+   * same types; `undefined` where an argument has no such form.
    */
-  #argumentsReading(
+  #argumentsForm(
     reference: ts.TypeNode,
     context: GenerationContext,
   ): string | undefined {
     const typeArguments = ts.isTypeReferenceNode(reference)
       ? reference.typeArguments
       : undefined;
-    // An argument holding a type parameter the reading does not bind, as a
-    // payload read from its instantiation leaves its own, reads as nothing.
-    if (
-      !typeArguments?.length ||
-      typeArguments.some((node) =>
-        holdsFreeTypeParameter(
-          node,
-          context.typeChecker,
-          context.boundTypeParameters?.arguments,
-        )
-      )
-    ) {
-      return undefined;
-    }
-    const {
-      typeNode: _,
-      hintsNode: __,
-      instantiatedAs: ___,
-      arrayItemsOverride: ____,
-      labelsOnly: _____,
-      ...placed
-    } = context;
-    const unread: ts.TypeNode[] = [];
-    const apart: GenerationContext = {
-      ...placed,
-      definitions: {},
-      emittedRefs: new Set(),
-      schemaOrigins: new WeakMap(),
-      definitionStack: new Set(),
-      inProgressNames: new Set(),
-      uninterpretedTypeNodes: unread,
-      onDiagnostic: () => {},
-    };
-    const names = {
-      anonymous: this.#anonymousNames,
-      bound: this.#boundAnonymousNames,
-      counter: this.#anonymousNameCounter,
-    };
-    this.#anonymousNames = new WeakMap();
-    this.#boundAnonymousNames = new Map();
-    this.#anonymousNameCounter = 0;
-    try {
-      const schemas = typeArguments.map((node) =>
-        this.#analyzeChildNode(node, context.typeChecker, apart)
+    if (!typeArguments?.length) return undefined;
+    const forms: string[] = [];
+    for (const node of typeArguments) {
+      const form = this.#writtenForm(
+        node,
+        context.boundTypeParameters,
+        context,
+        0,
       );
-      return unread.length > 0
-        ? undefined
-        : canonicalSchemaText({ schemas, definitions: apart.definitions });
-    } catch {
-      // A reading that fails leaves the recursion to the nesting bound.
-      return undefined;
-    } finally {
-      this.#anonymousNames = names.anonymous;
-      this.#boundAnonymousNames = names.bound;
-      this.#anonymousNameCounter = names.counter;
+      if (form === undefined) return undefined;
+      forms.push(writtenFormText(form));
     }
+    return forms.join(",");
+  }
+
+  /**
+   * Helper for {@link #argumentsForm}: `node`, written under `bound`, in a form
+   * that two nodes share only where they denote the same type, or `undefined`
+   * where it has none. A bound parameter is its argument's form, under the
+   * bindings the argument is written under. A node holding no type parameter
+   * is the type the checker gives it, compared by identity. A union or an
+   * intersection is its members, flattened into it (`writtenFormText()`), so
+   * `(string | undefined) | undefined` is `string | undefined`. A reference
+   * is the declaration it names and its arguments' forms, and any other
+   * construct as `#constructForm()` gives it. A type parameter `bound` does
+   * not bind, as a payload read from its instantiation leaves its own, and
+   * one a mapped or conditional type declares, stand for nothing the reading
+   * knows, so a node holding one has no form.
+   */
+  #writtenForm(
+    node: ts.TypeNode,
+    bound: BoundTypeParameters | undefined,
+    context: GenerationContext,
+    depth: number,
+  ): WrittenForm | undefined {
+    if (depth > MAX_WRITTEN_FORM_DEPTH) return undefined;
+    const checker = context.typeChecker;
+    const bare = unwrapTypeParentheses(node);
+    const parameter = typeParameterOfReference(bare, checker);
+    if (parameter) {
+      const argument = bound?.arguments.get(parameter);
+      if (!argument) return undefined;
+      return argument.node
+        ? this.#writtenForm(argument.node, argument.bound, context, depth + 1)
+        : `type:${this.#bindingId(argument.type)}`;
+    }
+    if (!holdsTypeParameter(bare, checker)) {
+      const type = context.typeRegistry?.get(bare) ??
+        checker.getTypeFromTypeNode(bare);
+      return `type:${this.#bindingId(type)}`;
+    }
+    if (ts.isUnionTypeNode(bare) || ts.isIntersectionTypeNode(bare)) {
+      const members: WrittenForm[] = [];
+      for (const member of bare.types) {
+        const form = this.#writtenForm(member, bound, context, depth + 1);
+        if (form === undefined) return undefined;
+        members.push(form);
+      }
+      return { op: ts.isUnionTypeNode(bare) ? "|" : "&", members };
+    }
+    if (ts.isTypeReferenceNode(bare)) {
+      const symbol = checker.getSymbolAtLocation(bare.typeName);
+      const declared = symbol && (symbol.flags & ts.SymbolFlags.Alias)
+        ? checker.getAliasedSymbol(symbol)
+        : symbol;
+      if (!declared) return undefined;
+      const forms: string[] = [];
+      for (const argument of bare.typeArguments ?? []) {
+        const form = this.#writtenForm(argument, bound, context, depth + 1);
+        if (form === undefined) return undefined;
+        forms.push(writtenFormText(form));
+      }
+      return `ref:${this.#bindingId(declared)}<${forms.join(",")}>`;
+    }
+    return this.#constructForm(bare, bound, context, depth);
+  }
+
+  /**
+   * Helper for {@link #writtenForm}: `node`, a type node holding a type
+   * parameter, as the construct it writes and its parts' forms, for the
+   * constructs whose form holds everything their type depends on: an array, a
+   * tuple and its elements, `keyof`, `readonly` and `unique`, and a type
+   * literal of properties and index signatures. Any other node has no form,
+   * an indexed access or a conditional type over a bound parameter among
+   * them, which a reading under bindings reports as not fully read in any
+   * case.
+   */
+  #constructForm(
+    node: ts.TypeNode,
+    bound: BoundTypeParameters | undefined,
+    context: GenerationContext,
+    depth: number,
+  ): string | undefined {
+    const form = (part: ts.TypeNode | undefined) => {
+      if (part === undefined) return "none";
+      const written = this.#writtenForm(part, bound, context, depth + 1);
+      return written === undefined ? undefined : writtenFormText(written);
+    };
+    const all = (parts: readonly (string | undefined)[]) =>
+      parts.every((part) => part !== undefined) ? parts.join(",") : undefined;
+    const of = (construct: string, parts: readonly (string | undefined)[]) => {
+      const joined = all(parts);
+      return joined === undefined ? undefined : `${construct}(${joined})`;
+    };
+    if (ts.isArrayTypeNode(node)) return of("array", [form(node.elementType)]);
+    if (ts.isTypeOperatorNode(node)) {
+      return of(`operator:${ts.SyntaxKind[node.operator]}`, [form(node.type)]);
+    }
+    if (ts.isRestTypeNode(node)) return of("rest", [form(node.type)]);
+    if (ts.isOptionalTypeNode(node)) return of("optional", [form(node.type)]);
+    if (ts.isNamedTupleMember(node)) {
+      const element = form(node.type);
+      return of(
+        node.dotDotDotToken ? "rest" : node.questionToken ? "optional" : "at",
+        [element],
+      );
+    }
+    if (ts.isTupleTypeNode(node)) return of("tuple", node.elements.map(form));
+    if (ts.isTypeLiteralNode(node)) {
+      const members = node.members.map((member) => {
+        const readonly = ts.getCombinedModifierFlags(member) &
+            ts.ModifierFlags.Readonly
+          ? "readonly "
+          : "";
+        if (ts.isPropertySignature(member)) {
+          const name = member.name;
+          if (!ts.isIdentifier(name) && !ts.isStringLiteral(name)) {
+            return undefined;
+          }
+          const optional = member.questionToken ? "?" : "";
+          return of(`${readonly}property:${name.text}${optional}`, [
+            form(member.type),
+          ]);
+        }
+        if (ts.isIndexSignatureDeclaration(member)) {
+          return of(`${readonly}index`, [
+            ...member.parameters.map((parameter) => form(parameter.type)),
+            form(member.type),
+          ]);
+        }
+        return undefined;
+      });
+      return of("literal", members);
+    }
+    return undefined;
   }
 
   /**

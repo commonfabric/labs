@@ -2295,6 +2295,31 @@ describe("Schema: CFC authoring aliases", () => {
       });
     }
 
+    for (
+      const argument of [
+        "[T]",
+        "[x?: T]",
+        "[...T[]]",
+        "[T?]",
+        "readonly T[]",
+        "{ k: T }",
+        "{ readonly k?: T }",
+        "{ [key: string]: T }",
+      ]
+    ) {
+      it(`reports a recursion that grows through \`${argument}\`, which settles to no level`, async () => {
+        // Each level's argument denotes a deeper type than the one before,
+        // so no two compare alike, and the nesting bound ends the reading.
+        const { diagnostics } = await generate(`
+          type Nest<T> = Confidential<{ v: T; next?: Nest<${argument}> }, readonly ["a"]>;
+          interface Holder { value: Nest<string> }
+        `);
+        expect(diagnostics.map((diagnostic) => diagnostic.type)).toContain(
+          "schema-type:unread",
+        );
+      });
+    }
+
     it("reads a nesting of an alias in its own argument as written", async () => {
       const { value, diagnostics } = await generate(`
         type Wrap<B> = Confidential<{ w: B }, readonly ["w"]>;

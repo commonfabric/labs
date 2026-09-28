@@ -1067,17 +1067,29 @@ Mechanics:
   instantiation is only assignable both ways with the enclosing reading's, a
   different type with the same members (`Sec<Readonly<Readonly<X>>>` inside
   `Sec<Readonly<X>>`), refers to that reading's definition. So does one whose
-  type arguments, each read under the bindings of the place it is written,
-  apart from the reading in progress, read as that reading's do: a bound
-  parameter is read only as its argument is, so the two readings read alike.
-  That settles a recursion wherever the reading has lost the instantiation at
-  its position, as through a tuple's rest, `Readonly` or `Required` around the
-  alias, or a union with another value; `Nest<T[]>` reads `T[]` differently at
-  each step and settles to none. Where the arguments of either reading hold a
-  `typeof` query, neither settle applies: a writer binding is an identity that
-  neither a type nor a schema shows, so such a recursion ends where it meets
-  the same reading again. A reading settles only to one that stores a
-  definition, never to a wrapper's or a scope's around a cell. A scope wrapper's
+  type arguments denote the same types as that reading's, compared in their
+  written form under the bindings of the place each is written: a bound
+  parameter as its argument's form, a node holding no type parameter as the
+  type the checker gives it, by identity, a union or an intersection as its
+  members flattened, a reference as the declaration it names and its
+  arguments' forms, and an array, a tuple, `keyof`, `readonly` or a type
+  literal as that construct and its parts' forms, names and optional or
+  readonly modifiers included. Any other node holding a type parameter has
+  no form and settles nothing. The same reference over the same types is the
+  same reading. That
+  settles a recursion wherever the reading has lost the instantiation at its
+  position, as through a tuple's rest, `Readonly` or `Required` around the
+  alias, or a union with another value; `Nest<T[]>` denotes a deeper array at
+  each step and settles to none. The comparison is of types, never of the
+  schemas they read as: `[string, number]` and `[number, string]` read as one
+  array schema, but an alias indexing its argument (`X[0]`) tells them apart.
+  An argument holding a type parameter the reading does not bind, as a
+  payload read from its instantiation leaves its own, has no form, and
+  settles nothing. Where the arguments of either reading hold a `typeof`
+  query, neither settle applies: a writer binding is an identity that no type
+  shows, so such a recursion ends where it meets the same reading again. A
+  reading settles only to one that stores a definition, never to a wrapper's
+  or a scope's around a cell. A scope wrapper's
   chain is read the same way, its payload being the one member its
   instantiation intersects with the scope brand, except a scope around a
   cell (`scopesCellHandle`): its cycle is found at the cell's value, which

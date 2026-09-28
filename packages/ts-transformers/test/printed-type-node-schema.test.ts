@@ -1144,6 +1144,115 @@ export default pattern<{ a: Sec<string> }>(({ a }) => ({ a }));`,
         ).toEqual([]);
       });
 
+      it("keeps each level's value in a recursion that swaps tuple arguments another alias indexes, on both sides", async () => {
+        // `[string, number]` and `[number, string]` read as one array schema,
+        // but `First` reads position 0 of the type its argument denotes, so
+        // the two levels differ, and the recursion settles only where the
+        // same types come round again.
+        const diagnostics: TransformationDiagnostic[] = [];
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type First<X extends unknown[]> = Confidential<{ first: X[0] }, readonly ["b"]>;
+type Sec<A extends unknown[], B extends unknown[]> = Confidential<{ value: First<A>; next?: Sec<B, A> }, readonly ["a"]>;
+export default pattern<{ a: Sec<[string, number], [number, string]> }>(({ a }) => ({ a }));`,
+        }, {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+        for (const root of [input, output]) {
+          const definitions = (root.$defs ?? {}) as Record<string, Schema>;
+          const resolve = (schema: Schema): Schema =>
+            typeof schema.$ref === "string"
+              ? definitions[schema.$ref.split("/").pop()!]!
+              : schema;
+          const firsts: unknown[] = [];
+          let level = resolve((root.properties as Record<string, Schema>).a!);
+          for (let depth = 0; depth < 4; depth++) {
+            const properties = level.properties as Record<string, Schema>;
+            const value = resolve(properties.value!);
+            firsts.push(
+              ((value.properties as Record<string, Schema>).first!).type,
+            );
+            level = resolve(properties.next!);
+          }
+          expect(firsts).toEqual(["string", "number", "string", "number"]);
+        }
+        expect(
+          diagnostics.filter((diagnostic) =>
+            diagnostic.type === "schema-type:unread"
+          ),
+        ).toEqual([]);
+      });
+
+      for (
+        const [spelling, outer, levels] of [
+          [
+            "references to two declarations",
+            "Sec<One<U>, Two<U>>",
+            ["one:one", "two:two", "one:one", "two:two"],
+          ],
+          [
+            "an optional and a required member",
+            "Sec<{ v?: U }, { v: U }>",
+            ["v:", "v:v", "v:", "v:v"],
+          ],
+        ] as const
+      ) {
+        it(`keeps each level's value in a recursion that swaps ${spelling}, on both sides`, async () => {
+          // The two arguments are one argument apart from what their written
+          // form says, the declaration a reference names or whether a
+          // member is optional, so each level is its own.
+          const diagnostics: TransformationDiagnostic[] = [];
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+interface One<U> { one: U }
+interface Two<U> { two: U }
+type Sec<A, B> = Confidential<{ value: A; next?: Sec<B, A> }, readonly ["a"]>;
+type Outer<U> = ${outer};
+export default pattern<{ a: Outer<string> }>(({ a }) => ({ a }));`,
+          }, {
+            types: COMMONFABRIC_TYPES,
+            typeCheck: true,
+            pipelineDiagnostics: diagnostics,
+          });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          for (const root of [input, output]) {
+            const definitions = (root.$defs ?? {}) as Record<string, Schema>;
+            const resolve = (schema: Schema): Schema =>
+              typeof schema.$ref === "string"
+                ? definitions[schema.$ref.split("/").pop()!]!
+                : schema;
+            const read: string[] = [];
+            let level = resolve(
+              (root.properties as Record<string, Schema>).a!,
+            );
+            for (let depth = 0; depth < 4; depth++) {
+              const properties = level.properties as Record<string, Schema>;
+              const value = resolve(properties.value!);
+              read.push(
+                Object.keys(value.properties as Schema).join("+") + ":" +
+                  ((value.required ?? []) as string[]).join("+"),
+              );
+              level = resolve(properties.next!);
+            }
+            expect(read).toEqual([...levels]);
+          }
+          expect(
+            diagnostics.filter((diagnostic) =>
+              diagnostic.type === "schema-type:unread"
+            ),
+          ).toEqual([]);
+        });
+      }
+
       it("keeps each level's writer in a recursion that swaps its writer bindings", async () => {
         // `f` and `g` have one type, so each level's instantiation is
         // assignable both ways with the one before, though its writer is the
