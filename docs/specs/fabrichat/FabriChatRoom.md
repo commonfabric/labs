@@ -16,11 +16,11 @@ example, today's `FabriChatMessage` and `FabriChatSendSurface` become
 
 ## State
 
-The room keeps four `PerSpace` values, shared by everyone the space admits:
-`about`, `messages`, `reactions`, and `roster`. `participants` is computed from
-`roster` and the messages' authors, keyed by profile cell. `messages` is a list;
-`reactions` and `roster` are keyed collections, projected as lists in the
-contract.
+The room keeps five `PerSpace` values, shared by everyone the space admits:
+`about`, `messages`, `reactions`, `roster`, and `outgoingNotices`.
+`participants` is computed from `roster` and the messages' authors, keyed by
+profile cell. `messages` is a list; `reactions` and `roster` are keyed
+collections, projected as lists in the contract.
 
 The room also keeps its composer's state, `PerSession`: the draft, the message
 being replied to, and where the reply is to be shown. The composer is the room's
@@ -39,6 +39,7 @@ Every write goes through one handler per stream:
 | `commitJoin` | `join` | none |
 | `commitAdd` | `add` | `ChatMembersSurface` |
 | `commitRemove` | `remove` | `ChatMembersSurface` |
+| `commitDelivered` | `delivered` | none |
 
 `commitSend` and `commitReact` keep today's types: the stored value is
 `AuthoredByCurrentUser<TrustedActionWrite<…>>`, so the runtime labels it with
@@ -58,6 +59,13 @@ twice.
 
 `commitAdd` and `commitRemove` ask the host to change the room space's access
 list. They are the only handlers that reach beyond the room's own record.
+`commitAdd` also adds a notice to `outgoingNotices`, and `commitDelivered`
+removes one.
+
+`about` is stored as `AuthoredByCurrentUser<ChatAbout>`, written once by the
+handler that creates the room, so it is labeled with its creator. `canSend` is
+computed for each viewer from their access and whether their profile resolves,
+as today's room computes `cannotSend`.
 
 ## Prerequisites
 

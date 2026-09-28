@@ -35,6 +35,19 @@ interface ChatAbout {
 A space's own chat (see [shared spaces](README.md#shared-spaces)) is a group
 room with no title, and a client shows it by the space's own name.
 
+## Who created the room
+
+`about` is stored as `AuthoredByCurrentUser<ChatAbout>`: the runtime labels it
+`authored-by` the principal who created the room, as it labels a message with
+its sender. That label is the authority on who created a room. A notice's claim
+of who sent it is not (see
+[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). For a direct
+room, the label names the counterpart of the member who didn't create it, which
+is what `accept` checks
+([`ChatManagerOutput`](ChatManagerOutput.md#acceptrequestid-string-room-cellchatroomoutput-counterpart-string)).
+A pattern reads a stored label as the `loom` pattern reads a panel's adder
+(`packages/patterns/loom/README.md`).
+
 ## Future directions
 
 Not part of this design, and not planned yet:

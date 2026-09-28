@@ -14,8 +14,8 @@ interface ChatMessage {
   body: string;
 
   /**
-   * When the message was sent, in milliseconds since the epoch, at whatever
-   * resolution the system's handler clock provides.
+   * When the room recorded the message, in milliseconds since the epoch, at
+   * whatever resolution the system's handler clock provides.
    */
   sentAt: number;
 
@@ -40,11 +40,13 @@ it only through the room's `sendMessage` stream, as a trusted gesture on
   represents.
 - **`body`** is the text, as the person saw it when they sent it. It is never
   empty.
-- **`sentAt`** is the time of the send event: when the person sent the message,
-  not when the room processed it. It comes from the handler clock, whose
+- **`sentAt`** is the handler clock when the room recorded the message. When the
+  room's handler runs in the sender's own runtime, that is close to when the
+  person sent it. When it runs elsewhere, it is when the room took the event,
+  which can be later, since an event carries no time of its own. The clock's
   resolution is the system's to set (see the [timing side-channel
-  mitigations](../sandboxing/TIMING_SIDE_CHANNELS.md)). A client MUST NOT assume
-  a finer resolution.
+  mitigations](../sandboxing/TIMING_SIDE_CHANNELS.md)), and a client MUST NOT
+  assume a finer one.
 - **`replyTo`** is a [`ChatReply`](ChatReply.md): the message this one replies
   to, in the same room, and whether the reply is shown in the main conversation,
   in a thread, or both. Threads, and which messages the main conversation shows,

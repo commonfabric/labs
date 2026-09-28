@@ -29,11 +29,13 @@ a room to anyone its space doesn't admit.
   is a shared space that has one.
 - **The people a client offers** when starting a conversation from a shared
   space are that space's member set.
-- **A notice** says the person has been admitted to a room, and by whom. The
-  client follows it with `accept` to their manager, passing the sender as
-  `counterpart` for a direct room. Whether to add the room to their list is the
-  person's decision, so a client SHOULD accept only after showing them who
-  admitted them, and to what.
+- **A notice** says the person has been admitted to a room. Its claim of who
+  sent it is unauthenticated, so a client shows who created the room from the
+  room's `about` label (see [`ChatAbout`](ChatAbout.md#who-created-the-room)),
+  never from the notice. The client follows it with `accept` to their manager,
+  passing that creator as `counterpart` for a direct room. Whether to add the
+  room to their list is the person's decision, so a client SHOULD accept only
+  after showing them who created the room, and what it is.
 
 ## Showing a room
 
@@ -91,8 +93,10 @@ adapter.
 A room refuses a bad event silently, so a client MUST check each event against
 its stream's rules before sending it: a non-empty body, a reply whose target is
 in the same room and allowed for its `shownIn`, a single emoji (see
-[`ChatRoomOutput`](ChatRoomOutput.md#streams)). A client that resumes an
-interrupted manager request MUST resend it with its original `requestId` (see
+[`ChatRoomOutput`](ChatRoomOutput.md#streams)). A client uses the room's
+`canSend` to tell the person when they can't send at all. A client that resumes
+an interrupted `createGroup` MUST resend it with its original `requestId`, and
+SHOULD do the same for `openDirect` (see
 [`ChatManagerOutput`](ChatManagerOutput.md#creating-a-room-partial-states)).
 
 **A client that renders the patterns' `[UI]`** meets this by construction. The
@@ -167,6 +171,7 @@ contents.
   control.
 - Copy a room's contents into another space.
 - Identify a person by name, or treat a roster entry as access.
+- Trust a notice's claim of who sent it.
 - Show a room's title, members, or history to someone its space doesn't admit.
 - Place a direct room in a container that admits anyone besides the room's two
   members.

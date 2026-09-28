@@ -25,8 +25,10 @@ each, and a row in the built-in targets table of
 ## State
 
 The manager keeps `rooms`, `direct`, `requests`, and `outgoingNotices` in the
-home space. `direct` is maintained alongside `rooms` by the same handlers, so
-the two can't disagree.
+home space. `direct` is maintained alongside `rooms` by the same handlers, which
+keep the two consistent: `direct` holds one entry per counterpart, including
+forgotten rooms, and `rooms` can also hold a second direct room with the same
+counterpart after crossing creations.
 
 ## Creating a room
 
@@ -43,7 +45,10 @@ create a room of its own in four steps:
 
 Each step is recorded under the request's `requestId` as it completes, which is
 how a repeated request resumes where the last attempt stopped instead of
-creating another room.
+creating another room. A pending `openDirect` is also recorded under its
+`counterpart`, which is how a second `openDirect` for the same person finds it
+and resumes it. Step 1 writes the room's `about` from this user's handler, which
+is what labels it `authored-by` this user.
 
 ## Prerequisites
 

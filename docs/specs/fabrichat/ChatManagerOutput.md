@@ -85,8 +85,9 @@ admitted to and by whom (see [delivering notices](#delivering-notices)).
   chose: `pending`, then `done` or `refused`. `done` carries the entry, except
   for `forget`, whose entry is no longer in `rooms`. `refused` carries a reason.
   An implementation MAY discard a `done` or `refused` outcome after a retention
-  period it documents. A request sent again after that starts afresh, which for
-  `openDirect` still finds the existing room.
+  period it documents. A request sent again after that starts afresh: an
+  `openDirect` still finds the existing room, but a `createGroup` creates
+  another.
 - **`outgoingNotices`** holds each notice this user's requests have produced,
   until a client reports it delivered.
 
@@ -133,10 +134,12 @@ outward act when it creates a room.
 
 - **Admitted:** as a trusted gesture on `ChatStartSurface`.
 - **Effect:** if `direct` has an entry for `counterpart`, that entry is the
-  outcome, and it is put back in `rooms` if it was forgotten. Otherwise, creates
-  a direct room whose members are this user and `counterpart`, grants
-  `counterpart` access, produces a notice for them, and records the new entry in
-  `rooms` and `direct`.
+  outcome, and it is put back in `rooms` if it was forgotten. Otherwise, if a
+  creation for the same `counterpart` is still pending under another
+  `requestId`, the manager MUST resume that creation rather than start another,
+  and records its outcome under both ids. Otherwise, creates a direct room whose
+  members are this user and `counterpart`, grants `counterpart` access, produces
+  a notice for them, and records the new entry in `rooms` and `direct`.
 - **Outcome:** `done` with the entry, or `refused` if `counterpart` is this
   user.
 
@@ -149,7 +152,9 @@ conversation from splitting.
   outcome is recorded under it in `requests`, and sending the same event again
   with it resumes the request rather than starting another.
 - `members: string[]` — The DIDs of the people to admit besides this user.
-  Duplicates, and this user's own DID, are ignored.
+  Duplicates, and this user's own DID, are ignored. It may be empty, which
+  creates a group room of one, and people can be added later with the room's
+  `add`.
 - `title: string` — The room's title, which every member sees. Must not be
   empty.
 
@@ -168,20 +173,26 @@ Creates a group room. This is an outward act: it grants other people access.
   with it resumes the request rather than starting another.
 - `room: Cell<ChatRoomOutput>` — A link to the room this user has been admitted
   to, from the notice that announced it.
-- `counterpart?: string` — For a direct room, the DID of its other member, from
-  the notice. Required for a direct room, and ignored for a group room.
+- `counterpart?: string` — For a direct room, the DID of its other member.
+  Required for a direct room, and ignored for a group room. It must be the
+  room's creator, as the room's `about` is labeled (see
+  [`ChatAbout`](ChatAbout.md#who-created-the-room)); a notice's claim of who
+  sent it is only a hint.
 
 Records a room this user has been admitted to.
 
 - **Admitted:** without a reviewed gesture, since it changes only this user's
   own index. Whether to add a room to their index is the user's decision (see
   [`clients.md`](clients.md#finding-conversations)).
-- **Effect:** records an entry in `rooms`. For a direct room, it also records
-  the entry in `direct`, unless `direct` already has an entry for `counterpart`,
-  in which case that entry stays, as under [crossing
-  creations](#crossing-creations).
+- **Effect:** for a direct room, first checks `counterpart` against the
+  principal the room's `about` is labeled `authored-by`, and, once the room's
+  space has a member set, against its members. Then records an entry in `rooms`.
+  For a direct room, it also records the entry in `direct`, unless `direct`
+  already has an entry for `counterpart`, in which case that entry stays, as
+  under [crossing creations](#crossing-creations).
 - **Outcome:** `done` with the entry, or `refused` if this user can't read the
-  room, or if the room is direct and `counterpart` is missing.
+  room, or if the room is direct and `counterpart` is missing or isn't the
+  room's creator.
 
 A client also sends `accept` when the user first opens a shared space's own
 chat, which is created with its space and not by a manager.
@@ -220,9 +231,11 @@ leaves a room in between. Until a creation's request is `done`:
 - The room can already admit some of its other members, since grants come before
   notices. A member granted before an interruption can use the room, but has no
   notice of it until the request is resumed.
-- The room is not yet in `rooms` or `direct`, so a new `openDirect` for the same
-  counterpart with a different `requestId` can't find it. A client MUST resume
-  an interrupted request with its original `requestId`.
+- The room is not yet in `rooms` or `direct`. A new `openDirect` for the same
+  counterpart resumes the pending creation, whatever its `requestId` (see
+  [`openDirect`](#opendirectrequestid-string-counterpart-string)). A
+  `createGroup` has no such key, so a client MUST resume an interrupted request
+  with its original `requestId`, and SHOULD do so for `openDirect` too.
 
 Resuming the request finishes the grants and notices that remain, and records
 the entry. It never creates a second room.
@@ -239,6 +252,12 @@ the room's contents. It then sends `delivered` with the notice's `id`.
 A notice carries no credential. The recipient already has access through the
 grant, so a notice that reaches the wrong person gives them nothing but the
 knowledge that a room exists.
+
+A notice is also unauthenticated: it travels by whatever channel a client has,
+so its claim of who sent it can be false. A recipient MUST NOT rely on that
+claim. Who created a room is what the room's `about` is labeled with (see
+[`ChatAbout`](ChatAbout.md#who-created-the-room)), and `accept` checks a direct
+room's `counterpart` against that label.
 
 ## Crossing creations
 

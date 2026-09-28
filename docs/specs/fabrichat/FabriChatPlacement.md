@@ -22,8 +22,9 @@ integrity, readable by everyone the container admits ([cross-space
 integrity](../cfc-cross-space-integrity.md), §1). Everything the placement
 offers is computed from the link when it is read, under the viewer's own access.
 
-It holds no presentation state either: no draft, no reply target, no scroll
-position. Whatever draws a placement keeps its own.
+It holds no presentation state either. The draft and the reply target are the
+room's, since its composer is the room's surface, and whatever draws a placement
+keeps the rest, such as its scroll position.
 
 ## Viewers who aren't members
 
@@ -47,6 +48,8 @@ client that can't learn it MUST treat the container as admitting others.
     `"not-member"`, or `"unavailable"` (the room can't be read right now). A
     member with READ only sees the room but can't send to it (see
     [`ChatRoomOutput`](ChatRoomOutput.md#membership)).
+  - `canSend`: the room's, for the viewer (see
+    [`ChatRoomOutput`](ChatRoomOutput.md#facts)).
   - `about`, `messages`, `participants`, and `reactionTallies` (per message:
     emoji, count, whether the viewer is among them, and the reactors' profiles),
     each read through the link. They're empty unless `state` is `"member"`.
