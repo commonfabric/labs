@@ -85,6 +85,24 @@ interface RootedSchemaVisit {
   parent?: RootedSchemaVisit;
 }
 
+/** A union being narrowed without consuming another path segment. */
+interface SchemaPathExpansion {
+  /** Definition map against which the branches resolve local references. */
+  defs: JSONSchemaObj["$defs"];
+
+  /** The original type list or compound branch list, before arm expansion. */
+  branches: readonly unknown[];
+
+  /** A co-declared `oneOf`, when `branches` is the `anyOf` list. */
+  oneOf: JSONSchemaObj["oneOf"];
+
+  /** Number of path segments still to consume at this union. */
+  remaining: number;
+
+  /** The enclosing union expansion, if any. */
+  parent: SchemaPathExpansion | undefined;
+}
+
 const rootedSchemaVisitIsActive = (
   visit: RootedSchemaVisit | undefined,
   root: object,
@@ -664,6 +682,7 @@ export class ContextualFlowControl {
     extraConfidentiality: Set<unknown> | undefined,
     defaultEmptyProperties: JSONSchema,
     defaultMissingProperty: JSONSchema,
+    expanding?: SchemaPathExpansion,
   ): JSONSchema {
     const joined = (extraConfidentiality !== undefined)
       ? new Set<unknown>(extraConfidentiality)
@@ -728,6 +747,29 @@ export class ContextualFlowControl {
       ) {
         const armSchemas: JSONSchema[] = [];
         const cursorObject = cursor;
+        const branches = Array.isArray(cursorObject.type)
+          ? cursorObject.type
+          : cursorObject.anyOf ?? cursorObject.oneOf;
+        let nextExpansion = expanding;
+        if (branches !== undefined) {
+          const oneOf = Array.isArray(cursorObject.type)
+            ? undefined
+            : cursorObject.oneOf;
+          const remaining = path.length - index;
+          for (let visit = expanding; visit; visit = visit.parent) {
+            if (
+              visit.defs === defs && visit.branches === branches &&
+              visit.oneOf === oneOf && visit.remaining === remaining
+            ) return false;
+          }
+          nextExpansion = {
+            defs,
+            branches,
+            oneOf,
+            remaining,
+            parent: expanding,
+          };
+        }
         const options = typeless
           ? [{ ...cursorObject, type: "object" as const }, {
             ...cursorObject,
@@ -748,6 +790,7 @@ export class ContextualFlowControl {
             extraConfidentiality,
             defaultEmptyProperties,
             defaultMissingProperty,
+            nextExpansion,
           );
           if (typeof optSchema !== "boolean" && typeof optSchema !== "object") {
             return optSchema;

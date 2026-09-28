@@ -152,6 +152,17 @@ describe("recursive handle union", () => {
         expect(projectRead(recursive.key("node").get())).toEqual(expected);
       });
 
+      it("narrows a child of the recursive handle as the unrolled union does", () => {
+        const recursive = rootWithNullNode("recursive", recursiveSchema);
+        const unrolled = rootWithNullNode("unrolled", unrolledSchema);
+        const expected = unrolled.key("node", "foo").getAsNormalizedFullLink();
+        const actual = recursive.key("node", "foo").getAsNormalizedFullLink();
+
+        expect(actual.path).toEqual(["node", "foo"]);
+        expect(actual.schema).toEqual(expected.schema);
+        expect(actual.schema).toBeUndefined();
+      });
+
       it("reads the object holding the position as the unrolled union does", () => {
         const recursive = rootWithNullNode("recursive", recursiveSchema);
         const unrolled = rootWithNullNode("unrolled", unrolledSchema);
