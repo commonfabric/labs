@@ -3,6 +3,7 @@ import { dirname, fromFileUrl, join, toFileUrl } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
   collectCoverageProfileFiles,
+  findUnreadableProfiles,
   isTrackedFile,
   normalizeLcovInstancePaths,
   parseFilesMissingTranspiledSource,
@@ -201,6 +202,91 @@ Deno.test("write-coverage-lcov converts real profiles to a normalized LCOV repor
       "instance query survived normalization",
     );
     assertStringIncludes(result.stdout, "Wrote LCOV");
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+// A profile cut off partway through, as a process or worker that stops while
+// writing it leaves one. The head, which names the script, survives; `deno
+// coverage` then refuses the whole directory on the first such file it reads.
+function truncatedProfile(url: string): string {
+  const whole = JSON.stringify(
+    {
+      scriptId: "42",
+      url,
+      functions: [
+        {
+          functionName: "",
+          ranges: [{ startOffset: 0, endOffset: 10, count: 1 }],
+          isBlockCoverage: true,
+        },
+      ],
+    },
+    null,
+    2,
+  );
+  return whole.slice(0, whole.indexOf("ranges"));
+}
+
+Deno.test("write-coverage-lcov names every truncated profile and the script it covers", async () => {
+  // `deno coverage` names only the first file it cannot read, and says nothing
+  // of what wrote it. The failure has to name each one, with the script its
+  // head still names, which is what points at the test that stopped a writer.
+  const root = await Deno.makeTempDir({ prefix: "write-lcov-" });
+  try {
+    const rawDir = await generateSampleProfiles(root);
+    const first = "file:///somewhere/worker-only-module.ts";
+    const second = "file:///somewhere/another-module.ts";
+    await Deno.writeTextFile(
+      join(rawDir, "cut-1.json"),
+      truncatedProfile(first),
+    );
+    await Deno.writeTextFile(
+      join(rawDir, "cut-2.json"),
+      truncatedProfile(second),
+    );
+    const output = join(root, "out.lcov");
+
+    const result = await runScript([rawDir, output]);
+
+    assertEquals(result.code, 1);
+    assertStringIncludes(result.stderr, "2 coverage profile(s)");
+    assertStringIncludes(result.stderr, `${join(rawDir, "cut-1.json")} (`);
+    assertStringIncludes(result.stderr, first);
+    assertStringIncludes(result.stderr, `${join(rawDir, "cut-2.json")} (`);
+    assertStringIncludes(result.stderr, second);
+    assertStringIncludes(result.stderr, "Tests that start Deno");
+    // The profiles are left where they are, so the run's artifact holds them.
+    assertEquals(
+      (await Deno.readTextFile(join(rawDir, "cut-1.json"))).length > 0,
+      true,
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("findUnreadableProfiles passes over every profile that parses", async () => {
+  const root = await Deno.makeTempDir({ prefix: "write-lcov-" });
+  try {
+    const rawDir = await generateSampleProfiles(root);
+    const files = await collectCoverageProfileFiles(rawDir);
+    assert(files.length > 0, "the sample run wrote no profile");
+    assertEquals(await findUnreadableProfiles(files), []);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("findUnreadableProfiles says so when a cut-off profile names no script", async () => {
+  const root = await Deno.makeTempDir({ prefix: "write-lcov-" });
+  try {
+    const file = join(root, "stub.json");
+    await Deno.writeTextFile(file, '{\n  "scriptId": "4');
+    assertEquals(await findUnreadableProfiles([file]), [
+      { path: file, bytes: 18, url: undefined },
+    ]);
   } finally {
     await Deno.remove(root, { recursive: true });
   }

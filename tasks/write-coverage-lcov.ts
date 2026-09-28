@@ -179,6 +179,64 @@ export function isTrackedFile(url: string, repositoryRoot: string): boolean {
   );
 }
 
+/** A coverage profile that does not parse, and what its head still says. */
+export interface UnreadableProfile {
+  path: string;
+  bytes: number;
+  /** The script the profile covers, when the cut left its `url` intact. */
+  url: string | undefined;
+}
+
+/**
+ * The profiles among `files` that do not parse as JSON, each with the script it
+ * covers when that much of it survives.
+ *
+ * Why: `deno coverage` stops at the first file it cannot read and names only
+ * that one, by a random file name, which says nothing of what wrote it. A
+ * profile cut off partway is written by a process or worker that stopped while
+ * writing it, and the script a profile covers is written near its start, so the
+ * `url` usually survives the cut and points at the test that stopped a writer.
+ * Every profile is read, which is slow for a large directory, so this runs only
+ * once a conversion has already failed.
+ */
+export async function findUnreadableProfiles(
+  files: string[],
+): Promise<UnreadableProfile[]> {
+  const unreadable: UnreadableProfile[] = [];
+  for (const file of files) {
+    const text = await Deno.readTextFile(file);
+    try {
+      JSON.parse(text);
+    } catch {
+      const url = text.match(/"url"\s*:\s*"((?:[^"\\]|\\.)*)"/)?.[1];
+      unreadable.push({
+        path: file,
+        bytes: new TextEncoder().encode(text).length,
+        url,
+      });
+    }
+  }
+  return unreadable;
+}
+
+function reportUnreadableProfiles(
+  profileDir: string,
+  unreadable: UnreadableProfile[],
+): void {
+  console.error(
+    `${unreadable.length} coverage profile(s) in ${profileDir} do not parse, so deno coverage refused the directory:\n  ${
+      unreadable.map(({ path: file, bytes, url }) =>
+        `${file} (${bytes} bytes), covering ${
+          url ?? "a script its head no longer names"
+        }`
+      ).join("\n  ")
+    }`,
+  );
+  console.error(
+    'A profile is cut off when the process or worker writing it stops partway through: a child Deno signalled while it exits, or a test process that exits while one of its workers is still writing. The script named is one the writer loaded, and a script only a worker or a child loads points at the test that started it. "Tests that start Deno" in docs/development/TESTING.md has the causes and the fixes.',
+  );
+}
+
 async function removeEmptyCoverageProfiles(files: string[]): Promise<number> {
   let removed = 0;
   for (const file of files) {
@@ -296,6 +354,8 @@ export async function writeLcovReport(
     );
     if (lost.length > 0) reportLostFiles();
     console.error(stderr.trim());
+    const unreadable = await findUnreadableProfiles(remainingProfileFiles);
+    if (unreadable.length > 0) reportUnreadableProfiles(profileDir, unreadable);
     return { ok: false };
   }
 
