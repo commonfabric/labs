@@ -91,34 +91,100 @@ does, and offers neither stream.
 
 ## Streams
 
+Each stream is a one-way, asynchronous request to the room. Sending an event
+finishes when the event is accepted, not when it takes effect, and returns no
+value: a sender observes the effect in the room's facts. An event is appended in
+the room's space, so sending needs write access there, and the room acts on it
+later, possibly in another runtime.
+
+Each stream below is written as a call, with its event's keys as the
+parameters: `react(message: Cell<ChatMessage>, emoji: string)` sends
+`{ message, emoji }`.
+
+These rules hold for every stream:
+
+- A stream that names a reviewed surface admits an event only as a trusted
+  gesture on that surface (see
+  [`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)), and the
+  record it writes is labeled `authored-by` the principal who sent it.
+- An event that arrives before the viewer's profile resolves is refused.
+- A refused event is spent: it is not retried, and the sender sends again.
+
 | Stream | Reviewed surface | Effect |
 | --- | --- | --- |
-| `sendMessage` | `ChatSendSurface` | appends a message from the viewer |
-| `react` | `ChatReactSurface` | adds the viewer's reaction, or removes it if present |
-| `join` | none | adds the viewer's own `#profile` to `roster` |
-| `invite` | `ChatMembersSurface` | grants a principal access, or issues an invitation |
-| `remove` | `ChatMembersSurface` | revokes a principal's access |
+| [`sendMessage`](#sendmessagebody-string-replyto-cellchatmessage) | `ChatSendSurface` | appends a message from the viewer |
+| [`react`](#reactmessage-cellchatmessage-emoji-string) | `ChatReactSurface` | adds the viewer's reaction, or removes it |
+| [`join`](#join) | none | adds the viewer's own profile to `roster` |
+| [`invite`](#inviteprincipal-string-access-write--owner) | `ChatMembersSurface` | grants a principal access, or issues an invitation |
+| [`remove`](#removeprincipal-string) | `ChatMembersSurface` | revokes a principal's access |
 
-An event on a stream with a reviewed surface is admitted only as a trusted
-gesture on that surface (see
-[`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)), and the
-record it writes is labeled with the principal who made it.
+### `sendMessage(body: string, replyTo?: Cell<ChatMessage>)`
 
-- **`sendMessage`** takes the text exactly as the person saw it. An empty body
-  is refused. A `replyTo` MUST link a message in the same room.
-- **`react`** takes a message in the same room and a single emoji (see
-  [`ChatReaction`](ChatReaction.md)). Reacting again with the same emoji removes
-  the reaction.
-- **`join`** contributes the viewer's own `#profile` link, as [shared-profile
-  rosters](../shared-profile-rosters.md) describe. It needs no reviewed gesture,
-  because it asserts nothing but the viewer's own profile, and an entry stays a
-  claim. A client SHOULD join when it first shows a room to a member.
-- **`invite`** and **`remove`** are outward acts: they grant or withdraw another
-  person's access. They exist only on group rooms, and are admitted only from a
-  member the access list makes OWNER.
+Sends a message from the viewer.
 
-Every stream refuses an event that arrives before the viewer's profile resolves.
-A refused event is spent: it is not retried, and the caller sends again.
+- **Event:** `body` is the text exactly as the person saw it when they sent it.
+  `replyTo` optionally links the message this one replies to.
+- **Admitted:** as a trusted gesture on `ChatSendSurface`.
+- **Effect:** appends a [`ChatMessage`](ChatMessage.md) to `messages`, with the
+  viewer's profile as `authorProfile` and the handler's clock as `sentAt`.
+- **Refused:** an empty `body`, or a `replyTo` that links a message in another
+  room.
+
+### `react(message: Cell<ChatMessage>, emoji: string)`
+
+Adds the viewer's reaction to a message, or removes it.
+
+- **Event:** `message` links a message in this room. `emoji` is a single emoji
+  (see [`ChatReaction`](ChatReaction.md)).
+- **Admitted:** as a trusted gesture on `ChatReactSurface`.
+- **Effect:** if the viewer has no reaction with `emoji` on `message`, adds a
+  [`ChatReaction`](ChatReaction.md) to `reactions`. If they have one, removes it.
+  No one else's reaction changes.
+- **Refused:** a `message` in another room, or an `emoji` that isn't a single
+  emoji.
+
+### `join()`
+
+Adds the viewer's own profile to `roster`.
+
+- **Event:** none. The profile is the viewer's own `#profile`, never one the
+  sender names.
+- **Admitted:** without a reviewed gesture. It asserts nothing but the viewer's
+  own profile, and an entry stays a claim, as
+  [shared-profile rosters](../shared-profile-rosters.md) describe.
+- **Effect:** adds the profile to `roster`, unless it's already there.
+- **When to send:** a client SHOULD send it when it first shows a room to a
+  member. It has no effect once the room's space has a member set.
+
+### `invite(principal: string, access: "WRITE" | "OWNER")`
+
+Admits another person to a group room. This is an outward act: it grants
+someone else access.
+
+- **Event:** `principal` is the DID to admit, and `access` what to grant.
+- **Admitted:** as a trusted gesture on `ChatMembersSurface`, and only from a
+  member the room space's access list makes OWNER.
+- **Effect:** grants `principal` the access, or issues a space invitation for
+  them to redeem.
+- **Open:** an invitation issued here has to be delivered, as the manager's are
+  (see [`ChatManagerOutput`](ChatManagerOutput.md#delivering-invitations)), but
+  the room has no way to hand it to the sender's client yet. The manager's
+  `outgoingInvitations` holds only invitations its own requests issue.
+- **Refused:** on a direct room, and on a space's own chat, neither of which
+  offers it.
+
+### `remove(principal: string)`
+
+Removes a person from a group room. This is an outward act: it withdraws
+someone else's access.
+
+- **Event:** `principal` is the DID to remove.
+- **Admitted:** as a trusted gesture on `ChatMembersSurface`, and only from a
+  member the room space's access list makes OWNER.
+- **Effect:** revokes `principal`'s access to the room's space. Their messages
+  and reactions stay in the history.
+- **Refused:** on a direct room, and on a space's own chat, neither of which
+  offers it.
 
 ## Renderings
 
