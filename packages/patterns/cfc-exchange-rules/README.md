@@ -23,9 +23,9 @@ object, whose object node is released along with its fields.
 `custody-answer-room.tsx` is a room whose members seal their stances into the
 policy's custody through the host's `cf-custody-seal`, and whose policy releases
 only what its projector computes over the sealed box, one of the listed answers,
-and only to the seal, when everything the projector read was written by the seal
-(`TransformedBy{builtin cfc-custody-seal}` as the rule's input witness). It
-shows the pattern side of the
+and only to the seal, when everything confidential the projector read was
+written by the seal (`TransformedBy{builtin cfc-custody-seal}` as the rule's
+input witness). It shows the pattern side of the
 [custody seal](../../../docs/specs/cfc-custody-seal.md): seats named by attested
 cells, the policy read from a declaring cell's label, the box link the seal
 writes into the room, and the answer the seal publishes once per instance
