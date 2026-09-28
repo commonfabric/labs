@@ -662,6 +662,21 @@ the kill loses that child's coverage, but it cannot truncate a profile.
 their input, and `packages/memory/test/inbox-store-child-coverage.test.ts` fails
 when any of them loses its profile.
 
+A `Worker` is the same hazard inside one process. Under coverage each worker
+writes its own profiles as it shuts down, on its own thread, and
+`Worker.terminate()` only starts that: nothing a test can observe through the
+web API says when it is done. A worker that loads a large module takes a while
+to write, since the runtime's TypeScript profile alone is several megabytes, and
+a `deno test` that finishes in the meantime exits under the write, which loses
+the worker's profiles or truncates one. So a test file that starts real runtime
+workers starts them through the `WorkerExitBarrier` in
+`packages/runtime-client/integration/worker-exit-barrier.ts` and calls its
+`settle()` after its last test. Each worker holds a shared lock on one file for
+its whole life, and `settle()` waits until it can take that lock exclusively,
+which is once every worker's runtime has been torn down.
+`packages/runtime-client/integration/worker-exit-coverage.test.ts` fails when a
+worker's profile is lost or cut off.
+
 ### Test Structure
 
 - **Unit tests**: Use `@std/testing/bdd` (`describe`/`it`) with `@std/expect` for assertions

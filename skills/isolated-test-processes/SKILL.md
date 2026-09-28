@@ -83,6 +83,12 @@ command's `--lock` flag.
   one truncated profile makes `deno coverage` refuse every profile in the job.
   "Tests that start Deno" in `docs/development/TESTING.md` has the detail.
 
+- Start the real runtime workers a test file uses through `WorkerExitBarrier`
+  (`packages/runtime-client/integration/worker-exit-barrier.ts`) and call its
+  `settle()` after the file's last test. A terminated worker writes its coverage
+  profiles on its own thread afterwards, and a test process that exits during
+  that write truncates one.
+
 ## Common Tells
 
 Risky tests often contain `Deno.Command(Deno.execPath())`, `deno check`,

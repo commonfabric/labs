@@ -1,7 +1,7 @@
 #!/usr/bin/env -S deno run -A
 
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
+import { afterAll, describe, it } from "@std/testing/bdd";
 import { debugStr } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { render } from "@commonfabric/html/client";
@@ -35,10 +35,11 @@ import {
   type VNode,
 } from "@commonfabric/runtime-client";
 import { MessagePortRuntimeTransport } from "@commonfabric/runtime-client/transports/message-port";
-import { WebWorkerRuntimeTransport } from "@commonfabric/runtime-client/transports/web-worker";
+import type { WebWorkerRuntimeTransport } from "@commonfabric/runtime-client/transports/web-worker";
 import { defer } from "@commonfabric/utils/defer";
 
 import { serverExecutionOnStepSkip } from "../../../tasks/server-execution-on-skips.ts";
+import { WorkerExitBarrier } from "./worker-exit-barrier.ts";
 
 const { API_URL } = env;
 
@@ -50,6 +51,11 @@ const keyConfig: IdentityCreateConfig = {
 };
 
 const identity = await Identity.fromPassphrase("test operator", keyConfig);
+
+// Every runtime worker this file starts comes from here, so that the file can
+// wait at the end for each to finish writing its coverage profiles; a process
+// that exits under that write truncates a profile. See `worker-exit-barrier.ts`.
+const workers = await WorkerExitBarrier.create();
 
 // Workers receive the host process's environment-selected flags. An absent
 // server-execution declaration follows the first-party default.
@@ -137,6 +143,8 @@ export default pattern<PatternState>(() => ({ version: "candidate" }));
 `;
 
 describe("RuntimeClient", () => {
+  afterAll(() => workers.settle());
+
   describe("lifecycle", () => {
     it("initializes and reaches ready state", async () => {
       const session = await createTestSession();
@@ -1810,7 +1818,7 @@ export default pattern<Record<string, never>>(() => {
      * these tests need to keep it.
      */
     async function owningClient(session: Session) {
-      const transport = await WebWorkerRuntimeTransport.connect();
+      const transport = await workers.connect();
       const options = await clientOptionsFor(session);
       const client = await RuntimeClient.initialize(transport, options);
       await client.synced(session.space);
@@ -2019,7 +2027,7 @@ async function createRuntimeClient(
   session: Session,
   extraOptions: Partial<RuntimeClientOptions> = {},
 ): Promise<RuntimeClient> {
-  const transport = await WebWorkerRuntimeTransport.connect();
+  const transport = await workers.connect();
   const worker = await RuntimeClient.initialize(
     transport,
     await clientOptionsFor(session, extraOptions),
