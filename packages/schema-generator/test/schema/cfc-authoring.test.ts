@@ -2181,6 +2181,42 @@ describe("Schema: CFC authoring aliases", () => {
           "next: Default<X[], []>",
         ],
         [
+          "`undefined` joined to it, as a tuple's element before a rest",
+          "T | undefined",
+          "Sec<string>",
+          "next: [X, ...string[]]",
+        ],
+        [
+          "`undefined` joined to it, as a tuple's rest",
+          "T | undefined",
+          "Sec<string>",
+          "next: [...X[]]",
+        ],
+        [
+          "`undefined` joined to it, in `Readonly`",
+          "T | undefined",
+          "Sec<string>",
+          "next: Readonly<X>",
+        ],
+        [
+          "`undefined` joined to it, in `Required`",
+          "T | undefined",
+          "Sec<string>",
+          "next: Required<X>",
+        ],
+        [
+          "`undefined` joined to it, in a `Default` that is also `null`",
+          "T | undefined",
+          "Sec<string>",
+          "next: Default<X | null, null>",
+        ],
+        [
+          "`undefined` joined to it, in a union with another value",
+          "T | undefined",
+          "Sec<string>",
+          "next: X | number",
+        ],
+        [
           "`undefined` joined to it, in a `Readonly` object",
           "T | undefined",
           "Sec<string>",

@@ -890,13 +890,19 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
           "next: Array<Sec<T | undefined>>",
           "next: [Sec<T | undefined>]",
           "next?: Sec<Readonly<T>>",
+          "next: [Sec<T | undefined>, ...string[]]",
+          "next: [...Sec<T | undefined>[]]",
+          "next: Readonly<Sec<T | undefined>>",
+          "next: Required<Sec<T | undefined>>",
+          "next: Default<Sec<T | undefined> | null, null>",
+          "next: Sec<T | undefined> | number",
         ]
       ) {
         it(`reads a recursion the checker settles, as \`${member}\`, as its definition on both sides`, async () => {
           const diagnostics: TransformationDiagnostic[] = [];
           const files = await transformFiles({
             "/main.tsx": `/// <cts-enable />
-import { Confidential, pattern, Writable } from "commonfabric";
+import { Confidential, Default, pattern, Writable } from "commonfabric";
 type Sec<T> = Confidential<{ value: T; ${member} }, ["secret"]>;
 export default pattern<{ a: Sec<{ a: string }> }>(({ a }) => ({ a }));`,
           }, {
@@ -993,6 +999,78 @@ export default pattern<{ a: Sec<{ a: string }> }>(({ a }) => ({ a }));`,
           ).toBe(2);
         });
       }
+
+      it("keeps each level's value in a recursion whose argument alternates, on both sides", async () => {
+        // The payload is read from the instantiation, which leaves the
+        // written argument's `T` unbound, so that argument reads as nothing
+        // and the recursion settles only where it meets the same reading
+        // again.
+        const diagnostics: TransformationDiagnostic[] = [];
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Sec<T> = Confidential<{ v: T; next?: Sec<T extends string ? number : string> }, ["secret"]>;
+export default pattern<{ a: Sec<string> }>(({ a }) => ({ a }));`,
+        }, {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+        for (const root of [input, output]) {
+          const definitions = (root.$defs ?? {}) as Record<string, Schema>;
+          const resolve = (schema: Schema): Schema =>
+            typeof schema.$ref === "string"
+              ? definitions[schema.$ref.split("/").pop()!]!
+              : schema;
+          const values: unknown[] = [];
+          let level = resolve((root.properties as Record<string, Schema>).a!);
+          for (let depth = 0; depth < 4; depth++) {
+            const properties = level.properties as Record<string, Schema>;
+            values.push(properties.v!.type);
+            level = resolve(properties.next!);
+          }
+          expect(values).toEqual(["string", "number", "string", "number"]);
+        }
+        expect(
+          diagnostics.filter((diagnostic) =>
+            diagnostic.type === "schema-type:unread"
+          ),
+        ).toEqual([]);
+      });
+
+      it("keeps each level's writer in a recursion that swaps its writer bindings", async () => {
+        // `f` and `g` have one type, so each level's instantiation is
+        // assignable both ways with the one before, though its writer is the
+        // other: a recursion whose arguments hold a `typeof` binding settles
+        // only where it meets the same reading again.
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { pattern, WriteAuthorizedBy } from "commonfabric";
+export function f(x: string): void {}
+export function g(x: string): void {}
+type Sec<T, A, B> = WriteAuthorizedBy<{ v: T; next?: Sec<T, B, A> }, A>;
+export default pattern<{ a: Sec<string, typeof f, typeof g> }>(({ a }) => ({ a }));`,
+        }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+        const { input } = patternSchemas(parseModule(files["/main.tsx"]!));
+        const definitions = (input.$defs ?? {}) as Record<string, Schema>;
+        const resolve = (schema: Schema): Schema =>
+          typeof schema.$ref === "string"
+            ? definitions[schema.$ref.split("/").pop()!]!
+            : schema;
+        const writers: unknown[] = [];
+        let level = resolve((input.properties as Record<string, Schema>).a!);
+        for (let depth = 0; depth < 4; depth++) {
+          const writer = (level.ifc as Schema).writeAuthorizedBy as Schema;
+          writers.push(
+            (writer.__ctWriterIdentityOf as { path: string[] }).path[0],
+          );
+          level = resolve((level.properties as Record<string, Schema>).next!);
+        }
+        expect(writers).toEqual(["f", "g", "f", "g"]);
+      });
 
       it("reads a recursion through the alias's optional member as its definition", async () => {
         // The result's member is `Sec<string> | undefined`, the `?` adding

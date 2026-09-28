@@ -34,6 +34,7 @@ import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
 import {
   holdsFreeTypeParameter,
   holdsTypeParameter,
+  typeParameterOfReference,
   unwrapTypeParentheses,
 } from "./typescript/type-node.ts";
 import {
@@ -91,6 +92,66 @@ type ChainReading = {
   readonly type: ts.Type;
   readonly context: GenerationContext;
 };
+
+/**
+ * Whether `node`, read under `bound`, holds a `typeof` query: in its own
+ * syntax, or in the argument of a parameter `bound` binds, in turn.
+ */
+function holdsTypeQuery(
+  node: ts.Node,
+  bound: BoundTypeParameters | undefined,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Node> = new Set(),
+): boolean {
+  if (seen.has(node)) return false;
+  seen.add(node);
+  if (ts.isTypeQueryNode(node)) return true;
+  const parameter = ts.isTypeNode(node)
+    ? typeParameterOfReference(node, checker)
+    : undefined;
+  const argument = parameter && bound?.arguments.get(parameter);
+  if (argument?.node) {
+    return holdsTypeQuery(argument.node, argument.bound, checker, seen);
+  }
+  return ts.forEachChild(
+    node,
+    (child) => holdsTypeQuery(child, bound, checker, seen) || undefined,
+  ) ?? false;
+}
+
+/**
+ * `schema` as a text two schemas share where they accept the same values by
+ * the same structure: object keys in order, and an `anyOf` flattened into the
+ * `anyOf`s it holds, each member once, in order. A union read by its written
+ * members nests where the checker's would not (`(T | undefined) | undefined`).
+ */
+function canonicalSchemaText(schema: unknown): string {
+  return JSON.stringify(canonicalSchema(schema));
+}
+
+/** Helper for {@link canonicalSchemaText}. */
+function canonicalSchema(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalSchema);
+  if (!isObjectOrArray(value)) return value;
+  const source = value as Record<string, unknown>;
+  const canonical: Record<string, unknown> = Object.create(null);
+  for (const key of Object.keys(source).sort()) {
+    canonical[key] = canonicalSchema(source[key]);
+  }
+  if (Array.isArray(canonical.anyOf)) {
+    const members = canonical.anyOf.flatMap((member) =>
+      isObjectOrArray(member) && !Array.isArray(member) &&
+        Object.keys(member).length === 1 &&
+        Array.isArray((member as Record<string, unknown>).anyOf)
+        ? (member as { anyOf: unknown[] }).anyOf
+        : [member]
+    );
+    canonical.anyOf = [
+      ...new Set(members.map((member) => JSON.stringify(member))),
+    ].sort().map((text) => JSON.parse(text));
+  }
+  return canonical;
+}
 
 /** Whether a schema is an object schema the alias rules can rewrite. */
 function isObjectSchema(
@@ -1085,6 +1146,9 @@ export class SchemaGenerator {
    */
   #chainReadings: WeakMap<object, ChainReading[]> = new WeakMap();
 
+  /** Each chain reading's arguments reading (`#argumentsReadingOf()`). */
+  #argumentReadings: WeakMap<ChainReading, string | undefined> = new WeakMap();
+
   /** Identities of the types and declarations a binding key names. */
   #bindingIds: WeakMap<object, number> = new WeakMap();
 
@@ -1398,17 +1462,17 @@ export class SchemaGenerator {
    * by. A reading entered again from the same reference inside itself is a
    * recursion through it. One whose instantiation is identical to a reading's
    * in progress there is a cycle of that type, which `#formatType` finds as it
-   * finds any other. One the checker settles only up to assignability, its
-   * instantiation a different type assignable both ways with that reading's
-   * (`Sec<Readonly<Readonly<X>>>` and `Sec<Readonly<X>>`), refers to that
-   * reading's definition here. A chain reached by its alias settles none: two
-   * readings of one alias through no written reference may be a nesting its
-   * author wrote out, whose instantiations the checker can find assignable
-   * both ways though they read differently. An entry nested in itself
-   * `MAX_BOUND_NESTING` deep without settling instantiates the chain without
-   * end, as `Nest<T[]>` inside `Nest<T>` does, or has no known instantiation
-   * to settle by; the innermost accepts any value and is reported as not
-   * fully read.
+   * finds any other. Otherwise it refers to the definition of the reading it
+   * settles to (`#settledReading()`), where that reading stores one. A chain
+   * reached by its alias settles none: two readings of one alias through no
+   * written reference may be a nesting its author wrote out, whose
+   * instantiations the checker can find assignable both ways though they read
+   * differently. Nor does a scope around a cell, whose cycle is found at the
+   * cell's value, which keeps the handle it caps at each reference
+   * (`scopesCellHandle()`). An entry nested in itself `MAX_BOUND_NESTING` deep
+   * without settling instantiates the chain without end, as `Nest<T[]>`
+   * inside `Nest<T>` does; the innermost accepts any value and is reported as
+   * not fully read.
    */
   public readAliasChain(
     type: ts.Type,
@@ -1422,14 +1486,13 @@ export class SchemaGenerator {
     const checker = context.typeChecker;
     const written = "kind" in entry;
     const again = readings.filter((reading) => reading.entry === entry);
-    const settled = written && instantiated &&
-      again.find((reading) =>
-        reading.instantiated !== undefined &&
-        reading.instantiated !== instantiated &&
-        checker.isTypeAssignableTo(reading.instantiated, instantiated) &&
-        checker.isTypeAssignableTo(instantiated, reading.instantiated)
-      );
-    if (settled) return this.#referToReading(settled.type, settled.context);
+    const settled = written && again.length > 0 &&
+        !scopesCellHandle(type, checker)
+      ? this.#settledReading(entry, context, instantiated, again)
+      : undefined;
+    const reference = settled &&
+      this.#referToReading(settled.type, settled.context);
+    if (reference) return reference;
     if (again.length >= MAX_BOUND_NESTING) {
       // One reached with no written reference is reported as the checker
       // prints its type.
@@ -1448,21 +1511,171 @@ export class SchemaGenerator {
   }
 
   /**
+   * Helper for {@link readAliasChain}: the reading among `again`, readings in
+   * progress entered from `reference`, that the reading entered from it again
+   * with `context` settles to, where the checker instantiates `instantiated`.
+   * One whose instantiation is a different type assignable both ways with
+   * this one (`Sec<Readonly<Readonly<X>>>` and `Sec<Readonly<X>>`) is the same
+   * reading up to assignability. So is one whose arguments read as this
+   * one's do (`#argumentsReading()`), which settles a recursion wherever the
+   * reading has lost the instantiation at its position: a bound parameter is
+   * read only as its argument is, so two readings whose arguments read alike
+   * read alike. `Nest<T[]>` inside `Nest<T>` reads `T[]` differently at each
+   * step, and settles to none. Where the arguments of any of these readings
+   * hold a `typeof` query, none settles: a writer binding is an identity that
+   * neither a type nor a schema shows, and two readings with different
+   * writers can have one type. That recursion ends where it meets the same
+   * reading again, which `#formatType` finds.
+   */
+  #settledReading(
+    reference: ts.TypeNode,
+    context: GenerationContext,
+    instantiated: ts.Type | undefined,
+    again: readonly ChainReading[],
+  ): ChainReading | undefined {
+    const checker = context.typeChecker;
+    const holdsQuery = (
+      entry: ts.TypeNode | ts.Symbol,
+      at: GenerationContext,
+    ) =>
+      "kind" in entry && ts.isTypeReferenceNode(entry) &&
+      (entry.typeArguments ?? []).some((node) =>
+        holdsTypeQuery(node, at.boundTypeParameters, checker)
+      );
+    if (
+      holdsQuery(reference, context) ||
+      again.some((reading) => holdsQuery(reading.entry, reading.context))
+    ) {
+      return undefined;
+    }
+    const byInstantiation = instantiated &&
+      again.find((reading) =>
+        reading.instantiated !== undefined &&
+        reading.instantiated !== instantiated &&
+        checker.isTypeAssignableTo(reading.instantiated, instantiated) &&
+        checker.isTypeAssignableTo(instantiated, reading.instantiated)
+      );
+    if (byInstantiation) return byInstantiation;
+    const arguments_ = this.#argumentsReading(reference, context);
+    return arguments_ === undefined
+      ? undefined
+      : again.find((reading) =>
+        this.#argumentsReadingOf(reading) === arguments_
+      );
+  }
+
+  /**
+   * Helper for {@link #settledReading}: the arguments reading of `reading`,
+   * read once for the reading's lifetime.
+   */
+  #argumentsReadingOf(reading: ChainReading): string | undefined {
+    if (!this.#argumentReadings.has(reading)) {
+      this.#argumentReadings.set(
+        reading,
+        this.#argumentsReading(reading.entry as ts.TypeNode, reading.context),
+      );
+    }
+    return this.#argumentReadings.get(reading);
+  }
+
+  /**
+   * Helper for {@link #settledReading}: the schemas the type arguments
+   * `reference` writes read as under `context`'s bindings, as one canonical
+   * text (`canonicalSchemaText()`), or `undefined` where they cannot stand for
+   * the arguments. Each is read apart from the reading in progress, into a
+   * definitions table, stacks, and names of its own, and reports nothing.
+   * Arguments any of which reads only in part stand for nothing.
+   */
+  #argumentsReading(
+    reference: ts.TypeNode,
+    context: GenerationContext,
+  ): string | undefined {
+    const typeArguments = ts.isTypeReferenceNode(reference)
+      ? reference.typeArguments
+      : undefined;
+    // An argument holding a type parameter the reading does not bind, as a
+    // payload read from its instantiation leaves its own, reads as nothing.
+    if (
+      !typeArguments?.length ||
+      typeArguments.some((node) =>
+        holdsFreeTypeParameter(
+          node,
+          context.typeChecker,
+          context.boundTypeParameters?.arguments,
+        )
+      )
+    ) {
+      return undefined;
+    }
+    const {
+      typeNode: _,
+      hintsNode: __,
+      instantiatedAs: ___,
+      ...placed
+    } = context;
+    const unread: ts.TypeNode[] = [];
+    const apart: GenerationContext = {
+      ...placed,
+      definitions: {},
+      emittedRefs: new Set(),
+      schemaOrigins: new WeakMap(),
+      definitionStack: new Set(),
+      inProgressNames: new Set(),
+      uninterpretedTypeNodes: unread,
+      onDiagnostic: () => {},
+    };
+    const names = {
+      anonymous: this.#anonymousNames,
+      bound: this.#boundAnonymousNames,
+      counter: this.#anonymousNameCounter,
+    };
+    this.#anonymousNames = new WeakMap();
+    this.#boundAnonymousNames = new Map();
+    this.#anonymousNameCounter = 0;
+    try {
+      const schemas = typeArguments.map((node) =>
+        this.#analyzeChildNode(node, context.typeChecker, apart)
+      );
+      return unread.length > 0
+        ? undefined
+        : canonicalSchemaText({ schemas, definitions: apart.definitions });
+    } catch {
+      // A reading that fails leaves the recursion to the nesting bound.
+      return undefined;
+    } finally {
+      this.#anonymousNames = names.anonymous;
+      this.#boundAnonymousNames = names.bound;
+      this.#anonymousNameCounter = names.counter;
+    }
+  }
+
+  /**
    * A reference to the definition of `type` read with `context`, a reading in
-   * progress that its own schema reaches again: the definition is stored under
-   * that name once the reading ends.
+   * progress that its own schema reaches again, stored under that name once
+   * the reading ends; `undefined` where the reading stores none, as a wrapper
+   * or a scope around a cell does not (`#formatType()`).
    */
   #referToReading(
     type: ts.Type,
     context: GenerationContext,
-  ): MutableJSONSchema {
-    const syntheticKey = this.#ensureSyntheticName(type, context);
-    context.inProgressNames.add(syntheticKey);
-    context.emittedRefs.add(syntheticKey);
-    const aliasScope = scopeOfAliasChain(type, context.typeChecker);
+  ): MutableJSONSchema | undefined {
+    const checker = context.typeChecker;
+    if (
+      detectWrapperViaNode(context.typeNode, checker) !== undefined ||
+      scopesCellHandle(type, checker)
+    ) {
+      return undefined;
+    }
+    const aliasScope = scopeOfAliasChain(type, checker);
+    const key =
+      (aliasScope === undefined
+        ? getNamedTypeKey(type, context.typeNode)
+        : undefined) ?? this.#ensureSyntheticName(type, context);
+    context.inProgressNames.add(key);
+    context.emittedRefs.add(key);
     return aliasScope === undefined
-      ? { "$ref": `#/$defs/${syntheticKey}` }
-      : { "$ref": `#/$defs/${syntheticKey}`, scope: aliasScope };
+      ? { "$ref": `#/$defs/${key}` }
+      : { "$ref": `#/$defs/${key}`, scope: aliasScope };
   }
 
   #bindingId(value: object): number {

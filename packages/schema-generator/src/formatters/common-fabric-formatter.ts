@@ -476,10 +476,6 @@ const usesParameterUnreachably = (
   ) ?? false);
 
 /**
- * `type` less the `undefined` among its members, where one other member
- * remains, and `type` itself otherwise.
- */
-/**
  * The payload of `type`, a scope wrapper's instantiation, or `undefined` where
  * it cannot be told apart. A scope wrapper intersects its payload with its
  * brand, so the payload is the one member besides the brand; a payload that
@@ -519,6 +515,10 @@ const instantiatedPayloadOf = (
   return payloadIsCfcAlias ? defined : cfcPayloadOf(defined);
 };
 
+/**
+ * `type` less the `undefined` among its members, where one other member
+ * remains, and `type` itself otherwise.
+ */
 const definedPart = (type: ts.Type): ts.Type => {
   if (!type.isUnion()) return type;
   const defined = type.types.filter((member) =>
@@ -1372,7 +1372,9 @@ export class CommonFabricFormatter implements TypeFormatter {
       innerType,
       childContext,
       shouldPassTypeNode ? innerTypeNode : undefined,
-      instantiatedCell?.typeRef.typeArguments?.[0],
+      instantiatedCell &&
+        (instantiatedCell.typeRef.typeArguments ??
+          context.typeChecker.getTypeArguments(instantiatedCell.typeRef))[0],
     );
 
     // Stream<T>: can also reflect inner Cell-ness

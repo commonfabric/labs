@@ -372,7 +372,7 @@ export function instantiatedElementType(
  * at a record or an object with an index signature read under bindings
  * (`GenerationContext.instantiatedAs`), holds: its string or number index
  * type, or, for a record over literal keys, which has none, the type its
- * properties share.
+ * properties share, where every one of them has the same type.
  */
 export function instantiatedValueType(
   instantiatedAs: ts.Type | undefined,
@@ -383,8 +383,16 @@ export function instantiatedValueType(
     checker.getIndexTypeOfType(instantiatedAs, ts.IndexKind.String) ??
       checker.getIndexTypeOfType(instantiatedAs, ts.IndexKind.Number);
   if (indexed) return indexed;
-  const [first] = checker.getPropertiesOfType(instantiatedAs);
-  return first && checker.getTypeOfSymbol(first);
+  const [first, ...rest] = checker.getPropertiesOfType(instantiatedAs).map(
+    (property) => checker.getTypeOfSymbol(property),
+  );
+  return first &&
+      rest.every((type) =>
+        checker.isTypeAssignableTo(first, type) &&
+        checker.isTypeAssignableTo(type, first)
+      )
+    ? first
+    : undefined;
 }
 
 /**

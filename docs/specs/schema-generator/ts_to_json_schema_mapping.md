@@ -1066,7 +1066,18 @@ Mechanics:
   reference inside itself is found as a recursion through it. One whose
   instantiation is only assignable both ways with the enclosing reading's, a
   different type with the same members (`Sec<Readonly<Readonly<X>>>` inside
-  `Sec<Readonly<X>>`), refers to that reading's definition. A scope wrapper's
+  `Sec<Readonly<X>>`), refers to that reading's definition. So does one whose
+  type arguments, each read under the bindings of the place it is written,
+  apart from the reading in progress, read as that reading's do: a bound
+  parameter is read only as its argument is, so the two readings read alike.
+  That settles a recursion wherever the reading has lost the instantiation at
+  its position, as through a tuple's rest, `Readonly` or `Required` around the
+  alias, or a union with another value; `Nest<T[]>` reads `T[]` differently at
+  each step and settles to none. Where the arguments of either reading hold a
+  `typeof` query, neither settle applies: a writer binding is an identity that
+  neither a type nor a schema shows, so such a recursion ends where it meets
+  the same reading again. A reading settles only to one that stores a
+  definition, never to a wrapper's or a scope's around a cell. A scope wrapper's
   chain is read the same way, its payload being the one member its
   instantiation intersects with the scope brand, except a scope around a
   cell (`scopesCellHandle`): its cycle is found at the cell's value, which
