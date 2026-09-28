@@ -168,6 +168,12 @@ const namespaceLocalDefinitionScope = (
   tag: string,
 ): JSONSchemaObj => {
   const names = localDefinitionNamesInScope(schema, definitions);
+  if (names.size === 0) {
+    // No local name crosses the document boundary. An empty map would mint
+    // a new document identity on each visit to an external recursive branch.
+    const { $defs: _empty, ...body } = schema;
+    return body;
+  }
 
   const usedNames = new Set([...reservedNames, ...names]);
   const renamed = new Map<string, string>();

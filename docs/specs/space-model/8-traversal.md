@@ -322,6 +322,11 @@ list once along its path: walking it again decides nothing new, so it adds no
 match to an `anyOf` or `oneOf`, no constraint to an `allOf`, and no narrower
 follow cap.
 
+The follow-cap walk identifies a branch list together with its owning document.
+Resolving an external reference with metadata beside it keeps that document
+identity when the ref site carries neither definitions nor local references;
+an empty definition map has no names to isolate.
+
 ---
 
 ## Known Non-Standard JSON Schema Behavior
