@@ -31,11 +31,12 @@ Adding a marker means editing the document and the module together.
 
 In `.github/workflows/deno.yml`, every step whose marker puts it in the work
 phase carries `timeout-minutes: *work-timeout`, and its job carries
-`timeout-minutes: *job-timeout`, which is the ten minutes longer. GitHub
+`timeout-minutes: *job-timeout`, which is the ten minutes longer. The lanes' job
+and the step that runs a lane take a pair of their own, described below. GitHub
 cancels a job that runs past the bound on the job, so that job's conclusion is
 `cancelled` rather than `failure`, and a test that hangs then looks like a run
-somebody stopped. A step that runs past the bound on the step fails, and the
-job fails with it.
+somebody stopped. A step that runs past the bound on the step fails, and the job
+fails with it.
 
 Both aliases point at YAML anchors declared in the `env:` block at the top of
 the file, which is where the minutes themselves are written. Add a work step
@@ -46,14 +47,20 @@ a deploy's duration is set by a script in another repository.
 it fails when a bound is missing, when it is written as a number rather than an
 alias, or when a step's anchor is fewer than ten minutes below its job's.
 
-The `tests` job takes the same two aliases: 30 minutes for the lane step and 40
-for its job. Neither is a lane's budget. A lane packs its work against a budget
+The `tests` job has a pair of its own, `*lane-work-timeout` and
+`*lane-job-timeout`: 60 minutes for the lane step and 70 for its job. Neither is
+a lane's budget. A lane packs its work against a budget
 `tasks/test-selection/policy.ts` derives from `LANE_BOUND_SECONDS` or
 `FULL_LANE_BOUND_SECONDS`. Those are what a lane is packed to finish inside, not
-bounds it is stopped at. The step bound only stops a lane that hangs. A lane
-whose mandatory work passes its budget runs long and says by how much in its
-job log, rather than being stopped with its later batches unrun. Changing a lane
-bound in `policy.ts` changes no timeout in `deno.yml`.
+bounds it is stopped at. The step bound only stops a lane that hangs, so it sits
+well above the larger of the two lane bounds, and `tasks/ci-workflow.test.ts`
+fails when it does not sit above it at all. A pull request's lanes are instances
+of the same job definition and take the same bounds, so a pull-request lane that
+hangs is stopped only at the lane step's bound, although it is packed to finish
+in five minutes. A lane whose mandatory work passes its budget runs long and
+says by how much in its job log, rather than being stopped with its later
+batches unrun. Raising a lane bound in `policy.ts` past the lane step's bound
+means raising that anchor in the same change.
 
 ## A compile cache is keyed on a resolved fingerprint, not on the compiler's inputs listed in `hashFiles`
 

@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import { Identity } from "@commonfabric/identity";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   DEFAULT_MAX_OUTSTANDING_EFFECTS,
   ensureSpaceRootsFromEnv,
@@ -395,17 +396,9 @@ describe("startServerExecutionHost with the store read-through on", () => {
     const server = new MemoryServer({
       store: new URL("memory://store-read-through-serving"),
       subscriptionRefreshDelayMs: 0,
-      // Both shapes: the signed loopback invocation the serving runtime's
-      // session carries `iss`; the client mounted below carries
-      // `authorization.principal`.
-      authorizeSessionOpen: (message) => {
-        const iss = (message.invocation as { iss?: unknown } | undefined)?.iss;
-        if (typeof iss === "string") return iss;
-        const principal =
-          (message.authorization as { principal?: unknown } | undefined)
-            ?.principal;
-        return typeof principal === "string" ? principal : undefined;
-      },
+      // Both shapes: the serving runtime's session opens signed; the client
+      // mounted below names its principal in `authorization.principal`.
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: { audience: "did:key:z6Mk-store-read-through" },
     });
     const knobs: Record<string, string> = {

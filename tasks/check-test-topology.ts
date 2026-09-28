@@ -744,12 +744,14 @@ export async function check(
     // the part that did arrive is the guard reporting on a corpus it
     // only partly read.
     const resolver = await loadAliasResolver();
-    const records: StoredIdentity[] = [];
+    // A run's records, and the findings they yield, can outnumber the
+    // arguments one function call takes.
+    const reads: StoredIdentity[][] = [];
     const empty: string[] = [];
     for (const at of options.store.records) {
       const read = await readRecords([at], resolver);
       if (read.length === 0) empty.push(at);
-      records.push(...read);
+      reads.push(read);
     }
     if (empty.length > 0) {
       // This is said alone: every unit the topology holds would
@@ -761,7 +763,8 @@ export async function check(
       });
       return { findings, suites: suites.length };
     }
-    findings.push(...checkStore(suites, records, options.store.commit));
+    const found = checkStore(suites, reads.flat(), options.store.commit);
+    for (const finding of found) findings.push(finding);
   }
   // The count travels with the findings because loading the topology
   // walks every workspace member and every test file, and doing that a

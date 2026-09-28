@@ -56,6 +56,10 @@ env:
   TEST_SELECTION_PREFIX: ${{ vars.TEST_SELECTION_PREFIX }}
   WORK_TIMEOUT_MINUTES: &work-timeout 30
   JOB_TIMEOUT_MINUTES: &job-timeout 40
+  # A lane of the full run is packed to finish inside FULL_LANE_BOUND_SECONDS
+  # in tasks/test-selection/policy.ts, so the lanes' bounds sit above that.
+  LANE_WORK_TIMEOUT_MINUTES: &lane-work-timeout 60
+  LANE_JOB_TIMEOUT_MINUTES: &lane-job-timeout 70
 
 # Every step name must begin with a phase-marker emoji (setup / work / shutdown).
 # scripts/ci-gantt.ts reads that emoji to split each job bar by phase. See the
@@ -132,7 +136,7 @@ jobs:
       !cancelled() &&
       (needs.plan-full.result == 'success' || needs.plan-full.result == 'skipped')
     runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
+    timeout-minutes: *lane-job-timeout
     permissions:
       contents: read
     env:
@@ -225,7 +229,7 @@ jobs:
             cc-lane-${{ steps.compile-cache-key.outputs.fingerprint }}-
 
       - name: 🧪 Run the lane
-        timeout-minutes: *work-timeout
+        timeout-minutes: *lane-work-timeout
         # The token is what the `github-api` capability hands to the suites
         # that declared it, so only this step holds it. The lane takes it out
         # of its own environment before it starts anything, so no other child

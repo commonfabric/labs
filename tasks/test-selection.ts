@@ -140,7 +140,7 @@ export function dialLines(): string[] {
     lines.push("");
   }
   lines.push(
-    "setupCost, suiteOverhead and correction are measured too, and are " +
+    "setupCost and each suite's fit come from measurement too, and are " +
       "published\nin each manifest rather than kept here.",
   );
   return lines;

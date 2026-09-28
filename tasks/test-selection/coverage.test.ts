@@ -10,7 +10,7 @@ import {
   measuredSets,
   measuredUnitKeys,
 } from "./coverage.ts";
-import type { Calibration, ManifestEntry } from "./manifest.ts";
+import type { Calibration, ManifestEntry, SuiteFit } from "./manifest.ts";
 import {
   COST_WINDOW_DAYS,
   LANE_BUDGET_SECONDS,
@@ -289,7 +289,7 @@ describe("coverage", () => {
 
     describe("measuredCost()", () => {
       /** A calibration whose coverage-on fit for `workspace-unit` is this. */
-      const fittedAs = (fit: typeof FREE): Calibration => ({
+      const fittedAs = (fit: SuiteFit): Calibration => ({
         ...measuredFits(),
         suitesWithCoverage: { "workspace-unit": fit },
       });
@@ -305,12 +305,112 @@ describe("coverage", () => {
             entry("bakery", "packages/bakery/glaze.test.ts", 4),
             entry("bakery", "packages/bakery/proof.test.ts", 5),
           ],
+          new Map(),
         )).toEqual({
           overhead: 10,
           spread: 24,
           units: [{ overhead: 1, entries: 2 }, { overhead: 1, entries: 1 }],
+          processes: [],
           largest: 21,
         });
+      });
+
+      it("charges each process's setup for every time it starts, beside how many of the entries run in it", () => {
+        // `glaze.test.ts` and `proof.test.ts` run in two processes, and one
+        // of `glaze.test.ts`'s tests runs twice, which starts its process
+        // twice. `rack.test.ts` runs in no process.
+        const cost = measuredCost(
+          fittedAs({
+            overhead: 50,
+            correction: 1,
+            unitOverhead: 0,
+            process: { setup: 7, overhead: 0, correction: 1, unitOverhead: 0 },
+          }),
+          [
+            entry("bakery", "packages/bakery/glaze.test.ts", 3),
+            {
+              ...entry("bakery", "packages/bakery/glaze.test.ts", 4),
+              repeats: 2,
+            },
+            entry("bakery", "packages/bakery/proof.test.ts", 5),
+            entry("cellar", "packages/cellar/rack.test.ts", 30),
+          ],
+          new Map([
+            ["workspace-unit\tpackages/bakery/glaze.test.ts", "first"],
+            ["workspace-unit\tpackages/bakery/proof.test.ts", "second"],
+          ]),
+        );
+        expect(cost?.processes).toEqual([
+          { setup: 14, entries: 2 },
+          { setup: 7, entries: 1 },
+        ]);
+        // The figures beside the process fit are for a packer that charges
+        // no process setup.
+        expect(cost?.overhead).toBe(0);
+        // The twice-run test charges its process twice and its own four
+        // seconds twice; the rack test charges no process.
+        expect(cost?.largest).toBe(30);
+        expect(
+          measuredCost(
+            fittedAs({
+              overhead: 0,
+              correction: 1,
+              unitOverhead: 0,
+              process: {
+                setup: 20,
+                overhead: 0,
+                correction: 1,
+                unitOverhead: 0,
+              },
+            }),
+            [{
+              ...entry("bakery", "packages/bakery/glaze.test.ts", 4),
+              repeats: 2,
+            }],
+            new Map([
+              ["workspace-unit\tpackages/bakery/glaze.test.ts", "first"],
+            ]),
+          )?.largest,
+        ).toBe(48);
+      });
+
+      it("charges its largest entry no less than that entry's own time", () => {
+        // The suite runs its units side by side, and a lane holding one
+        // entry still takes that entry's whole time, twice over where it
+        // runs twice, however the entries are spread. Each run is a pass
+        // of its own, which starts the suite and opens the unit again.
+        const repeated = {
+          ...entry("bakery", "packages/bakery/glaze.test.ts", 100),
+          repeats: 2,
+        };
+        expect(
+          measuredCost(
+            fittedAs({ overhead: 10, correction: 0.4, unitOverhead: 1 }),
+            [repeated],
+            new Map(),
+          ),
+        ).toEqual({
+          overhead: 10,
+          spread: 211,
+          units: [{ overhead: 1, entries: 1 }],
+          processes: [],
+          largest: 222,
+        });
+      });
+
+      it("spreads no less than the longest unit takes", () => {
+        // Corrected, the two entries of the one unit come to 36 seconds.
+        // They run one after the other, so the unit takes 90.
+        expect(
+          measuredCost(
+            fittedAs({ overhead: 0, correction: 0.4, unitOverhead: 0 }),
+            [
+              entry("bakery", "packages/bakery/glaze.test.ts", 40),
+              entry("bakery", "packages/bakery/glaze.test.ts", 50),
+            ],
+            new Map(),
+          )?.spread,
+        ).toBe(90);
       });
 
       it("charges an entry once for every time it runs", () => {
@@ -322,14 +422,17 @@ describe("coverage", () => {
           measuredCost(
             fittedAs({ overhead: 0, correction: 2, unitOverhead: 0 }),
             [repeated],
+            new Map(),
           )?.spread,
         ).toBe(24);
       });
 
       it("returns `undefined` where no lane has run a suite with coverage on", () => {
-        expect(measuredCost(measuredFits(), [
-          entry("bakery", "packages/bakery/glaze.test.ts", 3),
-        ])).toBeUndefined();
+        expect(measuredCost(
+          measuredFits(),
+          [entry("bakery", "packages/bakery/glaze.test.ts", 3)],
+          new Map(),
+        )).toBeUndefined();
       });
     });
 
@@ -424,6 +527,45 @@ describe("coverage", () => {
         it("counts the overhead and setup again in each lane it spreads over", () => {
           const tests = LANE_BUDGET_SECONDS * 1.5;
           expect(costing(tests / 2, tests / 2)[0]).toContain(
+            `costs ${duration(tests + 2 * 15)} with coverage on`,
+          );
+        });
+
+        it("counts a process's setup again in each lane holding one of its entries", () => {
+          // The five seconds a lane paid before running anything are its
+          // process's setup rather than the suite's overhead.
+          const tests = LANE_BUDGET_SECONDS * 1.5;
+          const lines = measuredCostLines(
+            sampleManifest({
+              calibration: {
+                setupCost: { deno: 10 },
+                suites: {},
+                suitesWithCoverage: {
+                  "workspace-unit": {
+                    overhead: 0,
+                    correction: 1,
+                    unitOverhead: 0,
+                    process: {
+                      setup: 5,
+                      overhead: 0,
+                      correction: 1,
+                      unitOverhead: 0,
+                    },
+                  },
+                },
+                prologue: 0,
+              },
+              entries: [tests / 2, tests / 2].map((cost) =>
+                entry("cellar", "packages/cellar/rack.test.ts", cost)
+              ),
+            }),
+            [{
+              ...suite("workspace-unit", [cellar]),
+              needs: ["deno"],
+              processes: new Map([["packages/cellar/rack.test.ts", "rack"]]),
+            }],
+          );
+          expect(lines[0]).toContain(
             `costs ${duration(tests + 2 * 15)} with coverage on`,
           );
         });

@@ -1505,4 +1505,52 @@ describe("post-main-report", () => {
       ).toEqual([]);
     });
   });
+
+  it("maps a change onto the type check under its workflow's permissions", async () => {
+    // Packing a pull request's run asks the type check which groups the
+    // change reaches, and that starts `deno info`. This test and every lane
+    // hold every permission, so neither would notice the report's own run
+    // lacking one; the run is repeated here under the workflow's flags.
+    const root = new URL("..", import.meta.url);
+    const workflow = await Deno.readTextFile(
+      new URL(".github/workflows/pull-request-comments.yml", root),
+    );
+    const flags = /deno run ((?:--allow-\S+\s+)+)tasks\/post-main-report\.ts/
+      .exec(workflow)?.[1]?.split(/\s+/).filter((flag) => flag !== "");
+    expect(flags).toBeDefined();
+    const script = await Deno.makeTempFile({ suffix: ".ts" });
+    try {
+      await Deno.writeTextFile(
+        script,
+        `import { loadTopology } from "${
+          new URL("tasks/test-topology.ts", root).href
+        }";\n` +
+          `const suites = await loadTopology(${
+            JSON.stringify(root.pathname.replace(/\/$/, ""))
+          });\n` +
+          `const typecheck = suites.find((suite) => suite.id === "typecheck");\n` +
+          `console.log(JSON.stringify(typecheck.unitsForChange(` +
+          `new Set(["packages/runner/src/cell.ts"]))));\n`,
+      );
+      const run = await new Deno.Command(Deno.execPath(), {
+        // The script sits outside the tree, so it names the tree's manifest
+        // rather than finding it beside itself.
+        args: [
+          "run",
+          `--config=${new URL("deno.jsonc", root).pathname}`,
+          ...flags!,
+          script,
+        ],
+        cwd: root,
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      expect(run.success, new TextDecoder().decode(run.stderr)).toBe(true);
+      expect(JSON.parse(new TextDecoder().decode(run.stdout))).toContain(
+        "shell",
+      );
+    } finally {
+      await Deno.remove(script);
+    }
+  });
 });

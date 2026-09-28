@@ -164,18 +164,27 @@ One set of run counts serves both `churn` and `flakeRate`, so it is kept
 for the longer of the two windows and each term reads back only as far as
 its own.
 
-`cost` is the largest of the days' ninetieth percentiles inside its
-window: the ninetieth rather than the maximum, because one unlucky runner
-should not permanently inflate an estimate, and the largest across days
-rather than an average, because a cost model that under-estimates blows
-the time budget.
+`cost` is the ninetieth percentile of every passing execution inside its
+window, taken together: the ninetieth rather than the maximum, because
+one unlucky runner should not permanently inflate an estimate, and rather
+than the mean, because a cost model that under-estimates blows the time
+budget. Each execution counts once however the days fall, so a slow day,
+whether a loaded runner or a regression since fixed, raises the cost by
+as much of the window as it holds rather than setting it for a week.
 
-A day is one population, whatever order its records reached the store in
-and however many runs read them. A day is therefore held as its slowest
-executions and the count of all of them, so that the parts a day arrives
-in combine into the percentile of the whole. Holding a percentile of each
-part instead would let a part carrying one execution report that
-execution as the percentile of every execution beside it.
+The window is one population, whatever order its records reached the
+store in and however many runs read them. A day is therefore held as
+counts of its executions by duration, so that the parts a day arrives in,
+and the days a window spans, combine into the percentile of the whole.
+Holding a percentile of each part instead would let a part carrying one
+execution report that execution as the percentile of every execution
+beside it.
+
+The counts are kept in buckets, 32 to each doubling of a duration, and a
+percentile is read as the largest duration its bucket counts. The cost is
+therefore never below the exact percentile and at most one bucket, about
+2.2%, above it, and what a day holds grows with how widely its durations
+spread rather than with how many ran.
 
 Only executions that passed are measured. A cost predicts what a lane
 will spend running the test again, and a failure measures something else.
@@ -554,6 +563,14 @@ Two rules force a test in.
   declaration rather than by what it has caught. Nothing about a changed
   source file forces a test in except through a declaration that reaches
   it. Which tests run for it otherwise is what the score decides.
+
+  The type check is not bounded that way. A change reaches every
+  type-check group whose files import a changed file, directly or through
+  other modules, however many groups that is; a manifest, a declaration
+  file it loads into every check, or the lock file reaches the groups whose
+  modules it governs. The change can alter each of those groups' verdicts,
+  and no `deno test` type-checks anything, so a group left to the score is
+  a type error the change may have made that nothing looks for.
 
 ## Coverage
 

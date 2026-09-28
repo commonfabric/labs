@@ -358,7 +358,9 @@ export function isWorkerReadyNotification(
 ): value is WorkerReadyNotification {
   return (
     isObjectNotArray(value) &&
-    value.type === TransportNotificationType.WorkerReady
+    value.type === TransportNotificationType.WorkerReady &&
+    (value.lifetimeLock === undefined ||
+      typeof value.lifetimeLock === "string")
   );
 }
 

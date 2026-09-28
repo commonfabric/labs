@@ -17,6 +17,7 @@ import {
 import {
   capabilitiesBySuite,
   loadTopology,
+  unitProcesses,
   wholeUnits,
 } from "./test-topology.ts";
 
@@ -502,6 +503,7 @@ function unitsPerLane(
     mandatory: seen.mandatory,
     capabilities: capabilitiesBySuite(suites),
     wholeUnits: wholeUnits(suites),
+    processes: unitProcesses(suites),
     lanes,
     ...(policy === undefined ? {} : { policy }),
   });
@@ -885,6 +887,7 @@ describe("how many lanes the full run asks for", () => {
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(deps.suites),
       wholeUnits: wholeUnits(deps.suites),
+      processes: unitProcesses(deps.suites),
       policy: "everything",
       lanes,
     });
@@ -918,6 +921,7 @@ describe("how many lanes the full run asks for", () => {
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(deps.suites),
       wholeUnits: wholeUnits(deps.suites),
+      processes: unitProcesses(deps.suites),
       policy: "everything",
       lanes,
     });
@@ -1036,6 +1040,7 @@ describe("how many lanes the full run asks for", () => {
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(suites),
       wholeUnits: wholeUnits(suites),
+      processes: unitProcesses(suites),
       policy: "everything",
       lanes,
     });
@@ -1133,6 +1138,7 @@ describe("how many lanes the full run asks for", () => {
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(deps.suites),
       wholeUnits: wholeUnits(deps.suites),
+      processes: unitProcesses(deps.suites),
       policy: "everything",
       lanes,
     });
@@ -1197,6 +1203,7 @@ describe("how many lanes the full run asks for", () => {
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(deps.suites),
       wholeUnits: wholeUnits(deps.suites),
+      processes: unitProcesses(deps.suites),
       policy: "everything",
       lanes,
     });
@@ -1272,6 +1279,7 @@ describe("what the two runs agree about", () => {
       mandatory: new Map<string, SelectionReason>(),
       capabilities: capabilitiesBySuite(suites),
       wholeUnits: wholeUnits(suites),
+      processes: unitProcesses(suites),
       lanes: 3,
       budgetSeconds: 1_000_000,
     };
@@ -1608,6 +1616,44 @@ describe("running a lane's work", () => {
     expect(printed).not.toContain("nothing has measured");
   });
 
+  it("counts a test in its batch's own time once for each run of its unit", () => {
+    // The unit runs twice because one of its tests asks for two runs, and
+    // every test in it runs each time: 1.5 and 2.5 seconds, twice over.
+    const [repeated, once] = manifestOf([
+      { test: { k: "unit", s: "bakery", n: "glaze > sets" }, cost: 1.5 },
+      { test: { k: "unit", s: "bakery", n: "glaze > cracks" }, cost: 2.5 },
+    ]).entries;
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      describePlan(
+        lane,
+        [{
+          suite: runnable(["true"], "workspace-unit"),
+          units: [{ unit: "packages/bakery/glaze.test.ts", skip: [] }],
+          runs: new Map([["packages/bakery/glaze.test.ts", 2]]),
+        }],
+        ["deno"],
+        { objectName: "manifest-x.json.gz" },
+        [],
+        [],
+        {
+          manifest: manifestOf([]),
+          selections: [
+            { entry: repeated!, reason: "value", repeats: 2 },
+            { entry: once!, reason: "value", repeats: 1 },
+          ],
+          projectedSeconds: 96,
+        },
+        LANE_BUDGET_SECONDS,
+      );
+    } finally {
+      console.log = log;
+    }
+    expect(lines.join("\n")).toContain("│ 8s ");
+  });
+
   /**
    * What `describePlan` prints for a lane holding these selections
    * against a suite whose correction is `correction`, projected at 96
@@ -1683,15 +1729,45 @@ describe("running a lane's work", () => {
     );
   });
 
-  it("reads a stand-in's seconds through its suite's correction", () => {
+  it("reads stand-ins' seconds through their suite's correction", () => {
     // A suite whose batches run their files in parallel has a correction
-    // below one, and the packer charged the stand-in at that. Reading
-    // its bare cost instead would report 80 seconds of a 96-second
-    // projection that holds 20.
+    // below one, and the packer charged the five stand-ins at that.
+    // Reading their bare cost instead would report 200 seconds of a
+    // 96-second projection that holds 50.
+    expect(projectionLine(
+      ["proof", "knead", "shape", "rise", "bake"].map((unit) => ({
+        entry: unmeasured(unit, [40]),
+        reason: "unknown" as const,
+        repeats: 1,
+      })),
+      0.25,
+    )).toBe(
+      "Projected: 1m36s of 3m50s, 50s of it charged to 5 units " +
+        "nothing has measured",
+    );
+  });
+
+  it("charges a stand-in only what it adds past the measured tests beside it", () => {
+    // The measured unit takes 100 seconds on its own, which is more than
+    // the suite's loads come to, so the stand-in beside it runs within
+    // that time and the lane is charged nothing more for it.
+    expect(projectionLine([
+      { entry: measured("glaze", 100), reason: "value", repeats: 1 },
+      { entry: unmeasured("proof", [40]), reason: "unknown", repeats: 1 },
+    ], 0.25)).toBe(
+      "Projected: 1m36s of 3m50s, 0s of it charged to 1 unit " +
+        "nothing has measured",
+    );
+  });
+
+  it("reads a lone stand-in's seconds as no less than its own time", () => {
+    // The correction shares a batch's tests out among its units, and a
+    // batch holding one unit, run twice, takes that unit's whole time
+    // twice over.
     expect(projectionLine([
       { entry: unmeasured("proof", [40]), reason: "unknown", repeats: 2 },
     ], 0.25)).toBe(
-      "Projected: 1m36s of 3m50s, 20s of it charged to 1 unit " +
+      "Projected: 1m36s of 3m50s, 1m20s of it charged to 1 unit " +
         "nothing has measured",
     );
   });
@@ -2696,6 +2772,208 @@ describe("what a lane records about itself", () => {
       await Deno.remove(workDir, { recursive: true });
       await Deno.remove(spool, { recursive: true });
     }
+  });
+
+  it("writes the longest unit of each pass, the units its passes opened, and the passes it made", async () => {
+    // A pass finishes no sooner than its longest unit, and the passes
+    // follow one another. `slow` takes three seconds and runs once, and
+    // `quick` takes one and runs three times, so the passes' longest
+    // units come to five seconds: not the three either unit takes over
+    // its own runs, and not the six every record comes to. The first pass
+    // opens both units and the other two open `quick`.
+    const workDir = await Deno.makeTempDir({ prefix: "lane-longest-" });
+    const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
+    const took: Record<string, number> = { slow: 3000, quick: 1000 };
+    try {
+      await runBatch(
+        {
+          suite: suite({
+            id: "pattern-unit",
+            units: ["slow", "quick"],
+            recordSurfaces: [{ kind: "pattern", scope: "patterns" }],
+            locate: (record) => ({ level: "unit", unit: record.test.n }),
+            command: (units, context) => {
+              const records = units.map(({ unit }) =>
+                JSON.stringify({
+                  line: "record",
+                  test: { k: "pattern", s: "patterns", n: unit },
+                  outcome: "pass",
+                  durationMs: took[unit],
+                })
+              ).join("\n");
+              return Promise.resolve([{
+                command: [
+                  Deno.execPath(),
+                  "eval",
+                  `Deno.writeTextFileSync(
+                    Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+                    ${JSON.stringify(records + "\n")},
+                  )`,
+                ],
+                cwd: context.root,
+              }]);
+            },
+          }),
+          units: [{ unit: "slow", skip: [] }, { unit: "quick", skip: [] }],
+          runs: new Map([["slow", 1], ["quick", 3]]),
+        },
+        lane,
+        workDir,
+        spool,
+        {},
+      );
+      const written: string[] = [];
+      for await (const entry of Deno.readDir(spool)) {
+        if (entry.isFile) {
+          written.push(await Deno.readTextFile(`${spool}/${entry.name}`));
+        }
+      }
+      const spooled = written.join("");
+      expect(spooled).toContain(
+        '"n":"ci-lane longest batch pattern-unit"},"outcome":"pass"' +
+          ',"durationMs":5000',
+      );
+      expect(spooled).toContain(
+        '"n":"ci-lane units batch pattern-unit"},"outcome":"pass"' +
+          ',"durationMs":4',
+      );
+      expect(spooled).toContain(
+        '"n":"ci-lane passes batch pattern-unit"},"outcome":"pass"' +
+          ',"durationMs":3',
+      );
+      expect(spooled).toContain(
+        '"n":"ci-lane ran batch pattern-unit"},"outcome":"pass"' +
+          ',"durationMs":6000',
+      );
+    } finally {
+      await Deno.remove(workDir, { recursive: true });
+      await Deno.remove(spool, { recursive: true });
+    }
+  });
+
+  describe("what the processes a batch started spent before their units began", () => {
+    /**
+     * The figures a batch writes whose invocations each run `script`, a
+     * program `deno eval` runs with the batch's spool named in its
+     * environment, and carry the process names given, one invocation
+     * apiece.
+     */
+    const measure = async (
+      invocations: { script: string; process?: string }[],
+    ): Promise<Map<string, number>> => {
+      const workDir = await Deno.makeTempDir({ prefix: "lane-start-" });
+      const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
+      try {
+        await runBatch(
+          {
+            suite: suite({
+              id: "pattern-unit",
+              units: ["one"],
+              command: (_units, context) =>
+                Promise.resolve(invocations.map(({ script, process }) => ({
+                  command: [Deno.execPath(), "eval", script],
+                  cwd: context.root,
+                  ...(process === undefined ? {} : { process }),
+                }))),
+            }),
+            units: [{ unit: "one", skip: [] }],
+            runs: new Map([["one", 1]]),
+          },
+          lane,
+          workDir,
+          spool,
+          {},
+        );
+        const figures = new Map<string, number>();
+        for await (const entry of Deno.readDir(spool)) {
+          if (!entry.isFile) continue;
+          const text = await Deno.readTextFile(`${spool}/${entry.name}`);
+          for (const line of text.split("\n")) {
+            if (line.length === 0) continue;
+            const record = JSON.parse(line);
+            figures.set(record.test.n, record.durationMs);
+          }
+        }
+        return figures;
+      } finally {
+        await Deno.remove(workDir, { recursive: true });
+        await Deno.remove(spool, { recursive: true });
+      }
+    };
+
+    /** A program that marks its units as having begun at `at`. */
+    const marking = (at: string) =>
+      `Deno.writeTextFileSync(
+        Deno.env.get("CF_TEST_RECORDS_DIR") + "/began-a.json",
+        JSON.stringify(${at}),
+      )`;
+
+    it("counts the time until the process marked its units as having begun", async () => {
+      // A mark before the process started is read as nothing spent.
+      const figures = await measure([{ script: marking("0"), process: "a" }]);
+      expect(figures.get("ci-lane start batch pattern-unit")).toBe(0);
+      expect(figures.get("ci-lane processes batch pattern-unit")).toBe(1);
+    });
+
+    it("counts the time until the mark, and not the time after it", async () => {
+      // The process marks as soon as it runs, and then runs a Deno program
+      // of its own and waits for it, which the batch spends after the mark:
+      // more than ten milliseconds, since starting Deno takes that long.
+      const figures = await measure([{
+        script: `${marking("Date.now()")};
+          new Deno.Command(Deno.execPath(), { args: ["eval", "0"] })
+            .outputSync();`,
+        process: "a",
+      }]);
+      const start = figures.get("ci-lane start batch pattern-unit")!;
+      expect(start).toBeGreaterThan(0);
+      expect(start).toBeLessThan(
+        figures.get("ci-lane batch pattern-unit")! - 10,
+      );
+    });
+
+    it("counts no more than the process took", async () => {
+      // A mark after the process ended says its units began once it had
+      // ended, and the batch did not wait that long.
+      const figures = await measure([
+        { script: marking("Date.now() + 3_600_000"), process: "a" },
+      ]);
+      expect(figures.get("ci-lane start batch pattern-unit")).toBe(
+        figures.get("ci-lane batch pattern-unit"),
+      );
+    });
+
+    it("counts nothing of a process that marked nothing", async () => {
+      // A `deno test` that cannot write to its spool is one. What it spent
+      // stays with its units rather than being read as setup.
+      const figures = await measure([
+        { script: "0", process: "a" },
+        { script: marking("0"), process: "b" },
+      ]);
+      expect(figures.get("ci-lane start batch pattern-unit")).toBe(0);
+      expect(figures.get("ci-lane processes batch pattern-unit")).toBe(1);
+    });
+
+    it("counts nothing of an invocation that is not one of its suite's processes, whatever it marks", async () => {
+      // The first invocation's mark is the earlier of the two, so were it
+      // read as the second's, the second would count nothing.
+      const figures = await measure([
+        { script: marking("0") },
+        { script: marking("Date.now() + 3_600_000"), process: "a" },
+      ]);
+      expect(figures.get("ci-lane start batch pattern-unit"))
+        .toBeGreaterThan(0);
+      expect(figures.get("ci-lane processes batch pattern-unit")).toBe(1);
+    });
+
+    it("counts every process it started", async () => {
+      const figures = await measure([
+        { script: marking("0"), process: "a" },
+        { script: marking("0"), process: "b" },
+        { script: marking("0") },
+      ]);
+      expect(figures.get("ci-lane processes batch pattern-unit")).toBe(2);
+    });
   });
 
   /**

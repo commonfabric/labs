@@ -11,7 +11,7 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { Result, Unit } from "../src/storage/interface.ts";
 import type { SessionFactory } from "../src/storage/v2.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
   TestStorageManager,
 } from "./memory-v2-test-utils.ts";
@@ -26,13 +26,7 @@ class PendingSessionFactory implements SessionFactory {
 }
 
 function makeServer(): MemoryV2Server.Server {
-  return new MemoryV2Server.Server({
-    authorizeSessionOpen(m) {
-      const p = (m.authorization as { principal?: unknown })?.principal;
-      return typeof p === "string" ? p : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
+  return newSharedServer();
 }
 
 // A session whose transport delivers the handshake and commits normally but

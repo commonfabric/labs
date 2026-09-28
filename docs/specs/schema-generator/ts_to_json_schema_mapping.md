@@ -1158,14 +1158,19 @@ as of this writing.
 
 Hint shape (`src/interface.ts`): `SchemaHints` is `WeakMap<ts.Node,
 SchemaHint>`, where `SchemaHint` is `{ items?: unknown; cfcUiContract?:
-UiContractHint }` and `UiContractHint` is `{ helper: "UiAction" |
-"UiPromptSlot" | "UiDisclosure"; action?; surface?; role?; kind?;
-trustedPattern?; requiredEventIntegrity? }`. Every member is read-only: the
+UiContractHint; narrowedFrom?: NarrowedFrom }`, `UiContractHint` is
+`{ helper: "UiAction" | "UiPromptSlot" | "UiDisclosure"; action?; surface?;
+role?; kind?; trustedPattern?; requiredEventIntegrity? }`, and `NarrowedFrom`
+is `{ type: ts.Type; typeNode?: ts.TypeNode }`. Every member is read-only: the
 generator only reads hints, and copies the `requiredEventIntegrity` list on the
-way into the emitted schema. Lookups always try the node and
-`ts.getOriginalNode(node)` (`src/ui-contract.ts`, called from
-`schema-generator.ts` and `object-formatter.ts`; the producer writes both —
-`cross-stage-state.ts`).
+way into the emitted schema. A node holds a hint of each kind, recorded apart
+from the others. The producer writes `items` and `cfcUiContract` to the node
+and its original (`cross-stage-state.ts`), and `narrowedFrom` to the node
+alone. A `cfcUiContract` lookup tries the node and `ts.getOriginalNode(node)`
+(`src/ui-contract.ts`, called from `schema-generator.ts` and
+`object-formatter.ts`); an `items` lookup reads the current hint node
+(`common-fabric-formatter.ts`); a `narrowedFrom` lookup reads the node, and the
+node inside its parentheses (`schema-generator.ts`).
 
 - **`items: false`** — array-typed wrapper contents collapse to
   `items: { type: "unknown", …element wrapper markers }` for property-only
@@ -1184,6 +1189,26 @@ way into the emitted schema. Lookups always try the node and
   against the emitted literal
   (`ts-transformers/.../schema-generator.ts`, preferring an
   existing `$UI` property when present).
+- **`narrowedFrom`** names the value a node was built from part of, such as a
+  capture narrowed to the members its callback reads. The node's schema keeps
+  the value's labels: the `ifc` that formatting `type`, spelled by `typeNode`
+  where given, attaches at its top, through the definitions it references,
+  combined into the node's own as an outer declaration's
+  (`applyNodeSchemaHints` in `schema-generator.ts`, `withIfcLabels` and
+  `declaredIfcLabels` in `ifc-labels.ts`). The value is formatted apart from
+  the position, in definitions of its own, with nothing reported, and only for
+  its labels: a type no CFC wrapper holds, other than a union or an
+  intersection, reads as `{}` (`GenerationContext.labelsOnly`). A value that
+  may be `undefined` or `null` has the labels of its one other member. A node
+  narrowed from any other union stands for any of its members, so it has the
+  union's labels, every member's confidentiality, and each other label every
+  member declares alike (`joinMemberIfcLabels`). A member is spelled by the
+  node its type is written as: the declaration's own node where that denotes
+  the member alone, as an optional property's does, and otherwise the member
+  of the union the declaration writes, read through parentheses and through
+  aliases without type parameters (`readAuthoredTypeNode`). A member with no
+  such node is read by its type. A schema whose own reference
+  chain already holds every label is left as it is (`holdsIfcLabels`).
 
 ## 14. Options
 

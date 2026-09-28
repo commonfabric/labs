@@ -6,6 +6,7 @@ import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import { toDocumentPath } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
 import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
@@ -324,13 +325,7 @@ describe("initialization attribution", () => {
         store: new URL(
           `memory://initialization-attribution-${crypto.randomUUID()}`,
         ),
-        // Test-only: trust the asserted principal instead of verifying a
-        // signature, as the memory package's own ACL tests do.
-        authorizeSessionOpen(message) {
-          const principal = (message.authorization as { principal?: unknown })
-            ?.principal;
-          return typeof principal === "string" ? principal : undefined;
-        },
+        authorizeSessionOpen: authorizeLoopbackSessionOpen,
         sessionOpenAuth: { audience: TEST_AUDIENCE },
         acl: { mode: "enforce" },
         subscriptionRefreshDelayMs: 0,

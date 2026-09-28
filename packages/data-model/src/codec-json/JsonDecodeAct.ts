@@ -2,10 +2,16 @@ import { backtickQuote } from "@commonfabric/utils/markdown";
 import { isPlainObject, isUnsafeObjectKey } from "@commonfabric/utils/types";
 
 import type { FabricValue } from "@/interface.ts";
-import { BaseDecodeAct, ProblematicStateError } from "@/codec-common";
+import {
+  BaseDecodeAct,
+  type CodecEngineConfig,
+  ProblematicStateError,
+} from "@/codec-common";
+import type { LiveEnvironment } from "@/codec-interface/interface.ts";
 import { CODEC_META_TAGS } from "@/codec-interface/codec-meta-tags.ts";
 import { debugStr } from "@/value-debug";
 import { ENCODING_PREFIX_TAG, type JsonCodecValue } from "./interface.ts";
+import { excerptOf } from "./text-scan.ts";
 import {
   isEncodedInstance,
   parseWireText,
@@ -22,17 +28,32 @@ import {
  * array holes.
  */
 export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
+  readonly #slotLimit: number | undefined;
+
+  /**
+   * Constructs an instance. `slotLimit`, when given, bounds the slots the text
+   * this act decodes may stand for, as `parseWireText()` counts them.
+   */
+  constructor(
+    config: CodecEngineConfig<JsonCodecValue>,
+    env: LiveEnvironment,
+    slotLimit?: number,
+  ) {
+    super(config, env);
+    this.#slotLimit = slotLimit;
+  }
+
   /**
    * @inheritDoc
    *
    * Checks the format tag and parses what follows it. A string without the tag
    * is not this format's serialized form at all, which is refused here rather
    * than walked -- and settles against `lenient` like any other malformation
-   * off a channel.
+   * off a channel, as does text past this act's slot limit.
    */
   override encodedFromSerializedForm(data: string): JsonCodecValue {
     if (!seemsLikeEncoded(data)) {
-      const excerpt = (data.length <= 50) ? data : `${data.slice(0, 50)}...`;
+      const excerpt = excerptOf(data);
       throw new ProblematicStateError(
         "",
         excerpt,
@@ -43,6 +64,7 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
     return parseWireText(
       data.slice(ENCODING_PREFIX_TAG.length),
       this.config.mutable,
+      this.#slotLimit,
     );
   }
 

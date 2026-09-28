@@ -21,6 +21,7 @@ import * as path from "@std/path";
 import ports from "@commonfabric/ports" with { type: "json" };
 import {
   FragmentWriter,
+  markUnitsBegan,
   preloadArgument,
   RECORDS_DIR_VARIABLE,
   recordsDir,
@@ -363,6 +364,12 @@ async function runPatternTests(
     `Found ${testFiles.length} pattern test(s), running ${concurrency} at a time`,
   );
 
+  // The files begin here. What this process spent before now is in no
+  // file's record, and a lane charges it as this process's setup. The
+  // precompile below compiles each file's program, so what it takes grows
+  // with the files, and a lane charges it to them.
+  markUnitsBegan();
+
   // With a cache file to fill, every file's program is compiled once, in one
   // process, before any test runs. Each `cf test` child seeds from that file
   // only as it starts, so on a cold cache the children started together
@@ -598,7 +605,7 @@ export function buildFilteredTestArgs(
   testFiles: string[],
   junitDir?: string,
 ): string[] {
-  const args = ["test", "-A"];
+  const args = ["test", "--no-check", "-A"];
 
   if (pkg === "patterns") {
     args.push("--v8-flags=--max-old-space-size=4096", "--trace-leaks");

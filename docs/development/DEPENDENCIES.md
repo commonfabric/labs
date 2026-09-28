@@ -459,6 +459,31 @@ package's `wasm/tree-sitter-swift.wasm` has the same digest; the lockfile's
 integrity hash then holds the package to those bytes. Run the `cf view` Swift
 tests afterward, and `cf view` against a `.swift` file.
 
+Kotlin reaches its grammar through
+`packages/cli/lib/view/languages/kotlin/kotlin.ts`, and the CLI pins
+`@binclusive/tree-sitter-kotlin-wasm` exactly. The Kotlin grammar is
+[`tree-sitter-grammars/tree-sitter-kotlin`](https://github.com/tree-sitter-grammars/tree-sitter-kotlin),
+whose own npm package ships its WebAssembly build beside 44 MB of generated C
+source and native bindings, a development tool as a runtime dependency, and an
+install script. The pinned package holds only that WebAssembly build. Version
+0.1.0 holds the 1.1.0 release's `tree-sitter-kotlin.wasm`, whose SHA-256 is
+`7009d69453bc8735e438b2818a633efb21c88f99782769abba60dffedfab73f7`, the digest
+of both the asset attached to the upstream release and the file in the
+upstream npm package. Before rolling it, confirm that the package's
+`wasm/tree-sitter-kotlin.wasm` has the digest of the new upstream release's
+asset. Like every grammar, it has to match the `web-tree-sitter` runtime's
+binary interface, so roll it with the runtime. Run the `cf view` Kotlin tests
+afterward, and `cf view` against a `.kt` file.
+
+TOML reaches its grammar through `packages/cli/lib/view/languages/toml/toml.ts`,
+and the CLI pins `@tree-sitter-grammars/tree-sitter-toml` exactly. That package
+is the grammar's own and ships its WebAssembly build. Like `tree-sitter-python`,
+it also ships native bindings and an install script that builds them, which the
+pager never loads; the whole package is 0.76 MB unpacked, and its two
+dependencies are the ones `tree-sitter-python` already brings. Roll it with the
+runtime, then run the `cf view` TOML tests and `cf view` against a `.toml`
+file.
+
 ### Viz.js
 
 The scripts workspace pins `@viz-js/viz` exactly. `scripts/docs-links.ts`

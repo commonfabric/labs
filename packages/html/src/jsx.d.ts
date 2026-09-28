@@ -4057,6 +4057,7 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "oncf-error"?: any;
   "oncf-collaboration-reconcile"?: any;
   "oncf-presence-error"?: any;
+  "oncf-presence-join"?: any;
   "onbacklink-click"?: any;
   "onbacklink-create"?: any;
   "onmention-ref-label-changed"?: any;

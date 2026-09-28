@@ -96,3 +96,9 @@ decision is reversed or superseded).
 
 - [Shared profile space](shared-profile-space.md)
 - [Shared-profile participant rosters](shared-profile-rosters.md)
+
+### Chat
+
+- [FabriChat](fabrichat/README.md) (proposed): a room per conversation, a
+  per-user manager, and placements and adapters that show rooms in other
+  spaces

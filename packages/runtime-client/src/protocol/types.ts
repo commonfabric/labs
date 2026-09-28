@@ -3732,6 +3732,13 @@ export type EventAttentionResolveResponse = {
  */
 export type WorkerReadyNotification = {
   type: TransportNotificationType.WorkerReady;
+  /**
+   * The name of a Web Lock the worker holds from before this post until its
+   * runtime is torn down, which is when a terminated web worker's locks are
+   * released. A request for it is therefore granted only once the worker is
+   * gone. A worker that names none is not waited for.
+   */
+  lifetimeLock?: string;
 };
 
 /** The `console` methods the worker's console bridge forwards. */

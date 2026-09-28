@@ -181,6 +181,9 @@
       // Attached data files travel byte-for-byte and their bytes are asserted
       // on; formatting them would rewrite the thing under test.
       "packages/cli/integration/pattern/data/",
+      // Language fixtures reproduce files from the surveyed repositories, and
+      // the viewer is tested on those bytes.
+      "packages/cli/test/fixtures/view-language/",
       "packages/ui/src/v2/components/cf-chart/cf-chart.ts",
       "packages/ui/src/v2/components/cf-chart/lib/axes.ts",
       "packages/ui/src/v2/components/cf-chart/lib/render.ts",

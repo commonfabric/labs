@@ -12,6 +12,7 @@ import { NullLiveEnvironment } from "@commonfabric/data-model/codec-common";
 import {
   fabricFromJsonValue,
   jsonFromFabricValue,
+  newDefaultJsonCodecEngine,
 } from "@commonfabric/data-model/codecs";
 import { internPathSelector } from "@commonfabric/data-model-schema";
 import { isPlainObject, unsafeObjectKeyIn } from "@commonfabric/utils/types";
@@ -2591,16 +2592,45 @@ export const encodeMemoryBoundary = (value: FabricValue): string =>
 export const commitPreconditionValueHash = (value: FabricValue): string =>
   hashStringOf(encodeMemoryBoundary(value));
 
+/**
+ * The most slots one memory message from an untrusted sender may stand for:
+ * the places its values fill or leave absent, an array counting as its length
+ * with holes included and a record as its number of members. It bounds the
+ * work that decoding, applying, and re-encoding one message can cost the
+ * server, whatever the message's size on the wire.
+ */
+export const MAX_UNTRUSTED_MESSAGE_SLOTS = 1_000_000;
+
+const untrustedMemoryCodec = newDefaultJsonCodecEngine({
+  slotLimit: MAX_UNTRUSTED_MESSAGE_SLOTS,
+});
+
+/**
+ * Decodes wire text from an untrusted sender. Text standing for more than
+ * {@link MAX_UNTRUSTED_MESSAGE_SLOTS} slots is refused with `SlotLimitError`
+ * before any of it is walked.
+ *
+ * This is the decoder for anything a client sent. Text the memory system wrote
+ * itself -- a stored row, a frame the server sent -- goes through
+ * {@link decodeTrustedMemoryBoundary} instead, which applies no limit.
+ */
 export const decodeMemoryBoundary = <Value extends FabricValue = FabricValue>(
   source: string,
-): Value & FabricValue => {
-  const decoded = fabricFromJsonValue(
-    source,
-    memoryLiveEnvironment,
-  );
+): Value & FabricValue =>
+  untrustedMemoryCodec.decode(source, memoryLiveEnvironment) as Value;
 
-  return decoded as Value;
-};
+/**
+ * Like {@link decodeMemoryBoundary}, except that no slot limit applies: for
+ * text the memory system wrote itself, such as a stored row or a frame the
+ * server sent. A stored document may stand for more slots than one message
+ * may, and refusing to read it would break every reader of that document.
+ */
+export const decodeTrustedMemoryBoundary = <
+  Value extends FabricValue = FabricValue,
+>(
+  source: string,
+): Value & FabricValue =>
+  fabricFromJsonValue(source, memoryLiveEnvironment) as Value;
 
 export const toDocumentPath = (path: readonly string[]): DocumentPath =>
   path as DocumentPath;
@@ -2631,17 +2661,18 @@ export const isEntityDocument = (
  *
  * `decode` is the caller's, because the readers disagree on which payloads they
  * accept and only on that: the engine reads what it wrote, through
- * {@link decodeMemoryBoundary}, while an offline reader over a durable file may
- * also meet untagged plain-JSON rows and route accordingly. Everything else is
- * one rule shared here, since a reader that tests the payload for truthiness
- * instead takes an empty string for an absent one and rebuilds a document the
- * engine would have rejected.
+ * {@link decodeTrustedMemoryBoundary}, while an offline reader over a durable
+ * file may also meet untagged plain-JSON rows and route accordingly.
+ * Everything else is one rule shared here, since a reader that tests the
+ * payload for truthiness instead takes an empty string for an absent one and
+ * rebuilds a document the engine would have rejected.
  *
  * An absent payload never reaches the decoder. Handing one a placeholder string
- * makes the rule depend on which decoder was passed — `decodeMemoryBoundary`
- * refuses any untagged payload, a plain-JSON decoder accepts one — and two
- * readers that disagree about an absent payload do not share a rule at all. An
- * absent document is `null`, which the root check below refuses on its own.
+ * makes the rule depend on which decoder was passed —
+ * `decodeTrustedMemoryBoundary` refuses any untagged payload, a plain-JSON
+ * decoder accepts one — and two readers that disagree about an absent payload
+ * do not share a rule at all. An absent document is `null`, which the root
+ * check below refuses on its own.
  */
 export const decodeStoredDocumentPayload = (
   decode: (source: string) => FabricValue,

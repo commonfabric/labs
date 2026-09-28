@@ -101,16 +101,20 @@ transaction that admits no writes has nothing to stamp in any case.
 `Runtime.editWithRetry` accepts an optional owner `AbortSignal`. With one, it
 awaits `prepareForCommitCooperatively` before committing. The synchronous and
 cooperative entry points run the same boundary checks; the cooperative driver
-uses `CooperativeYield` between target documents so cancellation can reach the
-event loop. Cancellation aborts the uncommitted transaction and ends retries.
-No target is omitted from a successful preparation.
+uses `CooperativeYield` between target documents and within staged-reference
+label derivation, including derivation for integrity floors, so cancellation
+can reach the event loop. The reference walk suspends between recursive calls
+and label-map construction phases. Cancellation aborts the uncommitted
+transaction and ends retries. No target is omitted from a successful
+preparation.
 
 The privileged write scope covers each synchronous verification step and ends
 before a yield. If the transaction's activity epoch changes during that yield,
 the attempt aborts rather than sealing candidates collected before the change.
-The caller must await preparation before committing. Initial collections, each
-target's verification, and final ceiling, grant, and digest work remain
-synchronous.
+The caller must await preparation before committing. Initial collections,
+individual flat label-map operations, other verification, and final ceiling,
+grant, and digest work remain synchronous. Suspension points do not impose a
+transaction-size limit or a hard bound on event-loop latency.
 
 `sqliteQuery` supplies its builtin lifetime signal to completion and error
 writebacks. Stopping the builtin cancels preparation; a later activation can

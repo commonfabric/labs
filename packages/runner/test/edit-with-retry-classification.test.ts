@@ -25,6 +25,7 @@ import type { MemorySpace, Signer, URI } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   type Options,
   type SessionFactory,
@@ -362,11 +363,7 @@ Deno.test("a server ProtocolError reaches editWithRetry by name, once", async ()
 
   const server = new MemoryV2Server.Server({
     store: new URL("memory://retry-classification"),
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
+    authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: TEST_AUDIENCE },
     acl: { mode: "enforce" },
     subscriptionRefreshDelayMs: 0,
@@ -516,11 +513,7 @@ Deno.test("a SessionError commits once and does not remount the session", async 
 
   const server = new MemoryV2Server.Server({
     store: new URL("memory://session-error-retry"),
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
+    authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: TEST_AUDIENCE },
     acl: { mode: "enforce" },
     subscriptionRefreshDelayMs: 0,
