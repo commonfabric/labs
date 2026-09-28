@@ -288,6 +288,13 @@ type PendingPresenceJoin = {
   early: PresenceWireEvent[];
 
   /**
+   * The handles of the callers waiting on the join. The room takes them the
+   * moment it exists, so no other handle's leave can empty it while those
+   * callers are still being handed it.
+   */
+  handles: Set<PresenceHandleState>;
+
+  /**
    * Settles on the room the join reached: the one it joined, or, when the
    * worker names a room another join already holds or is joining by name,
    * that one. The two cells are then aliases of one field, and their handles
@@ -336,13 +343,19 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    */
   #presenceByCell = new Map<string, PresenceRoomState>();
 
-  /** Named-room joins in flight, by the key of the room each names. */
+  /** Named-room joins not yet settled, by the key of the room each names. */
   #presenceJoinsByRoom = new Map<string, PendingPresenceJoin>();
 
-  /** Derived-room joins in flight, by the cell each was made through. */
+  /**
+   * Derived-room joins not yet settled, by the cell each was made through. An
+   * alias's join stays here until the room it shares has settled too.
+   */
   #presenceJoinsByCell = new Map<string, PendingPresenceJoin>();
 
-  /** Joins in flight by the membership each requests. */
+  /**
+   * Joins the worker has not answered, by the membership each requests, so
+   * that the membership's early events are held for the room.
+   */
   #presenceJoinsBySubscription = new Map<string, PendingPresenceJoin>();
 
   private constructor(
@@ -591,6 +604,12 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
         this.#presenceJoinsByRoom,
         presenceRoomKey(ref.space, requested),
       ];
+    const handle: PresenceHandleState = {
+      facets: new Map(),
+      focused: false,
+      listeners: new Set(),
+      left: false,
+    };
     let room = rooms.get(key);
     if (room?.ended) {
       this.#forgetPresenceRoom(room);
@@ -599,18 +618,15 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     if (room === undefined) {
       const join = joins.get(key) ??
         this.#joinPresence(ref, cellKey, requested);
+      join.handles.add(handle);
       room = await join.room;
       if (room.ended) {
+        void this.#releasePresenceHandle(room, handle);
         throw new Error("presence room ended while it was being joined");
       }
+    } else {
+      room.handles.add(handle);
     }
-    const handle: PresenceHandleState = {
-      facets: new Map(),
-      focused: false,
-      listeners: new Set(),
-      left: false,
-    };
-    room.handles.add(handle);
     return {
       get participantId() {
         return room.participantId;
@@ -650,16 +666,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
         if (handle.left) return;
         handle.left = true;
         handle.listeners.clear();
-        room.handles.delete(handle);
-        if (room.handles.size > 0) {
-          if (handle.facets.size > 0) this.#schedulePresencePublish(room);
-          return;
-        }
-        this.#forgetPresenceRoom(room);
-        await this.#conn.request<RequestType.PresenceLeave>({
-          type: RequestType.PresenceLeave,
-          subscriptionId: room.subscriptionId,
-        }).catch(() => undefined);
+        await this.#releasePresenceHandle(room, handle);
       },
     };
   }
@@ -1663,7 +1670,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
 
   /**
    * Starts a join of the room `requested` names, or of `ref`'s derived room
-   * when it names none, and indexes the join until the worker answers.
+   * when it names none, and indexes the join until it settles.
    */
   #joinPresence(
     ref: CellRef,
@@ -1674,6 +1681,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     const join: PendingPresenceJoin = {
       subscriptionId: crypto.randomUUID(),
       early: [],
+      handles: new Set(),
       room: settled.promise,
     };
     if (requested === undefined) {
@@ -1685,18 +1693,18 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       );
     }
     this.#presenceJoinsBySubscription.set(join.subscriptionId, join);
-    this.#settlePresenceJoin(join, ref, cellKey, requested).then(
-      settled.resolve,
-      settled.reject,
-    );
+    this.#settlePresenceJoin(join, ref, cellKey, requested)
+      .finally(() => this.#forgetPresenceJoin(join))
+      .then(settled.resolve, settled.reject);
     return join;
   }
 
   /**
    * Helper for `#joinPresence()`, which waits out the worker's reply and
-   * returns the room the join reached. A derived room the client already
-   * holds, or is joining by name, makes this join's membership redundant: it
-   * is left, and the join returns that room.
+   * returns the room the join reached, holding the handles waiting on the
+   * join. A derived room the client already holds, or is joining by name,
+   * makes this join's membership redundant: it is left, and the join returns
+   * that room.
    */
   async #settlePresenceJoin(
     join: PendingPresenceJoin,
@@ -1718,20 +1726,22 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       this.#leavePresence(join.subscriptionId);
       throw error;
     } finally {
-      this.#forgetPresenceJoin(join);
+      this.#presenceJoinsBySubscription.delete(join.subscriptionId);
     }
     const key = presenceRoomKey(ref.space, response.room);
     if (requested === undefined) {
+      // A room another join holds or is joining is one this cell aliases.
       const held = this.#presenceRooms.get(key);
-      const shared = held !== undefined && !held.ended
-        ? held
-        : this.#presenceJoinsByRoom.get(key)?.room;
-      if (shared !== undefined) {
-        // Another join reached this room first, and the cells are aliases of
-        // one field.
+      if (held !== undefined && !held.ended) {
         this.#leavePresence(join.subscriptionId);
-        const room = await shared;
-        if (!room.ended) this.#presenceByCell.set(cellKey, room);
+        this.#sharePresenceRoom(held, join, cellKey);
+        return held;
+      }
+      const named = this.#presenceJoinsByRoom.get(key);
+      if (named !== undefined) {
+        this.#leavePresence(join.subscriptionId);
+        const room = await named.room;
+        this.#sharePresenceRoom(room, join, cellKey);
         return room;
       }
     }
@@ -1746,22 +1756,52 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
           participant,
         ]),
       ),
-      handles: new Set(),
+      handles: join.handles,
       name: "",
       frame: undefined,
       ended: false,
     };
     for (const event of join.early) this.#receivePresence(room, event);
-    if (room.ended) {
-      // A failure reached the membership ahead of the reply. No handle will
-      // take the room, so nothing else would leave it.
-      this.#leavePresence(room.subscriptionId);
-      return room;
-    }
     this.#presenceRooms.set(key, room);
     this.#presenceBySubscription.set(room.subscriptionId, room);
     if (requested === undefined) this.#presenceByCell.set(cellKey, room);
     return room;
+  }
+
+  /**
+   * Helper for `#settlePresenceJoin()`, which hands the room another join
+   * reached to the handles waiting on an alias's join, and indexes it by the
+   * alias cell. An ended room takes neither.
+   */
+  #sharePresenceRoom(
+    room: PresenceRoomState,
+    join: PendingPresenceJoin,
+    cellKey: string,
+  ): void {
+    if (room.ended) return;
+    for (const handle of join.handles) room.handles.add(handle);
+    this.#presenceByCell.set(cellKey, room);
+  }
+
+  /**
+   * Takes `handle` off the room, republishing the room's record without its
+   * facets, or leaving the room when it was the last handle. A handle the
+   * room does not hold releases nothing.
+   */
+  async #releasePresenceHandle(
+    room: PresenceRoomState,
+    handle: PresenceHandleState,
+  ): Promise<void> {
+    if (!room.handles.delete(handle)) return;
+    if (room.handles.size > 0) {
+      if (handle.facets.size > 0) this.#schedulePresencePublish(room);
+      return;
+    }
+    this.#forgetPresenceRoom(room);
+    await this.#conn.request<RequestType.PresenceLeave>({
+      type: RequestType.PresenceLeave,
+      subscriptionId: room.subscriptionId,
+    }).catch(() => undefined);
   }
 
   #leavePresence(subscriptionId: string): void {
@@ -1846,8 +1886,8 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   }
 
   /**
-   * Drops the room from every index, and marks it ended so that a join
-   * which settled on it and has not yet taken it is not handed it.
+   * Drops the room from every index, and marks it ended so that nothing more
+   * is published or delivered through it, and no alias's join shares it.
    */
   #forgetPresenceRoom(room: PresenceRoomState): void {
     room.ended = true;
@@ -1862,7 +1902,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     }
   }
 
-  /** Drops a join the worker has answered from every index of joins. */
+  /** Drops a settled join from the indexes a later join would find it by. */
   #forgetPresenceJoin(join: PendingPresenceJoin): void {
     const indexes = [this.#presenceJoinsByRoom, this.#presenceJoinsByCell];
     for (const joins of indexes) {
@@ -1870,7 +1910,6 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
         if (held === join) joins.delete(key);
       }
     }
-    this.#presenceJoinsBySubscription.delete(join.subscriptionId);
   }
 
   #onEventNeedsAttention = (

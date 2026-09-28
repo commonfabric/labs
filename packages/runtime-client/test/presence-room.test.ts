@@ -235,6 +235,49 @@ describe("RuntimeClient presence rooms", () => {
       ]);
     });
 
+    it("hands a join its handle when another caller joins and leaves the room before the first join resumes", async () => {
+      // The second caller acts after each number of microtasks in turn, so
+      // every point between the reply and the first caller resuming is hit.
+      for (let ticks = 0; ticks < 8; ticks++) {
+        const { client, cell, requests, answerJoin } = buildClient({
+          holdJoins: true,
+        });
+        const joining = client.joinPresenceRoom(cell);
+        answerJoin(0);
+        for (let i = 0; i < ticks; i++) await Promise.resolve();
+        const passing = await client.joinPresenceRoom(cell);
+        await passing.leave();
+        const first = await joining;
+        expect(first.participantId).toBe("participant:self:1");
+        expect(requests.map(({ type }) => type)).toEqual([
+          RequestType.PresenceJoin,
+        ]);
+      }
+    });
+
+    it("shares an alias's join in flight with a later join through the alias while it waits on a named join", async () => {
+      const { client, cell, requests, answerJoin } = buildClient({
+        holdJoins: true,
+      });
+      const named = client.joinPresenceRoom(cell, { room: ROOM });
+      const derived = client.joinPresenceRoom(aliasCell);
+      answerJoin(1);
+      await settle();
+      const again = client.joinPresenceRoom(aliasCell);
+      expect(requests.map(({ type }) => type)).toEqual([
+        RequestType.PresenceJoin,
+        RequestType.PresenceJoin,
+        RequestType.PresenceLeave,
+      ]);
+      answerJoin(0);
+      const handles = await Promise.all([named, derived, again]);
+      expect(handles.map(({ participantId }) => participantId)).toEqual([
+        "participant:self:1",
+        "participant:self:1",
+        "participant:self:1",
+      ]);
+    });
+
     it("shares a room a named join is still joining with a cell the worker resolves to it", async () => {
       const { client, cell, requests, answerJoin } = buildClient({
         holdJoins: true,
