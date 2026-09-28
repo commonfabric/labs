@@ -1918,12 +1918,12 @@ const VERBS: ReadonlyMap<string, VerbEntry> = new Map<string, VerbEntry>([
     arity: { operands: "none" },
     usage: "xpwd",
     summary: "Writes the external working location, whole.",
-    detail:
-      "It is the position a relative external operand is read against — " +
-      "`file:out.json`\nnames a file beside it, where `file:/tmp/out.json` " +
-      "names one whole — and it\nprints in the one spelling that reads " +
-      "back as the same place.\n\nThe prompt carries the fabric place and " +
-      "carries nothing about this one,\nwhich is what this is for.",
+    detail: "Shuttle stands in two places at once: one in the fabric, which " +
+      "`pwd`\nprints, and one outside it, which is this. It prints in the " +
+      "one spelling\nthat reads back as the same place.\n\nThe prompt " +
+      "carries the fabric place and carries nothing about this one,\nwhich " +
+      "is what this is for. `where` prints it beside every other " +
+      "dimension;\nthis is the form to copy.",
   }],
 ]);
 

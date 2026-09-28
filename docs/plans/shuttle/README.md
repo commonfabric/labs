@@ -217,11 +217,12 @@ invisible, the prompt renders the whole ambient record — place and scope
     one outside is not an escape — globs, `&&` and the rest are what a
     person reached for `!` to get. A local program runs at the external
     working location, which decision 30 makes a directory on this machine.
-    `!cf` injects the connection — api endpoint, identity, space — and not
-    the position: a `cf` command takes a reference as an operand rather
-    than a flag, and knowing which operand that is for each command is
-    `cf`'s grammar rather than shuttle's, which is the drift decision 9
-    warns about. A flag written on the line wins over the injected one,
+    `!cf` injects the dimensions fixed at launch — api endpoint, identity
+    and the space (decision 22) — and not the piece and path standing
+    under them: a `cf` command takes a reference as an operand rather than
+    a flag, and knowing which operand that is for each command is `cf`'s
+    grammar rather than shuttle's, which is the drift decision 9 warns
+    about. A flag written on the line wins over the injected one,
     silently: the escape is a subprocess, so it may reach a space this
     process cannot, and refusing would leave `!cf` weaker than the `cf`
     outside it.
@@ -285,10 +286,11 @@ invisible, the prompt renders the whole ambient record — place and scope
     (`> file:../out.json`), and a bare relative operand is always fabric —
     so no operand ever changes plane by position, the scheme deciding that
     and position deciding nothing. There is no separate base name. `x:` was
-    one while the external plane spanned several schemes and had to be
-    named without naming any of them; decision 30 leaves it spanning one,
-    and a base that abstracts over a set of one is a second spelling for
-    what the scheme already says (decision 13).
+    one, and what it bought was naming the external plane without naming
+    which member of it a location stood on. A schemed operand names that
+    member outright, and shuttle stands on one at a time, so the base says
+    a second time what the scheme has said already (decision 13) — which
+    holds however many members the family comes to have.
 24. **Pagination: height-fit pages, and `more` continues.** `ls` prints
     one terminal-height page plus a status line and never escalates to a
     view uninvited; `more` continues the listing and its handle numbering,
@@ -391,11 +393,13 @@ invisible, the prompt renders the whole ambient record — place and scope
     moving through it, and that plane has nothing for a move to land on.
     Two things follow. The external working location is always a directory
     on this machine, which is what gives `!` somewhere to run and what lets
-    decision 23 retire the base. And a scheme that does afford navigation —
-    one with a listing, as `ftp:` and `s3:` have — reaches `xcd` by this
-    rule rather than by a change to it, while `https:` stays what
-    [`futures.md`](futures.md) makes it: a read end, naming its place
-    whole.
+    decision 23 retire the base. And the rule is what a later member of
+    the family would be admitted by rather than something a later member
+    would change: a scheme that answers what stands under a path has a
+    `navigate` to give, where `https:` has none and stays what
+    [`futures.md`](futures.md) makes it — a read end, naming its place
+    whole. No such member is in v1, and `file:` is the whole of the table
+    shuttle acts on today.
 
 The line grammar itself — what a line may say, what its parts denote, and what
 shuttle does and shows in return — is drafted in [`grammar.md`](grammar.md). The

@@ -709,12 +709,18 @@ Landed:
   back as the same place (`lib/shuttle/external.ts`). A token is resolved as
   a path rather than as a URL reference, the two not being the same language.
   It stands beside the place rather than inside it, and the two move
-  independently. The
-  scheme-absolute rule is shuttle's own check rather than the URL parser's,
-  which does not enforce it — `new URL("file:out.json")` answers with a path
-  of `/out.json`, turning a relative spelling into a place at the root. `~`
-  expands where the location is on the plane that has a home, and a path
-  naming somebody else's is refused rather than guessed at.
+  independently.
+
+  What `xcd` takes is checked by shuttle rather than by the URL parser,
+  which reads a schemed token further than the token says:
+  `new URL("file:out.json")` answers with a path of `/out.json`, turning a
+  relative spelling into a place at the root rather than refusing it. `xcd`
+  wants an absolute path behind a scheme and says so. Decision 23 gives an
+  *operand* the other reading — relative to this location — and that
+  reading lands with the verbs that read one.
+
+  `~` expands against the home this run was given, and a path naming
+  somebody else's is refused rather than guessed at.
 
   The location stands on `file:` and nowhere else (decision 30), so it is
   always a directory on this machine. `x:` was to have been the base a
@@ -768,11 +774,20 @@ JSON's own spelling — so `get --json > file:…` round-trips already. What was
 genuinely left was whether a *message* stays glyphed into a file or a pipe and
 whether a *name* in a redirected listing stays described.
 
-Both stay as they are. A file is `cat`'d onto a terminal as readily as a
-screen is written to, so the safety the glyphing buys defers rather than
-evaporates; and one question with one answer is what keeps a reader from
-having to know where their output went before they know what it says. The
-canonical output form ([`futures.md`](futures.md)) inherits it.
+Both stay as they are, for two reasons that are worth keeping apart.
+
+The glyphing is there because a terminal acts on a control character, and
+that is a fact about terminals rather than about files. What makes it carry
+into a file is that the file reaches one later: a file is `cat`'d onto a
+terminal as readily as a screen is written to, so the safety defers rather
+than evaporates, and a rendering that dropped it would be storing the
+hazard rather than avoiding it.
+
+The second reason stands on its own and would hold even if nothing ever
+`cat`'d the file. One question with one answer is what keeps a reader from
+having to know where their output went before they know what it says, and
+it is what lets the canonical output form ([`futures.md`](futures.md))
+inherit this rather than fork it.
 
 B4 closes v1. The deferred set — the pinned strip, cold-browse mode, the
 native tool set, heavyweight `where` edits, the `fuse/` facet,

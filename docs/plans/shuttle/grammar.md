@@ -1051,7 +1051,7 @@ anything outside the fabric is named by an explicit scheme.
   refusal names the plane's limit rather than a gap in shuttle (decision
   30). HTTP has no listing primitive — an auto-index page is a server's
   choice rather than the protocol's — and no traversal for `..` to act on,
-  which is why three of its columns are empty. `https:` read ends are
+  which empties four of its five columns and leaves the read. `https:` read ends are
   designed and deferred ([`futures.md`](futures.md)), and writing to an
   external scheme stays out of scope until a use rules it in.
 - Shuttle maintains two working positions: the fabric cwd and one
