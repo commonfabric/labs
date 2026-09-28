@@ -306,6 +306,36 @@ describe("RuntimeClient presence rooms", () => {
         .toEqual([requests[1].subscriptionId]);
     });
 
+    it("rejects an alias's join when the named join it waits on fails ahead of its reply, and joins afresh next time", async () => {
+      const { client, cell, requests, notify, answerJoin } = buildClient({
+        holdJoins: true,
+      });
+      const named = client.joinPresenceRoom(cell, { room: ROOM });
+      const derived = client.joinPresenceRoom(aliasCell);
+      const rejections = [named, derived].map((joining) =>
+        expect(joining).rejects.toThrow(
+          "presence room ended while it was being joined",
+        )
+      );
+      answerJoin(1);
+      await settle();
+      notify({
+        kind: "failure",
+        error: { name: "SessionRevokedError", message: "taken over" },
+      });
+      answerJoin(0);
+      await Promise.all(rejections);
+      // The alias gave its own membership up when its reply named the room,
+      // and the failed membership is left once; nothing is left twice.
+      expect(
+        requests.filter(({ type }) => type === RequestType.PresenceLeave)
+          .map(({ subscriptionId }) => subscriptionId),
+      ).toEqual([requests[1].subscriptionId, requests[0].subscriptionId]);
+      const rejoining = client.joinPresenceRoom(aliasCell);
+      answerJoin(2);
+      expect((await rejoining).participantId).toBe("participant:self:3");
+    });
+
     it("shares an alias's join in flight with a later join through the alias while it waits on a named join", async () => {
       const { client, cell, requests, answerJoin } = buildClient({
         holdJoins: true,
@@ -540,6 +570,23 @@ describe("RuntimeClient presence rooms", () => {
       notify({ kind: "upsert", participant: newer });
       answerJoin(0);
       expect((await joining).participants).toEqual([newer]);
+    });
+
+    it("applies and delivers nothing after the failure that ended the room", async () => {
+      const { client, cell, notify } = buildClient();
+      const handle = await client.joinPresenceRoom(cell);
+      const events: PresenceEvent[] = [];
+      handle.subscribe((event) => events.push(event));
+      notify({
+        kind: "failure",
+        error: { name: "SessionRevokedError", message: "taken over" },
+      });
+      notify({
+        kind: "upsert",
+        participant: { ...peer, revision: 2, name: "Peer, moved" },
+      });
+      expect(handle.participants).toEqual([peer]);
+      expect(events.map((event) => event.kind)).toEqual(["failure"]);
     });
 
     it("ends the room on a failure and still tells the worker on leave", async () => {
