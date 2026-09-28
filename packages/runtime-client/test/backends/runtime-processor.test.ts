@@ -54,9 +54,12 @@ import {
   cfcLabelViewForCell,
   createRuntimeCfcModulePolicySource,
   linkCfcLabelView,
-  setLinkCfcLabelView,
+  withLinkCfcLabelView,
 } from "@commonfabric/runner/cfc";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  newLoopbackServer,
+  StorageManager,
+} from "@commonfabric/runner/storage/cache.deno";
 import * as V2Storage from "@commonfabric/runner/storage/v2";
 
 import {
@@ -133,16 +136,7 @@ const createRuntime = (
   actingPrincipal?: string,
   apiUrl = new URL("http://localhost/"),
 ) => {
-  const server = new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: {
-      audience: testSessionOpenAudience,
-    },
-  });
+  const server = newLoopbackServer();
   const storageManager = new SharedV2StorageManager({
     as: cfcSigner,
     memoryHost: new URL("memory://"),
@@ -2872,20 +2866,22 @@ describe("runtime-processor", () => {
       runtime: Runtime,
       id: string,
     ): Cell<unknown> {
-      const link = runtime.getCell(cfcSigner.did(), id).getAsLink();
-      setLinkCfcLabelView(link, {
-        version: 1,
-        entries: [{
-          path: [],
-          label: {
-            confidentiality: [{
-              type: CFC_ATOM_TYPE.Caveat,
-              kind: "derived-from",
-              source: "did:key:alice",
-            }],
-          },
-        }],
-      } as CfcLabelView);
+      const link = withLinkCfcLabelView(
+        runtime.getCell(cfcSigner.did(), id).getAsLink(),
+        {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: [{
+                type: CFC_ATOM_TYPE.Caveat,
+                kind: "derived-from",
+                source: "did:key:alice",
+              }],
+            },
+          }],
+        } as CfcLabelView,
+      );
       return runtime.getCellFromLink(link);
     }
 
@@ -4205,14 +4201,7 @@ describe("runtime-processor", () => {
         `direct-scoped-cell-initialize-${crypto.randomUUID()}`,
       );
       const space = signer.did();
-      const server = new MemoryV2Server.Server({
-        authorizeSessionOpen(message) {
-          const principal = (message.authorization as { principal?: unknown })
-            ?.principal;
-          return typeof principal === "string" ? principal : undefined;
-        },
-        sessionOpenAuth: { audience: testSessionOpenAudience },
-      });
+      const server = newLoopbackServer();
       const managerOptions = {
         as: signer,
         memoryHost: new URL("memory://"),
@@ -5984,6 +5973,54 @@ describe("runtime-processor", () => {
           host: "http://refused.test/",
         })).toEqual({ value: false });
         expect(calls.length).toBe(2);
+      });
+    });
+
+    describe("handleRegisterSpaceHostDetailed()", () => {
+      it("forwards to the runtime and returns each registration unchanged", () => {
+        const calls: Array<[string, string]> = [];
+        const registrations = {
+          "http://accepted.test/": { accepted: true },
+          "http://other.test/": {
+            accepted: false,
+            reason: "known-different-host",
+            existingHost: "http://known.test/",
+          },
+          "http://late.test/": {
+            accepted: false,
+            reason: "default-route-in-use",
+          },
+          "http://local.test/": {
+            accepted: false,
+            reason: "no-remote-resolution",
+          },
+          "http://plain.test/": { accepted: false, reason: "unspecified" },
+        } as const;
+        const processor = buildProcessor({
+          runtime: {
+            registerSpaceHostDetailed: (
+              space: string,
+              host: keyof typeof registrations,
+            ) => {
+              calls.push([space, host]);
+              return registrations[host];
+            },
+          },
+        });
+        for (
+          const host of Object.keys(registrations) as Array<
+            keyof typeof registrations
+          >
+        ) {
+          expect(processor.handleRegisterSpaceHostDetailed({
+            type: RequestType.RegisterSpaceHostDetailed,
+            space: "did:key:z6Mk-ipc-detailed",
+            host,
+          })).toEqual({ registration: registrations[host] });
+        }
+        expect(calls.map(([, host]) => host)).toEqual(
+          Object.keys(registrations),
+        );
       });
     });
 

@@ -14,6 +14,64 @@ export class SpaceHostValidationError extends TypeError {
 }
 
 /**
+ * Why a space host registration was refused.
+ *
+ * - `known-different-host`: a seed or an accepted hint already routes the
+ *   space to another host, which a registration confirms and never replaces.
+ * - `default-route-in-use`: the space opened through the default host and a
+ *   stateful operation was issued there, so this session keeps that route.
+ *   Opening alone does not cause it. The refusal says nothing against the
+ *   offered host.
+ * - `no-remote-resolution`: storage resolves no per-space host, so a hint can
+ *   take no effect.
+ * - `unspecified`: storage gave a verdict without a reason.
+ */
+export type SpaceHostRefusalReason =
+  | "known-different-host"
+  | "default-route-in-use"
+  | "no-remote-resolution"
+  | "unspecified";
+
+/**
+ * The outcome of a space host registration. Acceptance covers a hint that took
+ * effect and one that confirms the route already in effect.
+ */
+export type SpaceHostRegistration =
+  | {
+    /**
+     * The hint is in effect.
+     */
+    accepted: true;
+  }
+  | {
+    /**
+     * The hint was refused.
+     */
+    accepted: false;
+
+    /**
+     * The rule that refused it.
+     */
+    reason: "known-different-host";
+
+    /**
+     * The normalized origin the space is routed to.
+     */
+    existingHost: string;
+  }
+  | {
+    /**
+     * The hint was refused.
+     */
+    accepted: false;
+
+    /**
+     * The rule that refused it.
+     */
+    reason: Exclude<SpaceHostRefusalReason, "known-different-host">;
+  };
+
+/**
  * Parses a shared per-space host route. Storage and compute requests use the
  * same route, so the value contains only an HTTP or HTTPS origin.
  */

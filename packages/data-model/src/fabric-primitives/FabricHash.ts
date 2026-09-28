@@ -159,7 +159,7 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
 
       /** @inheritDoc */
       encode(value: FabricHash, _env: LiveEnvironment): FabricHashState {
-        return { tag: value.tag, hash: value.hashString };
+        return Object.freeze({ tag: value.tag, hash: value.hashString });
       }
 
       /** @inheritDoc */
@@ -173,16 +173,18 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
         typeTag: string,
         state: FabricHashState,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const { tag, hash } = state;
 
         try {
           return new FabricHash(fromBase64url(hash), tag, true);
         } catch (e) {
-          return new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `Hash: ${e instanceof Error ? e.message : String(e)}`,
+            mutable,
           );
         }
       }
@@ -205,7 +207,10 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
        * with this instance would leave a transferred value hollow.
        */
       encode(value: FabricHash, _env: LiveEnvironment): RealmCodecValue {
-        return { tag: value.tag, hash: value.#hash.buffer.slice(0) };
+        return Object.freeze({
+          tag: value.tag,
+          hash: value.#hash.buffer.slice(0),
+        });
       }
 
       /** @inheritDoc */

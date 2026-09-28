@@ -21,10 +21,11 @@ interface Rooms {
   roomRelay: Writable<Default<RoomText, "">>;
   roomAppended: Writable<Default<RoomText, "">>;
   roomForged: Writable<Default<RoomText, "">>;
+  roomPlanted: Writable<Default<RoomText, "">>;
 }
 
 export default pattern<Rooms>(
-  ({ roomTally, roomRelay, roomAppended, roomForged }) => {
+  ({ roomTally, roomRelay, roomAppended, roomForged, roomPlanted }) => {
     const ballot = WitnessedChain(
       {} as Parameters<typeof WitnessedChain>[0],
     );
@@ -50,6 +51,12 @@ export default pattern<Rooms>(
         { action: ballot.forge },
         { action: publish({ from: ballot.tally, to: roomForged }) },
         { assertion: assert(() => roomForged.get() === "") },
+        // A brief added by other code, which `commit` then counts, is refused.
+        { action: ballot.plant },
+        { action: ballot.commit },
+        { assertion: assert(() => ballot.tally === "2") },
+        { action: publish({ from: ballot.tally, to: roomPlanted }) },
+        { assertion: assert(() => roomPlanted.get() === "") },
       ],
       // Each refused publish logs the CFC refusal; the refusals are the point.
       allowConsoleWarnings: true,

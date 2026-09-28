@@ -5,6 +5,7 @@ import {
   isDeepFrozen,
   isFabricPlainContainer,
   valueEqual,
+  valueEqualByWalk,
 } from "@commonfabric/data-model";
 import { hasDataUriScheme } from "@commonfabric/data-model/codec-data-uri";
 import {
@@ -31,6 +32,7 @@ import {
   encodePointer,
   parsePointer,
   pathsOverlap,
+  prefixPointers,
 } from "../../../memory/v2/path.ts";
 import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope } from "../scope.ts";
@@ -115,9 +117,9 @@ import {
   StateInconsistency,
 } from "./transaction/attestation.ts";
 import {
-  applyMutablePathWrite,
-  getValueTypeName,
-  isContainerValue,
+  type MutableWriteResult,
+  planMutablePathWrite,
+  type PlannedPathWrite,
 } from "./transaction/mutable-path-write.ts";
 import { toTransactionDocumentValue } from "./v2-document.ts";
 import { hasValueAtPath, readValueAtPath } from "./v2-path.ts";
@@ -159,6 +161,20 @@ type WritableDocumentEntry = {
   writeDetails: Map<string, TransactionWriteDetail>;
   patchDetails: Map<string, TransactionWriteDetail>;
   displaced?: DisplacedRoot[];
+
+  /**
+   * The paths this transaction's writes to the document report for
+   * reactivity, from `buildReactivityPathsForChanges()`, kept so that every
+   * build of the reactivity log during one commit shares them. They depend
+   * only on `initial`, `current` and `patchDetails`, so a read leaves them
+   * standing. `V2StorageTransaction.#invalidateWrittenState()` drops them
+   * wherever `current` or `patchDetails` may change: ahead of every in-place
+   * write to the working root, which all go through
+   * `V2StorageTransaction.#writeWorkingRoot()`, and wherever the root or the
+   * recorded patch details are replaced.
+   */
+  reactivityPaths?: readonly (readonly string[])[];
+
   // Mergeable-write intents recorded by recordMergeableOp, keyed by document
   // path. The commit emits these as the corresponding mergeable op (which the
   // server resolves against durable state) instead of a value diffed against a
@@ -285,7 +301,7 @@ const ensureWritableDocument = (
 
 /**
  * Drops `doc.frozenReads` entries on the chain of `writtenPath` -- both
- * ancestors (whose containers were rebuilt by `applyMutablePathWrite()`)
+ * ancestors (whose containers were rebuilt by a plan's `apply()`)
  * and descendants (the subtree at the write target is gone). Sibling
  * subtrees off divergent ancestors are preserved: structural sharing
  * leaves their values reference-identical to the consumer's cached
@@ -350,138 +366,24 @@ const collapseEmptyJsonDocumentEnvelope = (
 
 const EMPTY_META = Object.freeze({});
 
-type PathInspection =
-  | {
-    kind: "ok";
-    value: FabricValue | undefined;
-  }
-  | {
-    kind: "notFound";
-    path: readonly string[];
-  }
-  | {
-    kind: "typeMismatch";
-    path: readonly string[];
-    actualType: string;
-  };
-
-const inspectPath = (
-  value: FabricValue | undefined,
-  path: readonly string[],
-): PathInspection => {
-  if (path.length === 0) {
-    return { kind: "ok", value };
-  }
-
-  let current: unknown = value;
-  for (let index = 0; index < path.length; index += 1) {
-    const segment = path[index]!;
-
-    if (current === undefined) {
-      return {
-        kind: "notFound",
-        path: path.slice(0, index),
-      };
-    }
-
-    if (Array.isArray(current)) {
-      if (segment === "length") {
-        current = current.length;
-        continue;
-      }
-      if (!isArrayIndexPropertyName(segment)) {
-        return {
-          kind: "typeMismatch",
-          path: path.slice(0, index + 1),
-          actualType: "array",
-        };
-      }
-      current = current[Number(segment)];
-      continue;
-    }
-
-    if (isObjectOrArray(current)) {
-      current = current[segment];
-      continue;
-    }
-
-    return {
-      kind: "typeMismatch",
-      path: path.slice(0, index + 1),
-      actualType: getValueTypeName(current as FabricValue | undefined),
-    };
-  }
-
-  return {
-    kind: "ok",
-    value: current as FabricValue | undefined,
-  };
-};
-
-const findMaterializedParentPath = (
-  currentRoot: FabricValue | undefined,
-  path: readonly string[],
-  isDelete: boolean,
-): readonly string[] | undefined => {
-  // Deletes never materialize intermediates; value writes (including
-  // explicit `undefined`) do.
-  if (isDelete) {
-    return undefined;
-  }
-
-  // A write into a not-yet-initialized doc value materializes the entire
-  // value at the root: that's the observable change, regardless of how
-  // deep the leaf write is. (`path.length === 0` is the "we ARE the
-  // root" case — there's no distinct materialization point, fall back
-  // to the leaf via the caller.)
-  if (currentRoot === undefined) {
-    return path.length === 0 ? undefined : [];
-  }
-
-  if (path.length <= 1) {
-    return undefined;
-  }
-
-  if (!isContainerValue(currentRoot)) {
-    return undefined;
-  }
-
-  let current = currentRoot as Record<string, FabricValue> | FabricValue[];
-  for (let index = 0; index < path.length - 1; index += 1) {
-    const key = path[index]!;
-
-    if (Array.isArray(current)) {
-      if (key === "length" || !isArrayIndexPropertyName(key)) {
-        return undefined;
-      }
-      const next = current[Number(key)];
-      if (next === undefined) {
-        return path.slice(0, index);
-      }
-      if (!isContainerValue(next)) {
-        return undefined;
-      }
-      current = next;
-      continue;
-    }
-
-    const next = current[key];
-    if (next === undefined) {
-      return path.slice(0, index);
-    }
-    if (!isContainerValue(next)) {
-      return undefined;
-    }
-    current = next;
-  }
-
-  return undefined;
-};
-
-type PatchDraftCandidate = {
+/** One op a document's commit may send, before `selectPatchOps()` chooses. */
+export type PatchDraftCandidate = {
+  /** The op itself. */
   patch: PatchOp;
+
+  /** The document path the op writes. */
   path: readonly string[];
+
+  /**
+   * Whether the op replaces everything beneath `path`, so that a candidate at
+   * or below it is redundant. Value ops do; an array's element splice does not.
+   */
   coversDescendants: boolean;
+
+  /**
+   * For a splice that adds or removes an array's tail, the first index it
+   * touches: a candidate at an element index at or past it is subsumed.
+   */
   tailSpliceStartIndex?: number;
 };
 
@@ -758,13 +660,123 @@ const isSubsumedByTailSplice = (
     Number(childSegment) >= spliceCandidate.tailSpliceStartIndex;
 };
 
+/**
+ * The ops a document's commit sends, chosen from its patch candidates. A
+ * covering candidate is dropped when a tail splice subsumes it, or when a
+ * covering candidate already kept sits at or above its path, shorter paths
+ * being kept first. A non-covering candidate is dropped when a kept covering
+ * candidate or a tail splice covers it. And either kind is dropped when
+ * `suppress` names it, since a mergeable op carries that change instead.
+ *
+ * Every one of those checks asks which of a set of paths prefix a candidate's
+ * path, and a transaction writing `K` keys yields `K` candidates. So each set
+ * is indexed by pointer and a candidate looks up its own prefixes, which keeps
+ * the work per candidate to the depth of its path rather than the number of
+ * candidates.
+ *
+ * Exported for direct unit testing.
+ */
+export const selectPatchOps = (
+  fullCoverCandidates: readonly PatchDraftCandidate[],
+  nonCoverCandidates: readonly PatchDraftCandidate[],
+  suppress: readonly OpSuppression[],
+): PatchOp[] => {
+  const tailSplicesByPointer = new Map<string, PatchDraftCandidate[]>();
+  for (const candidate of nonCoverCandidates) {
+    if (candidate.tailSpliceStartIndex === undefined) continue;
+    const pointer = encodePointer(candidate.path);
+    const splices = tailSplicesByPointer.get(pointer);
+    if (splices === undefined) {
+      tailSplicesByPointer.set(pointer, [candidate]);
+    } else {
+      splices.push(candidate);
+    }
+  }
+  // A tail splice subsumes only what sits strictly beneath it, so a
+  // candidate's own pointer, the last of its prefixes, is not looked up.
+  const isSubsumedByAnyTailSplice = (
+    candidatePath: readonly string[],
+  ): boolean =>
+    prefixPointers(candidatePath).slice(0, -1).some((pointer) =>
+      tailSplicesByPointer.get(pointer)?.some((spliceCandidate) =>
+        isSubsumedByTailSplice(spliceCandidate, candidatePath)
+      ) ?? false
+    );
+
+  const retainedCoverCandidates = fullCoverCandidates
+    .filter((candidate) => !isSubsumedByAnyTailSplice(candidate.path))
+    .sort((left, right) => left.path.length - right.path.length);
+  // Shortest first, so a candidate overlaps one already kept exactly when
+  // that one's path is a prefix of its own.
+  const nonOverlappingCoverCandidates: typeof retainedCoverCandidates = [];
+  const coverPointers = new Set<string>();
+  const isUnderCover = (path: readonly string[]): boolean =>
+    prefixPointers(path).some((pointer) => coverPointers.has(pointer));
+  for (const detail of retainedCoverCandidates) {
+    if (isUnderCover(detail.path)) {
+      continue;
+    }
+    nonOverlappingCoverCandidates.push(detail);
+    coverPointers.add(encodePointer(detail.path));
+  }
+
+  const retainedNonCoverCandidates = nonCoverCandidates.filter((detail) =>
+    !isUnderCover(detail.path) && !isSubsumedByAnyTailSplice(detail.path)
+  );
+
+  // Drop the candidates the append op replaces: the whole-array op at the
+  // append path, and element candidates in the appended tail (index >= start).
+  // Edits to existing elements (index < start) and unrelated sibling/ancestor
+  // candidates are kept.
+  const suppressionsByPointer = new Map<string, OpSuppression[]>();
+  for (const suppression of suppress) {
+    const pointer = encodePointer(suppression.path);
+    const suppressions = suppressionsByPointer.get(pointer);
+    if (suppressions === undefined) {
+      suppressionsByPointer.set(pointer, [suppression]);
+    } else {
+      suppressions.push(suppression);
+    }
+  }
+  const isSuppressed = (candidatePath: readonly string[]): boolean =>
+    prefixPointers(candidatePath).some((pointer, length) =>
+      suppressionsByPointer.get(pointer)?.some(({ tailStart, subtree }) => {
+        // Any suppression at the candidate's own path suppresses it.
+        if (length === candidatePath.length) {
+          return true;
+        }
+        // A remove-by-value suppresses the whole subtree (any descendant); a
+        // tail op suppresses only appended-tail element candidates; an
+        // increment suppresses only the exact scalar path.
+        if (subtree) {
+          return true;
+        }
+        if (tailStart === undefined) {
+          return false;
+        }
+        const childSegment = candidatePath[length]!;
+        return isArrayIndexPropertyName(childSegment) &&
+          Number(childSegment) >= tailStart;
+      }) ?? false
+    );
+
+  return [
+    ...nonOverlappingCoverCandidates
+      .filter((candidate) => !isSuppressed(candidate.path))
+      .map((candidate) => candidate.patch),
+    ...retainedNonCoverCandidates
+      .filter((candidate) => !isSuppressed(candidate.path))
+      .map((candidate) => candidate.patch),
+  ];
+};
+
 // A `FabricSpecialObject` on either side falls to the `valueEqual` comparison
 // below rather than being compared by key set: its state sits behind no key,
 // so two distinct ones would compare by their empty key sets and report
 // "unchanged", leaving an in-place fabric change at an ancestor prefix with no
 // reactivity path. `differential.ts` guards its sibling walk the same way.
 //
-// That covers a `FabricInstance` too. `buildReactivityPathsForChange` calls
+// That covers a `FabricInstance` too. `buildReactivityPathsForChanges` calls
 // this with the value at every proper ancestor prefix of a written path, read
 // from the document as it stood when the transaction opened, so a write
 // anywhere below a stored `FabricError` arrives here at commit time.
@@ -772,6 +784,9 @@ const shallowStructureChanged = (
   before: FabricValue | undefined,
   after: FabricValue | undefined,
 ): boolean => {
+  if (Object.is(before, after)) {
+    return false;
+  }
   if (isFabricPlainContainer(before) && isFabricPlainContainer(after)) {
     const beforeKeys = Object.keys(before);
     const afterKeys = Object.keys(after);
@@ -803,45 +818,62 @@ const compareDocPaths = (
   return leftPointer < rightPointer ? -1 : leftPointer > rightPointer ? 1 : 0;
 };
 
-const buildReactivityPathsForChange = (
+/**
+ * The paths one document's writes report for reactivity, sorted by
+ * `compareDocPaths()` and free of duplicates: each written path whose value
+ * differs between `beforeRoot` and `afterRoot`, and each proper ancestor of
+ * such a path whose shallow structure differs (see `shallowStructureChanged()`),
+ * so that a shape-only reader of the ancestor wakes when a key comes or goes
+ * and not when a value beneath it changes.
+ *
+ * Comparing an ancestor's shallow structure reads its whole key set, and every
+ * written path beneath it shares the answer, so each ancestor is compared once
+ * per call however many written paths sit beneath it. `K` writes under one
+ * `N`-key object then list its keys once, not `K` times.
+ *
+ * Exported for direct unit testing.
+ */
+export const buildReactivityPathsForChanges = (
   beforeRoot: FabricValue | undefined,
   afterRoot: FabricValue | undefined,
-  path: readonly string[],
+  writtenPaths: Iterable<readonly string[]>,
 ): readonly (readonly string[])[] => {
-  const beforeValue = readValueAtPath(beforeRoot, path, {
-    allowArrayLength: true,
-  });
-  const afterValue = readValueAtPath(afterRoot, path, {
-    allowArrayLength: true,
-  });
-  if (valueEqual(beforeValue, afterValue)) {
-    return [];
-  }
-
   const paths = new Map<string, readonly string[]>();
-  if (path.length === 0) {
-    paths.set("", []);
-    return [...paths.values()];
-  }
-
-  for (let prefixLength = 1; prefixLength < path.length; prefixLength += 1) {
-    const prefix = path.slice(0, prefixLength);
-    if (
-      !shallowStructureChanged(
-        readValueAtPath(beforeRoot, prefix, {
-          allowArrayLength: true,
-        }),
-        readValueAtPath(afterRoot, prefix, {
-          allowArrayLength: true,
-        }),
-      )
-    ) {
+  // Keyed by the ancestor's pointer, which `paths` shares.
+  const ancestorChanged = new Map<string, boolean>();
+  for (const path of writtenPaths) {
+    const beforeValue = readValueAtPath(beforeRoot, path, {
+      allowArrayLength: true,
+    });
+    const afterValue = readValueAtPath(afterRoot, path, {
+      allowArrayLength: true,
+    });
+    if (valueEqual(beforeValue, afterValue)) {
       continue;
     }
-    paths.set(encodePointer(prefix), prefix);
-  }
 
-  paths.set(encodePointer(path), path);
+    const pointers = prefixPointers(path);
+    for (let prefixLength = 1; prefixLength < path.length; prefixLength += 1) {
+      const pointer = pointers[prefixLength];
+      let changed = ancestorChanged.get(pointer);
+      if (changed === undefined) {
+        const prefix = path.slice(0, prefixLength);
+        changed = shallowStructureChanged(
+          readValueAtPath(beforeRoot, prefix, {
+            allowArrayLength: true,
+          }),
+          readValueAtPath(afterRoot, prefix, {
+            allowArrayLength: true,
+          }),
+        );
+        ancestorChanged.set(pointer, changed);
+      }
+      if (changed && !paths.has(pointer)) {
+        paths.set(pointer, path.slice(0, prefixLength));
+      }
+    }
+    paths.set(pointers[path.length], path);
+  }
   return [...paths.values()].sort(compareDocPaths);
 };
 
@@ -1422,10 +1454,12 @@ export class V2StorageTransaction implements IStorageTransaction {
       // full-cover path in buildPatchOperation). An unconfirmed schema
       // document steps out to the re-delivery set instead — as a
       // whole-doc set: content addressing makes any visible copy the
-      // whole document.
+      // whole document. Writes reach the working root by copy-on-write from
+      // `doc.initial`, so the two share every subtree no write replaced, and
+      // comparing them by walk costs the written spine.
       if (
         !this.#authoritativeWrites &&
-        valueEqual(doc.current.value, doc.initial.value)
+        valueEqualByWalk(doc.current.value, doc.initial.value)
       ) {
         if (
           this.#mustDeliverSchemaDoc(space, id) &&
@@ -1659,9 +1693,12 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
 
     if (usesLocalReads(this) && !hasDataUriScheme(address.id)) {
+      // `patchDetails` is keyed by each write's pointer.
+      const patchDetails = doc.patchDetails;
       const written = this.#readEpoch === undefined &&
-        [...(doc.patchDetails?.values() ?? [])].some((write) =>
-          isPrefixPath(write.address.path, address.path)
+        patchDetails !== undefined && patchDetails.size > 0 &&
+        prefixPointers(address.path).some((pointer) =>
+          patchDetails.has(pointer)
         );
       const replica = branch.replica;
       const identity = this.#scopeKeyIdentity;
@@ -1890,9 +1927,10 @@ export class V2StorageTransaction implements IStorageTransaction {
     (doc.displaced ??= []).push({ until: this.#writeEpoch, root: standing });
   }
 
-  #replaceCurrent(doc: DocumentEntry, next: RootAttestation): void {
+  #replaceCurrent(doc: WritableDocumentEntry, next: RootAttestation): void {
     this.#writeEpoch++;
     doc.current = next;
+    this.#invalidateWrittenState(doc);
   }
 
   trackReadPaths(
@@ -2050,12 +2088,12 @@ export class V2StorageTransaction implements IStorageTransaction {
   }
 
   /**
-   * Unified write entry. Handles simple writes, root writes, type-mismatch
-   * errors, and create-missing-intermediates in one path, all via
-   * `applyMutablePathWrite()`. `cloneForMutation()` inside that helper
-   * shallow-thaws only the containers on the write spine; off-spine
-   * subtrees stay deep-frozen and structurally shared with the prior
-   * `doc.current.value`.
+   * Unified write entry. Handles simple writes, root writes, refusals, and
+   * create-missing-intermediates in one path: `planMutablePathWrite()` decides
+   * whether the write is refused and reads what it finds, and the plan's
+   * `apply()` carries it out. `cloneForMutation()` beneath that shallow-thaws
+   * only the containers on the write spine; off-spine subtrees stay
+   * deep-frozen and structurally shared with the prior `doc.current.value`.
    *
    * No-op short-circuits (presence-aware: a stored `undefined` is a real
    * state, distinct from an absent slot):
@@ -2064,9 +2102,10 @@ export class V2StorageTransaction implements IStorageTransaction {
    *     to an absent leaf is NOT a no-op — it stores `undefined`,
    *     materializing intermediates if needed.
    *   - For a delete (`options.delete`), if the leaf doesn't exist —
-   *     whether the leaf slot is absent or an intermediate is missing —
-   *     return the unchanged attestation; don't allocate intermediate
-   *     containers just to delete a slot that wasn't there.
+   *     whether the leaf slot is absent, an intermediate is missing, or the
+   *     path runs through a value that cannot hold it — return the unchanged
+   *     attestation; don't allocate intermediate containers just to delete a
+   *     slot that wasn't there.
    */
   #writeWithinBranch(
     branch: SpaceBranch,
@@ -2084,88 +2123,53 @@ export class V2StorageTransaction implements IStorageTransaction {
     const doc = ensureWritableDocument(readDoc);
     this.#preserveForReaders(doc);
     const current = doc.current;
-    const previous = inspectPath(current.value, address.path);
-    if (previous.kind === "ok") {
-      const present = hasValueAtPath(current.value, address.path, {
-        allowArrayLength: true,
-      });
-      // Authoritative mode (markAuthoritativeWrites) disables the
-      // equal-VALUE elision only: the visible state being diffed against
-      // may be an extrapolation over a doomed sealed overlay, so "already
-      // equal" is not evidence the store holds the value. An unconfirmed
-      // schema document (#mustDeliverSchemaDoc) disables it the same way:
-      // its visible copy may sit on a speculation layer the wire never
-      // carries. Deletes of absent slots stay no-ops — there is nothing
-      // to assert.
-      if (
-        isDelete ? !present : (present && valueEqual(previous.value, value) &&
+    // Everything the write needs to know about the document before it is
+    // changed is read BEFORE the write, by the plan and by `apply()` ahead of
+    // its mutation: the write mutates `current.value` in place on the
+    // second-and-later write to this doc within a transaction
+    // (`cloneForMutation({ force: false })` short-circuits to identity on an
+    // already-mutable root), so a read of `current.value` after it would
+    // observe the post-write state and silently mis-report the previous
+    // values to the reactivity log. For create-parents writes, the activity
+    // path `apply()` reports is the materialization point (deepest
+    // pre-existing parent on the write path), where the observable change
+    // happens for subscribers watching a parent.
+    const plan = planMutablePathWrite(
+      current.value,
+      address,
+      value,
+      isDelete ? { delete: true } : undefined,
+    );
+    if (plan.error) {
+      return { error: plan.error.from(space) };
+    }
+    const planned = plan.ok;
+    // Authoritative mode (markAuthoritativeWrites) disables the
+    // equal-VALUE elision only: the visible state being diffed against
+    // may be an extrapolation over a doomed sealed overlay, so "already
+    // equal" is not evidence the store holds the value. An unconfirmed
+    // schema document (#mustDeliverSchemaDoc) disables it the same way:
+    // its visible copy may sit on a speculation layer the wire never
+    // carries. Deletes of absent slots stay no-ops — there is nothing
+    // to assert.
+    if (
+      isDelete
+        ? !planned.present
+        : (planned.present && valueEqual(planned.previousValue, value) &&
           !this.#authoritativeWrites &&
           !this.#mustDeliverSchemaDoc(space, address.id))
-      ) {
-        this.#retainPendingWriteElision(branch, space, address);
-        return { ok: current };
-      }
-    }
-    if (previous.kind === "notFound" && isDelete) {
+    ) {
       this.#retainPendingWriteElision(branch, space, address);
       return { ok: current };
     }
 
-    const isolatedValue = value === undefined
-      ? undefined
-      : cloneIfNecessary(value);
-
-    // Compute the activity path and previous-value snapshots BEFORE the
-    // write -- `applyMutablePathWrite()` mutates `current.value` in place
-    // on the second-and-later write to this doc within a transaction
-    // (`cloneForMutation({ force: false })` short-circuits to identity on
-    // an already-mutable root). Reading `current.value` AFTER the mutation
-    // would observe the post-write state and silently mis-report the
-    // `previousActivityValue` to the reactivity log.
-    //
-    // For create-parents writes, the materialization point (deepest
-    // pre-existing parent on the write path) is where the observable
-    // change happens for subscribers watching a parent. For simple writes
-    // it falls back to `address.path`.
-    const activityPath = findMaterializedParentPath(
-      current.value,
-      address.path,
-      isDelete,
-    ) ?? address.path;
-    const previousActivityValue = cloneIfNecessary(
-      readValueAtPath(current.value, activityPath, {
-        allowArrayLength: true,
-      }),
-    ) as FabricValue | undefined;
-    // Pre-write slot presence (distinct from value: a slot holding
-    // `undefined` is present) for the write details — also read BEFORE the
-    // in-place mutation below. `hasValueAtPath` is vacuously true for the
-    // empty path, so root presence is the root's own definedness (the
-    // root IS the value — it has no present-but-undefined state).
-    const presentBeforeWrite = (path: readonly string[]): boolean =>
-      path.length === 0
-        ? current.value !== undefined
-        : hasValueAtPath(current.value, path, { allowArrayLength: true });
-    const previousPresent = presentBeforeWrite(address.path);
-    const previousActivityPresent = activityPath === address.path
-      ? previousPresent
-      : presentBeforeWrite(activityPath);
-
-    const result = applyMutablePathWrite(
-      current.value,
-      address,
-      isolatedValue,
-      isDelete ? { delete: true } : undefined,
-    );
-    if (result.error) {
-      return { error: result.error.from(space) };
-    }
+    const result = this.#writeWorkingRoot(doc, planned);
     // Authoritative mode records the (value-unchanged) write anyway so it
     // reaches the commit as a full-cover re-assert, and an unconfirmed
     // schema document is recorded for the same delivery reason; delete
     // no-ops still return (see above).
     if (
-      !result.ok.changed &&
+      !result.changed &&
       (isDelete ||
         (!this.#authoritativeWrites &&
           !this.#mustDeliverSchemaDoc(space, address.id)))
@@ -2176,7 +2180,7 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     const collapsedNext: RootAttestation = {
       ...current,
-      value: collapseEmptyJsonDocumentEnvelope(result.ok.root),
+      value: collapseEmptyJsonDocumentEnvelope(result.root),
     };
 
     this.#replaceCurrent(doc, collapsedNext);
@@ -2187,19 +2191,19 @@ export class V2StorageTransaction implements IStorageTransaction {
       readValueAtPath(collapsedNext.value, address.path, {
         allowArrayLength: true,
       }),
-      cloneIfNecessary(result.ok.previousValue) as FabricValue | undefined,
+      cloneIfNecessary(planned.previousValue) as FabricValue | undefined,
       doc,
-      previousPresent,
+      planned.present,
     );
     this.#recordWriteActivity(
       space,
-      { ...address, path: activityPath },
-      readValueAtPath(collapsedNext.value, activityPath, {
+      { ...address, path: result.activityPath },
+      readValueAtPath(collapsedNext.value, result.activityPath, {
         allowArrayLength: true,
       }),
-      previousActivityValue,
+      result.previousActivityValue,
       doc,
-      previousActivityPresent,
+      result.previousActivityPresent,
     );
 
     return { ok: collapsedNext };
@@ -2231,6 +2235,11 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (read.error) throw read.error;
   }
 
+  /**
+   * Helper for `writeBatch()`, which applies `writes`, all addressing one
+   * document, in order. The run stops at the first write that fails, whether it
+   * returns an error or throws, and leaves the writes before it applied.
+   */
   #writeBatchRun(
     space: MemorySpace,
     branch: SpaceBranch,
@@ -2260,12 +2269,9 @@ export class V2StorageTransaction implements IStorageTransaction {
     const { doc: readDoc } = this.#document(branch, writes[0]!.address);
     const doc = ensureWritableDocument(readDoc);
     this.#preserveForReaders(doc);
-    const originalRoot = doc.current.value;
-    let nextRoot = originalRoot;
-    let changed = false;
-    const writtenPaths: (readonly string[])[] = [];
+    let nextRoot = doc.current.value;
 
-    // No explicit mutable-root prelude here: `applyMutablePathWrite()` calls
+    // No explicit mutable-root prelude here: a plan's `apply()` calls
     // `cloneForMutation()` with `force: false`, which shallow-thaws the
     // root container on the first write (if it was frozen) and is an
     // identity short-circuit on subsequent writes (since the root is
@@ -2273,87 +2279,40 @@ export class V2StorageTransaction implements IStorageTransaction {
     // freshly-thawed spine across the whole batch" without ever needing a
     // deep clone of off-spine subtrees.
     //
-    // Read-before-mutate ordering is load-bearing: `previousValue`,
-    // `activityPath`, and `previousActivityValue` are all computed from
-    // `nextRoot` BEFORE `applyMutablePathWrite()` is called. The helper
-    // mutates `nextRoot` in place from the second iteration onward, so
-    // reading it AFTER the call would observe the post-write state.
-    // (See `#writeWithinBranch` for the same invariant and a regression
-    // test.)
+    // Read-before-mutate ordering is load-bearing: the previous value comes
+    // from the plan, and the activity path and previous activity value from
+    // `apply()`, both read from `nextRoot` BEFORE it is changed. Applying
+    // mutates `nextRoot` in place from the second iteration onward, so a
+    // read after it would observe the post-write state. (See
+    // `#writeWithinBranch` for the same invariant and a regression test.)
     for (const { address, value, delete: isDelete } of writes) {
-      const isolatedValue = value === undefined
-        ? undefined
-        : cloneIfNecessary(value);
-      const previousValue = readValueAtPath(nextRoot, address.path, {
-        allowArrayLength: true,
-      });
-      // Presence-aware no-op detection (also keeps no-op deletes from
-      // reaching `applyMutablePathWrite`, which would materialize
-      // intermediates into `nextRoot` before the changed check).
-      // Authoritative mode records equal-VALUE writes anyway, and an
-      // unconfirmed schema document is recorded for its delivery
-      // guarantee (see `#writeWithinBranch` for both); delete no-ops
-      // still skip.
-      const present = hasValueAtPath(nextRoot, address.path, {
-        allowArrayLength: true,
-      });
+      const plan = planMutablePathWrite(
+        nextRoot,
+        address,
+        value,
+        isDelete ? { delete: true } : undefined,
+      );
+      if (plan.error) {
+        return { error: plan.error.from(space) };
+      }
+      const planned = plan.ok;
+      // Presence-aware no-op detection. Authoritative mode records
+      // equal-VALUE writes anyway, and an unconfirmed schema document is
+      // recorded for its delivery guarantee (see `#writeWithinBranch` for
+      // both); delete no-ops still skip.
       if (
-        isDelete
-          ? !present
-          : (present && valueEqual(previousValue, isolatedValue) &&
-            !this.#authoritativeWrites &&
-            !this.#mustDeliverSchemaDoc(space, address.id))
+        isDelete ? !planned.present : (planned.present &&
+          valueEqual(planned.previousValue, value) &&
+          !this.#authoritativeWrites &&
+          !this.#mustDeliverSchemaDoc(space, address.id))
       ) {
         this.#retainPendingWriteElision(branch, space, address);
         continue;
       }
-      const activityPath = findMaterializedParentPath(
-        nextRoot,
-        address.path,
-        isDelete === true,
-      ) ?? address.path;
-      const previousActivityValue = cloneIfNecessary(
-        readValueAtPath(nextRoot, activityPath, {
-          allowArrayLength: true,
-        }),
-      ) as FabricValue | undefined;
-      // Pre-write slot presence for the write details (see
-      // `#writeWithinBranch`; empty path = root definedness, since
-      // `hasValueAtPath` is vacuously true there) — read before
-      // `applyMutablePathWrite` mutates `nextRoot` in place.
-      const previousPresent = address.path.length === 0
-        ? nextRoot !== undefined
-        : present;
-      const previousActivityPresent = activityPath === address.path
-        ? previousPresent
-        : activityPath.length === 0
-        ? nextRoot !== undefined
-        : hasValueAtPath(nextRoot, activityPath, {
-          allowArrayLength: true,
-        });
-      const result = applyMutablePathWrite(
-        nextRoot,
-        address,
-        isolatedValue,
-        isDelete ? { delete: true } : undefined,
-      );
-      if (result.error) {
-        if (changed) {
-          this.#replaceCurrent(doc, {
-            ...doc.current,
-            value: collapseEmptyJsonDocumentEnvelope(
-              nextRoot,
-            ),
-          });
-          for (const written of writtenPaths) {
-            invalidateFrozenReadsOnChain(doc, written);
-          }
-        }
-        return { error: result.error.from(space) };
-      }
-      nextRoot = result.ok.root;
+      const result = this.#writeWorkingRoot(doc, planned);
+      nextRoot = result.root;
       if (
-        !result.ok.changed &&
+        !result.changed &&
         (isDelete ||
           (!this.#authoritativeWrites &&
             !this.#mustDeliverSchemaDoc(space, address.id)))
@@ -2361,42 +2320,42 @@ export class V2StorageTransaction implements IStorageTransaction {
         this.#retainPendingWriteElision(branch, space, address);
         continue;
       }
-      changed = true;
-      writtenPaths.push(address.path);
+      // Only a write of the whole root, or a delete of one of its keys, can
+      // leave the root empty, so only those pay for counting its keys. The
+      // run goes on from the collapsed root, as the next of separate writes
+      // would.
+      if (
+        address.path.length === 0 || (isDelete && address.path.length === 1)
+      ) {
+        nextRoot = collapseEmptyJsonDocumentEnvelope(nextRoot);
+      }
+      // Installed before the next write begins, as `#writeWithinBranch`
+      // installs its one write, so a run that stops at a later write, by
+      // returning an error or by throwing, leaves nothing about this one
+      // undone: reads, the epoch, and the commit all see it, as its patch
+      // intent says.
+      this.#replaceCurrent(doc, { ...doc.current, value: nextRoot });
+      invalidateFrozenReadsOnChain(doc, address.path);
       this.#recordPatchIntent(
         space,
         address,
-        readValueAtPath(result.ok.root, address.path, {
+        readValueAtPath(nextRoot, address.path, {
           allowArrayLength: true,
         }),
-        cloneIfNecessary(previousValue) as FabricValue | undefined,
+        cloneIfNecessary(planned.previousValue) as FabricValue | undefined,
         doc,
-        previousPresent,
+        planned.present,
       );
       this.#recordWriteActivity(
         space,
-        { ...address, path: activityPath },
-        readValueAtPath(result.ok.root, activityPath, {
+        { ...address, path: result.activityPath },
+        readValueAtPath(nextRoot, result.activityPath, {
           allowArrayLength: true,
         }),
-        previousActivityValue,
+        result.previousActivityValue,
         doc,
-        previousActivityPresent,
+        result.previousActivityPresent,
       );
-    }
-
-    if (!changed) {
-      return { ok: {} };
-    }
-
-    this.#replaceCurrent(doc, {
-      ...doc.current,
-      value: collapseEmptyJsonDocumentEnvelope(
-        nextRoot,
-      ),
-    });
-    for (const written of writtenPaths) {
-      invalidateFrozenReadsOnChain(doc, written);
     }
     return { ok: {} };
   }
@@ -2464,6 +2423,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       previousValue,
       previousPresent,
     );
+    this.#invalidateWrittenState(doc);
   }
 
   #upsertWriteDetail(
@@ -3027,6 +2987,34 @@ export class V2StorageTransaction implements IStorageTransaction {
   }
 
   /**
+   * Drops what the reactivity log derives from `doc`'s written state: the
+   * paths kept on the document, and the log built from them. Called by
+   * `#writeWorkingRoot()` ahead of every in-place write to the working root,
+   * and wherever the root or the recorded patch details are replaced.
+   */
+  #invalidateWrittenState(doc: WritableDocumentEntry): void {
+    doc.reactivityPaths = undefined;
+    this.#invalidateReactivityLog();
+  }
+
+  /**
+   * Carries out `planned`, a write to `doc`'s working root. The plan's
+   * `apply()` mutates that root in place when it is already mutable. What
+   * the reactivity log derives from the document is dropped first, so
+   * nothing built before the write outlives it; every in-place write to a
+   * working root goes through here for that reason. A write that changes the
+   * document drops it again when it replaces the root, so this first drop is
+   * defensive: it covers an in-place change that no replacement follows.
+   */
+  #writeWorkingRoot(
+    doc: WritableDocumentEntry,
+    planned: PlannedPathWrite,
+  ): MutableWriteResult {
+    this.#invalidateWrittenState(doc);
+    return planned.apply();
+  }
+
+  /**
    * The explicit instance a logged scoped address names when this
    * transaction carries a run identity (server-execution v2 stage A):
    * the scheduler's dependency/trigger keys then key the read to THAT
@@ -3086,23 +3074,13 @@ export class V2StorageTransaction implements IStorageTransaction {
         }
 
         const { id, scope } = this.#parseDocKey(key);
-        const reactivityPaths = new Map<string, readonly string[]>();
-        for (const detail of doc.patchDetails.values()) {
-          for (
-            const path of buildReactivityPathsForChange(
-              doc.initial.value,
-              doc.current.value,
-              detail.address.path,
-            )
-          ) {
-            reactivityPaths.set(encodePointer(path), path);
-          }
-        }
-
         const instance = this.#instanceOf(scope);
-        for (
-          const path of [...reactivityPaths.values()].sort(compareDocPaths)
-        ) {
+        doc.reactivityPaths ??= buildReactivityPathsForChanges(
+          doc.initial.value,
+          doc.current.value,
+          doc.patchDetails.values().map((detail) => detail.address.path),
+        );
+        for (const path of doc.reactivityPaths) {
           writes.push({
             space,
             scope,
@@ -3357,12 +3335,23 @@ export class V2StorageTransaction implements IStorageTransaction {
       if (route.error) return route;
     }
     const log = this.getReactivityLog();
+    // Each document's current value, fetched once however many reads name it;
+    // the replica does not change while this synchronous check runs.
+    const currentByDocument = new Map<DocumentEntry, FabricValue | undefined>();
     for (
       const [reads, shallow] of [
         [log.reads, false],
         [log.shallowReads, true],
       ] as const
     ) {
+      // The log keeps a read each time one was taken, and a reader walking a
+      // large value takes the same shallow read of its root once per child.
+      // A read whose value is still the one it was given passes in constant
+      // time. One whose value moved is checked once per document and path,
+      // since checking it again gives the same answer, where comparing a
+      // large container once per copy of the read would cost its size once
+      // per copy.
+      const checked = new Map<DocumentEntry, Set<string>>();
       for (const address of reads) {
         const branch = this.#branches.get(address.space);
         const doc = branch?.docs.get(this.#docKey(address));
@@ -3375,26 +3364,43 @@ export class V2StorageTransaction implements IStorageTransaction {
             ),
           };
         }
-        const replica = branch.replica;
-        const current = toTransactionDocumentValue(
-          isDurableReadTx(this) && replica.getNonSpeculativeDocument
-            ? replica.getNonSpeculativeDocument(
-              address.id,
-              address.scope,
-              this.#scopeKeyIdentity,
-            )
-            : replica.getDocument(
-              address.id,
-              address.scope,
-              this.#scopeKeyIdentity,
-            ),
-        );
+        let current: FabricValue | undefined;
+        if (currentByDocument.has(doc)) {
+          current = currentByDocument.get(doc);
+        } else {
+          const replica = branch.replica;
+          current = toTransactionDocumentValue(
+            isDurableReadTx(this) && replica.getNonSpeculativeDocument
+              ? replica.getNonSpeculativeDocument(
+                address.id,
+                address.scope,
+                this.#scopeKeyIdentity,
+              )
+              : replica.getDocument(
+                address.id,
+                address.scope,
+                this.#scopeKeyIdentity,
+              ),
+          );
+          currentByDocument.set(doc, current);
+        }
         const expected = readValueAtPath(doc.initial.value, address.path, {
           allowArrayLength: true,
         });
         const actual = readValueAtPath(current, address.path, {
           allowArrayLength: true,
         });
+        // A value present on both sides and the very same one passes every
+        // check below.
+        if (expected !== undefined && Object.is(expected, actual)) continue;
+        const pointer = encodePointer(address.path);
+        let checkedPaths = checked.get(doc);
+        if (checkedPaths === undefined) {
+          checkedPaths = new Set();
+          checked.set(doc, checkedPaths);
+        }
+        if (checkedPaths.has(pointer)) continue;
+        checkedPaths.add(pointer);
         if (
           hasValueAtPath(doc.initial.value, address.path, {
               allowArrayLength: true,
@@ -3608,82 +3614,11 @@ export class V2StorageTransaction implements IStorageTransaction {
       }
     }
 
-    if (fullCoverCandidates.length === 0 && nonCoverCandidates.length === 0) {
-      return null;
-    }
-
-    const tailSpliceCandidates = nonCoverCandidates.filter((candidate) =>
-      candidate.tailSpliceStartIndex !== undefined
+    const patches = selectPatchOps(
+      fullCoverCandidates,
+      nonCoverCandidates,
+      suppress,
     );
-
-    const retainedCoverCandidates = fullCoverCandidates
-      .filter((candidate) =>
-        !tailSpliceCandidates.some((spliceCandidate) =>
-          isSubsumedByTailSplice(spliceCandidate, candidate.path)
-        )
-      )
-      .sort((left, right) => left.path.length - right.path.length);
-    const nonOverlappingCoverCandidates: typeof retainedCoverCandidates = [];
-    for (const detail of retainedCoverCandidates) {
-      if (
-        nonOverlappingCoverCandidates.some((existing) =>
-          pathsOverlap(existing.path, detail.path)
-        )
-      ) {
-        continue;
-      }
-      nonOverlappingCoverCandidates.push(detail);
-    }
-
-    const retainedNonCoverCandidates = nonCoverCandidates.filter((detail) =>
-      !nonOverlappingCoverCandidates.some((existing) =>
-        isPrefixPath(existing.path, detail.path)
-      ) &&
-      !tailSpliceCandidates.some((spliceCandidate) =>
-        spliceCandidate !== detail &&
-        isSubsumedByTailSplice(spliceCandidate, detail.path)
-      )
-    );
-
-    // Drop the candidates the append op replaces: the whole-array op at the
-    // append path, and element candidates in the appended tail (index >= start).
-    // Edits to existing elements (index < start) and unrelated sibling/ancestor
-    // candidates are kept.
-    const isSuppressed = (candidatePath: readonly string[]): boolean =>
-      suppress.some(({ path, tailStart, subtree }) => {
-        if (
-          candidatePath.length === path.length &&
-          isPrefixPath(path, candidatePath)
-        ) {
-          return true;
-        }
-        // A remove-by-value suppresses the whole subtree (any descendant); a tail
-        // op suppresses only appended-tail element candidates; an increment
-        // suppresses only the exact scalar path.
-        if (subtree) {
-          return isPrefixPath(path, candidatePath);
-        }
-        if (
-          tailStart === undefined ||
-          !isPrefixPath(path, candidatePath) ||
-          candidatePath.length <= path.length
-        ) {
-          return false;
-        }
-        const childSegment = candidatePath[path.length];
-        return childSegment !== undefined &&
-          isArrayIndexPropertyName(childSegment) &&
-          Number(childSegment) >= tailStart;
-      });
-
-    const patches: PatchOp[] = [
-      ...nonOverlappingCoverCandidates
-        .filter((candidate) => !isSuppressed(candidate.path))
-        .map((candidate) => candidate.patch),
-      ...retainedNonCoverCandidates
-        .filter((candidate) => !isSuppressed(candidate.path))
-        .map((candidate) => candidate.patch),
-    ];
 
     if (patches.length === 0) {
       return null;

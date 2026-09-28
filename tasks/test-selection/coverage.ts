@@ -19,6 +19,7 @@ import {
 } from "../test-topology/suite.ts";
 import { memberScope } from "../test-topology/unit.ts";
 import type { Calibration, Manifest, ManifestEntry } from "./manifest.ts";
+import { longestUnit, ownTime } from "./plan.ts";
 import {
   COST_WINDOW_DAYS,
   EXCLUDED_FROM_COVERAGE_GATE,
@@ -173,9 +174,12 @@ export interface MeasuredCost {
   overhead: number;
 
   /**
-   * Each entry's own cost through its suite's correction, once for every
-   * time the entry runs, which is paid once however the entries are
-   * spread.
+   * What the entries take, which is paid once however they are spread:
+   * for each suite, each entry's own cost through the suite's correction
+   * once for every time the entry runs, or the time its longest unit
+   * takes where that is more, as `suiteLoad()` charges a lane. Spreading a
+   * suite over lanes charges each lane at least its own share of each, so
+   * the lanes between them are charged no less.
    */
   spread: number;
 
@@ -189,8 +193,10 @@ export interface MeasuredCost {
 
   /**
    * The most any one entry charges the lane holding it, with its suite's
-   * and its unit's overheads. All of one entry's runs go in one lane, so
-   * no number of lanes holds an entry costing more than one lane does.
+   * and its unit's overheads: its own cost through the correction, or its
+   * `ownTime()` where that is more, as a lane holding nothing else is
+   * charged it. All of one entry's runs go in one lane, so no number of
+   * lanes holds an entry costing more than one lane does.
    */
   largest: number;
 }
@@ -216,15 +222,21 @@ export function measuredCost(
     const fitted = calibration.suitesWithCoverage?.[suite];
     if (fitted === undefined) return undefined;
     const units = new Map<string, number>();
+    let spread = 0;
     for (const entry of held) {
       units.set(entry.unit, (units.get(entry.unit) ?? 0) + 1);
       const own = fitted.correction * entry.cost * entry.repeats;
-      cost.spread += own;
+      spread += own;
       cost.largest = Math.max(
         cost.largest,
-        fitted.overhead + fitted.unitOverhead + own,
+        fitted.overhead + fitted.unitOverhead +
+          Math.max(own, ownTime(entry, entry.repeats)),
       );
     }
+    cost.spread += Math.max(
+      spread,
+      longestUnit(held.map((entry) => ({ entry, repeats: entry.repeats }))),
+    );
     cost.overhead += fitted.overhead;
     for (const entries of units.values()) {
       cost.units.push({ overhead: fitted.unitOverhead, entries });

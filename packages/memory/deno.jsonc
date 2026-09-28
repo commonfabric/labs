@@ -28,6 +28,7 @@
     "./v2/path": "./v2/path.ts",
     "./v2/operation-codec": "./v2/operation-codec.ts",
     "./v2/client": "./v2/client.ts",
+    "./v2/presence": "./v2/presence.ts",
     "./v2/message-compression": "./v2/message-compression.ts",
     "./v2/genesis-root": "./v2/genesis-root.ts",
     "./v2/engine": "./v2/engine.ts",

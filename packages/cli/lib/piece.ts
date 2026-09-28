@@ -33,6 +33,7 @@ import {
 } from "@commonfabric/piece";
 import {
   assertPieceInputPath,
+  completeServedRegistration,
   type PatternCompatibilityReport,
   type PatternUpdateReceipt,
   PieceController,
@@ -40,6 +41,8 @@ import {
   type PiecePatternRef,
   PiecesController,
   type PieceSourceActionResult,
+  servedInstantiatePiece,
+  ServedLifecycleRefusal,
 } from "@commonfabric/piece/ops";
 import {
   Cell,
@@ -1672,22 +1675,19 @@ async function lifecycleClient(
 }
 
 /**
- * The served half of `newPiece`: the serving runtime compiles the program
- * and materializes the piece with its name and creation receipt in one
- * transaction, then awaits the default pattern's registration action.
- * This connection then starts
- * it the way it starts any piece it opens, running the graph as
- * speculation while the server derives on demand. The request is awaited
- * without a wall-clock bound: a creation the server is still committing
- * is not one to walk away from, since it lands whether or not this
- * process waits. `boundStart` is the bound the local start runs under.
+ * Creates or resumes a piece with an atomic creation receipt. A serving
+ * deployment executes the transaction remotely; an ordinary client executes
+ * the same operation locally. Registration retains its delivery identity, so
+ * an uncertain response can be retried without reinitializing the document.
+ * `boundStart` bounds only the local start, after creation and registration.
  */
-async function createOnServer(
+async function createWithReceipt(
   config: SpaceConfig,
   pieces: PiecesController,
   program: RuntimeProgram,
   entry: EntryConfig,
   options: {
+    input?: object;
     start?: boolean;
     slug?: string;
     force?: boolean;
@@ -1699,23 +1699,41 @@ async function createOnServer(
   const requestKey = options?.requestKey ?? crypto.randomUUID();
   const receipt = await (async () => {
     try {
-      return await (deps.instantiatePieceOnServer ??
-        instantiatePieceOnServer)(await lifecycleClient(config, deps), {
-          space: pieces.getSpace(),
-          requestKey,
-          program,
-          ...(entry.repository === undefined
-            ? {}
-            : { repository: entry.repository }),
-          ...(options?.slug === undefined ? {} : { slug: options.slug }),
-          ...(options?.force === undefined ? {} : { force: options.force }),
-          register: true,
-          ...(options?.start === false ? { start: false } : {}),
-        });
+      const client = await lifecycleClient(config, deps);
+      const request = {
+        requestKey,
+        ...(options?.input === undefined ? {} : { argument: options.input }),
+        ...(entry.repository === undefined
+          ? {}
+          : { repository: entry.repository }),
+        ...(options?.slug === undefined ? {} : { slug: options.slug }),
+        ...(options?.force === undefined ? {} : { force: options.force }),
+        register: true,
+      };
+      if (servesLifecycleVerbs(pieces)) {
+        return await (deps.instantiatePieceOnServer ??
+          instantiatePieceOnServer)(client, {
+            ...request,
+            space: pieces.getSpace(),
+            program,
+            ...(options?.start === false ? { start: false } : {}),
+          });
+      }
+      const created = await servedInstantiatePiece(pieces, {
+        ...request,
+        source: { program },
+        actingUser: client.identity.did(),
+      });
+      return await completeServedRegistration(
+        pieces,
+        created,
+        client.identity.did(),
+      );
     } catch (error) {
       if (
-        error instanceof ServedLifecycleError && error.status >= 400 &&
-        error.status < 500 && error.status !== 408
+        error instanceof ServedLifecycleRefusal ||
+        (error instanceof ServedLifecycleError && error.status >= 400 &&
+          error.status < 500 && error.status !== 408)
       ) {
         throw error;
       }
@@ -1744,16 +1762,19 @@ async function createOnServer(
  * Creates a new piece from source code and optional input.
  *
  * A `slug` that already points somewhere is refused the way `set-slug`
- * refuses one, and `force` takes it. Against a serving deployment the name
- * rides the creation transaction, so the refusal leaves nothing behind.
- * Otherwise the refusal arrives after the piece exists, so it names the
- * piece as well as the flag: an operator who meant to repoint has an id to
- * name, and one who did not has a piece to find.
+ * refuses one, and `force` takes it. With a request key or a serving
+ * deployment, the name rides the creation transaction, so the refusal
+ * leaves nothing behind. Otherwise the refusal arrives after the piece exists,
+ * so it names the piece as well as the flag: an operator who meant to repoint
+ * has an id to name, and one who did not has a piece to find.
  */
 export async function newPiece(
   config: SpaceConfig,
   entry: EntryConfig,
   options?: {
+    /** Initial argument committed during setup, before registration or start. */
+    input?: object;
+
     start?: boolean;
     slug?: string;
     force?: boolean;
@@ -1832,11 +1853,12 @@ export async function newPiece(
     });
     return Promise.race([starting, timeout]).finally(() => clearTimeout(timer));
   };
+  const receipted = served || options?.requestKey !== undefined;
   const piece = await timeCliPhase(
     "newPiece.create",
     () =>
-      served
-        ? createOnServer(
+      receipted
+        ? createWithReceipt(
           config,
           pieces,
           program,
@@ -1848,14 +1870,15 @@ export async function newPiece(
         : boundStart(pieces.create(program, {
           repository: entry.repository,
           start: options?.start,
+          ...(options?.input === undefined ? {} : { input: options.input }),
         })),
   );
   // Here rather than after the registry add below: the piece now exists in
   // the space, and a slug or registry step that throws afterwards leaves a
   // partial write that the operator is owed the location of.
   noteWroteTo(config.space);
-  // Served creation returns after both setup and registration commit.
-  if (served) return piece.id;
+  // Receipt-backed creation returns after both setup and registration commit.
+  if (receipted) return piece.id;
 
   if (options?.slug) {
     try {

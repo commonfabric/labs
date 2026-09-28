@@ -10,43 +10,10 @@ import {
   wish,
 } from "commonfabric";
 
+import { normalizePresenceParticipantName } from "./participant-name.ts";
+export { normalizePresenceParticipantName } from "./participant-name.ts";
+
 const DEFAULT_NOTE = "# Collaborative note\n\nStart writing together.";
-const MAXIMUM_PRESENCE_NAME_CODE_POINTS = 80;
-const MAXIMUM_PRESENCE_NAME_BYTES = 256;
-
-function isPresenceNameCodePoint(codePoint: number): boolean {
-  return !(codePoint <= 0x1f ||
-    (codePoint >= 0x7f && codePoint <= 0x9f) ||
-    (codePoint >= 0xd800 && codePoint <= 0xdfff));
-}
-
-/** Returns a profile name that satisfies the co-presence wire contract. */
-export function normalizePresenceParticipantName(value: string): string {
-  const filtered = Array.from(value)
-    .filter((character) => isPresenceNameCodePoint(character.codePointAt(0)!))
-    .join("")
-    .trim();
-  const encoder = new TextEncoder();
-  let bytes = 0;
-  let result = "";
-  let codePoints = 0;
-
-  for (const character of filtered) {
-    const characterBytes = encoder.encode(character).length;
-    if (
-      codePoints === MAXIMUM_PRESENCE_NAME_CODE_POINTS ||
-      bytes + characterBytes > MAXIMUM_PRESENCE_NAME_BYTES
-    ) {
-      break;
-    }
-    result += character;
-    codePoints++;
-    bytes += characterBytes;
-  }
-
-  return result;
-}
-
 export interface CollaborativeNoteInput {
   /** Note body shared by every viewer of this piece. */
   note?: PerSpace<string | Default<typeof DEFAULT_NOTE>>;
@@ -61,8 +28,9 @@ export interface CollaborativeNoteOutput {
 
 /**
  * A minimal shared note that pairs Memory-backed text with ephemeral cursors.
- * The editor derives its room from the shared field, the host supplies the
- * service URL, and the pattern derives each viewer's label from their profile.
+ * The runtime derives the editor's room from the shared field and relays it
+ * over the memory connection, and the pattern derives each viewer's label
+ * from their profile.
  */
 export default pattern<CollaborativeNoteInput, CollaborativeNoteOutput>(
   ({ note }) => {

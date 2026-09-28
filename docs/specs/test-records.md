@@ -230,11 +230,11 @@ they carry no variant whatever the batch they measure carried. Nothing
 enumerates them, nothing scores them, and no lane can be asked to run
 one.
 
-Their figures are not all durations. A lane writes three measurements
+Their figures are not all durations. A lane writes four measurements
 per batch — what the batch spent, what its own tests took between them,
-and how many units it opened — and the record format carries one number
-and calls it a duration, so which of the three a record holds is decided
-by its name.
+how many units it opened, and what its longest unit took over every run of
+it — and the record format carries one number and calls it a duration, so
+which of the four a record holds is decided by its name.
 A batch that ended badly is written as a failure, and a test in it
 failing is enough to end it badly.
 

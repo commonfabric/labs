@@ -52,8 +52,8 @@ class DeniedStorageManager extends StorageManager {
   private constructor(options: Options) {
     super(options, new DenyingFactory());
   }
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed() {
+    return { accepted: false, reason: "no-remote-resolution" } as const;
   }
 }
 

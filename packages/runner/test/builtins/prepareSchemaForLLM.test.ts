@@ -1,6 +1,8 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { llmGenerateObjectRequestProblem } from "@commonfabric/llm/types";
+
 import { llmToolExecutionHelpers } from "../../src/builtins/llm-dialog.ts";
 
 const { prepareSchemaForLLM } = llmToolExecutionHelpers;
@@ -91,5 +93,35 @@ describe("prepareSchemaForLLM()", () => {
       required: ["entry", "byName"],
       additionalProperties: false,
     });
+  });
+
+  it("returns the object form of a `true` schema", () => {
+    expect(prepareSchemaForLLM(true)).toEqual({
+      type: "object",
+      properties: {},
+      additionalProperties: true,
+    });
+  });
+
+  it("returns a `false` schema as written, which the generateObject route refuses", () => {
+    // `false` accepts no value. Its object form would accept `{}`, so the
+    // request is refused rather than asking the model for a value the schema
+    // forbids.
+
+    expect(prepareSchemaForLLM(false)).toBe(false);
+    expect(llmGenerateObjectRequestProblem({
+      messages: [{ role: "user", content: "Return anything" }],
+      schema: prepareSchemaForLLM(false),
+    })).toContain("'schema'");
+  });
+
+  it("returns a schema the generateObject route accepts for `true`", () => {
+    // `generateObject<any>()` asks with `true`, and the route takes a schema
+    // only as an object.
+
+    expect(llmGenerateObjectRequestProblem({
+      messages: [{ role: "user", content: "Return anything" }],
+      schema: prepareSchemaForLLM(true),
+    })).toBeUndefined();
   });
 });

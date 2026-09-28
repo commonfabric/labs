@@ -39,21 +39,9 @@ import type {
   MemorySpace,
 } from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
-import { TEST_MEMORY_SERVER_AUTH } from "./memory-v2-test-utils.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { CooperativeYield } from "../src/scheduler/cooperative-yield.ts";
 import { awaitAdmitted, settleServing } from "./support/serving-waits.ts";
-
-const newSharedServer = () =>
-  new MemoryV2Server.Server({
-    sessions: new MemoryV2Server.SessionRegistry({ ttlMs: 600_000 }),
-    subscriptionRefreshDelayMs: 0,
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
 
 const spaceSigner = await Identity.fromPassphrase("cooperative yield space");
 const space = spaceSigner.did() as MemorySpace;
@@ -118,7 +106,10 @@ describe("stage C tuning T3: cooperative yield + mid-wave renew", () => {
     });
 
   beforeEach(() => {
-    server = newSharedServer();
+    server = newSharedServer({
+      sessions: new MemoryV2Server.SessionRegistry({ ttlMs: 600_000 }),
+      subscriptionRefreshDelayMs: 0,
+    });
     servingRuntime = undefined;
   });
 

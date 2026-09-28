@@ -15,7 +15,7 @@ import type { ISpaceReplica } from "../src/storage/interface.ts";
 import { Runtime } from "../src/runtime.ts";
 import { loadSchemaDocument } from "../src/cfc/prepare.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
@@ -74,14 +74,8 @@ class TestStorageManager extends StorageManager {
 }
 
 const makeServer = (name: string): MemoryV2Server.Server =>
-  new MemoryV2Server.Server({
+  newSharedServer({
     store: new URL(`memory://${name}`),
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
   });
 
 /**
@@ -1264,6 +1258,20 @@ describe("late space host hints", () => {
           "https://different-toolshed.test",
         ),
       ).toBe(false);
+      expect(
+        manager.registerSpaceHostDetailed(
+          targetSpace,
+          "https://different-toolshed.test",
+        ),
+      ).toEqual({ accepted: false, reason: "default-route-in-use" });
+      // The refusal fixes no route: a hint naming the default host, which the
+      // written provider is on, is still confirmed.
+      expect(
+        manager.registerSpaceHostDetailed(
+          targetSpace,
+          "https://default-toolshed.test",
+        ),
+      ).toEqual({ accepted: true });
       expect(provider.replica).toBe(replica);
       expect(provider.replica.getDocument(targetId)).toEqual({
         value: { name: "acknowledged data" },

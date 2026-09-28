@@ -30,7 +30,7 @@ import { debugStr } from "@/value-debug";
 import { BaseValueVisitor } from "./BaseValueVisitor.ts";
 import {
   DO_RECURSE_VALUES,
-  type VisitedResult,
+  type MappedResult,
   type VisitingResult,
   type VisitResult,
 } from "./interface.ts";
@@ -193,12 +193,12 @@ export abstract class DefaultValueVisitor<
   /**
    * Visits a value determined to be the `PlusType` by virtue of the visitor
    * engine having called `isPlusType()` on it and gotten a truthy return value.
-   * If not overridden, this calls `visitAnyValue()`.
+   * If not overridden, this calls `visitUnhandledValue()`.
    */
   visitPlusType(
     value: PlusType,
   ): VisitResult<PlusType, ResultType> {
-    return this.visitAnyValue(value, VALUE_TAGS.PlusType);
+    return this.visitUnhandledValue(value, VALUE_TAGS.PlusType);
   }
 
   /**
@@ -231,12 +231,16 @@ export abstract class DefaultValueVisitor<
    * Visits a value which was not recognized to be any known value, including
    * the `PlusType`. If not overridden, this throws an error, indicating the
    * situation.
+   *
+   * **Note:** The choice to `throw` here rather than return `undefined` is
+   * meant to recognize that common subclass implementation patterns -- which
+   * would typically specifically handle a `PlusType` -- don't have to write
+   * code to specifically disclaim out-of-domain values.
    */
   visitUnrecognizedValue(
     value: unknown,
   ): VisitResult<PlusType, ResultType> {
-    const msg = debugStr`Cannot visit unrecognized value: $quote${value}`;
-    throw new Error(msg);
+    throw new Error(debugStr`Cannot visit unrecognized value: $quote${value}`);
   }
 
   //
@@ -249,13 +253,18 @@ export abstract class DefaultValueVisitor<
    * up here; a container does not, because `visitFabricContainerValue()`
    * returns `recurse` rather than deferring; and a value with the tag `null`
    * does not, because `visitUnrecognizedValue()` throws. If not overridden,
-   * this returns `undefined`.
+   * this throws an error, indicating the situation.
+   *
+   * **Note:** The choice to `throw` here rather than return `undefined` is so
+   * that common subclass implementation patterns -- where a certain set of
+   * types/kinds of value are specifically handled -- don't have to write code
+   * to specifically disclaim what they don't handle.
    */
-  visitAnyValue(
-    _value: FabricValuePlus<PlusType>,
+  visitUnhandledValue(
+    value: FabricValuePlus<PlusType>,
     _tag: FabricValuePlusTag | null,
   ): VisitResult<PlusType, ResultType> {
-    return undefined;
+    throw new Error(debugStr`Cannot visit unhandled value: $quote${value}`);
   }
 
   /**
@@ -264,9 +273,9 @@ export abstract class DefaultValueVisitor<
    * engine.
    *
    * **Note:** This implementation intentionally does _not_ default to calling
-   * `visitAnyValue()`, because it is expected that most useful visitors will in
-   * fact want to recurse into containers. Subclasses that don't want this can
-   * of course just override this implementation.
+   * `visitUnhandledValue()`, because it is expected that most useful visitors
+   * will in fact want to recurse into containers. Subclasses that don't want
+   * this can of course just override this implementation.
    */
   visitFabricContainerValue(
     _value: FabricContainerValuePlus<PlusType>,
@@ -299,18 +308,56 @@ export abstract class DefaultValueVisitor<
 
   /**
    * Visits a primitive value, including both regular JS primitives _and_
-   * `FabricPrimitive`s. If not overridden, this calls `visitAnyValue()`.
+   * `FabricPrimitive`s. If not overridden, this calls `visitUnhandledValue()`.
    */
   visitPrimitiveValue(
     value: Primitive | FabricPrimitive,
     tag: PrimitiveValueTag,
   ): VisitResult<PlusType, ResultType> {
-    return this.visitAnyValue(value, tag);
+    return this.visitUnhandledValue(value, tag);
   }
 
   //
   // Instance methods
   //
+
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `undefined`.
+   */
+  override mappedFabricArrayElement(
+    _array: FabricArrayPlus<PlusType>,
+    _index: number,
+    _value: FabricValuePlus<ResultType>,
+  ): MappedResult<ResultType> {
+    return undefined;
+  }
+
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `undefined`.
+   */
+  override mappedFabricInstanceState(
+    _instance: FabricInstancePlus<PlusType>,
+    _state: FabricValuePlus<ResultType>,
+  ): MappedResult<ResultType> {
+    return undefined;
+  }
+
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `undefined`.
+   */
+  override mappedFabricPlainObjectEntry(
+    _container: FabricPlainObjectPlus<PlusType>,
+    _key: string,
+    _value: FabricValuePlus<ResultType>,
+  ): MappedResult<ResultType> {
+    return undefined;
+  }
 
   /**
    * Calls through to the most type-specific `visit*()` method, returning
@@ -415,44 +462,6 @@ export abstract class DefaultValueVisitor<
       }
         // deno-coverage-ignore-stop
     }
-  }
-
-  /**
-   * @inheritDoc
-   *
-   * If not overridden, this returns `undefined`.
-   */
-  override visitedFabricArrayElement(
-    _array: FabricArrayPlus<PlusType>,
-    _index: number,
-    _value: FabricValuePlus<ResultType>,
-  ): VisitedResult<ResultType> {
-    return undefined;
-  }
-
-  /**
-   * @inheritDoc
-   *
-   * If not overridden, this returns `undefined`.
-   */
-  override visitedFabricInstanceState(
-    _instance: FabricInstancePlus<PlusType>,
-    _state: FabricValuePlus<ResultType>,
-  ): VisitedResult<ResultType> {
-    return undefined;
-  }
-
-  /**
-   * @inheritDoc
-   *
-   * If not overridden, this returns `undefined`.
-   */
-  override visitedFabricPlainObjectEntry(
-    _container: FabricPlainObjectPlus<PlusType>,
-    _key: string,
-    _value: FabricValuePlus<ResultType>,
-  ): VisitedResult<ResultType> {
-    return undefined;
   }
 
   /**

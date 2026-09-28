@@ -272,5 +272,97 @@ Deno.test("model spend: no keys at all -> gray, naming the keys to set", async (
   const v = await modelSpend.collect(ctx({}));
   assertEquals(v.status, "unknown");
   assertEquals(v.value, "—");
-  assertEquals(v.sub, "set OPENAI_ADMIN_KEY / ANTHROPIC_ADMIN_KEY / OPENROUTER_KEY");
+  assertEquals(
+    v.sub,
+    "set OPENAI_ADMIN_KEY / ANTHROPIC_FEDERATION_RULE_ID + ANTHROPIC_ORGANIZATION_ID + " +
+      "ANTHROPIC_SERVICE_ACCOUNT_ID or ANTHROPIC_ADMIN_KEY / OPENROUTER_KEY",
+  );
+});
+
+// In-cluster, Anthropic is read with a federated token: the metadata server
+// signs an identity token, Anthropic exchanges it, and the cost report is read
+// with the result as a bearer token. A stray Admin key must not be used.
+const FEDERATION = {
+  ANTHROPIC_FEDERATION_RULE_ID: "fdrl_x",
+  ANTHROPIC_ORGANIZATION_ID: "org-uuid",
+  ANTHROPIC_SERVICE_ACCOUNT_ID: "svac_x",
+};
+
+Deno.test("model spend: Anthropic federation exchanges an identity token and reads with the bearer token", async () => {
+  const costHeads: Record<string, string>[] = [];
+  let exchanges = 0;
+  await withFetch(
+    {
+      "metadata.google.internal": () => new Response("google-jwt"),
+      "api.anthropic.com": (url, init) => {
+        if (url.pathname === "/v1/oauth/token") {
+          exchanges++;
+          return json({ access_token: "sk-ant-oat01-fed", token_type: "Bearer", expires_in: 600 });
+        }
+        costHeads.push(authOf(init));
+        return anthropicPaged(url, init);
+      },
+    },
+    async () => {
+      const v = await modelSpend.collect(ctx({ ...FEDERATION, ANTHROPIC_ADMIN_KEY: "stray" }));
+      assertEquals(v.status, "good");
+      assertEquals(v.aside, `<span class="hfacet" title="$${2 * DOM} MTD">$${2 * DOM} MTD</span>`);
+      // One exchange serves every page of the report.
+      assertEquals(exchanges, 1);
+      assertEquals(costHeads.length, 2);
+      for (const h of costHeads) {
+        assertEquals(h.authorization, "Bearer sk-ant-oat01-fed");
+        assertEquals(h["anthropic-version"], "2023-06-01");
+        assertEquals(h["x-api-key"], undefined);
+      }
+    },
+  );
+});
+
+// OpenAI still reads, so the tile renders rather than returning early: the
+// Anthropic line itself must show $???, and the total must not count it as $0.
+Deno.test("model spend: a denied Anthropic exchange marks Anthropic $??? and grays the tile", async () => {
+  await withFetch(
+    {
+      "api.openai.com": openaiPaged,
+      "metadata.google.internal": () => new Response("google-jwt"),
+      "api.anthropic.com": (url) =>
+        url.pathname === "/v1/oauth/token"
+          ? new Response(JSON.stringify({ type: "error" }), { status: 401 })
+          : json({ data: [] }),
+    },
+    async () => {
+      const v = await modelSpend.collect(ctx({ ...FEDERATION, OPENAI_ADMIN_KEY: "oa" }));
+      assertEquals(v.status, "unknown");
+      assert(v.value?.startsWith("≥"), `a total missing a provider is a lower bound, got ${v.value}`);
+      assertEquals(v.aside, `<span class="hfacet" title="$${DOM} MTD">$${DOM} MTD</span>`); // OpenAI alone
+      assertStringIncludes(
+        v.extra ?? "",
+        `<p class="sub" title="OpenAI • Anthropic $???">${themedSwatch("#10a37f")} OpenAI • Anthropic $???</p>`,
+      );
+    },
+  );
+});
+
+// A half-finished federation setup still counts Anthropic as configured, so the
+// tile grays with Anthropic $??? instead of dropping the provider silently, and
+// the Admin key beside it is not used.
+Deno.test("model spend: a partial federation setup shows Anthropic $??? and sends nothing to Anthropic", async () => {
+  // Both hosts answer, so a request to either would succeed rather than fail
+  // quietly into the same $???; the recorded calls are what prove none is made.
+  const touched: string[] = [];
+  const record: Handler = (url) => {
+    touched.push(url.href);
+    return json({ access_token: "sk-ant-oat01-x", data: [] });
+  };
+  await withFetch({ "api.openai.com": openaiPaged, "api.anthropic.com": record, "metadata.google.internal": record }, async () => {
+    const v = await modelSpend.collect(ctx({
+      ANTHROPIC_FEDERATION_RULE_ID: "fdrl_x",
+      ANTHROPIC_ADMIN_KEY: "stray",
+      OPENAI_ADMIN_KEY: "oa",
+    }));
+    assertEquals(v.status, "unknown");
+    assertStringIncludes(v.extra ?? "", "Anthropic $???");
+    assertEquals(touched, []);
+  });
 });

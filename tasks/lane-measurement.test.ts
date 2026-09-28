@@ -47,9 +47,17 @@ describe("lane-measurement", () => {
       });
     });
 
+    it("returns the suite a longest-unit measurement names", () => {
+      expect(batchMeasurement("ci-lane longest batch pattern-unit")).toEqual({
+        suite: "pattern-unit",
+        measured: false,
+        kind: "longest",
+      });
+    });
+
     it("returns every name `batchMeasurementName()` composes", () => {
       for (const measured of [false, true]) {
-        for (const kind of ["spent", "ran", "units"] as const) {
+        for (const kind of ["spent", "ran", "units", "longest"] as const) {
           const name = batchMeasurementName("runner-unit", measured, kind);
           expect(batchMeasurement(name))
             .toEqual({ suite: "runner-unit", measured, kind });

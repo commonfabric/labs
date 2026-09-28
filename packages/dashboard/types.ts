@@ -27,6 +27,9 @@ export interface TileView {
 export interface Route {
   path: string;
   handler(req: Request, url: URL): Response | Promise<Response>;
+  // The page is rendered again on every serving tick while a browser shows
+  // it, and sent to that browser when it changes (live-page.ts).
+  live?: boolean;
 }
 
 export function runSource(repo: string, workflow: string) {

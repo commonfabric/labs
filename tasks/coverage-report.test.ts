@@ -21,7 +21,11 @@ import {
   coverageMetricForGroup,
   measuredSetCoverageMetric,
 } from "./ci-check-lib.ts";
-import { type CoverageDebtMetric, parseLcov } from "./coverage-metrics.ts";
+import {
+  collectSourceFiles,
+  type CoverageDebtMetric,
+  parseLcov,
+} from "./coverage-metrics.ts";
 import {
   COMPILE_CACHE_STATE_FILE,
   COVERAGE_FAILURE_MARKER,
@@ -129,6 +133,21 @@ async function markerPathIn(lane: string): Promise<string> {
     path.dirname(await reportPathIn(lane)),
     COVERAGE_FAILURE_MARKER,
   );
+}
+
+/**
+ * A report holding a record for every file the repository-wide figure
+ * charges, each with one line covered and one line not.
+ *
+ * Scoring compiles a tracked file the report holds no record for, unless
+ * the file opts out of coverage, to learn whether it holds any code, and
+ * this repository has thousands of them. A report naming every one of
+ * them leaves none to compile.
+ */
+async function everyFileReport(): Promise<string> {
+  return (await collectSourceFiles(REPOSITORY))
+    .map((file) => `SF:${file.absolutePath}\nDA:1,1\nDA:2,0\nend_of_record\n`)
+    .join("");
 }
 
 /** The measured-set figures a reports directory yields. */
@@ -478,16 +497,18 @@ describe("coverage-report", () => {
 
   describe("report()", () => {
     it("publishes every figure as a measurement in the run's spool", async () => {
-      const source = path.join(REPOSITORY, MEMBER, "src/index.ts");
       const reports = await directoryOf({
-        [await reportPathIn("lane-1")]:
-          `SF:${source}\nDA:1,1\nDA:2,0\nend_of_record\n`,
+        [await reportPathIn("lane-1")]: await everyFileReport(),
       });
       try {
         const { summary, coverage } = await reportInto(reports);
         expect([...coverage.sets.keys()]).toEqual([`${SUITE}/${MEMBER}`]);
-        expect(coverage.groups.get("workspace")).toBeGreaterThan(0);
-        expect(coverage.groups.get(MEMBER)).toBeGreaterThan(0);
+        // Each file's record leaves exactly one of its lines uncovered.
+        const files = await collectSourceFiles(REPOSITORY);
+        expect(coverage.groups.get("workspace")).toBe(files.length);
+        expect(coverage.groups.get(MEMBER)).toBe(
+          files.filter((file) => file.metricGroup === MEMBER).length,
+        );
         expect(summary).toContain("uncovered lines");
       } finally {
         await Deno.remove(reports, { recursive: true });
@@ -498,11 +519,10 @@ describe("coverage-report", () => {
       // The dashboard leaves a cold run out of the repository-wide trend,
       // and reads that from here.
 
-      const source = path.join(REPOSITORY, MEMBER, "src/index.ts");
+      const lcov = await everyFileReport();
       for (const state of ["cold", "warm"] as const) {
         const reports = await directoryOf({
-          [await reportPathIn("lane-1")]:
-            `SF:${source}\nDA:1,1\nDA:2,0\nend_of_record\n`,
+          [await reportPathIn("lane-1")]: lcov,
           [`lane-1/lcov/${COMPILE_CACHE_STATE_FILE}`]: `${state}\n`,
         });
         try {

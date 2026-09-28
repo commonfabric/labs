@@ -389,10 +389,13 @@ each is easy to get wrong in a way nothing reports.
 
 ### 5.1 Encoding
 
-**An encoded tree shares structure with the value it was built from, and is
-not frozen.** Copy-on-write is what makes that so: a subtree needing no
-encoding *is* that subtree rather than a reconstruction of it, which is the
-same mechanism Section 4 credits with preserving shared references.
+**An encoded tree shares structure with the value it was built from, and the
+encoder freezes none of it.** Copy-on-write is what makes that so: a subtree
+needing no encoding *is* that subtree rather than a reconstruction of it, which
+is the same mechanism Section 4 credits with preserving shared references. An
+instance's encoded state is a snapshot (Section 2.4 of `1-fabric-values.md`),
+so what the tree shares is the value's plain containers and whatever its
+instances hold by reference.
 
 So a value must not be mutated after it is encoded. A caller that does so
 changes the encoded tree, and over a transport that clones on send, changes
@@ -423,6 +426,12 @@ implementation that rebuilt everything would retain nothing, and a rule phrased
 around retention would then oblige it to freeze nothing and let it hand back
 mutable values. Which containers a caller sees returned by identity therefore
 varies with what needed decoding; whether any of them is mutable does not.
+
+An engine constructed with `mutable` as `true` (`1-fabric-values.md` Section
+2.9) freezes none of them instead, and copies a container that needed no
+decoding when it arrived frozen, that being the one way to hand it back
+mutable. A frozen container can arrive only from a decode in the realm that
+built the tree, since cloning produces none.
 
 An `ArrayBuffer` cannot be frozen, which is what makes ceding it a requirement
 rather than a courtesy: sole ownership is the only available defense for a

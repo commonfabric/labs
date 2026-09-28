@@ -590,9 +590,11 @@ export const canonicalizePreparedDigestInput = (
       ),
     }
     : {}),
-  // Whole-value roots decide where the flow stamp lands: an order-insensitive
-  // set of (address, recording identity). Empty collapses to absent, so a
-  // transaction that recorded none keeps its digest.
+  // Whole-value roots decide where the flow stamp lands, and a root's
+  // reference decides which pointer its value may hold: an order-insensitive
+  // set of (address, recording identity, reference). Empty collapses to
+  // absent, so a transaction that recorded none keeps its digest, and a root
+  // with no reference keeps the spelling it had before references existed.
   ...(input.assertedValueRoots !== undefined &&
       input.assertedValueRoots.length > 0
     ? {
@@ -601,6 +603,9 @@ export const canonicalizePreparedDigestInput = (
           const canonical = {
             address: canonicalizeAttemptedWrite(root.address),
             identity: root.identity,
+            ...(root.reference !== undefined
+              ? { reference: canonicalizeAttemptedWrite(root.reference) }
+              : {}),
           };
           // The whole canonical record's hash, so two roots compare equal only
           // when they are the same root.
@@ -619,7 +624,7 @@ export const canonicalizePreparedDigestInput = (
         .filter((root, index, sorted) =>
           index === 0 || root.recordHash !== sorted[index - 1].recordHash
         )
-        .map(({ address, identity }) => ({ address, identity })),
+        .map(({ recordHash: _, ...root }) => root),
     }
     : {}),
   // List-coordinator containers: a deduplicated address set, absent when

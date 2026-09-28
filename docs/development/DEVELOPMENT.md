@@ -694,6 +694,11 @@ using them is not optional in code that can reach a stored value:
   class whose codec is a stub, which this walk returns for.
   `valueEqual({ v: aFabricMap }, { v: 5 })` throws where `fabricAwareEqual()`
   returns `false`.
+- `valueEqualByWalk(a, b)` returns what `valueEqual()` returns on acyclic
+  values, and is the comparison for a value against a copy-on-write revision
+  of itself: it walks the two in step and settles a subtree they share by
+  identity, where `valueEqual()` hashes the whole of any operand whose hash it
+  has not cached.
 
 Around a dozen walks in `runner` and `piece` take one of the two
 non-refusing answers, and what each says is decided by what it owes its

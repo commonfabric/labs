@@ -388,7 +388,9 @@ are frozen via `Object.freeze()`). The immutability guarantee (see
 `1-fabric-values.md` Section 2.9) is a property of decoding output, not of
 whether decoding occurred. A caller receiving a value from the engine's
 `decode()` can always assume it is immutable, regardless of whether it came from
-a `/quote` path, a decoded type, or a plain literal.
+a `/quote` path, a decoded type, or a plain literal. An engine constructed with
+`mutable` as `true` reverses this uniformly: none of its output is frozen, the
+`/quote` path's included.
 
 Use cases:
 - Storing schemas or examples that describe special types without instantiating
