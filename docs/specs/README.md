@@ -100,4 +100,5 @@ decision is reversed or superseded).
 ### Chat
 
 - [FabriChat](fabrichat/README.md) (proposed): a room per conversation, a
-  per-user manager, and adapters that show rooms in other spaces
+  per-user manager, and placements and adapters that show rooms in other
+  spaces

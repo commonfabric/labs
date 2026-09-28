@@ -1,33 +1,32 @@
-# FabriChat: the room
+# FabriChatRoom
 
 Status: proposed design (see [`README.md`](README.md)).
 
-`FabriChatRoom` is one conversation. It is the successor to the room in
-today's `packages/patterns/fabrichat/chat.tsx`, and keeps that room's record,
-writers, and reviewed surfaces. What changes is where it lives and what
-decides its membership.
+`FabriChatRoom` is one conversation. It is the successor to the room in today's
+`packages/patterns/fabrichat/chat.tsx`, and keeps that room's record, writers,
+and reviewed surfaces. What changes is where it lives and what decides its
+membership.
 
 ## Where it lives
 
-A room is a piece in a shared space (see
-[shared spaces](README.md#shared-spaces)). It can be placed in two ways:
+A room is a piece in a shared space (see [shared
+spaces](README.md#shared-spaces)). It can be placed in two ways:
 
 - **A room of its own.** A direct room, or a group room, lives in a space
   created for it, and nothing else of consequence lives in that space. It is
-  created by a manager ([`manager.md`](manager.md)), and never by an adapter or
-  a container.
+  created by a manager ([`FabriChatManager.md`](FabriChatManager.md)), and never
+  by a placement, an adapter, or a container.
 - **A space's own chat.** The chat of everyone in a shared space is a room in
-  that space itself. Its members are the space's members, by construction. It
-  is created in the space by whatever sets the space up, and a space has at
-  most one.
+  that space itself. Its members are the space's members, by construction. It is
+  created in the space by whatever sets the space up, and a space has at most
+  one.
 
 For a room of its own, the space's access list MUST grant only the room's
-members. Its creator
-holds OWNER. The other members of a direct room hold WRITE. A group room MAY
-grant OWNER to more than one member, so that more than one person can add
-people. The access list MUST NOT contain the `"*"` wildcard: a room is not
-open to principals it hasn't admitted. A space's own chat takes the space's
-access list as it is, and adds nothing to it.
+members. Its creator holds OWNER. The other members of a direct room hold WRITE.
+A group room MAY grant OWNER to more than one member, so that more than one
+person can add people. The access list MUST NOT contain the `"*"` wildcard: a
+room is not open to principals it hasn't admitted. A space's own chat takes the
+space's access list as it is, and adds nothing to it.
 
 ## The record
 
@@ -46,7 +45,7 @@ interface FabriChatAbout {
   /** `"direct"` for exactly two members; `"group"` otherwise. */
   kind: "direct" | "group";
 
-  /** A group room's title. A direct room has none; clients show the other member. */
+  /** A group room's title. A direct room has none; clients show the other. */
   title?: string;
 
   /** When the room was created, in milliseconds since the epoch. */
@@ -70,23 +69,23 @@ interface FabriChatMessage {
 }
 ```
 
-`replyTo` is a link, so a reply keeps its target's identity and label. A
-client builds threads from it. A reply MUST name a message in the same room.
+`replyTo` is a link, so a reply keeps its target's identity and label. A client
+builds threads from it. A reply MUST name a message in the same room.
 
-A message's identity is its entity. Clients MUST use the entity as the
-message's id, and MUST NOT make up ids from content or position.
+A message's identity is its entity. Clients MUST use the entity as the message's
+id, and MUST NOT make up ids from content or position.
 
 A reaction is today's `FabriChatReaction` (reactor profile, message, emoji),
 kept at an address derived from the reactor, the message, and the emoji
 (`reactionKeyFor`). Adding or removing one never rewrites anyone else's.
 
-A reaction's emoji is any single emoji: exactly one emoji sequence that
-[Unicode Technical Standard #51](https://www.unicode.org/reports/tr51/)
-recommends for general interchange (`RGI_Emoji`), with its modifiers and
-joiners included. `commitReact` refuses anything else, including text, and two
-emoji written as one. A room has no fixed list. The four cat faces in today's
-`FABRICHAT_REACJI` are a demo placeholder, not part of this design. Which
-emoji a client puts within easy reach is the client's choice.
+A reaction's emoji is any single emoji: exactly one emoji sequence that [Unicode
+Technical Standard #51](https://www.unicode.org/reports/tr51/) recommends for
+general interchange (`RGI_Emoji`), with its modifiers and joiners included.
+`commitReact` refuses anything else, including text, and two emoji written as
+one. A room has no fixed list. The four cat faces in today's `FABRICHAT_REACJI`
+are a demo placeholder, not part of this design. Which emoji a client puts
+within easy reach is the client's choice.
 
 ## Writers
 
@@ -101,18 +100,17 @@ admitted only from its reviewed surface:
 
 `commitSend` and `commitReact` keep today's types: the stored value is
 `AuthoredByCurrentUser<TrustedActionWrite<…>>`, so the runtime labels it with
-its writer and refuses it without a trusted gesture from the named surface.
-The event a send carries is the text to send (as today, `target.value`), plus
-an optional `replyTo`. A react event names the message and the emoji.
+its writer and refuses it without a trusted gesture from the named surface. The
+event a send carries is the text to send (as today, `target.value`), plus an
+optional `replyTo`. A react event names the message and the emoji.
 
-`commitJoin` contributes the viewer's own `#profile` link, as
-[shared-profile rosters](../shared-profile-rosters.md) describe. It needs no
-reviewed gesture, because it asserts nothing but the viewer's own profile, and
-an entry stays a claim. A client SHOULD join when it first shows a room to a
-member.
+`commitJoin` contributes the viewer's own `#profile` link, as [shared-profile
+rosters](../shared-profile-rosters.md) describe. It needs no reviewed gesture,
+because it asserts nothing but the viewer's own profile, and an entry stays a
+claim. A client SHOULD join when it first shows a room to a member.
 
-Each handler refuses to act before the viewer's profile resolves, and a
-refused event is spent, as today.
+Each handler refuses to act before the viewer's profile resolves, and a refused
+event is spent, as today.
 
 ## Membership
 
@@ -123,12 +121,12 @@ them. A room reads its members from its space and keeps no list of its own.
 Until the runtime provides member sets, a room keeps `roster`, a set of profile
 claims, as the `loom` pattern keeps `participants`, and consumers combine it
 with the access list themselves. The roster is display, and the two can
-disagree: a member who has never joined has no roster entry, and a roster
-entry whose principal has lost access stays until it's cleaned up. Clients
-MUST NOT treat a roster entry as proof of access.
+disagree: a member who has never joined has no roster entry, and a roster entry
+whose principal has lost access stays until it's cleaned up. Clients MUST NOT
+treat a roster entry as proof of access.
 
-Adding and removing members changes the access list. For group rooms, the
-room offers two streams that record the intent and ask the host to act:
+Adding and removing members changes the access list. For group rooms, the room
+offers two streams that record the intent and ask the host to act:
 
 - **`invite`** `{ principal, access }`: grant a principal access, or issue an
   invitation for them to redeem.
@@ -137,22 +135,21 @@ room offers two streams that record the intent and ask the host to act:
 Both are outward acts: they grant or withdraw another person's access. So each
 is admitted only from a reviewed surface (`FabriChatMembersSurface`), and only
 from a member the access list makes OWNER. A direct room has neither: its
-membership is fixed at creation. A space's own chat has neither: its
-members change when the space's do.
+membership is fixed at creation. A space's own chat has neither: its members
+change when the space's do.
 
 ## Outputs
 
-The room's result is the contract that adapters and clients read:
+The room's result is the contract that placements, adapters, and clients read:
 
 - `about`, `messages`, `reactions`, `roster`.
 - `participants`: `roster`, plus any author with no roster entry, keyed by
   profile cell.
 - The streams `sendMessage`, `react`, `join`, `invite`, and `remove`.
 - `[UI]`: the room's own rendering, with its reviewed surfaces. An adapter's
-  web rendering embeds it, so that a composer is always the room's own
-  surface.
-- `[VIEWS]`: a `room` group with the same facts and streams, for hosts that
-  draw natively (see [`clients.md`](clients.md)).
+  rendering embeds it, so that a composer is always the room's own surface.
+- `[VIEWS]`: a `room` group with the same facts and streams, for hosts that draw
+  natively (see [`clients.md`](clients.md)).
 
 ## Prerequisites
 
@@ -162,6 +159,5 @@ The room's result is the contract that adapters and clients read:
   `"*": "WRITE"`. A prototype MAY use it, and MUST say that the room is open to
   any authenticated principal.
 - **Pattern-facing access control.** `invite` and `remove` need a way for a
-  pattern to ask its host to change an access list or issue a space
-  invitation. Today only hosts can do that (`ACLManager`,
-  `SpaceInviteClient`).
+  pattern to ask its host to change an access list or issue a space invitation.
+  Today only hosts can do that (`ACLManager`, `SpaceInviteClient`).
