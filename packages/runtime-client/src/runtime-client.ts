@@ -70,6 +70,7 @@ import {
   type PieceUpdateSourceResponse,
   type PresenceJoinResponse,
   type PresenceUpdateNotification,
+  type PresenceWireEvent,
   RequestType,
   type RuntimeSecurityContext,
   type SlugRefusal,
@@ -251,11 +252,10 @@ type PresenceHandleState = {
 
 /** What the client holds for one joined room. */
 type PresenceRoomState = {
-  /**
-   * The room's identity on this client: its space and room id. Empty while a
-   * derived room's join is in flight, since the worker names the room.
-   */
+  /** The room's identity on this client: its space and room id. */
   key: string;
+
+  /** The id of the membership the room is held through. */
   subscriptionId: string;
   room: string;
   participantId: string;
@@ -266,18 +266,34 @@ type PresenceRoomState = {
   /** The scheduled publication, or `undefined` when none is pending. */
   frame: number | undefined;
 
-  /** Settles when the worker has responded to the join. */
-  joined: Promise<void>;
-
-  /** Set by a `failure`, after which nothing is published or delivered. */
+  /**
+   * Set by a `failure`, or once the room is dropped from the client's
+   * indexes, after which nothing is published or delivered.
+   */
   ended: boolean;
+};
+
+/**
+ * A join the worker has not answered. A later join through the same cell, or
+ * of the same named room, waits on it rather than asking the worker again.
+ */
+type PendingPresenceJoin = {
+  /** The id the membership is requested under, and held under once joined. */
+  subscriptionId: string;
 
   /**
-   * The state this join settled on when the worker named a room another cell
-   * had already joined: the two cells are aliases of one field, and their
-   * handles share that room rather than racing it with two memberships.
+   * Events the worker sent the membership ahead of the join's reply, in the
+   * order they arrived. They are applied to the room once it exists.
    */
-  resolved?: PresenceRoomState;
+  early: PresenceWireEvent[];
+
+  /**
+   * Settles on the room the join reached: the one it joined, or, when the
+   * worker names a room another join already holds or is joining by name,
+   * that one. The two cells are then aliases of one field, and their handles
+   * share the room rather than racing it with two memberships.
+   */
+  room: Promise<PresenceRoomState>;
 };
 
 const presenceRoomKey = (space: string, room: string): string =>
@@ -303,18 +319,31 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     string,
     (field: OperationFieldSnapshot) => void
   >();
+
+  /** Joined rooms by their key. */
   #presenceRooms = new Map<string, PresenceRoomState>();
+
+  /** Joined rooms by the membership each is held through. */
   #presenceBySubscription = new Map<string, PresenceRoomState>();
 
   /** Orders facet writes across every handle, for the merge to rank by. */
   #presenceWrites = 0;
 
   /**
-   * Derived-room joins by the cell each was made through, kept after the
-   * join settles so a second join through the same cell finds the room
-   * without asking the worker again.
+   * The room each derived-room join settled on, by the cell the join was made
+   * through, so a second join through the same cell finds the room without
+   * asking the worker again. Two alias cells of one field map to one room.
    */
   #presenceByCell = new Map<string, PresenceRoomState>();
+
+  /** Named-room joins in flight, by the key of the room each names. */
+  #presenceJoinsByRoom = new Map<string, PendingPresenceJoin>();
+
+  /** Derived-room joins in flight, by the cell each was made through. */
+  #presenceJoinsByCell = new Map<string, PendingPresenceJoin>();
+
+  /** Joins in flight by the membership each requests. */
+  #presenceJoinsBySubscription = new Map<string, PendingPresenceJoin>();
 
   private constructor(
     conn: InitializedRuntimeConnection,
@@ -555,46 +584,25 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     // A named room is known before the worker is asked, and a derived one
     // only from its reply, so a derived join is found by the cell it was made
     // through, and a named one by the room.
-    let state = requested === undefined
-      ? this.#presenceByCell.get(cellKey)
-      : this.#presenceRooms.get(presenceRoomKey(ref.space, requested));
-    if (state !== undefined && (state.resolved ?? state).ended) {
-      this.#forgetPresenceRoom(state);
-      state = undefined;
+    const [rooms, joins, key] = requested === undefined
+      ? [this.#presenceByCell, this.#presenceJoinsByCell, cellKey]
+      : [
+        this.#presenceRooms,
+        this.#presenceJoinsByRoom,
+        presenceRoomKey(ref.space, requested),
+      ];
+    let room = rooms.get(key);
+    if (room?.ended) {
+      this.#forgetPresenceRoom(room);
+      room = undefined;
     }
-    if (state === undefined) {
-      const created: PresenceRoomState = {
-        key: requested === undefined
-          ? ""
-          : presenceRoomKey(ref.space, requested),
-        subscriptionId: crypto.randomUUID(),
-        room: requested ?? "",
-        participantId: "",
-        participants: new Map(),
-        handles: new Set(),
-        name: "",
-        frame: undefined,
-        joined: Promise.resolve(),
-        ended: false,
-      };
-      created.joined = this.#joinPresence(created, ref, requested);
-      if (requested === undefined) {
-        this.#presenceByCell.set(cellKey, created);
-      } else {
-        this.#presenceRooms.set(created.key, created);
+    if (room === undefined) {
+      const join = joins.get(key) ??
+        this.#joinPresence(ref, cellKey, requested);
+      room = await join.room;
+      if (room.ended) {
+        throw new Error("presence room ended while it was being joined");
       }
-      this.#presenceBySubscription.set(created.subscriptionId, created);
-      state = created;
-    }
-    try {
-      await state.joined;
-    } catch (error) {
-      if (state.handles.size === 0) this.#forgetPresenceRoom(state);
-      throw error;
-    }
-    const room = state.resolved ?? state;
-    if (room.ended) {
-      throw new Error("presence room ended while it was being joined");
     }
     const handle: PresenceHandleState = {
       facets: new Map(),
@@ -1601,9 +1609,22 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   };
 
   #onPresenceUpdate = (data: PresenceUpdateNotification): void => {
+    const join = this.#presenceJoinsBySubscription.get(data.subscriptionId);
+    if (join !== undefined) {
+      join.early.push(data.event);
+      return;
+    }
     const room = this.#presenceBySubscription.get(data.subscriptionId);
-    if (room === undefined || room.ended) return;
-    const wire = data.event;
+    if (room !== undefined) this.#receivePresence(room, data.event);
+  };
+
+  /**
+   * Applies one of the worker's events to the room and delivers it to the
+   * room's handles. An event that changes nothing is not delivered, and an
+   * ended room takes none.
+   */
+  #receivePresence(room: PresenceRoomState, wire: PresenceWireEvent): void {
+    if (room.ended) return;
     let event: PresenceEvent;
     switch (wire.kind) {
       case "snapshot":
@@ -1638,51 +1659,109 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       }
     }
     this.#deliverPresence(room, event);
-  };
+  }
 
-  async #joinPresence(
-    state: PresenceRoomState,
+  /**
+   * Starts a join of the room `requested` names, or of `ref`'s derived room
+   * when it names none, and indexes the join until the worker answers.
+   */
+  #joinPresence(
     ref: CellRef,
+    cellKey: string,
     requested: string | undefined,
-  ): Promise<void> {
+  ): PendingPresenceJoin {
+    const settled = Promise.withResolvers<PresenceRoomState>();
+    const join: PendingPresenceJoin = {
+      subscriptionId: crypto.randomUUID(),
+      early: [],
+      room: settled.promise,
+    };
+    if (requested === undefined) {
+      this.#presenceJoinsByCell.set(cellKey, join);
+    } else {
+      this.#presenceJoinsByRoom.set(
+        presenceRoomKey(ref.space, requested),
+        join,
+      );
+    }
+    this.#presenceJoinsBySubscription.set(join.subscriptionId, join);
+    this.#settlePresenceJoin(join, ref, cellKey, requested).then(
+      settled.resolve,
+      settled.reject,
+    );
+    return join;
+  }
+
+  /**
+   * Helper for `#joinPresence()`, which waits out the worker's reply and
+   * returns the room the join reached. A derived room the client already
+   * holds, or is joining by name, makes this join's membership redundant: it
+   * is left, and the join returns that room.
+   */
+  async #settlePresenceJoin(
+    join: PendingPresenceJoin,
+    ref: CellRef,
+    cellKey: string,
+    requested: string | undefined,
+  ): Promise<PresenceRoomState> {
     let response: PresenceJoinResponse;
     try {
       response = await this.#conn.request<RequestType.PresenceJoin>({
         type: RequestType.PresenceJoin,
-        subscriptionId: state.subscriptionId,
+        subscriptionId: join.subscriptionId,
         cell: ref,
         ...(requested === undefined ? {} : { room: requested }),
       });
     } catch (error) {
       // The worker may have joined and lost only its reply. A best-effort
       // leave keeps a membership nobody holds from outliving the connection.
-      this.#leavePresence(state.subscriptionId);
+      this.#leavePresence(join.subscriptionId);
       throw error;
+    } finally {
+      this.#forgetPresenceJoin(join);
     }
+    const key = presenceRoomKey(ref.space, response.room);
     if (requested === undefined) {
-      const key = presenceRoomKey(ref.space, response.room);
-      const existing = this.#presenceRooms.get(key);
-      if (existing !== undefined && existing !== state && !existing.ended) {
-        // Another cell reached this room first: an alias of the same field.
-        // This membership is redundant and is given up; the handles that
-        // waited on it share the room already held.
-        state.resolved = existing;
-        this.#presenceBySubscription.delete(state.subscriptionId);
-        this.#leavePresence(state.subscriptionId);
-        await existing.joined;
-        return;
+      const held = this.#presenceRooms.get(key);
+      const shared = held !== undefined && !held.ended
+        ? held
+        : this.#presenceJoinsByRoom.get(key)?.room;
+      if (shared !== undefined) {
+        // Another join reached this room first, and the cells are aliases of
+        // one field.
+        this.#leavePresence(join.subscriptionId);
+        const room = await shared;
+        if (!room.ended) this.#presenceByCell.set(cellKey, room);
+        return room;
       }
-      state.key = key;
-      this.#presenceRooms.set(key, state);
     }
-    state.room = response.room;
-    state.participantId = response.participantId;
-    state.participants = new Map(
-      response.participants.map((participant) => [
-        participant.participantId,
-        participant,
-      ]),
-    );
+    const room: PresenceRoomState = {
+      key,
+      subscriptionId: join.subscriptionId,
+      room: response.room,
+      participantId: response.participantId,
+      participants: new Map(
+        response.participants.map((participant) => [
+          participant.participantId,
+          participant,
+        ]),
+      ),
+      handles: new Set(),
+      name: "",
+      frame: undefined,
+      ended: false,
+    };
+    for (const event of join.early) this.#receivePresence(room, event);
+    if (room.ended) {
+      // A failure reached the membership ahead of the reply. No handle will
+      // take the room, so nothing else would leave it.
+      this.#leavePresence(room.subscriptionId);
+      return room;
+    }
+    this.#presenceRooms.set(key, room);
+    this.#presenceBySubscription.set(room.subscriptionId, room);
+    if (requested === undefined) this.#presenceByCell.set(cellKey, room);
+    return room;
   }
 
   #leavePresence(subscriptionId: string): void {
@@ -1767,22 +1846,31 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   }
 
   /**
-   * Drops the room from every index, and marks it ended so that a state an
-   * alias cell still points at is not joined again through this one.
+   * Drops the room from every index, and marks it ended so that a join
+   * which settled on it and has not yet taken it is not handed it.
    */
   #forgetPresenceRoom(room: PresenceRoomState): void {
     room.ended = true;
     if (this.#presenceRooms.get(room.key) === room) {
       this.#presenceRooms.delete(room.key);
     }
-    for (const [cellKey, state] of [...this.#presenceByCell]) {
-      if (state === room || state.resolved === room) {
-        this.#presenceByCell.delete(cellKey);
-      }
+    for (const [cellKey, held] of [...this.#presenceByCell]) {
+      if (held === room) this.#presenceByCell.delete(cellKey);
     }
     if (this.#presenceBySubscription.get(room.subscriptionId) === room) {
       this.#presenceBySubscription.delete(room.subscriptionId);
     }
+  }
+
+  /** Drops a join the worker has answered from every index of joins. */
+  #forgetPresenceJoin(join: PendingPresenceJoin): void {
+    const indexes = [this.#presenceJoinsByRoom, this.#presenceJoinsByCell];
+    for (const joins of indexes) {
+      for (const [key, held] of [...joins]) {
+        if (held === join) joins.delete(key);
+      }
+    }
+    this.#presenceJoinsBySubscription.delete(join.subscriptionId);
   }
 
   #onEventNeedsAttention = (

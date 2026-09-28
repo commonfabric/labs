@@ -32,10 +32,17 @@ type Recorded = {
   room?: string;
 };
 
-/** A stand-in connection answering the presence requests and nothing else. */
-const buildClient = (options: { joinFails?: boolean } = {}) => {
+/**
+ * A stand-in connection answering the presence requests and nothing else.
+ * With `holdJoins`, each join's reply waits until `answerJoin()` releases it,
+ * so a test chooses the order replies arrive in.
+ */
+const buildClient = (
+  options: { joinFails?: boolean; holdJoins?: boolean } = {},
+) => {
   const handlers = new Map<string, (data: unknown) => void>();
   const requests: Recorded[] = [];
+  const heldJoins: (() => void)[] = [];
   let joins = 0;
   const conn = {
     signal: new AbortController().signal,
@@ -45,16 +52,21 @@ const buildClient = (options: { joinFails?: boolean } = {}) => {
     request: (request: Recorded) => {
       requests.push(request);
       switch (request.type) {
-        case RequestType.PresenceJoin:
+        case RequestType.PresenceJoin: {
           joins++;
           if (options.joinFails && joins === 1) {
             return Promise.reject(new Error("presence unavailable"));
           }
-          return Promise.resolve({
+          const reply = {
             participantId: `participant:self:${joins}`,
             room: request.room ?? ROOM,
             participants: [peer],
-          });
+          };
+          if (!options.holdJoins) return Promise.resolve(reply);
+          const { promise, resolve } = Promise.withResolvers<typeof reply>();
+          heldJoins.push(() => resolve(reply));
+          return promise;
+        }
         case RequestType.PresencePublish:
         case RequestType.PresenceLeave:
           return Promise.resolve({ value: true });
@@ -74,8 +86,16 @@ const buildClient = (options: { joinFails?: boolean } = {}) => {
       event,
     });
   };
-  return { client, cell, requests, notify };
+
+  /** Releases the reply to the `index`th join the worker was asked for. */
+  const answerJoin = (index: number) => heldJoins[index]();
+  return { client, cell, requests, notify, answerJoin };
 };
+
+/** A cell the stand-in worker resolves to the same field as `cellRef`. */
+const aliasCell = {
+  ref: () => ({ ...cellRef, id: "of:presence-alias" }),
+} as unknown as CellHandle<unknown>;
 
 /** Lets a publication scheduled on the microtask queue go out. */
 const settle = async () => {
@@ -184,6 +204,124 @@ describe("RuntimeClient presence rooms", () => {
       expect(publishes(requests).at(-1)?.subscriptionId).toBe(
         requests[1].subscriptionId,
       );
+    });
+
+    it("shares one join in flight between two joins through the same cell", async () => {
+      const { client, cell, requests, answerJoin } = buildClient({
+        holdJoins: true,
+      });
+      const joining = [
+        client.joinPresenceRoom(cell),
+        client.joinPresenceRoom(cell),
+      ];
+      answerJoin(0);
+      const [first, second] = await Promise.all(joining);
+      expect(requests.map(({ type }) => type)).toEqual([
+        RequestType.PresenceJoin,
+      ]);
+      expect(second.participantId).toBe(first.participantId);
+    });
+
+    it("hands a join of a room already held its handle when the room's other handle leaves in the same tick", async () => {
+      const { client, cell, requests } = buildClient();
+      const first = await client.joinPresenceRoom(cell);
+      const joining = client.joinPresenceRoom(cell);
+      const leaving = first.leave();
+      const second = await joining;
+      await leaving;
+      expect(second.participantId).toBe(first.participantId);
+      expect(requests.map(({ type }) => type)).toEqual([
+        RequestType.PresenceJoin,
+      ]);
+    });
+
+    it("shares a room a named join is still joining with a cell the worker resolves to it", async () => {
+      const { client, cell, requests, answerJoin } = buildClient({
+        holdJoins: true,
+      });
+      const named = client.joinPresenceRoom(cell, { room: ROOM });
+      const derived = client.joinPresenceRoom(aliasCell);
+      answerJoin(1);
+      await settle();
+      // The derived join was told the room the named one is joining, and
+      // gave its own membership up without waiting for that join.
+      expect(requests.map(({ type }) => type)).toEqual([
+        RequestType.PresenceJoin,
+        RequestType.PresenceJoin,
+        RequestType.PresenceLeave,
+      ]);
+      expect(requests[2].subscriptionId).toBe(requests[1].subscriptionId);
+      answerJoin(0);
+      const [first, second] = await Promise.all([named, derived]);
+      expect(first.participantId).toBe("participant:self:1");
+      expect(second.participantId).toBe(first.participantId);
+    });
+
+    it("holds the room through an alias's own membership when the room its reply names was left meanwhile", async () => {
+      const { client, cell, requests, answerJoin } = buildClient({
+        holdJoins: true,
+      });
+      const joining = client.joinPresenceRoom(cell);
+      answerJoin(0);
+      const first = await joining;
+      const aliased = client.joinPresenceRoom(aliasCell);
+      await first.leave();
+      answerJoin(1);
+      const second = await aliased;
+      expect(requests.map(({ type }) => type)).toEqual([
+        RequestType.PresenceJoin,
+        RequestType.PresenceJoin,
+        RequestType.PresenceLeave,
+      ]);
+      expect(requests[2].subscriptionId).toBe(requests[0].subscriptionId);
+      expect(second.participantId).toBe("participant:self:2");
+      second.setName("Ada");
+      second.setFacet("caret", {});
+      await settle();
+      expect(publishes(requests).at(-1)?.subscriptionId).toBe(
+        requests[1].subscriptionId,
+      );
+    });
+
+    it("joins afresh through an alias cell after the shared room's last handle left", async () => {
+      const { client, cell, requests } = buildClient();
+      const first = await client.joinPresenceRoom(cell);
+      const second = await client.joinPresenceRoom(aliasCell);
+      await first.leave();
+      await second.leave();
+      const fresh = await client.joinPresenceRoom(aliasCell);
+      expect(requests.map(({ type }) => type)).toEqual([
+        RequestType.PresenceJoin,
+        RequestType.PresenceJoin,
+        RequestType.PresenceLeave,
+        RequestType.PresenceLeave,
+        RequestType.PresenceJoin,
+      ]);
+      expect(requests[3].subscriptionId).toBe(requests[0].subscriptionId);
+      expect(fresh.participantId).toBe("participant:self:3");
+    });
+
+    it("rejects a join whose membership failed ahead of the reply, leaves it, and joins afresh next time", async () => {
+      const { client, cell, requests, notify, answerJoin } = buildClient({
+        holdJoins: true,
+      });
+      const joining = client.joinPresenceRoom(cell);
+      notify({
+        kind: "failure",
+        error: { name: "SessionRevokedError", message: "taken over" },
+      });
+      answerJoin(0);
+      await expect(joining).rejects.toThrow(
+        "presence room ended while it was being joined",
+      );
+      expect(requests.map(({ type }) => type)).toEqual([
+        RequestType.PresenceJoin,
+        RequestType.PresenceLeave,
+      ]);
+      expect(requests[1].subscriptionId).toBe(requests[0].subscriptionId);
+      const rejoining = client.joinPresenceRoom(cell);
+      answerJoin(1);
+      expect((await rejoining).participantId).toBe("participant:self:2");
     });
   });
 
@@ -297,6 +435,17 @@ describe("RuntimeClient presence rooms", () => {
         "remove",
         "snapshot",
       ]);
+    });
+
+    it("applies an update that arrives ahead of the join's reply over the reply's participants", async () => {
+      const { client, cell, notify, answerJoin } = buildClient({
+        holdJoins: true,
+      });
+      const joining = client.joinPresenceRoom(cell);
+      const newer = { ...peer, revision: 2, name: "Peer, moved" };
+      notify({ kind: "upsert", participant: newer });
+      answerJoin(0);
+      expect((await joining).participants).toEqual([newer]);
     });
 
     it("ends the room on a failure and still tells the worker on leave", async () => {
