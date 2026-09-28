@@ -9,8 +9,8 @@ import { type FabricContainerValueTag, type FabricValuePlusTag } from "@/types";
 import { debugStr } from "@/value-debug";
 
 import {
+  type MappedResult,
   ValueVisitor,
-  type VisitedResult,
   type VisitingResult,
   type VisitResult,
 } from "./interface.ts";
@@ -29,30 +29,30 @@ export abstract class BaseValueVisitor<
   //
 
   /** @inheritDoc */
+  abstract mappedFabricArrayElement(
+    array: FabricArrayPlus<PlusType>,
+    index: number,
+    value: FabricValuePlus<ResultType>,
+  ): MappedResult<ResultType>;
+
+  /** @inheritDoc */
+  abstract mappedFabricInstanceState(
+    instance: FabricInstancePlus<PlusType>,
+    state: FabricValuePlus<ResultType>,
+  ): MappedResult<ResultType>;
+
+  /** @inheritDoc */
+  abstract mappedFabricPlainObjectEntry(
+    container: FabricPlainObjectPlus<PlusType>,
+    key: string,
+    value: FabricValuePlus<ResultType>,
+  ): MappedResult<ResultType>;
+
+  /** @inheritDoc */
   abstract visitValue(
     value: FabricValuePlus<PlusType>,
     tag: FabricValuePlusTag | null,
   ): VisitResult<PlusType, ResultType>;
-
-  /** @inheritDoc */
-  abstract visitedFabricArrayElement(
-    array: FabricArrayPlus<PlusType>,
-    index: number,
-    value: FabricValuePlus<ResultType>,
-  ): VisitedResult<ResultType>;
-
-  /** @inheritDoc */
-  abstract visitedFabricInstanceState(
-    instance: FabricInstancePlus<PlusType>,
-    state: FabricValuePlus<ResultType>,
-  ): VisitedResult<ResultType>;
-
-  /** @inheritDoc */
-  abstract visitedFabricPlainObjectEntry(
-    container: FabricPlainObjectPlus<PlusType>,
-    key: string,
-    value: FabricValuePlus<ResultType>,
-  ): VisitedResult<ResultType>;
 
   /** @inheritDoc */
   abstract visitingFabricArrayElement(

@@ -97,6 +97,15 @@ stored references and consume the labels at each hop. A carried view is checked
 in full at the link's first occurrence, and a repeated occurrence supplies the
 entries covering the requested paths.
 
+Within one derivation, sibling branches can reuse a complete result when the
+pending document graph has shared sources and no cycles, and the result carries
+no caller-specific projection request. The cache belongs to that derivation:
+preparation can persist source metadata between calls, so later calls derive
+against the current snapshot. Graphs with document cycles retain their
+branch-local expansion rules. Ordinary chains need no shared-result cache.
+The persisted view still contains every distinct labeled path; sharing work
+does not reduce the size of a flat label map for a branching graph.
+
 ## Setup replay over a stored argument
 
 A runtime that starts a piece it did not create replays the setup of the

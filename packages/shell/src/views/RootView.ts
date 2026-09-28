@@ -13,11 +13,7 @@ import {
   type RuntimeClient,
   RuntimeErrorCode,
 } from "@commonfabric/runtime-client";
-import {
-  presenceUrlContext,
-  runtimeContext,
-  spaceContext,
-} from "@commonfabric/ui";
+import { runtimeContext, spaceContext } from "@commonfabric/ui";
 import { provide } from "@lit/context";
 import { Task, TaskStatus } from "@lit/task";
 import { css, html, PropertyValues } from "lit";
@@ -40,12 +36,7 @@ import {
   type CommonfabricDebugState,
   exposeCommonfabricGlobals,
 } from "../lib/debug-utils.ts";
-import {
-  COMMIT_SHA,
-  ENVIRONMENT,
-  EXPERIMENTAL,
-  PRESENCE_URL,
-} from "../lib/env.ts";
+import { COMMIT_SHA, ENVIRONMENT, EXPERIMENTAL } from "../lib/env.ts";
 import { runtimeHostFlags } from "../lib/host-toggles.ts";
 import { type BrowserTelemetry, initBrowserOtel } from "../lib/otel.ts";
 import { shouldRecreateRuntime } from "../lib/runtime-lifecycle.ts";
@@ -217,10 +208,6 @@ export class XRootView extends BaseView implements ShellApp {
   @provide({ context: spaceContext })
   @state()
   private accessor space: DID | undefined = undefined;
-
-  @provide({ context: presenceUrlContext })
-  @state()
-  private accessor presenceUrl: string | undefined = PRESENCE_URL?.href;
 
   /**
    * The runtime task, which runs when `AppState` changes and determines if a

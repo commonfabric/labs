@@ -33,6 +33,8 @@ describe("CFC prepare reproduction", () => {
         "overlapWildcardQueries",
         "overlapConcreteQueries",
         "authoritativeCoverCalls",
+        "stagedReferenceDerivations",
+        "stagedReferenceCacheHits",
         "flowTemplateEntriesMinted",
         "flowTemplateContainers",
       ] as const satisfies readonly CfcPreparationWork[];

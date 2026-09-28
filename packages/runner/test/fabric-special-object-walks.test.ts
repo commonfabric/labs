@@ -504,7 +504,7 @@ describe("fabric special objects through the runner's walks", () => {
     it("writes below a `FabricError` stored by an earlier transaction", () => {
       // The cases around this one share the suite's `tx`, so the document's
       // value at transaction start is empty and no ancestor prefix ever holds
-      // an instance. `buildReactivityPathsForChange` reads those prefixes from
+      // an instance. `buildReactivityPathsForChanges` reads those prefixes from
       // the document as it stood when the transaction opened, so the walk it
       // feeds sees an instance only across a commit boundary.
 

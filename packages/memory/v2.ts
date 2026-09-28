@@ -1226,6 +1226,17 @@ export type MemoryProtocolFlags = {
    * declares nothing, and every own patch head reaches it in full.
    */
   patchReplayVersion?: number;
+
+  /**
+   * Server capability: the server relays ephemeral presence rooms under a
+   * space over this connection — `presence.join`, `presence.publish`,
+   * `presence.leave`, and the `presence/upsert` and `presence/remove`
+   * pushes (04-protocol.md §4.13). Build-inherent, so a server of this
+   * version always advertises it. Absent (an older server) parses to
+   * false, and a client then reports presence as unavailable rather than
+   * sending a message the server would refuse.
+   */
+  presenceV1?: boolean;
 };
 
 /**
@@ -1254,6 +1265,7 @@ export type WireMemoryProtocolFlags = {
   viewScopedReplicationV1?: boolean;
   sessionReadCeiling?: boolean;
   patchReplayVersion?: number;
+  presenceV1?: boolean;
 };
 
 export type HelloMessage = {
@@ -1888,6 +1900,87 @@ export type EventAttentionResolveResult = {
   resolution: EventAttentionResolution;
 };
 
+/**
+ * Per-kind presence state, keyed by facet name. The relay bounds the map and
+ * treats each value as an opaque plain object; a consumer decodes the facets
+ * it knows and ignores the rest (04-protocol.md §4.13).
+ */
+export type PresenceFacets = Record<string, FabricPlainObject>;
+
+/** What a participant publishes: the envelope fields it owns. */
+export type PresencePublication = {
+  /** Plain-text display name, bounded; never rendered as HTML. */
+  name: string;
+
+  facets: PresenceFacets;
+};
+
+/** Latest published state of one room participant, as the relay holds it. */
+export type PresenceRecord = PresencePublication & {
+  /** Relay-assigned id for the membership; unpredictable and never reused. */
+  participantId: string;
+
+  /**
+   * DID the publishing session was opened as, stamped by the relay from its
+   * session registry. Absent when the session has no bound principal.
+   */
+  principal?: string;
+
+  /** Strictly increasing within one membership. */
+  revision: number;
+};
+
+export type PresenceJoinRequest = {
+  type: "presence.join";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  room: string;
+};
+
+/** The `ok` of a `presence.join` response. */
+export type PresenceJoinResult = {
+  participantId: string;
+
+  /** Every other member that has published, at its latest record. */
+  participants: PresenceRecord[];
+};
+
+export type PresencePublishRequest = PresencePublication & {
+  type: "presence.publish";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  room: string;
+  revision: number;
+};
+
+export type PresenceLeaveRequest = {
+  type: "presence.leave";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  room: string;
+};
+
+/** A room member's record replaced, pushed to the room's other members. */
+export type PresenceUpsertMessage = {
+  type: "presence/upsert";
+  space: string;
+  sessionId: SessionId;
+  room: string;
+  participant: PresenceRecord;
+};
+
+/** A room member gone, pushed to the room's other members. */
+export type PresenceRemoveMessage = {
+  type: "presence/remove";
+  space: string;
+  sessionId: SessionId;
+  room: string;
+  participantId: string;
+};
+
 export type ResponseMessage<Result> = {
   type: "response";
   requestId: string;
@@ -1958,15 +2051,19 @@ export type ClientMessage =
   | WatchSetRequest
   | WatchAddRequest
   | SessionAckRequest
-  | EventAttentionResolveRequest;
+  | EventAttentionResolveRequest
+  | PresenceJoinRequest
+  | PresencePublishRequest
+  | PresenceLeaveRequest;
 export type ServerMessage =
   | HelloOkMessage
   | ResponseMessage<FabricValue>
   | SessionEffectMessage
-  | SessionRevokedMessage;
+  | SessionRevokedMessage
+  | PresenceUpsertMessage
+  | PresenceRemoveMessage;
 
 const memoryLiveEnvironment = new NullLiveEnvironment(
-  true,
   "no cell decoding at the memory boundary",
 );
 
@@ -2213,6 +2310,8 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   ...(getPatchReplayConfig()
     ? { patchReplayVersion: PATCH_SEMANTICS_VERSION }
     : {}),
+  // Build-inherent: this build's server relays presence rooms.
+  presenceV1: true,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
 });
 
@@ -2384,6 +2483,11 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const presenceV1 = value.presenceV1;
+  if (presenceV1 !== undefined && typeof presenceV1 !== "boolean") {
+    return null;
+  }
+
   return {
     modernCellRep: modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
@@ -2423,6 +2527,10 @@ export const parseMemoryProtocolFlags = (
     ...(patchReplayVersion === undefined
       ? {}
       : { patchReplayVersion: patchReplayVersion as number }),
+    // Absent (an older server) parses to false: a client then refuses to
+    // join a presence room rather than send a message the server would
+    // refuse.
+    presenceV1: presenceV1 === true,
   };
 };
 
@@ -2455,6 +2563,7 @@ export const wireMemoryProtocolFlags = (
   ...(flags.patchReplayVersion === undefined
     ? {}
     : { patchReplayVersion: flags.patchReplayVersion }),
+  presenceV1: flags.presenceV1,
 });
 
 /**
@@ -2468,6 +2577,13 @@ export const wireMemoryProtocolFlags = (
  * engine's commit/stored-row probes (v2/engine.ts). A pinning test in
  * test/v2-sync-schema-table.test.ts fails loudly if verbatim embedding ever
  * stops holding.
+ *
+ * The engine's document-cache weigh (`encodedGrowth()` in v2/engine.ts)
+ * depends on a second property, and moves with the codec too: a plain record
+ * with no `/`-prefixed key, and an array with no hole, encode as their members
+ * encode alone, joined by one comma each. Tests in
+ * test/v2-document-cache.test.ts hold the weight it carries to a full encode,
+ * over every patch op and over generated patches.
  */
 export const encodeMemoryBoundary = (value: FabricValue): string =>
   jsonFromFabricValue(value);

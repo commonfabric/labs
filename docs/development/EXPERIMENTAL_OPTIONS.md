@@ -1387,6 +1387,13 @@ the per-epic implementation notes).
 > - **`entityIdLookup`** is a build-inherent capability, hardwired to `true`. It
 >   advertises identifier-only `entity-id.exists` point lookup. Older servers
 >   omit it, which parses as `false`. It is permanent.
+> - **`presenceV1`** is a build-inherent capability, hardwired to `true`. It
+>   advertises that the server relays ephemeral presence rooms — the
+>   `presence.*` commands and `presence/*` pushes of the memory protocol
+>   chapter's section 4.13 — over the memory connection. Older servers omit
+>   it, which parses as `false`, and a client then reports presence as
+>   unavailable rather than sending a message the server would refuse. It is
+>   permanent.
 
 ### `experimentalConcurrentWatchRefresh`
 

@@ -224,6 +224,31 @@ interface PendingRead {
 Confirmed reads are validated against canonical history. Pending reads are
 resolved within the submitting logical session.
 
+A read's `path` is an array holding a string at every index. The server refuses
+a commit carrying a read of any other path — one with a hole, one with a
+segment that is not a string, or one that is not an array — with a
+`ProtocolError`, whether or not the read's staleness is checked. The staleness
+check matches a read's path against a write's touched paths segment by
+segment, and defines that match for string segments only.
+
+A confirmed read's `seq` names a position in the space's log, and so does a
+pending read's `basisSeq` where it has one: a safe integer of zero or more, and
+not negative zero, which the wire encoding keeps distinct from zero. `NaN`, an
+infinity, a fraction, a negative number, a number past
+`Number.MAX_SAFE_INTEGER`, and a value that is not a number name no position,
+and nor does a confirmed read with no `seq`. A pending read's `localSeq` is held
+to less: it names at least one layer, and each is an integer other than negative
+zero. The server refuses a commit carrying a read that breaks any of these rules
+with a `ProtocolError`. It does so before it checks the staleness of any read in
+the commit, and whether or not it would check that read's. The staleness check
+scans the log after the position a read names, and a value that is not one
+bounds the scan by accident: after `NaN` it finds no write, so a read naming it
+could never be stale.
+
+The rule is one of shape. Which position a well-formed value names is the
+client's claim, trusted as §3.6.3 describes; a confirmed read's `seq` past the
+head is trusted too, where a `basisSeq` past the head is refused.
+
 ## 3.5 Stacked Pending Commits
 
 A client can create commit `C2` that reads from the optimistic writes of earlier
@@ -479,7 +504,9 @@ by the read's shape:
   confirmed basis and the top layer's resolution seq, which the legacy
   basis never scanned. A `basisSeq` greater than the server's current head
   is a protocol error; values at or below head are trusted, like a
-  confirmed read's `seq` (lying corrupts only the session's own data).
+  confirmed read's `seq`. A client that misstates its basis can lose a
+  concurrent writer's update, but only on a document it may write, where a
+  commit carrying no reads could overwrite that update just the same.
   The declared-set restriction is server-side VALIDATION of the array's
   completeness attestation, not an extension of what a client may omit:
   the sanctioned omission remains a processed rejection (§3.5), and a

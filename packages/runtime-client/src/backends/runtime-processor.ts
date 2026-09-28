@@ -28,11 +28,18 @@ import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { setLLMUrl } from "@commonfabric/llm";
 import { type ACL, isACLUser, isCapability } from "@commonfabric/memory/acl";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import type {
+  PresenceEvent,
+  PresenceMembership,
+} from "@commonfabric/memory/v2/client";
+import { presenceRoomForField } from "@commonfabric/memory/v2/presence";
 import {
   dbNeedsColumnProvenance,
+  DEFAULT_BRANCH,
   eventAttentionEntryKey,
   type EventAttentionIndexValue,
   type OperationFieldAddress,
+  resolveScopeKey,
   SERVER_EXECUTION_ATTENTION_DOC_ID,
   type SqliteDbRef,
   type StreamEventsDocValue,
@@ -62,6 +69,7 @@ import {
   getMetaLink,
   getPatternIdentityRef,
   hasOperationStorageCapability,
+  hasPresenceStorageCapability,
   type IExtendedStorageTransaction,
   type IOperationStorageCapability,
   isCell,
@@ -234,7 +242,13 @@ import {
   type PieceSyncedRequest,
   type PieceUpdateSourceRequest,
   type PieceUpdateSourceResponse,
+  type PresenceJoinRequest,
+  type PresenceJoinResponse,
+  type PresenceLeaveRequest,
+  type PresencePublishRequest,
+  type PresenceWireEvent,
   type RecreateSpaceRootPatternRequest,
+  type RegisterSpaceHostDetailedRequest,
   type RegisterSpaceHostRequest,
   RequestType,
   type ResolveEventAttentionRequest,
@@ -261,6 +275,7 @@ import {
   type SnapshotSharePreview,
   type SpaceAclResponse,
   type SpaceGetAclRequest,
+  type SpaceHostRegistrationResponse,
   type SpaceRemoveAclEntryRequest,
   type SpaceResponse,
   type SpaceSetAclEntryRequest,
@@ -848,6 +863,27 @@ type RuntimeOperationTarget = {
   address: OperationFieldAddress;
 };
 
+/**
+ * One client's membership in one presence room, keyed by the subscription
+ * id the client chose. `membership` is absent while the join is in flight,
+ * and `ended` records a leave or a client departure that arrived before it
+ * settled, so the membership is left as soon as it exists.
+ */
+type RuntimePresenceMembership = {
+  client: WorkerClient;
+  membership: PresenceMembership | undefined;
+  ended: boolean;
+};
+
+/** Reduces a room event to what crosses the worker boundary. */
+const toPresenceWireEvent = (event: PresenceEvent): PresenceWireEvent =>
+  event.kind === "failure"
+    ? {
+      kind: "failure",
+      error: { name: event.error.name, message: event.error.message },
+    }
+    : event;
+
 type RuntimeOperationSession = {
   cellKey: string;
   target: RuntimeOperationTarget;
@@ -905,6 +941,7 @@ export class RuntimeProcessor {
     }
   >();
   #operationSessions = new Map<string, RuntimeOperationSession>();
+  #presenceMemberships = new Map<string, RuntimePresenceMembership>();
   #pieceSourceConfirmations = new Map<
     string,
     { token: string; prepared: PreparedPieceSourceChange }
@@ -1328,8 +1365,8 @@ export class RuntimeProcessor {
   /**
    * Tears down everything one client owns, leaving the runtime and every other
    * client's work running. This is what a client's departure costs: its cell
-   * and operation subscriptions stop, its VDOM trees unmount, and nothing else
-   * moves.
+   * and operation subscriptions stop, its presence memberships end, its VDOM
+   * trees unmount, and nothing else moves.
    *
    * The runtime itself is never touched here, however the departing client
    * came to leave. Only {@link dispose} ends a runtime, and only the client
@@ -1386,6 +1423,11 @@ export class RuntimeProcessor {
     for (const [sessionId, session] of [...this.#operationSessions]) {
       if (session.clientId !== client.id) continue;
       this.#operationSessions.delete(sessionId);
+    }
+
+    for (const [subscriptionId, membership] of [...this.#presenceMemberships]) {
+      if (membership.client.id !== client.id) continue;
+      void this.#endPresenceMembership(subscriptionId);
     }
   }
 
@@ -1672,6 +1714,123 @@ export class RuntimeProcessor {
     };
     this.#operationSessions.set(sessionKey, session);
     return { ...target, sessionKey, session };
+  }
+
+  /**
+   * Joins a presence room for the client: the one derived from the cell's
+   * resolved field, or the one the request names, under the cell's space.
+   * The first snapshot is the request's response; every later event of the
+   * membership reaches the client as a `presence:update`.
+   */
+  async handlePresenceJoin(
+    request: PresenceJoinRequest,
+    client: WorkerClient = ownerClient,
+  ): Promise<PresenceJoinResponse> {
+    if (this.#presenceMemberships.has(request.subscriptionId)) {
+      throw new Error("presence membership id is already in use");
+    }
+    const link = getCell(this.#runtime, request.cell).resolveAsCell()
+      .getAsNormalizedFullLink();
+    const provider = this.#runtime.storageManager.open(link.space);
+    const capability = hasPresenceStorageCapability(provider)
+      ? provider
+      : provider.replica;
+    if (!hasPresenceStorageCapability(capability)) {
+      throw new Error("runtime storage does not support presence");
+    }
+    const room = request.room ?? presenceRoomForField({
+      space: link.space,
+      branch: DEFAULT_BRANCH,
+      id: link.id,
+      scopeKey: resolveScopeKey(
+        link.scope,
+        this.#runtime.storageManager.scopeKeyIdentity(),
+      ),
+      path: toValuePath(link.path),
+    });
+    const state: RuntimePresenceMembership = {
+      client,
+      membership: undefined,
+      ended: false,
+    };
+    this.#presenceMemberships.set(request.subscriptionId, state);
+    let opening: Extract<PresenceEvent, { kind: "snapshot" }> | undefined;
+    let membership: PresenceMembership;
+    try {
+      membership = await capability.joinPresenceRoom(room, (event) => {
+        if (this.#presenceMemberships.get(request.subscriptionId) !== state) {
+          return;
+        }
+        // The membership delivers its opening snapshot before it is handed
+        // back, and that one is the join's response rather than an update.
+        if (opening === undefined && event.kind === "snapshot") {
+          opening = event;
+          return;
+        }
+        queueMicrotask(() =>
+          client.post({
+            type: NotificationType.PresenceUpdate,
+            subscriptionId: request.subscriptionId,
+            event: toPresenceWireEvent(event),
+          })
+        );
+      });
+    } catch (error) {
+      if (this.#presenceMemberships.get(request.subscriptionId) === state) {
+        this.#presenceMemberships.delete(request.subscriptionId);
+      }
+      throw error;
+    }
+    state.membership = membership;
+    if (state.ended || this.#isDisposed) {
+      await membership.leave();
+      throw new Error("presence membership ended while joining");
+    }
+    return {
+      participantId: membership.participantId,
+      room,
+      participants: opening?.participants ?? [],
+    };
+  }
+
+  /**
+   * Replaces the client's record in the room. A publication outside the
+   * relay's bounds throws before anything is sent.
+   */
+  handlePresencePublish(
+    request: PresencePublishRequest,
+    client: WorkerClient = ownerClient,
+  ): BooleanResponse {
+    const state = this.#presenceMemberships.get(request.subscriptionId);
+    if (
+      state === undefined || state.client.id !== client.id ||
+      state.membership === undefined
+    ) {
+      return { value: false };
+    }
+    state.membership.publish({ name: request.name, facets: request.facets });
+    return { value: true };
+  }
+
+  /** Ends the client's membership; a membership is its joiner's to end. */
+  async handlePresenceLeave(
+    request: PresenceLeaveRequest,
+    client: WorkerClient = ownerClient,
+  ): Promise<BooleanResponse> {
+    const state = this.#presenceMemberships.get(request.subscriptionId);
+    if (state === undefined || state.client.id !== client.id) {
+      return { value: false };
+    }
+    await this.#endPresenceMembership(request.subscriptionId);
+    return { value: true };
+  }
+
+  async #endPresenceMembership(subscriptionId: string): Promise<void> {
+    const state = this.#presenceMemberships.get(subscriptionId);
+    if (state === undefined) return;
+    this.#presenceMemberships.delete(subscriptionId);
+    state.ended = true;
+    await state.membership?.leave();
   }
 
   async handleOperationCapabilities(
@@ -2086,9 +2245,14 @@ export class RuntimeProcessor {
     const terms = this.#hostSelectedCell(request.terms);
     const policy = this.#hostSelectedCell(request.policy);
     const settings = this.#hostSelectedCell(request.allowedSources);
-    const prepared = await prepareCustodySeal(draft, { terms, policy }, {
-      allowedSources: settings,
-    });
+    const box = request.box === undefined
+      ? undefined
+      : this.#hostSelectedCell(request.box);
+    const prepared = await prepareCustodySeal(
+      draft,
+      { terms, policy, ...(box === undefined ? {} : { box }) },
+      { allowedSources: settings },
+    );
     if (unavailable()) throw new Error("Custody sealing is unavailable");
     const id = crypto.randomUUID();
     this.#custodySeals.set(clientScopedKey(client, id), {
@@ -2978,6 +3142,17 @@ export class RuntimeProcessor {
     };
   }
 
+  handleRegisterSpaceHostDetailed(
+    request: RegisterSpaceHostDetailedRequest,
+  ): SpaceHostRegistrationResponse {
+    return {
+      registration: this.#runtime.registerSpaceHostDetailed(
+        request.space,
+        request.host,
+      ),
+    };
+  }
+
   async handleResolveSpaceName(
     request: ResolveSpaceNameRequest,
   ): Promise<SpaceResponse> {
@@ -3296,6 +3471,12 @@ export class RuntimeProcessor {
         return this.handleOperationUnsubscribe(request, client);
       case RequestType.OperationSessionClose:
         return this.handleOperationSessionClose(request, client);
+      case RequestType.PresenceJoin:
+        return await this.handlePresenceJoin(request, client);
+      case RequestType.PresencePublish:
+        return this.handlePresencePublish(request, client);
+      case RequestType.PresenceLeave:
+        return await this.handlePresenceLeave(request, client);
       case RequestType.SqliteQuery:
         return await this.handleSqliteQuery(request);
       case RequestType.SqliteExec:
@@ -3362,6 +3543,8 @@ export class RuntimeProcessor {
         return await this.handleResolveSpaceName(request);
       case RequestType.RegisterSpaceHost:
         return this.handleRegisterSpaceHost(request);
+      case RequestType.RegisterSpaceHostDetailed:
+        return this.handleRegisterSpaceHostDetailed(request);
       case RequestType.GetGraphSnapshot:
         return this.getGraphSnapshot(request);
       case RequestType.GetLoggerCounts:

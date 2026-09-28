@@ -111,9 +111,11 @@ For primitives that own a list/set of items, core mutations address an item by
 **live reference**, using the data model's own identity:
 
 - Remove: `items.remove(item)` — same `equals()` machinery under the hood.
-- Update/toggle: locate with `findIndex((x) => equals(x, item))`, then patch
-  **through the element's cells** — `items.key(i).key(field).set(value)` (the
-  same route `$checked`/`$value` two-way binding writes through). Never
+- Update/toggle: locate with `findIndex((x) => equals(x, item))` and, when it
+  finds one (`i >= 0`), patch **through the element's cells** —
+  `items.key(i).key(field).set(value)` (the same route `$checked`/`$value`
+  two-way binding writes through). An unguarded `-1` addresses a key no array
+  holds, and the write fails with a `TypeMismatchError`. Never
   replace the array slot with a fresh object literal
   (`items.set(current.toSpliced(i, 1, { ...old, ...changes }))`): a fresh
   literal re-mints the entity identity, so every previously-held reference to

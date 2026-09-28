@@ -50,6 +50,10 @@ import type {
   ViewInterest,
   ViewPlan,
 } from "@commonfabric/memory/v2";
+import type {
+  PresenceEvent,
+  PresenceMembership,
+} from "@commonfabric/memory/v2/client";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import type { Immutable } from "@commonfabric/utils/types";
 
@@ -83,6 +87,7 @@ import type {
 import type { EntityId } from "../create-ref.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import { RAW_META_WRITE } from "../meta-seam.ts";
+import type { SpaceHostRegistration } from "../space-host.ts";
 import { BaseMemoryAddress } from "../traverse.ts";
 import type { MergeableOpDelta } from "./mergeable-ops.ts";
 export type {
@@ -327,6 +332,16 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * through the provisional route.
    */
   registerSpaceHost?(space: MemorySpace, host: string): boolean;
+
+  /**
+   * Record a host hint as {@link registerSpaceHost} does, and say why when it
+   * is refused. Optional: a manager may implement either method, or both
+   * with the same verdict.
+   */
+  registerSpaceHostDetailed?(
+    space: MemorySpace,
+    host: string,
+  ): SpaceHostRegistration;
 
   /** Changes memory-message compression for live and later remote sessions. */
   setMessageCompressionEnabled?(enabled: boolean): Promise<void>;
@@ -849,6 +864,33 @@ export const hasOperationStorageCapability = (
     typeof candidate.applyOperation === "function" &&
     typeof candidate.releaseOperationField === "function" &&
     typeof candidate.subscribeOperationField === "function";
+};
+
+/**
+ * A storage provider that reaches the memory server's presence rooms
+ * (memory-v2 `04-protocol.md` §4.13) through its space session. The
+ * membership outlives the session it was joined through: a reconnect rejoins
+ * it, and a replacement of the provider's replica rejoins it on the
+ * replacement's session, each time delivering a fresh `snapshot` with the id
+ * the relay assigned there and republishing the last record.
+ */
+export interface IPresenceStorageCapability {
+  /**
+   * Joins `room` under this provider's space, delivering the room's events
+   * to `observer`, and returns the membership.
+   */
+  joinPresenceRoom(
+    room: string,
+    observer: (event: PresenceEvent) => void,
+  ): Promise<PresenceMembership>;
+}
+
+export const hasPresenceStorageCapability = (
+  value: unknown,
+): value is IPresenceStorageCapability => {
+  if (value === null || value === undefined) return false;
+  const candidate = value as Partial<IPresenceStorageCapability>;
+  return typeof candidate.joinPresenceRoom === "function";
 };
 
 /**
@@ -1601,6 +1643,12 @@ export interface IStorageTransaction {
   /**
    * Optional batched write hook for transactions that can apply multiple path
    * writes more efficiently than one-at-a-time.
+   *
+   * Not atomic: a batch that fails, whether a write returns an error or
+   * something throws, may leave some of its writes applied, and which ones is
+   * unspecified. The writes it does apply are applied consistently: the
+   * transaction's reads, its write details and its commit all include them. A
+   * caller that must not land part of a batch aborts the transaction.
    */
   writeBatch?(
     writes: Iterable<ITransactionWriteRequest>,
@@ -2101,12 +2149,16 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   /**
    * Records a destination the runtime wrote a whole value to, so the flow
    * stamp lands there rather than only at the paths the diff changed. See
-   * `CfcTxState.assertedValueRoots`. Dropped unless `authorization` carries
-   * the runtime's mark. The address is `deepFreeze()`d on entry.
+   * `CfcTxState.assertedValueRoots`. `reference` names the document root a
+   * pointer the runtime stored at `address` refers to (a custody box, or an
+   * entity anchoring split out). Dropped unless
+   * `authorization` carries the runtime's mark. The address is
+   * `deepFreeze()`d on entry.
    */
   recordCfcAssertedValueRoot(
     address: CfcAddress,
     authorization?: RuntimeWritePolicyAuthorization,
+    reference?: CfcAddress,
   ): void;
 
   /**

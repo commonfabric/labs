@@ -20,7 +20,14 @@ does two things before it reaches the CFC enforcement ladder:
    - **Probe flow-label relevance.** `flowLabelWorkExists`
      ([prepare.ts](../../packages/runner/src/cfc/prepare.ts)) asks whether the
      transaction observed or wrote a document carrying stored labels. A
-     transaction that did is marked relevant.
+     transaction that did is marked relevant. A write counts whatever value
+     it leaves: every write the transaction recorded is an attempted write
+     under spec §8.10.2.1, including one whose value returned to where it
+     started and an authoritative write of an unchanged value, which the
+     reactivity log's `writes` leave out. A write elided as equal to the
+     current value is never recorded, so it marks nothing here. Nor does a
+     write that ended where it started make the document's stored labels
+     self-minted: it minted nothing.
    - **Probe the sink-request ceiling.** `gatedSinkRequestExists` asks whether
      the transaction assembled a request for a sink that declares a
      confidentiality ceiling.
@@ -183,7 +190,10 @@ the commit.
   transaction nothing prepared; a read-only transaction is left unprepared
   where a writable one is prepared; a child-cell wrapper prepares the
   transaction it wraps; materialization stages `cid:` ids alone; a labeled
-  `cid:` document leaves a transaction unprepared.
+  `cid:` document leaves a transaction unprepared; a write returned to its
+  starting value, and an authoritative write of an unchanged value, each make
+  a labeled target relevant; a reverted path's derived label is replaced
+  whether or not another document in its space changed.
 - [runtime-prepare-tx-for-commit.test.ts](../../packages/runner/test/runtime-prepare-tx-for-commit.test.ts)
   — the settled-transaction and aborted-transaction cases.
 - [cfc-flow-probe-memo.test.ts](../../packages/runner/test/cfc-flow-probe-memo.test.ts)

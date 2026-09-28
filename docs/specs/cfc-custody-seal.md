@@ -161,9 +161,11 @@ as it could write any DID, and the confirmation shows every seat's DID.
 A room is a pattern, and it reaches the seal through `cf-custody-seal`, which
 the pattern binds to its own cells: `$terms`, whose seats are references;
 `$policy`, a cell it declares `PolicyOf` its custody rules; and `$box`, a cell
-that receives a link to the instance's box once the seal commits. The host
-derives the box's address from `(P, D)`, so a pattern never computes it. The
-link grants nothing: the box's entries carry `[P]` and its root `P ∨ Space(S)`,
+in the room space that receives a link to the instance's box. The host
+derives the box's address from `(P, D)`, so a pattern never computes it, and
+the seal writes the link itself, in the transaction that writes the entry (see
+[Which box the room reads](#which-box-the-room-reads)). The link grants
+nothing: the box's entries carry `[P]` and its root `P ∨ Space(S)`,
 so what the pattern computes from them is shown or written anywhere only as
 `P`'s release rules allow. `cf-sealed` carries the instance `D`. `D` digests
 the resolved terms, so it is computable by whoever can read the terms and the
@@ -174,7 +176,8 @@ the pattern the entry's key: a pattern that held it could write down which
 member's entry it is. `packages/patterns/cfc-exchange-rules/custody-projector.tsx`
 is such a room, and `packages/patterns/integration/cfc-custody-projector.test.ts`
 seals two members' stances through its cells and shows that a room reader sees
-its projector's answer and not a member's rating.
+its projector's answer and not a member's rating, under the room's own rule
+and under the same rule requiring the seal's witness.
 
 ## What the seal writes
 
@@ -238,6 +241,47 @@ reads the whole box mints
 A transformation that also reads one confidential value the seal did not write
 mints no such atom.
 
+### Which box the room reads
+
+A room's projector reads its box through the room's `$box` cell, which holds a
+link, and a member's code can write that cell like any other room data: point
+it at another document, such as a record of its own whose entries are links to
+real entries, one of them repeated. Blinded entries cannot be told apart from
+such a record's, and a projector counting entries against seats would count the
+repeated member twice. Each entry such a record reaches is the seal's, so a
+witness taken over the entries alone would hold.
+
+Two things close this. The seal writes the link into the room's `$box` itself,
+in the transaction that writes the entry, so the link carries the seal's
+`TransformedBy`: the transaction is the seal's, and the link is recorded as the
+one reference the value there holds (`CfcAssertedValueRoot.reference`), so the
+cell is stamped as the seal's write. And a reference a transformation follows
+to confidential content is an input location of its own
+([input witnesses](cfc-transformed-by-input-witnesses.md#references-a-transformation-follows)),
+whatever the slot holding it is labeled. So a projector reading the box through
+the link the seal wrote keeps the witness, and one reading it through a link any
+other code wrote, to the box or to a record of its own, does not; nor does one
+that reads such a record directly, since the record's own slots are references
+the seal did not write.
+
+The `$box` cell must be in the room space, and the seal refuses one that is
+not, at preview and again at commit. The seal writes under its own identity,
+which the box and the anchor admit, so it follows the cell's write redirects
+only to a location that holds this box's link already, or holds nothing (an
+empty default, as a room's `Default` leaves) in a document that exists and that
+the seal did not write, and never into the box, the terms, or any instance's
+anchor: a member's room code could otherwise have the seal overwrite another
+member's entry, or write into another instance's anchor, which every later seal
+of that instance would then refuse. The anchor carries no integrity, so the seal
+recognizes one by its address, derived from the instance it holds and the
+policy its label names. An instance is the digest of its terms, so a member can
+derive the address of an anchor or box the seal has yet to create; the seal
+cannot tell such an absent document from an ordinary one, so it never links
+from a document that does not exist yet. Documents are compared by space, id
+and scope. Once the seal has written it, the cell carries the seal's
+label, so a link other code writes over it must name a document that carries a
+label of its own.
+
 ### The blinded entry key
 
 An entry's key is `base64url(SHA-256(sign_actor(domain ‖ digest(P, D))))`: a
@@ -286,33 +330,33 @@ of it.
   releasing code can compare the number of entries with the number of seats,
   not the set of writers with the set of seats. That count is sound only while
   each seat seals once and only seats can seal.
-- **Which box a room reads.** The link a pattern holds to the box is
-  ordinary pattern data, so a member's code can point it at another document:
-  the box of another instance under the same `P`, or one that links to some of
-  the real entries beside entries of its own. A projector checking the entries'
-  terms and their number against the seats cannot tell such a document from the
-  box. While the room's rule names its projector by identity alone, a member
-  can therefore run the projector over another member's entry and values of
-  their own, varied to learn that entry answer by answer, and the rule releases
-  each answer. Requiring the input witness is necessary to close this, and not
-  sufficient. The witness is the meet over the releasing code's confidential
-  observations only, so a document of the member's own that sits a real,
-  sealed entry beside unlabeled entries it made up still carries it. Closing
-  the gap also takes writer policies on the box and on the releasing code's
-  output, and endorsed releasing code that takes no public selector
+- **Which box a room reads, under a rule that names its projector alone.**
+  The link a pattern holds to the box is ordinary pattern data, so a member's
+  code can point it at another document: the box of another instance under the
+  same `P`, or one that links to some of the real entries, repeated or beside
+  entries of its own. A projector checking the entries' terms and their number
+  against the seats cannot tell such a document from the box. While the room's
+  rule names its projector by identity alone, a member can therefore run the
+  projector over another member's entry and values of their own, varied to
+  learn that entry answer by answer, and the rule releases each answer. A rule
+  requiring the seal's witness refuses these (see
+  [Which box the room reads](#which-box-the-room-reads)), except the box of
+  another instance under the same `P`, which the seal wrote and whose link the
+  seal may have written too; that is the multi-instance case above. The witness
+  still rests on writer policies on the box and on the releasing code's
+  output, and on endorsed releasing code that takes no public selector
   parameters. The preview reports whether every rule of `P` requires the
   witness on a guard naming its releasing code outright (`witnessedRelease`),
   and when one does not, the confirmation shows a warning that a member's own
   code can learn the actor's stance one answer at a time, in place of a bound
-  on what an answer reveals. Once a pattern's reads carry the witness and the
-  other conditions can be checked, the seal is meant to refuse such a policy
-  instead of warning.
-- **An input witness from pattern code.** A projector written as a pattern
-  `lift` reads the box through its argument document, and the witness does not
-  reach that read today, so a rule requiring
-  `inputWitness: TransformedBy{builtin cfc-custody-seal}` releases nothing a
-  pattern computes. A room's rule names its projector by identity until it
-  does.
+  on what an answer reveals.
+- **An answer that does not change.** A stamp is replaced when its value is
+  written. When a member's code points the room's box at a document of its own
+  and the projector computes the answer it had already released, nothing is
+  written, and the answer keeps the stamp it had. A member can so learn whether
+  a document of their choosing yields the answer the room released, one such
+  comparison per change. This holds of every witnessed release, not of custody
+  alone.
 - **Freezing the room's readers.** Whoever can read `S` when a released value
   is rendered is its audience. Keeping the audience at the seats, whether with
   a room access list fixed at the first seal or with a render fact that admits

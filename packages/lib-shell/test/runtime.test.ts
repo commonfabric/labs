@@ -89,6 +89,15 @@ class MockRuntimeClient {
     return Promise.resolve(`did:key:z6Mk-${name}` as DID);
   }
 
+  registeredSpaceHosts: Array<{ space: DID; host: string }> = [];
+
+  registerSpaceHostDetailed(space: DID, host: string) {
+    this.registeredSpaceHosts.push({ space, host });
+    return Promise.resolve(
+      { accepted: false, reason: "default-route-in-use" } as const,
+    );
+  }
+
   /** Records the scope each slug read named, alongside the piece. */
   pieceSlugCalls: Array<{ pieceId: string; space: DID; scope?: string }> = [];
 
@@ -445,6 +454,22 @@ describe("RuntimeInternals", () => {
         "did:key:z6Mk-notebook",
       );
       expect(client.resolvedSpaceNames).toEqual(["notebook"]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("returns the worker's registration for a refused space host", async () => {
+    const space = "did:key:z6Mk-lib-shell-routed-space" as DID;
+    const client = new MockRuntimeClient();
+    const runtime = new RuntimeInternals(client as any);
+    try {
+      await expect(
+        runtime.registerSpaceHostDetailed(space, "http://host-b.test/"),
+      ).resolves.toEqual({ accepted: false, reason: "default-route-in-use" });
+      expect(client.registeredSpaceHosts).toEqual([
+        { space, host: "http://host-b.test/" },
+      ]);
     } finally {
       await runtime.dispose();
     }

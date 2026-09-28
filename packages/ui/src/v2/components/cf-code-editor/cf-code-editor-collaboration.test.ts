@@ -12,6 +12,9 @@ import {
   type CellRef,
   CODEMIRROR_CHANGESET_CODEC,
   type OperationFieldSnapshot,
+  type PresenceEvent,
+  type PresenceRecord,
+  type PresenceRoomHandle,
 } from "@commonfabric/runtime-client";
 import { CFCodeEditor } from "./cf-code-editor.ts";
 import { CodeMirrorCollaborationController } from "./codemirror-collaboration.ts";
@@ -49,43 +52,93 @@ function statefulView(extensions: unknown[] = []) {
   };
 }
 
-class MockPresenceWebSocket {
-  static instances: MockPresenceWebSocket[] = [];
+/** A room handle that records what the editor does to it. */
+class FakePresenceHandle implements PresenceRoomHandle {
+  participantId = "participant:self";
+  participants: PresenceRecord[] = [];
+  readonly names: string[] = [];
+  readonly facets: Array<[string, unknown]> = [];
+  readonly focus: boolean[] = [];
+  leaves = 0;
+  readonly #listeners = new Set<(event: PresenceEvent) => void>();
 
-  readyState = 0;
-  readonly sent: string[] = [];
-  readonly closes: number[] = [];
-  readonly listeners = new Map<string, Array<(event: unknown) => void>>();
+  constructor(readonly room: string) {}
 
-  constructor(readonly url: string) {
-    MockPresenceWebSocket.instances.push(this);
+  setName(name: string): void {
+    this.names.push(name);
   }
 
-  send(data: string): void {
-    this.sent.push(data);
+  setFacet(facet: string, value: unknown): void {
+    this.facets.push([facet, value]);
   }
 
-  close(code?: number): void {
-    if (code !== undefined) this.closes.push(code);
+  clearFacet(): void {}
+
+  setFocused(focused: boolean): void {
+    this.focus.push(focused);
   }
 
-  addEventListener(type: string, listener: (event: unknown) => void): void {
-    const listeners = this.listeners.get(type) ?? [];
-    listeners.push(listener);
-    this.listeners.set(type, listeners);
+  subscribe(listener: (event: PresenceEvent) => void): () => void {
+    this.#listeners.add(listener);
+    return () => {
+      this.#listeners.delete(listener);
+    };
   }
 
-  emit(type: string, event: unknown = {}): void {
-    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  leave(): Promise<void> {
+    this.leaves++;
+    return Promise.resolve();
+  }
+
+  emit(event: PresenceEvent): void {
+    for (const listener of [...this.#listeners]) listener(event);
   }
 }
 
-const presenceSnapshot = JSON.stringify({
-  v: 1,
-  type: "room.snapshot",
-  selfParticipantId: "11111111-1111-4111-8111-111111111111",
-  participants: [],
-});
+/** A runtime stand-in whose only presence is what `joinPresenceRoom` records. */
+function presenceRuntime(options: { failJoin?: Error } = {}) {
+  const runtime = {
+    joins: [] as Array<{ room?: string }>,
+    handles: [] as FakePresenceHandle[],
+    joinPresenceRoom(
+      _cell: CellHandle<string>,
+      joinOptions: { room?: string } = {},
+    ): Promise<PresenceRoomHandle> {
+      runtime.joins.push(joinOptions);
+      if (options.failJoin !== undefined) {
+        return Promise.reject(options.failJoin);
+      }
+      const handle = new FakePresenceHandle(joinOptions.room ?? "derived");
+      runtime.handles.push(handle);
+      return Promise.resolve(handle);
+    },
+  };
+  return runtime;
+}
+
+/** Lets a join that settles on the microtask queue land. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 4; i++) await Promise.resolve();
+}
+
+function caretRecord(
+  participantId: string,
+  revision = 1,
+): PresenceRecord {
+  return {
+    participantId,
+    revision,
+    name: "Peer",
+    facets: {
+      caret: {
+        focused: true,
+        cursor: { epoch: 2, version: 4 },
+        selection: { ranges: [{ anchor: 0, head: 1, assoc: -1 }], main: 0 },
+        basis: "confirmed",
+      },
+    },
+  };
+}
 
 function operationCell(
   runtime: Record<string, unknown>,
@@ -358,19 +411,15 @@ describe("CFCodeEditor collaboration", () => {
       });
   });
 
-  it("uses the host endpoint context until an explicit override is set", () => {
-    const originalWebSocket = globalThis.WebSocket;
-    MockPresenceWebSocket.instances = [];
-    Object.defineProperty(globalThis, "WebSocket", {
-      configurable: true,
-      value: MockPresenceWebSocket,
-    });
+  it("joins the field's room through the cell's runtime and republishes without rejoining", async () => {
+    const runtime = presenceRuntime();
     const element = new CFCodeEditor();
     try {
       const presence = (element as any)._presenceComp as Compartment;
       (element as any)._editorView = statefulView([presence.of([])]);
       const collaboration = {
         active: true,
+        cell: operationCell(runtime),
         synchronizationSnapshot: {
           confirmedCursor: { epoch: 2, version: 4 },
           pendingChanges: [],
@@ -381,16 +430,22 @@ describe("CFCodeEditor collaboration", () => {
       element.collaborative = true;
       element.presenceRoom = "abcdefghijklmnopqrstuv";
       element.participantName = "Ada";
-      element.contextPresenceUrl = "wss://default-presence.example";
 
-      (element as any)._takePresenceOwnership();
-      expect(MockPresenceWebSocket.instances[0].url).toBe(
-        "wss://default-presence.example/v1/rooms/abcdefghijklmnopqrstuv",
-      );
+      (element as any)._setupPresence();
+      await settle();
+      expect(runtime.joins).toEqual([{ room: "abcdefghijklmnopqrstuv" }]);
+      expect(runtime.handles[0].names).toEqual(["Ada"]);
+      expect(runtime.handles[0].facets).toEqual([["caret", {
+        focused: false,
+        cursor: { epoch: 2, version: 4 },
+        selection: null,
+        basis: "confirmed",
+      }]]);
 
       element.participantName = "Grace";
       (element as any)._setupPresence();
-      expect(MockPresenceWebSocket.instances).toHaveLength(1);
+      expect(runtime.joins).toHaveLength(1);
+      expect(runtime.handles[0].names).toEqual(["Ada", "Grace"]);
 
       collaboration.synchronizationSnapshot = {
         confirmedCursor: { epoch: 3, version: 0 },
@@ -400,100 +455,35 @@ describe("CFCodeEditor collaboration", () => {
       (element as any)._handleCollaborationSynchronization(
         collaboration.synchronizationSnapshot,
       );
-      expect(MockPresenceWebSocket.instances).toHaveLength(2);
-      expect(MockPresenceWebSocket.instances[0].closes).toEqual([1000]);
-
-      element.presenceUrl = "wss://override-presence.example";
-      (element as any)._setupPresence();
-      expect(MockPresenceWebSocket.instances[2].url).toBe(
-        "wss://override-presence.example/v1/rooms/abcdefghijklmnopqrstuv",
-      );
-      expect(MockPresenceWebSocket.instances[1].closes).toEqual([1000]);
+      await settle();
+      expect(runtime.handles[0].leaves).toBe(1);
+      expect(runtime.joins).toHaveLength(2);
 
       element.presenceRoom = "zyxwvutsrqponmlkjihgfe";
       (element as any)._setupPresence();
-      expect(MockPresenceWebSocket.instances).toHaveLength(4);
-      expect(MockPresenceWebSocket.instances[2].closes).toEqual([1000]);
+      await settle();
+      expect(runtime.joins[2]).toEqual({ room: "zyxwvutsrqponmlkjihgfe" });
+      expect(runtime.handles[1].leaves).toBe(1);
 
       element.presenceRoom = "";
       (element as any)._setupPresence();
-      expect(MockPresenceWebSocket.instances).toHaveLength(5);
-      expect(MockPresenceWebSocket.instances[4].url).toMatch(
-        /^wss:\/\/override-presence\.example\/v1\/rooms\/[A-Za-z0-9_-]{43}$/,
-      );
-      expect(MockPresenceWebSocket.instances[3].closes).toEqual([1000]);
+      await settle();
+      expect(runtime.joins[3]).toEqual({});
+      expect(runtime.handles[3].room).toBe("derived");
     } finally {
-      (element as any)._releasePresenceOwnership();
-      Object.defineProperty(globalThis, "WebSocket", {
-        configurable: true,
-        value: originalWebSocket,
-      });
+      (element as any)._cleanupPresence();
     }
   });
 
-  it("derives a room from the bound text cell when no override is set", () => {
-    const originalWebSocket = globalThis.WebSocket;
-    MockPresenceWebSocket.instances = [];
-    Object.defineProperty(globalThis, "WebSocket", {
-      configurable: true,
-      value: MockPresenceWebSocket,
-    });
-    const element = new CFCodeEditor();
-    try {
-      const presence = (element as any)._presenceComp as Compartment;
-      (element as any)._editorView = statefulView([presence.of([])]);
-      (element as any)._collaboration = {
-        active: true,
-        synchronizationSnapshot: {
-          confirmedCursor: { epoch: 2, version: 4 },
-          pendingChanges: [],
-          field: {
-            space: "did:key:resolved-space",
-            branch: "main",
-            id: "of:note-document",
-            scopeKey: "user:ada",
-            path: ["value", "content", "markdown"],
-          },
-        },
-      };
-      element.value = operationCell({}, {
-        space: "did:key:shared-space" as CellRef["space"],
-        id: "of:note-document" as CellRef["id"],
-        scope: "space",
-        path: ["content", "markdown"],
-      });
-      element.collaborative = true;
-      element.participantName = "Ada";
-      element.contextPresenceUrl = "wss://default-presence.example";
-
-      (element as any)._takePresenceOwnership();
-
-      expect(MockPresenceWebSocket.instances).toHaveLength(1);
-      expect(MockPresenceWebSocket.instances[0].url).toMatch(
-        /^wss:\/\/default-presence\.example\/v1\/rooms\/[A-Za-z0-9_-]{43}$/,
-      );
-    } finally {
-      (element as any)._releasePresenceOwnership();
-      Object.defineProperty(globalThis, "WebSocket", {
-        configurable: true,
-        value: originalWebSocket,
-      });
-    }
-  });
-
-  it("moves the page presence session between focused editors", () => {
-    const originalWebSocket = globalThis.WebSocket;
-    MockPresenceWebSocket.instances = [];
-    Object.defineProperty(globalThis, "WebSocket", {
-      configurable: true,
-      value: MockPresenceWebSocket,
-    });
+  it("joins every editor's room and marks only the focused one", async () => {
+    const runtime = presenceRuntime();
     const createEditor = (room: string) => {
       const element = new CFCodeEditor();
       const presence = (element as any)._presenceComp as Compartment;
       (element as any)._editorView = statefulView([presence.of([])]);
       (element as any)._collaboration = {
         active: true,
+        cell: operationCell(runtime),
         synchronizationSnapshot: {
           confirmedCursor: { epoch: 2, version: 4 },
           pendingChanges: [],
@@ -503,7 +493,6 @@ describe("CFCodeEditor collaboration", () => {
       element.collaborative = true;
       element.presenceRoom = room;
       element.participantName = "Ada";
-      element.presenceUrl = "wss://presence.example";
       return element;
     };
     const first = createEditor("aaaaaaaaaaaaaaaaaaaaaa");
@@ -511,67 +500,49 @@ describe("CFCodeEditor collaboration", () => {
     try {
       (first as any)._setupPresence();
       (second as any)._setupPresence();
-      expect(MockPresenceWebSocket.instances).toHaveLength(0);
+      await settle();
+      expect(runtime.joins).toEqual([
+        { room: "aaaaaaaaaaaaaaaaaaaaaa" },
+        { room: "bbbbbbbbbbbbbbbbbbbbbb" },
+      ]);
+      const focusedOf = (handle: FakePresenceHandle) =>
+        handle.facets.map(([, caret]) =>
+          (caret as { focused: boolean }).focused
+        );
+      expect(focusedOf(runtime.handles[0])).toEqual([false]);
+      expect(focusedOf(runtime.handles[1])).toEqual([false]);
 
       ((first as any)._editorView as { hasFocus: boolean }).hasFocus = true;
       (first as any)._handlePresenceFocus();
-      expect(MockPresenceWebSocket.instances).toHaveLength(1);
-      expect(MockPresenceWebSocket.instances[0].url).toContain(
-        "/rooms/aaaaaaaaaaaaaaaaaaaaaa",
-      );
-
-      (first as any)._publishPresence();
-      expect(MockPresenceWebSocket.instances[0].closes).toEqual([]);
+      await settle();
+      expect(runtime.joins).toHaveLength(2);
+      expect(focusedOf(runtime.handles[0])).toEqual([false, true]);
 
       ((first as any)._editorView as { hasFocus: boolean }).hasFocus = false;
+      (first as any)._publishPresence();
       ((second as any)._editorView as { hasFocus: boolean }).hasFocus = true;
       (second as any)._handlePresenceFocus();
-      expect(MockPresenceWebSocket.instances[0].closes).toEqual([1000]);
-      expect(MockPresenceWebSocket.instances).toHaveLength(2);
-      expect(MockPresenceWebSocket.instances[1].url).toContain(
-        "/rooms/bbbbbbbbbbbbbbbbbbbbbb",
-      );
+      await settle();
+      expect(runtime.joins).toHaveLength(2);
+      expect(focusedOf(runtime.handles[0])).toEqual([false, true, false]);
+      expect(focusedOf(runtime.handles[1])).toEqual([false, true]);
+      expect(runtime.handles[0].focus).toEqual([false, true, false]);
+      expect(runtime.handles[1].focus).toEqual([false, true]);
+      expect(runtime.handles.map((handle) => handle.leaves)).toEqual([0, 0]);
 
+      (second as any)._cleanupPresence();
+      expect(runtime.handles.map((handle) => handle.leaves)).toEqual([0, 1]);
       (first as any)._setupPresence();
-      expect(MockPresenceWebSocket.instances).toHaveLength(2);
-
-      (second as any)._releasePresenceOwnership();
-      expect(MockPresenceWebSocket.instances[1].closes).toEqual([1000]);
-      (first as any)._setupPresence();
-      expect(MockPresenceWebSocket.instances).toHaveLength(2);
+      await settle();
+      expect(runtime.joins).toHaveLength(2);
     } finally {
-      (first as any)._releasePresenceOwnership?.();
-      (second as any)._releasePresenceOwnership?.();
       (first as any)._cleanupPresence();
       (second as any)._cleanupPresence();
-      Object.defineProperty(globalThis, "WebSocket", {
-        configurable: true,
-        value: originalWebSocket,
-      });
     }
   });
 
-  it("publishes no selection before focus and retains it after blur", () => {
-    const originalWebSocket = globalThis.WebSocket;
-    const originalRequestFrame = globalThis.requestAnimationFrame;
-    const originalCancelFrame = globalThis.cancelAnimationFrame;
-    const frames: FrameRequestCallback[] = [];
-    MockPresenceWebSocket.instances = [];
-    Object.defineProperty(globalThis, "WebSocket", {
-      configurable: true,
-      value: MockPresenceWebSocket,
-    });
-    Object.defineProperty(globalThis, "requestAnimationFrame", {
-      configurable: true,
-      value: (callback: FrameRequestCallback) => {
-        frames.push(callback);
-        return frames.length;
-      },
-    });
-    Object.defineProperty(globalThis, "cancelAnimationFrame", {
-      configurable: true,
-      value: () => {},
-    });
+  it("publishes no selection before focus and retains it after blur", async () => {
+    const runtime = presenceRuntime();
     const element = new CFCodeEditor();
     try {
       const presence = (element as any)._presenceComp as Compartment;
@@ -581,6 +552,7 @@ describe("CFCodeEditor collaboration", () => {
       (element as any)._editorView = view;
       (element as any)._collaboration = {
         active: true,
+        cell: operationCell(runtime),
         synchronizationSnapshot: {
           confirmedCursor: { epoch: 2, version: 4 },
           pendingChanges: [],
@@ -590,59 +562,105 @@ describe("CFCodeEditor collaboration", () => {
       element.collaborative = true;
       element.presenceRoom = "abcdefghijklmnopqrstuv";
       element.participantName = "Ada";
-      element.presenceUrl = "wss://presence.example";
 
-      (element as any)._takePresenceOwnership();
-      const socket = MockPresenceWebSocket.instances[0];
-      socket.readyState = 1;
-      socket.emit("open");
-      socket.emit("message", { data: presenceSnapshot });
-      frames.shift()?.(0);
-      expect(JSON.parse(socket.sent[0])).toMatchObject({
-        name: "Ada",
+      (element as any)._setupPresence();
+      await settle();
+      const handle = runtime.handles[0];
+      expect(handle.facets[0]).toEqual(["caret", {
         focused: false,
         cursor: { epoch: 2, version: 4 },
         selection: null,
         basis: "confirmed",
-      });
+      }]);
 
       view.hasFocus = true;
       (element as any)._publishPresence();
-      frames.shift()?.(0);
-      expect(JSON.parse(socket.sent[1])).toMatchObject({
-        revision: 2,
+      expect(handle.facets[1]).toEqual(["caret", {
         focused: true,
+        cursor: { epoch: 2, version: 4 },
         selection: {
           ranges: [{ anchor: 1, head: 2, assoc: -1 }],
           main: 0,
         },
-      });
+        basis: "confirmed",
+      }]);
 
       view.hasFocus = false;
       (element as any)._publishPresence();
-      frames.shift()?.(0);
-      expect(JSON.parse(socket.sent[2])).toMatchObject({
-        revision: 3,
+      expect(handle.facets[2]).toEqual(["caret", {
         focused: false,
+        cursor: { epoch: 2, version: 4 },
         selection: {
           ranges: [{ anchor: 1, head: 2, assoc: -1 }],
           main: 0,
         },
-      });
+        basis: "confirmed",
+      }]);
     } finally {
-      (element as any)._releasePresenceOwnership();
-      Object.defineProperty(globalThis, "WebSocket", {
-        configurable: true,
-        value: originalWebSocket,
+      (element as any)._cleanupPresence();
+    }
+  });
+
+  it("keeps the presence cursor advancing while a join is still in flight", async () => {
+    const joining = Promise.withResolvers<PresenceRoomHandle>();
+    const runtime = {
+      joins: 0,
+      joinPresenceRoom: () => {
+        runtime.joins++;
+        return joining.promise;
+      },
+    };
+    const element = new CFCodeEditor();
+    try {
+      const presence = (element as any)._presenceComp as Compartment;
+      const view = statefulView([presence.of([])]);
+      (element as any)._editorView = view;
+      const collaboration = {
+        active: true,
+        cell: operationCell(runtime),
+        synchronizationSnapshot: {
+          confirmedCursor: { epoch: 2, version: 4 },
+          pendingChanges: [],
+          field: synchronizedField,
+        },
+      };
+      (element as any)._collaboration = collaboration;
+      element.collaborative = true;
+      element.presenceRoom = "abcdefghijklmnopqrstuv";
+      element.participantName = "Ada";
+
+      (element as any)._setupPresence();
+      expect(runtime.joins).toBe(1);
+      expect(codeMirrorPresenceState(view.state)?.cursor).toEqual({
+        epoch: 2,
+        version: 4,
       });
-      Object.defineProperty(globalThis, "requestAnimationFrame", {
-        configurable: true,
-        value: originalRequestFrame,
+      collaboration.synchronizationSnapshot = {
+        confirmedCursor: { epoch: 2, version: 7 },
+        pendingChanges: [],
+        field: synchronizedField,
+      };
+      (element as any)._handleCollaborationSynchronization(
+        collaboration.synchronizationSnapshot,
+      );
+      expect(runtime.joins).toBe(1);
+      expect(codeMirrorPresenceState(view.state)?.cursor).toEqual({
+        epoch: 2,
+        version: 7,
       });
-      Object.defineProperty(globalThis, "cancelAnimationFrame", {
-        configurable: true,
-        value: originalCancelFrame,
-      });
+
+      const handle = new FakePresenceHandle("abcdefghijklmnopqrstuv");
+      joining.resolve(handle);
+      await settle();
+      expect((element as any)._presence).toBe(handle);
+      expect(handle.facets.at(-1)).toEqual(["caret", {
+        focused: false,
+        cursor: { epoch: 2, version: 7 },
+        selection: null,
+        basis: "confirmed",
+      }]);
+    } finally {
+      (element as any)._cleanupPresence();
     }
   });
 
@@ -656,9 +674,10 @@ describe("CFCodeEditor collaboration", () => {
       presence.of([]),
     ]);
     const collaboration = { active: true };
+    const handle = new FakePresenceHandle("abcdefghijklmnopqrstuv");
     (element as any)._editorView = view;
     (element as any)._collaboration = collaboration;
-    (element as any)._presence = { dispose: () => {} };
+    (element as any)._presence = handle;
     (element as any).emit = (name: string, detail: unknown) =>
       events.push([name, detail]);
 
@@ -666,16 +685,14 @@ describe("CFCodeEditor collaboration", () => {
 
     expect((element as any)._collaboration).toBe(collaboration);
     expect(view.state.readOnly).toBe(false);
+    expect(handle.leaves).toBe(1);
     expect(events).toEqual([["cf-presence-error", { category: "protocol" }]]);
   });
 
-  it("reports invalid host configuration once until the endpoint changes", () => {
-    const originalWebSocket = globalThis.WebSocket;
-    MockPresenceWebSocket.instances = [];
-    Object.defineProperty(globalThis, "WebSocket", {
-      configurable: true,
-      value: MockPresenceWebSocket,
-    });
+  it("reports a refused join once until the room or name changes", async () => {
+    const unsupported = new Error("memory server does not support presence");
+    unsupported.name = "ProtocolError";
+    const runtime = presenceRuntime({ failJoin: unsupported });
     const events: Array<[string, unknown]> = [];
     const element = new CFCodeEditor();
     try {
@@ -683,6 +700,7 @@ describe("CFCodeEditor collaboration", () => {
       (element as any)._editorView = statefulView([presence.of([])]);
       (element as any)._collaboration = {
         active: true,
+        cell: operationCell(runtime),
         synchronizationSnapshot: {
           confirmedCursor: { epoch: 1, version: 0 },
           pendingChanges: [],
@@ -694,116 +712,102 @@ describe("CFCodeEditor collaboration", () => {
       element.collaborative = true;
       element.presenceRoom = "abcdefghijklmnopqrstuv";
       element.participantName = "Ada";
-      element.contextPresenceUrl = "https://presence.example";
 
-      (element as any)._takePresenceOwnership();
       (element as any)._setupPresence();
-      (element as any)._retryPresenceFromSignal();
+      await settle();
+      (element as any)._setupPresence();
+      (element as any)._setupPresence(undefined, true);
+      await settle();
 
       expect((element as any)._collaboration.active).toBe(true);
       expect(events).toEqual([
         ["cf-presence-error", { category: "configuration" }],
       ]);
-      expect(MockPresenceWebSocket.instances).toHaveLength(0);
+      expect(runtime.joins).toHaveLength(1);
 
-      element.contextPresenceUrl = "wss://presence.example";
+      element.participantName = "Grace";
       (element as any)._setupPresence();
-      expect(MockPresenceWebSocket.instances).toHaveLength(1);
+      await settle();
+      expect(runtime.joins).toHaveLength(2);
     } finally {
-      (element as any)._releasePresenceOwnership();
-      Object.defineProperty(globalThis, "WebSocket", {
-        configurable: true,
-        value: originalWebSocket,
-      });
+      (element as any)._cleanupPresence();
     }
   });
 
-  it("reconnects a failed presence session only after an explicit signal", () => {
-    const originalWebSocket = globalThis.WebSocket;
-    MockPresenceWebSocket.instances = [];
-    Object.defineProperty(globalThis, "WebSocket", {
-      configurable: true,
-      value: MockPresenceWebSocket,
-    });
+  it("retries a failed room on focus and renders the records it delivers", async () => {
+    const runtime = presenceRuntime();
+    const events: Array<[string, unknown]> = [];
     const element = new CFCodeEditor();
     try {
       const presence = (element as any)._presenceComp as Compartment;
-      (element as any)._editorView = statefulView([presence.of([])]);
+      const view = statefulView([presence.of([])]);
+      (element as any)._editorView = view;
       const synchronizationSnapshot = {
-        confirmedCursor: { epoch: 1, version: 0 },
+        confirmedCursor: { epoch: 2, version: 4 },
         pendingChanges: [],
         field: synchronizedField,
       };
       (element as any)._collaboration = {
         active: true,
+        cell: operationCell(runtime),
         synchronizationSnapshot,
       };
+      (element as any).emit = (name: string, detail: unknown) =>
+        events.push([name, detail]);
       element.collaborative = true;
       element.presenceRoom = "abcdefghijklmnopqrstuv";
       element.participantName = "Ada";
-      element.presenceUrl = "wss://presence.example";
 
-      (element as any)._takePresenceOwnership();
-      const failedSocket = MockPresenceWebSocket.instances[0];
-      failedSocket.emit("error");
-      expect(failedSocket.closes).toEqual([1002]);
+      (element as any)._setupPresence();
+      await settle();
+      const failed = runtime.handles[0];
+      failed.emit({
+        kind: "failure",
+        error: new Error("memory session closed"),
+      });
+      expect(events).toEqual([
+        ["cf-presence-error", { category: "connection" }],
+      ]);
+      expect(failed.leaves).toBe(1);
 
       (element as any)._handleCollaborationSynchronization(
         synchronizationSnapshot,
       );
-      expect(MockPresenceWebSocket.instances).toHaveLength(1);
+      await settle();
+      expect(runtime.joins).toHaveLength(1);
 
-      (element as any)._retryPresenceFromSignal();
-      expect(MockPresenceWebSocket.instances).toHaveLength(2);
-      const reconnectedSocket = MockPresenceWebSocket.instances[1];
-      reconnectedSocket.readyState = 1;
-      reconnectedSocket.emit("open");
-      reconnectedSocket.emit("message", { data: presenceSnapshot });
-      expect((element as any)._presenceParticipantId).toBe(
-        "11111111-1111-4111-8111-111111111111",
-      );
-    } finally {
-      (element as any)._releasePresenceOwnership();
-      Object.defineProperty(globalThis, "WebSocket", {
-        configurable: true,
-        value: originalWebSocket,
+      (element as any)._handlePresenceFocus();
+      await settle();
+      expect(runtime.joins).toHaveLength(2);
+      const handle = runtime.handles[1];
+      expect((element as any)._presenceParticipantId).toBe("participant:self");
+
+      handle.emit({ kind: "upsert", participant: caretRecord("peer:1") });
+      expect(
+        [...codeMirrorPresenceState(view.state)!.participants.keys()],
+      ).toEqual(["peer:1"]);
+      handle.emit({
+        kind: "upsert",
+        participant: { ...caretRecord("peer:1", 2), facets: {} },
       });
-    }
-  });
-
-  it("listens for online and visible signals only while connected", () => {
-    const originalDocument = Object.getOwnPropertyDescriptor(
-      globalThis,
-      "document",
-    );
-    const fakeDocument = new EventTarget() as EventTarget & {
-      visibilityState: string;
-    };
-    fakeDocument.visibilityState = "visible";
-    Object.defineProperty(globalThis, "document", {
-      configurable: true,
-      value: fakeDocument,
-    });
-    const element = new CFCodeEditor();
-    let retries = 0;
-    (element as any)._retryPresenceFromSignal = () => retries++;
-    try {
-      (element as any)._setupPresenceReconnectListeners();
-      globalThis.dispatchEvent(new Event("online"));
-      fakeDocument.dispatchEvent(new Event("visibilitychange"));
-      expect(retries).toBe(2);
-
-      (element as any)._cleanupPresenceReconnectListeners();
-      globalThis.dispatchEvent(new Event("online"));
-      fakeDocument.dispatchEvent(new Event("visibilitychange"));
-      expect(retries).toBe(2);
+      expect(codeMirrorPresenceState(view.state)!.participants.size).toBe(0);
+      handle.emit({ kind: "upsert", participant: caretRecord("peer:2") });
+      handle.emit({ kind: "remove", participantId: "peer:2" });
+      expect(codeMirrorPresenceState(view.state)!.participants.size).toBe(0);
+      handle.emit({
+        kind: "snapshot",
+        participantId: "participant:self:again",
+        participants: [caretRecord("peer:3")],
+      });
+      expect((element as any)._presenceParticipantId).toBe(
+        "participant:self:again",
+      );
+      expect(
+        [...codeMirrorPresenceState(view.state)!.participants.keys()],
+      ).toEqual(["peer:3"]);
+      expect(events).toHaveLength(1);
     } finally {
-      (element as any)._cleanupPresenceReconnectListeners();
-      if (originalDocument) {
-        Object.defineProperty(globalThis, "document", originalDocument);
-      } else {
-        Reflect.deleteProperty(globalThis, "document");
-      }
+      (element as any)._cleanupPresence();
     }
   });
 
@@ -1037,12 +1041,7 @@ describe("CFCodeEditor collaboration", () => {
   });
 
   it("restores synchronization and presence when release fails", async () => {
-    const originalWebSocket = globalThis.WebSocket;
-    MockPresenceWebSocket.instances = [];
-    Object.defineProperty(globalThis, "WebSocket", {
-      configurable: true,
-      value: MockPresenceWebSocket,
-    });
+    const runtime = presenceRuntime();
     const element = new CFCodeEditor();
     try {
       const readonly = (element as any)._readonly as Compartment;
@@ -1062,6 +1061,7 @@ describe("CFCodeEditor collaboration", () => {
       let observerRegistrations = 0;
       const collaboration = {
         active: true,
+        cell: operationCell(runtime),
         synchronizationSnapshot: snapshot,
         release: () => Promise.reject(new Error("release failed")),
         observeSynchronization: (
@@ -1078,8 +1078,8 @@ describe("CFCodeEditor collaboration", () => {
       element.collaborative = true;
       element.presenceRoom = "abcdefghijklmnopqrstuv";
       element.participantName = "Ada";
-      element.presenceUrl = "wss://presence.example";
-      (element as any)._takePresenceOwnership();
+      (element as any)._setupPresence();
+      await settle();
 
       let failure: unknown;
       try {
@@ -1087,30 +1087,21 @@ describe("CFCodeEditor collaboration", () => {
       } catch (error) {
         failure = error;
       }
+      await settle();
 
       expect((failure as Error).message).toBe("release failed");
       expect(observerRegistrations).toBe(1);
-      expect(MockPresenceWebSocket.instances).toHaveLength(2);
-      expect(MockPresenceWebSocket.instances[0].closes).toEqual([1000]);
-      expect((element as any)._presence).toBeDefined();
+      expect(runtime.joins).toHaveLength(2);
+      expect(runtime.handles[0].leaves).toBe(1);
+      expect((element as any)._presence).toBe(runtime.handles[1]);
       expect(view.state.facet(EditorState.readOnly)).toBe(false);
       expect((element as any)._collaboration).toBe(collaboration);
     } finally {
-      (element as any)._releasePresenceOwnership();
-      Object.defineProperty(globalThis, "WebSocket", {
-        configurable: true,
-        value: originalWebSocket,
-      });
+      (element as any)._cleanupPresence();
     }
   });
 
   it("clears presence before a new Memory epoch replaces the document", async () => {
-    const originalWebSocket = globalThis.WebSocket;
-    MockPresenceWebSocket.instances = [];
-    Object.defineProperty(globalThis, "WebSocket", {
-      configurable: true,
-      value: MockPresenceWebSocket,
-    });
     const initial: OperationFieldSnapshot = {
       branch: "",
       id: "of:editor",
@@ -1137,6 +1128,7 @@ describe("CFCodeEditor collaboration", () => {
         return Promise.resolve(() => {});
       },
       closeOperationSession: () => Promise.resolve(),
+      ...presenceRuntime(),
     };
     const element = new CFCodeEditor();
     const collaborationComp = (element as any)
@@ -1180,8 +1172,7 @@ describe("CFCodeEditor collaboration", () => {
       element.collaborative = true;
       element.presenceRoom = "abcdefghijklmnopqrstuv";
       element.participantName = "Ada";
-      element.presenceUrl = "wss://presence.example";
-      (element as any)._takePresenceOwnership();
+      (element as any)._setupPresence();
       (element as any)._observeCollaboration(controller);
       expect(codeMirrorPresenceState(view.state)).toBeDefined();
 
@@ -1197,12 +1188,8 @@ describe("CFCodeEditor collaboration", () => {
       expect((element as any)._presenceEpoch).toBe(2);
     } finally {
       (element as any)._collaborationSyncUnsub?.();
-      (element as any)._releasePresenceOwnership();
+      (element as any)._cleanupPresence();
       controller.dispose();
-      Object.defineProperty(globalThis, "WebSocket", {
-        configurable: true,
-        value: originalWebSocket,
-      });
     }
   });
 

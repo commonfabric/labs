@@ -53,6 +53,7 @@ export function makeTestSelection(
     routes: [{
       path: TEST_SELECTION_PATH,
       handler: () => testSelectionResponse(source.latest, options.now),
+      live: true,
     }],
     collectActivity: publisherRunning,
     collect: (_ctx, publish) =>
