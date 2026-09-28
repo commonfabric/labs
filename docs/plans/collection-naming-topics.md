@@ -19,8 +19,9 @@ This block is LIVE: the change that moves a stage updates it here.
 | S2b — assignment refuses by default | on main (#6898) |
 | S3 — the shell opens `/<space>/top/42` | on main (#6896) |
 | S4 — `#42` in text | on main (#6887) |
-| S6 — graft onto Topics | items 1, 2, 3, 5 on main (#6937), with what items 2 and 3 show hidden on Topics since 2026-09-17 (below); item 4 rehearsed twice and held, awaiting a demand for named Topics rather than a technical answer |
-| S6b — a Topic stores its own number | built; awaiting review and merge |
+| S6 — graft onto Topics | items 1, 2, 3, 5 on main (#6937); item 4 rehearsed twice and held, awaiting a demand for named Topics rather than a technical answer |
+| S6b — a Topic stores its own number | on main (#7774) |
+| S6c — a Topic publishes the number it stores | built; awaiting review and merge |
 | S5 — deferred, not scheduled | — |
 
 ### Built 2026-09-17: a Topic stores its own number
@@ -41,21 +42,22 @@ pass the number into the topic in the transaction that creates it, the way the
 exemplar's `addItem` does. A topic nobody has
 numbered stores nothing, reports nothing, and renders without failing.
 
-The step's report is degraded while Topics hides its numbers, and Mike ruled on
-2026-09-19 to ship on that footing rather than publish a second property to
-work around it. A topic's published `shortName` is the only signal the board's
-step can read, and `SHOW_TOPIC_NUMBERS` gates it, so `named` comes back empty
-and `pending` holds every topic on every run. Repeating the step is safe but
-not idle — a topic that already stores the number writes nothing further, one
-whose number never landed stores it now, and the asking is itself a write
-either way — and what it loses is the ability to report that it is finished.
-`assigned`, the namespace's own half, still settles exactly.
-Turning the switch on restores the report by itself. The component behavior
-that forced the gate onto the publication is
-[#7771](https://github.com/commontoolsinc/labs/issues/7771): `cf-code-editor`
-takes a mention's short name off the destination piece where the list it was
-handed is the raw member list, which the spec reserves for a universe row.
-Criteria 3 and 4 of this stage were re-baselined the same day to say so.
+A topic's published `shortName` is the only signal the board's numbering step
+can read, and a topic publishes the number it stores, so the step reports what
+it allocated, what it found already stored under `named`, and what it asked
+under `pending`. An empty `pending` is the finished state. Repeating the step
+is safe and not idle — a topic that already stores the number writes nothing
+further, one whose number never landed stores it now, and the asking is itself
+a write either way.
+
+A number reaches every surface through that one publication rather than through
+each display, and
+[#7771](https://github.com/commontoolsinc/labs/issues/7771) is why:
+`cf-code-editor` takes a mention's short name off the destination piece where
+the list it was handed is the raw member list, which the spec reserves for a
+universe row. A topic not yet rewired to the board's derived universe completes
+over the topics themselves, so what each topic publishes is what that editor
+offers for `#42`.
 
 The board's `backfillNames` is now the whole of the operator procedure for the
 topics filed before the namespace. It numbers every topic the namespace does
@@ -64,10 +66,8 @@ namespace holds for it, by sending that number to the topic's own
 `recordName` — the one thing a member must provide for `recordNames` in
 `naming.ts` to reach it, and the verb an operator can also call directly. A
 board cannot confirm that asking inside the transaction that makes it, so the
-step returns `assigned`, `named` and `pending`. Once numbers are shown again, a
-run leaving a non-empty `pending` is completed by running it again; while they
-are hidden `pending` holds every topic on every run and `assigned` is the half
-that settles, as the paragraph above says. The per-topic `cf piece link` of
+step returns `assigned`, `named` and `pending`. A run leaving a non-empty
+`pending` is completed by running it again. The per-topic `cf piece link` of
 `namesTable` that decision 13 accepted is no longer part of any Topics
 procedure; the operator procedure as it now stands, including what it has not
 been rehearsed for, is
@@ -124,39 +124,29 @@ holds the evidence behind the decision: a member reading its name through the
 board's table, and what it took to bind the board onto members filed before the
 namespace.
 
-**Decided 2026-09-17: Topics shows no numbers until every topic has one.** Mike
-ruled it, and ruled the mechanism too. The deployed board numbers each topic it
-creates, while a topic filed before the namespace has no number until the
-production backfill (item 3 below) reaches it and that topic stores what the
-step asked it to, so only some topics showed a number, and that confused the
-people reading the board.
+**Decided 2026-09-28: a Topic publishes the number it stores.** Mike ruled it,
+and ruled the mechanism too. The condition the 2026-09-17 ruling set is met:
+every topic on the deployed board stores its number, 555 of 555 audited that
+day, the namespace holds 1 through 555 with no duplicates and no gaps, and
+`//topics-dev-476ea34f/top/42` resolves to the topic storing `42`.
 
-`SHOW_TOPIC_NUMBERS` in `packages/patterns/topics/topic.tsx` is off, and a topic
-then publishes no `shortName`. Withholding the publication rather than each
-display is what covers every surface: a topic's header, the board's cards, the
-`index` rows, and the entries of whatever universe a topic's editor completes
-over. That last one is why the choice matters. A topic filed before the board
-derived its universe reads the raw topics list until an operator rewires it, and
-a board cannot rewire it, because a parent writes a member's result and never a
-member's argument. Blanking only the board's derived copies left those topics
-offering `#1` and showing a pill number, measured against the derived-index
-version of this change. So no pill shows a number and `#42` offers no topic
-either way, which is the loss the ruling accepts until every topic has a number.
+The publication is where a number reaches every surface, and one property is
+what each of them reads: a topic's header, the board's cards, the `index` rows,
+and the entries of whatever universe a topic's editor completes over. That last
+one is why the publication rather than each display carries it. A topic filed
+before the board derived its universe reads the raw topics list until an
+operator rewires it, and a board cannot rewire it, because a parent writes a
+member's result and never a member's argument, so a topic's own publication is
+the only thing such an editor has to offer for `#42`.
 
-Addressing is untouched: the board allocates a number on every create, records
-it in `names`, lists it beside its topic in `namesTable`, `addTopic` returns the
-name it allocated, and `top/<n>` resolves. What the hiding costs is the two
-reads that go through a topic — its own `shortName` and its `index` row — so the
-namespace is where a number is read while numbers are hidden. Item 3's check is
-the topic's own stored number, read from its durable `shortName` input, which
-the switch does not gate; the `boardNames` argument that check once read is gone
-with the input. The exemplar in
-`packages/patterns/collection-naming/` shows its numbers in the header, on the
-cards, and in the editor, and its tests are unchanged.
+A topic that stores no number publishes none, renders without failing, and
+shows no badge on its own header or on its board card. Addressing is unchanged
+by any of this: the board allocates a number on every create, records it in
+`names`, lists it beside its topic in `namesTable`, `addTopic` returns the name
+it allocated, and `top/<n>` resolves. Decision 5 governs how a number renders.
 
-Showing numbers on Topics again means turning that one constant on, once every
-topic has a number. Decision 5 still governs how a number renders wherever one
-is shown.
+Updating the topics on the deployed board is an operator step, not part of the
+change that lands this in the repository.
 
 1. **Decision 14 — a member takes one input naming its board.** Ruled, and
    measured buildable in
@@ -183,8 +173,9 @@ is shown.
 
 3. **S6 item 4 — the production backfill.** Held for want of a demand rather
    than a technical answer. Its sequence, and the contract breaks it still
-   needs, are recorded under S6 below. Finishing it is what lets Topics show
-   numbers again (decided 2026-09-17, above). Two things that gated it have
+   needs, are recorded under S6 below. Finishing it is what gives every topic on
+   the deployed board a number to publish; one the step has not reached stores
+   none, so it publishes none and shows none. Two things that gated it have
    since moved. #6969 was closed by #7178, and the patched check accepted the
    board source retrieved from a local snapshot of the Topics board taken August
    31; and an optional `unknown` member demand no longer refuses. The
@@ -538,14 +529,11 @@ Mike's call, after S4.
       namespace and needs `--dangerously-allow-incompatible-schema` until a
       general mechanism for adding a property to existing data exists.
    3. Update each topic to a pattern that declares the `shortName` input and
-      the `recordName` verb, then run `backfillNames` until its `assigned` list
-      comes back empty. `assigned` rather than `pending`, and the difference
-      matters while numbers are hidden: the step reads a topic's published
-      `shortName` to tell a stored number from none, `SHOW_TOPIC_NUMBERS` gates
-      exactly that, so `pending` holds every topic on every run and waiting for
-      it to empty would wait forever. An empty `assigned` says the namespace
-      holds every listed topic; what each topic stores is read from its own
-      durable input, `cf cell get --cell "$TOPIC" shortName --input`. The
+      the `recordName` verb, then run `backfillNames` until its `pending` list
+      comes back empty. An empty `pending` says every listed topic publishes
+      the number the namespace holds for it, and an empty `assigned` says the
+      namespace holds every listed topic; the step reads a topic's published
+      `shortName` to tell a stored number from none. The
       operator procedure has the whole of it. Every topic takes the source
       update BEFORE the step runs: a send to a path holding no stream is an
       ordinary write, so the step's event lands as data in an un-updated

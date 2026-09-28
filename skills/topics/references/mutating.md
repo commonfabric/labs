@@ -31,12 +31,10 @@ magnitude more payload — which is what the projection exists to avoid.
 
 When the result is present, carry `TOPIC` into the next command. `NAME` is the
 member name the board allocated and passed into the Topic — read it here rather
-than from the Topic's own `shortName`, for two reasons: the row IS the created
-Topic, so reading a property off a piece filed a moment ago waits for that piece
-to materialize, and a Topic publishes no `shortName` at all while
-`SHOW_TOPIC_NUMBERS` in `packages/patterns/topics/topic.tsx` is off
-(`references/naming.md`). Use JSON encoding or schema-derived flags for
-multiline Markdown; do not interpolate unescaped content into JSON.
+than from the Topic's own `shortName`, because the row IS the created Topic, so
+reading a property off a piece filed a moment ago waits for that piece to
+materialize. Use JSON encoding or schema-derived flags for multiline Markdown;
+do not interpolate unescaped content into JSON.
 
 Current Estuary calls have a known observation asymmetry. `addTopic` has
 reported an error after committing and has reported success without committing.
@@ -81,12 +79,10 @@ deno task cf piece step --cell "$TOPIC"
 deno task cf cell get "$TOPICS_BOARD" index --step --select @,title,lastActivityAt,commentCount
 ```
 
-`shortName` is not in that list on purpose. It is gated on `SHOW_TOPIC_NUMBERS`
-in `../../../packages/patterns/topics/topic.tsx`, currently `false`, so a topic
-running this checkout's pattern publishes none however often it is stepped. A
-board still serving a pattern from before that flag was turned off does publish
-one, which is the kind of difference the running piece settles and the checkout
-does not.
+`shortName` is left out of that projection because it is not a derived scalar
+and stepping does not settle it: a topic publishes the number its durable input
+holds, so it reads the same before and after a step. Select it when the number
+is what you want.
 
 `piece step` runs one scheduling step — start, idle, synced, stop. It authors no
 new content, so it is safe to repeat and safe to run over a topic somebody else

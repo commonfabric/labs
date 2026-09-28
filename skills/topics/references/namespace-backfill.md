@@ -12,16 +12,13 @@ through its own `recordName`, and the board's `backfillNames` is the step that
 numbers the namespace and asks every Topic reporting no number to store the
 number the namespace holds for it.
 
-**Topics shows no numbers while this runs.** `SHOW_TOPIC_NUMBERS` in
-`packages/patterns/topics/topic.tsx` is off until every Topic has a number, and
-while it is off a Topic publishes no `shortName` whether or not it stores one.
-Turning it on is a pattern update of its own and the team's decision, not an
-agent's. So every `shortName` read below is what this procedure looks like once
-numbers are shown. Until then the namespace says which Topics it has numbered
-and what each number is, and only a Topic's own durable input says what that
-Topic stores — the two are different questions, and "Which read answers what"
-below gives each one its command. `deno task cf cell get /top/<n> title` answers
-either way, because a member's address is the namespace's and not the Topic's.
+**The namespace and the Topic answer different questions**, and this procedure
+turns on keeping them apart. The namespace says which Topics it has numbered and
+what each number is; a Topic's published `shortName` says what that Topic
+stores. A run that writes the first and does not get the second is the
+half-finished state below. "Which read answers what" gives each question its
+command. `deno task cf cell get /top/<n> title` answers from the namespace
+alone, because a member's address is the namespace's and not the Topic's.
 
 **What a clone rehearsal of the whole procedure showed** is recorded in
 `docs/history/plans/topics-numbering-rehearsal-2026-09-22.md`, and the earlier
@@ -115,14 +112,14 @@ this against a space holding real data.
    the number lives in the Topic's own input, and a Topic that declares no such
    input has nowhere to put one.
 
-3. **`backfillNames` once, then the audit.** It numbers every Topic the
-   namespace does not hold, in filing order, and asks every Topic reporting no
-   number to store the one the namespace holds for it. Over Topics that all
-   report their numbers it writes no key and sends no event — which, while
-   numbers are hidden, is no Topic at all. While they are hidden its report
-   cannot say which asking landed, so follow the one run with the per-Topic
-   audit in "Telling when it is done", and repair only the Topics that audit
-   finds missing. "What a re-run writes" below says what a run costs.
+3. **`backfillNames` until `pending` comes back empty.** It numbers every Topic
+   the namespace does not hold, in filing order, and asks every Topic reporting
+   no number to store the one the namespace holds for it. Over Topics that all
+   report their numbers it writes no key and sends no event. A run cannot
+   confirm an asking it just made, so the run after it is what reports whichever
+   asking landed; a Topic that stays in `pending` across runs is one to repair
+   directly, as "Telling when it is done" says. "What a re-run writes" below
+   says what a run costs.
 
 ### The command
 
@@ -206,31 +203,24 @@ The report is three lists of numbers in filing order:
 - `pending` — the Topics this run asked. None of them is confirmed, because a
   send's effect is invisible to the transaction that makes it.
 
-Once numbers are shown, an empty `pending` is the finished state, and a
-non-empty one is a reason to run the step again rather than a failure: the run
-after it reports whichever asking landed under `named` and asks for the rest.
-While they are hidden, `pending` never empties, so it is no reason to run again;
-the audit in "Telling when it is done" is.
-
-**While numbers are hidden, only `assigned` means anything.** The step reads a
-Topic's published `shortName` to tell a stored number from none, and
-`SHOW_TOPIC_NUMBERS` gates exactly that, so every Topic reads as storing nothing
-however much it holds: `named` comes back empty and `pending` comes back holding
-every Topic on the board, run after run. What it cannot do is tell you it is
-done.
+An empty `pending` is the finished state, and a non-empty one is a reason to run
+the step again rather than a failure: the run after it reports whichever asking
+landed under `named` and asks for the rest. The step reads a Topic's published
+`shortName` to tell a stored number from none, which is why `named` and
+`pending` mean what they say.
 
 ### Telling when it is done
 
-While numbers are hidden, the step is finished when every Topic's own input
-stores a number, and only a read per Topic answers that. Read each one through
-the CLI, over the Topics the survey plan names:
+The step is done when `pending` comes back empty over a board whose `assigned`
+is also empty: every listed Topic is numbered in the namespace and publishes the
+number held for it. The bounded board-wide read shows the same thing per Topic:
 
 ```bash
-deno task cf cell get --cell "$TOPIC" shortName --input
+deno task cf cell get "$TOPICS_BOARD" index --step --select @,title,shortName
 ```
 
-A Topic can come back without one after a run, and another run of the step does
-not necessarily reach it: in the rehearsal recorded in
+A Topic can stay in `pending` across runs, and another run of the step does not
+necessarily reach it: in the rehearsal recorded in
 `docs/history/plans/topics-numbering-rehearsal-2026-09-22.md`, the same Topic
 missed in both passes and a second run changed nothing for it. So store its
 number directly. The numbers the namespace holds that no Topic reported storing
@@ -260,22 +250,22 @@ count to trust.
 ### What a re-run writes
 
 A re-run is safe. It is not idle, and on a board the size of the deployed one
-the difference matters, because `pending` holding every Topic means every run
-asks every Topic again. Per case:
+the difference is worth knowing per case:
 
 - **The asking itself is a write.** A send is an ordinary write to the target's
   stream — `Cell.send` in `packages/runner/src/cell.ts` delegates to `set` — and
   every send in one run lands in the board's own transaction. So a run over a
-  board of 125 Topics stages 125 writes, whatever the handlings then decide.
-  That cost is per run and does not fall as Topics store their numbers, because
-  the step cannot see that they have. A handling per Topic is the rest of it,
-  but only where the Topic's source declares the stream: one that does not takes
-  the last case below and dispatches nothing.
-- **A Topic that already stores its number writes nothing further.**
-  `recordName` compares the number asked for against its own input — which no
-  switch gates — and returns before `upgradeTopicState` and before the write.
-  This is the case "safe to repeat" is true of, and while numbers are hidden it
-  is most of the board after the first run.
+  board of 125 Topics none of which publishes a number stages 125 writes,
+  whatever the handlings then decide. That cost falls as Topics come to publish
+  their numbers, because the step sends to a Topic it can see storing one at
+  all. A handling per Topic is the rest of it, but only where the Topic's source
+  declares the stream: one that does not takes the last case below and
+  dispatches nothing.
+- **A Topic the step still asks, and that already stores its number, writes
+  nothing further.** `recordName` compares the number asked for against its own
+  input and returns before `upgradeTopicState` and before the write. That is the
+  case "safe to repeat" is true of, and it covers a Topic whose store landed
+  after the run that read it.
 - **A Topic whose write did not land writes now.** That is what a re-run is for:
   the obstruction cleared, the asking arrives again, and the number is stored. A
   run is idle only over a board where nothing is outstanding.
@@ -299,12 +289,12 @@ and one logged failure per Topic in a state the verb refuses. After step 2 that
 is a handling for every Topic, which is the shape to plan for. None of it
 corrupts anything, and none of it is free.
 
-Until the switch is on, read three things instead of `pending`:
+Two reads stand beside the step's own report, and neither is board-wide:
 
-- **`assigned` empty** means every listed Topic is numbered in `names`. That is
-  the whole of the namespace half, and it is what `top/<n>` resolves through.
-- **One Topic's stored number** comes from its own durable input, which no
-  switch gates: `deno task cf cell get --cell "$TOPIC" shortName --input`.
+- **One Topic's stored number** comes from its own durable input:
+  `deno task cf cell get --cell "$TOPIC" shortName --input`. That is the value
+  the Topic publishes from, so it tells a stored number from an unpublished one
+  where the two could differ.
 - **`recordName` called on one Topic reports that Topic**: `wrote: true` the
   first time, `wrote: false` once the number is stored. The board route cannot
   report per Topic, because a verb's result reaches its caller and the board
@@ -312,19 +302,15 @@ Until the switch is on, read three things instead of `pending`:
   for a boardful it is one command each, which is what the board route exists to
   avoid.
 
-Turning `SHOW_TOPIC_NUMBERS` on restores the report by itself. Nothing else
-about the step changes with it.
-
-**A number that comes back under `pending` on every run is not waiting for a
-retry** — once numbers are shown, when `pending` means something again. That
-Topic's own verb is refusing the number, which `recordName` does when the Topic
-already stores a different one. The way a Topic comes to store one the namespace
-disagrees with is a direct `recordName` call carrying a number the board did not
-allocate: the verb takes any well-formed member name, because a Topic holds no
-namespace to check against, so the check belongs to whoever calls it. Read its
-stored number, decide which number that Topic is to keep, and reconcile by hand;
-nothing in the board resolves it, and each run costs one refused handler
-transaction.
+**A number that comes back under `pending` on every run may not be waiting for a
+retry.** That Topic's own verb may be refusing the number, which `recordName`
+does when the Topic already stores a different one. The way a Topic comes to
+store one the namespace disagrees with is a direct `recordName` call carrying a
+number the board did not allocate: the verb takes any well-formed member name,
+because a Topic holds no namespace to check against, so the check belongs to
+whoever calls it. Read its stored number, decide which number that Topic is to
+keep, and reconcile by hand; nothing in the board resolves it, and each run
+costs one refused handler transaction.
 
 ### What a half-finished Topic looks like, and what it costs
 
@@ -365,14 +351,14 @@ which the verb works. It is untidy rather than damaging, and step 2 before step
 **What an operator sees**, in the order they would look:
 
 ```bash
-# the step's own report, run after run. While numbers are hidden it reads every
-# Topic as storing nothing, so `named` is empty and `pending` holds them all:
-# what moves between runs is `assigned`.
+# the step's own report. Both Topics here are half-finished — numbered in the
+# namespace, storing nothing — so both come back under `pending` and neither
+# under `named`.
 deno task cf piece call --cell "$TOPICS_BOARD" --invocation '<id>' backfillNames \
   '{"agentName":"Sol"}'
 # -> { "assigned": [], "named": [], "pending": ["1","2"] }
 
-# what Topic 2 actually stores, which no switch gates
+# what Topic 2 actually stores
 deno task cf cell get --cell "$TOPIC2" shortName --input
 # -> fails, exit 1: Cannot access path "shortName" - property "shortName" not
 #    found. Available keys: ...   (a Topic that has not stored one)
@@ -389,53 +375,41 @@ reach ("Telling when it is done"). Nothing has to be undone.
 
 ### Which read answers what
 
-Every read below is named somewhere in this procedure, and they do not all
-survive `SHOW_TOPIC_NUMBERS` being off. The switch gates a Topic's PUBLISHED
-`shortName`, so every read that goes through the publication reads the same
-absence for a Topic storing a number and one storing none. The reads that go
-through the namespace, or through a Topic's own durable input, are untouched by
-it.
+Every read below is named somewhere in this procedure. Which half of the
+question each one answers is what tells them apart: the namespace says what the
+board has allocated, and a Topic's `shortName` says what that Topic holds.
 
-| Read                            | Numbers hidden                                                                                       | Numbers shown                     |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `backfillNames` → `assigned`    | what this run wrote into the namespace                                                               | the same                          |
-| `backfillNames` → `named`       | always empty                                                                                         | the Topics already storing theirs |
-| `backfillNames` → `pending`     | every listed Topic, every run                                                                        | the Topics this run asked         |
-| board `index` row's `shortName` | absent for every Topic                                                                               | the number that Topic stores      |
-| board `names` map               | which Topics the namespace has numbered, and what each number is — never whether the Topic stores it | the same                          |
-| Topic's `shortName` input       | the number that Topic stores                                                                         | the same                          |
-| `recordName` on one Topic       | a write, not a read: the repair, whose `wrote` says whether it had to                                | the same                          |
-| `//<space>/top/<n>`             | resolves to the Topic                                                                                | the same                          |
+| Read                            | What it answers                                                                              |
+| ------------------------------- | -------------------------------------------------------------------------------------------- |
+| `backfillNames` → `assigned`    | what this run wrote into the namespace                                                       |
+| `backfillNames` → `named`       | the Topics already storing theirs, which this run sent nothing                               |
+| `backfillNames` → `pending`     | the Topics this run asked, none of them confirmed                                            |
+| board `index` row's `shortName` | the number that Topic stores                                                                 |
+| board `names` map               | which Topics the namespace has numbered, and what each number is — never what a Topic stores |
+| Topic's `shortName` input       | the number that Topic stores, as the durable value it publishes from                         |
+| `recordName` on one Topic       | a write, not a read: the repair, whose `wrote` says whether it had to                        |
+| `//<space>/top/<n>`             | resolves to the Topic                                                                        |
 
-So while numbers are hidden, **the board's index answers nothing about storage**
-— it is the read to skip, not the survey — and there is no board-wide read of
-what Topics store. The read that works is one per Topic:
+The board's index is the one bounded read that answers both halves at once,
+because a row IS its Topic and a row's `shortName` is the number that Topic
+stores:
 
 ```bash
-# what this Topic stores. No switch gates the durable input.
-deno task cf cell get --cell "$TOPIC" shortName --input
+deno task cf cell get "$TOPICS_BOARD" index --step --select @,title,shortName
 ```
 
-`recordName` also answers the question, but it is a mutation, not a read: on a
-Topic storing no number it writes the one it is handed. Use it only as the
-repair in "Telling when it is done", with its invocation id and the read-back
-that confirms it.
-
-Board-wide, the namespace is what can be surveyed, and it answers the other half
-of the question:
+The namespace is what to survey for the other half on its own, where the
+question is what the board has allocated rather than what a Topic holds:
 
 ```bash
 deno task cf cell get "$TOPICS_BOARD" names
 # -> { "1": {}, "2": {} }   the Topics the namespace has numbered
 ```
 
-Once numbers are shown, the board's index becomes the one bounded read that
-answers both halves at once, because a row's `shortName` is then the number its
-Topic stores:
-
-```bash
-deno task cf cell get "$TOPICS_BOARD" index --step --select @,title,shortName
-```
+`recordName` also answers the per-Topic question, but it is a mutation, not a
+read: on a Topic storing no number it writes the one it is handed. Use it only
+as the repair in "Telling when it is done", with its invocation id and the
+read-back that confirms it.
 
 Audit only Topics whose source has already been migrated. Every targeted use of
 an input path goes through one guard — `assertPieceInputPath` in

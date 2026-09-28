@@ -251,17 +251,16 @@ passes it into the topic it creates, in the same transaction as the append; each
 topic stores that number and publishes it as `shortName`, reading nothing of its
 board to report it; and `backfillNames` numbers what the board held before it
 numbered anything, asking each such topic to store its number through the
-topic's own `recordName`. No topic's number is SHOWN for now:
-`SHOW_TOPIC_NUMBERS` in `topic.tsx` is off while only some topics have one, so a
-topic publishes no `shortName` and every surface that would show one reads
-nothing; the numbers are stored and recorded either way. Topics reference each
-other by CELL: the board derives the whole graph once by scanning what each
-topic points at with `equals`, and each topic reads its own inbound edges out of
-that pivot. Demonstrates: reading-list-style piece-in-list composition,
-profile-native browser authorship on a shared piece, mergeable comment appends,
-session-scoped drafts, bounding a whole-list derivation with a narrow declared
-`lift` parameter, passing topics through a sort so an activity-ordered list
-keeps the identity its elements already have, `multiUserTest` coverage.
+topic's own `recordName`. Every surface that shows a number reads the one a
+topic publishes — the header badge, the card, the survey row, and the mention
+universe row a `#42` query matches. Topics reference each other by CELL: the
+board derives the whole graph once by scanning what each topic points at with
+`equals`, and each topic reads its own inbound edges out of that pivot.
+Demonstrates: reading-list-style piece-in-list composition, profile-native
+browser authorship on a shared piece, mergeable comment appends, session-scoped
+drafts, bounding a whole-list derivation with a narrow declared `lift`
+parameter, passing topics through a sort so an activity-ordered list keeps the
+identity its elements already have, `multiUserTest` coverage.
 
 **Keywords:** topics, issues, tracker, discussion, thread, comments, multi-user,
 profile, mergeable, index, discovery, bounded read, row identity, references,
@@ -315,12 +314,11 @@ interface TopicsOutput {
 A single #topic piece: the durable object the tracker's list holds. Body edits
 go through an explicit Edit→Save toggle (one whole-value `set` per save keeps
 the concurrent-edit window small); comments and links are mergeable appends.
-Stores the number its board calls it by as its own input, and publishes it as
-`shortName` while `SHOW_TOPIC_NUMBERS` is on, rendering it as a badge beside the
-title; the constant is off for now, so a topic stores its number and shows none.
-A topic nobody has numbered stores none either way. `recordName` is how a number
-reaches a topic the board did not pass one to at create. Use from
-`topics/main.tsx` via `navigateTo()`, or standalone.
+Stores the number its board calls it by as its own input and publishes it as
+`shortName`, rendering it as a badge beside the title. A topic nobody has
+numbered stores none and publishes none. `recordName` is how a number reaches a
+topic the board did not pass one to at create. Use from `topics/main.tsx` via
+`navigateTo()`, or standalone.
 
 **Keywords:** topic, detail, thread, comment, links, body, navigateTo,
 shortName, member name, badge

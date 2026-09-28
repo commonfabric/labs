@@ -7,25 +7,22 @@ The board gives each Topic a name of its own: a decimal number, dense from `1`,
 allocated when the Topic is filed and never reused. It is not a display name — a
 Topic's display name stays its title.
 
-The board shows no Topic's number for now. `SHOW_TOPIC_NUMBERS` in
-`packages/patterns/topics/topic.tsx` is off while only some Topics have one, and
-a Topic then publishes no `shortName` at all — which is what leaves every
-surface reading it blank: no header or board card badge, no number on a mention
-pill, and nothing offered for `#42` in a Topic's body editor. The numbers
-themselves are unaffected: allocated, recorded, stored by the Topic, and
-resolvable as below. Wherever numbers are shown, one renders as a badge beside
-its Topic's title, out of the number the Topic stores and publishes as
-`shortName`, which the board's `index` rows carry.
+A Topic publishes the number it stores, as `shortName`, and every surface that
+shows one reads that one property: the header and board card badges, the number
+on a mention pill, and what `#42` offers in a Topic's body editor. It renders as
+a badge beside the Topic's title, and the board's `index` rows carry it. A Topic
+nobody has numbered publishes none, and each of those surfaces reads nothing for
+it.
 
 `addTopic` allocates the number, passes it into the Topic it creates, and
 returns it as `name` beside the created `topic`. For the Topics already on the
 board, the namespace is what to read: the board's `namesTable` holds one row per
 Topic the NAMESPACE has numbered, carrying `name` and the Topic itself as
 `member`, and `names` holds the same pairing as a map from number to Topic.
-Neither says whether that Topic stores its number; that is a separate question
-and a separate read. One Topic's own stored number is read from its durable
-input, `cf cell get --cell "$TOPIC" shortName --input`, which the display switch
-does not gate.
+Neither says whether that Topic stores its number; that is the Topic's own
+record, and a separate read: `cf cell get --cell "$TOPIC" shortName` reads what
+the Topic publishes, and the same command with `--input` reads the durable value
+it publishes from.
 
 ```bash
 deno task cf cell get --cell "$TOPICS_BOARD" namesTable --step
