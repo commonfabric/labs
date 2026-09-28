@@ -1,5 +1,13 @@
 import { assertEquals } from "@std/assert";
 import { describe, it } from "@std/testing/bdd";
+import {
+  ARRAY_SUBSCHEMA_KEYS,
+  DEFS_KEYS,
+  RECORD_SUBSCHEMA_KEYS,
+  SINGLE_SUBSCHEMA_KEYS,
+  UNUSED_RECORD_SUBSCHEMA_KEYS,
+  UNUSED_SINGLE_SUBSCHEMA_KEYS,
+} from "@commonfabric/data-model-schema/schema-walk";
 import { Ajv } from "ajv";
 import { normalizeSchemaForProvider } from "./schema.ts";
 
@@ -92,61 +100,71 @@ describe("normalizeSchemaForProvider", () => {
     );
   });
 
-  it("keeps the other types of a type array that includes `unknown`", () => {
+  it("leaves out the type of a type array that includes `unknown`", () => {
+    // `unknown` admits every value, and the route validates the model's answer
+    // against the normalized schema, so keeping a concrete type beside it
+    // would refuse an answer the runtime accepts.
+
     assertEquals(
       normalizeSchemaForProvider({ type: ["unknown", "string"] }),
-      { type: "string" },
-    );
-    assertEquals(
-      normalizeSchemaForProvider({ type: ["unknown", "string", "number"] }),
-      { type: ["string", "number"] },
+      {},
     );
     assertEquals(
       normalizeSchemaForProvider({ type: ["unknown", "undefined"] }),
       {},
     );
+    const validate = new Ajv({ allErrors: true, strict: false }).compile(
+      normalizeSchemaForProvider({
+        type: "object",
+        properties: { value: { type: ["unknown", "string"] } },
+        required: ["value"],
+      }) as Record<string, unknown>,
+    );
+    assertEquals(validate({ value: 42 }), true);
   });
 
-  it("normalizes the schemas inside every keyword that holds schemas", () => {
-    assertEquals(
-      normalizeSchemaForProvider({
-        type: "object",
-        additionalProperties: { type: "unknown" },
-        patternProperties: { "^x-": { type: "unknown" } },
-        propertyNames: { type: ["unknown", "string"] },
-        $defs: { Anything: { type: "unknown" } },
-        dependentSchemas: { a: { type: "unknown" } },
-        allOf: [{ type: "unknown" }],
-        oneOf: [{ type: "undefined" }, { type: "unknown" }],
-        not: { type: "unknown" },
-        if: { type: "unknown" },
-        then: { type: "unknown" },
-        else: { type: "unknown" },
-      }),
-      {
-        type: "object",
-        additionalProperties: {},
-        patternProperties: { "^x-": {} },
-        propertyNames: { type: "string" },
-        $defs: { Anything: {} },
-        dependentSchemas: { a: {} },
-        allOf: [{}],
-        oneOf: [{}],
-        not: {},
-        if: {},
-        then: {},
-        else: {},
-      },
-    );
-    assertEquals(
-      normalizeSchemaForProvider({
-        type: "array",
-        items: { type: "unknown" },
-        prefixItems: [{ type: "unknown" }],
-        contains: { type: "unknown" },
-      }),
-      { type: "array", items: {}, prefixItems: [{}], contains: {} },
-    );
+  it("normalizes the schemas under every keyword that holds them", () => {
+    // The central registry's keywords, and the spellings before 2019 that a
+    // validator still reads.
+
+    const unknownType = { type: "unknown" };
+    for (
+      const key of [
+        ...SINGLE_SUBSCHEMA_KEYS,
+        ...UNUSED_SINGLE_SUBSCHEMA_KEYS,
+        "additionalItems",
+      ]
+    ) {
+      assertEquals(
+        normalizeSchemaForProvider({ [key]: unknownType }),
+        { [key]: {} },
+        key,
+      );
+    }
+    for (const key of [...ARRAY_SUBSCHEMA_KEYS, "items"]) {
+      assertEquals(
+        normalizeSchemaForProvider({
+          [key]: [unknownType, { type: "string" }],
+        }),
+        { [key]: [{}, { type: "string" }] },
+        key,
+      );
+    }
+    for (
+      const key of [
+        ...RECORD_SUBSCHEMA_KEYS,
+        ...UNUSED_RECORD_SUBSCHEMA_KEYS,
+        ...DEFS_KEYS,
+        "definitions",
+        "dependencies",
+      ]
+    ) {
+      assertEquals(
+        normalizeSchemaForProvider({ [key]: { a: unknownType } }),
+        { [key]: { a: {} } },
+        key,
+      );
+    }
   });
 
   it("returns `const`, `enum`, `default`, and `examples` values as written", () => {

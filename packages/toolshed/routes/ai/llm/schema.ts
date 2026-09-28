@@ -1,33 +1,35 @@
+import {
+  ARRAY_SUBSCHEMA_KEYS,
+  DEFS_KEYS,
+  RECORD_SUBSCHEMA_KEYS,
+  SINGLE_SUBSCHEMA_KEYS,
+  UNUSED_RECORD_SUBSCHEMA_KEYS,
+  UNUSED_SINGLE_SUBSCHEMA_KEYS,
+} from "@commonfabric/data-model-schema/schema-walk";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 const OMIT_SCHEMA = Symbol("omit-schema");
 
 // The keywords whose value is a schema, a list of schemas, or a map of names to
-// schemas. Only these are walked. Every other keyword's value is data (a
-// `const`, an `enum` entry, a `default`) and passes through as written, however
-// much it looks like a schema. `anyOf`, `properties`, and `required` are
-// handled on their own.
-const SCHEMA_KEYWORDS = new Set([
+// schemas: every keyword in the central registry, emitted or not, and the
+// spellings before 2019 that a provider's validator still reads. Only these are
+// walked. Every other keyword's value is data (a `const`, an `enum` entry, a
+// `default`) and passes through as written, however much it looks like a
+// schema. `anyOf`, `properties`, and `required` are handled on their own.
+const SCHEMA_KEYWORDS: ReadonlySet<string> = new Set([
+  ...SINGLE_SUBSCHEMA_KEYS,
+  ...UNUSED_SINGLE_SUBSCHEMA_KEYS,
   "additionalItems",
-  "additionalProperties",
-  "contains",
-  "contentSchema",
-  "else",
-  "if",
-  "items",
-  "not",
-  "propertyNames",
-  "then",
-  "unevaluatedItems",
-  "unevaluatedProperties",
 ]);
-const SCHEMA_LIST_KEYWORDS = new Set(["allOf", "oneOf", "prefixItems"]);
-const SCHEMA_MAP_KEYWORDS = new Set([
-  "$defs",
+const SCHEMA_LIST_KEYWORDS: ReadonlySet<string> = new Set(
+  ARRAY_SUBSCHEMA_KEYS,
+);
+const SCHEMA_MAP_KEYWORDS: ReadonlySet<string> = new Set([
+  ...RECORD_SUBSCHEMA_KEYS,
+  ...UNUSED_RECORD_SUBSCHEMA_KEYS,
+  ...DEFS_KEYS,
   "definitions",
   "dependencies",
-  "dependentSchemas",
-  "patternProperties",
 ]);
 
 function normalizeSchemaList(schemas: readonly unknown[]): unknown[] {
@@ -73,19 +75,21 @@ function normalizeSchemaNode(schema: unknown): unknown {
   }
 
   // The runtime adds two types JSON Schema does not have. `"undefined"` has no
-  // JSON value. `"unknown"` marks a position the runtime reads as a reference
-  // rather than descending into, so the model may put any JSON value there.
-  // Both are left out; a concrete type beside them is what the reader asks
-  // for, and it stays.
+  // JSON value, so it is left out of a type array. `"unknown"` marks a position
+  // the runtime reads as a reference rather than descending into, and it
+  // admits every value, so a type that includes it constrains nothing and is
+  // left out whole: the route validates the model's answer against this
+  // schema, and a concrete type kept beside `unknown` would refuse an answer
+  // the runtime accepts.
   const typeValue = schema.type;
   if (Array.isArray(typeValue)) {
-    const jsonTypes = typeValue.filter((item) =>
-      item !== "undefined" && item !== "unknown"
-    );
-    if (jsonTypes.length === 1) {
-      out.type = jsonTypes[0];
-    } else if (jsonTypes.length > 1) {
-      out.type = jsonTypes;
+    if (!typeValue.includes("unknown")) {
+      const jsonTypes = typeValue.filter((item) => item !== "undefined");
+      if (jsonTypes.length === 1) {
+        out.type = jsonTypes[0];
+      } else if (jsonTypes.length > 1) {
+        out.type = jsonTypes;
+      }
     }
   } else if (typeValue !== undefined && typeValue !== "unknown") {
     out.type = typeValue;
