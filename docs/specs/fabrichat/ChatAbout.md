@@ -28,8 +28,19 @@ interface ChatAbout {
 - **`title`** is only for group rooms. A client shows a direct room by its other
   member, read from that member's profile ([`ChatProfile.md`](ChatProfile.md)),
   so it follows changes to the member's name.
-- **`createdAt`** comes from the creating handler's clock, at its one-second
-  resolution.
+- **`createdAt`** comes from the handler clock, at whatever resolution the
+  system provides (see the [timing side-channel
+  mitigations](../sandboxing/TIMING_SIDE_CHANNELS.md)).
 
 A space's own chat (see [shared spaces](README.md#shared-spaces)) is a group
 room with no title, and a client shows it by the space's own name.
+
+## Future directions
+
+Not part of this design, and not planned yet:
+
+- **A rich-text title.** A group room's `title` could be rich text rather than
+  plain text, in the same format as rich-text message bodies (see
+  [`ChatMessage`](ChatMessage.md#future-directions)) and under the same
+  constraint: it renders the same way in every client, so every member sees the
+  title that was set.

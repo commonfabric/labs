@@ -143,7 +143,8 @@ Sends a message from the viewer.
 
 - **Admitted:** as a trusted gesture on `ChatSendSurface`.
 - **Effect:** appends a [`ChatMessage`](ChatMessage.md) to `messages`, with the
-  viewer's profile as `authorProfile` and the handler's clock as `sentAt`.
+  viewer's profile as `authorProfile` and the send event's time as `sentAt` (see
+  [`ChatMessage`](ChatMessage.md#fields)).
 - **Refused:** an empty or whitespace-only `body`, a `replyTo` whose `message`
   is in another room, a `shownIn` other than `"main"`, `"thread"`, or `"both"`,
   or a `"main"` reply to a message shown only in a thread.

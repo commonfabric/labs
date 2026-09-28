@@ -14,8 +14,8 @@ interface ChatMessage {
   body: string;
 
   /**
-   * When the message was sent, in milliseconds since the epoch, at the
-   * one-second resolution a handler's clock has.
+   * When the message was sent, in milliseconds since the epoch, at whatever
+   * resolution the system's handler clock provides.
    */
   sentAt: number;
 
@@ -40,7 +40,11 @@ it only through the room's `sendMessage` stream, as a trusted gesture on
   represents.
 - **`body`** is the text, as the person saw it when they sent it. It is never
   empty.
-- **`sentAt`** comes from the sending handler's clock.
+- **`sentAt`** is the time of the send event: when the person sent the message,
+  not when the room processed it. It comes from the handler clock, whose
+  resolution is the system's to set (see the [timing side-channel
+  mitigations](../sandboxing/TIMING_SIDE_CHANNELS.md)). A client MUST NOT assume
+  a finer resolution.
 - **`replyTo`** is a [`ChatReply`](ChatReply.md): the message this one replies
   to, in the same room, and whether the reply is shown in the main conversation,
   in a thread, or both. Threads, and which messages the main conversation shows,
@@ -61,7 +65,9 @@ shape above doesn't close them off.
 
 - **Rich text.** A body with formatting, rather than plain text. The format has
   to render the same way in every client, since the rule that a person sends
-  exactly what they saw applies to the formatting as much as to the words.
+  exactly what they saw applies to the formatting as much as to the words. A
+  room's title could use the same format (see
+  [`ChatAbout`](ChatAbout.md#future-directions)).
 - **Attachments.** Images and other media sent with a message. An attachment
   would be linked rather than copied into the message, so it keeps its own label
   and is read under the reader's own access, as profiles are.

@@ -32,6 +32,8 @@ interface ChatIndexEntry {
   member, which is the key `direct` is indexed by. It is a principal and not a
   profile, because a person can have several profiles, and one conversation with
   a person must not split along them.
-- **`since`** comes from the manager's handler clock.
+- **`since`** comes from the manager's handler clock, at whatever resolution the
+  system provides (see the [timing side-channel
+  mitigations](../sandboxing/TIMING_SIDE_CHANNELS.md)).
 
 An entry is private to its user, like everything in the home space.
