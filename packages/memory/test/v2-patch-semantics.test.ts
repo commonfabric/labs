@@ -15,7 +15,7 @@ const RECORDED_VERSION = 1;
  * `RECORDED_VERSION` moved to it.
  */
 const RELEASED_FINGERPRINTS: Record<number, string> = {
-  1: "ka7-QdTsOLc_ogs444QLoQKFUEXsQbkzoVribprUakA",
+  1: "4EddKHZB6mwZiPB9zBYvQRsKnd39EyR_5cfj7yYs4EQ",
 };
 
 /** Builds a link record, its keys in one order or the other. */
@@ -27,6 +27,12 @@ const link = (order: "id-first" | "space-first") =>
 /** Builds the bytes `[1, 2]`, a fresh instance each time. */
 const bytes = () => new FabricBytes(new Uint8Array([1, 2]));
 
+/** Returns `values` with a hole at `index`. */
+const holey = (values: unknown[], index: number): unknown[] => {
+  delete values[index];
+  return values;
+};
+
 /**
  * What applying each list of operations to its base produces at
  * {@link RECORDED_VERSION}, through `applyPatchToDocument()`, the entry point a
@@ -34,7 +40,9 @@ const bytes = () => new FabricBytes(new Uint8Array([1, 2]));
  * memory boundary encodes it — keys in canonical order, `-0` and `NaN` written
  * out — or `PatchApplyError` for a list the patch refuses. Every operation kind
  * appears, and so do the equalities `add-unique` and `remove-by-value` decide
- * with `valueEqual()`. Comparing encodings ties the record to the codec as
+ * with `valueEqual()`, among a few values and again among many, since how an
+ * implementation finds an equal value may differ with how many it is looking
+ * for. Comparing encodings ties the record to the codec as
  * well, which is right: a client replays the operations it holds in memory,
  * and the server applies the ones it decoded.
  */
@@ -269,6 +277,32 @@ const CASES: Array<{
     base: { a: [bytes(), 3] },
     ops: [{ op: "remove-by-value", path: "/a", value: bytes() }],
     result: 'fvj1:{"a":[3]}',
+  },
+  {
+    name: "add-unique each equality among many values",
+    base: { a: [0, NaN, { x: 1, y: 2 }, link("id-first"), bytes(), "�"] },
+    ops: [{
+      op: "add-unique",
+      path: "/a",
+      values: [
+        -0,
+        NaN,
+        { y: 2, x: 1 },
+        link("space-first"),
+        bytes(),
+        "\uD800",
+        "\uD800",
+        ...Array.from({ length: 13 }, (_, index) => index + 1),
+      ],
+    }],
+    result:
+      'fvj1:{"a":[0,{"/SpecialNumber@1":"NaN"},{"x":1,"y":2},{"/quote":{"/":{"link@1":{"id":"of:x","path":[],"space":"did:key:x"}}}},{"/Bytes@1":"AQI"},"�",{"/SpecialNumber@1":"-0"},"\\ud800",1,2,3,4,5,6,7,8,9,10,11,12,13]}',
+  },
+  {
+    name: "remove-by-value around a hole",
+    base: { a: holey([1, 2, 2, 1], 1) },
+    ops: [{ op: "remove-by-value", path: "/a", value: 1 }],
+    result: 'fvj1:{"a":[{"/hole":1},2]}',
   },
   {
     name: "several operations in order",
