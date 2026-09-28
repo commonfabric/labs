@@ -11,6 +11,7 @@ import {
   seededOrder,
   type Selection,
   type SelectionReason,
+  suiteLoad,
 } from "./plan.ts";
 import type { Calibration, Manifest, ManifestEntry } from "./manifest.ts";
 import type { WithheldReason } from "@commonfabric/test-support/records";
@@ -541,6 +542,7 @@ describe("plan", () => {
         "runner-unit": { overhead: 10, correction: 1, unitOverhead: 5 },
         "cli-deno": { overhead: 0, correction: 1, unitOverhead: 0 },
         "cli-core": { overhead: 0, correction: 1, unitOverhead: 0 },
+        "pattern-unit": { overhead: 0, correction: 0.8, unitOverhead: 0 },
       },
       prologue: 0,
     };
@@ -605,6 +607,109 @@ describe("plan", () => {
       expect(
         strangers.filter((s) => chosen.get(s.test.n) === "density").length,
       ).toBe(1);
+    });
+
+    it("moves a suite's shorter tests up once its lane holds a longer one", () => {
+      // The pattern unit suite runs its tests side by side. A mandatory
+      // test puts it in the lane, so taking the long test opens nothing
+      // but its own file. The long test is the densest there is, and
+      // costs the lane 13.9 of the 25.4 seconds the density pass has. The
+      // short test alone would cost nine, and the stranger costs eight,
+      // so the stranger is denser to start with. Once the long test is
+      // in, the short one's own time fits under it and it costs 4.48,
+      // which is denser than the stranger. There is room for one of the
+      // two.
+      const pattern = (name: string, cost: number, score = 0.05) =>
+        test(name, `${name}.test.tsx`, { suite: "pattern-unit", cost, score });
+      const tiny = pattern("tiny", 0.1);
+      const chosen = reasons(packed(
+        [
+          tiny,
+          pattern("long", 14, 0.5),
+          pattern("short", 9),
+          test("stranger", "open.test.ts", { cost: 8 }),
+        ],
+        {
+          mandatory: new Map([
+            ...opened,
+            [testIdentityKey(tiny.test), "changed" as const],
+          ]),
+        },
+      ));
+      expect(chosen.get("long")).toBe("density");
+      expect(chosen.get("short")).toBe("density");
+      expect(chosen.get("stranger")).not.toBe("density");
+    });
+
+    it("moves a long test of a suite up as its lane's share of the suite grows", () => {
+      // The long test's own time is more than the suite's loads in the
+      // lane come to, so it is charged what its own time adds past them,
+      // and that falls with every short test the lane takes. The three
+      // short tests are the densest there are. After them the long test
+      // costs 16 seconds, and is denser than the stranger at 7.5; after
+      // only the first, it cost 18 and was not. The density pass has 20.6
+      // seconds left, which holds one of the two.
+      const pattern = (name: string, cost: number, score = 0.05) =>
+        test(name, `${name}.test.tsx`, { suite: "pattern-unit", cost, score });
+      const tiny = pattern("tiny", 0.1);
+      const chosen = reasons(packed(
+        [
+          tiny,
+          pattern("short 1", 2, 0.5),
+          pattern("short 2", 2, 0.5),
+          pattern("short 3", 2, 0.5),
+          pattern("long", 20, 0.115),
+          test("stranger", "open.test.ts", { cost: 7.5 }),
+        ],
+        {
+          mandatory: new Map([
+            ...opened,
+            [testIdentityKey(tiny.test), "changed" as const],
+          ]),
+        },
+      ));
+      expect(chosen.get("short 3")).toBe("density");
+      expect(chosen.get("long")).toBe("density");
+      expect(chosen.get("stranger")).not.toBe("density");
+    });
+
+    it("moves a suite's long tests up once its longest unit sets the lane's charge", () => {
+      // One lane of 24 seconds, and a suite running its units side by side
+      // at a correction of a quarter. The value pass takes the files of
+      // 10, 5 and 11 seconds, so the lane is charged the 11 its longest
+      // unit takes. The density pass then takes the 18-second file for
+      // 7 seconds, and the lane is charged 18. That leaves the 19-second
+      // file costing 1 and the 20-second file costing 2, where before
+      // they cost 8 and 9, and there is room for one of the two: the
+      // 19-second one, which is now the denser.
+      const file = (name: string, cost: number, score: number) =>
+        sampleEntry({ k: "pattern", s: "patterns", n: name }, {
+          suite: "pattern-unit",
+          unit: `${name}.test.tsx`,
+          cost,
+          score,
+        });
+      const manifest = sampleManifest({
+        entries: [
+          file("ten", 10, 0.131),
+          file("twenty", 20, 0.115),
+          file("five", 5, 0.118),
+          file("nineteen", 19, 0.075),
+          file("eighteen", 18, 0.097),
+          file("eleven", 11, 0.11),
+        ],
+        calibration: {
+          setupCost: {},
+          suites: {
+            "pattern-unit": { overhead: 0, correction: 0.25, unitOverhead: 0 },
+          },
+          prologue: 0,
+        },
+      });
+      const chosen = reasons(run(manifest, { lanes: 1, budgetSeconds: 24 }));
+      expect(chosen.get("eighteen")).toBe("density");
+      expect(chosen.get("nineteen")).toBe("density");
+      expect(chosen.get("twenty")).not.toBe("density");
     });
 
     it("charges a test the overhead of a suite its lane is not holding", () => {
@@ -1117,6 +1222,121 @@ describe("plan", () => {
       });
       const result = run(manifest, { lanes: 1 });
       expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(12, 6);
+    });
+
+    describe("a suite running its units side by side", () => {
+      // Its correction is well below one, because a batch of many units
+      // spends a fraction of what they take between them. A batch still
+      // does not finish before its longest unit has.
+
+      const sideBySide: Calibration = {
+        setupCost: {},
+        suites: {
+          "workspace-unit": { overhead: 0, correction: 0.4, unitOverhead: 0 },
+        },
+        prologue: 0,
+      };
+
+      it("charges a lane no less than its longest test takes", () => {
+        const manifest = sampleManifest({
+          entries: entries(3, (i) => ({ cost: i === 0 ? 100 : 1 })),
+          calibration: sideBySide,
+        });
+        const result = run(manifest, { lanes: 1, budgetSeconds: 200 });
+        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(100, 6);
+      });
+
+      it("charges a lane no less than the unit it holds most of takes", () => {
+        // A unit's tests follow one another, so three tests of one file
+        // take their three costs added together.
+        const manifest = sampleManifest({
+          entries: entries(3, () => ({
+            cost: 40,
+            unit: "packages/memory/test/one.test.ts",
+          })),
+          calibration: sideBySide,
+        });
+        const result = run(manifest, { lanes: 1, budgetSeconds: 200 });
+        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(120, 6);
+      });
+
+      it("charges a unit every test in it for each run its most repeated test asks for", () => {
+        // The runner runs the unit twice, with both tests each time, so it
+        // takes 40 seconds, where the two tests' own runs come to 30.
+        const manifest = sampleManifest({
+          entries: entries(2, (i) => ({
+            cost: 10,
+            repeats: i === 0 ? 2 : 1,
+            unit: "packages/memory/test/one.test.ts",
+          })),
+          calibration: sideBySide,
+        });
+        const result = run(manifest, {
+          lanes: 1,
+          budgetSeconds: 200,
+          mandatory: everything(manifest),
+        });
+        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(40, 6);
+      });
+
+      it("charges a lane the corrected sum where that is more", () => {
+        const manifest = sampleManifest({
+          entries: entries(10, () => ({ cost: 20 })),
+          calibration: sideBySide,
+        });
+        const result = run(manifest, { lanes: 1, budgetSeconds: 200 });
+        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(80, 6);
+      });
+
+      it("reads a lane's share the way the packer charged it", () => {
+        const manifest = sampleManifest({
+          entries: entries(
+            6,
+            (i) =>
+              i < 2
+                ? { cost: 40, unit: "packages/memory/test/one.test.ts" }
+                : { cost: 10 },
+          ),
+          calibration: sideBySide,
+        });
+        const result = run(manifest, { lanes: 1, budgetSeconds: 200 });
+        const selections = result.lanes[0]!.selections;
+        expect(selections.length).toBe(6);
+        expect(suiteLoad(manifest, selections)).toBeCloseTo(
+          result.lanes[0]!.projectedSeconds,
+          6,
+        );
+        expect(suiteLoad(manifest, selections)).toBeCloseTo(80, 6);
+        expect(suiteLoad(manifest, selections.slice(2))).toBeCloseTo(16, 6);
+      });
+
+      it("charges a lane every run of a repeated test in full", () => {
+        // The runs of one unit follow one another, so none of them is
+        // shared out among the rest of the batch.
+        const manifest = sampleManifest({
+          entries: entries(1, () => ({ cost: 50, repeats: 2 })),
+          calibration: sideBySide,
+        });
+        const result = run(manifest, {
+          lanes: 1,
+          budgetSeconds: 200,
+          mandatory: everything(manifest),
+        });
+        expect(result.lanes[0]!.selections[0]!.repeats).toBe(2);
+        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(100, 6);
+      });
+
+      it("reports a test no lane can hold on its own time rather than the corrected one", () => {
+        // Corrected, the test would cost the lane 160 seconds, well inside
+        // the bound. It takes 400.
+        const manifest = sampleManifest({
+          entries: entries(1, () => ({ cost: 400 })),
+          calibration: sideBySide,
+        });
+        const result = run(manifest, { lanes: 1, boundSeconds: 300 });
+        expect(result.unschedulable.map(({ cost }) => cost)).toEqual([400]);
+        expect(selected(result)).toEqual([]);
+      });
     });
 
     it("applies the suite's fitted correction to a measured cost", () => {

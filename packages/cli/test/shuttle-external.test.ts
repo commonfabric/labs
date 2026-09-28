@@ -59,33 +59,10 @@ describe("external", () => {
       expect(location.render()).toBe("file:///tmp/work/inner/");
     });
 
-    it("moves it with a plain absolute path, staying on the same plane", () => {
-      const location = at("https://example.test/a/b/");
-      location.xcd("/c");
-      expect(location.render()).toBe("https://example.test/c/");
-    });
-
-    it("moves it to another plane with a whole schemed path", () => {
-      const location = at("file:///tmp/");
-      location.xcd("https://example.test/a/b/");
-      expect(location.render()).toBe("https://example.test/a/b/");
-    });
-
-    it("takes a scheme a location is only held under, nothing opening one", () => {
-      const location = at("file:///tmp/");
-      expect(location.xcd("https://example.test/a/").kind).toBe("external");
-    });
-
     it("counts a path opening at the home directory as absolute", () => {
       const location = at("file:///tmp/");
       location.xcd("file:~/work");
       expect(location.render()).toBe(`file://${HOME}/work/`);
-    });
-
-    it("leaves a `~` alone on a plane that has no home", () => {
-      const location = at("https://example.test/a/");
-      location.xcd("~/work");
-      expect(location.render()).toBe("https://example.test/a/~/work/");
     });
 
     it("stays where it stands for an operand naming no path", () => {
@@ -122,16 +99,6 @@ describe("external", () => {
       expect(reason).not.toContain("absolute");
     });
 
-    it("refuses a relative token a URL plane cannot spell, and does not move", () => {
-      // A plane written in URLs reads a token as a URL reference, and `//a b`
-      // is an authority it cannot write. The same token on the file plane is
-      // an ordinary path and lands, which is the case below.
-
-      const location = at("https://example.test/a/");
-      expect(refusal(location.xcd("//a b/c"))).toContain("names no place");
-      expect(location.render()).toBe("https://example.test/a/");
-    });
-
     it("reads a token on the file plane as a path, not as a URL reference", () => {
       // A URL reads `#` as a fragment, `?` as a query and a leading blank as
       // nothing at all, and a directory may be named with any of them. Each
@@ -160,6 +127,65 @@ describe("external", () => {
       expect(location.render()).toBe("file:///home/a%23b/data/");
     });
 
+    it("refuses a scheme a location cannot be stood in, saying what it cannot answer", () => {
+      // `xcd` moves through a plane, and a plane with no listing has nothing
+      // for a move to land on or climb out of. The refusal says that rather
+      // than that shuttle has not got to it, because only one of those will
+      // ever change.
+
+      const location = at("file:///tmp/work/");
+      const reason = refusal(location.xcd("https://example.test/a/"));
+      expect(reason).toContain("https:");
+      expect(reason).toContain("nothing to move through");
+      expect(location.render()).toBe("file:///tmp/work/");
+    });
+
+    it("holds a location of its own, not the one it was handed", () => {
+      // A URL is mutable, so a location holding the one it was given is one
+      // the giver can still change — and every check it passed was made of
+      // the value it had then. Without the copy this acquires the host the
+      // constructor had just refused.
+
+      const handed = new URL("file:///work/");
+      const location = new ExternalLocation(handed, HOME);
+      handed.protocol = "https:";
+      handed.host = "elsewhere.test";
+      expect(location.render()).toBe("file:///work/");
+    });
+
+    it("refuses a location naming a host, whose host a move would drop", () => {
+      // `fromFileUrl` drops a host rather than refusing it, so a location on
+      // `server` would quietly become the local path of the same name on the
+      // first relative move — the failure `xcd` refuses a host to prevent,
+      // reaching in through the other door.
+
+      expect(() => new ExternalLocation(new URL("file://server/share/"), HOME))
+        .toThrow("on this machine");
+    });
+
+    it("refuses a location built on another plane, which no line can reach", () => {
+      // The door turns the scheme down, so only a caller inside this process
+      // could stand one up — and every move below reads the location as a
+      // path, so it would resolve against nonsense rather than be refused.
+
+      expect(() =>
+        new ExternalLocation(new URL("https://example.test/a/"), HOME)
+      )
+        .toThrow("stands on");
+    });
+
+    it("refuses a location holding an escape no path can be made of", () => {
+      // `%FF` is well formed as an escape and names no character, so a URL
+      // takes it and a path cannot be read back from it. Every move from a
+      // location reads it as a path, so one taken here would fail on the
+      // next line instead, naming a token the person did not type.
+
+      const location = at("file:///work/");
+      expect(refusal(location.xcd("file:///%FF"))).toContain("spells no place");
+      expect(location.render()).toBe("file:///work/");
+      expect(location.xcd("child").kind).toBe("external");
+    });
+
     it("refuses a `file:` token naming a host, which is another machine", () => {
       // The host would be dropped in silence by the conversion to a path,
       // leaving a location that looks like the one asked for and is not.
@@ -174,17 +200,6 @@ describe("external", () => {
       const location = at("file:///tmp/");
       location.xcd("file://localhost/work");
       expect(location.render()).toBe("file:///work/");
-    });
-
-    it("cannot be read past a leading blank into a scheme, on a URL plane", () => {
-      // A URL parser drops leading blanks before it reads anything else,
-      // which would turn this into a schemed reference — past the check that
-      // refuses the scheme, and onto another plane.
-
-      const location = at("https://example.test/a/");
-      location.xcd(" file:out.json");
-      expect(location.render())
-        .toBe("https://example.test/a/%20file:out.json/");
     });
 
     it("refuses a token holding a character a terminal acts on", () => {
@@ -204,18 +219,9 @@ describe("external", () => {
       // and leave the token reading as though it named no scheme, which is a
       // relative path landing where an absolute one was refused.
 
-      const location = at("https://example.test/a/");
+      const location = at("file:///tmp/work/");
       expect(refusal(location.xcd("file:out.json"))).toContain("absolute");
-      expect(location.render()).toBe("https://example.test/a/");
-    });
-
-    it("keeps a blank at either end of a token on a URL plane", () => {
-      // A URL parser drops them at both ends: at the front that reads past a
-      // scheme, and at the back it quietly renames `a ` to `a`.
-
-      const location = at("https://example.test/a/");
-      location.xcd("b ");
-      expect(location.render()).toBe("https://example.test/a/b%20/");
+      expect(location.render()).toBe("file:///tmp/work/");
     });
 
     it("reads a scheme however it is spelled, a scheme being case-blind", () => {
@@ -237,12 +243,6 @@ describe("external", () => {
       const location = at("file:///tmp/");
       location.xcd("file:~");
       expect(location.render()).toBe(`file://${HOME}/`);
-    });
-
-    it("keeps a token that is nothing but blanks", () => {
-      const location = at("https://example.test/a/");
-      location.xcd("  ");
-      expect(location.render()).toBe("https://example.test/a/%20%20/");
     });
 
     it("refuses a relative path opening at a home the run was given none of", () => {

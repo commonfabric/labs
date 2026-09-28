@@ -203,7 +203,11 @@ workflow. A run's lanes come from two jobs.
   watching the job. `🧪 Run the lane` then runs the lane with `--described`.
   That packs the same plan again, since the tree and the manifest have not
   changed, and names it in one line: its batches, what it is projected to
-  take, and the manifest it was packed against.
+  take, and the manifest it was packed against. It then prints a line as it
+  begins to open each capability, one just before each command that setup
+  runs, one once each capability has opened, and one as each batch starts.
+  Setup captures its commands' output, so in a lane that stops without saying
+  why, the last of these lines names the step it stopped in.
 
 So a pull request's five lanes start without waiting, and a run of every test
 waits for the count. Whether a run runs every test is decided in one place,
@@ -936,13 +940,16 @@ Left out of everything scored, they are not discarded. The publisher
 keeps them in its rolling aggregate over `COST_WINDOW_DAYS`, the same
 window it measures a test's cost over, and fits `setupCost`,
 `suiteOverhead`, `correction` and `unitOverhead` from them for the next
-manifest. A lane writes one record per capability it opens and three per
-batch — what the batch spent, what its own tests took between them, and
-how many units it opened — and it is the second and third that make a fit
-possible. Neither can be recovered from the records the batch produced: a
-reader of a report cannot tell which of its records came from which
-batch, and a unit whose tests all recorded nothing leaves no trace of
-having been opened.
+manifest. A lane writes one record per capability it opens and four per
+batch — what the batch spent, what its own tests took between them, how
+many units it opened, and what its longest unit took over every run of
+it — and it is the second and third that make a fit possible. Neither can
+be recovered from the records the batch produced: a reader of a report
+cannot tell which of its records came from which batch, and a unit whose
+tests all recorded nothing leaves no trace of having been opened. The
+fourth bounds what the batch spent on its tests from below, for a suite
+that runs its units side by side; [the cost model](../plans/pull-request-test-selection.md#the-cost-model)
+says how.
 
 What its tests took, rather than what the packer expected them to take.
 The two differ by however wrong the manifest's costs are, and a unit
@@ -1015,9 +1022,9 @@ setup(s), and 3 of those suite(s) have a cost with coverage on
 ```
 
 The two halves are counted apart because they come from different
-records. A lane writes one per capability it opens and a pair per batch,
-and a lane killed part way through a batch leaves the pair unmatched, so
-a model can hold a capability setup and no suite at all.
+records. A lane writes one per capability it opens and several per batch,
+and a lane killed part way through a batch leaves those unmatched, so a
+model can hold a capability setup and no suite at all.
 
 A batch run with coverage on is fitted apart from what the suite's batches cost
 without coverage, because instrumenting a run costs it time and how much is a
@@ -1028,9 +1035,15 @@ or two, and the last figure is how many have a coverage-on fit.
 
 The two fixed charges, a suite's `suiteOverhead` and a capability's
 `setupCost`, are each the ninetieth percentile of what lanes have seen in
-the window, the same percentile a test's own cost is read at. That is
-well above what a typical batch or opening takes. It is not the slowest
-one, because each charge is paid by every lane that holds the suite or
+the window, the same percentile a test's own cost is read at: for a
+suite, of what each batch spent beyond what its tests and its units
+account for, and for a capability, of how long each opening took. That
+is well above the typical observation of either. Up to one in ten
+exceeds its charge, by an amount the fit does not bound. The safety
+margin `LANE_SAFETY_SECONDS` absorbs such an excess up to its own size,
+and a lane whose observations exceed their charges by more than that
+between them runs past its bound. The charge is not the slowest observation,
+because each charge is paid by every lane that holds the suite or
 opens the capability: read at the slowest observation, one slow runner
 would set what every lane pays, and every lane would pack short by that
 runner's excess. The percentile is the observation at its rank rather

@@ -17,6 +17,8 @@ import type {
   EventAttentionResolution,
   OpCursor,
   OperationFieldSnapshot,
+  PresenceFacets,
+  PresenceRecord,
 } from "@commonfabric/memory/v2";
 import type { MetaField } from "@commonfabric/runner";
 import type {
@@ -41,6 +43,7 @@ import type {
   WriteStackTraceEntry,
   WriteStackTraceMatcher,
 } from "@commonfabric/runner/shared";
+import type { SpaceHostRegistration } from "@commonfabric/runner/space-host";
 export type { JSONObject, JSONSchema, JSONValue, Program };
 
 export type { CfcLabelView };
@@ -213,6 +216,15 @@ export enum RequestType {
   /** Forgets a client's pinned operation target. */
   OperationSessionClose = "operation:session-close",
 
+  /** Joins a presence room for a cell's field and starts its events. */
+  PresenceJoin = "presence:join",
+
+  /** Replaces the record this client holds in a presence room. */
+  PresencePublish = "presence:publish",
+
+  /** Leaves a presence room. */
+  PresenceLeave = "presence:leave",
+
   /** Runs a read-only SQL query against a SQLite database cell. */
   SqliteQuery = "sqlite:query",
 
@@ -268,6 +280,12 @@ export enum RequestType {
    * error rather than a `false`.
    */
   RegisterSpaceHost = "runtime:registerSpaceHost",
+
+  /**
+   * Routes one space's storage to a named host as `RegisterSpaceHost` does,
+   * and returns the reason along with a refusal.
+   */
+  RegisterSpaceHostDetailed = "runtime:registerSpaceHostDetailed",
 
   /** Waits for the pattern manager's compile-cache writes to land. */
   FlushCompileCacheWrites = "runtime:flushCompileCacheWrites",
@@ -513,7 +531,9 @@ export enum NotificationType {
 
   /**
    * Reports an error that surfaced with no request to fail: a renderer error,
-   * or one raised by a pattern between requests.
+   * one raised by a pattern between requests, or the boot-time health check
+   * finding a host unreachable after `initialize` was answered, which carries
+   * {@link RuntimeErrorCode.HostUnreachable}.
    */
   ErrorReport = "callback:error",
 
@@ -534,6 +554,9 @@ export enum NotificationType {
 
   /** Reports a new operation-backed snapshot for a subscription. */
   OperationUpdate = "operation:update",
+
+  /** Carries one presence room event for a membership. */
+  PresenceUpdate = "presence:update",
 
   /** Reports one authoritative terminal event-delivery notice. */
   EventNeedsAttention = "callback:event-needs-attention",
@@ -616,6 +639,15 @@ export enum RuntimeErrorCode {
    * rather than a retry.
    */
   CompilerStackLoadFailed = "compiler-stack-load-failed",
+
+  /**
+   * The boot-time health check found the backend, or one of the space hosts,
+   * unreachable. The worker is running regardless and its storage reconnects
+   * by itself, so the client's remedy is to wait or to say so, not to retry
+   * the initialization. Posted once, to the clients connected when the check
+   * answers; a client that attaches later is not told.
+   */
+  HostUnreachable = "host-unreachable",
 }
 
 /**
@@ -938,6 +970,17 @@ export type InitializationData = {
    * the next runtime rather than live. Off by default.
    */
   concurrentWatchRefresh?: boolean;
+
+  /**
+   * Hold the {@link RequestType.Initialize} reply until the backend's health
+   * check has answered, and refuse the initialization when a host fails it.
+   * Off by default: the worker answers as soon as its runtime stands, the
+   * check runs alongside, and a host it cannot reach is reported as a
+   * {@link NotificationType.ErrorReport} carrying
+   * {@link RuntimeErrorCode.HostUnreachable} while the memory client keeps
+   * reconnecting on its own.
+   */
+  awaitHealth?: boolean;
 };
 
 /**
@@ -1244,6 +1287,14 @@ export type CustodySealPrepareRequest = BaseRequest & {
 
   /** The actor's source policy, in the actor's home space. */
   allowedSources: CellRef;
+
+  /**
+   * The room's cell that receives the link to the instance's box, in the
+   * room space. The seal writes the link itself, in the transaction that
+   * writes the entry, so the room's release witness covers which box the
+   * room reads.
+   */
+  box?: CellRef;
 };
 
 /** A principal the room space's access list lets read the room. */
@@ -1493,6 +1544,80 @@ export type OperationSessionCloseRequest = BaseRequest & {
   operationSessionId: string;
 };
 
+/** The {@link RequestType.PresenceJoin} request. */
+export type PresenceJoinRequest = BaseRequest & {
+  type: RequestType.PresenceJoin;
+
+  /**
+   * Identifies this membership, chosen by the joiner. Every
+   * {@link PresenceUpdateNotification} carries it back, and the publish and
+   * leave requests name the membership by it.
+   */
+  subscriptionId: string;
+
+  /**
+   * The cell whose resolved field the room is derived from, and whose space
+   * the room lives under.
+   */
+  cell: CellRef;
+
+  /**
+   * An explicit room in place of the one derived from the field. The space
+   * is still the cell's: a room is addressed under it, and joining is
+   * admitted by the client's session on it.
+   */
+  room?: string;
+};
+
+/** What a {@link PresenceJoinRequest} returns. */
+export type PresenceJoinResponse = {
+  /** The id the relay assigned this membership. */
+  participantId: string;
+
+  /** The room the membership joined, derived or as requested. */
+  room: string;
+
+  /** Every other member that has published, at its latest record. */
+  participants: PresenceRecord[];
+};
+
+/** The {@link RequestType.PresencePublish} request. */
+export type PresencePublishRequest = BaseRequest & {
+  type: RequestType.PresencePublish;
+
+  /** The membership, as {@link PresenceJoinRequest} named it. */
+  subscriptionId: string;
+
+  /** Plain-text display name, within the relay's bounds. */
+  name: string;
+
+  /** Per-kind state, within the relay's bounds. */
+  facets: PresenceFacets;
+};
+
+/** The {@link RequestType.PresenceLeave} request. */
+export type PresenceLeaveRequest = BaseRequest & {
+  type: RequestType.PresenceLeave;
+
+  /** The membership to end, as {@link PresenceJoinRequest} named it. */
+  subscriptionId: string;
+};
+
+/**
+ * One presence room event on its way across the worker boundary. It is the
+ * memory client's event with its `failure` error reduced to a name and a
+ * message, which is what survives the crossing.
+ */
+export type PresenceWireEvent =
+  | {
+    kind: "snapshot";
+    participantId: string;
+    participants: PresenceRecord[];
+  }
+  | { kind: "upsert"; participant: PresenceRecord }
+  | { kind: "remove"; participantId: string }
+  | { kind: "failure"; error: { name: string; message: string } };
+
 /** A response carrying one operation-backed field snapshot. */
 export type OperationFieldResponse = {
   /**
@@ -1686,6 +1811,25 @@ export type ResolveSpaceNameRequest = BaseRequest & {
  */
 export type RegisterSpaceHostRequest = BaseRequest & {
   type: RequestType.RegisterSpaceHost;
+
+  /**
+   * The space to route.
+   */
+  space: DID;
+
+  /**
+   * The origin its storage should resolve against.
+   */
+  host: string;
+};
+
+/**
+ * Record a host hint for a space under the rules and the ordering contract of
+ * {@link RegisterSpaceHostRequest}. The worker returns the registration, which
+ * carries the reason for a refusal.
+ */
+export type RegisterSpaceHostDetailedRequest = BaseRequest & {
+  type: RequestType.RegisterSpaceHostDetailed;
 
   /**
    * The space to route.
@@ -3038,6 +3182,9 @@ export type IPCClientRequest =
   | OperationSubscribeRequest
   | OperationUnsubscribeRequest
   | OperationSessionCloseRequest
+  | PresenceJoinRequest
+  | PresencePublishRequest
+  | PresenceLeaveRequest
   | SqliteQueryRequest
   | SqliteExecRequest
   | GetCellRequest
@@ -3087,6 +3234,7 @@ export type IPCClientRequest =
   | RuntimeSyncedRequest
   | ResolveSpaceNameRequest
   | RegisterSpaceHostRequest
+  | RegisterSpaceHostDetailedRequest
   | VDomMountRequest
   | VDomUnmountRequest
   | DetectNonIdempotentRequest
@@ -3159,6 +3307,14 @@ export type BooleanResponse = {
    * The verdict.
    */
   value: boolean;
+};
+
+/** The outcome of a space host registration. */
+export type SpaceHostRegistrationResponse = {
+  /**
+   * Whether the hint was accepted, and the reason when it was not.
+   */
+  registration: SpaceHostRegistration;
 };
 
 /**
@@ -3593,6 +3749,13 @@ export type EventAttentionResolveResponse = {
  */
 export type WorkerReadyNotification = {
   type: TransportNotificationType.WorkerReady;
+  /**
+   * The name of a Web Lock the worker holds from before this post until its
+   * runtime is torn down, which is when a terminated web worker's locks are
+   * released. A request for it is therefore granted only once the worker is
+   * gone. A worker that names none is not waited for.
+   */
+  lifetimeLock?: string;
 };
 
 /** The `console` methods the worker's console bridge forwards. */
@@ -3672,6 +3835,17 @@ export type OperationUpdateNotification = {
   field: OperationFieldSnapshot;
 };
 
+/** Reports one presence room event for a membership. */
+export type PresenceUpdateNotification = {
+  type: NotificationType.PresenceUpdate;
+
+  /** The membership this is for, as {@link PresenceJoinRequest} named it. */
+  subscriptionId: string;
+
+  /** The event, in its wire form. */
+  event: PresenceWireEvent;
+};
+
 /**
  * Every shape a successful response can carry. The arm a given request yields
  * is fixed by {@link Commands} rather than chosen here.
@@ -3680,6 +3854,7 @@ export type RemoteResponse =
   | EmptyResponse
   | NullResponse
   | BooleanResponse
+  | SpaceHostRegistrationResponse
   | CellValueResponse
   | CellGetResponse
   | CellResponse
@@ -3711,6 +3886,7 @@ export type RemoteResponse =
   | OperationCapabilitiesResponse
   | OperationFieldResponse
   | OperationApplyResponse
+  | PresenceJoinResponse
   | EventAttentionListResponse
   | EventAttentionResolveResponse;
 
@@ -3729,6 +3905,7 @@ export type IPCRemoteNotification =
   | VDomBatchNotification
   | PendingWritesNotification
   | OperationUpdateNotification
+  | PresenceUpdateNotification
   | EventNeedsAttentionNotification;
 
 /**
@@ -3952,6 +4129,18 @@ export type Commands = {
     request: OperationSessionCloseRequest;
     response: BooleanResponse;
   };
+  [RequestType.PresenceJoin]: {
+    request: PresenceJoinRequest;
+    response: PresenceJoinResponse;
+  };
+  [RequestType.PresencePublish]: {
+    request: PresencePublishRequest;
+    response: BooleanResponse;
+  };
+  [RequestType.PresenceLeave]: {
+    request: PresenceLeaveRequest;
+    response: BooleanResponse;
+  };
   [RequestType.SqliteQuery]: {
     request: SqliteQueryRequest;
     response: SqliteQueryResponse;
@@ -3980,6 +4169,10 @@ export type Commands = {
   [RequestType.RegisterSpaceHost]: {
     request: RegisterSpaceHostRequest;
     response: BooleanResponse;
+  };
+  [RequestType.RegisterSpaceHostDetailed]: {
+    request: RegisterSpaceHostDetailedRequest;
+    response: SpaceHostRegistrationResponse;
   };
   [RequestType.PieceGet]: {
     request: PieceGetRequest;

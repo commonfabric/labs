@@ -33,11 +33,11 @@ export { isLaneMeasurement, LANE_MEASUREMENT_PREFIX, LANE_MEASUREMENT_SURFACE };
  */
 export const MEASURED_BATCH_SUFFIX = " with coverage";
 
-/** What each of a batch's three measurements is, as its name says it. */
-export type BatchMeasurementKind = "spent" | "ran" | "units";
+/** What each of a batch's four measurements is, as its name says it. */
+export type BatchMeasurementKind = "spent" | "ran" | "units" | "longest";
 
 /**
- * The word a measurement's name carries to say which of the three it is.
+ * The word a measurement's name carries to say which of the four it is.
  * What a batch spent is the one the lane has always written, and it is
  * unmarked.
  */
@@ -45,14 +45,16 @@ const BATCH_MEASUREMENT_LEAD: Record<BatchMeasurementKind, string> = {
   spent: "",
   ran: "ran ",
   units: "units ",
+  longest: "longest ",
 };
 
 /**
  * What a lane's measurement of one batch is called.
  *
- * A lane writes three of these per batch: what the batch spent, what its
- * tests took between them, and how many units it opened. The three
- * together are what the calibration is fitted from.
+ * A lane writes four of these per batch: what the batch spent, what its
+ * tests took between them, how many units it opened, and what the one
+ * unit that took longest took over every run of it. The four together
+ * are what the calibration is fitted from.
  */
 export function batchMeasurementName(
   suite: string,
@@ -65,7 +67,7 @@ export function batchMeasurementName(
 
 /**
  * The suite one batch measurement names, whether coverage was on for it,
- * and which of the three figures it carries. Nothing else for the name: a
+ * and which of the four figures it carries. Nothing else for the name: a
  * reader that took it apart itself would be a second answer to how it is
  * composed, and the two would part company the first time either moved.
  *
@@ -80,7 +82,7 @@ export function batchMeasurement(
 ):
   | { suite: string; measured: boolean; kind: BatchMeasurementKind }
   | undefined {
-  for (const kind of ["ran", "units", "spent"] as const) {
+  for (const kind of ["ran", "units", "longest", "spent"] as const) {
     const prefix = `${LANE_MEASUREMENT_PREFIX}` +
       `${BATCH_MEASUREMENT_LEAD[kind]}batch `;
     if (!name.startsWith(prefix)) continue;

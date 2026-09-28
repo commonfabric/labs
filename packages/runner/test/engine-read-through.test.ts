@@ -44,7 +44,10 @@ import {
 } from "../src/executor/space-server.ts";
 import type { WaveCommitSink } from "../src/executor/wave.ts";
 import { readWatermarkSeq, waitForSettled } from "../src/executor/watermark.ts";
-import { TEST_MEMORY_SERVER_AUTH } from "./memory-v2-test-utils.ts";
+import {
+  newSharedServer,
+  TEST_MEMORY_SERVER_AUTH,
+} from "./memory-v2-test-utils.ts";
 import { waitUntil } from "./support/wait-until.ts";
 
 class SharedServerStorageManager extends EmulatedStorageManager {
@@ -300,14 +303,8 @@ describe("engine-read-through", () => {
   const clientIdentity: ScopeKeyIdentity = { principal: aliceSigner.did() };
 
   beforeEach(() => {
-    server = new MemoryV2Server.Server({
+    server = newSharedServer({
       subscriptionRefreshDelayMs: 0,
-      authorizeSessionOpen(message) {
-        const principal = (message.authorization as { principal?: unknown })
-          ?.principal;
-        return typeof principal === "string" ? principal : undefined;
-      },
-      sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
     });
     failRefreshes = undefined;
     refreshCalls = 0;

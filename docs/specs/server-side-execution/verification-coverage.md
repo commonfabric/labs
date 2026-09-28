@@ -3150,10 +3150,13 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   (vii) CLOSED for read-triggered remount. An admitted ACL change latches
   `Provider.noteAclChanged`; the next load discards a session terminated by
   an ACL verdict and reopens through the server's full `session.open`
-  admission. The watched-document tracker is cleared so a previously watched
-  document is fetched again on its next read. `executor-session-remount.test.ts`
-  pins the ACL-change/host path, owner rebinding, denial without widened
-  authority, and refetch after remount. Automatic replay of the entire dead
+  admission. A document load already in flight when the revocation lands
+  fails on the terminated session; that failure consumes the remount, and the
+  load is made once more on the new session. The watched-document tracker is
+  cleared so a previously watched document is fetched again on its next read.
+  `executor-session-remount.test.ts` pins the ACL-change/host path, owner
+  rebinding, denial without widened authority, the in-flight load in both
+  outcomes, and refetch after remount. Automatic replay of the entire dead
   session's watch set remains a distinct follow-up; read-triggered refetch
   does not establish that stronger guarantee.
   Acceptance beyond the executor pins rides the PR's CI ON lanes and

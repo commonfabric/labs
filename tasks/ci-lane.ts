@@ -74,11 +74,11 @@ import {
   crowdingLine,
   type CrowdingSuite,
   fullLaneCount,
-  ownLoad,
   type Plan,
   plan,
   type Selection,
   type SelectionReason,
+  suiteLoad,
   unholdableSuites,
 } from "./test-selection/plan.ts";
 import {
@@ -496,26 +496,22 @@ export function batchesOf(
   // each group the largest share of the lane goes first, because a lane
   // that runs out of time should have spent it on the batch most worth
   // knowing about and dropped the cheap ones. A share is read through
-  // `ownLoad`, which is what the packer charged the lane for the suite's
+  // `suiteLoad`, which is what the packer charged the lane for the suite's
   // tests, so a suite whose tests run slower than they were measured at,
   // or run several times, is as large here as it was when the lane was
   // filled.
   //
   // Both keys are a function of the plan, and the identifier settles a
   // tie, so every attempt at a lane runs its batches in the same order
-  // whatever order the plan listed its selections in. A share is added
-  // up smallest load first, so that it comes to one number however its
-  // loads were listed, since floating-point addition rounds differently
-  // in a different order.
+  // whatever order the plan listed its selections in.
   const keyed = [...batches.values()].map((batch) => ({
     batch,
     id: batch.suite.id,
     measured: manifest.fitted.has(batch.suite.id) ? 1 : 0,
-    seconds: selections
-      .filter(({ entry }) => entry.suite === batch.suite.id)
-      .map(({ entry, repeats }) => ownLoad(manifest, entry, repeats))
-      .toSorted((a, b) => a - b)
-      .reduce((sum, load) => sum + load, 0),
+    seconds: suiteLoad(
+      manifest,
+      selections.filter(({ entry }) => entry.suite === batch.suite.id),
+    ),
   }));
   return keyed.sort((a, b) =>
     a.measured - b.measured || b.seconds - a.seconds ||
@@ -803,7 +799,13 @@ export async function runBatch(
   // batch's records as one list cannot tell that from a batch where
   // every execution ran.
   let unexplained = 0;
+  // Seconds each unit's records took, over every run of it.
+  const unitSeconds = new Map<string, number>();
   for (let run = 1; run <= batchRepeats(batch); run++) {
+    console.log(
+      `ci-lane: starting ${batch.suite.id}, run ${run} of ` +
+        `${batchRepeats(batch)}`,
+    );
     const outputDir = path.join(workDir, `${batch.suite.id}-${run}`);
     const batchSpool = path.join(outputDir, "spool");
     await Deno.mkdir(batchSpool, { recursive: true });
@@ -860,7 +862,12 @@ export async function runBatch(
       }
       for (const record of collected.records) {
         const location = batch.suite.locate(record);
-        if (location?.level === "unit") heard.add(location.unit);
+        if (location?.level !== "unit") continue;
+        heard.add(location.unit);
+        unitSeconds.set(
+          location.unit,
+          (unitSeconds.get(location.unit) ?? 0) + record.durationMs / 1000,
+        );
       }
       records.push(...collected.records);
       conflicts.push(...collected.conflicts);
@@ -874,11 +881,14 @@ export async function runBatch(
   if (spool !== undefined) {
     spoolRecords(spool, [
       ...records,
-      // What the batch spent, what its tests took between them, and how
-      // many units it opened. The publisher fits a suite's cost beyond
-      // its tests from the three together: the first two differ by
-      // everything the batch paid that no test's duration holds, and the
-      // third is the part of that which grows with the units opened.
+      // What the batch spent, what its tests took between them, how many
+      // units it opened, and what its longest unit took over every run
+      // of it. The publisher fits a suite's cost beyond its tests from the
+      // four together: the first two differ by everything the batch paid
+      // that no test's duration holds, the third is the part of that which
+      // grows with the units opened, and the fourth is the least the batch
+      // could have spent on its tests however many of them ran side by
+      // side, since a unit's runs follow one another.
       //
       // The tests' own time is summed here rather than read back from
       // the records, because a reader has no way to tell which of a
@@ -908,6 +918,15 @@ export async function runBatch(
           "units",
         ),
         batch.units.length,
+        ok,
+      ),
+      timingRecord(
+        batchMeasurementName(
+          batch.suite.id,
+          coverage !== undefined,
+          "longest",
+        ),
+        Math.max(0, ...unitSeconds.values()),
         ok,
       ),
     ]);
@@ -1147,10 +1166,12 @@ function chosenFor(
  * how many of its selections are stand-ins, and the seconds of the
  * projection their own cost decides.
  *
- * Read through `ownLoad`, which is the term the packer charged them by,
- * so that the seconds are a share of the projection and not a second
- * reading of the same quantity in other units. The overheads a lane pays
- * around a stand-in are measured rather than guessed, and are not here.
+ * Read through `suiteLoad`, which is how the packer charges a suite's
+ * tests: the seconds are what each suite's charge comes to less what it
+ * would come to without its stand-ins, so that they are a share of the
+ * projection rather than a second reading of the same quantity. The
+ * overheads a lane pays around a stand-in are measured rather than
+ * guessed, and are not here.
  */
 function standingOnStandIns(
   manifest: Manifest,
@@ -1158,10 +1179,12 @@ function standingOnStandIns(
 ): { units: number; seconds: number } {
   let units = 0;
   let seconds = 0;
-  for (const selection of selections) {
-    if (!isStandIn(selection.entry)) continue;
-    units++;
-    seconds += ownLoad(manifest, selection.entry, selection.repeats);
+  for (
+    const held of Map.groupBy(selections, ({ entry }) => entry.suite).values()
+  ) {
+    const measured = held.filter(({ entry }) => !isStandIn(entry));
+    units += held.length - measured.length;
+    seconds += suiteLoad(manifest, held) - suiteLoad(manifest, measured);
   }
   return { units, seconds };
 }
@@ -1709,6 +1732,7 @@ export async function runLane(
       dryRun: false,
       workDir,
       ...(githubToken === undefined ? {} : { githubToken }),
+      report: console.log,
     });
   } catch (error) {
     await leaveWorkDir(false);

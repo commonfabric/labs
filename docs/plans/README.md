@@ -10,6 +10,10 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [Compact CFC label maps](compact-cfc-label-maps.md) proposes shared label
+  subtrees, graph-aware policy queries, and a reader-first stored-format migration
+  to bound the cost of staged reference diamonds.
+
 - [Shuffled test order: what is left to build](test-order-shuffle.md) carries
   the piece the shuffle does not yet have: a shuffle inside this repository's
   own `describe()` and `it()`, which every test file already resolves to,
@@ -77,9 +81,6 @@ a record: archive it to `docs/history/plans/` following the procedure in
   on which authority and which caveat tiers admit content to a model.
 - [CFC TypeScript authoring](cfc_typescript_authoring.md) sequences the
   TypeScript and JSX authoring surface for CFC metadata.
-- [`cf-code-editor` co-presence](cf-code-editor-copresence.md) adds an
-  ephemeral Cloudflare WebSocket plane for live participant names, carets, and
-  selections while Memory remains the sole authority for document contents.
 - [First-class serializable factories](first-class-serializable-factories.md)
   sequences the implementation of durable pattern, module, and handler
   factories.

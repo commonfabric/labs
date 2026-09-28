@@ -103,6 +103,15 @@ export interface CapabilityContext {
    * answered, the way `exec` says what the machine would have answered.
    */
   fetch?: typeof fetch;
+
+  /**
+   * Where opening says what it is doing, a line at a time: each
+   * capability as it begins to open and once it has opened, and each
+   * command a capability runs, before it runs. Setup runs its commands
+   * with their output captured, so a step that never finishes is named in
+   * the log only by the line said before it. Absent, opening says nothing.
+   */
+  report?: (line: string) => void;
 }
 
 /** A capability that has been opened. */
@@ -252,7 +261,11 @@ const run: Exec = async (command, args, options = {}) => {
 
 /** How this context runs commands. */
 function execOf(context: CapabilityContext): Exec {
-  return context.exec ?? run;
+  const exec = context.exec ?? run;
+  return (command, args, options) => {
+    context.report?.(`ci-lane: running ${[command, ...args].join(" ")}`);
+    return exec(command, args, options);
+  };
 }
 
 /** A probe answering whether `command` is on the path. */
@@ -906,14 +919,14 @@ export async function openCapabilities(
   try {
     for (const id of resolveCapabilities(requested, registry)) {
       const capability = registry.get(id)!;
+      context.report?.(`ci-lane: opening ${id}: ${capability.description}`);
       const startedAt = performance.now();
       const open = await capability.open(context);
       opened.push(open);
       exported.set(id, open.env);
-      timings.push({
-        capability: id,
-        seconds: (performance.now() - startedAt) / 1000,
-      });
+      const seconds = (performance.now() - startedAt) / 1000;
+      timings.push({ capability: id, seconds });
+      context.report?.(`ci-lane: opened ${id} in ${seconds.toFixed(1)}s`);
       for (const log of open.logs ?? []) {
         logs.push({ capability: id, path: log });
       }

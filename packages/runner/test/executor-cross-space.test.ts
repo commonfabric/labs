@@ -53,10 +53,14 @@ import {
   streamEntriesDocId,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import { type Frame, UI } from "../src/builder/types.ts";
 import { resolveEntryIdentity } from "../src/index.ts";
 import { parseLink } from "../src/link-utils.ts";
-import { TEST_MEMORY_SERVER_AUTH } from "./memory-v2-test-utils.ts";
+import {
+  newSharedServer,
+  TEST_MEMORY_SERVER_AUTH,
+} from "./memory-v2-test-utils.ts";
 
 // The route the toolshed serves the profile-create surface from, which is what
 // the surface's `system:` origin resolves against.
@@ -70,17 +74,6 @@ class SharedServerStorageManager extends EmulatedStorageManager {
     return super.connectTo(server, options) as SharedServerStorageManager;
   }
 }
-
-const newSharedServer = () =>
-  new MemoryV2Server.Server({
-    subscriptionRefreshDelayMs: 0,
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
 
 const homeSigner = await Identity.fromPassphrase("cross-space home");
 const homeSpace = homeSigner.did() as MemorySpace;
@@ -140,7 +133,9 @@ describe("Phase 5 cross-space serving", () => {
     );
 
   beforeEach(() => {
-    server = newSharedServer();
+    server = newSharedServer({
+      subscriptionRefreshDelayMs: 0,
+    });
     servingRuntime = undefined;
     onServingRuntime = undefined;
     activations = new ArrivalLog();
@@ -1010,11 +1005,7 @@ describe("Phase 5 cross-space serving", () => {
   it("OW31 read posture under enforce: a serving manager reads an OWNER-ONLY home space through the acting-as-owner binding; a non-serving manager as the same identity is denied", async () => {
     const enforceServer = new MemoryV2Server.Server({
       subscriptionRefreshDelayMs: 0,
-      authorizeSessionOpen(message) {
-        const principal = (message.authorization as { principal?: unknown })
-          ?.principal;
-        return typeof principal === "string" ? principal : undefined;
-      },
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
       acl: {
         mode: "enforce",

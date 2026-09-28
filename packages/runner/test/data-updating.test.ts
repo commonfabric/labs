@@ -1,9 +1,12 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { spy } from "@std/testing/mock";
 
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { JSONSchema } from "../src/builder/types.ts";
@@ -33,6 +36,57 @@ import { toURI } from "../src/uri-utils.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
+
+/**
+ * Commits a map of `size` entries, each holding a cell of its own, rewrites it
+ * whole with one entry changed, and returns how many times the rewrite's
+ * `set()` enumerated the keys of a link envelope, along with the changed entry
+ * as read back after the rewrite commits.
+ *
+ * In the legacy link representation, recognizing a value as a link and
+ * reading the link out of it each run `Object.keys()` on the `{ "/": ... }`
+ * envelope, so the count is how many times the walk asked a link what it is.
+ */
+const linkRecognitionsOfOneEntryRewrite = async (
+  runtime: Runtime,
+  size: number,
+): Promise<{ recognitions: number; changed: unknown }> => {
+  const people = Array.from(
+    { length: size },
+    (_, index) => runtime.getCell(space, `rewrite of ${size}: person ${index}`),
+  );
+  const entries = (changed: string) =>
+    Object.fromEntries(people.map((person, index) => [
+      `key-${index}`,
+      { person, fallbackName: index === 0 ? changed : `name-${index}` },
+    ]));
+  const map = runtime.getCell<Record<string, unknown>>(
+    space,
+    `rewrite of ${size}`,
+  );
+
+  const seed = runtime.edit();
+  map.withTx(seed).set(entries("before"));
+  expect((await seed.commit()).error).toBeUndefined();
+
+  const rewritten = entries("after");
+  const tx = runtime.edit();
+  let recognitions: number;
+  {
+    using keys = spy(Object, "keys");
+    map.withTx(tx).set(rewritten);
+    recognitions =
+      keys.calls.filter(({ args: [value] }) =>
+        isObjectOrArray(value) && Object.hasOwn(value, "/")
+      ).length;
+  }
+  expect((await tx.commit()).error).toBeUndefined();
+
+  return {
+    recognitions,
+    changed: map.key("key-0").key("fallbackName").get(),
+  };
+};
 
 describe("data-updating", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -358,41 +412,122 @@ describe("data-updating", () => {
       expect(changes[1].value).toBe(3);
     });
 
-    it("should generate correct paths when setting array length to 0", () => {
-      const testCell = runtime.getCell<{ items: number[] }>(
-        space,
-        "normalizeAndDiff array length to zero",
-        undefined,
-        tx,
-      );
-      // Create array with 100 items
-      const largeArray = Array.from({ length: 100 }, (_, i) => i);
-      testCell.set({ items: largeArray });
+    describe("a write to an array's `length`", () => {
+      /** Returns a fresh cell whose `items` holds `items`. */
+      const itemsCell = (cause: string, items: unknown[]) => {
+        const cell = runtime.getCell<{ items: unknown[] }>(
+          space,
+          cause,
+          undefined,
+          tx,
+        );
+        cell.set({ items });
+        return cell;
+      };
 
-      // Now set length to 0 through the length property
-      const lengthLink = testCell.key("items").key("length")
-        .getAsNormalizedFullLink();
-      const changes = normalizeAndDiff(runtime, tx, lengthLink, 0);
+      it("returns just the length write for a grow, which applies as holes", () => {
+        const cell = itemsCell("normalizeAndDiff array length grow", [1, 2]);
+        const lengthLink = cell.key("items").key("length")
+          .getAsNormalizedFullLink();
+        const changes = normalizeAndDiff(runtime, tx, lengthLink, 5);
 
-      // Should have 101 changes total
-      expect(changes.length).toBe(101);
+        expect(changes).toEqual([{ location: lengthLink, value: 5 }]);
 
-      // Find the length change
-      const lengthChange = changes.find((c) =>
-        c.location.path[c.location.path.length - 1] === "length"
-      );
-      expect(lengthChange).toBeDefined();
-      expect(lengthChange!.value).toBe(0);
+        applyChangeSet(tx, changes);
+        const items = cell.getRaw()!.items;
+        expect(items.length).toBe(5);
+        expect(Object.keys(items)).toEqual(["0", "1"]);
+      });
 
-      // Verify all elements are marked undefined with correct paths
-      const elementChanges = changes.filter((c) =>
-        c.location.path[c.location.path.length - 1] !== "length"
-      );
-      expect(elementChanges.length).toBe(100);
+      it("returns just the length write for a grow to `2 ** 32 - 1`", () => {
+        // What a grow costs here does not depend on how far it reaches, so
+        // the largest length an array can have returns as fast as `5` does.
 
-      elementChanges.forEach((change, i) => {
-        expect(change.location.path).toEqual(["items", i.toString()]);
-        expect(change.value).toBe(undefined);
+        const cell = itemsCell("normalizeAndDiff array length grow max", [1]);
+        const lengthLink = cell.key("items").key("length")
+          .getAsNormalizedFullLink();
+
+        expect(normalizeAndDiff(runtime, tx, lengthLink, 2 ** 32 - 1))
+          .toEqual([{ location: lengthLink, value: 2 ** 32 - 1 }]);
+      });
+
+      it("returns just the length write for a shrink to `0`, which empties the array", () => {
+        const cell = itemsCell(
+          "normalizeAndDiff array length to zero",
+          Array.from({ length: 100 }, (_, i) => i),
+        );
+        const lengthLink = cell.key("items").key("length")
+          .getAsNormalizedFullLink();
+        const changes = normalizeAndDiff(runtime, tx, lengthLink, 0);
+
+        expect(changes).toEqual([{ location: lengthLink, value: 0 }]);
+
+        applyChangeSet(tx, changes);
+        expect(cell.getRaw()!.items).toEqual([]);
+      });
+
+      it("returns just the length write for a fractional length", () => {
+        const cell = itemsCell(
+          "normalizeAndDiff array length fractional",
+          ["a", "b", "c", "d", "e"],
+        );
+        const lengthLink = cell.key("items").key("length")
+          .getAsNormalizedFullLink();
+
+        expect(normalizeAndDiff(runtime, tx, lengthLink, 2.5))
+          .toEqual([{ location: lengthLink, value: 2.5 }]);
+      });
+
+      it("keeps every surviving element for a negative length, which counts from the end", () => {
+        const cell = itemsCell(
+          "normalizeAndDiff array length negative",
+          ["a", "b", "c", "d", "e"],
+        );
+
+        cell.key("items").key("length").set(-1);
+
+        expect(cell.getRaw()!.items).toEqual(["a", "b", "c", "d"]);
+      });
+
+      it("empties the array for `-Infinity`", () => {
+        const cell = itemsCell("normalizeAndDiff array length -Infinity", [
+          "a",
+          "b",
+        ]);
+
+        cell.key("items").key("length").set(-Infinity);
+
+        expect(cell.getRaw()!.items).toEqual([]);
+      });
+
+      it("keeps every key of an object that replaces the array, `length` included", () => {
+        // The new values differ from the old elements at the same indices, so
+        // no key is lost to a comparison against the array being replaced.
+
+        const numeric = runtime.getCell<{ x: unknown }>(
+          space,
+          "normalizeAndDiff array replaced by object, numeric length",
+          undefined,
+          tx,
+        );
+        numeric.set({ x: ["a", "b", "c"] });
+        numeric.set({ x: { "0": "x", "1": "y", length: 1 } });
+
+        const named = runtime.getCell<{ x: unknown }>(
+          space,
+          "normalizeAndDiff array replaced by object, named length",
+          undefined,
+          tx,
+        );
+        named.set({ x: ["a", "b"] });
+        named.set({ x: { "0": "x", "1": "y", length: "two" } });
+
+        expect(numeric.getRaw()).toEqual({
+          x: { "0": "x", "1": "y", length: 1 },
+        });
+        expect(named.getRaw()).toEqual({
+          x: { "0": "x", "1": "y", length: "two" },
+        });
       });
     });
 
@@ -906,6 +1041,57 @@ describe("data-updating", () => {
         metadata: { description: "Contains a nested link" },
       });
     });
+
+    it("recognizes each link of a rewritten map of cells a fixed number of times, at 200 entries as at 20", async () => {
+      // Every check the walk makes about whether a value is a link, or where
+      // it points, reads a parse made once per call, so each entry costs the
+      // same small number of recognitions however large the map. The equal
+      // per-entry counts say the cost does not grow with the map; the bound
+      // says it stays this small, which a check that recognized and parsed
+      // again on its own would break. The lower bound fails the case if the
+      // links stop being envelopes that `Object.keys()` enumerates, rather
+      // than letting it pass on a count of zero.
+      const short = await linkRecognitionsOfOneEntryRewrite(runtime, 20);
+      const long = await linkRecognitionsOfOneEntryRewrite(runtime, 200);
+
+      expect(short.changed).toBe("after");
+      expect(long.changed).toBe("after");
+      expect(long.recognitions / 200).toBe(short.recognitions / 20);
+      expect(long.recognitions / 200).toBeGreaterThan(0);
+      expect(long.recognitions / 200).toBeLessThanOrEqual(17);
+    });
+
+    it("replaces a stored link whose path does not parse with a write redirect", () => {
+      const aliased = runtime.getCell<{ v: number }>(
+        space,
+        "the cell a write redirect names",
+        undefined,
+        tx,
+      );
+      aliased.set({ v: 1 });
+      const slot = runtime.getCell<Record<string, unknown>>(
+        space,
+        "a slot holding a link whose path does not parse",
+        undefined,
+        tx,
+      );
+      tx.writeValueOrThrow(slot.getAsNormalizedFullLink(), {
+        x: linkRefFrom({
+          id: aliased.getAsNormalizedFullLink().id,
+          path: [null],
+        }),
+      });
+
+      const changes = normalizeAndDiff(
+        runtime,
+        tx,
+        slot.key("x").getAsNormalizedFullLink(),
+        aliased.getAsWriteRedirectLink(),
+      );
+
+      expect(changes).toHaveLength(1);
+      expect(parseLink(changes[0].value)?.overwrite).toBe("redirect");
+    });
   });
 
   it("should handle data: URI links that contain nested links and references go through it", () => {
@@ -1124,6 +1310,76 @@ describe("data-updating", () => {
       expect(Object.isFrozen(written)).toBe(false);
     });
 
+    it("asserts an array of equal links in its stored form", () => {
+      // The transaction itself is marked, rather than reporting the posture
+      // through `authoritative()`, so that applying the change set skips the
+      // write layer's equal-value elision as well and writes it in full.
+
+      const target = runtime.getCell<number>(
+        space,
+        "authoritative re-assert link target (array)",
+        undefined,
+        tx,
+      );
+      target.set(1);
+      const testCell = runtime.getCell<{ items: unknown[] }>(
+        space,
+        "authoritative re-assert equal links array",
+        undefined,
+        tx,
+      );
+      testCell.set({ items: [target] });
+      const current = testCell.key("items").getAsNormalizedFullLink();
+      const stored = tx.readValueOrThrow(current);
+      tx.tx.markAuthoritativeWrites!();
+      expect(tx.isAuthoritativeWrites?.()).toBe(true);
+
+      const changes = normalizeAndDiff(runtime, tx, current, [target]);
+
+      expect(changes.length).toBe(1);
+      expect(changes[0].location).toEqual(current);
+      expect(changes[0].value).toEqual(stored);
+      expect(isPrimitiveCellLink((changes[0].value as unknown[])[0])).toBe(
+        true,
+      );
+      applyChangeSet(tx, changes);
+      expect(tx.readValueOrThrow(current)).toEqual(stored);
+    });
+
+    it("asserts a record of equal links in its stored form", () => {
+      // Marked on the transaction itself, as in the array case above.
+
+      const target = runtime.getCell<number>(
+        space,
+        "authoritative re-assert link target (record)",
+        undefined,
+        tx,
+      );
+      target.set(1);
+      const testCell = runtime.getCell<{ rec: Record<string, unknown> }>(
+        space,
+        "authoritative re-assert equal links record",
+        undefined,
+        tx,
+      );
+      testCell.set({ rec: { a: target } });
+      const current = testCell.key("rec").getAsNormalizedFullLink();
+      const stored = tx.readValueOrThrow(current);
+      tx.tx.markAuthoritativeWrites!();
+      expect(tx.isAuthoritativeWrites?.()).toBe(true);
+
+      const changes = normalizeAndDiff(runtime, tx, current, { a: target });
+
+      expect(changes.length).toBe(1);
+      expect(changes[0].location).toEqual(current);
+      expect(changes[0].value).toEqual(stored);
+      expect(
+        isPrimitiveCellLink((changes[0].value as Record<string, unknown>).a),
+      ).toBe(true);
+      applyChangeSet(tx, changes);
+      expect(tx.readValueOrThrow(current)).toEqual(stored);
+    });
+
     it("emits nothing for an equal array outside the authoritative posture", () => {
       const testCell = runtime.getCell<{ items: number[] }>(
         space,
@@ -1234,7 +1490,9 @@ describe("data-updating", () => {
       // recursion into its content, so an element containing its own
       // objects-in-arrays draws a lower seed than they do. This pins the
       // sequence deliberately: a change to it would silently re-derive every
-      // nested anchored id.
+      // nested anchored id. Each element takes its array's position as its
+      // context, read from the written value, so the arrays written fresh
+      // here derive what a rewrite of stored ones would.
       const testCell = runtime.getCell<unknown>(
         space,
         "pre-order anchor ids",
@@ -1262,7 +1520,7 @@ describe("data-updating", () => {
       const rootLink = testCell.getAsNormalizedFullLink();
       const outerId = toURI(createRef({ id: "seed-0" }, {
         parent: { id: rootLink.id, space: rootLink.space },
-        path: ["0"],
+        path: [],
         context,
       }));
       const raw = testCell.getRaw() as unknown[];
@@ -1271,12 +1529,89 @@ describe("data-updating", () => {
 
       const innerId = toURI(createRef({ id: "seed-1" }, {
         parent: { id: outerId, space: rootLink.space },
-        path: ["kids", "0"],
+        path: ["kids"],
         context,
       }));
       const outerDoc = runtime.getCellFromLink(outerLink!, undefined, tx);
       const outerRaw = outerDoc.getRaw() as { kids: unknown[] };
       expect(parseLink(outerRaw.kids[0], outerDoc)?.id).toBe(innerId);
+    });
+
+    it("anchors a fresh array's element under the identity a stored one's takes", () => {
+      // The element's identity takes its array's position as context. That
+      // is read from the value the walk writes, so it does not depend on
+      // whether the array was stored before the write.
+      const testCell = runtime.getCell<unknown>(
+        space,
+        "fresh and stored anchor ids",
+        undefined,
+        tx,
+      );
+      const link = testCell.getAsNormalizedFullLink();
+      const context = "fresh and stored anchor ids";
+      const ids: (string | undefined)[] = [];
+      for (const note of ["first", "second"]) {
+        diffAndUpdate(
+          runtime,
+          tx,
+          link,
+          [{ note }],
+          context,
+          undefined,
+          () => "seed",
+        );
+        const raw = testCell.getRaw() as unknown[];
+        ids.push(parseLink(raw[0], testCell)?.id);
+      }
+      expect(ids[0]).toBe(toURI(createRef({ id: "seed" }, {
+        parent: { id: link.id, space: link.space },
+        path: [],
+        context,
+      })));
+      expect(ids[1]).toBe(ids[0]);
+    });
+
+    it("anchors a fresh scope-narrowed array element under the identity a stored one's takes", () => {
+      // Each element's schema narrows it to the user's instance, so the
+      // element is anchored at the same position in that instance. The array
+      // the element sits in is the one this walk writes, whichever instance
+      // holds its content.
+      const schema = {
+        type: "array",
+        items: {
+          type: "object",
+          scope: "user",
+          properties: { note: { type: "string" } },
+        },
+      } as const satisfies JSONSchema;
+      const testCell = runtime.getCell<unknown>(
+        space,
+        "fresh and stored scoped anchor ids",
+        schema,
+        tx,
+      );
+      const link = testCell.getAsNormalizedFullLink();
+      const context = "fresh and stored scoped anchor ids";
+      const ids: (string | undefined)[] = [];
+      for (const note of ["first", "second"]) {
+        diffAndUpdate(
+          runtime,
+          tx,
+          link,
+          [{ note }],
+          context,
+          undefined,
+          () => "seed",
+        );
+        const scoped = runtime.getCellFromLink(
+          { ...link, scope: "user", path: ["0"], schema: undefined },
+          undefined,
+          tx,
+        );
+        ids.push(parseLink(scoped.getRaw(), scoped)?.id);
+      }
+      expect(ids[0]).toBeDefined();
+      expect(ids[1]).toBe(ids[0]);
     });
 
     it("converges repeated references on one document", () => {

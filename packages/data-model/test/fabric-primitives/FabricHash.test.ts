@@ -19,6 +19,7 @@ import {
   JSON_CODEC,
   NULL_LIVE_ENVIRONMENT,
   ProblematicValue,
+  REALM_CODEC,
 } from "@/codec-common";
 import { FabricHash } from "@/fabric-primitives";
 
@@ -238,6 +239,11 @@ describe("FabricHash", () => {
             hash: cid.hashString,
           });
         });
+
+        it("returns a frozen record", () => {
+          const cid = new FabricHash(SAMPLE_HASH, "fid1");
+          expect(Object.isFrozen(codec.encode(cid, env))).toBe(true);
+        });
       });
 
       describe("canDecode()", () => {
@@ -293,6 +299,18 @@ describe("FabricHash", () => {
           expect(decoded).toBeInstanceOf(FabricHash);
           expect((decoded as FabricHash).tag).toBe("sha3");
           expect((decoded as FabricHash).bytes).toEqual(cid.bytes);
+        });
+      });
+    });
+
+    describe("[REALM_CODEC]", () => {
+      const codec = FabricHash[REALM_CODEC];
+      const env = NULL_LIVE_ENVIRONMENT;
+
+      describe("encode()", () => {
+        it("returns a frozen record", () => {
+          const cid = new FabricHash(SAMPLE_HASH, "fid1");
+          expect(Object.isFrozen(codec.encode(cid, env))).toBe(true);
         });
       });
     });

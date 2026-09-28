@@ -339,9 +339,10 @@ recognizes one, and it is asked of `record.test` before any alias is
 resolved. The report tool, the dashboard collector, the test-selection
 fold and the topology check all do this. Leaving them in does more than
 add an identity to the output. The figures are not all durations: of the
-three a lane writes per batch, one says what the batch was packed to
-spend and one counts the units it opened, so a sum over them is a number
-that means nothing. `Status`, the job that scores a push run's coverage, writes
+four a lane writes per batch, one counts the units it opened, and one
+holds time another already counts, since the longest unit's time is part
+of what the batch's tests took, so a sum over them is a number that means
+nothing. `Status`, the job that scores a push run's coverage, writes
 its figures as measurements too, named `ci-lane coverage …`, each holding a
 count of uncovered lines, and three things read them back: the test-selection
 publisher's coverage baselines, the dashboard's coverage debt tile, and the

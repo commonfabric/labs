@@ -1,10 +1,22 @@
+---
+status: historical
+created: 2026-08-26
+archived: 2026-09-27
+reason: "Superseded plan; presence moved onto the memory connection, retiring the Cloudflare relay and endpoint configuration this plan describes."
+superseded-by: docs/features/collaborative-fields.md
+---
+
 # `cf-code-editor` Co-presence — Implementation Plan
 
-Status: In progress — depends on the Memory `apply-op` CodeMirror implementation
+Status: Superseded in transport by
+[Presence over the memory socket](memory-presence.md), which retires the
+Cloudflare service and endpoint configuration this plan describes. The
+client-side design in "Keeping cursor and content visually aligned" and the
+CodeMirror extension stand and are not restated there.
 
 This plan adds live participant names, carets, and selections to collaborative
 `cf-code-editor` instances. It builds on
-[Memory `apply-op`](memory-apply-op.md), which remains the sole authority for
+[Memory `apply-op`](../../plans/memory-apply-op.md), which remains the sole authority for
 document contents and operation ordering. Co-presence is a separate, lossy
 WebSocket plane whose server remembers only the latest value for each connected
 participant.

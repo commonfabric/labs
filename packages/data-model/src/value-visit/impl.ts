@@ -8,7 +8,10 @@ import type { ValueVisitor } from "./interface.ts";
 import { VisitInProgress } from "./VisitInProgress.ts";
 
 /**
- * Performs a one-off structural-map of a value, with the given visitor.
+ * Performs a one-off structural-map of a value, with the given visitor. This
+ * configures the map to freeze the containers it produces.
+ *
+ * TODO(danfuzz): The freezing is not yet implemented; see `VisitInProgress`.
  *
  * See `visitValue()` in re `value` validation.
  */
@@ -16,13 +19,36 @@ export function mapValue<PlusType, ResultType>(
   value: NoInfer<FabricValuePlus<PlusType>>,
   visitor: ValueVisitor<PlusType, ResultType>,
 ): ResultType {
-  const inProgress = new VisitInProgress<PlusType, ResultType>(visitor);
-  return inProgress.map(value);
+  const inProgress = new VisitInProgress<PlusType, ResultType>(visitor, {
+    mode: "map",
+    freeze: true,
+  });
+  return inProgress.visit(value);
 }
 
 /**
- * Creates a structural-map function bound to the given visitor. The result is a
- * single-argument `map(value)` function.
+ * Performs a one-off structural-map of a value, with the given visitor. This
+ * configures the map to leave the containers it produces mutable.
+ *
+ * TODO(danfuzz): The configuration is not yet honored, so this currently
+ * behaves exactly like `mapValue()`; see `VisitInProgress`.
+ *
+ * See `visitValue()` in re `value` validation.
+ */
+export function mutableMapValue<PlusType, ResultType>(
+  value: NoInfer<FabricValuePlus<PlusType>>,
+  visitor: ValueVisitor<PlusType, ResultType>,
+): ResultType {
+  const inProgress = new VisitInProgress<PlusType, ResultType>(visitor, {
+    mode: "map",
+    freeze: false,
+  });
+  return inProgress.visit(value);
+}
+
+/**
+ * Creates a structural-map function which performs visits identically to
+ * `value => mapValue(value, visitor)`.
  */
 export function makeMapValueFunction<PlusType, ResultType>(
   visitor: ValueVisitor<PlusType, ResultType>,
@@ -30,6 +56,30 @@ export function makeMapValueFunction<PlusType, ResultType>(
   value: FabricValuePlus<PlusType>,
 ) => ResultType {
   return (value: FabricValuePlus<PlusType>) => mapValue(value, visitor);
+}
+
+/**
+ * Creates a structural-map function which performs visits identically to
+ * `value => mutableMapValue(value, visitor)`.
+ */
+export function makeMutableMapValueFunction<PlusType, ResultType>(
+  visitor: ValueVisitor<PlusType, ResultType>,
+): (
+  value: FabricValuePlus<PlusType>,
+) => ResultType {
+  return (value: FabricValuePlus<PlusType>) => mutableMapValue(value, visitor);
+}
+
+/**
+ * Creates a visitor function which performs visits identically to
+ * `value => visitValue(value, visitor)`.
+ */
+export function makeVisitValueFunction<PlusType, ResultType>(
+  visitor: ValueVisitor<PlusType, ResultType>,
+): (
+  value: FabricValuePlus<PlusType>,
+) => ResultType {
+  return (value: FabricValuePlus<PlusType>) => visitValue(value, visitor);
 }
 
 /**
@@ -50,18 +100,8 @@ export function visitValue<PlusType, ResultType>(
   value: NoInfer<FabricValuePlus<PlusType>>,
   visitor: ValueVisitor<PlusType, ResultType>,
 ): ResultType {
-  const inProgress = new VisitInProgress<PlusType, ResultType>(visitor);
+  const inProgress = new VisitInProgress<PlusType, ResultType>(visitor, {
+    mode: "visit",
+  });
   return inProgress.visit(value);
-}
-
-/**
- * Creates a visitor function bound to the given visitor. The result is a
- * single-argument `visit(value)` function.
- */
-export function makeVisitValueFunction<PlusType, ResultType>(
-  visitor: ValueVisitor<PlusType, ResultType>,
-): (
-  value: FabricValuePlus<PlusType>,
-) => ResultType {
-  return (value: FabricValuePlus<PlusType>) => visitValue(value, visitor);
 }

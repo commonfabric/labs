@@ -662,6 +662,18 @@ the kill loses that child's coverage, but it cannot truncate a profile.
 their input, and `packages/memory/test/inbox-store-child-coverage.test.ts` fails
 when any of them loses its profile.
 
+A web worker that a test starts writes coverage profiles too, and it writes them
+while it shuts down, after `terminate()` has already returned. A process that
+exits before that write finishes loses the worker's profiles or leaves one
+truncated. A `Worker` object gives no signal when its shutdown is done, but in
+Deno a Web Lock that a web worker holds is released only when the worker's
+runtime is torn down, which comes after that write. So a test that terminates a
+web worker just before its process exits waits for it by requesting a lock the
+worker took for itself. `WebWorkerRuntimeTransport.dispose()` waits in that way
+for the runtime worker, and
+`packages/runtime-client/test/client/transport-web-worker-coverage.test.ts`
+fails when that worker loses its profile.
+
 ### Test Structure
 
 - **Unit tests**: Use `@std/testing/bdd` (`describe`/`it`) with `@std/expect` for assertions

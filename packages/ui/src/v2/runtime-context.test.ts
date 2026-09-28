@@ -3,16 +3,11 @@ import { expect } from "@std/expect";
 import type { Context } from "@lit/context";
 import type { RuntimeClient } from "@commonfabric/runtime-client";
 import type { DID } from "@commonfabric/identity";
-import {
-  presenceUrlContext,
-  runtimeContext,
-  spaceContext,
-} from "./runtime-context.ts";
+import { runtimeContext, spaceContext } from "./runtime-context.ts";
 
 describe("host embedding contract: runtime/space contexts", () => {
   // Host-embedding contract seam 2 (docs/features/host-embedding.md §2):
-  // `runtimeContext` and `spaceContext` are the only REQUIRED contexts a host
-  // provides; `presenceUrlContext` is optional and degrades to disabled. A host
+  // `runtimeContext` and `spaceContext` are the contexts a host provides. A host
   // and the mounted components must agree on the context *identity* — with
   // `@lit/context`, `createContext(key)` returns the string key itself, so the
   // key string is the wire identity of the seam. A rename, or a merge into a
@@ -31,12 +26,6 @@ describe("host embedding contract: runtime/space contexts", () => {
     expect(runtimeContext).not.toBe(spaceContext);
   });
 
-  it("presenceUrlContext is keyed 'presence-url'", () => {
-    expect(presenceUrlContext).toBe("presence-url");
-    expect(presenceUrlContext).not.toBe(runtimeContext);
-    expect(presenceUrlContext).not.toBe(spaceContext);
-  });
-
   it("carries the host-providable value types (compile-time contract)", () => {
     // Type-level assertion: the value types are what a host provides. If the
     // published value types drift (e.g. RuntimeClient -> some shell-internal
@@ -47,11 +36,7 @@ describe("host embedding contract: runtime/space contexts", () => {
     const _space: typeof spaceContext extends Context<unknown, DID | undefined>
       ? true
       : never = true;
-    const _presenceUrl: typeof presenceUrlContext extends
-      Context<unknown, string | undefined> ? true
-      : never = true;
     expect(_runtime).toBe(true);
     expect(_space).toBe(true);
-    expect(_presenceUrl).toBe(true);
   });
 });

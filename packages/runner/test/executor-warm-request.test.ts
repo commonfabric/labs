@@ -49,7 +49,7 @@ import {
   read as readDoc,
   serverSeq,
 } from "@commonfabric/memory/v2/engine";
-import { TEST_MEMORY_SERVER_AUTH } from "./memory-v2-test-utils.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 class SharedServerStorageManager extends EmulatedStorageManager {
   static override connectTo(
@@ -59,17 +59,6 @@ class SharedServerStorageManager extends EmulatedStorageManager {
     return super.connectTo(server, options) as SharedServerStorageManager;
   }
 }
-
-const newSharedServer = () =>
-  new MemoryV2Server.Server({
-    subscriptionRefreshDelayMs: 0,
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
 
 const homeSigner = await Identity.fromPassphrase("warm request home");
 const homeSpace = homeSigner.did() as MemorySpace;
@@ -199,7 +188,9 @@ describe("executor-warm-request", () => {
     });
 
   beforeEach(() => {
-    server = newSharedServer();
+    server = newSharedServer({
+      subscriptionRefreshDelayMs: 0,
+    });
     servingRuntime = undefined;
     failNextRuntimeFor = undefined;
     failNextCycle = false;

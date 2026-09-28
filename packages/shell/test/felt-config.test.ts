@@ -42,14 +42,12 @@ async function importFreshConfig() {
 describe("shell felt config", () => {
   it("wires modern experimental env vars into build-time defines", async () => {
     const config = await withEnv({
-      PRESENCE_URL: "wss://presence.test",
       EXPERIMENTAL_MODERN_CELL_REP: "true",
       EXPERIMENTAL_AGENT_BUILTIN: "false",
       EXPERIMENTAL_CONTENT_ADDRESSED_SCHEMAS: "true",
     }, importFreshConfig);
 
     expect(config.esbuild?.define).toMatchObject({
-      $PRESENCE_URL: "wss://presence.test/",
       $EXPERIMENTAL_MODERN_CELL_REP: "true",
       $EXPERIMENTAL_AGENT_BUILTIN: "false",
       $EXPERIMENTAL_CONTENT_ADDRESSED_SCHEMAS: "true",
@@ -59,20 +57,5 @@ describe("shell felt config", () => {
     ];
     expect(compileCacheVersion?.startsWith("cf/esm-compile/")).toBe(true);
     expect(compileCacheVersion).not.toBe("cf/esm-compile/source");
-  });
-
-  it("rejects an invalid presence URL before building", async () => {
-    for (
-      const value of [
-        "https://presence.test",
-        "wss://user:secret@presence.test",
-        "wss://presence.test?room=shared",
-        "wss://presence.test#fragment",
-      ]
-    ) {
-      await expect(withEnv({
-        PRESENCE_URL: value,
-      }, importFreshConfig)).rejects.toThrow("PRESENCE_URL");
-    }
   });
 });

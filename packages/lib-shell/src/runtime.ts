@@ -5,6 +5,7 @@ import type { FabricPlainObject } from "@commonfabric/data-model";
 import { entityRefFromString } from "@commonfabric/data-model/cell-rep";
 import { navigate } from "@commonfabric/navigation";
 import { slugIdForSpace } from "@commonfabric/runner/slugs";
+import type { SpaceHostRegistration } from "@commonfabric/runner/space-host";
 import { NameSchema } from "@commonfabric/runner/schemas";
 import {
   attachOptionsFrom,
@@ -190,6 +191,15 @@ export type RuntimeInternalsCreateOptions = RuntimeInternalsCallbacks & {
   concurrentWatchRefresh?: boolean;
 
   /**
+   * When true, the worker holds its initialization reply until the backend's
+   * health check has answered, and `create` rejects when a host fails it.
+   * Off by default: the worker answers as soon as its runtime stands, and a
+   * host the check cannot reach arrives through `onError` as a
+   * `host-unreachable` report while storage reconnects on its own.
+   */
+  awaitHealth?: boolean;
+
+  /**
    * Override the runtime worker URL. By default, deployed builds use the
    * immutable `/builds/<clientVersion>/` asset namespace while local builds
    * fall back to `/scripts/worker-runtime.js`.
@@ -333,6 +343,7 @@ export function createRuntimeClientOptions({
   forwardWorkerConsole,
   patternCoverage,
   concurrentWatchRefresh,
+  awaitHealth,
 }: {
   session: Session;
   apiUrl: URL;
@@ -345,6 +356,7 @@ export function createRuntimeClientOptions({
   forwardWorkerConsole?: boolean;
   patternCoverage?: boolean;
   concurrentWatchRefresh?: boolean;
+  awaitHealth?: boolean;
 }) {
   // The identity the runtime renders as. A delegated host names it in its own
   // trust snapshot; a snapshot that names nobody leaves the session identity
@@ -378,6 +390,7 @@ export function createRuntimeClientOptions({
     forwardWorkerConsole,
     patternCoverage,
     concurrentWatchRefresh,
+    awaitHealth,
   };
 }
 
@@ -786,6 +799,15 @@ export class RuntimeInternals extends EventTarget {
     return await this.#client.registerSpaceHost(space, host);
   }
 
+  /** See RuntimeClient.registerSpaceHostDetailed. */
+  async registerSpaceHostDetailed(
+    space: DID,
+    host: string,
+  ): Promise<SpaceHostRegistration> {
+    this.#check();
+    return await this.#client.registerSpaceHostDetailed(space, host);
+  }
+
   async idle(): Promise<void> {
     this.#check();
     await this.#client.idle();
@@ -930,6 +952,7 @@ export class RuntimeInternals extends EventTarget {
     forwardWorkerConsole,
     patternCoverage,
     concurrentWatchRefresh,
+    awaitHealth,
     getBuildHash = fetchBuildHash,
     workerUrl,
     transport,
@@ -972,6 +995,7 @@ export class RuntimeInternals extends EventTarget {
       forwardWorkerConsole,
       patternCoverage,
       concurrentWatchRefresh,
+      awaitHealth,
     });
 
     const connection = transport ??
@@ -982,12 +1006,20 @@ export class RuntimeInternals extends EventTarget {
           getBuildHash,
         }),
       });
-    const client = attach
-      ? await RuntimeClient.attach(
-        connection,
-        attachOptionsFrom(clientOptions),
-      )
-      : await RuntimeClient.initialize(connection, clientOptions);
+    let client: RuntimeClient;
+    try {
+      client = attach
+        ? await RuntimeClient.attach(
+          connection,
+          attachOptionsFrom(clientOptions),
+        )
+        : await RuntimeClient.initialize(connection, clientOptions);
+    } catch (error) {
+      // A worker this call spawned has nobody else to end it; one that came
+      // in over `transport` is the embedder's to keep or drop.
+      if (!transport) await connection.dispose();
+      throw error;
+    }
 
     // Expose a usable RuntimeInternals immediately. Callers that need
     // storage/piece-manager convergence should await `rt.synced(space)`

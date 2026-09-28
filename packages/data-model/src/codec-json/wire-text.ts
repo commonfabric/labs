@@ -17,10 +17,18 @@ export function seemsLikeEncoded(value: string): boolean {
   return value.startsWith(ENCODING_PREFIX_TAG);
 }
 
-/** Parses the JSON-text wire form, _without_ a tag prefix. */
-export function parseWireText(jsonText: string): JsonCodecValue {
+/**
+ * Parses the JSON-text wire form, _without_ a tag prefix. The result is
+ * deep-frozen unless `mutable`; it is freshly built either way, so a mutable
+ * one is shared with nothing.
+ */
+export function parseWireText(
+  jsonText: string,
+  mutable = false,
+): JsonCodecValue {
   try {
-    return deepFreeze(JSON.parse(jsonText) as JsonCodecValue);
+    const parsed = JSON.parse(jsonText) as JsonCodecValue;
+    return mutable ? parsed : deepFreeze(parsed);
   } catch (e) {
     // The tag said this was ours and the text under it is not JSON, which
     // is a refusal of the serialized form and settles against `lenient`

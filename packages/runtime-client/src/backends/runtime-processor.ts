@@ -28,11 +28,18 @@ import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { setLLMUrl } from "@commonfabric/llm";
 import { type ACL, isACLUser, isCapability } from "@commonfabric/memory/acl";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import type {
+  PresenceEvent,
+  PresenceMembership,
+} from "@commonfabric/memory/v2/client";
+import { presenceRoomForField } from "@commonfabric/memory/v2/presence";
 import {
   dbNeedsColumnProvenance,
+  DEFAULT_BRANCH,
   eventAttentionEntryKey,
   type EventAttentionIndexValue,
   type OperationFieldAddress,
+  resolveScopeKey,
   SERVER_EXECUTION_ATTENTION_DOC_ID,
   type SqliteDbRef,
   type StreamEventsDocValue,
@@ -62,6 +69,7 @@ import {
   getMetaLink,
   getPatternIdentityRef,
   hasOperationStorageCapability,
+  hasPresenceStorageCapability,
   type IExtendedStorageTransaction,
   type IOperationStorageCapability,
   isCell,
@@ -234,11 +242,18 @@ import {
   type PieceSyncedRequest,
   type PieceUpdateSourceRequest,
   type PieceUpdateSourceResponse,
+  type PresenceJoinRequest,
+  type PresenceJoinResponse,
+  type PresenceLeaveRequest,
+  type PresencePublishRequest,
+  type PresenceWireEvent,
   type RecreateSpaceRootPatternRequest,
+  type RegisterSpaceHostDetailedRequest,
   type RegisterSpaceHostRequest,
   RequestType,
   type ResolveEventAttentionRequest,
   type ResolveSpaceNameRequest,
+  RuntimeErrorCode,
   type RuntimeSecurityContext,
   type SetActionRunTraceEnabledRequest,
   type SetBreakpointsRequest,
@@ -260,6 +275,7 @@ import {
   type SnapshotSharePreview,
   type SpaceAclResponse,
   type SpaceGetAclRequest,
+  type SpaceHostRegistrationResponse,
   type SpaceRemoveAclEntryRequest,
   type SpaceResponse,
   type SpaceSetAclEntryRequest,
@@ -814,6 +830,32 @@ export function securityContextFrom(
   } satisfies EveryFieldOf<RuntimeSecurityContext>;
 }
 
+/**
+ * The message reporting a host that did not answer the boot-time health
+ * check. The check gives one verdict over the backend and every space host,
+ * so the message names them all where there is more than one. Hosts are
+ * compared as the check compares them, as parsed URLs; one that does not
+ * parse is named as written, since that is what failed the check.
+ */
+function unreachableHostMessage(data: InitializationData): string {
+  const asChecked = (host: string) => {
+    try {
+      return new URL(host).toString();
+    } catch {
+      return host;
+    }
+  };
+  const backend = asChecked(data.apiUrl);
+  const spaceHosts = new Set<string>();
+  for (const host of Object.values(data.spaceHostMap ?? {})) {
+    const checked = asChecked(host);
+    if (checked !== backend) spaceHosts.add(checked);
+  }
+  const quoted = [...spaceHosts].map((host) => `"${host}"`).join(", ");
+  return `Could not connect to "${data.apiUrl}"` +
+    (spaceHosts.size > 0 ? ` or to a space host (${quoted})` : "");
+}
+
 /** Builds the refusal for a detached client's or a disposed runtime's seal. */
 const custodySealingUnavailable = () =>
   new Error("Custody sealing is unavailable");
@@ -827,6 +869,27 @@ type RuntimeOperationTarget = {
   capability: IOperationStorageCapability;
   address: OperationFieldAddress;
 };
+
+/**
+ * One client's membership in one presence room, keyed by the subscription
+ * id the client chose. `membership` is absent while the join is in flight,
+ * and `ended` records a leave or a client departure that arrived before it
+ * settled, so the membership is left as soon as it exists.
+ */
+type RuntimePresenceMembership = {
+  client: WorkerClient;
+  membership: PresenceMembership | undefined;
+  ended: boolean;
+};
+
+/** Reduces a room event to what crosses the worker boundary. */
+const toPresenceWireEvent = (event: PresenceEvent): PresenceWireEvent =>
+  event.kind === "failure"
+    ? {
+      kind: "failure",
+      error: { name: event.error.name, message: event.error.message },
+    }
+    : event;
 
 type RuntimeOperationSession = {
   cellKey: string;
@@ -859,6 +922,11 @@ export class RuntimeProcessor {
   #runtime: Runtime;
   #cc: PiecesController;
   #spaces = new Map<DID, PiecesController>();
+  // The boot-time health check's verdict, and whether `initialize()` waited
+  // for it before returning. A processor built without `initialize()` made
+  // no check and reads as healthy.
+  #health: Promise<boolean> = Promise.resolve(true);
+  #awaitedHealth = false;
   #identity: Identity;
   #isDisposed = false;
   #disposingPromise: Promise<void> | undefined;
@@ -880,6 +948,7 @@ export class RuntimeProcessor {
     }
   >();
   #operationSessions = new Map<string, RuntimeOperationSession>();
+  #presenceMemberships = new Map<string, RuntimePresenceMembership>();
   #pieceSourceConfirmations = new Map<
     string,
     { token: string; prepared: PreparedPieceSourceChange }
@@ -978,8 +1047,9 @@ export class RuntimeProcessor {
   /**
    * The runtime and home context this processor was built over, the tables
    * it keeps by space, by client, and by session, the disposed flag, the
-   * render policy and ceiling a mount inherits, and the per-space context
-   * step, which a test drives directly.
+   * render policy and ceiling a mount inherits, the boot-time health check's
+   * verdict and whether `initialize()` waited for it, and the per-space
+   * context step, which a test drives directly.
    */
   get accessForTestingOnly(): {
     runtime: Runtime;
@@ -1007,6 +1077,8 @@ export class RuntimeProcessor {
     >;
     renderConfidentialityCeiling: RenderConfidentialityCeiling | undefined;
     readonly renderDeclassificationPolicy: RenderDeclassificationPolicy;
+    readonly health: Promise<boolean>;
+    readonly awaitedHealth: boolean;
     getSpaceCtx(space: DID): PiecesController;
   } {
     // deno-lint-ignore no-this-alias
@@ -1017,6 +1089,12 @@ export class RuntimeProcessor {
       },
       set runtime(value) {
         outerThis.#runtime = value;
+      },
+      get health() {
+        return outerThis.#health;
+      },
+      get awaitedHealth() {
+        return outerThis.#awaitedHealth;
       },
       cc: this.#cc,
       spaces: this.#spaces,
@@ -1294,8 +1372,8 @@ export class RuntimeProcessor {
   /**
    * Tears down everything one client owns, leaving the runtime and every other
    * client's work running. This is what a client's departure costs: its cell
-   * and operation subscriptions stop, its VDOM trees unmount, and nothing else
-   * moves.
+   * and operation subscriptions stop, its presence memberships end, its VDOM
+   * trees unmount, and nothing else moves.
    *
    * The runtime itself is never touched here, however the departing client
    * came to leave. Only {@link dispose} ends a runtime, and only the client
@@ -1352,6 +1430,11 @@ export class RuntimeProcessor {
     for (const [sessionId, session] of [...this.#operationSessions]) {
       if (session.clientId !== client.id) continue;
       this.#operationSessions.delete(sessionId);
+    }
+
+    for (const [subscriptionId, membership] of [...this.#presenceMemberships]) {
+      if (membership.client.id !== client.id) continue;
+      void this.#endPresenceMembership(subscriptionId);
     }
   }
 
@@ -1638,6 +1721,123 @@ export class RuntimeProcessor {
     };
     this.#operationSessions.set(sessionKey, session);
     return { ...target, sessionKey, session };
+  }
+
+  /**
+   * Joins a presence room for the client: the one derived from the cell's
+   * resolved field, or the one the request names, under the cell's space.
+   * The first snapshot is the request's response; every later event of the
+   * membership reaches the client as a `presence:update`.
+   */
+  async handlePresenceJoin(
+    request: PresenceJoinRequest,
+    client: WorkerClient = ownerClient,
+  ): Promise<PresenceJoinResponse> {
+    if (this.#presenceMemberships.has(request.subscriptionId)) {
+      throw new Error("presence membership id is already in use");
+    }
+    const link = getCell(this.#runtime, request.cell).resolveAsCell()
+      .getAsNormalizedFullLink();
+    const provider = this.#runtime.storageManager.open(link.space);
+    const capability = hasPresenceStorageCapability(provider)
+      ? provider
+      : provider.replica;
+    if (!hasPresenceStorageCapability(capability)) {
+      throw new Error("runtime storage does not support presence");
+    }
+    const room = request.room ?? presenceRoomForField({
+      space: link.space,
+      branch: DEFAULT_BRANCH,
+      id: link.id,
+      scopeKey: resolveScopeKey(
+        link.scope,
+        this.#runtime.storageManager.scopeKeyIdentity(),
+      ),
+      path: toValuePath(link.path),
+    });
+    const state: RuntimePresenceMembership = {
+      client,
+      membership: undefined,
+      ended: false,
+    };
+    this.#presenceMemberships.set(request.subscriptionId, state);
+    let opening: Extract<PresenceEvent, { kind: "snapshot" }> | undefined;
+    let membership: PresenceMembership;
+    try {
+      membership = await capability.joinPresenceRoom(room, (event) => {
+        if (this.#presenceMemberships.get(request.subscriptionId) !== state) {
+          return;
+        }
+        // The membership delivers its opening snapshot before it is handed
+        // back, and that one is the join's response rather than an update.
+        if (opening === undefined && event.kind === "snapshot") {
+          opening = event;
+          return;
+        }
+        queueMicrotask(() =>
+          client.post({
+            type: NotificationType.PresenceUpdate,
+            subscriptionId: request.subscriptionId,
+            event: toPresenceWireEvent(event),
+          })
+        );
+      });
+    } catch (error) {
+      if (this.#presenceMemberships.get(request.subscriptionId) === state) {
+        this.#presenceMemberships.delete(request.subscriptionId);
+      }
+      throw error;
+    }
+    state.membership = membership;
+    if (state.ended || this.#isDisposed) {
+      await membership.leave();
+      throw new Error("presence membership ended while joining");
+    }
+    return {
+      participantId: membership.participantId,
+      room,
+      participants: opening?.participants ?? [],
+    };
+  }
+
+  /**
+   * Replaces the client's record in the room. A publication outside the
+   * relay's bounds throws before anything is sent.
+   */
+  handlePresencePublish(
+    request: PresencePublishRequest,
+    client: WorkerClient = ownerClient,
+  ): BooleanResponse {
+    const state = this.#presenceMemberships.get(request.subscriptionId);
+    if (
+      state === undefined || state.client.id !== client.id ||
+      state.membership === undefined
+    ) {
+      return { value: false };
+    }
+    state.membership.publish({ name: request.name, facets: request.facets });
+    return { value: true };
+  }
+
+  /** Ends the client's membership; a membership is its joiner's to end. */
+  async handlePresenceLeave(
+    request: PresenceLeaveRequest,
+    client: WorkerClient = ownerClient,
+  ): Promise<BooleanResponse> {
+    const state = this.#presenceMemberships.get(request.subscriptionId);
+    if (state === undefined || state.client.id !== client.id) {
+      return { value: false };
+    }
+    await this.#endPresenceMembership(request.subscriptionId);
+    return { value: true };
+  }
+
+  async #endPresenceMembership(subscriptionId: string): Promise<void> {
+    const state = this.#presenceMemberships.get(subscriptionId);
+    if (state === undefined) return;
+    this.#presenceMemberships.delete(subscriptionId);
+    state.ended = true;
+    await state.membership?.leave();
   }
 
   async handleOperationCapabilities(
@@ -2052,9 +2252,14 @@ export class RuntimeProcessor {
     const terms = this.#hostSelectedCell(request.terms);
     const policy = this.#hostSelectedCell(request.policy);
     const settings = this.#hostSelectedCell(request.allowedSources);
-    const prepared = await prepareCustodySeal(draft, { terms, policy }, {
-      allowedSources: settings,
-    });
+    const box = request.box === undefined
+      ? undefined
+      : this.#hostSelectedCell(request.box);
+    const prepared = await prepareCustodySeal(
+      draft,
+      { terms, policy, ...(box === undefined ? {} : { box }) },
+      { allowedSources: settings },
+    );
     if (unavailable()) throw new Error("Custody sealing is unavailable");
     const id = crypto.randomUUID();
     this.#custodySeals.set(clientScopedKey(client, id), {
@@ -2944,6 +3149,17 @@ export class RuntimeProcessor {
     };
   }
 
+  handleRegisterSpaceHostDetailed(
+    request: RegisterSpaceHostDetailedRequest,
+  ): SpaceHostRegistrationResponse {
+    return {
+      registration: this.#runtime.registerSpaceHostDetailed(
+        request.space,
+        request.host,
+      ),
+    };
+  }
+
   async handleResolveSpaceName(
     request: ResolveSpaceNameRequest,
   ): Promise<SpaceResponse> {
@@ -3262,6 +3478,12 @@ export class RuntimeProcessor {
         return this.handleOperationUnsubscribe(request, client);
       case RequestType.OperationSessionClose:
         return this.handleOperationSessionClose(request, client);
+      case RequestType.PresenceJoin:
+        return await this.handlePresenceJoin(request, client);
+      case RequestType.PresencePublish:
+        return this.handlePresencePublish(request, client);
+      case RequestType.PresenceLeave:
+        return await this.handlePresenceLeave(request, client);
       case RequestType.SqliteQuery:
         return await this.handleSqliteQuery(request);
       case RequestType.SqliteExec:
@@ -3328,6 +3550,8 @@ export class RuntimeProcessor {
         return await this.handleResolveSpaceName(request);
       case RequestType.RegisterSpaceHost:
         return this.handleRegisterSpaceHost(request);
+      case RequestType.RegisterSpaceHostDetailed:
+        return this.handleRegisterSpaceHostDetailed(request);
       case RequestType.GetGraphSnapshot:
         return this.getGraphSnapshot(request);
       case RequestType.GetLoggerCounts:
@@ -3599,10 +3823,12 @@ export class RuntimeProcessor {
    * wires the runtime's console, navigation, piece-creation, and error
    * bridges to `postToClient()`, and starts the home-space site-table watch.
    * Rejects when the runtime's server-execution posture diverges from what
-   * the host declared, or when the API host fails its health check. The
-   * returned processor handles requests at once; a caller that needs storage
-   * and pieces to have converged waits on `synced()`. `clients` resolves the
-   * current authorized recipients of runtime-wide access-loss notifications.
+   * the host declared, or, with `awaitHealth`, when a host fails the health
+   * check. Otherwise the check runs alongside: the returned processor handles
+   * requests at once, and a host the check could not reach is reported to
+   * the clients connected when it answers. A caller that needs storage and
+   * pieces to have converged waits on `synced()`. `clients` resolves the
+   * current authorized recipients of runtime-wide notifications.
    */
   static async initialize(
     data: InitializationData,
@@ -3710,8 +3936,17 @@ export class RuntimeProcessor {
 
     assertServerExecutionPostureAgreement(data.experimental, runtime);
 
-    if (!await runtime.healthCheck()) {
-      throw new Error(`Could not connect to "${data.apiUrl}"`);
+    // The check fans out to the default host and every seeded one, so it
+    // answers at the pace of the slowest of them. The reply does not wait for
+    // it: storage reconnects with its own backoff, and a host that stays
+    // unreachable is reported below. The check cannot reject on its own; a
+    // rejection is treated as an unreachable host all the same.
+    const health = runtime.healthCheck().then(
+      (healthy) => healthy,
+      () => false,
+    );
+    if (data.awaitHealth === true && !await health) {
+      throw new Error(unreachableHostMessage(data));
     }
 
     // Allow the worker to acknowledge initialization immediately. Consumers
@@ -3727,6 +3962,24 @@ export class RuntimeProcessor {
       securityContextFrom(data, identity.did()),
       clients,
     );
+    processor.#health = health;
+    processor.#awaitedHealth = data.awaitHealth === true;
+    if (!processor.#awaitedHealth) {
+      // Nothing between the check and the return awaits, so the host has its
+      // reply, and its error listener in place, before this notice can go
+      // out. An `await` added on that path would reorder the two.
+      const built = processor;
+      void health.then((healthy) => {
+        if (healthy || built.#isDisposed) return;
+        for (const client of clients()) {
+          client.post({
+            type: NotificationType.ErrorReport,
+            code: RuntimeErrorCode.HostUnreachable,
+            message: unreachableHostMessage(data),
+          });
+        }
+      });
+    }
     // InitializationData crosses postMessage with no runtime validation, so a
     // typo'd host config or version-skewed peer must fail CLOSED, not open:
     // any present-but-unknown value becomes "deny"; absent stays "allow".

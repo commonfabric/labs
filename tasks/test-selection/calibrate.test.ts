@@ -56,6 +56,11 @@ function batch(
   ];
 }
 
+/** What a lane writes about its longest unit in one batch. */
+function longest(suite: string, seconds: number, coverage = false): TestRecord {
+  return measured(batchMeasurementName(suite, coverage, "longest"), seconds);
+}
+
 /**
  * Observations over every combination of a small and a large reading of
  * each of the two things a batch is charged for, far enough apart in the
@@ -156,6 +161,35 @@ describe("calibrate", () => {
           units: 17,
         },
       ]);
+    });
+
+    it("joins what its longest unit took, where the lane wrote that", () => {
+      const seen = observationsOf([
+        {
+          run: "a",
+          records: [
+            ...batch("pattern-unit", 900, 700, 3),
+            longest("pattern-unit", 680),
+          ],
+        },
+      ]);
+      expect(seen.batches).toEqual([
+        {
+          suite: "pattern-unit",
+          measured: false,
+          ran: 900,
+          spent: 700,
+          units: 3,
+          longest: 680,
+        },
+      ]);
+    });
+
+    it("takes nothing from a longest unit whose batch wrote nothing else", () => {
+      const seen = observationsOf([
+        { run: "a", records: [longest("pattern-unit", 680)] },
+      ]);
+      expect(seen.batches).toEqual([]);
     });
 
     it("reads a unit count as a count rather than as a span of time", () => {
@@ -292,6 +326,23 @@ describe("calibrate", () => {
   });
 
   describe("what one group says, as an aggregate stores it", () => {
+    it("carries what a batch's longest unit took", () => {
+      const kept = laneObservationsOf(
+        "object-1",
+        [...batch("pattern-unit", 900, 700, 3), longest("pattern-unit", 680)],
+        "2026-09-12",
+      );
+      expect(kept).toEqual([{
+        day: "2026-09-12",
+        suite: "pattern-unit",
+        measured: false,
+        ran: 900,
+        spent: 700,
+        units: 3,
+        longest: 680,
+      }]);
+    });
+
     it("carries the day, so a stored observation can be aged", () => {
       const kept = laneObservationsOf(
         "object-1",
@@ -603,6 +654,134 @@ describe("calibrate", () => {
       expect(fitted.correction).toBe(1);
     });
 
+    it("charges a batch's one long unit to that batch rather than to every lane", () => {
+      // The suite runs its units side by side, so a batch of many spends
+      // a third of what they took between them. A batch holding a unit
+      // that takes minutes spends those minutes. Read through the
+      // correction alone, the three such batches leave hundreds of seconds
+      // that the intercept, which every lane holding the suite pays, would
+      // have to cover.
+      const pooled = Array.from({ length: 15 }, (_, i) => ({
+        suite: "s",
+        measured: false,
+        units: 30,
+        ran: 60 * (2 + i),
+        spent: 60 * (2 + i) / 3,
+        longest: 10,
+      }));
+      const long = Array.from({ length: 3 }, () => ({
+        suite: "s",
+        measured: false,
+        units: 3,
+        ran: 410,
+        spent: 405,
+        longest: 400,
+      }));
+      const fitted = fitSuite([...pooled, ...long]);
+      expect(fitted.overhead).toBeLessThan(50);
+      const unbounded = fitSuite(
+        [...pooled, ...long].map(({ longest: _, ...one }) => one),
+      );
+      expect(unbounded.overhead).toBeGreaterThan(250);
+    });
+
+    it("fits the correction through the batches their longest unit does not decide", () => {
+      // Each pooled batch spends a third of what its tests took. The three
+      // long ones spend what their longest unit took, and a slope through
+      // them as well comes out lower than a third.
+      const pooled = Array.from({ length: 15 }, (_, i) => ({
+        suite: "s",
+        measured: false,
+        units: 30,
+        ran: 60 * (2 + i),
+        spent: 60 * (2 + i) / 3,
+        longest: 10,
+      }));
+      const long = Array.from({ length: 3 }, () => ({
+        suite: "s",
+        measured: false,
+        units: 1,
+        ran: 400,
+        spent: 400,
+        longest: 400,
+      }));
+      const fitted = fitSuite([...pooled, ...long]);
+      expect(fitted.correction).toBeCloseTo(1 / 3, 6);
+      expect(fitted.overhead).toBeCloseTo(0, 6);
+    });
+
+    it("fits a suite from the batches that said what their longest unit took", () => {
+      // The three long batches said nothing about their longest unit, so
+      // read through the correction they would set the intercept. The
+      // batches that did say are what the suite is fitted from.
+      const pooled = Array.from({ length: 15 }, (_, i) => ({
+        suite: "s",
+        measured: false,
+        units: 30,
+        ran: 60 * (2 + i),
+        spent: 60 * (2 + i) / 3,
+        longest: 10,
+      }));
+      const unsaid = Array.from({ length: 3 }, () => ({
+        suite: "s",
+        measured: false,
+        units: 1,
+        ran: 400,
+        spent: 400,
+      }));
+      const fitted = fitSuite([...pooled, ...unsaid]);
+      expect(fitted.correction).toBeCloseTo(1 / 3, 6);
+      expect(fitted.overhead).toBeCloseTo(0, 6);
+      expect(
+        fitSuite([...pooled.map(({ longest: _, ...one }) => one), ...unsaid])
+          .overhead,
+      ).toBeGreaterThan(250);
+    });
+
+    it("fits the correction through batches spent side by side where a fit through all of them comes out below zero", () => {
+      // The pooled batches spend three tenths of what their tests took.
+      // The long ones took less in all and spent more, each on one unit,
+      // and a slope through every batch falls as their tests' time rises.
+      const pooled = Array.from({ length: 6 }, (_, i) => ({
+        suite: "s",
+        measured: false,
+        units: 60,
+        ran: 1000 + 80 * i,
+        spent: 0.3 * (1000 + 80 * i),
+        longest: 30,
+      }));
+      const long = [600, 700, 800, 900].map((ran) => ({
+        suite: "s",
+        measured: false,
+        units: 3,
+        ran,
+        spent: ran - 100,
+        longest: ran - 110,
+      }));
+      expect(fitSuite([...pooled, ...long]).correction).toBeCloseTo(0.3, 6);
+    });
+
+    it("fits a suite from every batch while too few say what their longest unit took", () => {
+      // Two batches are too few to fit a correction from, so a suite
+      // fitted from them alone would be charged its tests' whole time.
+      const unsaid = Array.from({ length: 15 }, (_, i) => ({
+        suite: "s",
+        measured: false,
+        units: 30,
+        ran: 60 * (2 + i),
+        spent: 60 * (2 + i) / 3,
+      }));
+      const said = [0, 1].map(() => ({
+        suite: "s",
+        measured: false,
+        units: 30,
+        ran: 300,
+        spent: 100,
+        longest: 10,
+      }));
+      expect(fitSuite([...unsaid, ...said]).correction).toBeCloseTo(1 / 3, 6);
+    });
+
     it("fits a suite whose batch runs faster than the sum of its tests", () => {
       // A batch runs its files in parallel, so its wall time is
       // routinely a fraction of the sum of its tests' own durations —
@@ -770,7 +949,7 @@ describe("calibrate", () => {
       // on the order the openings were read in.
       for (const count of [10, 11, 20, 30, 100]) {
         const typical = Array.from({ length: count - 1 }, (_, i) => 10 + i);
-        const openings = [90, ...typical];
+        const openings = [400, ...typical];
         const charged = calibrate({
           setup: new Map([["fuse", openings]]),
           batches: [],
@@ -948,6 +1127,34 @@ describe("calibrate", () => {
       ).toBe(false);
     });
 
+    it("returns `true` for a batch carrying what its longest unit took", () => {
+      expect(
+        isLaneObservation({
+          day: "d",
+          suite: "s",
+          ran: 10,
+          spent: 30,
+          units: 4,
+          longest: 8,
+        }),
+      ).toBe(true);
+    });
+
+    it("returns `false` for a longest unit that is not a finite number", () => {
+      for (const figure of [null, "8", Infinity]) {
+        expect(
+          isLaneObservation({
+            day: "d",
+            suite: "s",
+            ran: 10,
+            spent: 30,
+            units: 4,
+            longest: figure,
+          }),
+        ).toBe(false);
+      }
+    });
+
     it("returns `false` for anything that is not one", () => {
       expect(isLaneObservation({ capability: "fuse", seconds: 1 })).toBe(false);
       expect(isLaneObservation({ day: "d", seconds: 1 })).toBe(false);
@@ -979,6 +1186,26 @@ describe("calibrate", () => {
       expect(seen.batches).toEqual([
         { suite: "runner-unit", measured: true, ran: 10, spent: 30, units: 4 },
       ]);
+    });
+
+    it("reads what a stored batch's longest unit took", () => {
+      const seen = laneObservations([{
+        day: "2026-09-12",
+        suite: "pattern-unit",
+        measured: true,
+        ran: 900,
+        spent: 700,
+        units: 3,
+        longest: 680,
+      }]);
+      expect(seen.batches).toEqual([{
+        suite: "pattern-unit",
+        measured: true,
+        ran: 900,
+        spent: 700,
+        units: 3,
+        longest: 680,
+      }]);
     });
 
     it("reads a batch stored without the coverage flag as run without coverage", () => {

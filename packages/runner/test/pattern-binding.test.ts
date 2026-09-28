@@ -18,7 +18,7 @@ import { isAliasBinding } from "../src/alias-binding.ts";
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import {
   linkCfcLabelView,
-  setLinkCfcLabelView,
+  withLinkCfcLabelView,
 } from "../src/cfc/link-label-view.ts";
 import { createCell, isCell } from "../src/cell.ts";
 import {
@@ -1023,10 +1023,12 @@ describe("pattern-binding", () => {
       // The label view is a flow-control side channel, and cfc's own module
       // calls it no part of a link's addressing identity -- so it is no part
       // of what names a node either.
-      const link = runtime
-        .getCell(space, `labeled ${crypto.randomUUID()}`, undefined, tx)
-        .getAsLink();
-      setLinkCfcLabelView(link, {} as never);
+      const link = withLinkCfcLabelView(
+        runtime
+          .getCell(space, `labeled ${crypto.randomUUID()}`, undefined, tx)
+          .getAsLink(),
+        {} as never,
+      );
       expect(linkCfcLabelView(link)).not.toBeUndefined();
 
       const reduced = reduce({ x: link }).x;
