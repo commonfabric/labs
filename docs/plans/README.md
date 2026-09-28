@@ -10,6 +10,13 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [Piece upgrades from first principles](piece-upgrades.md) designs the state
+  half of changing a piece's source and data shape — a runtime-owned state
+  version with upgrade steps, a writer-version guard, contracts between pieces
+  checked at three strengths, capability narrowing made free, and a scoped
+  acknowledgment in place of the global override — and walks every kind of
+  break through it with its cost. Each decision is a numbered proposal for
+  Bernhard, Robin, Gideon, danfuzz, or Mike to confirm; nothing is implemented.
 - [Shuffled test order: what is left to build](test-order-shuffle.md) carries
   the piece the shuffle does not yet have: a shuffle inside this repository's
   own `describe()` and `it()`, which every test file already resolves to,
