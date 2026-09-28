@@ -255,6 +255,33 @@ describe("RuntimeClient presence rooms", () => {
       }
     });
 
+    it("joins afresh when a failure ends the room while the join that reached it is still settling", async () => {
+      // The failure arrives after each number of microtasks in turn, from
+      // ahead of the reply through the first caller resuming. Whether that
+      // first caller rejects or holds a failed handle depends on when; the
+      // caller after the failure gets a membership of its own either way.
+      for (let ticks = 0; ticks < 8; ticks++) {
+        const { client, cell, requests, notify, answerJoin } = buildClient({
+          holdJoins: true,
+        });
+        const joining = client.joinPresenceRoom(cell);
+        const first = joining.catch(() => undefined);
+        answerJoin(0);
+        for (let i = 0; i < ticks; i++) await Promise.resolve();
+        notify({
+          kind: "failure",
+          error: { name: "SessionRevokedError", message: "taken over" },
+        });
+        const rejoining = client.joinPresenceRoom(cell);
+        expect(
+          requests.filter(({ type }) => type === RequestType.PresenceJoin),
+        ).toHaveLength(2);
+        answerJoin(1);
+        await first;
+        expect((await rejoining).participantId).toBe("participant:self:2");
+      }
+    });
+
     it("shares an alias's join in flight with a later join through the alias while it waits on a named join", async () => {
       const { client, cell, requests, answerJoin } = buildClient({
         holdJoins: true,
