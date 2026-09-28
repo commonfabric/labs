@@ -5,9 +5,9 @@
  * a member's task cannot be handed a subset: almost every one of them
  * lists its own paths, so appending more would add to what runs rather
  * than restrict it. What the task does carry is everything else the run
- * needs — the permissions, `--no-check`, a fake-clock preload, an `ENV`
- * assignment in front — so the task is read for those and its paths are
- * replaced with the chosen ones.
+ * needs — the permissions, a fake-clock preload, an `ENV` assignment in
+ * front — so the task is read for those and its paths are replaced with the
+ * chosen ones.
  *
  * Only the simple shape is read: leading `NAME=value` assignments, then
  * `deno test`, then flags and paths. A task carrying a shell

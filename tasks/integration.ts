@@ -605,7 +605,7 @@ export function buildFilteredTestArgs(
   testFiles: string[],
   junitDir?: string,
 ): string[] {
-  const args = ["test", "-A"];
+  const args = ["test", "--no-check", "-A"];
 
   if (pkg === "patterns") {
     args.push("--v8-flags=--max-old-space-size=4096", "--trace-leaks");

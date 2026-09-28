@@ -564,6 +564,14 @@ Two rules force a test in.
   source file forces a test in except through a declaration that reaches
   it. Which tests run for it otherwise is what the score decides.
 
+  The type check is not bounded that way. A change reaches every
+  type-check group whose files import a changed file, directly or through
+  other modules, however many groups that is; a manifest, a declaration
+  file it loads into every check, or the lock file reaches the groups whose
+  modules it governs. The change can alter each of those groups' verdicts,
+  and no `deno test` type-checks anything, so a group left to the score is
+  a type error the change may have made that nothing looks for.
+
 ## Coverage
 
 Selection breaks a gate on the repository's whole coverage number: a

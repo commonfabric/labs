@@ -1167,7 +1167,7 @@ Deno.test("the CFC Property Suite workflow records no tests", async () => {
   const job = jobBlock(suite, "cfc-properties");
   assertStringIncludes(
     job,
-    "run: deno test --shuffle=$(deno task -q test-seed) -A " +
+    "run: deno test --shuffle=$(deno task -q test-seed) --no-check -A " +
       "test/cfc-properties/\n",
   );
   assertStringIncludes(job, "deno task cfc-audit ");

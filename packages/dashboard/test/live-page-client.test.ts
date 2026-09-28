@@ -1,6 +1,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { type Part, reconcileMain } from "../live-page-client.ts";
+import {
+  LIVE_PAGE_UPDATE,
+  type Part,
+  reconcileMain,
+  updateMain,
+} from "../live-page-client.ts";
 
 // The parts of the DOM `reconcileMain()` uses, over a plain tree of nodes.
 // `live-page-client.browser.test.ts` runs the same function against a real
@@ -34,6 +39,13 @@ class FakePart implements Part<FakePart> {
 
   get outerHTML(): string {
     return `<${this.name}${this.attributes}>${this.innerHTML}</${this.name}>`;
+  }
+
+  /** What the element was sent, and what it held when it was. */
+  readonly announced: { event: CustomEvent<FakePart>; held: string }[] = [];
+
+  dispatchEvent(event: CustomEvent<FakePart>): void {
+    this.announced.push({ event, held: this.outerHTML });
   }
 
   replaceWith(next: FakePart): void {
@@ -109,5 +121,33 @@ describe("reconcileMain()", () => {
       .toBe(true);
     expect(body.children).toEqual([main]);
     expect(main.outerHTML).toBe(`<main${title}><p>two</p></main>`);
+  });
+});
+
+describe("updateMain()", () => {
+  it("announces the rendering to main before bringing main up to date", () => {
+    const main = part("main", part("span", "1h ago"));
+    onPage(main);
+    const next = part("main", part("span", "2h ago"));
+    expect(updateMain(main, next)).toBe(true);
+    expect(main.announced.map(({ event, held }) => ({
+      type: event.type,
+      bubbles: event.bubbles,
+      detail: event.detail,
+      held,
+    }))).toEqual([{
+      type: LIVE_PAGE_UPDATE,
+      bubbles: true,
+      detail: next,
+      held: "<main><span>1h ago</span></main>",
+    }]);
+    expect(main.outerHTML).toBe("<main><span>2h ago</span></main>");
+  });
+
+  it("announces a rendering that changes nothing, and reports that", () => {
+    const main = part("main", part("b", "same"));
+    onPage(main);
+    expect(updateMain(main, part("main", part("b", "same")))).toBe(false);
+    expect(main.announced.length).toBe(1);
   });
 });

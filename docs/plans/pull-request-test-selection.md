@@ -543,8 +543,8 @@ and still failed.
 A member's test task cannot be handed a subset of its own files: almost
 every one of them lists its own paths, so appending more would add to
 what runs rather than restrict it. What the task does carry is everything
-else a run needs — the permissions, `--no-check`, a fake-clock preload,
-an `ENV` assignment in front — so the topology reads the task for those
+else a run needs — the permissions, a fake-clock preload, an `ENV`
+assignment in front — so the topology reads the task for those
 and replaces its paths with the chosen ones.
 
 Most of the forty-seven members are readable that way, and nearly every

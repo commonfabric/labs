@@ -2176,7 +2176,8 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   prepareForCommit(): void;
 
   /**
-   * Runs the same preparation with cooperative yields between targets.
+   * Runs the same preparation with cooperative yields between targets and
+   * within staged-reference label derivation.
    * Cancellation aborts the uncommitted transaction. The caller must await
    * completion before committing; activity during a yield aborts the attempt.
    */

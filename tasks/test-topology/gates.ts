@@ -12,7 +12,7 @@
  * it.
  */
 
-import { collectPathsByScope, scopeOfPath } from "../typecheck.ts";
+import { collectPathsByScope, scopesReached } from "../typecheck.ts";
 import * as path from "@std/path";
 import { ACCEPTED_CONTRACT_BREAKS } from "../pattern-compat-accepted-breaks.ts";
 import {
@@ -478,14 +478,19 @@ function gateSuite(
 
 /**
  * The type check, one unit per package group. The store records one
- * identity per group and the mapping from a changed file to its group is
- * direct, so `unitsForChange` names exactly the groups a change touches.
+ * identity per group.
+ *
+ * A group's check opens every module its files import, so a change can
+ * alter the verdict of a group other than its own. `unitsForChange` names
+ * each group whose files import a changed file, directly or through other
+ * modules, as well as the group owning it.
  */
 async function typecheckSuite(root: string): Promise<Suite> {
   const byScope = await collectPathsByScope(root);
   const scopes = [...byScope.keys()].sort();
   const known = new Set(scopes);
   const recordSurfaces = scopes.map((scope) => ({ kind: "typecheck", scope }));
+  const reached = await scopesReached(root, byScope);
   return {
     id: "typecheck",
     recordSurfaces,
@@ -494,17 +499,7 @@ async function typecheckSuite(root: string): Promise<Suite> {
     unavailable: [],
     // One `deno check` over a group records one identity.
     whole: scopes,
-    // A group's unit is the scope it checks rather than a path, so the
-    // diff is mapped onto scopes the same way the check itself groups
-    // the paths it walks.
-    unitsForChange(changed) {
-      const touched = new Set<string>();
-      for (const path of changed) {
-        const scope = scopeOfPath(path);
-        if (known.has(scope)) touched.add(scope);
-      }
-      return [...touched];
-    },
+    unitsForChange: reached,
     locate(record): Location | undefined {
       if (!claimsIdentity({ recordSurfaces }, record.test)) return undefined;
       // `cfcheck` records under the same kind and its own names, so the

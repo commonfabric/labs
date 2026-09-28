@@ -922,6 +922,34 @@ describe("reading a run's gathered artifacts", () => {
     }
   }
 
+  it("reports every unclaimed identity of a run holding half a million records", async () => {
+    // A lane's artifact holds a record for every test the lane ran, and
+    // a mapping gone wrong leaves each of those unclaimed. Both are more
+    // than one function call can take as arguments.
+    const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+    const dir = await Deno.makeTempDir({ prefix: "large-" });
+    const count = 500_000;
+    try {
+      await artifact(
+        dir,
+        "test-records-lane",
+        { job: "Lane", commit: "c0ffee" },
+        Array.from({ length: count }, (_, at) => `bakes ${at}`),
+      );
+      const { findings } = await check({
+        root,
+        store: { records: [dir], commit: "c0ffee" },
+      });
+      const unclaimed = findings.filter((finding) =>
+        finding.fails && finding.message.startsWith("no suite claims")
+      );
+      expect(unclaimed.length).toBe(count);
+      expect(unclaimed.at(-1)?.message).toContain(`"bakes ${count - 1}"`);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+
   it("holds a gathered artifact's records to the commit its job named", async () => {
     // A gathered artifact carries a run's records without the context a
     // report opens with, and the commit the store half holds a tree to is

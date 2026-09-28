@@ -241,7 +241,9 @@ export interface Suite {
    * repository, since a declaration for such a unit comes to most
    * changes and places it in most lanes by declaration rather than by
    * what it has caught. Such a unit reaches a lane on what it is worth,
-   * or because nothing has a record of it.
+   * or because nothing has a record of it. The type check is the exception:
+   * a change reaches every type-check group importing what it touches,
+   * however many that is, since no `deno test` checks types.
    */
   unitsForChange?(changed: ReadonlySet<string>): readonly Unit[];
 
@@ -505,6 +507,37 @@ export function shuffleArguments(): string[] {
   return [shuffleFlag(shuffleSeed())];
 }
 
+/**
+ * The command that runs `deno test` over `files` under `flags`, recording
+ * and shuffling as every suite's `deno test` does, and writing its report to
+ * `junitPath`.
+ *
+ * It never type-checks. The `typecheck` suite checks every file a test
+ * loads, so a test process checking its module graph again repeats that
+ * work in every process a lane starts. Whatever `flags` say about checking
+ * is replaced by one `--no-check`.
+ */
+export function denoTestCommand(
+  flags: readonly string[],
+  context: CommandContext,
+  junitPath: string,
+  files: readonly string[],
+): string[] {
+  const unchecked = [
+    "--no-check",
+    ...flags.filter((flag) => !/^--(no-)?check(=|$)/.test(flag)),
+  ];
+  return [
+    Deno.execPath(),
+    "test",
+    ...unchecked,
+    ...shuffleArguments(),
+    ...recordingArguments(unchecked, context),
+    `--junit-path=${junitPath}`,
+    ...files,
+  ];
+}
+
 /** Writes a batch's skip list where its invocations will read it. */
 export async function writeSkipList(
   skipListPath: string,
@@ -670,17 +703,14 @@ export function fileSuite(options: FileSuiteOptions): Suite {
           env.CF_PATTERN_COVERAGE_DIR = context.patternCoverageDir;
         }
         invocations.push({
-          command: [
-            Deno.execPath(),
-            "test",
-            ...part.flags,
-            ...shuffleArguments(),
-            ...recordingArguments(part.flags, context),
-            `--junit-path=${junitPath}`,
-            ...group.map((request) =>
+          command: denoTestCommand(
+            part.flags,
+            context,
+            junitPath,
+            group.map((request) =>
               path.relative(cwd, path.resolve(context.root, request.unit))
             ),
-          ],
+          ),
           cwd,
           env,
           junit: [{ path: junitPath, ...part.junit }],

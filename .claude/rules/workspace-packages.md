@@ -31,7 +31,9 @@ A package's `deno.jsonc` must contain a `"tasks"` object with a `"test"` entry.
 When the package has tests, that entry runs `tasks/run-member-tests.ts` over a
 `"deno-test"` entry that runs the tests themselves — a `deno test` for most
 packages, or a runner of the package's own; when it does not have them yet, it
-is `"echo 'No tests defined.'"`.
+is `"echo 'No tests defined.'"`. A `deno test` there passes `--no-check`, since
+the type check is a suite of its own, and `tasks/test-topology.test.ts` fails
+on one that does not.
 
 A package whose tests include some that need a browser keeps them out of
 `deno-test`, in a `"browser-test"` entry of their own, and its `test` task names

@@ -16,12 +16,7 @@ import {
   type TestIdentity,
   testIdentityKey,
 } from "@commonfabric/test-support/records";
-import { DETAIL_PAGE_STYLES } from "./detail-page.ts";
-import {
-  LIVE_PAGE_BADGE,
-  LIVE_PAGE_CLIENT,
-  LIVE_PAGE_STYLES,
-} from "./live-page.ts";
+import { type LivePageContent, livePageResponse } from "./live-page.ts";
 import {
   compactSpan,
   escapeHtml,
@@ -42,12 +37,7 @@ import {
   numberDial,
   selectedCount,
 } from "./test-selection-manifest.ts";
-import {
-  DASHBOARD_THEME_CLIENT,
-  DASHBOARD_THEME_HEAD,
-  dashboardThemeToggle,
-  statusLayer,
-} from "./theme.ts";
+import { statusLayer } from "./theme.ts";
 
 /** The fragment the flaky tests tile links to. */
 export const FLAKY_SECTION_ID = "flaky";
@@ -59,8 +49,6 @@ export const UNSCHEDULABLE_SECTION_ID = "unschedulable";
 export const TEST_SELECTION_PATH = "/test-selection";
 
 const STYLES = `
-  ${DETAIL_PAGE_STYLES}
-  ${LIVE_PAGE_STYLES}
   .summary{display:flex;flex-wrap:wrap;gap:10px 34px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;margin-bottom:4px}
   .summary div{display:flex;flex-direction:column;gap:2px}
   .summary dt{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-subtle)}
@@ -243,30 +231,24 @@ function summary(manifest: Manifest): string {
 
 /**
  * The page's frame, which every state of it wears. Everything that changes
- * from one manifest to the next is inside `<main>`, which the page replaces
- * as the server renders it again.
+ * from one manifest to the next is inside `<main>`, which the page brings up
+ * to date as the server renders it again.
  */
-function frame(head: string, body: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Test selection</title>
-${DASHBOARD_THEME_HEAD}
-<style>
-${STYLES}
-</style></head><body><main>
-  <div class="top"><a class="back" href="/">← dashboard</a><b>Test selection</b>${LIVE_PAGE_BADGE}<span>${head}</span></div>
-  ${body}
-  <p class="note">What a pull request runs, from the newest manifest the selection publisher wrote.</p>
-</main>
-${dashboardThemeToggle()}
-${DASHBOARD_THEME_CLIENT}
-${LIVE_PAGE_CLIENT}
-</body></html>`;
+function frame(head: string, body: string): LivePageContent {
+  return {
+    title: "Test selection",
+    styles: STYLES,
+    head,
+    body: `${body}
+  <p class="note">What a pull request runs, from the newest manifest the selection publisher wrote.</p>`,
+  };
 }
 
-/** The whole page for one manifest, or the page saying there is not one. */
+/** The page for one manifest, or the page saying there is not one. */
 export function testSelectionPage(
   manifest: Manifest | undefined,
   now = Date.now(),
-): string {
+): LivePageContent {
   if (manifest === undefined) {
     return frame(
       "",
@@ -311,7 +293,7 @@ export function testSelectionPage(
  * The page for a store that could not be read, which is a different thing
  * from a store holding no manifest and says so.
  */
-export function testSelectionUnavailable(reason: string): string {
+export function testSelectionUnavailable(reason: string): LivePageContent {
   return frame(
     "",
     `<p class="empty">The selection manifest could not be read: ${
@@ -325,16 +307,14 @@ export async function testSelectionResponse(
   read: ManifestReader = sharedTestSelection.latest,
   clock?: () => number,
 ): Promise<Response> {
-  const html = (body: string, status: number) =>
-    new Response(body, {
-      status,
-      headers: { "content-type": "text/html; charset=utf-8" },
-    });
   try {
-    return html(testSelectionPage(await read(), clock?.()), 200);
+    return livePageResponse(testSelectionPage(await read(), clock?.()));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("test selection page:", message);
-    return html(testSelectionUnavailable(collectionSub(error)), 503);
+    return livePageResponse(
+      testSelectionUnavailable(collectionSub(error)),
+      503,
+    );
   }
 }

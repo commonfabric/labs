@@ -15,6 +15,7 @@ import {
   SKIP_LIST_VARIABLE,
 } from "@commonfabric/test-support/records";
 import { CAPABILITIES } from "./ci-capabilities.ts";
+import { commandsWrittenIn } from "./check-test-shuffle.ts";
 import { collectMeasuredSetDebt } from "./coverage-metrics.ts";
 import { DENO_TEST_FILE } from "./test-topology/deno-task.ts";
 import { MEASURED_BATCH_SUFFIX } from "./lane-measurement.ts";
@@ -333,6 +334,61 @@ describe("the test topology", () => {
     expect(claims.map((claim) => [claim.suite.id, claim.level])).toEqual([
       ["cli-core", "suite"],
     ]);
+  });
+});
+
+describe("type checking in a test run", () => {
+  /** Whether a command starts `deno test`, itself or through the batcher. */
+  const startsDenoTest = (command: string) =>
+    /(^|\s)deno test(\s|$)/.test(command) ||
+    command.includes("run-test-batches.ts");
+
+  it("passes `--no-check` to every `deno test` a suite starts", async () => {
+    // The `typecheck` suite checks every file a test loads, so a test
+    // process checking its module graph again repeats that work in every
+    // process a lane starts.
+    const outputDir = await Deno.makeTempDir({ prefix: "topology-no-check-" });
+    const checking: string[] = [];
+    let started = 0;
+    for (const suite of suites) {
+      const requests = suite.units.map((unit) => ({ unit, skip: [] }));
+      for (
+        const invocation of await suite.command(requests, {
+          root,
+          outputDir,
+          spoolDir: "/spool",
+          baseRef: "origin/main",
+        })
+      ) {
+        if (invocation.command[1] !== "test") continue;
+        started++;
+        const flags = invocation.command.filter((word) =>
+          /^--(no-)?check(=|$)/.test(word)
+        );
+        if (flags.join(" ") !== "--no-check") {
+          checking.push(`${suite.id} in ${invocation.cwd}: ${flags}`);
+        }
+      }
+    }
+    await Deno.remove(outputDir, { recursive: true });
+    expect(checking).toEqual([]);
+    // Building no `deno test` at all would pass the check above.
+    expect(started).toBeGreaterThan(0);
+  });
+
+  it("passes `--no-check` to every `deno test` a manifest or script writes", async () => {
+    // Some tasks a lane runs as they stand, and every other one is how
+    // somebody runs the same tests by hand, so a task that checks is
+    // either a lane repeating the type check or a hand run unlike the
+    // lane's.
+    const written = (await commandsWrittenIn(root))
+      .filter(({ command }) => startsDenoTest(command));
+    expect(
+      written
+        .filter(({ command }) => !/(^|\s)--no-check(\s|$)/.test(command))
+        .map(({ where, command }) => `${where}: ${command}`),
+    ).toEqual([]);
+    expect(written.length).toBeGreaterThan(0);
   });
 });
 

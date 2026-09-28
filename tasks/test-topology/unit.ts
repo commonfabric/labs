@@ -44,14 +44,13 @@ import {
 import {
   claimsIdentity,
   type CommandContext,
+  denoTestCommand,
   type Invocation,
   type LocatableRecord,
   type Location,
   type MeasuredSet,
   measuringInto,
-  recordingArguments,
   type RecordSurface,
-  shuffleArguments,
   skipListOf,
   type Suite,
   type UnitRequest,
@@ -424,15 +423,12 @@ function unitSuite(
             );
             const requests = batch.files.map((file) => byFile.get(file)!);
             invocations.push({
-              command: [
-                Deno.execPath(),
-                "test",
-                ...batch.flags,
-                ...shuffleArguments(),
-                ...recordingArguments(batch.flags, context),
-                `--junit-path=${junitPath}`,
-                ...batch.files,
-              ],
+              command: denoTestCommand(
+                batch.flags,
+                context,
+                junitPath,
+                batch.files,
+              ),
               cwd: memberDir,
               env: { ...denoEnv, ...await skipEnv(context, name, requests) },
               process,

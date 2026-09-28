@@ -395,10 +395,22 @@ describe("the repository's gate suites", () => {
     expect(invocation!.command).not.toContain("--scope=cli");
   });
 
-  it("maps a changed path to the group that checks it", () => {
+  it("maps a changed path to the groups whose check opens it", () => {
     const typecheck = byId("typecheck");
-    expect(typecheck.unitsForChange!(new Set(["packages/memory/mod.ts"])))
-      .toEqual(["memory"]);
+    // Nothing imports a test, so its own group is the only one it reaches.
+    expect(
+      typecheck.unitsForChange!(
+        new Set(["packages/memory/test/commit-telemetry.test.ts"]),
+      ),
+    ).toEqual(["memory"]);
+    // A module other packages import reaches their groups too, and no
+    // group it imports from.
+    const shared = typecheck.unitsForChange!(
+      new Set(["packages/runner/src/cell.ts"]),
+    );
+    expect(shared).toContain("runner");
+    expect(shared).toContain("shell");
+    expect(shared).not.toContain("utils");
     // A path no group checks makes nothing mandatory, rather than making
     // every group mandatory or throwing.
     expect(typecheck.unitsForChange!(new Set(["README.md"]))).toEqual([]);

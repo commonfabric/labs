@@ -80,9 +80,6 @@ async function patternIntegrationSuites(
   const packageDir = "packages/patterns";
   const files = await filesIn(root, `${packageDir}/integration`);
   const flags = [
-    // `packages/patterns/integration` is one of the paths the type check
-    // owns, so checking it again here is the same work a second time.
-    "--no-check",
     "-A",
     "--v8-flags=--max-old-space-size=4096",
     "--trace-leaks",

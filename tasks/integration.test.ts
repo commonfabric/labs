@@ -143,7 +143,13 @@ Deno.test("findIntegrationTestFiles rethrows errors other than a missing directo
 Deno.test("buildFilteredTestArgs passes files as explicit paths under relDir", () => {
   assertEquals(
     buildFilteredTestArgs("runner", "integration", ["a.test.ts", "b.test.ts"]),
-    ["test", "-A", "./integration/a.test.ts", "./integration/b.test.ts"],
+    [
+      "test",
+      "--no-check",
+      "-A",
+      "./integration/a.test.ts",
+      "./integration/b.test.ts",
+    ],
   );
 });
 
@@ -152,6 +158,7 @@ Deno.test("buildFilteredTestArgs adds patterns memory and leak flags", () => {
     buildFilteredTestArgs("patterns", "integration", ["home-profile.test.ts"]),
     [
       "test",
+      "--no-check",
       "-A",
       "--v8-flags=--max-old-space-size=4096",
       "--trace-leaks",
@@ -169,6 +176,7 @@ Deno.test("buildFilteredTestArgs uses the generated-patterns subdir and flags", 
     ),
     [
       "test",
+      "--no-check",
       "-A",
       "--trace-leaks",
       "--parallel",
@@ -182,6 +190,7 @@ Deno.test("buildFilteredTestArgs adds a junit path when a junit dir is given", (
     buildFilteredTestArgs("shell", "integration", ["a.test.ts"], "out/junit"),
     [
       "test",
+      "--no-check",
       "-A",
       "--junit-path=out/junit/shell.xml",
       preloadArgument(),
@@ -237,6 +246,7 @@ Deno.test("runFilteredIntegration runs deno test with the matching explicit path
     assertEquals(captured?.cmd, [
       "deno",
       "test",
+      "--no-check",
       "-A",
       "--v8-flags=--max-old-space-size=4096",
       "--trace-leaks",
@@ -270,6 +280,7 @@ Deno.test("runFilteredIntegration uses the generated-patterns subdir", async () 
     assertEquals(captured, [
       "deno",
       "test",
+      "--no-check",
       "-A",
       "--trace-leaks",
       "--parallel",

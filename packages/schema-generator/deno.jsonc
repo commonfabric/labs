@@ -20,8 +20,7 @@
   },
   "tasks": {
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
-    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --parallel --allow-read --allow-write --allow-run --allow-env=API_URL,\"TSC_*\",NODE_INSPECTOR_IPC,VSCODE_INSPECTOR_OPTIONS,NODE_ENV,UPDATE_GOLDENS,FIXTURE,SKIP_INPUT_CHECK,CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST test/**/*.test.ts",
-    "test:check": "deno test --shuffle=$(deno task -q test-seed) --allow-read --allow-write --allow-run --allow-env=API_URL,\"TSC_*\",NODE_INSPECTOR_IPC,VSCODE_INSPECTOR_OPTIONS,NODE_ENV,UPDATE_GOLDENS,FIXTURE,SKIP_INPUT_CHECK,CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST test/**/*.test.ts",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --parallel --allow-read --allow-write --allow-run --allow-env=API_URL,\"TSC_*\",NODE_INSPECTOR_IPC,VSCODE_INSPECTOR_OPTIONS,NODE_ENV,UPDATE_GOLDENS,FIXTURE,SKIP_INPUT_CHECK,CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST test/**/*.test.ts",
     "check": "deno check src/**/*.ts test/*.ts test/schema/**/*.ts test/typescript/**/*.ts",
     "fmt": "deno fmt src/ test/",
     "lint": "deno lint src/ test/"

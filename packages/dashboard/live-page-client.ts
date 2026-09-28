@@ -57,3 +57,25 @@ export function reconcileMain<E extends Part<E>>(main: E, next: E): boolean {
   reconcile(main, next);
   return true;
 }
+
+/**
+ * The event a live page's `<main>` is sent, before the page is brought up to
+ * date, with the fresh rendering's `<main>` as its detail. The event bubbles to
+ * the document. A page that the reader has rearranged, as by sorting a table,
+ * arranges the fresh rendering the same way when it hears this, so the parts
+ * that did not change compare equal and are kept.
+ */
+export const LIVE_PAGE_UPDATE = "live-page-update";
+
+/**
+ * Announces `next` to the page as `LIVE_PAGE_UPDATE`, then makes `main` match
+ * it with `reconcileMain`, and reports whether that changed anything.
+ */
+export function updateMain<
+  E extends Part<E> & { dispatchEvent(event: CustomEvent<E>): unknown },
+>(main: E, next: E): boolean {
+  main.dispatchEvent(
+    new CustomEvent(LIVE_PAGE_UPDATE, { bubbles: true, detail: next }),
+  );
+  return reconcileMain(main, next);
+}

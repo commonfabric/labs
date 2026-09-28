@@ -15,8 +15,8 @@ deno task test
 
 **Important:** Always use `deno task test` from the root, NOT `deno test`, as the task includes necessary flags.
 
-A package's `test` task is no substitute for a type check: some packages' tests
-skip checking outright, and the rest check only the modules their tests reach.
+A package's `test` task is no substitute for a type check: every `deno test`
+runs under `--no-check`, and the type check is a suite of its own.
 `deno task check` at the root checks the whole workspace at once, so run both:
 
 ```bash
@@ -277,11 +277,12 @@ choose:
 #### Writing a task that runs tests
 
 A `deno test` written anywhere in this repository takes the seed from the root
-`test-seed` task. In a package, that is its `deno-test` task, which its `test`
-task runs through `tasks/run-member-tests.ts`:
+`test-seed` task, and passes `--no-check`, since the type check is a suite of
+its own. In a package, that is its `deno-test` task, which its `test` task runs
+through `tasks/run-member-tests.ts`:
 
 ```json
-"deno-test": "deno test --shuffle=$(deno task -q test-seed) --allow-read test/"
+"deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-read test/"
 ```
 
 `deno task -q test-seed` resolves to the root task from any directory inside
@@ -290,6 +291,9 @@ standard error. `deno task check-test-shuffle` fails when a command that
 starts a test runner does not carry a seed, and lists the runners this
 repository owns along with the ones whose order is the test.
 `packages/test-support/src/shuffle.ts` holds the seed and the permutation.
+`tasks/test-topology.test.ts` fails on a `deno test` that a manifest, a
+workflow, or a shell script writes without `--no-check`; a lane passes the flag
+to every `deno test` it builds whatever the task says.
 
 ### Browser tests in agent sandboxes
 
@@ -433,7 +437,7 @@ TOOLSHED_PORT=58848 SHELL_PORT=5263 EXPERIMENTAL_SERVER_EXECUTION=false deno tas
 After the shell reports that it is listening, run the browser test:
 
 ```bash
-API_URL=http://127.0.0.1:8089 FRONTEND_URL=http://127.0.0.1:5263/ EXPERIMENTAL_SERVER_EXECUTION=false CF_ROW_RECONNECT_CONTROL_URL=http://127.0.0.1:58849/ CF_ROW_REPRO_ARTIFACT_DIR=/tmp/row-reconnect deno test -A packages/patterns/integration/reactive-vote-rows-browser.test.ts
+API_URL=http://127.0.0.1:8089 FRONTEND_URL=http://127.0.0.1:5263/ EXPERIMENTAL_SERVER_EXECUTION=false CF_ROW_RECONNECT_CONTROL_URL=http://127.0.0.1:58849/ CF_ROW_REPRO_ARTIFACT_DIR=/tmp/row-reconnect deno test --no-check -A packages/patterns/integration/reactive-vote-rows-browser.test.ts
 ```
 
 Each outage asserts that the relay closed live socket endpoints before the
