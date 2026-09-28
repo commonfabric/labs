@@ -2754,7 +2754,8 @@ separate step via `convertibleJsFromFabricValue()` (Section 8).
 
 ### 2.9 Decode Guarantees
 
-The system follows an **immutable-forward** design:
+The system follows an **immutable-forward** design. Unless an engine is
+constructed with `mutable` as `true`:
 
 - **Plain objects and arrays** are frozen (`Object.freeze()`) upon decoding.
   This applies to all decoding output paths, including `/quote` (Section 6 of
@@ -2762,14 +2763,18 @@ The system follows an **immutable-forward** design:
   of whether type-tag decoding occurred.
 - **`FabricInstance`s**, and every other value a codec decodes, are
   deep-frozen too: each codec's `decode()` freezes the one value it builds, and
-  the decoding walker deep-freezes the result (Section 4.5). A codec's
-  `decode()` called directly with `mutable` as `true` (Section 2.4) is how a
-  mutable instance is built from state.
+  the decoding walker deep-freezes the result (Section 4.5).
 - Decoding always produces regular plain objects, that being the only
   object shape a `FabricValue` has.
 
 This immutability guarantee enables safe sharing of decoded values and
 aligns with the reactive system's assumption that values don't mutate in place.
+
+An engine constructed with `mutable` as `true` is for a caller that means to
+change what it decodes. Its `decode()` leaves mutable every container it builds
+and every value a codec builds for it, a lenient `ProblematicValue` included,
+passing `mutable` to each codec's `decode()` (Section 2.4). A value frozen by
+nature, such as a `FabricPrimitive`, is frozen either way.
 
 > **Immutability of JS object wrappers.** Under the three-layer
 > architecture, decoding produces `FabricInstance` wrappers (`FabricMap`,
@@ -3162,8 +3167,9 @@ the public boundary interface.
  * representation used during encode tree walking -- NOT the final
  * serialized form (which is `string`). Internal to the JSON implementation.
  *
- * Deep-frozen invariant on the decode side: every such tree that
- * enters decoding is deep-frozen, enforced at the one construction site that
+ * Frozenness invariant on the decode side: every such tree that enters
+ * decoding is deep-frozen for a frozen decode, and freshly built and shared
+ * with nothing for a mutable one, enforced at the one construction site that
  * feeds it, `parseWireText()`. This is what lets the tag-unwrap and `/quote`
  * arms hand back extracted sub-trees directly without further copying. The
  * encode-side trees are transient (`JSON.stringify`-ed and discarded)
@@ -3498,11 +3504,11 @@ The decoding act's walk processes the `JsonCodecValue` tree:
    `ProblematicValue` leniently (Section 3.5), a raise strictly (see also
    Section 9 of `3-json-encoding.md`).
 4. **Codec dispatch** — `codecFromTag()` routes the tag to its registered
-   codec's `decode()`, without `mutable`, so that the codec freezes the one
-   value it builds, and settles the codec's verdict against `lenient`:
-   leniently, a throw becomes a `ProblematicValue`; strictly, a
-   `ProblematicValue` the codec returned becomes a throw. Values returned from
-   this arm are guaranteed deep-frozen at the walker boundary (the contract
+   codec's `decode()`, passing the engine's `mutable`, and settles the codec's
+   verdict against `lenient`: leniently, a throw becomes a `ProblematicValue`;
+   strictly, a `ProblematicValue` the codec returned becomes a throw. Values
+   returned from this arm are deep-frozen at the walker boundary, or left as
+   the codec built them, mutable, when the engine is mutable (the contract
    holds for both the codec-produced value and the lenient-mode
    `ProblematicValue`), so callers need not each freeze. Every other arm
    guarantees the same, the unknown-tag arm (step 5) included, so a caller need
@@ -4645,11 +4651,12 @@ produces a `FabricValue` that is structurally equivalent to `sv`.
 ### 8.6 Deep-Freeze Protocol and Egress Contracts
 
 Every `FabricValue` tree an engine's `decode()` returns at a boundary crossing
-is deep-frozen. This is enforced via a small protocol on `BaseFabricInstance`
+is deep-frozen, unless the engine was constructed with `mutable` as `true`
+(Section 2.9). This is enforced via a small protocol on `BaseFabricInstance`
 together with a generic top-level utility that dispatches across the four kinds
 of values that can appear in a `FabricValue` tree. A codec's own `decode()`
 builds a mutable value only when passed `mutable` as `true` (Section 2.4), which
-the decode walker never does.
+the decode walker does exactly when its engine is mutable.
 
 #### Instance protocol members
 
@@ -4740,7 +4747,8 @@ Visited objects are tracked in a per-call `Set` for cycle safety.
 #### Egress-freezing call sites
 
 The deep-freeze contract is enforced at the points where decoded values cross
-from internal codec machinery to callers:
+from internal codec machinery to callers. Those on a decode's path freeze
+nothing for a mutable engine:
 
 - **Every value the decode walker returns is deep-frozen at the boundary**,
   whichever arm produced it. The arms reach that by two routes. A leaf arm
@@ -4754,16 +4762,18 @@ from internal codec machinery to callers:
   step 4.
 
 - **`ProblematicStateError.asProblematicValue()`.** The rendering of a thrown
-  refusal as a returned value is deep-frozen where it is built, rather than at
-  each call site, so a caller reaching it outside the walker gets the same
-  guarantee.
+  refusal as a returned value is deep-frozen where it is built, unless asked
+  for a mutable one, rather than at each call site, so a caller reaching it
+  outside the walker gets the same guarantee.
 
 - **`JsonCodecValue` parse boundary.** The `parseWireText()` helper (invoked by
   the JSON decoding act's `encodedFromSerializedForm()`) deep-freezes the parsed
   tree before handing it to the decode walker. This is what makes the
   decode-side `JsonCodecValue` invariant load-bearing: tag-unwrap and the
   `/quote` arm can hand back extracted sub-trees directly without further
-  copying because the input tree is already deep-frozen.
+  copying because the input tree is already deep-frozen. For a mutable engine
+  the parse is left unfrozen, which the same shortcut relies on the other way:
+  the tree is freshly built, and shared with nothing.
 
 - **Codec `decode()` implementations freezing what they build.** Unless a
   decode call passes `mutable` as `true` (Section 2.4), each codec `decode()`
