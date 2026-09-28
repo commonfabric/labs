@@ -1202,7 +1202,12 @@ node inside its parentheses (`schema-generator.ts`).
   may be `undefined` or `null` has the labels of its one other member. A node
   narrowed from any other union stands for any of its members, so it has the
   union's labels, every member's confidentiality, and each other label every
-  member declares alike (`joinMemberIfcLabels`). A schema whose own reference
+  member declares alike (`joinMemberIfcLabels`). A member is spelled by the
+  node its type is written as: the declaration's own node where that denotes
+  the member alone, as an optional property's does, and otherwise the member
+  of the union the declaration writes, read through parentheses and through
+  aliases without type parameters (`readAuthoredTypeNode`). A member with no
+  such node is read by its type. A schema whose own reference
   chain already holds every label is left as it is (`holdsIfcLabels`).
 
 ## 14. Options

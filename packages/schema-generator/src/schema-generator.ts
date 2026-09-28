@@ -30,7 +30,10 @@ import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
 import { getCellWrapperInfo } from "./typescript/cell-brand.ts";
 import { getScopeBrand } from "./typescript/scope-brand.ts";
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
-import { unwrapTypeParentheses } from "./typescript/type-node.ts";
+import {
+  readAuthoredTypeNode,
+  unwrapTypeParentheses,
+} from "./typescript/type-node.ts";
 import {
   detectWrapperViaNode,
   getNamedTypeKey,
@@ -1619,18 +1622,21 @@ export class SchemaGenerator {
    * of `T`, which formatting attaches to that member. A node narrowed from
    * any other union stands for any of its members, so it has the labels
    * formatting attaches to the union joined with those of its members
-   * (`joinMemberIfcLabels()`).
+   * (`joinMemberIfcLabels()`). A member is spelled by the member of the union
+   * `typeNode` writes, read through parentheses and aliases
+   * (`readAuthoredTypeNode()`), whose type it is.
    */
   #labelsOf(
     type: ts.Type,
     typeNode: ts.TypeNode | undefined,
     context: GenerationContext,
   ): Record<string, unknown> | undefined {
-    const written = typeNode && unwrapTypeParentheses(typeNode);
+    const checker = context.typeChecker;
+    const written = typeNode && readAuthoredTypeNode(typeNode, checker);
     const memberNode = (member: ts.Type) =>
       written && ts.isUnionTypeNode(written)
         ? written.types.find((node) =>
-          context.typeChecker.getTypeFromTypeNode(node) === member
+          checker.getTypeFromTypeNode(node) === member
         )
         : undefined;
     const nullish = ts.TypeFlags.Undefined | ts.TypeFlags.Null |
@@ -1639,9 +1645,10 @@ export class SchemaGenerator {
       ? type.types.filter((member) => (member.flags & nullish) === 0)
       : [type];
     if (values.length === 1 && values[0] !== type) {
-      // A declaration that writes no union is an optional property's, whose
-      // `?` adds the `undefined`: it spells the value alone.
-      const valueNode = written && !ts.isUnionTypeNode(written)
+      // An optional property's declaration spells the value alone, since its
+      // `?` adds the `undefined`.
+      const valueNode = typeNode &&
+          checker.getTypeFromTypeNode(typeNode) === values[0]
         ? typeNode
         : memberNode(values[0]!);
       return this.#labelsOf(values[0]!, valueNode, context);

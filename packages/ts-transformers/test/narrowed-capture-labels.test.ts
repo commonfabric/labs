@@ -180,8 +180,11 @@ export default pattern<{ rows: (Confidential<Secret, ["row"]> | undefined)[] }>(
   });
 
   describe("a policy its declaration names by `typeof`", () => {
-    /** The capture schema of `secret`, declared as `declaration`, read by `?.`. */
-    const policyCapture = async (declaration: string) => {
+    /**
+     * The capture schema of `secret`, declared as `declaration` beside
+     * `declarations`, read by `?.`.
+     */
+    const policyCapture = async (declaration: string, declarations = "") => {
       const output = await transformFiles({
         "/rules.ts":
           `import { exchangeRule, exchangeRules, THIS_POLICY } from "commonfabric/cfc";
@@ -194,6 +197,7 @@ export const rules = exchangeRules([neverRelease]);`,
         "/test.tsx": `${IMPORTS}
 import { type PolicyOf } from "commonfabric/cfc";
 import { rules } from "./rules.ts";
+${declarations}
 export default pattern<{ ${declaration} }>(
   ({ secret }) => ({ out: computed(() => secret?.a ?? "") }),
 );`,
@@ -223,6 +227,15 @@ export default pattern<{ ${declaration} }>(
       expect(
         await policyCapture(
           "secret?: Confidential<Secret, [PolicyOf<typeof rules>]>",
+        ),
+      ).toMatchObject(POLICY_LABEL);
+    });
+
+    it("reads the policy of a value an alias of a nullable union names", async () => {
+      expect(
+        await policyCapture(
+          "secret: MaybeSecret",
+          "type MaybeSecret = Confidential<Secret, [PolicyOf<typeof rules>]> | undefined;",
         ),
       ).toMatchObject(POLICY_LABEL);
     });
