@@ -77,16 +77,26 @@ describe("staged-reference-derivation", () => {
       ).not.toContain("secret");
     });
 
-    for (const slotDeclaration of [false, true]) {
-      it(`preserves ancestor integrity through a projected reference${slotDeclaration ? " with a slot declaration" : ""} in ${order} order`, async () => {
+    for (const slotDeclaration of [false, true, "confidentiality"] as const) {
+      it(`preserves ancestor integrity through a projected reference${slotDeclaration === "confidentiality" ? " with a confidential slot declaration" : slotDeclaration ? " with a slot declaration" : ""} in ${order} order`, async () => {
         const tx = runtime.edit();
         const wrapper = runtime.getCell(space, "wrapper", {
           type: "object",
-          ifc: { integrity: ["wrapper-proof"] },
+          ifc: {
+            integrity: ["wrapper-proof"],
+            ...(slotDeclaration === "confidentiality"
+              ? { confidentiality: ["wrapper-secret"] }
+              : {}),
+          },
           ...(slotDeclaration
             ? {
               properties: {
-                next: { type: "object", ifc: { integrity: ["slot-proof"] } },
+                next: {
+                  type: "object",
+                  ifc: slotDeclaration === "confidentiality"
+                    ? { confidentiality: ["slot-secret"] }
+                    : { integrity: ["slot-proof"] },
+                },
               },
             }
             : {}),
@@ -161,6 +171,10 @@ describe("staged-reference-derivation", () => {
           expect(label?.integrity).toContain("leaf-proof");
           expect(label?.integrity).toContain("wrapper-proof");
           expect(label?.integrity).not.toContain("slot-proof");
+          if (slotDeclaration === "confidentiality") {
+            expect(label?.confidentiality).toContain("wrapper-secret");
+            expect(label?.confidentiality).toContain("slot-secret");
+          }
         }
       });
     }

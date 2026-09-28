@@ -82,9 +82,15 @@ link sees the entry's own authorship.
 
 When deriving a pending reference source, schema labels are minted at their
 declaration paths, with wildcard segments bound to the projected source path.
-A declaration on an ancestor object keeps the integrity that object earned;
-a declaration at or below an initialized reference mints none for the
-referenced content. An empty declaration without a persistent gate does not
+Covering declarations join their confidentiality and static integrity, including
+when the reference slot has its own nonempty confidentiality declaration. A
+declaration at or below an initialized reference mints no integrity for the
+referenced content. Principal claims, including `authored-by` and
+`represents-principal`, come from the most specific source label covering the
+projected path: a container's author does not become the author of a reference
+it holds. This applies to both pending and stored source labels, and to floors
+checked against them. Inline data without a more specific label keeps its
+container's authorship. An empty declaration without a persistent gate does not
 shadow an ancestor during this derivation.
 
 When a link's source is a reference staged in the same transaction, or a value

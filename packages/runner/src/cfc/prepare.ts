@@ -1922,7 +1922,10 @@ class VerifierMetadataResolver {
       this.#labelIndexes.set(metadata, index);
     }
     const label = labelForEntriesAtPath(
-      index.overlapping(path, false).map(({ entry }) => entry),
+      withoutShadowedPrincipalClaims(
+        index.overlapping(path, false).map(({ entry }) => entry),
+        path,
+      ),
       path,
     );
     labels.set(key, label);
@@ -1952,8 +1955,11 @@ class VerifierMetadataResolver {
         });
         this.#viewIndexes.set(metadata, index);
       }
-      const entries = index.overlapping(canonicalizeLogicalPath(path))
-        .map(({ entry }) => entry);
+      const entries = withoutShadowedPrincipalClaims(
+        index.overlapping(canonicalizeLogicalPath(path))
+          .map(({ entry }) => entry),
+        canonicalizeLogicalPath(path),
+      );
       views.set(
         key,
         cfcLabelViewFromMetadata({
@@ -6773,7 +6779,7 @@ const gateRuntimeMintedIntegrity = (
   };
 };
 
-/** Derives the closest persisted schema label covering a source path. */
+/** Derives the covering schema labels a source projection persists. */
 const persistedLabelFromSchemaAtPath = (
   tx: IExtendedStorageTransaction,
   schema: JSONSchema,
@@ -6786,14 +6792,15 @@ const persistedLabelFromSchemaAtPath = (
   const entryLabels = new Map<string, IFCLabel>(
     entries.map((entry) => [pathKey(entry.path), entry.label]),
   );
-  let match: { path: readonly string[]; label: IFCLabel } | undefined;
+  const labels: CfcLabelView["entries"] = [];
+  const reference = pathHoldsStagedReference(tx, source, logicalPath);
   for (const entry of entries) {
     if (!isPrefix(entry.path, logicalPath)) continue;
     const declarationPath = entry.path.map((segment, index) =>
       segment === "*" ? logicalPath[index] : segment
     );
-    // Minting belongs to the declaration's value. An ancestor object can
-    // carry integrity even when the projected path holds an initialized link.
+    // Each declaration contributes what its own value earns. Authorship of a
+    // container does not author the content of a reference staged inside it.
     const label = withCheckedPrincipalClaims(
       derivePersistedLabel(
         tx,
@@ -6803,23 +6810,24 @@ const persistedLabelFromSchemaAtPath = (
         source.space,
         labelMintOptionsAt(tx, source, declarationPath),
       ),
-      checkedSchema === undefined ? [] : checkedSchemaPrincipalClaims(
-        tx,
-        checkedSchema,
-        linkDocument(source),
-        entry.path,
-      ),
+      reference || checkedSchema === undefined
+        ? []
+        : checkedSchemaPrincipalClaims(
+          tx,
+          checkedSchema,
+          linkDocument(source),
+          entry.path,
+        ),
     );
-    // Empty declarations without a persistent gate have no stored entry to
-    // shadow their ancestor. Keep the same cover before metadata is written.
-    if (!hasLabelValues(label) && !hasPersistedPolicyClaim(entry.schema)) {
-      continue;
-    }
-    if (match === undefined || match.path.length < entry.path.length) {
-      match = { path: entry.path, label };
+    if (hasLabelValues(label) || hasPersistedPolicyClaim(entry.schema)) {
+      labels.push({ path: entry.path, label });
     }
   }
-  return match?.label;
+  return labels.length === 0 ? undefined : joinLabels(
+    withoutShadowedPrincipalClaims(labels, logicalPath).map(({ label }) =>
+      label
+    ),
+  );
 };
 
 // Join a series of labels in one pass: each channel collects its atoms from
@@ -6950,6 +6958,25 @@ const withoutPrincipalClaims = (label: IFCLabel): IFCLabel => {
   );
   if (kept.length === integrity.length) return label;
   return { ...label, integrity: kept.length > 0 ? kept : undefined };
+};
+
+/** Keeps principal claims only on the most specific cover of a source path. */
+const withoutShadowedPrincipalClaims = <
+  Entry extends { path: readonly string[]; label: IFCLabel },
+>(entries: Entry[], path: readonly string[]): Entry[] => {
+  if (path.length === 0) return entries;
+  let depth = -1;
+  for (const entry of entries) {
+    if (isPrefix(entry.path, path)) {
+      depth = Math.max(depth, entry.path.length);
+    }
+  }
+  if (depth <= 0) return entries;
+  return entries.map((entry) =>
+    entry.path.length < depth && isPrefix(entry.path, path)
+      ? { ...entry, label: withoutPrincipalClaims(entry.label) }
+      : entry
+  );
 };
 
 /** The document a link write's source or target address names. */
@@ -7558,7 +7585,10 @@ const createLinkLabelDeriver = (
         relative,
         undefined,
       );
-      views.push(rebaseCfcLabelView({ version: 1, entries: linked }, relative));
+      views.push(rebaseCfcLabelView({
+        version: 1,
+        entries: withoutShadowedPrincipalClaims(linked, relative),
+      }, relative));
       if (label !== undefined) {
         views.push({ version: 1, entries: [{ path: [], label }] });
       }
