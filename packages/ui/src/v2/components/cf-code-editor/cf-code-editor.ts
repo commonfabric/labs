@@ -265,8 +265,9 @@ const getLangExtFromMimeType = (mime: MimeType) => {
  *   co-presence. Without one the runtime derives the room from the bound
  *   text Cell's resolved field.
  * @attr {string} participantName - Plain-text display name which enables
- *   co-presence. Every collaborative editor on a page joins its own room and
- *   publishes its caret, with `focused` reporting which one owns focus.
+ *   co-presence. The editor joins the room of the field it is bound to, where
+ *   everyone editing that field meets, one entry per browser tab, and
+ *   publishes its caret there with `focused` reporting whether it owns focus.
  *   Presence travels over the runtime's memory connection; no endpoint is
  *   configured.
  *

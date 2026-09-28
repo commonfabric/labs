@@ -31,6 +31,7 @@ import type {
   WriteStackTraceEntry,
   WriteStackTraceMatcher,
 } from "@commonfabric/runner/shared";
+import type { SpaceHostRegistration } from "@commonfabric/runner/space-host";
 
 import { CellHandle } from "./cell-handle.ts";
 import {
@@ -441,13 +442,15 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * Prepares a custody seal of `draft` into the room whose terms and policy
    * are named, for the trusted host to show before the actor confirms. The
    * worker reads and checks every cell, and keeps the consent; the preview is
-   * what crosses.
+   * what crosses. When `box` is named, the seal writes the link to the
+   * instance's box into it as it commits.
    */
   async prepareCustodySeal(cells: {
     draft: CellRef;
     terms: CellRef;
     policy: CellRef;
     allowedSources: CellRef;
+    box?: CellRef;
   }): Promise<CustodySealPreview> {
     return await this.#conn.request<RequestType.CustodySealPrepare>({
       type: RequestType.CustodySealPrepare,
@@ -455,6 +458,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       terms: cells.terms,
       policy: cells.policy,
       allowedSources: cells.allowedSources,
+      ...(cells.box === undefined ? {} : { box: cells.box }),
     });
   }
 
@@ -1253,6 +1257,28 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       host,
     });
     return res.value;
+  }
+
+  /**
+   * Record a host hint for a space as {@link registerSpaceHost} does, and
+   * return the reason along with a refusal. `known-different-host` carries the
+   * host the space is routed to. `default-route-in-use` is about this session alone:
+   * the space issued a stateful operation through the default host, and a
+   * runtime created later can still take the hint. Callers must not mount the
+   * space under this hint unless `accepted` is true.
+   */
+  async registerSpaceHostDetailed(
+    space: DID,
+    host: string,
+  ): Promise<SpaceHostRegistration> {
+    const res = await this.#conn.request<
+      RequestType.RegisterSpaceHostDetailed
+    >({
+      type: RequestType.RegisterSpaceHostDetailed,
+      space,
+      host,
+    });
+    return res.registration;
   }
 
   /**

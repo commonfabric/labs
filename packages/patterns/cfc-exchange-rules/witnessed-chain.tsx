@@ -19,10 +19,14 @@ import {
 } from "commonfabric/cfc";
 
 // The policy releases the tally only when everything the tally read was
-// written by this module's `commit` step. The identity alone would release
-// whatever `tallyBallot` computed, over any input a caller chose; the
-// `inputWitness` names the code that must have written the tally's
-// confidential inputs, so a vote list written by any other code is refused.
+// written by this module's `commit` step, and everything `commit` read was
+// written by its `submit` step. The identity alone would release whatever
+// `tallyBallot` computed, over any input a caller chose; the `inputWitness`
+// names the code that must have written the tally's confidential inputs, so
+// a vote list written by any other code is refused, and the nested one does
+// the same for `commit`'s inputs, so a brief other code added is refused.
+// Each brief is an object in a list, which the runtime stores behind a
+// reference that carries the writer's stamp too.
 export const releaseTally = exchangeRule({
   appliesTo: THIS_POLICY,
   pre: {
@@ -39,6 +43,14 @@ export const releaseTally = exchangeRule({
           kind: "verified",
           moduleIdentity: THIS_POLICY.moduleIdentity,
           symbol: "commit",
+        },
+        inputWitness: {
+          type: "https://commonfabric.org/cfc/atom/TransformedBy",
+          identity: {
+            kind: "verified",
+            moduleIdentity: THIS_POLICY.moduleIdentity,
+            symbol: "submit",
+          },
         },
       },
     }],
@@ -92,6 +104,14 @@ export const forgeCommitted = handler<
   );
 });
 
+/** Not the entry point: adds a brief of its own choosing. */
+export const plantBrief = handler<
+  void,
+  { briefs: Writable<Sealed<Brief>[]> }
+>((_, { briefs }) => {
+  briefs.push({ vote: "approve" } as Sealed<Brief>);
+});
+
 /** Not the endorsed step: adds one vote beside the committed ones. */
 export const appendVote = handler<
   void,
@@ -128,6 +148,7 @@ export interface WitnessedChainOutput {
   commit: Stream<void>;
   forge: Stream<void>;
   append: Stream<void>;
+  plant: Stream<void>;
 }
 
 const WitnessedChain = pattern<WitnessedChainInput, WitnessedChainOutput>(
@@ -150,6 +171,7 @@ const WitnessedChain = pattern<WitnessedChainInput, WitnessedChainOutput>(
       commit: commit({ briefs, committed }),
       forge: forgeCommitted({ briefs, committed }),
       append: appendVote({ committed }),
+      plant: plantBrief({ briefs }),
     };
   },
 );

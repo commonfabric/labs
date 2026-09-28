@@ -45,13 +45,18 @@
  * direction every fit here errs in; it is the price of an intercept that
  * measures the machine rather than the manifest.
  *
- * Every fit here errs high. A cost model that under-estimates puts a lane
- * past the bound it is packed to finish inside, where one that
- * over-estimates leaves a lane finishing early. The two charges that are
- * read off what lanes have spent, a suite's fixed cost and a capability's
- * setup, are each read at the ninetieth percentile of what lanes have
- * seen. That is well above the typical observation, and it is not the
- * slowest one. Each charge is paid by every lane that holds the suite or
+ * Every fit here errs high: above what the typical lane pays. A cost
+ * model that under-estimates puts a lane past the bound it is packed to
+ * finish inside, where one that over-estimates leaves a lane finishing
+ * early. The two charges that are read off what lanes have spent, a
+ * suite's fixed cost and a capability's setup, are each read at the
+ * ninetieth percentile of what lanes have seen. That is well above the
+ * typical observation, and it is not the slowest one: up to one
+ * observation in ten exceeds its charge, by an amount nothing here
+ * bounds. The safety margin `LANE_SAFETY_SECONDS` leaves between a lane's
+ * budget and its bound absorbs such an excess up to its own size, and a
+ * lane whose observations exceed their charges by more than that between
+ * them runs past its bound. Each charge is paid by every lane that holds the suite or
  * opens the capability, for as long as the window keeps the observations
  * it was read from. Read at the slowest observation, a single slow batch
  * would set what every lane is charged, and every lane would pack short

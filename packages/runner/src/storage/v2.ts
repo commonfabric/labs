@@ -106,7 +106,11 @@ import {
   registerSchemaDocument,
 } from "../schema-registry.ts";
 import { isCellScope, normalizeCellScope } from "../scope.ts";
-import { normalizeSpaceHost, SpaceHostValidationError } from "../space-host.ts";
+import {
+  normalizeSpaceHost,
+  type SpaceHostRegistration,
+  SpaceHostValidationError,
+} from "../space-host.ts";
 import type { RuntimeTelemetryMarker } from "../telemetry.ts";
 import { combineOptionalSchema, isUnknownCellSchema } from "../traverse.ts";
 import { recordCommitLocalSeq, recordCommitSeq } from "./commit-identity.ts";
@@ -1497,9 +1501,25 @@ export class StorageManager implements IStorageManager {
    * - A different-host hint cannot replace a route after a stateful operation
    *   is issued.
    *
-   * Idempotent when the hint matches what is already in effect.
+   * Idempotent when the hint matches what is already in effect. The verdict is
+   * that of {@link registerSpaceHostDetailed}, which is the method a subclass
+   * overrides.
    */
   registerSpaceHost(space: MemorySpace, host: string): boolean {
+    return this.registerSpaceHostDetailed(space, host).accepted;
+  }
+
+  /**
+   * Records a host hint under the rules of {@link registerSpaceHost}, and
+   * names the rule behind a refusal. A seed or an accepted hint for another
+   * host is refused as `known-different-host`, with that host. A hint for a
+   * provider that issued a stateful operation through the default route is
+   * refused as `default-route-in-use`, and no route is recorded for the space.
+   */
+  registerSpaceHostDetailed(
+    space: MemorySpace,
+    host: string,
+  ): SpaceHostRegistration {
     let route: URL;
     try {
       route = normalizeSpaceHost(host);
@@ -1512,25 +1532,28 @@ export class StorageManager implements IStorageManager {
     }
     const normalized = route.toString();
     const seeded = this.#seedHosts[space];
-    if (seeded !== undefined) {
-      return new URL(seeded).toString() === normalized;
-    }
-    const existing = this.#dynamicHosts.get(space);
+    const existing = seeded !== undefined
+      ? new URL(seeded).toString()
+      : this.#dynamicHosts.get(space);
     if (existing !== undefined) {
-      return existing === normalized;
+      return existing === normalized ? { accepted: true } : {
+        accepted: false,
+        reason: "known-different-host",
+        existingHost: existing,
+      };
     }
     const provider = this.#providers.get(space);
     const replacesDefaultRoute = provider !== undefined &&
       this.#resolveDefaultStorageRoute() !==
         toWebSocketAddress(storageAddressForHost(normalized)).toString();
     if (replacesDefaultRoute && !provider.canReplaceProvisionalReplica()) {
-      return false;
+      return { accepted: false, reason: "default-route-in-use" };
     }
     this.#dynamicHosts.set(space, normalized);
     if (replacesDefaultRoute) {
       this.trackUntilSettled(provider.replaceProvisionalReplica());
     }
-    return true;
+    return { accepted: true };
   }
 
   /**
@@ -4633,7 +4656,9 @@ export class SpaceReplica
    * `#memoizedSessionHandle()`, and the serving loop already re-attempts a
    * deferred event's load every drain (see the scheduler's `failHeadEventLoadPark`
    * and the SpaceServer's deferral backstop), so the heal arrives on the
-   * cadence the deferral machinery already runs at.
+   * cadence the deferral machinery already runs at. A watch request in
+   * flight when the revocation lands consumes it as the request fails, and
+   * is made once more on the remounted session.
    */
   noteAclChanged(): void {
     if (this.#closed) return;
@@ -6264,7 +6289,7 @@ export class SpaceReplica
   ): Promise<Result<Unit, PullError>> {
     const refreshStart = performance.now();
     try {
-      const { session } = await this.#activeSessionHandle();
+      let { session } = await this.#activeSessionHandle();
       // Per-session (no global): mirror the storage setting onto the session so
       // its watch-mutation family (set + add) uses the ordered-issue concurrent
       // path. Idempotent; cheap to re-assert each refresh. Optional-chained so
@@ -6345,6 +6370,18 @@ export class SpaceReplica
       let mutation: MemoryV2Client.WatchMutationResult;
       try {
         mutation = await session.watchAddSync(watches);
+      } catch (error) {
+        // An ACL verdict can terminate the session while this request is in
+        // flight, and the request may be the only load the space sees, so its
+        // failure is what consumes the remount. The request is made once more
+        // on the remounted session, which admits or refuses it against the
+        // ACL as it now stands.
+        if (!this.#remountedSince(session)) throw error;
+        ({ session } = await this.#activeSessionHandle());
+        session.setConcurrentWatchRefresh?.(
+          this.#settings.experimentalConcurrentWatchRefresh === true,
+        );
+        mutation = await session.watchAddSync(watches);
       } finally {
         logger.time(watchAddStart, "watchRefresh", "watchAddSync");
       }
@@ -6381,6 +6418,15 @@ export class SpaceReplica
     } finally {
       logger.time(refreshStart, "watchRefresh", "total");
     }
+  }
+
+  /**
+   * Helper for `#refreshWatchSet()`, which consumes any session remount owed
+   * and returns whether `session` has been replaced as this replica's session.
+   */
+  #remountedSince(session: MemoryV2Client.SpaceSession): boolean {
+    this.#consumeOwedSessionRemount();
+    return this.#sessionSession !== session;
   }
 
   #consumeWatchView(view: MemoryV2Client.WatchView): void {

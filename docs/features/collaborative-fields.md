@@ -42,14 +42,18 @@ by the server, beside the client-supplied display name.
 `cf-code-editor` joins only while collaborative editing is active and a
 `participantName` is set, through `RuntimeClient.joinPresenceRoom()`
 ([`../../packages/runtime-client/README.md`](../../packages/runtime-client/README.md)).
-Every collaborative editor on a page joins its own room as soon as its field
-has a confirmed cursor, and publishes its caret there; the record's `focused`
-says which editor owns focus, and an editor publishes no selection until it
-has been focused once. Blur keeps the room joined with the last selection, and
-unmounting an editor leaves its room. By default the runtime derives each
-editor's room from the resolved, pinned field: the space DID, branch, full
-schemed document id, resolved scope instance, and complete field path are
-domain-separated and hashed. An explicit `presenceRoom` overrides that derived
+A room belongs to a field, not to a person: each editor joins the room of the
+field it is bound to, and everyone editing that field meets there, with one
+entry per browser tab. A tab with editors for two different fields is in both
+rooms, with an entry in each; two editors for the same field in one tab share
+the tab's entry. An editor joins as soon as its field has a confirmed cursor
+and publishes its caret; the record's `focused` says whether that editor owns
+focus, and an editor publishes no selection until it has been focused once.
+Blur keeps the room joined with the last selection, and unmounting an editor
+leaves its room. By default the runtime derives an editor's room from the
+resolved, pinned field: the space DID, branch, full schemed document id,
+resolved scope instance, and complete field path are domain-separated and
+hashed. An explicit `presenceRoom` overrides that derived
 room. The hash is a
 rendezvous key, not authorization; a human space name is display state and
 does not participate in Cell identity.

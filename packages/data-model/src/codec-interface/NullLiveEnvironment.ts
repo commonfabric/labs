@@ -10,22 +10,18 @@ import type { FabricInstance } from "@/interface.ts";
 import type { LiveEnvironment } from "./interface.ts";
 import { BaseLiveEnvironment } from "./BaseLiveEnvironment.ts";
 
-/**
- * `LiveEnvironment` whose `getCell()` always throws. `shouldDeepFreeze` is
- * inherited from `BaseLiveEnvironment`, and is required at construction.
- */
+/** `LiveEnvironment` whose `getCell()` always throws. */
 export class NullLiveEnvironment extends BaseLiveEnvironment {
   readonly #getCellMessage: string;
 
   /**
    * Constructs an instance.
    *
-   * @param shouldDeepFreeze - Should the result be deep-frozen?
    * @param getCellMessage - Message to use in `getCell()` throw. Defaults to a
    * generic message.
    */
-  constructor(shouldDeepFreeze: boolean, getCellMessage?: string) {
-    super(shouldDeepFreeze);
+  constructor(getCellMessage?: string) {
+    super();
     this.#getCellMessage = getCellMessage ?? "no live environment provided.";
   }
 
@@ -41,10 +37,10 @@ export class NullLiveEnvironment extends BaseLiveEnvironment {
 }
 
 /**
- * Shared `NullLiveEnvironment` instance with `.shouldDeepFreeze === true` and
- * whose `getCell()` always throws. Pass this when a codec wants a live
- * environment but isn't expected to need a cell; if a cell ref does turn up,
- * the throw makes the unexpected lookup obvious instead of silent.
+ * Shared `NullLiveEnvironment` instance, whose `getCell()` always throws. Pass
+ * this when a codec wants a live environment but isn't expected to need a
+ * cell; if a cell ref does turn up, the throw makes the unexpected lookup
+ * obvious instead of silent.
  */
 export const NULL_LIVE_ENVIRONMENT: LiveEnvironment = Object
-  .freeze(new NullLiveEnvironment(true));
+  .freeze(new NullLiveEnvironment());

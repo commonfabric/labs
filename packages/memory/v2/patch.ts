@@ -5,6 +5,7 @@ import {
   cloneIfNecessary,
   deepFreeze,
   type MutableFabricContainerValueLayer,
+  tracePath,
   valueEqual,
 } from "@commonfabric/data-model";
 import { isInstance, isObjectNotArray } from "@commonfabric/utils/types";
@@ -57,10 +58,10 @@ export const emptyEntityDocument = (): EntityDocument => ({});
 
 /**
  * `applyPatch` over a possibly-absent document: an absent base normalizes
- * to the empty envelope. The one entry point for "replay these ops over
- * whatever this document currently is" — server-side reconstruction and
- * client-side pending replay share it rather than each knowing the
- * absent-base rule.
+ * to the empty envelope. Like `applyPatch`, it deep-freezes `base` in place.
+ * The one entry point for "replay these ops over whatever this document
+ * currently is" — server-side reconstruction and client-side pending replay
+ * share it rather than each knowing the absent-base rule.
  */
 export const applyPatchToDocument = (
   base: EntityDocument | undefined,
@@ -89,19 +90,25 @@ export const applyPatchToDocument = (
  * The function is therefore on the hot path for any read that reconstructs
  * a document from its stored patch list.
  *
- * Mutation discipline: each op is applied via a copy-on-write descent. The
- * spine of containers from the root down to the mutated container is thawed to
- * fresh mutable copies (via `cloneForMutation()`), the leaf operation is applied
- * to that mutable container, and subtrees off the spine stay frozen-by-reference
- * (structural sharing). The assembled tree is then fully deep-frozen at the
- * `applyPatch` boundary, so callers can rely on the return value being deeply
- * frozen.
+ * Mutation discipline: frozen means shared, and mutable means this call's own.
+ * `state` is deep-frozen in place first, so the only mutable containers an op
+ * finds are the ones earlier ops of the same call copied. Each op then applies
+ * via a copy-on-write descent: a frozen container on its spine is thawed to a
+ * mutable copy (via `cloneForMutation()`), a mutable one is mutated in place,
+ * the leaf operation is applied to the container at the end, and subtrees off
+ * the spine stay frozen-by-reference (structural sharing). So a container on
+ * the ops' spines is copied once per call however many ops pass through it,
+ * and `K` ops beneath one `N`-key object copy it once rather than `K` times. A
+ * `move` re-inserts what it moves through `cloneValue()`, which copies it again
+ * when an earlier op of the same call has thawed it. The assembled tree is
+ * deep-frozen at the `applyPatch` boundary as well, so callers can rely on the
+ * return value being deeply frozen.
  */
 export const applyPatch = (
   state: FabricValue,
   ops: PatchOp[],
 ): FabricValue => {
-  let current = state;
+  let current = deepFreeze(state);
   for (const op of ops) {
     current = applyOp(current, op);
   }
@@ -111,25 +118,40 @@ export const applyPatch = (
 const applyOp = (state: FabricValue, op: PatchOp): FabricValue =>
   patchOpDescriptors[op.op].apply(state, op);
 
+/** `cloneForMutation()` options for a descent that creates nothing. */
+const REUSE_MUTABLE = { force: false } as const;
+
 /**
  * Copy-on-write thaw of the spine of `root` down to `thawPath`, returning the
  * new root and the mutable container at `thawPath`. Subtrees off the spine are
- * shared by identity (structural sharing); the caller's input is left untouched
- * (`cloneForMutation` defaults to `force: true`). `cloneForMutation`'s typed
- * errors are translated into this module's path-style messages, and a
- * value-at-path that isn't a plain container is rejected (patch ops only mutate
- * objects/arrays). `fullPath` is used for error messages.
+ * shared by identity (structural sharing). A frozen spine container is copied;
+ * a mutable one is one an earlier op of the same `applyPatch()` call copied,
+ * since that call froze its input first, and is mutated in place
+ * (`force: false`). `cloneForMutation`'s typed errors are translated into this
+ * module's path-style messages, and a value-at-path that isn't a plain
+ * container is rejected (patch ops only mutate objects/arrays). `fullPath` is
+ * used for error messages. Given `createMissingFor`, the descent creates the
+ * containers it finds missing, the last shaped for that next key (see
+ * `CloneForMutationOptions.nextKeyAfterPath`).
  */
 const thawSpine = (
   root: FabricValue,
   thawPath: string[],
   fullPath: string[],
-  options?: { createMissing?: boolean; nextKeyAfterPath?: string },
+  createMissingFor?: string,
 ): { root: FabricValue; container: PatchContainer } => {
   let value: FabricValue;
   let pathValue: MutableFabricContainerValueLayer;
   try {
-    ({ value, pathValue } = cloneForMutation(root, thawPath, options));
+    ({ value, pathValue } = cloneForMutation(
+      root,
+      thawPath,
+      createMissingFor === undefined ? REUSE_MUTABLE : {
+        createMissing: true,
+        nextKeyAfterPath: createMissingFor,
+        force: false,
+      },
+    ));
   } catch (e) {
     if (e instanceof CloneForMutationError) {
       throw new PatchApplyError(
@@ -173,37 +195,37 @@ const replaceAtPath = (
  * created during the mutating descent), but a present array must already contain
  * any index traversed through, and a present non-container can't be traversed.
  * This is what keeps `add` from fabricating missing array indices (which
- * `cloneForMutation`'s `createMissing` would otherwise do).
+ * `cloneForMutation`'s `createMissing` would otherwise do). The spine is read
+ * from `tracePath()`, the trace `cloneForMutation()` descends by.
  */
 const validateAddSpine = (root: FabricValue, path: string[]): void => {
-  let current: FabricValue = root;
-  // Becomes true once we pass a missing object key: everything below is freshly
-  // created, so all containers from there down are empty.
-  let creating = false;
-  for (let i = 0; i < path.length - 1; i++) {
-    const segment = path[i]!;
-    if (creating) {
-      // A freshly-created array is empty, so an intermediate array index (or the
-      // `-` append marker) can never resolve to an existing element to traverse
-      // into -- reject it rather than fabricate one. Plain object keys are fine;
-      // they get created on the way down.
-      if (isArraySegment(segment) || segment === "-") {
-        throw new PatchApplyError(`missing path ${encodePointer(path)}`);
+  const spine = path.slice(0, -1);
+  const trace = tracePath(root, spine);
+  for (let i = 0; i < spine.length; i++) {
+    const segment = spine[i]!;
+    if (i < trace.containers.length) {
+      // A present array must hold the index; a missing object key starts the
+      // part of the spine the descent creates.
+      if (Array.isArray(trace.containers[i])) {
+        parseArrayIndex(segment);
+        if (trace.end === "missing" && i === trace.at) {
+          throw new PatchApplyError(`missing path ${encodePointer(path)}`);
+        }
       }
       continue;
     }
-    if (Array.isArray(current)) {
-      current = current[requireExistingArrayIndex(current, segment, path)];
-    } else if (isPatchObject(current)) {
-      if (!Object.hasOwn(current, segment)) {
-        creating = true;
-        continue;
-      }
-      current = current[segment];
-    } else {
+    if (trace.end === "blocked") {
       throw new PatchApplyError(
         `path is not traversable at ${encodePointer(path)}`,
       );
+    }
+    // Past a missing object key everything is freshly created, and a
+    // freshly-created array is empty, so an intermediate array index (or the
+    // `-` append marker) can never resolve to an existing element to traverse
+    // into -- reject it rather than fabricate one. Plain object keys are fine;
+    // they get created on the way down.
+    if (isArraySegment(segment) || segment === "-") {
+      throw new PatchApplyError(`missing path ${encodePointer(path)}`);
     }
   }
 };
@@ -222,10 +244,7 @@ const addAtPath = (
     root,
     path.slice(0, -1),
     path,
-    {
-      createMissing: true,
-      nextKeyAfterPath: key,
-    },
+    key,
   );
   if (Array.isArray(container)) {
     if (key === "-") {
@@ -274,6 +293,9 @@ const moveValue = (
     throw new PatchApplyError("cannot move a value into its own descendant");
   }
 
+  // The extracted value may be a container an earlier op copied, and it
+  // re-enters the tree through `addAtPath()`'s `cloneValue()`, so the tree
+  // never holds it at two places.
   const extracted = getAtPath(root, from);
   return addAtPath(removeAtPath(root, from), path, extracted);
 };
@@ -308,10 +330,7 @@ const appendAtPath = (
   values: FabricValue[],
 ): FabricValue => {
   validateAddSpine(root, path);
-  const { root: newRoot, container } = thawSpine(root, path, path, {
-    createMissing: true,
-    nextKeyAfterPath: "0",
-  });
+  const { root: newRoot, container } = thawSpine(root, path, path, "0");
   if (!Array.isArray(container)) {
     throw new PatchApplyError(
       `append target is not an array at ${encodePointer(path)}`,
@@ -331,10 +350,7 @@ const addUniqueAtPath = (
   values: FabricValue[],
 ): FabricValue => {
   validateAddSpine(root, path);
-  const { root: newRoot, container } = thawSpine(root, path, path, {
-    createMissing: true,
-    nextKeyAfterPath: "0",
-  });
+  const { root: newRoot, container } = thawSpine(root, path, path, "0");
   if (!Array.isArray(container)) {
     throw new PatchApplyError(
       `add-unique target is not an array at ${encodePointer(path)}`,
@@ -426,10 +442,7 @@ const incrementAtPath = (
     root,
     path.slice(0, -1),
     path,
-    {
-      createMissing: true,
-      nextKeyAfterPath: path[path.length - 1]!,
-    },
+    path[path.length - 1]!,
   );
   const key = path[path.length - 1]!;
   if (Array.isArray(container)) {
@@ -507,7 +520,13 @@ const isContainer = (value: FabricValue): value is PatchContainer =>
  * switch:
  *
  * - `apply` is the mutation the durable store performs for the op (used by
- *   {@link applyPatch} above).
+ *   {@link applyPatch} above). It may mutate in place any container of
+ *   `state` that is not frozen, because `applyPatch()` guarantees each such
+ *   container was copied by an earlier op of the same call and is held in one
+ *   place. It keeps that guarantee by placing a value only through
+ *   `cloneValue()`, which never hands back a mutable container: a mutable
+ *   container placed at a second path, or handed out, would be mutated through
+ *   every reference to it.
  * - `pointerFields` names the fields whose value is a JSON Pointer into the
  *   document (`["path"]` for most ops, `["from", "path"]` for `move`). It is the
  *   source for every "which paths does this op touch" computation: the

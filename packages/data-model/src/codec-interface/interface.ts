@@ -168,11 +168,30 @@ export interface FabricCodec<PlusType, Encoded> {
    * declare the narrower state type it actually decodes and read its parts as
    * such. `state` is the whole of `Encoded` here because this interface is what
    * a registry holds, and the codecs in one agree on nothing narrower.
+   *
+   * A `state` need not come from {@link #encode}, so a nonterminal codec's
+   * implementation which keeps a container from `state` as part of the value it
+   * builds may do so only when that container is frozen and stays frozen in
+   * that value. Anything else it keeps, it copies. A mutable value may keep
+   * frozen state this way, so long as nothing that makes it mutable depends on
+   * changing that state. A value from `state` which the codec's values hold as
+   * an external reference is not a container of theirs, and is kept as it is.
+   * What a terminal codec may keep from its state is its wire format's
+   * business, as a transferred `ArrayBuffer` taken over whole shows.
+   *
+   * `mutable` decides the frozenness of the value built, and of nothing else:
+   * when `false`, the default, the result is frozen, and when `true`, it is
+   * left mutable. Either way a decode freezes only what it builds itself,
+   * never a value it keeps from `state`; freezing what `state` holds belongs to
+   * whatever built it. A codec whose values are immutable whatever their
+   * construction, such as a `FabricPrimitive`'s, has nothing to decide and may
+   * leave `mutable` undeclared.
    */
   decode(
     typeTag: string,
     state: Encoded,
     env: LiveEnvironment,
+    mutable?: boolean,
   ): FabricValuePlus<PlusType>;
 
   /**
@@ -188,6 +207,20 @@ export interface FabricCodec<PlusType, Encoded> {
    *
    * `env` is what a codec reaches the running system through, the same one
    * {@link #decode} is handed.
+   *
+   * For a nonterminal codec, the result is a snapshot of `value`: it
+   * represents `value`'s internal state as frozen data, and its external
+   * references as themselves, with their frozenness left as it is. This holds
+   * whether or not `value` is itself frozen. A mutable value's internal state
+   * is copied into the result, never frozen in place, and a result may be
+   * cached so long as it is dropped when the value changes. A value whose
+   * state effectively is an external reference may return that reference as
+   * itself, frozen or not; so a caller must not freeze a result in place, or
+   * otherwise change it.
+   *
+   * A terminal codec's result is in its wire format's own domain, and what it
+   * may be is that format's business. It is best made as frozen as the format
+   * allows: a record is frozen, though an `ArrayBuffer` in it cannot be.
    */
   encode(value: FabricValuePlus<PlusType>, env: LiveEnvironment): Encoded;
 }
@@ -327,21 +360,4 @@ export interface LiveEnvironment {
   getCell(
     ref: { id: string; path: string[]; space: string },
   ): FabricInstance;
-
-  /**
-   * Signals whether a decode call should produce a deep-frozen result: `true`
-   * means the decoded value should be deep-frozen, `false` means a mutable
-   * result is acceptable. Same contract as `frozen` passed to
-   * `cloneIfNecessary()` (see `value-clone.ts`): `shouldDeepFreeze === true`
-   * corresponds to `cloneIfNecessary(value, { frozen: true })`.
-   *
-   * Required (not optional): every live environment declares it, and gets it
-   * for free by extending `BaseLiveEnvironment`, which centralizes the getter;
-   * the `cloneIfNecessary`-style `true` default lives there.
-   *
-   * Enforcement: a decode deep-freezes its result, and a codec that builds a
-   * value cheaper when it may stay thawed reads this to decide, producing a
-   * deep-frozen result when it is `true`.
-   */
-  get shouldDeepFreeze(): boolean;
 }

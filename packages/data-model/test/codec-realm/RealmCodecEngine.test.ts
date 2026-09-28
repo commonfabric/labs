@@ -1117,6 +1117,61 @@ describe("RealmCodecEngine", () => {
     });
   });
 
+  describe("`mutable` constructor option", () => {
+    /** An engine over the default registry that decodes mutable. */
+    const mutableEngine = new RealmCodecEngine({
+      registry: createDefaultRealmRegistry(),
+      mutable: true,
+    });
+
+    it("is `false` by default, and `true` when given", () => {
+      expect(newDefaultRealmCodecEngine().mutable).toBe(false);
+      expect(mutableEngine.mutable).toBe(true);
+    });
+
+    it("hands back what it retains unfrozen, and by identity", () => {
+      const inner = { c: "two" };
+      const data = { a: tagged("EpochNsec@1", 7n), b: inner };
+      const decoded = mutableEngine.decode(wire(data)) as Record<
+        string,
+        unknown
+      >;
+
+      expect(Object.isFrozen(decoded)).toBe(false);
+      expect(decoded.b).toBe(inner);
+      expect(Object.isFrozen(inner)).toBe(false);
+    });
+
+    it("copies what it would retain when that arrived frozen", () => {
+      // A decode in the realm that built its argument can be handed a frozen
+      // container, which a mutable decode cannot hand back as it stands.
+
+      const inner = Object.freeze({ c: "two" });
+      // deno-lint-ignore no-sparse-arrays
+      const holey = Object.freeze([1, , 3]);
+      const decoded = mutableEngine.decode(
+        wire(Object.freeze({ b: inner, h: holey })),
+      ) as { b: object; h: unknown[] };
+
+      expect(Object.isFrozen(decoded)).toBe(false);
+      expect(decoded.b).not.toBe(inner);
+      expect(decoded.b).toEqual(inner);
+      expect(Object.isFrozen(decoded.b)).toBe(false);
+      expect(Object.isFrozen(decoded.h)).toBe(false);
+      expect(decoded.h.length).toBe(3);
+      expect(1 in decoded.h).toBe(false);
+    });
+
+    it("leaves an instance it decodes mutable", () => {
+      const decoded = mutableEngine.decode(
+        realmFromFabricValue(FabricError.fromNativeError(new Error("boom"))),
+      );
+
+      expect(decoded).toBeInstanceOf(FabricError);
+      expect(Object.isFrozen(decoded)).toBe(false);
+    });
+  });
+
   describe("across a real realm boundary", () => {
     it("decodes each class on the far side", async () => {
       const report = await crossRealm({

@@ -770,7 +770,7 @@ describe("calibrate", () => {
       // on the order the openings were read in.
       for (const count of [10, 11, 20, 30, 100]) {
         const typical = Array.from({ length: count - 1 }, (_, i) => 10 + i);
-        const openings = [90, ...typical];
+        const openings = [400, ...typical];
         const charged = calibrate({
           setup: new Map([["fuse", openings]]),
           batches: [],

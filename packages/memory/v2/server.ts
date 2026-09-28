@@ -260,23 +260,37 @@ const timing = getLogger("memory", { enabled: false });
 
 const SUBSCRIPTION_REFRESH_DELAY_MS = 5;
 const MIN_REFRESH_QUEUE_DRAIN_WAIT_MS = 500;
+/**
+ * The duration, in milliseconds, past which an operation is recorded for
+ * `/api/health/stats`: `CF_SLOW_QUERY_THRESHOLD_MS` as `readEnv` returns it
+ * when that is a non-negative number, and `100` otherwise, including when the
+ * variable is unset or `readEnv` throws because the process may not read it.
+ * The reader is a parameter so that every one of those cases can be exercised
+ * directly, whatever permissions the calling process has.
+ */
+export const slowQueryThresholdMs = (
+  readEnv: (name: string) => string | undefined,
+): number => {
+  let raw: string | undefined;
+  try {
+    raw = readEnv("CF_SLOW_QUERY_THRESHOLD_MS");
+  } catch {
+    return 100;
+  }
+  const parsed = raw === undefined || raw === "" ? NaN : Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 100;
+};
+
 // Operations slower than this are recorded for `/api/health/stats`. The
 // default suits a deployment, where the interesting operations are the ones
 // well past it; a local investigation of a fast machine sets
 // `CF_SLOW_QUERY_THRESHOLD_MS` lower — to `0` to record every one — so the
 // buffer carries the per-operation root, read and upsert counts for
-// operations the default would leave invisible.
-const SLOW_QUERY_THRESHOLD_MS = (() => {
-  try {
-    const raw = typeof Deno !== "undefined"
-      ? Deno.env.get("CF_SLOW_QUERY_THRESHOLD_MS")
-      : undefined;
-    const parsed = raw === undefined || raw === "" ? NaN : Number(raw);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 100;
-  } catch {
-    return 100;
-  }
-})();
+// operations the default would leave invisible. Outside Deno the reader throws
+// a `ReferenceError`, which reads as the default.
+const SLOW_QUERY_THRESHOLD_MS = slowQueryThresholdMs((name) =>
+  Deno.env.get(name)
+);
 const QUERY_EVALUATION_CACHE_MAX_SPACES = 8;
 // ~5 board-scale corpora (a full board evaluation retains ~6k entities).
 // Entity count is the byte proxy: what an entry holds alive is its cloned

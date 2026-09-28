@@ -10555,13 +10555,11 @@ export class Runner {
     // every route here and already rejects a bare function at any depth, with
     // a better message than a hash could give.
     //
-    // The walk types its result as a `FabricExecValue`, which admits a
-    // function; the cast says there is none left. The only functions in a
-    // pattern graph are builder artifacts, since `normalizeSandboxResult`
-    // refuses any other, and the walk replaces every artifact with its
-    // encodable form. The leaves were converted on the way out of the sandbox.
+    // `resultPattern` is the builder's own (`patternFromFrame()`), and a
+    // pattern the builder made flattens to a `FabricValue`; see
+    // `flattenBuilderArtifacts()`.
     const resultPatternKey = hashStringOf(
-      flattenBuilderArtifacts(resultPattern) as FabricValue,
+      flattenBuilderArtifacts(resultPattern),
     );
     // Keyed doc-then-INSTANCE, the instance being the SAME per-run resolved key
     // that selected the byScope cell above: a doc-level or

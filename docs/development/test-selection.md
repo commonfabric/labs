@@ -1028,9 +1028,15 @@ or two, and the last figure is how many have a coverage-on fit.
 
 The two fixed charges, a suite's `suiteOverhead` and a capability's
 `setupCost`, are each the ninetieth percentile of what lanes have seen in
-the window, the same percentile a test's own cost is read at. That is
-well above what a typical batch or opening takes. It is not the slowest
-one, because each charge is paid by every lane that holds the suite or
+the window, the same percentile a test's own cost is read at: for a
+suite, of what each batch spent beyond what its tests and its units
+account for, and for a capability, of how long each opening took. That
+is well above the typical observation of either. Up to one in ten
+exceeds its charge, by an amount the fit does not bound. The safety
+margin `LANE_SAFETY_SECONDS` absorbs such an excess up to its own size,
+and a lane whose observations exceed their charges by more than that
+between them runs past its bound. The charge is not the slowest observation,
+because each charge is paid by every lane that holds the suite or
 opens the capability: read at the slowest observation, one slow runner
 would set what every lane pays, and every lane would pack short by that
 runner's excess. The percentile is the observation at its rank rather
