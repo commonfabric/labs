@@ -1,4 +1,6 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { decodeBase64 } from "@std/encoding/base64";
+import { join } from "@std/path";
 
 import { CfHarnessEngine } from "../src/engine.ts";
 import type {
@@ -77,12 +79,15 @@ const closingRuntime = (
 };
 
 Deno.test("CfHarnessEngine closes the sandbox on every terminal transition", async () => {
+  // The three transitions that each close the sandbox themselves. An
+  // interrupted run ends through `failRun` and is covered on its own below:
+  // in this list it would pass on `failRun`'s close and prove nothing of its
+  // own.
   for (
     const end of [
       (e: CfHarnessEngine) => e.completeRun("assistant_completed"),
       (e: CfHarnessEngine) => e.failRun("prompt_loop_error", new Error("x")),
       (e: CfHarnessEngine) => e.cancelRun("stop"),
-      (e: CfHarnessEngine) => e.terminalizeInterruptedRun("SIGTERM"),
     ]
   ) {
     const runtime = closingRuntime(() => Promise.resolve());
@@ -95,6 +100,48 @@ Deno.test("CfHarnessEngine closes the sandbox on every terminal transition", asy
     await end(engine);
     assertEquals(runtime.closes, 1);
   }
+});
+
+Deno.test("CfHarnessEngine closes an interrupted run's sandbox once, and before it records the interruption", async () => {
+  // `terminalizeInterruptedRun` closes the sandbox and then ends the run
+  // through `failRun`, which closes it too. Two things are its own:
+  //
+  //   - the two closes are one: the runtime is asked once;
+  //   - its close comes FIRST, before the run state is touched. The process
+  //     is going down, and the sandbox is what outlives it if left.
+  //
+  // The second is what tells its close from `failRun`'s, which runs after
+  // the interruption has been recorded.
+  const failuresSeenAtClose: number[] = [];
+  const statusSeenAtClose: string[] = [];
+  let engine: CfHarnessEngine | undefined = undefined;
+  const runtime = closingRuntime(() => {
+    const state = engine!.getRunState();
+    failuresSeenAtClose.push(state.failureRecords?.length ?? 0);
+    statusSeenAtClose.push(state.status);
+    return Promise.resolve();
+  });
+  engine = new CfHarnessEngine({
+    runId: "run-1",
+    workspaceHostPath: "/host/project",
+    sandboxRuntime: runtime,
+    ownsSandboxRuntime: true,
+  });
+
+  const state = await engine.terminalizeInterruptedRun("SIGTERM");
+
+  assertEquals(state.status, "failed");
+  assertEquals(state.terminalReason, "process_interrupted");
+  // The interruption was recorded, so "none at close" below is a statement
+  // about order and not about a record that is never written.
+  assertEquals(state.failureRecords?.length, 1);
+  assertEquals(runtime.closes, 1);
+  assertEquals(failuresSeenAtClose, [0]);
+  assertEquals(statusSeenAtClose.includes("failed"), false);
+
+  // A run that already has its outcome is left as it is, sandbox included.
+  await engine.terminalizeInterruptedRun("SIGTERM");
+  assertEquals(runtime.closes, 1);
 });
 
 Deno.test("CfHarnessEngine leaves a shared, injected sandbox open when it ends", async () => {
@@ -177,4 +224,126 @@ Deno.test("CfHarnessEngine owns the runsc configuration a child can build on", (
     engine.ownedRunscSandboxConfig?.additionalMounts.map((m) => m.sandboxPath),
     ["/file-cabinet"],
   );
+});
+
+/** The `runsc run` command line of each call the runner was asked to make. */
+const runscRunCommandLines = (runner: RecordingRunner): string[][] =>
+  runner.calls
+    .filter((call) => call.command === "/bin/sh")
+    .map((call) => call.args ?? [])
+    .filter((args) => args.includes("run"));
+
+Deno.test("CfHarnessEngine builds the runsc runtime from every runsc option it is given", async () => {
+  // Each value differs from the default the runtime would fall back to, so
+  // an option the engine dropped shows as the default and not as itself.
+  const runner = new RecordingRunner();
+  const engine = new CfHarnessEngine({
+    runId: "run-threaded-options",
+    workspaceHostPath: "/host/project",
+    sandboxRuntimeKind: "runsc",
+    sandboxRootfs: "/images/kitchensink",
+    sandboxRunscNetworkMode: "none",
+    sandboxCfcPolicy: "/policy.json",
+    sandboxRunscBinary: "/opt/runsc",
+    processRunner: runner,
+  });
+  try {
+    const description = engine.sandbox.describe();
+    assertEquals(description.cfc?.networkMode, "none");
+    // The policy is in effect: the runtime asks runsc for CFC.
+    assertEquals(description.cfc?.runtimeRequested, true);
+
+    const config = engine.ownedRunscSandboxConfig;
+    assertEquals(config?.networkMode, "none");
+    assertEquals(config?.cfcPolicyPath, "/policy.json");
+    assertEquals(config?.runscBinary, "/opt/runsc");
+    assertEquals(config?.runId, "run-threaded-options");
+    assertEquals(config?.runId, engine.getRunState().runId);
+
+    // And what runsc is actually started with.
+    await engine.invokeBuiltinTool("bash", { command: "true" });
+    const commandLines = runscRunCommandLines(runner);
+    assertEquals(commandLines.length > 0, true);
+    for (const args of commandLines) {
+      assertEquals(args.includes("/opt/runsc"), true, args.join(" "));
+      assertEquals(args.includes("--network=none"), true, args.join(" "));
+      assertEquals(
+        args.slice(
+          args.indexOf("--cfc-policy"),
+          args.indexOf("--cfc-policy") + 2,
+        ),
+        ["--cfc-policy", "/policy.json"],
+      );
+      assertEquals(args.includes("--cfc"), true, args.join(" "));
+    }
+  } finally {
+    await engine.completeRun("assistant_completed");
+  }
+});
+
+Deno.test("CfHarnessEngine gives two runsc runs two run identities", () => {
+  // The run id is what keeps one run's sessions from another's. A runtime
+  // built without it draws a random one, which is unique too, so uniqueness
+  // alone would not show the engine dropping it: the id has to be the run's.
+  const build = (runId: string) =>
+    new CfHarnessEngine({
+      runId,
+      workspaceHostPath: "/host/project",
+      sandboxRuntimeKind: "runsc",
+      sandboxRootfs: "/images/kitchensink",
+      processRunner: new RecordingRunner(),
+    });
+  assertEquals(build("run-a").ownedRunscSandboxConfig?.runId, "run-a");
+  assertEquals(build("run-b").ownedRunscSandboxConfig?.runId, "run-b");
+});
+
+const ONE_PIXEL_PNG = decodeBase64(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p94AAAAASUVORK5CYII=",
+);
+
+Deno.test("CfHarnessEngine resolves a host-backed path through the runsc runtime's mounts", async () => {
+  // A host tool reads the file behind a sandbox path, so the engine has to
+  // know the mounts of the sandbox that runs. The path is under an
+  // ADDITIONAL mount: the workspace alone resolves even when the runsc
+  // configuration's mounts are not consulted.
+  const workspace = await Deno.makeTempDir({ prefix: "cf-runsc-workspace-" });
+  const cabinet = await Deno.makeTempDir({ prefix: "cf-runsc-cabinet-" });
+  try {
+    await Deno.writeFile(join(cabinet, "pixel.png"), ONE_PIXEL_PNG);
+    const engine = new CfHarnessEngine({
+      runId: "run-host-mounts",
+      workspaceHostPath: workspace,
+      sandboxRuntimeKind: "runsc",
+      sandboxRootfs: "/images/kitchensink",
+      cfcEnforcementMode: "observe",
+      additionalMounts: [{
+        kind: "host-bind",
+        name: "cabinet",
+        hostPath: cabinet,
+        sandboxPath: "/file-cabinet",
+        readOnly: true,
+      }],
+      processRunner: new RecordingRunner(),
+    });
+    try {
+      const viewed = await engine.invokeBuiltinTool("view_image", {
+        path: "/file-cabinet/pixel.png",
+      });
+      const output = viewed.output as {
+        path?: string;
+        bytes?: number;
+        mediaType?: string;
+        error?: unknown;
+      };
+      assertEquals(output.error, undefined);
+      assertEquals(output.path, "/file-cabinet/pixel.png");
+      assertEquals(output.mediaType, "image/png");
+      assertEquals(output.bytes, ONE_PIXEL_PNG.length);
+    } finally {
+      await engine.completeRun("assistant_completed");
+    }
+  } finally {
+    await Deno.remove(workspace, { recursive: true });
+    await Deno.remove(cabinet, { recursive: true });
+  }
 });
