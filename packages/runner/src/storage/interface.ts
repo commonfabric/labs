@@ -858,9 +858,10 @@ export const hasOperationStorageCapability = (
 /**
  * A storage provider that reaches the memory server's presence rooms
  * (memory-v2 `04-protocol.md` §4.13) through its space session. The
- * membership is the session's: it survives the session's reconnects, and a
- * replacement of the session it was joined through ends it with a `failure`
- * event, after which a consumer that still wants the room joins again.
+ * membership outlives the session it was joined through: a reconnect rejoins
+ * it, and a replacement of the provider's replica rejoins it on the
+ * replacement's session, each time delivering a fresh `snapshot` with the id
+ * the relay assigned there and republishing the last record.
  */
 export interface IPresenceStorageCapability {
   /**
@@ -876,6 +877,7 @@ export interface IPresenceStorageCapability {
 export const hasPresenceStorageCapability = (
   value: unknown,
 ): value is IPresenceStorageCapability => {
+  if (value === null || value === undefined) return false;
   const candidate = value as Partial<IPresenceStorageCapability>;
   return typeof candidate.joinPresenceRoom === "function";
 };

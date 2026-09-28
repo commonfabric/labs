@@ -28,7 +28,7 @@ allowed into a room.
 
 ## Status convention
 
-- [x] Not started
+- [ ] Not started
 - [x] Complete and verified
 
 Mark a work package complete only after its focused tests and completion gate
@@ -354,7 +354,7 @@ client-chosen `subscriptionId` like operation subscriptions.
 `RuntimeClient.joinPresenceRoom(cell, options?)` returns a
 `PresenceRoomHandle`:
 
-- `.participantId`, `.principal`, `.participants` — the current view.
+- `.participantId`, `.room`, `.participants` — the current view.
 - `setName(name)`, `setFacet(name, value)`, `clearFacet(name)` — update the
   local record. Updates coalesce at the browser animation-frame boundary and
   publish the merged record; no timer, debounce, or retry is involved.
@@ -378,10 +378,10 @@ consumer uses. `cf-code-editor` is its first consumer and publishes only the
 - `cf-presence-error` keeps its shape and categories. `connection` failures
   are now the memory connection's failures and recover with it; the editor no
   longer installs `online` or `visibilitychange` listeners.
-- The one-room-per-tab rule (`activePresenceEditor`) is unchanged by this
-  plan. It was written to bound socket count and now bounds only membership
-  count, so it may be relaxed in a later change once a participant list makes
-  the trade-off visible.
+- The one-room-per-tab rule (`activePresenceEditor`) was written to bound
+  socket count and would bound only membership count here, so the same change
+  removes it: every collaborative editor on a page joins its own room, and the
+  caret facet's `focused` says which editor owns focus.
 - The `copresence-client.ts` socket transport, its room-URL builder, and the
   Cloudflare protocol decoders are deleted. The caret facet decoder, the room
   derivation hash, and the bounds constants survive in a facet module beside
@@ -534,7 +534,6 @@ Completion gate:
   per-connection socket. A counter that drops (never queues) publications
   above a per-second budget is the shape to add if it proves necessary, and
   is not a timer in the sense the repository avoids.
-- Relaxing the one-room-per-tab rule once a participant list exists.
 - Whether a `pointer` facet should carry its own `cursor` for coordinate
   mapping or be expressed in viewport-independent document coordinates; the
   decision belongs to the change that adds it.

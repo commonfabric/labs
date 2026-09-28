@@ -2480,13 +2480,14 @@ export class Server {
             space,
             room,
             connectionId: connection.id,
+            sessionId,
             revision: message.revision,
             name: message.name,
             facets: message.facets,
           });
           return { type: "response", requestId, ok: {} };
         case "presence.leave":
-          this.#presence.leave(space, room, connection.id);
+          this.#presence.leave(space, room, connection.id, sessionId);
           return { type: "response", requestId, ok: {} };
       }
     } catch (error) {

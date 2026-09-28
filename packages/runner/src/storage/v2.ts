@@ -49,6 +49,7 @@ import {
   type OperationFieldQuery,
   type OperationFieldSnapshot,
   type PatchOp,
+  type PresencePublication,
   type ReleaseOpFieldOperation,
   resolveScopeKey,
   type ScopeKey,
@@ -68,6 +69,7 @@ import {
   type ViewPlan,
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import { validatePresencePublication } from "@commonfabric/memory/v2/presence";
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
 import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
@@ -3194,6 +3196,28 @@ type ProviderOperationSubscription = {
 };
 
 /**
+ * One presence membership the provider holds across replica replacements:
+ * the room and observer the consumer gave it, the membership on the current
+ * replica's session, and the last publication, which the replacement's
+ * session is given again.
+ */
+type ProviderPresenceMembership = {
+  room: string;
+  observer: (event: MemoryV2Client.PresenceEvent) => void;
+
+  /** The membership on the current replica, until a replacement retires it. */
+  inner?: MemoryV2Client.PresenceMembership;
+
+  /** The replica `inner` was joined through. */
+  replica?: SpaceReplica;
+
+  /** The last publication, republished on a replacement's session. */
+  publication?: PresencePublication;
+  install?: Promise<void>;
+  closed: boolean;
+};
+
+/**
  * Minimal marker sink — structurally the Runtime's `RuntimeTelemetry`.
  * Kept structural (type-only import) so the storage layer takes no runtime
  * dependency on the telemetry module.
@@ -3222,6 +3246,7 @@ class Provider
   #destroyed = false;
   #routeAbort = new AbortController();
   #operationSubscriptions = new Set<ProviderOperationSubscription>();
+  #presenceMemberships = new Set<ProviderPresenceMembership>();
 
   constructor(
     readonly options: ProviderOptions,
@@ -3358,16 +3383,108 @@ class Provider
     );
   }
 
-  joinPresenceRoom(
+  async joinPresenceRoom(
     room: string,
     observer: (event: MemoryV2Client.PresenceEvent) => void,
   ): Promise<MemoryV2Client.PresenceMembership> {
-    if (this.#destroyed) {
-      return Promise.reject(new Error("memory provider closed"));
+    if (this.#destroyed) throw new Error("memory provider closed");
+    const membership: ProviderPresenceMembership = {
+      room,
+      observer,
+      closed: false,
+    };
+    this.#presenceMemberships.add(membership);
+    try {
+      await this.#ensurePresenceMembership(membership);
+    } catch (error) {
+      membership.closed = true;
+      this.#presenceMemberships.delete(membership);
+      throw error;
     }
-    return this.#followReplacement((replica) =>
-      replica.joinPresenceRoom(room, observer)
-    );
+    if (membership.closed || this.#destroyed) {
+      throw new Error("memory provider closed");
+    }
+    return {
+      get participantId() {
+        return membership.inner?.participantId ?? "";
+      },
+      publish: (publication) => {
+        if (membership.closed) return;
+        validatePresencePublication(publication);
+        membership.publication = publication;
+        membership.inner?.publish(publication);
+      },
+      leave: async () => {
+        if (membership.closed) return;
+        membership.closed = true;
+        this.#presenceMemberships.delete(membership);
+        await membership.inner?.leave();
+      },
+    };
+  }
+
+  #ensurePresenceMembership(
+    membership: ProviderPresenceMembership,
+  ): Promise<void> {
+    if (membership.install !== undefined) return membership.install;
+    const install = this.#installPresenceMembership(membership);
+    membership.install = install;
+    const clear = () => {
+      if (membership.install === install) membership.install = undefined;
+    };
+    install.then(clear, clear);
+    return install;
+  }
+
+  async #installPresenceMembership(
+    membership: ProviderPresenceMembership,
+  ): Promise<void> {
+    while (!membership.closed && !this.#destroyed) {
+      const replica = this.replica;
+      let inner: MemoryV2Client.PresenceMembership;
+      try {
+        inner = await replica.joinPresenceRoom(
+          membership.room,
+          (event) => this.#forwardPresence(membership, replica, event),
+        );
+      } catch (error) {
+        if (replica !== this.replica && !this.#destroyed) continue;
+        throw error;
+      }
+      if (membership.closed || this.#destroyed) {
+        void inner.leave();
+        return;
+      }
+      if (replica !== this.replica) {
+        void inner.leave();
+        continue;
+      }
+      membership.inner = inner;
+      membership.replica = replica;
+      if (membership.publication !== undefined) {
+        inner.publish(membership.publication);
+      }
+      return;
+    }
+  }
+
+  /**
+   * Forwards a room event to the consumer. A `failure` from a replica that
+   * has been replaced is the replacement's to make good, with the snapshot
+   * its own join delivers, so it is not forwarded.
+   */
+  #forwardPresence(
+    membership: ProviderPresenceMembership,
+    replica: SpaceReplica,
+    event: MemoryV2Client.PresenceEvent,
+  ): void {
+    if (membership.closed) return;
+    if (
+      event.kind === "failure" && replica !== this.replica && !this.#destroyed
+    ) {
+      return;
+    }
+    membership.observer(event);
   }
 
   async subscribeOperationField(
@@ -3461,6 +3578,12 @@ class Provider
       subscription.cancel?.();
       subscription.cancel = undefined;
     }
+    // The old session's memberships end with it; each is joined again on
+    // the replacement, which hands the consumer a fresh snapshot.
+    for (const membership of this.#presenceMemberships) {
+      membership.inner = undefined;
+      membership.replica = undefined;
+    }
     previous.redirectOverlappingReadsTo((uri, selector, scope, instance) =>
       this.#replaySync(replacement, uri, selector, scope, instance)
     );
@@ -3474,6 +3597,9 @@ class Provider
       ),
       ...[...this.#operationSubscriptions].map((subscription) =>
         this.#ensureOperationSubscription(subscription)
+      ),
+      ...[...this.#presenceMemberships].map((membership) =>
+        this.#ensurePresenceMembership(membership)
       ),
     ]);
   }

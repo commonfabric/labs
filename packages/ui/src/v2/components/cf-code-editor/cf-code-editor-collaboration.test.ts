@@ -594,6 +594,69 @@ describe("CFCodeEditor collaboration", () => {
     }
   });
 
+  it("keeps the presence cursor advancing while a join is still in flight", async () => {
+    const joining = Promise.withResolvers<PresenceRoomHandle>();
+    const runtime = {
+      joins: 0,
+      joinPresenceRoom: () => {
+        runtime.joins++;
+        return joining.promise;
+      },
+    };
+    const element = new CFCodeEditor();
+    try {
+      const presence = (element as any)._presenceComp as Compartment;
+      const view = statefulView([presence.of([])]);
+      (element as any)._editorView = view;
+      const collaboration = {
+        active: true,
+        cell: operationCell(runtime),
+        synchronizationSnapshot: {
+          confirmedCursor: { epoch: 2, version: 4 },
+          pendingChanges: [],
+          field: synchronizedField,
+        },
+      };
+      (element as any)._collaboration = collaboration;
+      element.collaborative = true;
+      element.presenceRoom = "abcdefghijklmnopqrstuv";
+      element.participantName = "Ada";
+
+      (element as any)._setupPresence();
+      expect(runtime.joins).toBe(1);
+      expect(codeMirrorPresenceState(view.state)?.cursor).toEqual({
+        epoch: 2,
+        version: 4,
+      });
+      collaboration.synchronizationSnapshot = {
+        confirmedCursor: { epoch: 2, version: 7 },
+        pendingChanges: [],
+        field: synchronizedField,
+      };
+      (element as any)._handleCollaborationSynchronization(
+        collaboration.synchronizationSnapshot,
+      );
+      expect(runtime.joins).toBe(1);
+      expect(codeMirrorPresenceState(view.state)?.cursor).toEqual({
+        epoch: 2,
+        version: 7,
+      });
+
+      const handle = new FakePresenceHandle("abcdefghijklmnopqrstuv");
+      joining.resolve(handle);
+      await settle();
+      expect((element as any)._presence).toBe(handle);
+      expect(handle.facets.at(-1)).toEqual(["caret", {
+        focused: false,
+        cursor: { epoch: 2, version: 7 },
+        selection: null,
+        basis: "confirmed",
+      }]);
+    } finally {
+      (element as any)._cleanupPresence();
+    }
+  });
+
   it("reports presence failure without making Memory collaboration read-only", () => {
     const events: Array<[string, unknown]> = [];
     const element = new CFCodeEditor();

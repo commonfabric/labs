@@ -61,6 +61,23 @@ describe("presence-facets", () => {
     });
   });
 
+  describe("caretFacetOf()", () => {
+    it("refuses a caret its decoder would drop", () => {
+      expect(() => caretFacetOf({ ...caret, selection: null })).toThrow(
+        "caret facet",
+      );
+      expect(() =>
+        caretFacetOf({
+          ...caret,
+          selection: {
+            ranges: [{ anchor: -1, head: 0, assoc: 0 }],
+            main: 0,
+          },
+        })
+      ).toThrow("range");
+    });
+  });
+
   describe("participantFromRecord()", () => {
     const record: PresenceRecord = {
       participantId: "participant:1",

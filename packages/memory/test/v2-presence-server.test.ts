@@ -336,8 +336,10 @@ describe("v2-presence-server", () => {
           "PresenceError",
         );
         expect((await publish(a, 3, "")).error?.name).toBe("PresenceError");
+        // A facet name the relay does not accept fails at the parser, as a
+        // message that does not parse at all does.
         expect((await publish(a, 3, "Ada", { "Caret": {} })).error?.name).toBe(
-          "PresenceError",
+          "InvalidMessageError",
         );
         expect(
           (await publish(a, 3, "Ada", { caret: { fill: "x".repeat(9000) } }))
@@ -392,6 +394,81 @@ describe("v2-presence-server", () => {
         ]);
       } finally {
         gate.resolve();
+        await server.close();
+      }
+    });
+  });
+
+  describe("another session on the same connection", () => {
+    // One connection may hold two sessions on a space; a membership belongs
+    // to the session that joined, and the other cannot touch it.
+
+    const openSecondSession = async (peer: Peer): Promise<string> => {
+      await peer.connection.receive(encodeMemoryBoundary({
+        type: "session.open",
+        requestId: "second-open",
+        space: peer.space,
+        session: {},
+        invocation: {
+          aud: peer.nextSessionOpen.audience,
+          challenge: peer.nextSessionOpen.challenge.value,
+        },
+      }));
+      const opened = shiftResponse<{ sessionId: string }>(peer.messages);
+      return opened.ok!.sessionId;
+    };
+
+    const asSession = async (
+      peer: Peer,
+      sessionId: string,
+      message: Record<string, unknown>,
+    ) => {
+      await peer.connection.receive(encodeMemoryBoundary({
+        ...message,
+        space: peer.space,
+        sessionId,
+        room: ROOM,
+      }));
+      return shiftResponse(peer.messages);
+    };
+
+    it("refuses to join, publish to, or leave a room another session joined", async () => {
+      const server = createServer("cross-session");
+      const space = "did:key:z6Mk-presence-cross-session";
+      try {
+        const a = await openPeer(server, space, "a");
+        const b = await openPeer(server, space, "b");
+        await join(a);
+        await join(b);
+        await publish(a, 1, "Ada");
+        b.messages.length = 0;
+        const other = await openSecondSession(a);
+        expect(
+          (await asSession(a, other, {
+            type: "presence.join",
+            requestId: "other-join",
+          })).error?.name,
+        ).toBe("PresenceError");
+        expect(
+          (await asSession(a, other, {
+            type: "presence.publish",
+            requestId: "other-publish",
+            revision: 2,
+            name: "Mallory",
+            facets: {},
+          })).error?.name,
+        ).toBe("PresenceError");
+        expect(
+          (await asSession(a, other, {
+            type: "presence.leave",
+            requestId: "other-leave",
+          })).error?.name,
+        ).toBe("PresenceError");
+        expect(b.messages).toEqual([]);
+        expect(server.presenceMemberCount(space, ROOM)).toBe(2);
+        expect((await publish(a, 2, "Ada, still")).ok).toEqual({});
+        expect(b.messages).toHaveLength(1);
+      } finally {
         await server.close();
       }
     });

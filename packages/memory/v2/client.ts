@@ -1176,34 +1176,43 @@ export class SpaceSession {
     if (!isPresenceRoom(room)) {
       throw new PresenceError("Presence room id is invalid");
     }
-    let state = this.#presenceRooms.get(room);
-    if (state === undefined) {
-      const created: PresenceRoomState = {
-        room,
-        observers: new Set(),
-        participantId: "",
-        participants: new Map(),
-        revision: 0,
-        publication: null,
-        joined: Promise.resolve(),
-      };
-      created.joined = this.#joinPresence(created);
-      this.#presenceRooms.set(room, created);
-      state = created;
-    }
-    try {
-      await state.joined;
-    } catch (error) {
-      if (
-        this.#presenceRooms.get(room) === state && state.observers.size === 0
-      ) {
-        this.#presenceRooms.delete(room);
+    // The room's last observer may leave while the join is awaited, taking
+    // the state with it; a state that is no longer the room's is not one to
+    // attach to, so the join starts over on a fresh one.
+    let state: PresenceRoomState;
+    for (;;) {
+      const existing = this.#presenceRooms.get(room);
+      if (existing === undefined) {
+        const created: PresenceRoomState = {
+          room,
+          observers: new Set(),
+          participantId: "",
+          participants: new Map(),
+          revision: 0,
+          publication: null,
+          joined: Promise.resolve(),
+        };
+        created.joined = this.#joinPresence(created);
+        this.#presenceRooms.set(room, created);
+        state = created;
+      } else {
+        state = existing;
       }
-      throw error;
+      try {
+        await state.joined;
+      } catch (error) {
+        if (
+          this.#presenceRooms.get(room) === state && state.observers.size === 0
+        ) {
+          this.#presenceRooms.delete(room);
+        }
+        throw error;
+      }
+      this.#assertOpen();
+      if (this.#presenceRooms.get(room) === state) break;
     }
-    this.#assertOpen();
     state.observers.add(observer);
-    observer({
+    this.#deliverPresenceTo(observer, {
       kind: "snapshot",
       participantId: state.participantId,
       participants: [...state.participants.values()],
@@ -1852,6 +1861,19 @@ export class SpaceSession {
     }
     this.#closed = true;
     this.#closeError = new Error("memory session closed");
+    // The relay keeps a membership until it hears otherwise, and a closed
+    // session sends nothing further on its own, so each room is left now;
+    // the leave is not waited for. Observers hear the close as a failure.
+    for (const state of this.#presenceRooms.values()) {
+      void this.#client.request({
+        type: "presence.leave",
+        requestId: crypto.randomUUID(),
+        space: this.space,
+        sessionId: this.#sessionId,
+        room: state.room,
+      }).catch(() => undefined);
+    }
+    this.#endPresenceRooms(this.#closeError);
     this.#restoreComplete?.reject(this.#closeError);
     this.#restoreComplete = undefined;
     this.#readyOnConnection = false;
@@ -1868,7 +1890,6 @@ export class SpaceSession {
     this.#viewInterests = [];
     this.#viewCapabilityLostObservers.clear();
     this.#accessLossObservers.clear();
-    this.#presenceRooms.clear();
     this.#watchView?.close();
     this.#watchView = null;
   }
@@ -2024,11 +2045,18 @@ export class SpaceSession {
 
   #deliverPresence(state: PresenceRoomState, event: PresenceEvent): void {
     for (const observer of state.observers) {
-      try {
-        observer(event);
-      } catch (cause) {
-        console.error("presence observer threw:", cause);
-      }
+      this.#deliverPresenceTo(observer, event);
+    }
+  }
+
+  #deliverPresenceTo(
+    observer: (event: PresenceEvent) => void,
+    event: PresenceEvent,
+  ): void {
+    try {
+      observer(event);
+    } catch (cause) {
+      console.error("presence observer threw:", cause);
     }
   }
 

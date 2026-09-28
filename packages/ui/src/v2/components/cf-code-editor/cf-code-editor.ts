@@ -1974,7 +1974,12 @@ export class CFCodeEditor extends BaseElement {
       this._cleanupPresence();
     }
     this._setupPresence(snapshot);
-    if (!this._presence || !this._editorView) return;
+    // The extension is installed as soon as a join starts, so its cursor
+    // follows every advance from then on; a record that lands after the
+    // join is mapped against the document the extension already knows.
+    if ((!this._presence && !this._presenceJoining) || !this._editorView) {
+      return;
+    }
     this._editorView.dispatch({
       effects: codeMirrorPresenceCursorEffect.of({
         cursor: snapshot.confirmedCursor,
@@ -2392,8 +2397,6 @@ export class CFCodeEditor extends BaseElement {
 
     if (
       changedProperties.has("presenceRoom") ||
-      changedProperties.has("presenceUrl") ||
-      changedProperties.has("contextPresenceUrl") ||
       changedProperties.has("participantName")
     ) {
       this._setupPresence();

@@ -112,7 +112,7 @@ describe("RuntimeClient presence rooms", () => {
       expect(explicit.room).toBe("room-zyxwvutsrqponmlkjihgfedcba");
     });
 
-    it("rejects when the worker refuses and joins afresh next time", async () => {
+    it("rejects when the worker refuses, leaves what it may have joined, and joins afresh next time", async () => {
       const { client, cell, requests } = buildClient({ joinFails: true });
       await expect(client.joinPresenceRoom(cell)).rejects.toThrow(
         "presence unavailable",
@@ -121,8 +121,69 @@ describe("RuntimeClient presence rooms", () => {
       expect(handle.participantId).toBe("participant:self:2");
       expect(requests.map(({ type }) => type)).toEqual([
         RequestType.PresenceJoin,
+        RequestType.PresenceLeave,
         RequestType.PresenceJoin,
       ]);
+      expect(requests[1].subscriptionId).toBe(requests[0].subscriptionId);
+    });
+
+    it("shares one room between two cells the worker resolves to the same field", async () => {
+      const { client, requests } = buildClient();
+      const alias = {
+        ref: () => ({ ...cellRef, id: "of:presence-alias" }),
+      } as unknown as CellHandle<unknown>;
+      const first = await client.joinPresenceRoom(
+        { ref: () => cellRef } as CellHandle<unknown>,
+      );
+      const second = await client.joinPresenceRoom(alias);
+      // The alias asked the worker, was told the room it already held, and
+      // gave its redundant membership up.
+      expect(requests.map(({ type }) => type)).toEqual([
+        RequestType.PresenceJoin,
+        RequestType.PresenceJoin,
+        RequestType.PresenceLeave,
+      ]);
+      expect(requests[2].subscriptionId).toBe(requests[1].subscriptionId);
+      expect(second.participantId).toBe(first.participantId);
+      first.setName("Ada");
+      first.setFacet("caret", {});
+      second.setFacet("pointer", {});
+      await settle();
+      expect(publishes(requests)).toEqual([{
+        type: RequestType.PresencePublish,
+        subscriptionId: requests[0].subscriptionId,
+        name: "Ada",
+        facets: { caret: {}, pointer: {} },
+      }]);
+      await first.leave();
+      expect(requests.at(-1)?.type).toBe(RequestType.PresencePublish);
+      await second.leave();
+      expect(requests.at(-1)).toEqual({
+        type: RequestType.PresenceLeave,
+        subscriptionId: requests[0].subscriptionId,
+      });
+    });
+
+    it("joins afresh after a failure ended the room", async () => {
+      const { client, cell, requests, notify } = buildClient();
+      const ended = await client.joinPresenceRoom(cell);
+      notify({
+        kind: "failure",
+        error: { name: "SessionRevokedError", message: "taken over" },
+      });
+      const fresh = await client.joinPresenceRoom(cell);
+      expect(fresh).not.toBe(ended);
+      expect(fresh.participantId).toBe("participant:self:2");
+      expect(requests.map(({ type }) => type)).toEqual([
+        RequestType.PresenceJoin,
+        RequestType.PresenceJoin,
+      ]);
+      fresh.setName("Ada");
+      fresh.setFacet("caret", {});
+      await settle();
+      expect(publishes(requests).at(-1)?.subscriptionId).toBe(
+        requests[1].subscriptionId,
+      );
     });
   });
 

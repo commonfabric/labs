@@ -120,9 +120,13 @@ export function decodeCaretFacet(value: unknown): CaretFacet {
   };
 }
 
-/** Writes a `caret` facet in the form `decodeCaretFacet()` reads. */
+/**
+ * Writes a `caret` facet in the form `decodeCaretFacet()` reads, and holds
+ * it to the same shape first: a facet a peer would drop is refused here,
+ * where the bug is, rather than published to be ignored.
+ */
 export function caretFacetOf(caret: CaretFacet): FabricPlainObject {
-  return {
+  const facet: FabricPlainObject = {
     focused: caret.focused,
     cursor: { epoch: caret.cursor.epoch, version: caret.cursor.version },
     selection: caret.selection === null ? null : {
@@ -135,6 +139,8 @@ export function caretFacetOf(caret: CaretFacet): FabricPlainObject {
     },
     basis: caret.basis,
   };
+  decodeCaretFacet(facet);
+  return facet;
 }
 
 /**

@@ -351,6 +351,30 @@ describe("v2-presence-client", () => {
     });
   });
 
+  describe("close()", () => {
+    it("leaves every room and tells each observer when the session closes", async () => {
+      const server = createServer("close");
+      const space = "did:key:z6Mk-presence-client-close";
+      const { a, b, close } = await mountBoth(server, space);
+      try {
+        const observerA = new Observer();
+        const observerB = new Observer();
+        await b.joinPresenceRoom(ROOM, observerB.observe);
+        const membershipA = await a.joinPresenceRoom(ROOM, observerA.observe);
+        const upsert = observerB.next("upsert");
+        membershipA.publish({ name: "Ada", facets: {} });
+        await upsert;
+        const removed = observerB.next("remove");
+        await a.close();
+        expect(observerA.events.at(-1)?.kind).toBe("failure");
+        expect((await removed).participantId).toBe(membershipA.participantId);
+        expect(server.presenceMemberCount(space, ROOM)).toBe(1);
+      } finally {
+        await close();
+      }
+    });
+  });
+
   describe("reconnect", () => {
     it("rejoins with a new participant id and republishes the last record", async () => {
       const server = createServer("reconnect");

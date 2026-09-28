@@ -95,8 +95,10 @@ const hasInvalidNameCodePoint = (value: string): boolean =>
 
 /**
  * Reads a decoded facets position as a facets map — a plain object whose
- * every value is a plain object — or returns `null` for any other shape.
- * Bounds are the validator's business, not this one's.
+ * every value is a plain object, under names the relay accepts — or returns
+ * `null` for any other shape. The name check here is what keeps a key such
+ * as `__proto__` from reaching the assignment; the other bounds are the
+ * validator's business.
  */
 export const parsePresenceFacets = (
   value: FabricValue,
@@ -104,6 +106,7 @@ export const parsePresenceFacets = (
   if (!isFabricPlainObject(value)) return null;
   const facets: PresenceFacets = {};
   for (const [facetName, facet] of Object.entries(value)) {
+    if (!facetNamePattern.test(facetName)) return null;
     if (!isFabricPlainObject(facet)) return null;
     facets[facetName] = facet;
   }
@@ -198,7 +201,8 @@ export class PresenceRooms {
    * Adds the connection to the room, or refreshes its membership if it is
    * already there, and returns its participant id with the latest record of
    * every other member that has published. Throws a `PresenceError` when the
-   * room is full.
+   * room is full, or when the connection already holds the membership through
+   * another session: a membership belongs to the session that opened it.
    */
   join(input: {
     space: string;
@@ -236,7 +240,11 @@ export class PresenceRooms {
       }
       keys.add(key);
     } else {
-      member.sessionId = input.sessionId;
+      if (member.sessionId !== input.sessionId) {
+        throw new PresenceError(
+          "Presence room is joined by another session on this connection",
+        );
+      }
       member.principal = input.principal;
       member.send = input.send;
     }
@@ -252,22 +260,21 @@ export class PresenceRooms {
   /**
    * Replaces the connection's record in the room and pushes it to every
    * other member. Throws a `PresenceError` when the connection is not a
-   * member, when `revision` does not exceed the last accepted one, or when
-   * the publication fails a bound.
+   * member through `sessionId`, when `revision` does not exceed the last
+   * accepted one, or when the publication fails a bound.
    */
   publish(input: {
     space: string;
     room: string;
     connectionId: string;
+    sessionId: string;
     revision: number;
     name: string;
     facets: PresenceFacets;
   }): void {
     const room = this.#rooms.get(roomKey(input.space, input.room));
-    const member = room?.get(input.connectionId);
-    if (room === undefined || member === undefined) {
-      throw new PresenceError("Presence room is not joined");
-    }
+    const member = this.#memberOf(room, input.connectionId, input.sessionId);
+    if (room === undefined) return;
     if (
       !Number.isSafeInteger(input.revision) || input.revision <= member.revision
     ) {
@@ -289,9 +296,21 @@ export class PresenceRooms {
     }
   }
 
-  /** Ends the connection's membership in the room, if it has one. */
-  leave(space: string, room: string, connectionId: string): void {
-    this.#end(roomKey(space, room), connectionId);
+  /**
+   * Ends the connection's membership in the room, if it has one. Throws a
+   * `PresenceError` when the membership belongs to another session.
+   */
+  leave(
+    space: string,
+    room: string,
+    connectionId: string,
+    sessionId: string,
+  ): void {
+    const key = roomKey(space, room);
+    const room_ = this.#rooms.get(key);
+    if (room_?.get(connectionId) === undefined) return;
+    this.#memberOf(room_, connectionId, sessionId);
+    this.#end(key, connectionId);
   }
 
   /** Ends every membership the connection holds. */
@@ -319,6 +338,27 @@ export class PresenceRooms {
   /** How many connections are in the room; `0` for a room nobody is in. */
   memberCount(space: string, room: string): number {
     return this.#rooms.get(roomKey(space, room))?.size ?? 0;
+  }
+
+  /**
+   * The connection's membership in `room` through `sessionId`, or a
+   * `PresenceError` when there is none or it is another session's.
+   */
+  #memberOf(
+    room: Map<string, Member> | undefined,
+    connectionId: string,
+    sessionId: string,
+  ): Member {
+    const member = room?.get(connectionId);
+    if (member === undefined) {
+      throw new PresenceError("Presence room is not joined");
+    }
+    if (member.sessionId !== sessionId) {
+      throw new PresenceError(
+        "Presence room is joined by another session on this connection",
+      );
+    }
+    return member;
   }
 
   #end(key: string, connectionId: string): void {

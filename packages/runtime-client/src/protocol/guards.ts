@@ -187,7 +187,8 @@ export function isPresenceUpdateNotification(
     value.type === NotificationType.PresenceUpdate &&
     typeof value.subscriptionId === "string" &&
     isObjectNotArray(value.event) &&
-    typeof value.event.kind === "string";
+    (value.event.kind === "snapshot" || value.event.kind === "upsert" ||
+      value.event.kind === "remove" || value.event.kind === "failure");
 }
 
 /**
