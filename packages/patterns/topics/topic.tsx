@@ -874,8 +874,7 @@ export interface TopicOutput extends TopicPiece {
    * permanent: the step then allocates a different one, writes it into the
    * namespace, and is refused here for as long as the disagreement stands, so
    * `top/<n>` and the topic's own badge name different numbers and nothing in
-   * the board reconciles them. `skills/topics/references/namespace-backfill.md`
-   * carries that repair, which is by hand.
+   * the board reconciles them. The repair is by hand.
    *
    * Outside the projection for the reason `removeComment` states: a board
    * stores `TopicPiece`, so a required verb added there would refuse every

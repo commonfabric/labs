@@ -193,9 +193,9 @@ export interface BackfillNamesEvent {
  * it is finished, merge either into `assigned` and a write to the topic's
  * document is reported as a write to the board's.
  *
- * `skills/topics/references/namespace-backfill.md` is the operator procedure.
- * It says per topic what a re-run writes and what one costs on a board the
- * size of the deployed one.
+ * `../collection-naming/README.md` carries the library side: the two backfills,
+ * and the `recordName` contract a member has to provide for `recordNames` to
+ * reach it.
  */
 export interface BackfillNamesResult {
   /** The numbers this run wrote into the namespace; empty when every listed

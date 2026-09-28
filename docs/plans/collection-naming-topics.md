@@ -70,9 +70,11 @@ board cannot confirm that asking inside the transaction that makes it, so the
 step returns `assigned`, `named` and `pending`. A run leaving a non-empty
 `pending` is completed by running it again. The per-topic `cf piece link` of
 `namesTable` that decision 13 accepted is no longer part of any Topics
-procedure; the operator procedure as it now stands, including what it has not
-been rehearsed for, is
-[`namespace-backfill.md`](../../skills/topics/references/namespace-backfill.md).
+procedure. The procedure that ran, including what it had not been rehearsed
+for, is recorded at
+[`namespace-backfill.md`](../history/skills/topics/references/namespace-backfill.md);
+the library's general procedure is in
+`packages/patterns/collection-naming/README.md`.
 
 Two things it leaves as they were, and one it leaves behind. The namespace is
 still what a number is allocated over, and `namesTable` is still the reverse
@@ -512,9 +514,9 @@ Mike's call, after S4.
    `../history/plans/collection-naming-s6-backfill-rehearsal-2026-09-05.md`, and
    its rerun below — so what they measured of the numbering step itself no
    longer describes it; what they measured of the two source legs does, and
-   those legs are unchanged. The
-   operator procedure is `skills/topics/references/namespace-backfill.md`, which
-   states which of its steps have a clone run behind them.
+   those legs are unchanged. The procedure that ran, and which of its steps
+   have a clone run behind them, is recorded at
+   `docs/history/skills/topics/references/namespace-backfill.md`.
 
    **What the rehearsals measured.** The step is rehearsed
    twice; the second run, after the positional-link fix, is recorded at

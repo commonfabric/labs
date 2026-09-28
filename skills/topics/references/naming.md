@@ -61,5 +61,4 @@ mention pill, and nothing offered for `#42` in a Topic's body editor. Read a
 number from `namesTable`, or one Topic's from its own input with
 `cf cell get --cell "$TOPIC" shortName --input`. The pattern update that makes
 those Topics publish what they store is the team's step, not an agent's, and
-`references/pattern-updates.md` governs it; `references/namespace-backfill.md`
-is the numbering procedure.
+`references/pattern-updates.md` governs it.

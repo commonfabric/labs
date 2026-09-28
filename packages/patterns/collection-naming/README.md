@@ -302,6 +302,8 @@ passes the name into the topic it creates, its `backfillNames` verb runs
 and publishes it as `shortName`, and both boards derive their mention universe
 through `mentionable.ts`. Every place a number shows on either board reads that
 one property: the header, the cards, the survey rows, and the universe rows the
-derivation copies from each member. What is still to come is in
-[the plan](../../../docs/plans/collection-naming-topics.md): the production
-backfill, and the slug that binds the board's `names` cell as `top`.
+derivation copies from each member. The deployed Topics board carries the
+namespace — every topic numbered, the `names` map dense with no gaps, and the
+`top` slug bound — so what is still to come there is the operator source push
+that makes those topics publish what they store, which
+[the plan](../../../docs/plans/collection-naming-topics.md) tracks.
