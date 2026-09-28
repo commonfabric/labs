@@ -668,14 +668,18 @@ writes its own profiles as it shuts down, on its own thread, and
 web API says when it is done. A worker that loads a large module takes a while
 to write, since the runtime's TypeScript profile alone is several megabytes, and
 a `deno test` that finishes in the meantime exits under the write, which loses
-the worker's profiles or truncates one. So a test file that starts real runtime
-workers starts them through the `WorkerExitBarrier` in
-`packages/runtime-client/integration/worker-exit-barrier.ts` and calls its
-`settle()` after its last test. Each worker holds a shared lock on one file for
-its whole life, and `settle()` waits until it can take that lock exclusively,
-which is once every worker's runtime has been torn down.
+the worker's profiles or truncates one. The runtime-client integration tests
+start their runtime workers through the `WorkerExitBarrier` in
+`packages/runtime-client/integration/worker-exit-barrier.ts` and call its
+`settle()` after their last test. Each worker holds a shared lock on the
+barrier's file for its whole life, and `settle()` waits until it can take that
+lock exclusively, which is once every worker's runtime has been torn down.
 `packages/runtime-client/integration/worker-exit-coverage.test.ts` fails when a
-worker's profile is lost or cut off.
+worker's profile is lost or cut off. Other tests that terminate a worker loading
+the runtime carry the same hazard and do not yet wait:
+`packages/piece/test/piece-source-lifecycle.test.ts`,
+`packages/patterns/integration/multi-runtime-harness.ts` and
+`packages/cli/lib/multi-user-test-runner.ts`.
 
 ### Test Structure
 

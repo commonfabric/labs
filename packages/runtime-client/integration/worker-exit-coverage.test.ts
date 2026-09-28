@@ -48,8 +48,9 @@ describe("runtime worker coverage", () => {
 
       // Each worker runs the fixture entry as its main module, so every worker
       // that finished writing leaves exactly one profile naming it.
+      // The entry's URL carries its barrier's lock file as a search parameter.
       const entry =
-        new URL("./fixtures/runtime-worker.ts", import.meta.url).href;
+        new URL("./fixtures/runtime-worker.ts", import.meta.url).href + "?";
       let entryProfiles = 0;
       for await (const file of Deno.readDir(raw)) {
         const text = await Deno.readTextFile(`${raw}/${file.name}`);
@@ -62,7 +63,7 @@ describe("runtime worker coverage", () => {
             { cause: error },
           );
         }
-        if (profile.url === entry) entryProfiles++;
+        if (profile.url.startsWith(entry)) entryProfiles++;
       }
       expect(entryProfiles).toBe(WORKER_COUNT);
     } finally {

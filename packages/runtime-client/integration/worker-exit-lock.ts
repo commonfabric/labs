@@ -11,33 +11,43 @@
  * is writing cuts that file off, and `deno coverage` then refuses every profile
  * in the directory, which fails the lane without failing a test.
  *
- * A worker takes a shared lock on one file before anything else it runs, and
- * never releases it. The descriptor closes when Deno tears the worker's runtime
- * down, which it does only after the worker has written its profiles. So once
- * the test process can take the same lock exclusively, no worker is still
- * writing. See `worker-exit-barrier.ts`.
+ * A worker takes a shared lock on the file its barrier names before it loads
+ * the runtime, and never releases it. The descriptor closes when Deno tears the
+ * worker's runtime down, which it does only after the worker has written its
+ * profiles. So once the barrier can take the same lock exclusively, none of its
+ * workers is still writing. See `worker-exit-barrier.ts`.
  *
- * This module has no side effects, so that the barrier can read the variable's
- * name from it without taking the lock itself.
+ * The lock is `flock`, which belongs to an open file rather than to a process,
+ * so the barrier's exclusive attempt conflicts with its own workers' shared
+ * locks although all of them are in one process.
  */
 
-/** The variable naming the lock file, set by the barrier for its workers. */
-export const WORKER_EXIT_LOCK_VARIABLE = "CF_RUNTIME_WORKER_EXIT_LOCK";
+/** The worker URL's search parameter naming the lock file. */
+export const WORKER_EXIT_LOCK_PARAMETER = "exit-lock";
 
 /**
- * Takes a shared lock on the file the barrier named, for the life of this
- * worker. The file is deliberately never closed: its closing is the signal.
- *
- * @throws If no lock file is named, which means the worker was started other
- *   than through the barrier and so would go unwaited for.
+ * Held for the life of the worker, and never closed: its closing, when the
+ * worker's runtime is torn down, is the signal. Kept in a module binding so
+ * that nothing could ever collect it and close it early.
  */
-export function holdWorkerExitLock(): void {
-  const lockPath = Deno.env.get(WORKER_EXIT_LOCK_VARIABLE);
+let held: Deno.FsFile | undefined;
+
+/**
+ * Takes a shared lock on the file named by `moduleUrl`'s search parameter, for
+ * the life of this worker.
+ *
+ * @throws If the URL names no lock file, which means the worker was started
+ *   other than through the barrier and so would go unwaited for.
+ */
+export function holdWorkerExitLock(moduleUrl: string): void {
+  const lockPath = new URL(moduleUrl).searchParams.get(
+    WORKER_EXIT_LOCK_PARAMETER,
+  );
   if (!lockPath) {
     throw new Error(
-      `${WORKER_EXIT_LOCK_VARIABLE} is not set: start this worker through WorkerExitBarrier, which names the lock it holds`,
+      `${moduleUrl} names no ${WORKER_EXIT_LOCK_PARAMETER}: start this worker through WorkerExitBarrier, which names the lock it holds`,
     );
   }
-  const file = Deno.openSync(lockPath, { read: true });
-  file.lockSync(false);
+  held = Deno.openSync(lockPath, { read: true });
+  held.lockSync(false);
 }
