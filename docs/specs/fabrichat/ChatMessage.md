@@ -19,8 +19,8 @@ interface ChatMessage {
    */
   sentAt: number;
 
-  /** The message this one replies to, in this room; absent for none. */
-  replyTo?: Cell<ChatMessage>;
+  /** What this message replies to, and where it is shown; absent for none. */
+  replyTo?: ChatReply;
 }
 ```
 
@@ -41,9 +41,11 @@ it only through the room's `sendMessage` stream, as a trusted gesture on
 - **`body`** is the text, as the person saw it when they sent it. It is never
   empty.
 - **`sentAt`** comes from the sending handler's clock.
-- **`replyTo`** links another message in the same room, so a reply keeps its
-  target's identity and label. A client builds threads from it. A reply MUST
-  name a message in the same room.
+- **`replyTo`** is a [`ChatReply`](ChatReply.md): the message this one replies
+  to, in the same room, and whether the reply is shown in the main conversation,
+  in a thread, or both. Threads, and which messages the main conversation
+  shows, are derived from it (see [`ChatReply`](ChatReply.md#threads)). A
+  message without one is shown in the main conversation.
 
 ## Identity
 

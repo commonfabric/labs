@@ -18,6 +18,8 @@ requires of the runtime and of the programs that use it.
     to.
 - Records a room holds:
   - [`ChatMessage`](ChatMessage.md)
+  - [`ChatReply`](ChatReply.md): what a reply replies to, and where it's
+    shown.
   - [`ChatReaction`](ChatReaction.md)
   - [`ChatAbout`](ChatAbout.md)
   - [`ChatProfile`](ChatProfile.md): the part of a profile the room reads.
@@ -96,6 +98,7 @@ provide, the document says so, under the heading "Prerequisites".
    [`ChatManagerOutput.md`](ChatManagerOutput.md), named for the roles rather
    than the patterns that fill them.
 6. The records a room holds: [`ChatMessage.md`](ChatMessage.md),
+   [`ChatReply.md`](ChatReply.md),
    [`ChatReaction.md`](ChatReaction.md), [`ChatAbout.md`](ChatAbout.md), and
    [`ChatProfile.md`](ChatProfile.md), the part of a person's profile the room
    reads.

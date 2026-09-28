@@ -62,6 +62,9 @@ A client that draws natively MUST:
   [`ChatReaction`](ChatReaction.md)), and show any that others have used, even
   ones the client wouldn't offer itself.
 - **Use each message's entity as its id.**
+- **Show replies where they say they are shown**: the main conversation and
+  each thread, derived from `replyTo` as
+  [`ChatReply`](ChatReply.md#the-two-views) states, with flat threads.
 - **Show a room it can't read as unreadable**, and nothing more (see
   [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
 
@@ -103,8 +106,9 @@ MUST behave as a trustworthy renderer:
    that control. Never on a timer, never from a restored state, and never
    because something else asked.
 3. **What was shown is what is sent.** The event carries exactly the text,
-   emoji, message, or people the control displayed when the person acted. A
-   client MUST NOT alter, fill in, or substitute any of them after the gesture.
+   emoji, message, people, and choice of where a reply is shown that the control
+   displayed when the person acted. A client MUST NOT alter, fill in, or
+   substitute any of them after the gesture.
 4. **No other way in.** Nothing reaches the issuing point except those controls.
    That includes the client's own automation and test interfaces, scripting or
    command interfaces, local network endpoints, links and URL handlers, agents

@@ -26,7 +26,7 @@ interface ChatRoomOutput {
   /** `roster`, plus any author with no roster entry. */
   participants: Cell<ChatProfile>[];
 
-  sendMessage: Stream<{ body: string; replyTo?: Cell<ChatMessage> }>;
+  sendMessage: Stream<{ body: string; replyTo?: ChatReply }>;
   react: Stream<{ message: Cell<ChatMessage>; emoji: string }>;
   join: Stream<void>;
   invite: Stream<{ principal: string; access: "WRITE" | "OWNER" }>;
@@ -112,23 +112,26 @@ These rules hold for every stream:
 
 | Stream | Reviewed surface | Effect |
 | --- | --- | --- |
-| [`sendMessage`](#sendmessagebody-string-replyto-cellchatmessage) | `ChatSendSurface` | appends a message from the viewer |
+| [`sendMessage`](#sendmessagebody-string-replyto-chatreply) | `ChatSendSurface` | appends a message from the viewer |
 | [`react`](#reactmessage-cellchatmessage-emoji-string) | `ChatReactSurface` | adds the viewer's reaction, or removes it |
 | [`join`](#join) | none | adds the viewer's own profile to `roster` |
 | [`invite`](#inviteprincipal-string-access-write--owner) | `ChatMembersSurface` | grants a principal access, or issues an invitation |
 | [`remove`](#removeprincipal-string) | `ChatMembersSurface` | revokes a principal's access |
 
-### `sendMessage(body: string, replyTo?: Cell<ChatMessage>)`
+### `sendMessage(body: string, replyTo?: ChatReply)`
 
 Sends a message from the viewer.
 
 - **Event:** `body` is the text exactly as the person saw it when they sent it.
-  `replyTo` optionally links the message this one replies to.
+  `replyTo` optionally says which message this one replies to, and whether it
+  is shown in the main conversation, in that message's thread, or both (see
+  [`ChatReply`](ChatReply.md)).
 - **Admitted:** as a trusted gesture on `ChatSendSurface`.
 - **Effect:** appends a [`ChatMessage`](ChatMessage.md) to `messages`, with the
   viewer's profile as `authorProfile` and the handler's clock as `sentAt`.
-- **Refused:** an empty `body`, or a `replyTo` that links a message in another
-  room.
+- **Refused:** an empty `body`, a `replyTo` whose `message` is in another room,
+  a `shownIn` other than `"main"`, `"thread"`, or `"both"`, or a `"main"` reply
+  to a message shown only in a thread.
 
 ### `react(message: Cell<ChatMessage>, emoji: string)`
 
