@@ -1476,23 +1476,24 @@ export class SchemaGenerator {
 
   /**
    * Formats `type` with `read`, the reading of a CFC alias chain entered from
-   * `entry`, where the checker instantiates `instantiated`: a written
-   * reference to the chain, or, for a chain reached with none, as through an
-   * index signature or a tuple element read by type, the alias it is reached
-   * by. A reading entered again from the same reference inside itself is a
-   * recursion through it. One whose instantiation is identical to a reading's
-   * in progress there is a cycle of that type, which `#formatType` finds as it
-   * finds any other. Otherwise it refers to the definition of the reading it
-   * settles to (`#settledReading()`), where that reading stores one. A chain
-   * reached by its alias settles none: two readings of one alias through no
-   * written reference may be a nesting its author wrote out, whose
-   * instantiations the checker can find assignable both ways though they read
-   * differently. Nor does a scope around a cell, whose cycle is found at the
-   * cell's value, which keeps the handle it caps at each reference
-   * (`scopesCellHandle()`). An entry nested in itself `MAX_BOUND_NESTING` deep
-   * without settling instantiates the chain without end, as `Nest<T[]>`
-   * inside `Nest<T>` does; the innermost accepts any value and is reported as
-   * not fully read.
+   * `entry`, where the checker instantiates `instantiated`: a written reference
+   * to the chain, or, for a chain reached with none, as through an index
+   * signature or a tuple element read by type, the alias it is reached by. A
+   * reading entered again from the same reference inside itself is a recursion
+   * through it. One whose instantiation is identical to a reading's in progress
+   * there is a cycle of that type, which `#formatType` finds as it finds any
+   * other. Otherwise it refers to the definition of the reading it settles to
+   * (`#settledReading()`), where that reading stores one. A chain reached by
+   * its alias settles none: two readings of one alias through no written
+   * reference may be a nesting its author wrote out, whose instantiations the
+   * checker can find assignable both ways though they read differently. Nor
+   * does a scope around a cell, whose cycle is found at the cell's value, which
+   * keeps the handle it caps at each reference (`scopesCellHandle()`), nor a
+   * reading for labels alone, which names no definition
+   * (`GenerationContext.labelsOnly`). An entry nested in itself
+   * `MAX_BOUND_NESTING` deep without settling instantiates the chain without
+   * end, as `Nest<T[]>` inside `Nest<T>` does; the innermost accepts any value
+   * and is reported as not fully read.
    */
   public readAliasChain(
     type: ts.Type,
@@ -1506,7 +1507,7 @@ export class SchemaGenerator {
     const checker = context.typeChecker;
     const written = "kind" in entry;
     const again = readings.filter((reading) => reading.entry === entry);
-    const settled = written && again.length > 0 &&
+    const settled = written && again.length > 0 && !context.labelsOnly &&
         !scopesCellHandle(type, checker)
       ? this.#settledReading(entry, context, instantiated, again)
       : undefined;
@@ -1631,6 +1632,8 @@ export class SchemaGenerator {
       typeNode: _,
       hintsNode: __,
       instantiatedAs: ___,
+      arrayItemsOverride: ____,
+      labelsOnly: _____,
       ...placed
     } = context;
     const unread: ts.TypeNode[] = [];
