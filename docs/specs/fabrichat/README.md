@@ -5,6 +5,22 @@ the single pattern in `packages/patterns/fabrichat/`, one conversation per
 piece. This directory describes what it splits into, and what that split
 requires of the runtime and of the programs that use it.
 
+## Quick links
+
+- Patterns:
+  - [`FabriChatRoom`](FabriChatRoom.md): one conversation.
+  - [`FabriChatManager`](FabriChatManager.md): each user's index of rooms.
+  - [`FabriChatPlacement`](FabriChatPlacement.md): a room placed in a
+    container.
+  - [`FabriChatAdapter`](FabriChatAdapter.md): a placement's rendering.
+- Records a room holds:
+  - [`FabriChatMessage`](FabriChatMessage.md)
+  - [`FabriChatReaction`](FabriChatReaction.md)
+  - [`FabriChatAbout`](FabriChatAbout.md)
+  - [`FabriChatProfile`](FabriChatProfile.md): the part of a profile the room
+    reads.
+- [Requirements on clients](clients.md)
+
 ## Purpose
 
 FabriChat is a chat among people, each identified by their own profile, where
@@ -72,7 +88,12 @@ provide, the document says so, under the heading "Prerequisites".
    another space, and what a viewer may see of it.
 4. [`FabriChatAdapter.md`](FabriChatAdapter.md): rendering a placement for hosts
    that render VDOM.
-5. [`clients.md`](clients.md): the requirements on a separate program that uses
+5. The records a room holds: [`FabriChatMessage.md`](FabriChatMessage.md),
+   [`FabriChatReaction.md`](FabriChatReaction.md),
+   [`FabriChatAbout.md`](FabriChatAbout.md), and
+   [`FabriChatProfile.md`](FabriChatProfile.md), the part of a person's profile
+   the room reads.
+6. [`clients.md`](clients.md): the requirements on a separate program that uses
    FabriChat, including one that renders natively.
 
 ## Terms
@@ -209,8 +230,10 @@ patterns](../../common/patterns/multi-user-patterns.md#what-a-spec-should-captur
 1. **The current viewer** is resolved with `wish({ query: "#profile" })`, never
    typed in.
 2. **Each person is displayed** with `cf-profile-badge`, bound to the profile
-   link on their messages and roster entries. The name and avatar snapshots are
-   only a fallback for when the profile can't be read.
+   link on their messages and roster entries, and read when drawn. FabriChat
+   stores no names or avatars, so a changed name shows everywhere, history
+   included. A profile that can't be read shows as a neutral placeholder (see
+   [`FabriChatProfile.md`](FabriChatProfile.md)).
 3. **Shared and per-user state.** A room's history is `PerSpace` in the room's
    space, and its members are that space's member set. The manager's index is in
    the user's home space. Drafts are `PerSession` in the adapter.

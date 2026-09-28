@@ -48,7 +48,11 @@ A client that draws natively MUST:
   whether the message is verified: whether the principal in the body's
   `authored-by` label is the principal the linked profile represents. That is
   the check `cf-cfc-authorship` makes, and a client makes it from the labels,
-  never from a stored flag or from the name snapshot.
+  never from a stored flag or a name.
+- **Show people from their profiles**, read when drawn and redrawn when they
+  change, so a changed name shows on everything the person sent. A profile
+  that can't be read shows as a neutral placeholder (see
+  [`FabriChatProfile.md`](FabriChatProfile.md#when-a-profile-cant-be-read)).
 - **Identify people by their profile links**, compared with `equals()`, and
   never by display name.
 - **Show members from the member set.** Members are the room space's member set.

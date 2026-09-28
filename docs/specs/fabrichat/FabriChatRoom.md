@@ -32,60 +32,20 @@ space's access list as it is, and adds nothing to it.
 
 The room keeps three `PerSpace` values, shared by everyone the space admits:
 
-- **`messages`**: the conversation, oldest first.
-- **`reactions`**: one record per reactor, message, and emoji.
+- **`messages`**: the conversation, oldest first, each a
+  [`FabriChatMessage`](FabriChatMessage.md).
+- **`reactions`**: each a [`FabriChatReaction`](FabriChatReaction.md), one per
+  reactor, message, and emoji.
 - **`roster`**: live links to members' profiles, for display, only until the
   space has a member set (see [Membership](#membership)).
 
-It also keeps **`about`**, set once at creation:
+It also keeps **`about`**, a [`FabriChatAbout`](FabriChatAbout.md) set once at
+creation.
 
-```ts
-// Shown for illustration only.
-interface FabriChatAbout {
-  /** `"direct"` for exactly two members; `"group"` otherwise. */
-  kind: "direct" | "group";
-
-  /** A group room's title. A direct room has none; clients show the other. */
-  title?: string;
-
-  /** When the room was created, in milliseconds since the epoch. */
-  createdAt: number;
-}
-```
-
-A message is today's `FabriChatMessage`, plus one field:
-
-```ts
-// Shown for illustration only.
-interface FabriChatMessage {
-  authorProfile: Cell<FabriChatProfile>;
-  authorName: string;    // snapshot at send time
-  authorAvatar: string;  // snapshot at send time
-  body: string;
-  sentAt: number;
-
-  /** The message this one replies to, in this room; absent for none. */
-  replyTo?: Cell<FabriChatMessage>;
-}
-```
-
-`replyTo` is a link, so a reply keeps its target's identity and label. A client
-builds threads from it. A reply MUST name a message in the same room.
-
-A message's identity is its entity. Clients MUST use the entity as the message's
-id, and MUST NOT make up ids from content or position.
-
-A reaction is today's `FabriChatReaction` (reactor profile, message, emoji),
-kept at an address derived from the reactor, the message, and the emoji
-(`reactionKeyFor`). Adding or removing one never rewrites anyone else's.
-
-A reaction's emoji is any single emoji: exactly one emoji sequence that [Unicode
-Technical Standard #51](https://www.unicode.org/reports/tr51/) recommends for
-general interchange (`RGI_Emoji`), with its modifiers and joiners included.
-`commitReact` refuses anything else, including text, and two emoji written as
-one. A room has no fixed list. The four cat faces in today's `FABRICHAT_REACJI`
-are a demo placeholder, not part of this design. Which emoji a client puts
-within easy reach is the client's choice.
+Messages, reactions, and the roster link people's profiles
+([`FabriChatProfile`](FabriChatProfile.md)) and copy nothing from them. A
+client reads a person's name and avatar from their profile when it draws, so a
+change to either shows everywhere, history included.
 
 ## Writers
 
