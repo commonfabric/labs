@@ -2142,9 +2142,11 @@ const releasedToSeal = (
   instance: string,
 ): { value: JSONValue; released: boolean } => {
   const resolved = output.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
-  const value = snapshotJsonValue(
-    tx.readValueOrThrow(resolved, { meta: internalVerifierRead }),
-  );
+  const stored = tx.readValueOrThrow(resolved, { meta: internalVerifierRead });
+  // A projector that has not run yet has computed nothing: not an answer yet,
+  // refused like one the policy does not release.
+  if (stored === undefined) return { value: null, released: false };
+  const value = snapshotJsonValue(stored);
   if (
     value === null || typeof value === "object" ||
     (typeof value === "string" && value.length > MAX_ANSWER_LENGTH)

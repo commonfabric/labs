@@ -595,6 +595,26 @@ describe("custody answers", () => {
     }
   });
 
+  it("refuses quietly while the projector has computed nothing", async () => {
+    // Every seat has sealed but the projector has not run yet: its output
+    // holds nothing, which is not yet an answer, and is refused the way an
+    // answer the policy does not release is.
+    const fixture = await setup();
+    try {
+      const box = boxOf(fixture);
+      await fixture.seal(alice, "sushi", box);
+      await fixture.seal(bob, "sushi", box);
+      const output = outputOf(fixture);
+      await expect(fixture.publish(bob, output)).rejects.toThrow(
+        "releases to the seal",
+      );
+      expect(await fixture.project(bob, box, output)).toBe("sushi");
+      expect((await fixture.publish(bob, output)).value).toBe("sushi");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it("refuses an answer before every seat has sealed", async () => {
     const fixture = await setup();
     try {

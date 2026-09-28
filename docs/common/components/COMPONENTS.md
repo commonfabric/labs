@@ -125,6 +125,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-collapsible` | Single collapsible section with trigger and content | |
 | `cf-copy-button` | Copy-to-clipboard button with visual feedback | |
 | `cf-custody-seal` | Native confirmation that seals the actor's draft into a custody room, showing the runtime-verified room, readers, seats, policy and sources beside what the terms say (see [custody seal](#cf-custody-seal)) | `$draft`, `$terms`, `$policy`, `$sources`, `$box` |
+| `cf-custody-answer` | Asks the trusted host to publish a custody room's answer once per instance, and shows the answer the seal published (see [custody answer](#cf-custody-answer)) | `$terms`, `$policy`, `$output` |
 | `cf-dot-mark` | Scatter/dot mark rendered inside `cf-chart` | `$data` |
 | `cf-drag-source` | Wraps draggable content; pairs with `cf-drop-zone` (see [drag-and-drop](../patterns/meta/drag-and-drop.md)) | `$cell` |
 | `cf-draggable` | Absolutely-positioned draggable container (x/y) | |
@@ -1187,6 +1188,33 @@ seal's commit fail (see the `TODO(custody-box-link)` repro in
 leaves the component without that event even if the seal committed, so a
 pattern that must know should read the room rather than rely on it; the
 seal still writes the box link to the `$box` bound when the actor reviewed.
+
+## cf-custody-answer
+
+`cf-custody-answer` shows a custody room's answer: the one the seal published
+for the room's current instance, never the room's projection itself. A room
+binds `$terms` to its terms document, `$policy` to the cell declaring its
+custody policy, and `$output` to its projected answer:
+`<cf-custody-answer $terms={terms} $policy={policy} $output={choice} />`.
+
+Each time the projected answer or the terms change, the component asks the
+host to publish. The seal publishes an instance's answer once, and only when
+every rule of the room's policy requires the seal's witness and releases only
+to the seal, a rule of the room's policy releases the answer to the seal, and
+every seat has sealed; it refuses every later request. The seal writes the
+answer into the instance's answer slot, labeled for the room's readers, and the
+component shows what that slot holds, read and verified by the host, so what it
+shows cannot move once the answer is published. The projection is released to
+the seal alone, so no member reads it.
+
+The seal's refusals while an answer is not yet, or is already, published leave
+the component quiet, and it asks nothing before the room has terms. Any other
+failure, such as a lost worker connection or a slot the seal did not write,
+shows as an alert. It fires `cf-published` once the published answer is shown,
+with `detail.instance` when this component published it.
+`packages/patterns/cfc-exchange-rules/custody-answer-room.tsx` is a room built
+this way; the [custody seal spec](../../specs/cfc-custody-seal.md) says what it
+does not cover.
 
 ## CFC Authorship
 
