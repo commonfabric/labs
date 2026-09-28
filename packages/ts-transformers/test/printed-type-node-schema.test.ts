@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { CrossStageState } from "../src/core/mod.ts";
+import type { TransformationDiagnostic } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import {
   callSchemas,
@@ -853,6 +854,19 @@ type Sec<T, U = Box<T>> = Confidential<U, ["secret"]>;`,
             `Integrity<Sec<string>, ["trusted"]>`,
             labelled(box({ type: "string" })),
           ],
+          [
+            "an indexed access in an alias whose chain is another's payload",
+            // The outer chain's payload is read at the type it instantiates,
+            // which, less every carrier, is the inner alias's payload.
+            `type Sec<T extends { a: string }> = Confidential<{ pair: [T["a"]] }, ["secret"]>;
+type Outer<X extends { a: string }> = Integrity<Sec<X>, ["trusted"]>;`,
+            `Outer<{ a: string }>`,
+            labelled({
+              type: "object",
+              properties: { pair: strings },
+              required: ["pair"],
+            }),
+          ],
         ] as const
       ) {
         it(`keeps a payload that is ${spelling}`, async () => {
@@ -869,6 +883,76 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
           expect((output.properties as Schema).a).toEqual(expected);
         });
       }
+
+      for (
+        const member of [
+          "next: Writable<Sec<T | undefined>>",
+          "next: Array<Sec<T | undefined>>",
+          "next: [Sec<T | undefined>]",
+          "next?: Sec<Readonly<T>>",
+        ]
+      ) {
+        it(`reads a recursion the checker settles, as \`${member}\`, as its definition on both sides`, async () => {
+          const diagnostics: TransformationDiagnostic[] = [];
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern, Writable } from "commonfabric";
+type Sec<T> = Confidential<{ value: T; ${member} }, ["secret"]>;
+export default pattern<{ a: Sec<{ a: string }> }>(({ a }) => ({ a }));`,
+          }, {
+            types: COMMONFABRIC_TYPES,
+            typeCheck: true,
+            pipelineDiagnostics: diagnostics,
+          });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          for (const root of [input, output]) {
+            const definitions = Object.entries(
+              (root.$defs ?? {}) as Record<string, Schema>,
+            );
+            const recursive = definitions.find(([name, definition]) =>
+              JSON.stringify(definition).includes(`"#/$defs/${name}"`)
+            );
+            expect(recursive).toBeDefined();
+            expect(JSON.stringify((root.properties as Schema).a)).toContain(
+              `"#/$defs/${recursive?.[0]}"`,
+            );
+          }
+          expect(
+            diagnostics.filter((diagnostic) =>
+              diagnostic.type === "schema-type:unread"
+            ),
+          ).toEqual([]);
+        });
+      }
+
+      it("reports a recursion that instantiates the alias without end, on both sides", async () => {
+        // Each `Nest<T[]>` is a new type, on the result side as much as the
+        // argument side, so the nesting bound ends both readings.
+        const diagnostics: TransformationDiagnostic[] = [];
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Nest<T> = Confidential<{ v: T; inner?: Nest<T[]> }, ["secret"]>;
+export default pattern<{ a: Nest<string> }>(({ a }) => ({ a }));`,
+        }, {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+        for (const root of [input, output]) {
+          expect((root.properties as Record<string, Schema>).a).toBeDefined();
+        }
+        expect(
+          diagnostics.filter((diagnostic) =>
+            diagnostic.type === "schema-type:unread"
+          ).length,
+        ).toBeGreaterThan(0);
+      });
 
       it("reads a recursion through the alias's optional member as its definition", async () => {
         // The result's member is `Sec<string> | undefined`, the `?` adding

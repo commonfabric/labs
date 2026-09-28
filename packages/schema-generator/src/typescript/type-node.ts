@@ -239,3 +239,39 @@ function declaresWithin(node: ts.Node, declaration: ts.Node): boolean {
   }
   return false;
 }
+
+/**
+ * Returns the node `node` stands for, read as {@link readAuthoredTypeNode}
+ * reads it and, in turn, through each reference to an alias whose whole body
+ * is one of its own type parameters (`type Id<X> = X`), which denotes exactly
+ * the argument the reference supplies for it. An alias that leaves that
+ * argument out, or names itself through others, ends the walk.
+ */
+export function readThroughIdentityAliases(
+  node: ts.TypeNode,
+  checker: ts.TypeChecker,
+): ts.TypeNode {
+  const visited = new Set<ts.TypeNode>();
+  let current = readAuthoredTypeNode(node, checker);
+  while (!visited.has(current) && ts.isTypeReferenceNode(current)) {
+    visited.add(current);
+    const declaration = getTypeAliasDeclaration(current, checker);
+    const body = declaration && unwrapTypeParentheses(declaration.type);
+    if (
+      !body || !ts.isTypeReferenceNode(body) || body.typeArguments?.length ||
+      !ts.isIdentifier(body.typeName)
+    ) {
+      return current;
+    }
+    const name = body.typeName.text;
+    const index = declaration.typeParameters?.findIndex((parameter) =>
+      parameter.name.text === name
+    ) ?? -1;
+    const argument = index >= 0 ? current.typeArguments?.[index] : undefined;
+    if (!argument) {
+      return current;
+    }
+    current = readAuthoredTypeNode(argument, checker);
+  }
+  return current;
+}

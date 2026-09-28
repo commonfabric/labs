@@ -25,12 +25,11 @@ import {
   lowersFromReferenceArguments,
   resolveScopeWrapperNode,
   scopeOfAliasChain,
+  scopesCellHandle,
 } from "./formatters/common-fabric-formatter.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import { UnionFormatter } from "./formatters/union-formatter.ts";
 import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
-import { getCellWrapperInfo } from "./typescript/cell-brand.ts";
-import { getScopeBrand } from "./typescript/scope-brand.ts";
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
 import {
   holdsFreeTypeParameter,
@@ -43,6 +42,7 @@ import {
   getPropertyNameText,
   instantiatedElementType,
   instantiatedPropertyType,
+  instantiatedValueType,
   isFunctionLike,
   safeGetIndexTypeOfType,
   safeGetTypeOfSymbolAtLocation,
@@ -79,6 +79,18 @@ const LIBRARY_ALIAS_NAMES = new Set([
  * (`SchemaGenerator.#formatType`).
  */
 const MAX_BOUND_NESTING = 3;
+
+/**
+ * A CFC alias chain's reading in progress: the written reference it was
+ * entered from, the type the checker instantiates there where that is known,
+ * and the type and context its schema is being formatted with.
+ */
+type ChainReading = {
+  readonly reference: ts.TypeNode;
+  readonly instantiated: ts.Type | undefined;
+  readonly type: ts.Type;
+  readonly context: GenerationContext;
+};
 
 /** Whether a schema is an object schema the alias rules can rewrite. */
 function isObjectSchema(
@@ -1067,6 +1079,12 @@ export class SchemaGenerator {
    */
   #boundAnonymousNames: Map<string, string> = new Map();
 
+  /**
+   * The readings of CFC alias chains in progress, per generation, keyed by the
+   * generation's `definitionStack` (`readAliasChain()`).
+   */
+  #chainReadings: WeakMap<object, ChainReading[]> = new WeakMap();
+
   /** Identities of the types and declarations a binding key names. */
   #bindingIds: WeakMap<object, number> = new WeakMap();
 
@@ -1372,6 +1390,71 @@ export class SchemaGenerator {
     );
   }
 
+  /**
+   * Formats `type` with `read`, the reading of a CFC alias chain entered from
+   * `reference`, a written reference to the chain, where the checker
+   * instantiates `instantiated`. A reading entered again from the same
+   * reference inside itself is a recursion through it. One whose
+   * instantiation is identical to a reading's in progress there is a cycle of
+   * that type, which `#formatType` finds as it finds any other. One the
+   * checker settles only up to assignability, its instantiation a different
+   * type assignable both ways with that reading's (`Sec<Readonly<Readonly<X>>>`
+   * and `Sec<Readonly<X>>`), refers to that reading's definition here. A
+   * reference entered `MAX_BOUND_NESTING` deep without settling instantiates
+   * the chain without end, as `Nest<T[]>` inside `Nest<T>` does, or has no
+   * known instantiation to settle by; the innermost accepts any value and is
+   * reported as not fully read.
+   */
+  public readAliasChain(
+    type: ts.Type,
+    context: GenerationContext,
+    reference: ts.TypeNode,
+    instantiated: ts.Type | undefined,
+    read: () => MutableJSONSchema,
+  ): MutableJSONSchema {
+    const readings = this.#chainReadings.get(context.definitionStack) ?? [];
+    this.#chainReadings.set(context.definitionStack, readings);
+    const checker = context.typeChecker;
+    const again = readings.filter((reading) => reading.reference === reference);
+    const settled = instantiated &&
+      again.find((reading) =>
+        reading.instantiated !== undefined &&
+        reading.instantiated !== instantiated &&
+        checker.isTypeAssignableTo(reading.instantiated, instantiated) &&
+        checker.isTypeAssignableTo(instantiated, reading.instantiated)
+      );
+    if (settled) return this.#referToReading(settled.type, settled.context);
+    if (again.length >= MAX_BOUND_NESTING) {
+      const unread = context.uninterpretedTypeNodes;
+      if (unread && !unread.includes(reference)) unread.push(reference);
+      return {};
+    }
+    readings.push({ reference, instantiated, type, context });
+    try {
+      return read();
+    } finally {
+      readings.pop();
+    }
+  }
+
+  /**
+   * A reference to the definition of `type` read with `context`, a reading in
+   * progress that its own schema reaches again: the definition is stored under
+   * that name once the reading ends.
+   */
+  #referToReading(
+    type: ts.Type,
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    const syntheticKey = this.#ensureSyntheticName(type, context);
+    context.inProgressNames.add(syntheticKey);
+    context.emittedRefs.add(syntheticKey);
+    const aliasScope = scopeOfAliasChain(type, context.typeChecker);
+    return aliasScope === undefined
+      ? { "$ref": `#/$defs/${syntheticKey}` }
+      : { "$ref": `#/$defs/${syntheticKey}`, scope: aliasScope };
+  }
+
   #bindingId(value: object): number {
     let id = this.#bindingIds.get(value);
     if (id === undefined) {
@@ -1513,11 +1596,7 @@ export class SchemaGenerator {
     // written there, as for `Cell<T>`, with the capped handle inline at each
     // reference.
     const scopesHandle = isScopeWrapperAlias &&
-      (getScopeBrand(type, context.typeChecker)?.payload.some((members) =>
-        members.some((member) =>
-          getCellWrapperInfo(member, context.typeChecker) !== undefined
-        )
-      ) ?? false);
+      scopesCellHandle(type, context.typeChecker);
 
     let namedKey = isScopeWrapperAlias
       ? undefined
@@ -2004,6 +2083,7 @@ export class SchemaGenerator {
             valueType,
             context,
             member.type,
+            instantiatedValueType(context.instantiatedAs, checker),
           );
           // If multiple index signatures are present (e.g. both string and
           // number key), the first non-undefined wins — matching
@@ -2065,7 +2145,13 @@ export class SchemaGenerator {
       return {
         type: "array",
         items: tupleItems(
-          this.#slotsOfTupleNode(typeNode, checker, context, new Set()),
+          this.#slotsOfTupleNode(
+            typeNode,
+            checker,
+            context,
+            new Set(),
+            context.instantiatedAs,
+          ),
         ),
       };
     }
@@ -2207,7 +2293,14 @@ export class SchemaGenerator {
       }
 
       const argument = this.#identityAliasArgument(typeNode, checker, context);
-      if (argument) return this.#analyzeChildNode(argument, checker, context);
+      if (argument) {
+        return this.#analyzeChildNode(
+          argument,
+          checker,
+          context,
+          context.instantiatedAs,
+        );
+      }
 
       const resolved = this.#resolveTypeReferenceFromScope(
         typeNode,
@@ -2285,10 +2378,11 @@ export class SchemaGenerator {
     node: ts.TypeNode,
     checker: ts.TypeChecker,
     context: GenerationContext,
+    instantiatedAs?: ts.Type,
   ): MutableJSONSchema {
     const type = context.typeRegistry?.get(node) ??
       checker.getTypeFromTypeNode(node);
-    return this.formatChildType(type, context, node);
+    return this.formatChildType(type, context, node, instantiatedAs);
   }
 
   /**
@@ -2409,16 +2503,31 @@ export class SchemaGenerator {
    * union multiplying the alternatives, one per member; anything else
    * spread being an array, a rest slot holding its items, read through a
    * reference and a union of arrays; then each alternative normalized as
-   * the checker normalizes a tuple.
+   * the checker normalizes a tuple. `instantiatedAs` is the tuple's
+   * instantiation where it is read at a position of its own under bindings
+   * (`GenerationContext.instantiatedAs`); a tuple spread into another, or
+   * reached through a union or an opened alias, has none.
    */
   #slotsOfTupleNode(
     tuple: ts.TupleTypeNode,
     checker: ts.TypeChecker,
     context: GenerationContext,
     opened: OpenedAliases,
+    instantiatedAs?: ts.Type,
   ): TupleSlot[][] {
+    // A tuple without a rest element reads each slot at the same slot of its
+    // instantiation.
+    const instantiatedSlots = instantiatedAs &&
+        checker.isTupleType(instantiatedAs) &&
+        !tuple.elements.some((element) =>
+          ts.isRestTypeNode(element) ||
+          (ts.isNamedTupleMember(element) &&
+            element.dotDotDotToken !== undefined)
+        )
+      ? checker.getTypeArguments(instantiatedAs as ts.TypeReference)
+      : undefined;
     let alternatives: TupleSlot[][] = [[]];
-    for (const element of tuple.elements) {
+    for (const [index, element] of tuple.elements.entries()) {
       const rest = ts.isRestTypeNode(element) ||
         (ts.isNamedTupleMember(element) &&
           element.dotDotDotToken !== undefined);
@@ -2437,7 +2546,12 @@ export class SchemaGenerator {
         }) as TupleSlot[][]
         : [[{
           kind: optional ? "optional" : "required",
-          schema: this.#analyzeChildNode(inner, checker, context),
+          schema: this.#analyzeChildNode(
+            inner,
+            checker,
+            context,
+            instantiatedSlots?.[index],
+          ),
         } as TupleSlot]];
       alternatives = alternatives.flatMap((prefix) =>
         contributions.map((slots) => [...prefix, ...slots])
@@ -2757,20 +2871,31 @@ export class SchemaGenerator {
     }
     const first = args[0]!;
     const second = args[1];
-    const analyze = (node: ts.TypeNode) =>
-      this.#analyzeChildNode(node, checker, context);
+    // Under bindings, each argument is read at its part of the alias's
+    // instantiation (`GenerationContext.instantiatedAs`): an array's element,
+    // a record's value, and for the aliases that keep an object's property
+    // names, the instantiation itself.
+    const instantiatedAs = context.instantiatedAs;
+    const analyze = (node: ts.TypeNode, at: ts.Type | undefined = undefined) =>
+      this.#analyzeChildNode(node, checker, context, at);
     switch (name) {
       case "Readonly":
-        return analyze(first);
+        return analyze(first, instantiatedAs);
       case "Array":
       case "ReadonlyArray":
-        return { type: "array", items: analyze(first) };
+        return {
+          type: "array",
+          items: analyze(
+            first,
+            instantiatedElementType(instantiatedAs, checker),
+          ),
+        };
       case "NonNullable":
-        return withoutNullish(analyze(first), context);
+        return withoutNullish(analyze(first, instantiatedAs), context);
       case "Partial":
         // An array's elements count as optional, so each admits `undefined`;
         // a tuple's do the same, every element made optional.
-        return mapArms(analyze(first), context, partialArm);
+        return mapArms(analyze(first, instantiatedAs), context, partialArm);
       case "Required":
         return this.#requiredView(first, checker, context, new Set());
       case "Pick":
@@ -2779,14 +2904,17 @@ export class SchemaGenerator {
         const keys = literalKeys(second);
         if (keys === undefined) return undefined;
         return pickedView(
-          analyze(first),
+          analyze(first, instantiatedAs),
           context,
           name === "Pick" ? { pick: keys } : { omit: keys },
         );
       }
       case "Record": {
         if (second === undefined) return undefined;
-        const value = analyze(second);
+        const value = analyze(
+          second,
+          instantiatedValueType(instantiatedAs, checker),
+        );
         if (
           first.kind === ts.SyntaxKind.StringKeyword ||
           first.kind === ts.SyntaxKind.NumberKeyword

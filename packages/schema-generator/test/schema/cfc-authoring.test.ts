@@ -2127,43 +2127,134 @@ describe("Schema: CFC authoring aliases", () => {
         ],
         ["`Readonly` over it", "Readonly<T>", "Sec<string>", "next?: X"],
         [
+          "`Readonly` over an object argument",
+          "Readonly<T>",
+          "Sec<{ a: string }>",
+          "next?: X",
+        ],
+        [
           "`undefined` joined to it, in a member that is also `null`",
           "T | undefined",
           "Sec<string>",
           "next: X | null",
         ],
+        [
+          "`undefined` joined to it, in an `Array`",
+          "T | undefined",
+          "Sec<string>",
+          "next: Array<X>",
+        ],
+        [
+          "`undefined` joined to it, in a `ReadonlyArray`",
+          "T | undefined",
+          "Sec<string>",
+          "next: ReadonlyArray<X>",
+        ],
+        [
+          "`undefined` joined to it, in a tuple",
+          "T | undefined",
+          "Sec<string>",
+          "next: [X]",
+        ],
+        [
+          "`undefined` joined to it, in a `Record`",
+          "T | undefined",
+          "Sec<string>",
+          "next: Record<string, X>",
+        ],
+        [
+          "`undefined` joined to it, under an index signature",
+          "T | undefined",
+          "Sec<string>",
+          "next: { [key: string]: X }",
+        ],
+        [
+          "`undefined` joined to it, through an identity alias",
+          "T | undefined",
+          "Sec<string>",
+          "next?: Id<X>",
+        ],
+        [
+          "`undefined` joined to it, in a `Default`",
+          "T | undefined",
+          "Sec<string>",
+          "next: Default<X[], []>",
+        ],
+        [
+          "`undefined` joined to it, in a `Readonly` object",
+          "T | undefined",
+          "Sec<string>",
+          "next: Readonly<{ inner: X }>",
+        ],
+        [
+          "`undefined` joined to it, in a `Partial` object",
+          "T | undefined",
+          "Sec<string>",
+          "next: Partial<{ inner: X }>",
+        ],
+        [
+          "`undefined` joined to it, in a `Pick` of an object",
+          "T | undefined",
+          "Sec<string>",
+          'next: Pick<{ inner: X; other: number }, "inner">',
+        ],
+        [
+          "`undefined` joined to it, in a `NonNullable` object",
+          "T | undefined",
+          "Sec<string>",
+          "next: NonNullable<{ inner: X } | null>",
+        ],
+        [
+          "`undefined` joined to it, through an identity alias over an object",
+          "T | undefined",
+          "Sec<string>",
+          "next: Id<{ inner: X }>",
+        ],
+        [
+          "`undefined` joined to it, in a `Record` over a literal key",
+          "T | undefined",
+          "Sec<string>",
+          'next: Record<"only", X>',
+        ],
+        [
+          "`undefined` joined to it, in a generic declaration's array",
+          "T | undefined",
+          "Sec<string>",
+          "next: List<X>",
+        ],
+        [
+          "`undefined` joined to it, under a generic declaration's index signature",
+          "T | undefined",
+          "Sec<string>",
+          "next: Dict<X>",
+        ],
+        [
+          "`undefined` joined to it, in a generic declaration's tuple",
+          "T | undefined",
+          "Sec<string>",
+          "next: Twice<X>",
+        ],
       ] as const
     ) {
       it(`reads a recursion through the alias with ${spelling}, which the checker settles, as a reference to its definition`, async () => {
         // The written argument nests without end, but the type the checker
-        // instantiates settles after one step, and that identifies the reading.
+        // instantiates settles, and that identifies the reading.
         const next = member.replace("X", `Sec<${argument}>`);
         const { value, schema, diagnostics } = await generate(`
+          type Id<Y> = Y;
+          interface List<U> { items: U[] }
+          interface Dict<U> { [key: string]: U }
+          interface Twice<U> { items: [U, U] }
           type Sec<T> = Confidential<{ value: T; ${next} }, readonly ["a"]>;
           interface Holder { value: ${holder} }
         `);
-        type Node = {
-          $ref?: string;
-          type?: string;
-          anyOf?: Node[];
-          properties?: { next?: Node };
-        };
-        // A member that is also `null` reads as a union; its other arm is the
-        // value.
-        const nextOf = (node: Node): Node => {
-          const next = node.properties?.next ?? {};
-          return next.anyOf?.find((arm) => arm.type !== "null") ?? next;
-        };
-        let node = value as Node;
-        while (!nextOf(node).$ref && nextOf(node).properties) {
-          node = nextOf(node);
-        }
-        const reference = nextOf(node).$ref;
-        const definition = reference === undefined
-          ? undefined
-          : schema.$defs?.[reference.split("/").pop()!] as Node | undefined;
-        expect(reference).toBeDefined();
-        expect(definition && nextOf(definition).$ref).toBe(reference);
+        // Some definition refers to itself, and the value refers to it.
+        const definitions = Object.entries(schema.$defs ?? {});
+        const recursive = definitions.find(([name, definition]) =>
+          JSON.stringify(definition).includes(`"#/$defs/${name}"`)
+        );
+        expect(recursive).toBeDefined();
+        expect(JSON.stringify(value)).toContain(`"#/$defs/${recursive?.[0]}"`);
         expect(diagnostics).toEqual([]);
       });
     }

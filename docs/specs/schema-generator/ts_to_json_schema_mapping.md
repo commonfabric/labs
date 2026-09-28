@@ -983,6 +983,10 @@ Mechanics:
   canonical policy alias. Unresolvable expansions fall back to ordinary
   generation (tested). An argument a reference leaves out is its parameter's
   default, read with the arguments before it, as the checker instantiates one.
+  A reference to an alias whose whole body is one of its own parameters
+  (`type Id<X> = X`) denotes the argument it writes for that parameter, so the
+  chain, and the labels and defaults read from its syntax, start at that
+  argument (`readThroughIdentityAliases`, `src/typescript/type-node.ts`).
 - The payload is read from the declaration of the last alias along the chain,
   as written, with each parameter bound to its argument
   (`GenerationContext.boundTypeParameters`), never from a substituted node,
@@ -1025,6 +1029,10 @@ Mechanics:
   and the payload is no CFC alias of its own, whose labels the carriers merge
   with the chain's. A payload that is itself an intersection or a union has
   no one other member, and is read from its declaration under the bindings.
+  A payload that is a CFC alias is read as its own chain, at the type the
+  outer chain instantiates: that type's payload, every carrier taken off, is
+  the inner alias's, while the inner chain's labels are read from its own
+  arguments.
   Such a member's payload is therefore read as the checker instantiates it,
   so a `null` its declaration writes beside an object-shaped payload
   (`Confidential<{ v: T } | null, L>` as `Holder<string>`'s member) is not in
@@ -1039,20 +1047,37 @@ Mechanics:
   type, to which a string is. A reading under bindings carries the type the
   checker instantiates at the position it reads, where it has one
   (`GenerationContext.instantiatedAs`): the payload of the type the chain
-  instantiates, and in turn each property, array element, and the one member
-  of a value that is also `undefined` or `null`. A chain entered there takes
-  it as its instantiation. A type read under bindings is identified, as a
-  recursive definition's name and in cycle detection, by its type together
-  with that instantiation and the arguments as written, or with its bindings
-  where no instantiation is carried, so two instantiations of one declaration
-  keep apart, and a recursion whose arguments the checker settles
-  (`Sec<T | undefined>` inside `Sec<T>`) refers to its definition although the
-  written arguments nest without end. The same type read inside itself with
-  the same arguments written for it, each under deeper bindings, is otherwise
-  either a nesting its author wrote out (`Pair<Pair<string>>`) or a recursion
-  that instantiates it without end (`Nest<T[]>` inside `Nest<T>`); nested
-  `MAX_BOUND_NESTING` deep, it is taken for the second, and the innermost
-  accepts any value and is reported.
+  instantiates, and in turn, wherever the reading goes within it, the part of
+  that type in the same place: a property, the element of an array or a
+  tuple, the value of a record or an index signature, the value a cell or a
+  `Default` holds, the one member of a value that is also `undefined` or
+  `null`, the argument of an identity alias, and, for the operand of a
+  default-library alias read member by member (`Readonly`, `Partial`, `Pick`,
+  …), the alias's own instantiation. A chain entered there takes it as its
+  instantiation. A type read under bindings is
+  identified, as a recursive definition's name and in cycle detection, by its
+  type together with that instantiation and the arguments as written, or with
+  its bindings where no instantiation is carried, so two instantiations of one
+  declaration keep apart, and a recursion whose instantiation the checker
+  settles to the same type (`Sec<T | undefined>` inside `Sec<T>`) refers to
+  its definition although the written arguments nest without end.
+- A chain is also tracked from the written reference it is entered from
+  (`SchemaGenerator.readAliasChain`), so a chain entered again from that
+  reference inside itself is found as a recursion through it. One whose
+  instantiation is only assignable both ways with the enclosing reading's, a
+  different type with the same members (`Sec<Readonly<Readonly<X>>>` inside
+  `Sec<Readonly<X>>`), refers to that reading's definition. A scope wrapper's
+  chain is read the same way, its payload being the one member its
+  instantiation intersects with the scope brand, except a scope around a
+  cell (`scopesCellHandle`): its cycle is found at the cell's value, which
+  keeps the handle the scope caps at each reference, so it settles none, and
+  under bindings, where that value is read from its syntax, a recursion
+  through one is found only at the nesting bound. A reference entered
+  `MAX_BOUND_NESTING` deep without settling, like the same type read inside
+  itself with the same arguments written for it, each under deeper bindings,
+  is taken for a recursion that instantiates the chain without end
+  (`Nest<T[]>` inside `Nest<T>`) rather than a nesting its author wrote out
+  (`Pair<Pair<string>>`); the innermost accepts any value and is reported.
   A label reads a parameter it holds as its type wherever the label reader
   pairs that position. A `typeof` binding that a chain entered from a type
   receives only as a type argument cannot be read from a type, so a

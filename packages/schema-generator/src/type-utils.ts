@@ -355,16 +355,36 @@ export function instantiatedPropertyType(
 
 /**
  * The element type of `instantiatedAs`, the type the checker instantiates at
- * an array read under bindings (`GenerationContext.instantiatedAs`), where it
- * is an array.
+ * an array, a readonly array, or a tuple read under bindings
+ * (`GenerationContext.instantiatedAs`): its number index type, which for a
+ * tuple is every element's.
  */
 export function instantiatedElementType(
   instantiatedAs: ts.Type | undefined,
   checker: ts.TypeChecker,
 ): ts.Type | undefined {
-  return instantiatedAs && checker.isArrayType(instantiatedAs)
-    ? checker.getTypeArguments(instantiatedAs as ts.TypeReference)[0]
-    : undefined;
+  return instantiatedAs &&
+    checker.getIndexTypeOfType(instantiatedAs, ts.IndexKind.Number);
+}
+
+/**
+ * The type of the values `instantiatedAs`, the type the checker instantiates
+ * at a record or an object with an index signature read under bindings
+ * (`GenerationContext.instantiatedAs`), holds: its string or number index
+ * type, or, for a record over literal keys, which has none, the type its
+ * properties share.
+ */
+export function instantiatedValueType(
+  instantiatedAs: ts.Type | undefined,
+  checker: ts.TypeChecker,
+): ts.Type | undefined {
+  if (!instantiatedAs) return undefined;
+  const indexed =
+    checker.getIndexTypeOfType(instantiatedAs, ts.IndexKind.String) ??
+      checker.getIndexTypeOfType(instantiatedAs, ts.IndexKind.Number);
+  if (indexed) return indexed;
+  const [first] = checker.getPropertiesOfType(instantiatedAs);
+  return first && checker.getTypeOfSymbol(first);
 }
 
 /**

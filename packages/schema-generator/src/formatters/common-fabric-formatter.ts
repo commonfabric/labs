@@ -40,8 +40,8 @@ import {
   entityNameRight,
   holdsFreeTypeParameter,
   holdsTypeParameter,
-  readAuthoredTypeNode,
   readMemberAnnotation,
+  readThroughIdentityAliases,
   typeParameterOfReference,
   unwrapTypeParentheses,
 } from "../typescript/type-node.ts";
@@ -53,8 +53,10 @@ import {
   isCellBrand,
   wrapperKindToBrand,
 } from "../typescript/cell-brand.ts";
+import { hasDefaultMarker } from "../typescript/default-brand.ts";
 import { isDefaultAliasSymbol } from "../typescript/property-optionality.ts";
 import {
+  getScopeBrand,
   SCOPE_WRAPPER_FOR_SCOPE,
   scopeForWrapperName,
 } from "../typescript/scope-brand.ts";
@@ -477,6 +479,46 @@ const usesParameterUnreachably = (
  * `type` less the `undefined` among its members, where one other member
  * remains, and `type` itself otherwise.
  */
+/**
+ * The payload of `type`, a scope wrapper's instantiation, or `undefined` where
+ * it cannot be told apart. A scope wrapper intersects its payload with its
+ * brand, so the payload is the one member besides the brand; a payload that
+ * is itself an intersection, or a union, which the brand distributes over,
+ * has no one member.
+ */
+const scopePayloadOf = (
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): ts.Type | undefined => {
+  const payload = getScopeBrand(type, checker)?.payload;
+  return payload?.length === 1 && payload[0]!.length === 1
+    ? payload[0]![0]
+    : undefined;
+};
+
+/**
+ * The type the payload of a chain named `aliasName` at its end is read at,
+ * where `instantiated` is the type the chain instantiates, less the
+ * `undefined` an optional member's `?` adds: its payload, a scope wrapper's
+ * (`scopePayloadOf()`) or a CFC alias's (`cfcPayloadOf()`). A payload that is
+ * itself a CFC alias, `payloadIsCfcAlias`, is read at a CFC alias's whole
+ * instantiation, whose payload, every carrier taken off, is that alias's own,
+ * while its labels are read from its own arguments. A scope wrapper's brand
+ * cannot be taken off such an intersection, so inside one it is read at none.
+ */
+const instantiatedPayloadOf = (
+  aliasName: string,
+  instantiated: ts.Type,
+  payloadIsCfcAlias: boolean,
+  checker: ts.TypeChecker,
+): ts.Type | undefined => {
+  const defined = definedPart(instantiated);
+  if (scopeForWrapperName(aliasName) !== undefined) {
+    return payloadIsCfcAlias ? undefined : scopePayloadOf(defined, checker);
+  }
+  return payloadIsCfcAlias ? defined : cfcPayloadOf(defined);
+};
+
 const definedPart = (type: ts.Type): ts.Type => {
   if (!type.isUnion()) return type;
   const defined = type.types.filter((member) =>
@@ -610,6 +652,24 @@ export function scopeOfAliasChain(
 }
 
 /**
+ * Whether `type` is a scope wrapper, reached through its alias chain
+ * (`scopeOfAliasChain()`), around a cell. It caps the cell's handle and is
+ * itself a wrapper, so a cycle through it is found at the cell's value, not
+ * at the wrapper, and the capped handle is written inline at each reference.
+ */
+export function scopesCellHandle(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): boolean {
+  return scopeOfAliasChain(type, checker) !== undefined &&
+    (getScopeBrand(type, checker)?.payload.some((members) =>
+      members.some((member) =>
+        getCellWrapperInfo(member, checker) !== undefined
+      )
+    ) ?? false);
+}
+
+/**
  * Formatter for Common Fabric-specific types (Cell<T>, Stream<T>, Reactive<T>,
  * Default<T,V>), scope wrappers, and CFC aliases.
  *
@@ -738,9 +798,15 @@ export class CommonFabricFormatter implements TypeFormatter {
       SCOPE_WRAPPER_NAMES,
     );
     if (resolvedScopeAlias) {
-      return this.#applyScopeWrapperSemantics(
-        this.#formatResolvedAliasPayload(resolvedScopeAlias, context),
-        scopeForWrapperName(resolvedScopeAlias.aliasName)!,
+      return this.#readChain(
+        type,
+        context,
+        resolvedScopeAlias,
+        () =>
+          this.#applyScopeWrapperSemantics(
+            this.#formatResolvedAliasPayload(resolvedScopeAlias, context),
+            scopeForWrapperName(resolvedScopeAlias.aliasName)!,
+          ),
       );
     }
 
@@ -750,7 +816,12 @@ export class CommonFabricFormatter implements TypeFormatter {
       CFC_ALIAS_NAMES,
     );
     if (resolvedCfcAlias) {
-      return this.#formatResolvedCfcAlias(resolvedCfcAlias, context);
+      return this.#readChain(
+        type,
+        context,
+        resolvedCfcAlias,
+        () => this.#formatResolvedCfcAlias(resolvedCfcAlias, context),
+      );
     }
 
     // With no alias name left to follow, and no reference naming the policy,
@@ -1293,10 +1364,15 @@ export class CommonFabricFormatter implements TypeFormatter {
       }
     }
 
+    // Under bindings, the value is read at the cell's value in the position's
+    // instantiation (`GenerationContext.instantiatedAs`).
+    const instantiatedCell = context.instantiatedAs &&
+      getCellWrapperInfo(context.instantiatedAs, context.typeChecker);
     const innerSchema = this.#schemaGenerator.formatChildType(
       innerType,
       childContext,
       shouldPassTypeNode ? innerTypeNode : undefined,
+      instantiatedCell?.typeRef.typeArguments?.[0],
     );
 
     // Stream<T>: can also reflect inner Cell-ness
@@ -1595,11 +1671,20 @@ export class CommonFabricFormatter implements TypeFormatter {
       );
     }
 
-    // Generate schema for the value type
+    // Generate schema for the value type, under bindings at the member of the
+    // position's instantiation that carries no default brand
+    // (`GenerationContext.instantiatedAs`).
+    const instantiatedAs = context.instantiatedAs;
+    const unbranded = instantiatedAs?.isUnion()
+      ? instantiatedAs.types.filter((member) =>
+        !hasDefaultMarker(member, context.typeChecker)
+      )
+      : undefined;
     const valueSchema = this.#schemaGenerator.formatChildType(
       valueType,
       context,
       valueTypeNode,
+      unbranded?.length === 1 ? unbranded[0] : undefined,
     );
 
     // Extract default value from the default type node (this can handle complex literals)
@@ -1642,6 +1727,41 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     return valueSchema;
+  }
+
+  /**
+   * `read`, the reading of `resolved`, entered from the written reference the
+   * context reads, where it has one, and tracked as a chain reading
+   * (`SchemaGenerator.readAliasChain()`) so a recursion through that reference
+   * is found. Its instantiation is passed on to settle one by where it is
+   * known: at a position the reading carries one for
+   * (`GenerationContext.instantiatedAs`), and for a reference read under no
+   * bindings, whose type is concrete; a declaration read under bindings with
+   * none carried has only its own unbound parameters. A scope around a cell
+   * settles none: its cycle is found at the cell's value, which keeps the
+   * handle it caps at each reference (`scopesCellHandle()`).
+   */
+  #readChain(
+    type: ts.Type,
+    context: GenerationContext,
+    resolved: ResolvedAliasChain,
+    read: () => MutableJSONSchema,
+  ): MutableJSONSchema {
+    const checker = context.typeChecker;
+    const reference = context.typeNode &&
+      readThroughIdentityAliases(context.typeNode, checker);
+    if (!reference || !ts.isTypeReferenceNode(reference)) return read();
+    const instantiated = scopesCellHandle(type, checker)
+      ? undefined
+      : context.instantiatedAs ??
+        (context.boundTypeParameters ? undefined : resolved.instantiated);
+    return this.#schemaGenerator.readAliasChain(
+      type,
+      context,
+      reference,
+      instantiated,
+      read,
+    );
   }
 
   #formatResolvedCfcAlias(
@@ -1742,9 +1862,13 @@ export class CommonFabricFormatter implements TypeFormatter {
     // Read under bindings, the payload is read at the payload of the alias's
     // instantiation (`GenerationContext.instantiatedAs`).
     const instantiatedPayload = context.instantiatedAs &&
-        !(payloadNode && this.#refersToCfcAlias(payloadNode, context))
-      ? cfcPayloadOf(definedPart(context.instantiatedAs))
-      : undefined;
+      instantiatedPayloadOf(
+        resolved.aliasName,
+        context.instantiatedAs,
+        payloadNode !== undefined &&
+          this.#refersToCfcAlias(payloadNode, context),
+        context.typeChecker,
+      );
     return this.#schemaGenerator.formatChildType(
       baseType,
       context,
@@ -1778,13 +1902,17 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (!holdsFreeTypeParameter(payload.node, checker)) {
       return this.#schemaGenerator.formatChildType(type, outer, payload.node);
     }
-    // An optional member's `?` adds `undefined` to the type it instantiates.
+    const payloadIsCfcAlias = this.#refersToCfcAlias(payload.node, context);
     const instantiatedPayload = resolved.instantiated &&
-        !this.#refersToCfcAlias(payload.node, context)
-      ? cfcPayloadOf(definedPart(resolved.instantiated))
-      : undefined;
-    const readsInstantiation = !resolved.argumentsWritten ||
-      usesParameterUnreachably(payload.node, checker);
+      instantiatedPayloadOf(
+        resolved.aliasName,
+        resolved.instantiated,
+        payloadIsCfcAlias,
+        checker,
+      );
+    const readsInstantiation = !payloadIsCfcAlias &&
+      (!resolved.argumentsWritten ||
+        usesParameterUnreachably(payload.node, checker));
     if (readsInstantiation && instantiatedPayload) {
       return this.#schemaGenerator.formatChildType(
         instantiatedPayload,
@@ -1864,7 +1992,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     // still carries the outer reference's arguments. Start a user alias's
     // substitution from its authored declaration so those pairs agree.
     const reference = context.typeNode &&
-      readAuthoredTypeNode(context.typeNode, context.typeChecker);
+      readThroughIdentityAliases(context.typeNode, context.typeChecker);
     if (reference && ts.isTypeReferenceNode(reference)) {
       const declaration = this.#getTypeAliasDeclarationForSymbol(
         context.typeChecker.getSymbolAtLocation(reference.typeName),
@@ -2445,7 +2573,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     context: GenerationContext,
   ): boolean {
     const reference = context.typeNode &&
-      readAuthoredTypeNode(context.typeNode, context.typeChecker);
+      readThroughIdentityAliases(context.typeNode, context.typeChecker);
     if (
       !reference || !ts.isTypeReferenceNode(reference) ||
       this.#resolveTypeReferenceName(reference.typeName, context) === aliasName
@@ -2509,7 +2637,7 @@ export class CommonFabricFormatter implements TypeFormatter {
   ): readonly (ts.TypeNode | undefined)[] | undefined {
     const checker = context.typeChecker;
     const reference = context.typeNode &&
-      readAuthoredTypeNode(context.typeNode, checker);
+      readThroughIdentityAliases(context.typeNode, checker);
     if (!reference || !ts.isTypeReferenceNode(reference)) return undefined;
     if (
       this.#resolveTypeReferenceName(reference.typeName, context) === aliasName
@@ -2554,8 +2682,8 @@ export class CommonFabricFormatter implements TypeFormatter {
 
   /**
    * The type arguments written on the reference being formatted. The
-   * reference is read through parentheses and plain aliases
-   * (`readAuthoredTypeNode()`): `type Name = Owned<string, typeof setName>`
+   * reference is read through parentheses, plain aliases, and aliases whose
+   * whole body is one of their parameters (`readThroughIdentityAliases()`): `type Name = Owned<string, typeof setName>`
    * holds the arguments that `Name` stands for, and a policy read from the
    * bare `Name` would find none and drop the writer binding without a word.
    */
@@ -2563,7 +2691,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     context: GenerationContext,
   ): readonly ts.TypeNode[] | undefined {
     const typeNode = context.typeNode &&
-      readAuthoredTypeNode(context.typeNode, context.typeChecker);
+      readThroughIdentityAliases(context.typeNode, context.typeChecker);
     if (!typeNode || !ts.isTypeReferenceNode(typeNode)) {
       return undefined;
     }
