@@ -12,7 +12,7 @@ such a program. None of it depends on how the program is built.
 
 A client acts as the person's own principal, through a runtime that holds their
 key. It MUST resolve the person's profile with `#profile` and their manager with
-`#fabrichat`, and MUST NOT ask the person to type in either.
+`#chatManager`, and MUST NOT ask the person to type in either.
 
 Everything a client shows is read under the person's own access. A client MUST
 NOT read a room through any identity other than the person's, and MUST NOT show

@@ -15,14 +15,18 @@ resolves through a well-known `wish` target:
 
 ```ts
 // Shown for illustration only.
-const chats = wish<FabriChatManagerOutput>({ query: "#fabrichat" });
+const chats = wish<FabriChatManagerOutput>({ query: "#chatManager" });
 ```
 
-`#fabrichat` is a home target, like `#agent_queue` and `#profile`. On a serving
-runtime, it resolves against the demanding identity's home space and never the
-service's ([server-side builtins](../server-side-execution/builtins.md)).
-Because home is private to its user, so is the index: nobody else learns whom a
-user talks to by reading it.
+`#chatManager` is a home target, like `#agent_queue` and `#profile`. It names
+the role, not the pattern that fills it: a client asks for the user's chat
+manager, and `FabriChatManager` is what answers. The spelling follows the camel
+case of the other multi-word targets (`#learnedSummary`, `#pieceRegistry`,
+`#profileName`). On a serving runtime, it resolves against the demanding
+identity's home space and never the service's
+([server-side builtins](../server-side-execution/builtins.md)). Because home is
+private to its user, so is the index: nobody else learns whom a user talks to by
+reading it.
 
 Adding the target takes the same steps `#agent_queue` took: the field and child
 piece in `home.tsx`, a case in `getResolutionKind` and in
