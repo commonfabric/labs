@@ -87,7 +87,7 @@ every path and every flag — which is to say nearly everything shuttle
 prints, leaving nothing conditional about conditional quoting.
 
 Some characters this grammar spends on structure are left out all the same,
-and the same cost is the reason. `:` marks a scheme and the `x:` base, and
+and the same cost is the reason. `:` marks a scheme, and
 it also sits in every handle — `of:fid1:…` — so reserving it would quote
 every reference that prints. `-` is the previous place and the stdin
 sentinel, and it opens every long flag. Each of them is read at the head of
@@ -1032,25 +1032,38 @@ anything outside the fabric is named by an explicit scheme.
   copy, `link` remaining the reference-writer — is designed and deferred
   past v1 ([`futures.md`](futures.md)); the plane rules below are settled
   v1 grammar either way.
-- `file:` names a local file, the only spelling that touches disk — and a
-  scheme is legal only on an absolute complete path:
-  `get topics --json > file:/tmp/topics.json` is fine, `file:out.json` is
-  refused (`file:~/…` counts as absolute).
-- `file:` is one member of an open scheme family: a schemed operand names
-  something outside the fabric. `file:` is the v1 member; `https:` read
-  ends are designed and deferred ([`futures.md`](futures.md)), and writing
-  to an external scheme stays out of scope until a use rules it in.
+- `file:` names a local file, the only spelling that touches disk. A
+  schemed operand names its plane, and a leading `/` is what makes it
+  absolute: `get topics --json > file:/tmp/topics.json` names a whole path,
+  and `> file:out.json` names one relative to the external working location
+  below. `file:~/…` counts as absolute. There is no separate base name for
+  a relative external path — the scheme is the plane, and `/` is the root.
+- `file:` is one member of an open scheme family, and what a member affords
+  differs:
+
+  | plane | navigate | list | read | write | run a program in |
+  | ----- | -------- | ---- | ---- | ----- | ---------------- |
+  | `file:` | yes | yes | yes | yes | yes |
+  | `https:` | no | no | yes | no | no |
+  | fabric | yes | yes | yes | yes | n/a |
+
+  An operand reaches a plane and the plane decides what it affords, so a
+  refusal names the plane's limit rather than a gap in shuttle (decision
+  30). HTTP has no listing primitive — an auto-index page is a server's
+  choice rather than the protocol's — and no traversal for `..` to act on,
+  which is why three of its columns are empty. `https:` read ends are
+  designed and deferred ([`futures.md`](futures.md)), and writing to an
+  external scheme stays out of scope until a use rules it in.
 - Shuttle maintains two working positions: the fabric cwd and one
-  **external working location**. `xcd` sets it — `xcd file:~/data`,
-  `xcd https://foo.com/a/b/` — and, its argument being already on the
-  external plane, moves it with a plain relative path: `xcd ../foo`. It
-  writes where it landed, where `cd` writes nothing: the prompt carries the
-  place and carries nothing about this position, so a move nothing reports is
-  one a person has to ask about. `xpwd` prints it. In operands, a relative external path is rooted with
-  the `x:` base — `> x:../out.json`, `< x:data.json`. `x:` is a base name
-  rather than a scheme: it roots a relative path at the external location
-  whatever that location's scheme, so no operand ever changes plane by
-  position. A bare relative operand is always fabric.
+  **external working location**, which stands on `file:` and nowhere else.
+  `xcd` sets it — `xcd file:~/data` — and, its argument being already on
+  that plane, moves it with a plain relative path: `xcd ../foo`. A scheme
+  the table gives no `navigate` to is refused, `xcd https://…` among them:
+  a place is stood in by moving through it. `xcd` writes where it landed,
+  where `cd` writes nothing: the prompt carries the place and carries
+  nothing about this position, so a move nothing reports is one a person
+  has to ask about. `xpwd` prints it, and a bare relative operand is always
+  fabric, so nothing reaches this position by position alone.
 
 ## Pipes: escaped locals
 

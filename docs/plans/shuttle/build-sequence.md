@@ -693,9 +693,9 @@ Still to land:
   to `enter` would be a map from a drawn row back to a path inside the value,
   which is a change to a shared renderer.
 
-**B4 — externals and escapes.** `>` and `<` to and from `file:` externals
-under the scheme-absolute rule; the external working location
-(`xcd`/`xpwd`, the `x:` base); the `!` escape family — line-initial `!`,
+**B4 — externals and escapes.** `>` and `<` to and from `file:` externals;
+the external working location (`xcd`/`xpwd`); the `!` escape family —
+line-initial `!`,
 `|!` in a pipeline (bare `|` reserved, its error naming `|!`), and `!cf`
 with place-derived flags injected. With the external location, `where`
 reaches its v1 surface: every dimension printed, the light ones settable
@@ -714,9 +714,11 @@ Landed:
   expands where the location is on the plane that has a home, and a path
   naming somebody else's is refused rather than guessed at.
 
-  `x:` is not here. It roots a relative *operand* at this position, and
-  nothing reads an operand against this plane until redirection does, so the
-  base lands with the verb that reads it rather than ahead of one.
+  The location stands on `file:` and nowhere else (decision 30), so it is
+  always a directory on this machine. `x:` was to have been the base a
+  relative external operand rooted at, and it retires with the plane it
+  abstracted over: a schemed operand names its plane and a leading `/` makes
+  it absolute, which is decision 23 read the other way round.
 
   `Arity` gains the arm `where` needs: none or two operands and nothing
   between, the record being one surface, so naming a dimension with no value
@@ -729,33 +731,46 @@ Landed:
 
 Still to land:
 
-- **Redirection,** and the `x:` base with it. `>` and `<` to and from `file:`
-  externals, reading an operand against the location above: a bare relative
-  operand stays fabric, a schemed one names a plane, and `x:` roots a relative
-  one at the external location whatever that location's scheme — a base name
-  rather than a scheme, so no operand changes plane by position. This is the
-  slice the rendering question below gates.
-- **The escape family.** Line-initial `!`, `|!` in a pipeline, `!cf` with
-  place-derived flags injected, and bare `|` reserved with its error naming
-  `|!`. A local program takes and gives back the terminal the way `$EDITOR`
-  does.
+- **Reads and writes across the plane.** `>` and `<` to and from `file:`
+  externals, and `ls` and `get` over an external operand — the plane is a
+  place you can look at rather than only redirect into. An operand reaching
+  it is a schemed one, absolute or relative to the location, while a bare
+  relative operand stays fabric, so no operand changes plane by position.
+  The rendering ruling below is settled and this slice carries it.
+- **The `!` family's local half.** Line-initial `!`, whose words the system
+  shell reads, and `!cf` with the connection flags injected (decision 18).
+  A local program takes and gives back the terminal the way `$EDITOR` does,
+  and runs at the external working location, which decision 30 makes a
+  directory it can stand in.
+- **The pipeline half.** `|!`, and bare `|` reserved with its error naming
+  `|!`. It is last because a pipeline is where shuttle's own output meets a
+  program's stdin, which is the destination the rendering ruling is about.
 
-One question B4 settles rather than inherits: what a rendering carries when
-it is not going to a terminal. Only part of the treatment of a control
-character is at stake, and [`grammar.md`](grammar.md) is where the division
-is. A segment holding a newline is refused for what a rendering of it reads
-back as, which is a fact about addresses: it holds in a file and a pipe as
-readily as on a screen,
-and B4 changes nothing about it. The rest of the class is refused because a
+One question B4 settles rather than inherits, and it is settled: what a
+rendering carries when it is not going to a terminal. **It is chosen by the
+form, not by the destination** — a rendering is the same wherever it lands.
+
+Only part of the treatment of a control character was ever at stake, and
+[`grammar.md`](grammar.md) is where the division is. A segment holding a
+newline is refused for what a rendering of it reads back as, which is a fact
+about addresses: it holds in a file and a pipe as readily as on a screen, and
+B4 changes nothing about it. The rest of the class is refused because a
 terminal acts on it, the round trip there being exact, and a message is
-glyphed for that same reason — those two are what a second destination puts
-in question. `>` to a `file:` external and `|!` into a pipeline are that
-destination, and there the same treatment reads differently: glyphs in a
-file are noise rather than safety, and a redirected `get` is where somebody
-wants the value as the fabric holds it. Which way that goes is open. The
-canonical output form ([`futures.md`](futures.md)) reaches the same fork
-for the same reason, so whichever answer B4 takes is the one that form
-inherits.
+glyphed for that same reason — those two are what a second destination put in
+question.
+
+Two things had already answered most of it. `--json` is the machine form and
+is chosen by a flag rather than by where the output goes, and a value rendered
+as JSON never carries glyphs — `value.ts` escapes a control character in
+JSON's own spelling — so `get --json > file:…` round-trips already. What was
+genuinely left was whether a *message* stays glyphed into a file or a pipe and
+whether a *name* in a redirected listing stays described.
+
+Both stay as they are. A file is `cat`'d onto a terminal as readily as a
+screen is written to, so the safety the glyphing buys defers rather than
+evaporates; and one question with one answer is what keeps a reader from
+having to know where their output went before they know what it says. The
+canonical output form ([`futures.md`](futures.md)) inherits it.
 
 B4 closes v1. The deferred set — the pinned strip, cold-browse mode, the
 native tool set, heavyweight `where` edits, the `fuse/` facet,

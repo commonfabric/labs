@@ -211,7 +211,20 @@ invisible, the prompt renders the whole ambient record — place and scope
     character; [`grammar.md`](grammar.md) carries that rendering.
 18. **`!` means local, everywhere.** Line-initial `! <cmd>` runs a local
     program, `|!` is the same escape inside a pipeline, `!cf` the special
-    case that injects place-derived flags.
+    case that injects place-derived flags. Four readings follow from
+    "local". The words after `!` are read by the system shell rather than
+    by shuttle's split, because an escape that is a weaker shell than the
+    one outside is not an escape — globs, `&&` and the rest are what a
+    person reached for `!` to get. A local program runs at the external
+    working location, which decision 30 makes a directory on this machine.
+    `!cf` injects the connection — api endpoint, identity, space — and not
+    the position: a `cf` command takes a reference as an operand rather
+    than a flag, and knowing which operand that is for each command is
+    `cf`'s grammar rather than shuttle's, which is the drift decision 9
+    warns about. A flag written on the line wins over the injected one,
+    silently: the escape is a subprocess, so it may reach a space this
+    process cannot, and refusing would leave `!cf` weaker than the `cf`
+    outside it.
 19. **Shuttle is what it is; `cf sh` is what you type.** The relationship is
     the one Fabric already has with `cf`: a product carries the name a person
     means, and the command carries the name a person types thirty times an
@@ -267,10 +280,15 @@ invisible, the prompt renders the whole ambient record — place and scope
     which also honors the one-connection-per-process limit the seam work
     records. `cd`/`xcd` are conveniences over the hottest dimensions;
     launch flags seed the initial record.
-23. **A scheme is legal only on an absolute complete path.** Relative
-    external operands are rooted with the `x:` base (`> x:../out.json`) —
-    a base name, not a scheme — and a bare relative operand is always
-    fabric, so no operand ever changes plane by position.
+23. **A schemed operand names its plane; a leading `/` makes it absolute.**
+    Without one it is relative to the external working location
+    (`> file:../out.json`), and a bare relative operand is always fabric —
+    so no operand ever changes plane by position, the scheme deciding that
+    and position deciding nothing. There is no separate base name. `x:` was
+    one while the external plane spanned several schemes and had to be
+    named without naming any of them; decision 30 leaves it spanning one,
+    and a base that abstracts over a set of one is a second spelling for
+    what the scheme already says (decision 13).
 24. **Pagination: height-fit pages, and `more` continues.** `ls` prints
     one terminal-height page plus a status line and never escalates to a
     view uninvited; `more` continues the listing and its handle numbering,
@@ -361,6 +379,23 @@ invisible, the prompt renders the whole ambient record — place and scope
     13's checked names rest on, held by reuse rather than by a second answer.
     A completion is a read, so it is work in flight: it is cancelled by
     `ctrl-c` and written onto the line it was computed for and onto no other.
+30. **An operand reaches a plane; the plane decides what it affords.** A
+    refusal names the plane's limit rather than shuttle's gap, and the two
+    are different because only one of them will ever change. `file:`
+    affords navigation, listing, reading, writing, and a directory a local
+    program can run in. `https:` affords a read and nothing else: HTTP has
+    no listing primitive — an auto-index page is a server's choice, not the
+    protocol's — and no traversal for `..` to mean anything against. So
+    `xcd https://…` is refused on the same rule that refuses a listing
+    there, rather than as a thing not yet built: a place is stood in by
+    moving through it, and that plane has nothing for a move to land on.
+    Two things follow. The external working location is always a directory
+    on this machine, which is what gives `!` somewhere to run and what lets
+    decision 23 retire the base. And a scheme that does afford navigation —
+    one with a listing, as `ftp:` and `s3:` have — reaches `xcd` by this
+    rule rather than by a change to it, while `https:` stays what
+    [`futures.md`](futures.md) makes it: a read end, naming its place
+    whole.
 
 The line grammar itself — what a line may say, what its parts denote, and what
 shuttle does and shows in return — is drafted in [`grammar.md`](grammar.md). The
