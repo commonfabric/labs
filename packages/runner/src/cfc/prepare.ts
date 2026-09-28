@@ -6789,6 +6789,9 @@ const persistedLabelFromSchemaAtPath = (
   let match: { path: readonly string[]; label: IFCLabel } | undefined;
   for (const entry of entries) {
     if (!isPrefix(entry.path, logicalPath)) continue;
+    const declarationPath = entry.path.map((segment, index) =>
+      segment === "*" ? logicalPath[index] : segment
+    );
     // Minting belongs to the declaration's value. An ancestor object can
     // carry integrity even when the projected path holds an initialized link.
     const label = withCheckedPrincipalClaims(
@@ -6798,7 +6801,7 @@ const persistedLabelFromSchemaAtPath = (
         entry.label,
         entryLabels,
         source.space,
-        labelMintOptionsAt(tx, source, entry.path),
+        labelMintOptionsAt(tx, source, declarationPath),
       ),
       checkedSchema === undefined ? [] : checkedSchemaPrincipalClaims(
         tx,

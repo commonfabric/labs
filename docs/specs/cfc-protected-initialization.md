@@ -80,11 +80,12 @@ staged in the transaction. The link carries its source's label and the
 `LinkReference` a link write mints, so a reader reaching the entry through the
 link sees the entry's own authorship.
 
-Schema labels are minted at their declaration paths before projection onto a
-reference source. A declaration on an ancestor object keeps the integrity that
-object earned; a declaration at or below an initialized reference mints none
-for the referenced content. An empty declaration without a persistent gate has
-no stored label entry and does not shadow an ancestor during derivation.
+When deriving a pending reference source, schema labels are minted at their
+declaration paths, with wildcard segments bound to the projected source path.
+A declaration on an ancestor object keeps the integrity that object earned;
+a declaration at or below an initialized reference mints none for the
+referenced content. An empty declaration without a persistent gate does not
+shadow an ancestor during this derivation.
 
 When a link's source is a reference staged in the same transaction, or a value
 holding one, preparation derives that reference's labels through the recorded

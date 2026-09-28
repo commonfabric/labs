@@ -241,6 +241,63 @@ describe("staged-reference-derivation", () => {
     expect(runtime.getCfcStats().stagedReferenceCacheHits).toBeGreaterThan(0);
   });
 
+  for (const array of [false, true]) {
+    it(`does not mint a wildcard ${array ? "item" : "property"} declaration through a pending reference`, async () => {
+      const tx = runtime.edit();
+      const declaration = {
+        type: "object",
+        ifc: { integrity: ["slot-proof"] },
+      } as const;
+      const wrapper = runtime.getCell(
+        space,
+        "wildcard-wrapper",
+        array
+          ? {
+            type: "array",
+            items: declaration,
+            ifc: { integrity: ["wrapper-proof"] },
+          }
+          : {
+            type: "object",
+            additionalProperties: declaration,
+            ifc: { integrity: ["wrapper-proof"] },
+          },
+        tx,
+      );
+      const holder = runtime.getCell(space, "wildcard-holder", {
+        type: "object",
+        ifc: { integrity: ["holder-proof"] },
+      }, tx);
+      const key = array ? "0" : "next";
+      holder.set({ item: wrapper.key(key) });
+      recordReferencedArgumentFields(tx, holder.getAsNormalizedFullLink(), [
+        "item",
+      ]);
+      const leaf = runtime.getCell<Record<string, unknown>>(
+        space,
+        "reference-graph-leaf",
+        undefined,
+        tx,
+      );
+      wrapper.set(array ? [leaf] : { next: leaf });
+      recordReferencedArgumentFields(tx, wrapper.getAsNormalizedFullLink(), [
+        key,
+      ]);
+
+      expect((await tx.commit()).error).toBeUndefined();
+      const label = readStoredCfcMetadata(
+        runtime.readTx(),
+        holder.getAsNormalizedFullLink(),
+      )!
+        .labelMap.entries.find((entry) => entry.path.join("/") === "item")
+        ?.label;
+      expect(label?.confidentiality).toContain("secret");
+      expect(label?.integrity).toContain("leaf-proof");
+      expect(label?.integrity).toContain("wrapper-proof");
+      expect(label?.integrity).not.toContain("slot-proof");
+    });
+  }
+
   it("refreshes shared derivations after source metadata is persisted in the same pass", async () => {
     const flowRuntime = new Runtime({
       apiUrl: new URL("https://example.com"),
