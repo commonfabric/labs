@@ -217,7 +217,11 @@ import {
   scrubBareFabricIdentifiers,
   scrubBareFabricIdentifiersDeep,
 } from "./fabric-identifier-scrub.ts";
-import { BUILTIN_TOOLS, getBuiltinTool } from "./tools/registry.ts";
+import {
+  BUILTIN_TOOLS,
+  builtinToolDescriptorForRuntime,
+  getBuiltinTool,
+} from "./tools/registry.ts";
 import { isSearchPatternsToolSuccessOutput } from "./tools/search-patterns.ts";
 import {
   isResearchToolSuccessOutput,
@@ -3886,6 +3890,9 @@ export class CfHarnessPromptLoop {
           });
         }
         let response;
+        // What the run's sandbox can do decides which inputs a tool offers
+        // (bash takes `session` only where there are sessions).
+        const sandboxDescription = this.engine.sandbox.describe();
         try {
           response = await this.modelClient.complete({
             model,
@@ -3894,7 +3901,9 @@ export class CfHarnessPromptLoop {
               ? []
               : BUILTIN_TOOLS.filter((tool) =>
                 this.#allowedToolIds.has(tool.descriptor.toolId)
-              ).map((tool) => tool.descriptor),
+              ).map((tool) =>
+                builtinToolDescriptorForRuntime(tool, sandboxDescription)
+              ),
             nativeModelToolIds: finalizing ? [] : this.#nativeModelToolIds,
             runId: this.engine.getRunState().runId,
             ...(this.#cacheAffinityKey !== undefined

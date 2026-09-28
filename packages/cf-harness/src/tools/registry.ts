@@ -1,4 +1,8 @@
-import type { BuiltinToolId } from "../contracts/tool-descriptor.ts";
+import type {
+  BuiltinToolId,
+  HarnessToolDescriptor,
+} from "../contracts/tool-descriptor.ts";
+import type { SandboxRuntimeDescription } from "../sandbox/types.ts";
 import { acquireSkillTool } from "./acquire-skill.ts";
 import { assignSlugTool } from "./assign-slug.ts";
 import {
@@ -76,3 +80,13 @@ export const getBuiltinTool = (
   toolId: string,
 ): HarnessToolDefinition | undefined =>
   BUILTIN_TOOL_REGISTRY.get(toolId as BuiltinToolId);
+
+/**
+ * The descriptor of `tool` that a run on `runtime` offers the model: the
+ * tool's own, unless the tool has one that depends on the runtime.
+ */
+export const builtinToolDescriptorForRuntime = (
+  tool: Pick<HarnessToolDefinition, "descriptor" | "descriptorForRuntime">,
+  runtime: SandboxRuntimeDescription,
+): HarnessToolDescriptor =>
+  tool.descriptorForRuntime?.(runtime) ?? tool.descriptor;
