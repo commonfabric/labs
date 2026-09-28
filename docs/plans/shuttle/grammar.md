@@ -1062,8 +1062,12 @@ anything outside the fabric is named by an explicit scheme.
   a place is stood in by moving through it. `xcd` writes where it landed,
   where `cd` writes nothing: the prompt carries the place and carries
   nothing about this position, so a move nothing reports is one a person
-  has to ask about. `xpwd` prints it, and a bare relative operand is always
-  fabric, so nothing reaches this position by position alone.
+  has to ask about, and `xpwd` prints it.
+
+  A bare relative *operand* is always fabric, so nothing reaches this
+  position by position alone. `xcd`'s argument is the one exception, and it
+  is not an operand in that sense: the verb names the plane, which is why it
+  takes `../foo` bare where an operand would have to write the scheme.
 
 ## Pipes: escaped locals
 
@@ -1089,7 +1093,6 @@ spelling reaches any of them. Adding one item to a collection is therefore
 `get`, edit, `set`: the read-modify-write those operations were made
 first-class to avoid.
 
-The base-overlay spelling is settled above, and so is what the prompt shows
-where no slug is confirmed: the whole handle, for the reasons the Prompt
-section carries. One further open item for shuttle overall (shallow-sink
+What the prompt shows where no slug is confirmed is settled above: the whole
+handle, for the reasons the Prompt section carries. One further open item for shuttle overall (shallow-sink
 expressibility) lives in [`views.md`](views.md).
