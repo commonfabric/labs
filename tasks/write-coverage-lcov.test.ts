@@ -279,6 +279,39 @@ Deno.test("findUnreadableProfiles passes over every profile that parses", async 
   }
 });
 
+Deno.test("findUnreadableProfiles reports a profile's size on disk when the cut splits a character", async () => {
+  // A cut mid-character leaves bytes that are not UTF-8, which a text read
+  // replaces with a three-byte character, so the size must come from the file.
+  const root = await Deno.makeTempDir({ prefix: "write-lcov-" });
+  try {
+    const file = join(root, "split.json");
+    const bytes = new Uint8Array([
+      ...new TextEncoder().encode('{"url": "file:///caf'),
+      0xc3,
+    ]);
+    await Deno.writeFile(file, bytes);
+    assertEquals(await findUnreadableProfiles([file]), [
+      { path: file, bytes: bytes.length, url: undefined },
+    ]);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("findUnreadableProfiles names a profile it cannot read rather than throwing", async () => {
+  const root = await Deno.makeTempDir({ prefix: "write-lcov-" });
+  try {
+    const gone = join(root, "gone.json");
+    const found = await findUnreadableProfiles([gone]);
+    assertEquals(found.length, 1);
+    assertEquals(found[0].path, gone);
+    assertEquals(found[0].url, undefined);
+    assertStringIncludes(found[0].error ?? "", "No such file");
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test("findUnreadableProfiles says so when a cut-off profile names no script", async () => {
   const root = await Deno.makeTempDir({ prefix: "write-lcov-" });
   try {

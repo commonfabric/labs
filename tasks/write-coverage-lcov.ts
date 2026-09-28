@@ -182,9 +182,12 @@ export function isTrackedFile(url: string, repositoryRoot: string): boolean {
 /** A coverage profile that does not parse, and what its head still says. */
 export interface UnreadableProfile {
   path: string;
-  bytes: number;
+  /** The file's size on disk, when it could be read. */
+  bytes: number | undefined;
   /** The script the profile covers, when the cut left its `url` intact. */
   url: string | undefined;
+  /** Why the file could not be read at all, when it could not. */
+  error?: string;
 }
 
 /**
@@ -197,22 +200,35 @@ export interface UnreadableProfile {
  * writing it, and the script a profile covers is written near its start, so the
  * `url` usually survives the cut and points at the test that stopped a writer.
  * Every profile is read, which is slow for a large directory, so this runs only
- * once a conversion has already failed.
+ * once a conversion has already failed. A file that cannot be read is named
+ * with the reason rather than thrown, so the report of the rest still appears.
  */
 export async function findUnreadableProfiles(
   files: string[],
 ): Promise<UnreadableProfile[]> {
   const unreadable: UnreadableProfile[] = [];
   for (const file of files) {
-    const text = await Deno.readTextFile(file);
+    let raw: Uint8Array;
+    try {
+      raw = await Deno.readFile(file);
+    } catch (error) {
+      unreadable.push({
+        path: file,
+        bytes: undefined,
+        url: undefined,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+    const text = new TextDecoder().decode(raw);
     try {
       JSON.parse(text);
     } catch {
-      const url = text.match(/"url"\s*:\s*"((?:[^"\\]|\\.)*)"/)?.[1];
+      const match = text.match(/"url"\s*:\s*("(?:[^"\\]|\\.)*")/)?.[1];
       unreadable.push({
         path: file,
-        bytes: new TextEncoder().encode(text).length,
-        url,
+        bytes: raw.length,
+        url: match === undefined ? undefined : JSON.parse(match),
       });
     }
   }
@@ -225,10 +241,12 @@ function reportUnreadableProfiles(
 ): void {
   console.error(
     `${unreadable.length} coverage profile(s) in ${profileDir} do not parse, so deno coverage refused the directory:\n  ${
-      unreadable.map(({ path: file, bytes, url }) =>
-        `${file} (${bytes} bytes), covering ${
-          url ?? "a script its head no longer names"
-        }`
+      unreadable.map(({ path: file, bytes, url, error }) =>
+        error === undefined
+          ? `${file} (${bytes} bytes), covering ${
+            url ?? "a script its head no longer names"
+          }`
+          : `${file} (could not be read: ${error})`
       ).join("\n  ")
     }`,
   );
