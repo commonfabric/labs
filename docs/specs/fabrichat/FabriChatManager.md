@@ -15,15 +15,17 @@ resolves through a well-known `wish` target:
 
 ```ts
 // Shown for illustration only.
-const chats = wish<FabriChatManagerOutput>({ query: "#chatManager" });
+const chats = wish<ChatManagerOutput>({ query: "#chatManager" });
 ```
 
 `#chatManager` is a home target, like `#agent_queue` and `#profile`. It names
 the role, not the pattern that fills it: a client asks for the user's chat
-manager, and `FabriChatManager` is what answers. The spelling follows the camel
-case of the other multi-word targets (`#learnedSummary`, `#pieceRegistry`,
-`#profileName`). On a serving runtime, it resolves against the demanding
-identity's home space and never the service's
+manager, and `FabriChatManager` is what fills the role. The spelling follows the
+camel case of the other multi-word targets (`#learnedSummary`, `#pieceRegistry`,
+`#profileName`). The target resolves to a
+[`ChatManagerOutput`](ChatManagerOutput.md), the role's contract, and
+`FabriChatManager` is an implementation of it. On a serving runtime, it resolves
+against the demanding identity's home space and never the service's
 ([server-side builtins](../server-side-execution/builtins.md)). Because home is
 private to its user, so is the index: nobody else learns whom a user talks to by
 reading it.
@@ -37,23 +39,7 @@ each, and a row in the built-in targets table of
 
 ## The index
 
-```ts
-// Shown for illustration only.
-interface FabriChatIndexEntry {
-  /** The room. */
-  room: Cell<FabriChatRoomOutput>;
-
-  kind: "direct" | "group";
-
-  /** A direct room's other member, by principal. */
-  counterpart?: string;
-
-  /** When this user created or accepted it, in milliseconds since the epoch. */
-  since: number;
-}
-```
-
-The manager keeps:
+The manager keeps two indexes of [`ChatIndexEntry`](ChatIndexEntry.md)s:
 
 - **`rooms`**: every entry, newest first.
 - **`direct`**: for each counterpart principal, the entry of the direct room
@@ -68,14 +54,8 @@ A client asks the manager for something by sending an event on one of its
 streams, and then reads the outcome from the manager's outputs. Each request
 carries a `requestId` the client chooses. The manager records the outcome under
 that id in `requests`, as `pending`, `done` (with the entry), or `refused` (with
-a reason), and a client watches for it there.
-
-| Stream | Event | Outcome |
-| --- | --- | --- |
-| `openDirect` | `{ requestId, counterpart }` | the existing direct room, or a new one |
-| `createGroup` | `{ requestId, members, title }` | a new group room |
-| `accept` | `{ requestId, room }` | an entry for a room this user was invited to |
-| `forget` | `{ requestId, room }` | the entry removed; the room itself is untouched |
+a reason), and a client watches for it there. The streams, their events, and
+their outcomes are in [`ChatManagerOutput`](ChatManagerOutput.md#streams).
 
 `openDirect` first looks in `direct`. It creates a room only when there is no
 entry for that counterpart. That is what keeps one person's conversation from
@@ -83,8 +63,8 @@ splitting.
 
 `openDirect` and `createGroup` are outward acts: they create a space and grant
 another person access to it. They are admitted only from a reviewed surface
-(`FabriChatStartSurface`). `accept` and `forget` change only the user's own
-index, and they need none.
+(`ChatStartSurface`). `accept` and `forget` change only the user's own index,
+and they need none.
 
 ## Creating a room
 

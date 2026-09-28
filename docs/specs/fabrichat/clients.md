@@ -50,9 +50,9 @@ A client that draws natively MUST:
   the check `cf-cfc-authorship` makes, and a client makes it from the labels,
   never from a stored flag or a name.
 - **Show people from their profiles**, read when drawn and redrawn when they
-  change, so a changed name shows on everything the person sent. A profile
-  that can't be read shows as a neutral placeholder (see
-  [`FabriChatProfile.md`](FabriChatProfile.md#when-a-profile-cant-be-read)).
+  change, so a changed name shows on everything the person sent. A profile that
+  can't be read shows as a neutral placeholder (see
+  [`ChatProfile.md`](ChatProfile.md#when-a-profile-cant-be-read)).
 - **Identify people by their profile links**, compared with `equals()`, and
   never by display name.
 - **Show members from the member set.** Members are the room space's member set.
@@ -76,10 +76,10 @@ gesture on the reviewed surface its policy names:
 
 | Act | Pattern | Stream | Reviewed surface |
 | --- | --- | --- | --- |
-| send a message | room | `sendMessage` | `FabriChatSendSurface` |
-| add or remove a reaction | room | `react` | `FabriChatReactSurface` |
-| add or remove a member | room | `invite`, `remove` | `FabriChatMembersSurface` |
-| start a conversation | manager | `openDirect`, `createGroup` | `FabriChatStartSurface` |
+| send a message | room | `sendMessage` | `ChatSendSurface` |
+| add or remove a reaction | room | `react` | `ChatReactSurface` |
+| add or remove a member | room | `invite`, `remove` | `ChatMembersSurface` |
+| start a conversation | manager | `openDirect`, `createGroup` | `ChatStartSurface` |
 
 A client sends to the room's own streams, never through a placement or an
 adapter.

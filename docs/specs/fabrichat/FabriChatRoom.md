@@ -4,8 +4,11 @@ Status: proposed design (see [`README.md`](README.md)).
 
 `FabriChatRoom` is one conversation. It is the successor to the room in today's
 `packages/patterns/fabrichat/chat.tsx`, and keeps that room's record, writers,
-and reviewed surfaces. What changes is where it lives and what decides its
-membership.
+and reviewed surfaces. What changes is where it lives, what decides its
+membership, and the names of its records and surfaces, which are now neutral
+with respect to the implementation because they are part of the contract (for
+example, today's `FabriChatMessage` and `FabriChatSendSurface` become
+`ChatMessage` and `ChatSendSurface`).
 
 ## Where it lives
 
@@ -33,19 +36,18 @@ space's access list as it is, and adds nothing to it.
 The room keeps three `PerSpace` values, shared by everyone the space admits:
 
 - **`messages`**: the conversation, oldest first, each a
-  [`FabriChatMessage`](FabriChatMessage.md).
-- **`reactions`**: each a [`FabriChatReaction`](FabriChatReaction.md), one per
-  reactor, message, and emoji.
+  [`ChatMessage`](ChatMessage.md).
+- **`reactions`**: each a [`ChatReaction`](ChatReaction.md), one per reactor,
+  message, and emoji.
 - **`roster`**: live links to members' profiles, for display, only until the
   space has a member set (see [Membership](#membership)).
 
-It also keeps **`about`**, a [`FabriChatAbout`](FabriChatAbout.md) set once at
-creation.
+It also keeps **`about`**, a [`ChatAbout`](ChatAbout.md) set once at creation.
 
 Messages, reactions, and the roster link people's profiles
-([`FabriChatProfile`](FabriChatProfile.md)) and copy nothing from them. A
-client reads a person's name and avatar from their profile when it draws, so a
-change to either shows everywhere, history included.
+([`ChatProfile`](ChatProfile.md)) and copy nothing from them. A client reads a
+person's name and avatar from their profile when it draws, so a change to either
+shows everywhere, history included.
 
 ## Writers
 
@@ -54,15 +56,17 @@ admitted only from its reviewed surface:
 
 | Handler | Stream | Reviewed surface | Writes |
 | --- | --- | --- | --- |
-| `commitSend` | `sendMessage` | `FabriChatSendSurface` | appends a message |
-| `commitReact` | `react` | `FabriChatReactSurface` | adds or removes the viewer's reaction |
+| `commitSend` | `sendMessage` | `ChatSendSurface` | appends a message |
+| `commitReact` | `react` | `ChatReactSurface` | adds or removes the viewer's reaction |
 | `commitJoin` | `join` | none | adds the viewer's profile to `roster` |
 
 `commitSend` and `commitReact` keep today's types: the stored value is
 `AuthoredByCurrentUser<TrustedActionWrite<…>>`, so the runtime labels it with
 its writer and refuses it without a trusted gesture from the named surface. The
-event a send carries is the text to send (as today, `target.value`), plus an
-optional `replyTo`. A react event names the message and the emoji.
+event a send carries is `{ body, replyTo? }` (see
+[`ChatRoomOutput`](ChatRoomOutput.md#streams)). The room's own composer builds
+it from the text the person submitted, which today's room reads as
+`target.value`. A react event names the message and the emoji.
 
 `commitJoin` contributes the viewer's own `#profile` link, as [shared-profile
 rosters](../shared-profile-rosters.md) describe. It needs no reviewed gesture,
@@ -93,23 +97,17 @@ offers two streams that record the intent and ask the host to act:
 - **`remove`** `{ principal }`: revoke a principal's access.
 
 Both are outward acts: they grant or withdraw another person's access. So each
-is admitted only from a reviewed surface (`FabriChatMembersSurface`), and only
-from a member the access list makes OWNER. A direct room has neither: its
-membership is fixed at creation. A space's own chat has neither: its members
-change when the space's do.
+is admitted only from a reviewed surface (`ChatMembersSurface`), and only from a
+member the access list makes OWNER. A direct room has neither: its membership is
+fixed at creation. A space's own chat has neither: its members change when the
+space's do.
 
 ## Outputs
 
-The room's result is the contract that placements, adapters, and clients read:
-
-- `about`, `messages`, `reactions`, `roster`.
-- `participants`: `roster`, plus any author with no roster entry, keyed by
-  profile cell.
-- The streams `sendMessage`, `react`, `join`, `invite`, and `remove`.
-- `[UI]`: the room's own rendering, with its reviewed surfaces. An adapter's
-  rendering embeds it, so that a composer is always the room's own surface.
-- `[VIEWS]`: a `room` group with the same facts and streams, for hosts that draw
-  natively (see [`clients.md`](clients.md)).
+`FabriChatRoom` is an implementation of [`ChatRoomOutput`](ChatRoomOutput.md),
+the contract that placements, adapters, and clients read. It holds the record's
+facts, a stream for each writer, the room's own `[UI]` with its reviewed
+surfaces, and a `[VIEWS]` group for hosts that draw natively.
 
 ## Prerequisites
 

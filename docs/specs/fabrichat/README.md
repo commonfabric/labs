@@ -10,15 +10,19 @@ requires of the runtime and of the programs that use it.
 - Patterns:
   - [`FabriChatRoom`](FabriChatRoom.md): one conversation.
   - [`FabriChatManager`](FabriChatManager.md): each user's index of rooms.
-  - [`FabriChatPlacement`](FabriChatPlacement.md): a room placed in a
-    container.
+  - [`FabriChatPlacement`](FabriChatPlacement.md): a room placed in a container.
   - [`FabriChatAdapter`](FabriChatAdapter.md): a placement's rendering.
+- Contracts, named for their roles:
+  - [`ChatRoomOutput`](ChatRoomOutput.md): what a room offers.
+  - [`ChatManagerOutput`](ChatManagerOutput.md): what `#chatManager` resolves
+    to.
 - Records a room holds:
-  - [`FabriChatMessage`](FabriChatMessage.md)
-  - [`FabriChatReaction`](FabriChatReaction.md)
-  - [`FabriChatAbout`](FabriChatAbout.md)
-  - [`FabriChatProfile`](FabriChatProfile.md): the part of a profile the room
-    reads.
+  - [`ChatMessage`](ChatMessage.md)
+  - [`ChatReaction`](ChatReaction.md)
+  - [`ChatAbout`](ChatAbout.md)
+  - [`ChatProfile`](ChatProfile.md): the part of a profile the room reads.
+- Records a manager holds:
+  - [`ChatIndexEntry`](ChatIndexEntry.md)
 - [Requirements on clients](clients.md)
 
 ## Purpose
@@ -88,12 +92,15 @@ provide, the document says so, under the heading "Prerequisites".
    another space, and what a viewer may see of it.
 4. [`FabriChatAdapter.md`](FabriChatAdapter.md): rendering a placement for hosts
    that render VDOM.
-5. The records a room holds: [`FabriChatMessage.md`](FabriChatMessage.md),
-   [`FabriChatReaction.md`](FabriChatReaction.md),
-   [`FabriChatAbout.md`](FabriChatAbout.md), and
-   [`FabriChatProfile.md`](FabriChatProfile.md), the part of a person's profile
-   the room reads.
-6. [`clients.md`](clients.md): the requirements on a separate program that uses
+5. The contracts: [`ChatRoomOutput.md`](ChatRoomOutput.md) and
+   [`ChatManagerOutput.md`](ChatManagerOutput.md), named for the roles rather
+   than the patterns that fill them.
+6. The records a room holds: [`ChatMessage.md`](ChatMessage.md),
+   [`ChatReaction.md`](ChatReaction.md), [`ChatAbout.md`](ChatAbout.md), and
+   [`ChatProfile.md`](ChatProfile.md), the part of a person's profile the room
+   reads.
+7. The record a manager holds: [`ChatIndexEntry.md`](ChatIndexEntry.md).
+8. [`clients.md`](clients.md): the requirements on a separate program that uses
    FabriChat, including one that renders natively.
 
 ## Terms
@@ -107,8 +114,8 @@ provide, the document says so, under the heading "Prerequisites".
 - **Group room.** Any other room. Two group rooms can have the same members.
 - **Container.** A space that shows chats among other things, such as a space
   whose root is the `loom` pattern (`packages/patterns/loom/`).
-- **Placement.** One room placed in a container: a `FabriChatPlacement` piece
-  in the container's space, holding a link to the room. It has no rendering.
+- **Placement.** One room placed in a container: a `FabriChatPlacement` piece in
+  the container's space, holding a link to the room. It has no rendering.
 - **Adapter.** A `FabriChatAdapter` piece that renders one placement for hosts
   that render VDOM. A container holds the adapter.
 - **Shared space.** A space whose access list admits more than one principal,
@@ -155,7 +162,7 @@ provide, the document says so, under the heading "Prerequisites".
 Several parts of this design need to know who a space's members are. They need
 to know it for the room's own space, which decides who is in a conversation, and
 for a container, which decides who could see a room placed there. A shared space
-answers that with a member set: one entry per principal its access list admits,
+settles that with a member set: one entry per principal its access list admits,
 carrying that principal's access and the profile it contributed.
 
 Two things exist today that a member set would be built from:
@@ -233,7 +240,7 @@ patterns](../../common/patterns/multi-user-patterns.md#what-a-spec-should-captur
    link on their messages and roster entries, and read when drawn. FabriChat
    stores no names or avatars, so a changed name shows everywhere, history
    included. A profile that can't be read shows as a neutral placeholder (see
-   [`FabriChatProfile.md`](FabriChatProfile.md)).
+   [`ChatProfile.md`](ChatProfile.md)).
 3. **Shared and per-user state.** A room's history is `PerSpace` in the room's
    space, and its members are that space's member set. The manager's index is in
    the user's home space. Drafts are `PerSession` in the adapter.
