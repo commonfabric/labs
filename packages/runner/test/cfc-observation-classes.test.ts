@@ -255,16 +255,40 @@ describe("CFC observation classes (C1 read-shape plumbing)", () => {
     expect(tagsOf(join)).toEqual(["pointer-label"]);
   });
 
-  it("probes covered by a dereference trace are machinery: no followRef consumption", async () => {
-    // C0 §4's dereference row stays unchanged: a probe that belongs to a
-    // dereference this tx performed (a recorded trace source at-or-above the
-    // probed path) is resolution machinery, not a followRef observation — the
-    // taint of what was read arrives via ordinary reads of the target.
+  it("consumes the pointer label at a slot the transaction followed", async () => {
+    // A dereference retains the restrictions of the reference it follows
+    // (CFC §4.6.3, §8.2.4): the probe of the followed slot, the trace's
+    // source, is a followRef observation like a standalone one. The target's
+    // content arrives via ordinary reads of the target.
 
     const rt = makeRuntime();
     const id = await seedMixedDoc(rt, "occ-deref-read");
     const join = await flowJoinOf(rt, "occ-deref-out", (tx) => {
       tx.read(readAddress(id, ["slot"]), { meta: linkResolutionProbe });
+      tx.recordCfcDereferenceTrace({
+        source: { space, id, scope: "space", path: ["slot"] },
+        target: {
+          space,
+          id: "of:target-doc",
+          scope: "space",
+          path: [],
+        },
+        kind: "value",
+      });
+    });
+    expect(tagsOf(join)).toEqual(["pointer-label"]);
+  });
+
+  it("consumes nothing for a probe beneath a slot the transaction followed", async () => {
+    // The probes a dereference makes beneath the slot it follows walk the
+    // path that remains and find no reference: they observe nothing.
+
+    const rt = makeRuntime();
+    const id = await seedMixedDoc(rt, "occ-deref-beneath");
+    const join = await flowJoinOf(rt, "occ-deref-beneath-out", (tx) => {
+      tx.read(readAddress(id, ["slot", "field"]), {
+        meta: linkResolutionProbe,
+      });
       tx.recordCfcDereferenceTrace({
         source: { space, id, scope: "space", path: ["slot"] },
         target: {

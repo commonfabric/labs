@@ -301,13 +301,10 @@ describe("link-resolution probes and `*` templates", () => {
       expect(carriesPicked(join)).toBe(true);
     });
 
-    it("carries into a slot's content what a dereference alone carries", async () => {
-      // A dereference consumes the element's content and not the slot's
-      // membership J (row 4, cfc-template-population.md §6). Resolving the
-      // list first used to add that J through the list's own probe reaching
-      // its child template; the two readers now agree. Pinned as agreement
-      // rather than as either answer: consuming the slot's J at the
-      // dereference would make both carry it.
+    it("carries the label into a slot's content, dereferenced alone or after resolving the list", async () => {
+      // A dereference retains the restrictions of the reference it follows
+      // (§4.6.3, §8.2.4), so the reader carries the membership label whether
+      // or not it resolved the list first.
       const { list } = await declaredList("deref");
       const { schema: _schema, ...link } = list.getAsNormalizedFullLink();
       const element = (tx: IExtendedStorageTransaction) =>
@@ -319,7 +316,44 @@ describe("link-resolution probes and `*` templates", () => {
       const resolvedFirst = joinOf((tx) => {
         element(tx).resolveAsCell().key(0).key("n").get();
       });
-      expect(carriesPicked(resolvedFirst)).toBe(carriesPicked(alone));
+      expect(carriesPicked(alone)).toBe(true);
+      expect(carriesPicked(resolvedFirst)).toBe(true);
+    });
+
+    it("carries secret criteria into a fixed index of unlabeled elements", async () => {
+      // §18.7, "private query selects public targets": the elements carry no
+      // label of their own, so the criteria reach the reader through the
+      // reference alone.
+      const { list, first } = await declaredList("public-targets");
+      expect(entriesOf(first)).toEqual([]);
+      const { schema: _schema, ...link } = list.getAsNormalizedFullLink();
+
+      const join = joinOf((tx) => {
+        runtime.getCellFromLink(link, undefined, tx).key(0).key("n").get();
+      });
+      expect(carriesPicked(join)).toBe(true);
+    });
+
+    it("carries nothing of the list into a read of the element itself", async () => {
+      const { first } = await declaredList("direct");
+
+      const join = joinOf((tx) => {
+        first.withTx(tx).key("n").get();
+      });
+      expect(join).toEqual([]);
+    });
+
+    it("adds no integrity to what a dereference carries", async () => {
+      const { list } = await declaredList("integrity");
+      const { schema: _schema, ...link } = list.getAsNormalizedFullLink();
+
+      const tx = runtime.edit();
+      try {
+        runtime.getCellFromLink(link, undefined, tx).key(0).key("n").get();
+        expect(deriveFlowJoin(tx).integrity).toEqual([]);
+      } finally {
+        tx.abort("observation only");
+      }
     });
   });
 

@@ -3361,6 +3361,20 @@ const pureLinkContainerPaths = (
   }
 };
 
+/**
+ * The slot a link-resolution probe asked about: its path without the sub-path
+ * at which a link exposes its recognizable form (`linkProbeSubPath`, the
+ * sigil's `["/", "link@1"]` in the legacy layout, nothing in the atomic one).
+ */
+const probedSlotPath = (path: readonly string[]): readonly string[] => {
+  const sigil = linkProbeSubPath();
+  const slotLength = path.length - sigil.length;
+  if (sigil.length === 0 || slotLength < 0) return path;
+  return sigil.every((segment, index) => path[slotLength + index] === segment)
+    ? path.slice(0, slotLength)
+    : path;
+};
+
 const forEachFlowObservation = (
   tx: IExtendedStorageTransaction,
   consume: (
@@ -3374,10 +3388,11 @@ const forEachFlowObservation = (
       nonRecursive: boolean | undefined;
       // True when a same-tx dereference-trace source covers this read
       // at-or-above (the C0 §6.1 row-4 machinery predicate). Probe reads
-      // never arrive covered (they are skipped outright); a covered PLAIN
-      // read is the resolution machinery's ordinary journal shape at a
-      // followed slot, and is excluded from `*`-template consumption in
-      // `deriveFlowJoin`.
+      // never arrive covered: the probe of a followed slot arrives as the
+      // pointer observation it is, and the rest are skipped outright. A
+      // covered PLAIN read is the resolution machinery's ordinary journal
+      // shape at a followed slot, and is excluded from `*`-template
+      // consumption in `deriveFlowJoin`.
       coveredByTrace: boolean;
       // True when the read carries the op-instantiation/wiring machinery
       // marker (`machineryRead`): the runtime setting up operations reads
@@ -3393,22 +3408,29 @@ const forEachFlowObservation = (
       // them, which is what leaves `flowLabelWorkExists` — and with it
       // whether the flow stage runs at all — exactly as it was.
       writeDestination: boolean;
+      // True for the probe of a slot this transaction went on to follow: a
+      // `followRef` observation made by a dereference rather than standing
+      // alone.
+      followedSlot: boolean;
     },
   ) => boolean,
 ): boolean => {
-  // Probe reads issued while FOLLOWING a reference are resolution machinery,
-  // not observations of their own (C0 §4's dereference row): the follow is
-  // journaled as a dereference trace, and the taint of what was actually
-  // read arrives via the ordinary reads of the target document. Recognize
-  // them by the recorded trace sources: a probe at-or-below a followed
-  // slot's path in the same document belongs to that dereference.
-  let traceSourcesByDoc: Map<string, PathPrefixIndex> | undefined;
-  const probeBelongsToDereference = (
+  // Probe reads issued while FOLLOWING a reference belong to the dereference
+  // (C0 §4's dereference row): the follow is journaled as a dereference
+  // trace, and the taint of what was actually read arrives via the ordinary
+  // reads of the target document. Recognize them by the recorded trace
+  // sources: a probe at-or-below a followed slot's path in the same document
+  // belongs to that dereference. One of them is an observation all the same:
+  // the probe of the followed slot itself, which found the reference the
+  // dereference went on to follow (`probesFollowedSlot`).
+  let traceSourcesByDoc:
+    | Map<string, { covering: PathPrefixIndex; followed: Set<string> }>
+    | undefined;
+  const traceSources = (
     space: MemorySpace,
     id: URI,
     scope: ReturnType<typeof normalizeCellScope>,
-    logicalPath: readonly string[],
-  ): boolean => {
+  ) => {
     if (traceSourcesByDoc === undefined) {
       traceSourcesByDoc = new Map();
       for (const trace of tx.getCfcState().dereferenceTraces) {
@@ -3419,15 +3441,35 @@ const forEachFlowObservation = (
         });
         let sources = traceSourcesByDoc.get(key);
         if (sources === undefined) {
-          sources = new PathPrefixIndex();
+          sources = { covering: new PathPrefixIndex(), followed: new Set() };
           traceSourcesByDoc.set(key, sources);
         }
-        sources.add(canonicalizeLogicalPath(trace.source.path));
+        const source = canonicalizeLogicalPath(trace.source.path);
+        sources.covering.add(source);
+        sources.followed.add(pathKey(source));
       }
     }
-    const sources = traceSourcesByDoc.get(targetKey({ space, id, scope }));
-    return sources !== undefined && sources.hasPrefixOf(logicalPath);
+    return traceSourcesByDoc.get(targetKey({ space, id, scope }));
   };
+  const probeBelongsToDereference = (
+    space: MemorySpace,
+    id: URI,
+    scope: ReturnType<typeof normalizeCellScope>,
+    logicalPath: readonly string[],
+  ): boolean =>
+    traceSources(space, id, scope)?.covering.hasPrefixOf(logicalPath) === true;
+  // Whether `logicalPath` is the probe of a slot this transaction followed:
+  // the one read of a dereference that observes which reference sits at the
+  // slot, where the probes beneath it only walk the path that remains.
+  const probesFollowedSlot = (
+    space: MemorySpace,
+    id: URI,
+    scope: ReturnType<typeof normalizeCellScope>,
+    logicalPath: readonly string[],
+  ): boolean =>
+    traceSources(space, id, scope)?.followed.has(
+      pathKey(probedSlotPath(logicalPath)),
+    ) === true;
   for (const read of tx.getReadActivities?.() ?? []) {
     if (isInternalVerifierRead(read.meta)) {
       continue;
@@ -3493,9 +3535,20 @@ const forEachFlowObservation = (
         logicalPath,
       );
     let shape: ReadObservationShape;
+    let followsSlot = false;
     if (isLinkResolutionProbe(read.meta)) {
-      if (coveredByTrace() || isMachineryRead(read.meta)) {
+      if (isMachineryRead(read.meta)) {
         continue;
+      }
+      if (coveredByTrace()) {
+        // A dereference retains the restrictions of the reference it follows
+        // (§4.6.3, §8.2.4): the probe of the followed slot is a pointer
+        // observation like a standalone one. The other probes a dereference
+        // covers found no reference to follow.
+        if (!probesFollowedSlot(space, id, scope, logicalPath)) {
+          continue;
+        }
+        followsSlot = true;
       }
       shape = "followRef";
     } else {
@@ -3521,19 +3574,20 @@ const forEachFlowObservation = (
           shape,
           nonRecursive: read.nonRecursive,
           get coveredByTrace() {
-            return coveredByTrace();
+            return !followsSlot && coveredByTrace();
           },
           machinery: isMachineryRead(read.meta),
           writeDestination: isWriteDestinationRead(read.meta),
+          followedSlot: followsSlot,
         },
       )
     ) {
       return true;
     }
   }
-  // Dereference traces deliberately do NOT contribute: following a
-  // reference is a shape observation of the link (the resolution step), not
-  // a read of the target's content. When a transaction actually reads a
+  // Dereference trace TARGETS deliberately do NOT contribute: following a
+  // reference is an observation of the link (the probe of the followed slot,
+  // above), not a read of the target's content. When a transaction actually reads a
   // value through a link, the target read appears in the journal as an
   // ordinary read activity and is covered above; counting trace ends too
   // would taint identity-only link handling (e.g. the list builtins'
@@ -3570,6 +3624,7 @@ const forEachFlowObservation = (
           coveredByTrace: false,
           machinery: false,
           writeDestination: false,
+          followedSlot: false,
         },
       )
     ) {
@@ -3649,20 +3704,6 @@ const isReplacedMembershipEntry = (
   return entryPath.length > 0 &&
     entryPath[entryPath.length - 1] === "*" &&
     containers.has(pathKey(entryPath.slice(0, -1)));
-};
-
-/**
- * The slot a link-resolution probe asked about: its path without the sub-path
- * at which a link exposes its recognizable form (`linkProbeSubPath`, the
- * sigil's `["/", "link@1"]` in the legacy layout, nothing in the atomic one).
- */
-const probedSlotPath = (path: readonly string[]): readonly string[] => {
-  const sigil = linkProbeSubPath();
-  const slotLength = path.length - sigil.length;
-  if (sigil.length === 0 || slotLength < 0) return path;
-  return sigil.every((segment, index) => path[slotLength + index] === segment)
-    ? path.slice(0, slotLength)
-    : path;
 };
 
 /**
@@ -3895,9 +3936,10 @@ const deriveFlowJoinImpl = (
       // machinery journals ordinary reads at followed slots (the slot
       // scalar, the sigil interior) on its way to the target, and those
       // must not consume the slot templates — the follow's taint arrives
-      // via the target's own reads (row 4), while STANDALONE slot
-      // observations (no covering trace) consume in full (row 3, the SC-8
-      // closures). Without this, every traversal hop through a stamped
+      // via the target's own reads (row 4) and via the probe of the followed
+      // slot, which consumes the slot's `followRef` template once, while
+      // STANDALONE slot observations (no covering trace) consume in full
+      // (row 3, the SC-8 closures). Without this, every traversal hop through a stamped
       // container smears the container's J onto whatever the transaction
       // writes — re-importing the pointwise smear the S16 substrate
       // removed (measured: the phase-B pointwise map suite). The
@@ -3912,30 +3954,25 @@ const deriveFlowJoinImpl = (
       // structure/derived) — byte-identical to their pre-template
       // behavior, so the exclusion cannot under-taint relative to main.
       //
-      // The `probedSlot` arm is of another kind: it narrows a standalone
-      // observation, and it CAN carry less than main did. A probe keeps the
-      // templates at its slot and drops the runtime-minted ones beneath it.
-      // It asks which reference sits at ONE slot, and a template beneath
-      // labels which reference sits at a child. Read at the sigil's path, a
-      // probe of a container matched the container's own child template
-      // through the sigil key, as though "/" were a child — and in the
-      // atomic layout, where the probe reads the slot itself, recursion
-      // would reach it too. `Cell.set` probing a store's root then carried
-      // the J of the store's creation onto every document the writer wrote:
-      // a `sqliteQuery` whose parameter was labeled on its first issue
-      // refused each row it settled.
+      // The `probedSlot` arm is of another kind: it says what a pointer
+      // observation is about. A probe keeps the templates at its slot and
+      // drops the runtime-minted ones beneath it. It asks which reference
+      // sits at ONE slot, and a template beneath labels which reference sits
+      // at a child. Read at the sigil's path, a probe of a container matches
+      // the container's own child template through the sigil key, as though
+      // "/" were a child, and in the atomic layout, where the probe reads the
+      // slot itself, recursion reaches it too. `Cell.set` probes the root of
+      // the store it writes, so without this arm a writer of a store created
+      // under a label carries that label onto every document it writes.
       //
-      // What it gives up: a reader that resolves a container and then
-      // dereferences a slot consumed the membership J through that probe,
-      // and nothing else consumes it — the dereference is row 4 above. That
-      // reader now carries what a dereference alone carries, which no longer
-      // depends on whether the container happened to be probed first.
-      // Readers of the children's content or existence still consume J
-      // through the `value`/`shape` twins, and a probe of a child's own slot
-      // through the template there. Declared entries are the schema's
-      // policy and stay consumed: a declared `observes:"followRef"` entry
-      // has no twin, and this probe is what reaches it when a reader takes a
-      // whole container's references.
+      // The arm takes nothing from a reader of the children. Following a
+      // child's slot consumes the template there through the probe of that
+      // slot, reading a child's content or existence consumes the
+      // `value`/`shape` twins, and a probe of a child's own slot consumes the
+      // template there. Declared entries are the schema's policy and stay
+      // consumed: a declared `observes:"followRef"` entry has no twin, and
+      // this probe is what reaches it when a reader takes a whole
+      // container's references.
       const probedSlot = observation.shape === "followRef"
         ? probedSlotPath(logicalPath)
         : undefined;
@@ -4045,8 +4082,15 @@ const deriveFlowJoinImpl = (
       // included: which reference sits at a slot is information the
       // transformation consumed, and a pointer the endorsed writer did not
       // write must not pass as its input.
-      noteInputWitnesses(document.witnesses.get(labelKey));
-      noteInputWitnesses(document.witnesses.get(`${labelKey}#length`));
+      //
+      // The probe of a followed slot is the exception, because the reference
+      // is counted where it is followed: what a followed reference witnesses
+      // is read off the value stamps at its slot, below
+      // (`followedReferenceWitnesses`).
+      if (!observation.followedSlot) {
+        noteInputWitnesses(document.witnesses.get(labelKey));
+        noteInputWitnesses(document.witnesses.get(`${labelKey}#length`));
+      }
       // Any observation with label CONTENT marks its space as a label
       // contributor. Deliberately over-approximate for integrity (an
       // observation whose hereditary atoms all meet away still marks its
