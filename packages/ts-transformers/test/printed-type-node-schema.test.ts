@@ -959,6 +959,143 @@ interface Meta { confidentiality: Labels }`,
     });
   });
 
+  describe("a captured print of a member whose annotation names a binding", () => {
+    // A print spells `typeof rules` as the structural type of the value
+    // `rules` names, so a capture printed from its type is read as the
+    // annotation of the member it captures.
+
+    const policy = {
+      type: "https://commonfabric.org/cfc/atom/Policy",
+      policyRefKind: "module",
+      moduleIdentity: "sha256:rules",
+      symbol: "rules",
+    };
+
+    /**
+     * The schema of `name` in the first `computed()` capture of `/main.tsx`,
+     * beside a module declaring the exchange rules `rules`.
+     */
+    async function captured(
+      files: Record<string, string>,
+      name: string,
+    ): Promise<unknown> {
+      const output = await transformFiles({
+        "/rules.ts":
+          `import { exchangeRule, exchangeRules, THIS_POLICY } from "commonfabric/cfc";
+export const neverRelease = exchangeRule({
+  appliesTo: THIS_POLICY,
+  pre: { integrity: ["never"] },
+  post: { dropClause: true },
+});
+export const rules = exchangeRules([neverRelease]);`,
+        ...files,
+      }, {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        moduleIdentities: new Map([["/rules.ts", "sha256:rules"]]),
+      });
+      const [capture] = callSchemas(parseModule(output["/main.tsx"]!), "lift");
+      return (capture!.properties as Schema)[name];
+    }
+
+    it("reads the policy of a value captured whole", async () => {
+      expect(
+        await captured({
+          "/main.tsx":
+            `import { computed, pattern, type Confidential } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
+import { rules } from "./rules.ts";
+interface Secret { a: string; b: string; }
+export default pattern<{ secret: Confidential<Secret, [PolicyOf<typeof rules>]> }>(
+  ({ secret }) => ({ out: computed(() => JSON.stringify(secret)) }),
+);`,
+        }, "secret"),
+      ).toMatchObject({ ifc: { confidentiality: [policy] } });
+    });
+
+    it("reads the policy of a value an alias of a nullable union names", async () => {
+      expect(
+        await captured({
+          "/main.tsx":
+            `import { computed, pattern, type Confidential } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
+import { rules } from "./rules.ts";
+interface Secret { a: string; b: string; }
+type MaybeSecret = Confidential<Secret, [PolicyOf<typeof rules>]> | undefined;
+export default pattern<{ secret: MaybeSecret }>(
+  ({ secret }) => ({ out: computed(() => JSON.stringify(secret)) }),
+);`,
+        }, "secret"),
+      ).toMatchObject({
+        anyOf: [
+          { type: "undefined" },
+          { ifc: { confidentiality: [policy] } },
+        ],
+      });
+    });
+
+    it("reads the policy of another pattern's result member", async () => {
+      expect(
+        await captured({
+          "/release.tsx":
+            `import { type Confidential, pattern } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
+import { rules } from "./rules.ts";
+export interface Released {
+  message: Confidential<string, readonly [PolicyOf<typeof rules>]>;
+}
+export default pattern<{ message: string }, Released>(
+  ({ message }) => ({ message }),
+);`,
+          "/main.tsx": `import { computed, pattern } from "commonfabric";
+import Release from "./release.tsx";
+export default pattern(() => {
+  const release = Release({ message: "x" });
+  return { same: computed(() => release.message === "x") };
+});`,
+        }, "release"),
+      ).toMatchObject({
+        properties: { message: { ifc: { confidentiality: [policy] } } },
+      });
+    });
+
+    it("reads the policy of an optional member beside its `undefined`", async () => {
+      // The `unknown` member sends the capture through the analysis of its
+      // node, which reads `message` by its print's type, `undefined` and all.
+      expect(
+        await captured({
+          "/release.tsx":
+            `import { type Confidential, pattern } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
+import { rules } from "./rules.ts";
+export interface Entry { a: string; b: string; }
+export interface Released {
+  message?: Confidential<Entry, readonly [PolicyOf<typeof rules>]>;
+  extra: unknown;
+}
+export default pattern<{ message?: Entry }, Released>(
+  ({ message }) => ({ message, extra: 1 }),
+);`,
+          "/main.tsx": `import { computed, pattern } from "commonfabric";
+import Release from "./release.tsx";
+export default pattern(() => {
+  const release = Release({});
+  return { same: computed(() => release.message === release.extra) };
+});`,
+        }, "release"),
+      ).toMatchObject({
+        properties: {
+          message: {
+            anyOf: [
+              { type: "undefined" },
+              { ifc: { confidentiality: [policy] } },
+            ],
+          },
+        },
+      });
+    });
+  });
+
   describe("a pass reading inside a print", () => {
     // A pass that narrows, shrinks, or marks identity inside a print reads the
     // print's unfolding, each part printed afresh from its type, and leaves no

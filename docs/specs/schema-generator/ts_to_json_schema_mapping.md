@@ -1158,19 +1158,22 @@ as of this writing.
 
 Hint shape (`src/interface.ts`): `SchemaHints` is `WeakMap<ts.Node,
 SchemaHint>`, where `SchemaHint` is `{ items?: unknown; cfcUiContract?:
-UiContractHint; narrowedFrom?: NarrowedFrom }`, `UiContractHint` is
+UiContractHint; narrowedFrom?: NarrowedFrom; spelledBy?: ts.TypeNode }`,
+`UiContractHint` is
 `{ helper: "UiAction" | "UiPromptSlot" | "UiDisclosure"; action?; surface?;
 role?; kind?; trustedPattern?; requiredEventIntegrity? }`, and `NarrowedFrom`
 is `{ type: ts.Type; typeNode?: ts.TypeNode }`. Every member is read-only: the
 generator only reads hints, and copies the `requiredEventIntegrity` list on the
 way into the emitted schema. A node holds a hint of each kind, recorded apart
 from the others. The producer writes `items` and `cfcUiContract` to the node
-and its original (`cross-stage-state.ts`), and `narrowedFrom` to the node
-alone. A `cfcUiContract` lookup tries the node and `ts.getOriginalNode(node)`
-(`src/ui-contract.ts`, called from `schema-generator.ts` and
-`object-formatter.ts`); an `items` lookup reads the current hint node
-(`common-fabric-formatter.ts`); a `narrowedFrom` lookup reads the node, and the
-node inside its parentheses (`schema-generator.ts`).
+and its original (`cross-stage-state.ts`), and `narrowedFrom` and `spelledBy`
+to the node alone. A `cfcUiContract` lookup tries the node and
+`ts.getOriginalNode(node)` (`src/ui-contract.ts`, called from
+`schema-generator.ts` and `object-formatter.ts`); an `items` lookup reads the
+current hint node (`common-fabric-formatter.ts`); a `narrowedFrom` lookup reads
+the node, and the node inside its parentheses (`schema-generator.ts`); a
+`spelledBy` lookup reads the node (`formatChildType` in
+`schema-generator.ts`).
 
 - **`items: false`** — array-typed wrapper contents collapse to
   `items: { type: "unknown", …element wrapper markers }` for property-only
@@ -1209,6 +1212,20 @@ node inside its parentheses (`schema-generator.ts`).
   aliases without type parameters (`readAuthoredTypeNode`). A member with no
   such node is read by its type. A schema whose own reference
   chain already holds every label is left as it is (`holdsIfcLabels`).
+- **`spelledBy`** is the annotation of the member a printed node holds the
+  value of, where that annotation names a value binding, as
+  `PolicyOf<typeof rules>` does. A print spells the binding as the structural
+  type of the value it names, from which no reader can tell the binding, so
+  the node is read as the annotation spells the type at hand: as the
+  annotation where it denotes that type, and as the annotation beside
+  `undefined` where the type adds only the `undefined` of an optional
+  member's `?` (`#spelling` in `schema-generator.ts`). An annotation denotes
+  a type that is its own, or a union of the same members, since a union
+  written through an alias is a type apart from the same union written out
+  (`denotesSameType` in `src/typescript/type-node.ts`, which
+  `readMemberAnnotation` also compares by). The node's own hints still apply.
+  Where the annotation spells neither, the node is read as any print is, by
+  the type at hand.
 
 ## 14. Options
 

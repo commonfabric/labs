@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import {
+  denotesSameType,
   readAuthoredTypeNode,
   readAuthoredTypeNodeOnce,
   unwrapTypeParentheses,
@@ -171,6 +172,47 @@ describe("type-node", () => {
 
       expect(readAuthoredTypeNode(aliasedNode(sourceFile, "P"), checker))
         .toBe(aliasedNode(sourceFile, "B"));
+    });
+  });
+
+  describe("denotesSameType()", () => {
+    /** The types of the aliases `names` in `source`. */
+    const aliasedTypes = async (source: string, ...names: string[]) => {
+      const { sourceFile, checker } = await createTestProgram(source);
+      return names.map((name) =>
+        checker.getTypeFromTypeNode(aliasedNode(sourceFile, name))
+      );
+    };
+
+    it("returns `true` for unions of the same members written through two aliases", async () => {
+      const [maybe, optional] = await aliasedTypes(
+        "type A = { a: string }; type MaybeA = A | undefined; type OrA = undefined | A;",
+        "MaybeA",
+        "OrA",
+      );
+
+      expect(maybe).not.toBe(optional);
+      expect(denotesSameType(maybe!, optional!)).toBe(true);
+    });
+
+    it("returns `false` for unions of different members", async () => {
+      const [maybe, other] = await aliasedTypes(
+        "type A = { a: string }; type MaybeA = A | undefined; type NullA = A | null;",
+        "MaybeA",
+        "NullA",
+      );
+
+      expect(denotesSameType(maybe!, other!)).toBe(false);
+    });
+
+    it("returns `false` for a union and one of its members", async () => {
+      const [maybe, member] = await aliasedTypes(
+        "type A = { a: string }; type MaybeA = A | undefined; type B = A;",
+        "MaybeA",
+        "B",
+      );
+
+      expect(denotesSameType(maybe!, member!)).toBe(false);
     });
   });
 });

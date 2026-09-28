@@ -1579,6 +1579,13 @@ function carryNarrowing(
   const to = unwrapTypeParentheses(result);
   const value = state.narrowedFrom(from) ?? state.declaredValue(from);
   if (value) state.recordNarrowedFrom(to, value);
+  // A print rebuilt as a print of the same type is read as the annotation the
+  // print it rebuilds was read as.
+  const spelledBy = state.lookupSchemaHint(from)?.spelledBy;
+  const printed = state.printedFrom(to);
+  if (spelledBy && printed && printed === state.printedFrom(from)) {
+    state.recordSchemaHint(to, { spelledBy });
+  }
   const carry = (fromPart: ts.TypeNode, toPart: ts.TypeNode | undefined) =>
     carryNarrowing(fromPart, toPart, state);
   if (ts.isTypeLiteralNode(from) && ts.isTypeLiteralNode(to)) {

@@ -31,6 +31,7 @@ import { getCellWrapperInfo } from "./typescript/cell-brand.ts";
 import { getScopeBrand } from "./typescript/scope-brand.ts";
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
 import {
+  denotesSameType,
   readAuthoredTypeNode,
   unwrapTypeParentheses,
 } from "./typescript/type-node.ts";
@@ -999,6 +1000,9 @@ export class SchemaGenerator {
   /** Counter to generate stable synthetic identifiers */
   #anonymousNameCounter: number = 0;
 
+  /** Each annotation beside `undefined`, as `#spelling()` builds it. */
+  #optionalSpellings: WeakMap<ts.TypeNode, ts.TypeNode> = new WeakMap();
+
   /**
    * Generate JSON Schema for a TypeScript type.
    * AUTO-DETECTS whether to use type-based or node-based analysis.
@@ -1221,6 +1225,18 @@ export class SchemaGenerator {
       if ((type.flags & ts.TypeFlags.TypeParameter) === 0) return {};
     }
 
+    // A print whose member annotation names a value binding is read as that
+    // annotation spells the type at hand, and keeps the print's hints.
+    const spelledBy = typeNode && context.schemaHints?.get(typeNode)?.spelledBy;
+    const spelling = spelledBy &&
+      this.#spelling(type, spelledBy, context.typeChecker);
+    if (spelling) {
+      return this.#applyNodeSchemaHints(
+        this.formatChildType(type, context, spelling),
+        { ...context, typeNode },
+      );
+    }
+
     const readInPlace = typeReadForPrintedNode(
       type,
       typeNode,
@@ -1275,6 +1291,37 @@ export class SchemaGenerator {
       this.#formatType(readType, childContext, false),
       childContext,
     );
+  }
+
+  /**
+   * The node that spells `type` as `annotation`, a member's annotation, does
+   * (`SchemaHint.spelledBy`): the annotation, where it denotes `type`, and
+   * the annotation beside `undefined`, where `type` adds to the annotation's
+   * type only the `undefined` of an optional member's `?`. `undefined` where
+   * it spells neither.
+   */
+  #spelling(
+    type: ts.Type,
+    annotation: ts.TypeNode,
+    checker: ts.TypeChecker,
+  ): ts.TypeNode | undefined {
+    const annotated = checker.getTypeFromTypeNode(annotation);
+    if (denotesSameType(annotated, type)) return annotation;
+    const optional = type.isUnion() && type.types.length === 2 &&
+      type.types.includes(annotated) &&
+      type.types.some((member) =>
+        (member.flags & ts.TypeFlags.Undefined) !== 0
+      );
+    if (!optional) return undefined;
+    let spelling = this.#optionalSpellings.get(annotation);
+    if (!spelling) {
+      spelling = ts.factory.createUnionTypeNode([
+        annotation,
+        ts.factory.createKeywordTypeNode(ts.SyntaxKind.UndefinedKeyword),
+      ]);
+      this.#optionalSpellings.set(annotation, spelling);
+    }
+    return spelling;
   }
 
   #bindingId(value: object): number {
