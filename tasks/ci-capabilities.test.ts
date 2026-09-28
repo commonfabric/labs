@@ -495,6 +495,77 @@ describe("opening a capability on a machine that answers", () => {
     }
   }
 
+  /**
+   * What opening `id` on machine `m` said, with the commands the machine
+   * ran interleaved, and each measured time put as `N`.
+   */
+  async function narrate(id: CapabilityId, m: ReturnType<typeof machine>) {
+    const said: string[] = [];
+    const root = await Deno.makeTempDir({ prefix: "capability-" });
+    try {
+      const opened = await openCapabilities([id], {
+        root,
+        dryRun: false,
+        workDir: root,
+        exec: (command, args, options) => {
+          said.push(`ran ${[command, ...args].join(" ")}`);
+          return m.exec(command, args, options);
+        },
+        report: (line) => said.push(line.replace(/ in \d+\.\ds$/, " in Ns")),
+      });
+      await opened.close();
+    } catch (error) {
+      said.push(`threw ${error instanceof Error ? error.message : error}`);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+    return said;
+  }
+
+  it("says what it is about to open and run before it does", async () => {
+    // A command that never finishes leaves only what was said before it
+    // in the log, so each line has to come ahead of the work it names.
+    const install = "sudo apt-get install -y --no-install-recommends " +
+      "pkg-config gcc libfuse3-dev fuse3";
+    expect(await narrate("fuse", machine({ "command -v gcc": "!absent" })))
+      .toEqual([
+        "ci-lane: opening fuse: the FUSE headers and tools the CLI's " +
+        "mount suite needs",
+        "ci-lane: running sh -c command -v gcc",
+        "ran sh -c command -v gcc",
+        "ci-lane: running sh -c command -v fusermount3",
+        "ran sh -c command -v fusermount3",
+        "ci-lane: running pkg-config --exists fuse3",
+        "ran pkg-config --exists fuse3",
+        "ci-lane: running sudo apt-get update",
+        "ran sudo apt-get update",
+        `ci-lane: running ${install}`,
+        `ran ${install}`,
+        "ci-lane: running sudo chmod 666 /dev/fuse",
+        "ran sudo chmod 666 /dev/fuse",
+        "ci-lane: opened fuse in Ns",
+      ]);
+  });
+
+  it("does not say a capability opened when its setup failed", async () => {
+    // The last line before a stall is the step that stalled, so a step
+    // that did not finish must not be followed by a line saying it did.
+    const m = machine({ "command -v gcc": "!absent", "update": "!offline" });
+    expect(await narrate("fuse", m)).toEqual([
+      "ci-lane: opening fuse: the FUSE headers and tools the CLI's " +
+      "mount suite needs",
+      "ci-lane: running sh -c command -v gcc",
+      "ran sh -c command -v gcc",
+      "ci-lane: running sh -c command -v fusermount3",
+      "ran sh -c command -v fusermount3",
+      "ci-lane: running pkg-config --exists fuse3",
+      "ran pkg-config --exists fuse3",
+      "ci-lane: running sudo apt-get update",
+      "ran sudo apt-get update",
+      "threw offline",
+    ]);
+  });
+
   it("names the log its server writes, so a failed lane can print it", async () => {
     const m = machine({ toolshed: "listening (pid 999999). Logs: x\n" });
     const root = await Deno.makeTempDir({ prefix: "capability-" });

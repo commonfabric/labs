@@ -804,6 +804,10 @@ export async function runBatch(
   // every execution ran.
   let unexplained = 0;
   for (let run = 1; run <= batchRepeats(batch); run++) {
+    console.log(
+      `ci-lane: starting ${batch.suite.id}, run ${run} of ` +
+        `${batchRepeats(batch)}`,
+    );
     const outputDir = path.join(workDir, `${batch.suite.id}-${run}`);
     const batchSpool = path.join(outputDir, "spool");
     await Deno.mkdir(batchSpool, { recursive: true });
@@ -1709,6 +1713,7 @@ export async function runLane(
       dryRun: false,
       workDir,
       ...(githubToken === undefined ? {} : { githubToken }),
+      report: console.log,
     });
   } catch (error) {
     await leaveWorkDir(false);

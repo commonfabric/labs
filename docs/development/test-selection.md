@@ -203,7 +203,11 @@ workflow. A run's lanes come from two jobs.
   watching the job. `🧪 Run the lane` then runs the lane with `--described`.
   That packs the same plan again, since the tree and the manifest have not
   changed, and names it in one line: its batches, what it is projected to
-  take, and the manifest it was packed against.
+  take, and the manifest it was packed against. It then prints a line as it
+  begins to open each capability, one just before each command that setup
+  runs, one once each capability has opened, and one as each batch starts.
+  Setup captures its commands' output, so in a lane that stops without saying
+  why, the last of these lines names the step it stopped in.
 
 So a pull request's five lanes start without waiting, and a run of every test
 waits for the count. Whether a run runs every test is decided in one place,

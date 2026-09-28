@@ -1126,5 +1126,7 @@ export type CfcPreparationWork =
   | "overlapWildcardQueries"
   | "overlapConcreteQueries"
   | "authoritativeCoverCalls"
+  | "stagedReferenceDerivations"
+  | "stagedReferenceCacheHits"
   | "flowTemplateEntriesMinted"
   | "flowTemplateContainers";
