@@ -1,8 +1,11 @@
 /**
  * Decomposition of a self-contained JSON Schema into content-addressed schema
  * documents, and its inverse. The design is
- * `docs/specs/content-addressed-schemas.md`; this module is the pure value
- * layer — nothing here reads or writes storage.
+ * `docs/specs/content-addressed-schemas.md`; this module is the value layer —
+ * nothing here reads or writes storage. Its one tie to the realm is its memo:
+ * a decomposition that resolved external refs through the schema-document
+ * registry is reused only until that registry clears (see
+ * {@link decomposeSchema}).
  *
  * A decomposition splits a schema at `$defs` granularity. Each definition that
  * stands alone becomes its own document, referenced by bare document id; a
@@ -306,7 +309,13 @@ onSchemaRegistryClear(() => {
  * The input is interned (and therefore deep-frozen in place — callers must be
  * okay with that, as with `internSchema` itself). The result is deterministic
  * for structurally equal inputs regardless of key order, and memoized on the
- * interned input.
+ * interned input — for the realm's lifetime when the decomposition resolved no
+ * external ref. A decomposition that did resolve one depends on what the
+ * resolver held, so it is memoized only when the resolver is the registry's
+ * {@link lookupSchemaDocument}, and only until the registry clears; with any
+ * other resolver it is recomputed on every call. A caller whose resolver would
+ * now miss is therefore refused rather than handed a closure from an earlier
+ * registry epoch.
  *
  * Definitions unreachable from the root body are dropped: they are inert for
  * matching, and carrying them would make two schemas that match identically

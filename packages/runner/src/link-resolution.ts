@@ -931,6 +931,14 @@ export function resolveLinkTracingDereferences(
         // but its documents must still be at hand before anything reads
         // through it: load the closure from the space the hop starts in,
         // exactly as a crossing does, so the reader's `$ref` resolves.
+        //
+        // Unlike a crossing, an incomplete closure does not narrow the link
+        // to `false`. A crossing must hand the target space a self-contained
+        // schema, so a missing document leaves nothing honest to carry. Here
+        // the reference stays: while a document is missing, the read selects
+        // nothing (an unresolvable `$ref` matches no value), and once it
+        // arrives, the same link reads. A `false` would stay blind for as
+        // long as the link is held.
         ensureExternalSchemaClosure(tx, nextHop.source.space, link.schema);
       }
       const mgr = runtime.storageManager;
