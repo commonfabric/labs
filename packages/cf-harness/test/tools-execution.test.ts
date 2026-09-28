@@ -53,7 +53,10 @@ import type {
   SandboxRuntimeDescription,
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
-import { SandboxSessionUnavailableError } from "../src/sandbox/types.ts";
+import {
+  SANDBOX_SESSION_NAME_PATTERN,
+  SandboxSessionUnavailableError,
+} from "../src/sandbox/types.ts";
 
 const ONE_PIXEL_PNG = decodeBase64(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p94AAAAASUVORK5CYII=",
@@ -3623,4 +3626,116 @@ Deno.test("bash tool turns the runtime's session refusal into a recoverable resu
     String(output.stderr),
     "sessions need observe mode here",
   );
+});
+
+class SessionsFakeSandboxRuntime extends FakeSandboxRuntime {
+  override describe(): SandboxRuntimeDescription {
+    return { ...super.describe(), kind: "runsc-cfc", sessions: true };
+  }
+}
+
+/** Counts the invocation contexts a tool call asks the run to create. */
+const countInvocationContexts = (
+  context: HarnessToolContext,
+): { created: number } => {
+  const counter = { created: 0 };
+  const create = context.createCfcInvocationContext.bind(context);
+  context.createCfcInvocationContext = (options) => {
+    counter.created += 1;
+    return create(options);
+  };
+  return counter;
+};
+
+Deno.test("bash tool hands an accepted session to the runtime", async () => {
+  const sandbox = new SessionsFakeSandboxRuntime([{
+    stdout: "built\n",
+    stderr: "",
+    exitCode: 0,
+  }]);
+  const context = createContext(sandbox);
+  const contexts = countInvocationContexts(context);
+
+  const output = await bashTool.invoke(context, {
+    command: "make",
+    session: "build",
+  });
+
+  assertEquals(output.exitCode, 0);
+  assertEquals(sandbox.calls.length, 1);
+  assertEquals(sandbox.calls[0].type, "runShell");
+  assertEquals(sandbox.calls[0].request.session, "build");
+  assertEquals(contexts.created, 1);
+
+  // And a call that names none carries none, not an empty one.
+  await bashTool.invoke(context, { command: "make" });
+  assertEquals(sandbox.calls.length, 2);
+  assertEquals("session" in sandbox.calls[1].request, false);
+});
+
+Deno.test("bash tool accepts the longest session name the pattern allows", async () => {
+  const longest = "a".repeat(32);
+  assertEquals(SANDBOX_SESSION_NAME_PATTERN.test(longest), true);
+  const sandbox = new SessionsFakeSandboxRuntime();
+  const output = await bashTool.invoke(createContext(sandbox), {
+    command: "true",
+    session: longest,
+  });
+  assertEquals(output.exitCode, 0);
+  assertEquals(sandbox.calls[0]?.request.session, longest);
+});
+
+Deno.test("bash tool refuses a session name that is not an identifier, recoverably", async () => {
+  const refused: Array<[string, unknown]> = [
+    ["a path separator", "a/b"],
+    ["a path that climbs out", "a/../../x"],
+    ["a leading climb", "../escape"],
+    ["a space", "a b"],
+    ["one character past the longest", "a".repeat(33)],
+    ["a valid name with a tail", "build;rm"],
+    ["a trailing newline", "build\n"],
+    ["a leading separator", "-build"],
+    ["an empty name", ""],
+    ["a number", 5],
+  ];
+  for (const [what, session] of refused) {
+    const sandbox = new SessionsFakeSandboxRuntime();
+    const context = createContext(sandbox);
+    const contexts = countInvocationContexts(context);
+
+    const output = await bashTool.invoke(context, {
+      command: "echo hi",
+      cwd: "repo",
+      session: session as string,
+    });
+
+    assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE, what);
+    assertEquals(output.stdout, "", what);
+    assertStringIncludes(String(output.stderr), "session", what);
+    // Nothing ran and nothing was recorded for it.
+    assertEquals(sandbox.calls, [], what);
+    assertEquals(contexts.created, 0, what);
+    assertEquals(output.cwd, "/workspace", what);
+    assertEquals(context.currentDir, "/workspace", what);
+  }
+});
+
+Deno.test("bash tool refuses a session before it records an invocation", async () => {
+  // A runtime without sessions: the refusal is the whole of the call.
+  const sandbox = new FakeSandboxRuntime();
+  const context = createContext(sandbox);
+  const contexts = countInvocationContexts(context);
+
+  const output = await bashTool.invoke(context, {
+    command: "echo hi",
+    session: "build",
+  });
+
+  assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE);
+  assertEquals(sandbox.calls, []);
+  assertEquals(contexts.created, 0);
+
+  // The counter counts: the same call without the session records one.
+  await bashTool.invoke(context, { command: "echo hi" });
+  assertEquals(contexts.created, 1);
 });

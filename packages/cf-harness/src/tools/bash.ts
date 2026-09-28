@@ -12,7 +12,11 @@ import {
   extractFinalWorkingDirectory,
 } from "./shell-cwd.ts";
 import { ProcessTimeoutError } from "../sandbox/process-runner.ts";
-import { SandboxSessionUnavailableError } from "../sandbox/types.ts";
+import {
+  SANDBOX_SESSION_NAME_PATTERN,
+  type SandboxRuntimeDescription,
+  SandboxSessionUnavailableError,
+} from "../sandbox/types.ts";
 import { SandboxPathEscapeError } from "../sandbox/errors.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 
@@ -37,8 +41,9 @@ export const BASH_CWD_OUTSIDE_SANDBOX_EXIT_CODE = 1;
 export const BASH_TIMEOUT_EXIT_CODE = 124;
 /**
  * The command did not run: it named a sandbox session the runtime cannot
- * honour (no sessions). Recoverable — the model reruns
- * without the session.
+ * honour (no sessions, or not for this call), or a name that is not a
+ * session name. Recoverable — the model reruns without the session, or with
+ * a name that is one.
  */
 export const BASH_SESSION_UNAVAILABLE_EXIT_CODE = 125;
 
@@ -75,28 +80,30 @@ const observedCfcStdout = (
     ? cfcResult.stdout.segments.map((segment) => segment.text).join("")
     : undefined;
 
+const bashInputSchema = {
+  type: "object",
+  properties: {
+    command: { type: "string" },
+    cwd: { type: "string" },
+    timeoutMs: { type: "number", minimum: 0 },
+  },
+  required: ["command"],
+  additionalProperties: false,
+} satisfies JSONSchema;
+
+/**
+ * The descriptor for a run whose sandbox has no sessions, which is the
+ * Docker runtime and so the default. It takes no `session`: offering one
+ * would change the tool manifest of every run that cannot use it, and invite
+ * a call that can only be refused.
+ */
 export const bashToolDescriptor: HarnessToolDescriptor = {
   toolId: "bash",
   title: "Bash",
   description:
     "Run a shell command inside the target VM. Use this for navigation, search, and command-driven workflows.",
   effectClass: "side-effect",
-  inputSchema: {
-    type: "object",
-    properties: {
-      command: { type: "string" },
-      cwd: { type: "string" },
-      timeoutMs: { type: "number", minimum: 0 },
-      session: {
-        type: "string",
-        pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
-        description:
-          "Name a sandbox session to keep state between commands (files outside the mounts, background processes). Only some sandbox runtimes offer sessions: where one is unavailable the call does not run and returns a recoverable error saying so, and you rerun it without a session. Omit for a fresh sandbox per command.",
-      },
-    },
-    required: ["command"],
-    additionalProperties: false,
-  } satisfies JSONSchema,
+  inputSchema: bashInputSchema,
   outputSchema: {
     type: "object",
     properties: {
@@ -113,8 +120,49 @@ export const bashToolDescriptor: HarnessToolDescriptor = {
   tags: ["shell", "vm", "command"],
 };
 
+/** The same tool, for a run whose sandbox has sessions. */
+const bashToolDescriptorWithSessions: HarnessToolDescriptor = {
+  ...bashToolDescriptor,
+  inputSchema: {
+    ...bashInputSchema,
+    properties: {
+      ...bashInputSchema.properties,
+      session: {
+        type: "string",
+        // The runtime's own pattern, so the schema the model reads and the
+        // check made on the name are one rule.
+        pattern: SANDBOX_SESSION_NAME_PATTERN.source,
+        description:
+          "Name a sandbox session to keep state between commands (files outside the mounts, background processes). Only some sandbox runtimes offer sessions: where one is unavailable the call does not run and returns a recoverable error saying so, and you rerun it without a session. Omit for a fresh sandbox per command.",
+      },
+    },
+  } satisfies JSONSchema,
+};
+
+/** The bash descriptor a run on this sandbox runtime offers the model. */
+export const bashToolDescriptorForRuntime = (
+  runtime: Pick<SandboxRuntimeDescription, "sessions">,
+): HarnessToolDescriptor =>
+  runtime.sessions === true
+    ? bashToolDescriptorWithSessions
+    : bashToolDescriptor;
+
+/** A refusal over `session`: nothing ran, so nothing about the run moved. */
+const sessionRefusal = (
+  outputId: BashToolOutput["outputId"],
+  cwd: string,
+  stderr: string,
+): BashToolOutput => ({
+  outputId,
+  stdout: "",
+  stderr,
+  exitCode: BASH_SESSION_UNAVAILABLE_EXIT_CODE,
+  cwd,
+});
+
 export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
   descriptor: bashToolDescriptor,
+  descriptorForRuntime: bashToolDescriptorForRuntime,
   async invoke(context, input) {
     const outputId = context.nextOutputId("bash");
     let commandCwd: string;
@@ -155,6 +203,37 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
         cwd: commandCwd,
       };
     }
+    // Both refusals over `session` come BEFORE the invocation context
+    // below, which updates and persists run state: a command that never ran
+    // must not leave a record that it was prepared.
+    if (input.session !== undefined) {
+      if (context.sandbox.describe().sessions !== true) {
+        // Said rather than silently dropped: a runtime without sessions would
+        // run the command in a fresh sandbox and the model would go on
+        // relying on state that is not there. Nothing ran, so the working
+        // directory is unchanged — the same shape as the cwd-outside-sandbox
+        // refusal above.
+        return sessionRefusal(
+          outputId,
+          context.currentDir,
+          "this sandbox runtime has no sessions; rerun the command without `session`",
+        );
+      }
+      if (
+        typeof input.session !== "string" ||
+        !SANDBOX_SESSION_NAME_PATTERN.test(input.session)
+      ) {
+        // Checked here and not left to the runtime, whose refusal of a name
+        // is not one this tool is promised to recognise: an error it does
+        // not recognise ends the run, over a name the model can simply
+        // correct. The name itself is not echoed.
+        return sessionRefusal(
+          outputId,
+          context.currentDir,
+          "invalid `session` name: use 1 to 32 characters from letters, digits, `_`, `.` and `-`, starting with a letter or a digit; rerun the command with such a name, or without `session`",
+        );
+      }
+    }
     const cwdMarker = cwdMarkerForOutput(CWD_MARKER_PREFIX, outputId);
     const command = commandWithFinalWorkingDirectoryMarker(
       input.command,
@@ -178,24 +257,6 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
         ? [["command"], ["cwd"]]
         : [["command"]],
     });
-    if (
-      input.session !== undefined &&
-      context.sandbox.describe().sessions !== true
-    ) {
-      // Said rather than silently dropped: a runtime without sessions would
-      // run the command in a fresh sandbox and the model would go on relying
-      // on state that is not there.
-      // Nothing ran, so the working directory is unchanged — the same
-      // shape as the cwd-outside-sandbox refusal above.
-      return {
-        outputId,
-        stdout: "",
-        stderr:
-          "this sandbox runtime has no sessions; rerun the command without `session`",
-        exitCode: BASH_SESSION_UNAVAILABLE_EXIT_CODE,
-        cwd: context.currentDir,
-      };
-    }
     let result: Awaited<ReturnType<typeof context.sandbox.runShell>>;
     try {
       result = await context.sandbox.runShell({
@@ -222,13 +283,11 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
       if (error instanceof SandboxSessionUnavailableError) {
         // The runtime has sessions but not for this call: the model can act
         // on that by dropping the session.
-        return {
+        return sessionRefusal(
           outputId,
-          stdout: "",
-          stderr: `${error.message}; rerun the command without \`session\``,
-          exitCode: BASH_SESSION_UNAVAILABLE_EXIT_CODE,
-          cwd: context.currentDir,
-        };
+          context.currentDir,
+          `${error.message}; rerun the command without \`session\``,
+        );
       }
       // Anything else from runShell — docker spawn/infra, CFC transport — is not
       // something the model can fix. Let it propagate and stay run-fatal.
