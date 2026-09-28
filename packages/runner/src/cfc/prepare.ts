@@ -6773,40 +6773,50 @@ const gateRuntimeMintedIntegrity = (
   };
 };
 
+/** Derives the closest persisted schema label covering a source path. */
 const persistedLabelFromSchemaAtPath = (
   tx: IExtendedStorageTransaction,
   schema: JSONSchema,
   path: readonly string[],
-  owningSpace: MemorySpace,
-  options: LabelMintOptions = {},
+  source: LinkWritePolicyInput["source"],
+  checkedSchema: JSONSchema | undefined,
 ): IFCLabel | undefined => {
   const logicalPath = canonicalizeLogicalPath(path);
   const entries = cfcSchemaEntries(schema);
-  let match:
-    | { path: readonly string[]; label: IFCLabel; schema: JSONSchema }
-    | undefined;
-  for (const entry of entries) {
-    if (!isPrefix(entry.path, logicalPath)) {
-      continue;
-    }
-    if (match === undefined || match.path.length < entry.path.length) {
-      match = entry;
-    }
-  }
-  if (match === undefined) {
-    return undefined;
-  }
   const entryLabels = new Map<string, IFCLabel>(
     entries.map((entry) => [pathKey(entry.path), entry.label]),
   );
-  return derivePersistedLabel(
-    tx,
-    match.schema,
-    match.label,
-    entryLabels,
-    owningSpace,
-    options,
-  );
+  let match: { path: readonly string[]; label: IFCLabel } | undefined;
+  for (const entry of entries) {
+    if (!isPrefix(entry.path, logicalPath)) continue;
+    // Minting belongs to the declaration's value. An ancestor object can
+    // carry integrity even when the projected path holds an initialized link.
+    const label = withCheckedPrincipalClaims(
+      derivePersistedLabel(
+        tx,
+        entry.schema,
+        entry.label,
+        entryLabels,
+        source.space,
+        labelMintOptionsAt(tx, source, entry.path),
+      ),
+      checkedSchema === undefined ? [] : checkedSchemaPrincipalClaims(
+        tx,
+        checkedSchema,
+        linkDocument(source),
+        entry.path,
+      ),
+    );
+    // Empty declarations without a persistent gate have no stored entry to
+    // shadow their ancestor. Keep the same cover before metadata is written.
+    if (!hasLabelValues(label) && !hasPersistedPolicyClaim(entry.schema)) {
+      continue;
+    }
+    if (match === undefined || match.path.length < entry.path.length) {
+      match = { path: entry.path, label };
+    }
+  }
+  return match?.label;
 };
 
 // Join a series of labels in one pass: each channel collects its atoms from
@@ -7082,24 +7092,13 @@ const derivePersistedLinkLabel = (
   // Only a schema this transaction's writes to the source are checked
   // against can vouch for a principal claim; a setup result schema is not.
   const sourceCandidate = candidateSchemas.get(targetKey(input.source));
-  // A source that is itself a reference staged in this transaction, or a
-  // value initialized on nobody's behalf, mints nothing for the acting
-  // principal, as its own slot does not.
   let pendingSourceLabel = pendingSourceSchema !== undefined
-    ? withCheckedPrincipalClaims(
-      persistedLabelFromSchemaAtPath(
-        tx,
-        pendingSourceSchema,
-        input.source.path,
-        input.source.space,
-        labelMintOptionsAt(tx, input.source, input.source.path),
-      ) ?? {},
-      sourceCandidate === undefined ? [] : checkedSchemaPrincipalClaims(
-        tx,
-        sourceCandidate,
-        linkDocument(input.source),
-        input.source.path,
-      ),
+    ? persistedLabelFromSchemaAtPath(
+      tx,
+      pendingSourceSchema,
+      input.source.path,
+      input.source,
+      sourceCandidate,
     )
     : undefined;
   if (pendingSourceSchema === undefined && sourceMetadata === undefined) {
@@ -7126,24 +7125,12 @@ const derivePersistedLinkLabel = (
           targetCandidate,
           tx.getCfcState().trustSnapshot?.actingPrincipal,
         );
-        // A reference the runtime staged at the target is not the inline
-        // value this derivation stands for, so it mints nothing for the
-        // principal staging it; nor does a value the runtime initialized
-        // there on nobody's behalf.
-        pendingSourceLabel = withCheckedPrincipalClaims(
-          persistedLabelFromSchemaAtPath(
-            tx,
-            pendingSourceSchema,
-            input.target.path,
-            input.target.space,
-            labelMintOptionsAt(tx, input.target, input.target.path),
-          ) ?? {},
-          checkedSchemaPrincipalClaims(
-            tx,
-            targetCandidate,
-            linkDocument(input.target),
-            input.target.path,
-          ),
+        pendingSourceLabel = persistedLabelFromSchemaAtPath(
+          tx,
+          pendingSourceSchema,
+          input.target.path,
+          input.target,
+          targetCandidate,
         );
       }
     }
