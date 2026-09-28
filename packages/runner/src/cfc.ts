@@ -18,6 +18,7 @@ import type {
   JSONSchema,
   SchemaScope,
 } from "./builder/types.ts";
+import { BranchListWalk, REACHED_AGAIN } from "./cfc/branch-list-walk.ts";
 import type { CfcConfClause } from "./cfc/clause.ts";
 import { uniqueCfcAtoms } from "./cfc/observation.ts";
 import {
@@ -85,22 +86,16 @@ interface RootedSchemaVisit {
   parent?: RootedSchemaVisit;
 }
 
-/** A union being narrowed without consuming another path segment. */
-interface SchemaPathExpansion {
-  /** Definition map against which the branches resolve local references. */
-  defs: JSONSchemaObj["$defs"];
+/** What a union narrows to, with the definitions it is selected against. */
+interface NarrowedUnion {
+  /** The union of what the arms narrow to. */
+  readonly schema: JSONSchema;
 
-  /** The compound branch list being expanded. */
-  branches: readonly JSONSchema[];
-
-  /** A co-declared `oneOf`, when `branches` is the `anyOf` list. */
-  oneOf: JSONSchemaObj["oneOf"];
-
-  /** Number of path segments still to consume at this union. */
-  remaining: number;
-
-  /** The enclosing union expansion, if any. */
-  parent: SchemaPathExpansion | undefined;
+  /**
+   * The definition map in effect for `schema`: the arms' maps merged, or the
+   * union's own map where no arm carries one.
+   */
+  readonly defs: Record<string, JSONSchema> | undefined;
 }
 
 const rootedSchemaVisitIsActive = (
@@ -682,7 +677,7 @@ export class ContextualFlowControl {
     extraConfidentiality: Set<unknown> | undefined,
     defaultEmptyProperties: JSONSchema,
     defaultMissingProperty: JSONSchema,
-    expanding?: SchemaPathExpansion,
+    walk?: BranchListWalk<NarrowedUnion>,
   ): JSONSchema {
     const joined = (extraConfidentiality !== undefined)
       ? new Set<unknown>(extraConfidentiality)
@@ -743,92 +738,41 @@ export class ContextualFlowControl {
         (Array.isArray(cursor.type) || "anyOf" in cursor || "oneOf" in cursor ||
           typeless)
       ) {
-        const armSchemas: JSONSchema[] = [];
-        const cursorObject = cursor;
-        // A type-list arm replaces its type with a scalar. Only a compound
-        // can recur here without consuming a path segment.
-        const branches = Array.isArray(cursorObject.type)
-          ? undefined
-          : cursorObject.anyOf ?? cursorObject.oneOf;
-        let nextExpansion = expanding;
-        if (branches !== undefined) {
-          const oneOf = cursorObject.oneOf;
-          const remaining = path.length - index;
-          for (let visit = expanding; visit; visit = visit.parent) {
-            if (
-              visit.defs === defs && visit.branches === branches &&
-              visit.oneOf === oneOf && visit.remaining === remaining
-            ) return false;
-          }
-          nextExpansion = {
-            defs,
-            branches,
-            oneOf,
-            remaining,
-            parent: expanding,
-          };
-        }
-        const options = typeless
-          ? [{ ...cursorObject, type: "object" as const }, {
-            ...cursorObject,
-            type: "array" as const,
-          }]
-          : Array.isArray(cursorObject.type)
-          ? cursorObject.type.map((type) => ({ ...cursorObject, type }))
-          : (cursorObject.anyOf && cursorObject.oneOf)
-          ? [...cursorObject.anyOf, ...cursorObject.oneOf]
-          : cursorObject.anyOf ?? cursorObject.oneOf ?? [];
-        for (const entry of options) {
-          // An arm sits in the union's document, so its refs resolve against
-          // the map in effect, whatever `$defs` the arm declares of its own.
-          const optSchema = ContextualFlowControl.#schemaAtPathInternal(
-            entry,
+        // A type-list arm replaces its type with a scalar, and a schema
+        // declaring no type is read as an object and as an array. Only a
+        // compound can recur here without consuming a path segment, so only
+        // a compound's result is reused, keyed by its branch lists, the
+        // definitions they resolve against, and the path segments left.
+        walk ??= new BranchListWalk<NarrowedUnion>();
+        const unionWalk = walk;
+        const unionObject = cursor;
+        const unionDefs = defs;
+        const narrowUnion = () =>
+          ContextualFlowControl.#narrowUnion(
+            unionObject,
+            typeless,
             path.slice(index),
-            defs,
+            unionDefs,
             extraConfidentiality,
             defaultEmptyProperties,
             defaultMissingProperty,
-            nextExpansion,
+            unionWalk,
           );
-          if (typeof optSchema !== "boolean" && typeof optSchema !== "object") {
-            return optSchema;
-          }
-          const subSchema = optSchema as JSONSchema;
-          if (subSchema === false) {
-            continue;
-          } else if (ContextualFlowControl.isTrueSchema(subSchema)) {
-            cursor = true;
-            break;
-          } else {
-            armSchemas.push(subSchema);
-          }
-        }
-        // Only update cursor from the arms if the isTrueSchema branch
-        // didn't already set cursor = true and break out of the loop.
-        if (cursor !== true) {
-          // Each arm came back as a document of its own, carrying the closure
-          // its refs reach. The union is one document, so the arms' maps
-          // merge into the map the result is selected from, and an arm that
-          // resolved into another document is renamed apart.
-          const { fragments, definitions } = hoistCfcSchemaDefs(armSchemas);
-          if (definitions !== undefined) defs = definitions;
-          // `internSchema()` returns the canonical (identity-unique)
-          // schema object, so structurally-equal schemas collapse to
-          // the same reference. That gives identity-based dedup via
-          // `Set<JSONSchema>`, and correctly handles non-JSON-compatible
-          // `FabricValue`s (e.g. `FabricEpochNsec`, `FabricBytes`,
-          // `FabricHash`) that may appear in schema `default` fields.
-          const subSchemaArr = [
-            ...new Set(fragments.map((arm) => internSchema(arm))),
-          ];
-          if (subSchemaArr.length === 0) {
-            cursor = false;
-          } else if (subSchemaArr.length === 1) {
-            cursor = subSchemaArr[0];
-          } else {
-            cursor = { "anyOf": subSchemaArr };
-          }
-        }
+        const branches = Array.isArray(unionObject.type)
+          ? undefined
+          : unionObject.anyOf ?? unionObject.oneOf;
+        const key = [
+          branches,
+          unionDefs,
+          unionObject.oneOf,
+          path.length - index,
+        ];
+        const narrowed = branches === undefined
+          ? narrowUnion()
+          : unionWalk.expand(key, narrowUnion);
+        if (narrowed === REACHED_AGAIN) return false;
+        cursor = narrowed.schema;
+        defs = narrowed.defs;
         break;
       }
       if (typeof cursor === "boolean") {
@@ -915,6 +859,74 @@ export class ContextualFlowControl {
     if (throughWildcard) delete result.default;
     if (selectedDefs !== undefined) result.$defs = selectedDefs;
     return result as JSONSchema;
+  }
+
+  /**
+   * Helper for `#schemaAtPathInternal()`, which narrows each arm of the union
+   * `cursor` declares to `path` and unions the results: the arms of its type
+   * list, its `anyOf` and `oneOf` together, or, where it declares no type,
+   * its object and array readings.
+   */
+  static #narrowUnion(
+    cursor: JSONSchemaObj,
+    typeless: boolean,
+    path: readonly string[],
+    defs: Record<string, JSONSchema> | undefined,
+    extraConfidentiality: Set<unknown> | undefined,
+    defaultEmptyProperties: JSONSchema,
+    defaultMissingProperty: JSONSchema,
+    walk: BranchListWalk<NarrowedUnion>,
+  ): NarrowedUnion {
+    const options = typeless
+      ? [{ ...cursor, type: "object" as const }, {
+        ...cursor,
+        type: "array" as const,
+      }]
+      : Array.isArray(cursor.type)
+      ? cursor.type.map((type) => ({ ...cursor, type }))
+      : (cursor.anyOf && cursor.oneOf)
+      ? [...cursor.anyOf, ...cursor.oneOf]
+      : cursor.anyOf ?? cursor.oneOf ?? [];
+    const armSchemas: JSONSchema[] = [];
+    for (const entry of options) {
+      // An arm sits in the union's document, so its refs resolve against the
+      // map in effect, whatever `$defs` the arm declares of its own.
+      const armSchema = ContextualFlowControl.#schemaAtPathInternal(
+        entry,
+        path,
+        defs,
+        extraConfidentiality,
+        defaultEmptyProperties,
+        defaultMissingProperty,
+        walk,
+      );
+      if (armSchema === false) continue;
+      if (ContextualFlowControl.isTrueSchema(armSchema)) {
+        return { schema: true, defs };
+      }
+      armSchemas.push(armSchema);
+    }
+    // Each arm came back as a document of its own, carrying the closure its
+    // refs reach. The union is one document, so the arms' maps merge into the
+    // map the result is selected from, and an arm that resolved into another
+    // document is renamed apart.
+    const { fragments, definitions } = hoistCfcSchemaDefs(armSchemas);
+    // `internSchema()` returns the canonical (identity-unique) schema object,
+    // so structurally-equal schemas collapse to the same reference. That gives
+    // identity-based dedup via `Set<JSONSchema>`, and correctly handles
+    // non-JSON-compatible `FabricValue`s (e.g. `FabricEpochNsec`,
+    // `FabricBytes`, `FabricHash`) that may appear in schema `default` fields.
+    const subSchemaArr = [
+      ...new Set(fragments.map((arm) => internSchema(arm))),
+    ];
+    return {
+      schema: subSchemaArr.length === 0
+        ? false
+        : subSchemaArr.length === 1
+        ? subSchemaArr[0]
+        : { anyOf: subSchemaArr },
+      defs: definitions ?? defs,
+    };
   }
 
   /**
@@ -1119,17 +1131,18 @@ const resolveRootRefForScope = (
  * sits in the document its compound was read from, which changes only where a
  * reference resolved into another one.
  *
- * `expanding` holds, per document, the compounds being expanded on the way
- * down. A compound is what repeats when a definition reaches itself through a
- * branch, so one already being expanded is not expanded again. A reference does
- * not stand for its compound: keywords written beside a `$ref` replace the
- * definition's, so two positions naming one definition can carry different
- * compounds, and a position's own declaration is read whatever it names.
+ * `walk` keeps, per document, what each compound comes to. A compound is what
+ * repeats when a definition reaches itself through a branch, so it is
+ * expanded once per document, and one reached again while it is being
+ * expanded adds no narrower cap. A reference does not stand for its compound:
+ * keywords written beside a `$ref` replace the definition's, so two positions
+ * naming one definition can carry different compounds, and a position's own
+ * declaration is read whatever it names.
  */
 const asCellFollowScopeCap = (
   schema: JSONSchema | undefined,
   root: JSONSchema,
-  expanding?: Map<JSONSchema, Set<readonly JSONSchema[]>>,
+  walk?: BranchListWalk<SchemaScope | undefined>,
 ): SchemaScope | undefined => {
   if (!isObjectOrArray(schema)) return undefined;
   const declaring = resolveRootRefForScope(schema, root);
@@ -1142,24 +1155,19 @@ const asCellFollowScopeCap = (
     if (!Array.isArray(branches)) continue;
     // Allocated on the first compound: most positions carry none, and this
     // runs for every key a cell is narrowed through.
-    expanding ??= new Map();
-    let inDocument = expanding.get(declaring.root);
-    if (inDocument?.has(branches)) continue;
-    if (inDocument === undefined) {
-      inDocument = new Set();
-      expanding.set(declaring.root, inDocument);
-    }
-    inDocument.add(branches);
-    try {
+    walk ??= new BranchListWalk<SchemaScope | undefined>();
+    const listWalk = walk;
+    const listCap = listWalk.expand([branches, declaring.root], () => {
+      let narrowest: SchemaScope | undefined;
       for (const branch of branches) {
-        cap = narrowerScopeCap(
-          cap,
-          asCellFollowScopeCap(branch as JSONSchema, declaring.root, expanding),
+        narrowest = narrowerScopeCap(
+          narrowest,
+          asCellFollowScopeCap(branch as JSONSchema, declaring.root, listWalk),
         );
       }
-    } finally {
-      inDocument.delete(branches);
-    }
+      return narrowest;
+    });
+    if (listCap !== REACHED_AGAIN) cap = narrowerScopeCap(cap, listCap);
   }
   return cap;
 };

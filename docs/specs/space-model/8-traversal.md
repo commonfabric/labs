@@ -329,6 +329,12 @@ When those keywords reach no local name, resolution keeps the target document's
 identity even if the ref site's document holds unrelated definitions. Unresolved
 local names are still isolated from the target's definitions.
 
+One follow-cap walk expands each branch list once per owning document, and a
+route reaching a list again takes the cap it came to. A cap a list came to
+while a cycle through it was still open lacks the list the cycle returns to, so
+once the outermost list of that cycle has settled, a later route expands the
+list afresh.
+
 ---
 
 ## Known Non-Standard JSON Schema Behavior

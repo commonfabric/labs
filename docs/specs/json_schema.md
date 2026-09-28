@@ -513,7 +513,12 @@ what the cursor declares about its type decides how:
   branch list in the same definition scope without consuming a path segment
   contributes `false`: the other arms already describe the children it can
   reach. Consuming a segment permits the list to be expanded again, so recursive
-  object and array paths keep narrowing at each level.
+  object and array paths keep narrowing at each level. One narrowing expands
+  each such list once for its definition scope and the segments left, and a
+  route reaching it again takes what it came to. What a list came to while a
+  cycle through it was still open lacks the union the cycle returns to, so once
+  the outermost union of that cycle has narrowed, a later route expands the
+  list afresh.
 - A schema declaring no `type` admits every type, and which of its keywords
   apply — `properties` and `additionalProperties`, or `prefixItems` and
   `items` — is settled only by a value. Without one, narrowing can say only

@@ -7,6 +7,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import {
@@ -490,6 +491,111 @@ describe("scope-cap-through-refs", () => {
 
       expect(ContextualFlowControl.getAsCellFollowScopeCap(schema))
         .toBeUndefined();
+    });
+
+    describe("with definitions that name one another", () => {
+      // Each definition is `null` or a handle naming others, so the walk comes
+      // back to a union through every handle. Walking a union afresh along
+      // every route that reaches it resolves exponentially often in the
+      // number of definitions; a resolution count past the bound below fails
+      // the case at once.
+
+      /**
+       * `count` definitions, the `i`th naming those `steps` after it, each
+       * handle declaring the `asCell` entry `entry(i, step)` gives it.
+       */
+      function definitions(
+        count: number,
+        steps: readonly number[],
+        entry: (i: number, step: number) => "cell" | {
+          kind: "cell";
+          scope: "user";
+        } = () => "cell",
+      ): JSONSchemaObj {
+        return {
+          $ref: "#/$defs/R0",
+          $defs: Object.fromEntries(
+            Array.from({ length: count }, (_, i) => [`R${i}`, {
+              anyOf: [
+                { type: "null" as const },
+                ...steps.map((step) => ({
+                  $ref: `#/$defs/R${(i + step) % count}`,
+                  asCell: [entry(i, step)],
+                })),
+              ],
+            }]),
+          ),
+        };
+      }
+
+      /** The references resolved while reading `schema`'s follow cap. */
+      function resolutionsReading(
+        schema: JSONSchema,
+      ): { cap: string | undefined; resolutions: number } {
+        const resolve = ContextualFlowControl.resolveSchemaRefs;
+        let resolutions = 0;
+        using _counted = stub(
+          ContextualFlowControl,
+          "resolveSchemaRefs",
+          (...args: Parameters<typeof resolve>) => {
+            if (++resolutions > 10_000) {
+              throw new Error("resolved without end");
+            }
+            return resolve.apply(ContextualFlowControl, args);
+          },
+        );
+        return {
+          cap: ContextualFlowControl.getAsCellFollowScopeCap(schema),
+          resolutions,
+        };
+      }
+
+      it("resolves at most twice the references for twice the definitions, each naming the next two", () => {
+        const few = resolutionsReading(definitions(8, [1, 2]));
+        const many = resolutionsReading(definitions(16, [1, 2]));
+
+        expect(few.cap).toBeUndefined();
+        expect(many.cap).toBeUndefined();
+        expect(many.resolutions).toBeLessThanOrEqual(2 * few.resolutions);
+      });
+
+      it("resolves each reference at most once, each definition naming every other", () => {
+        const count = 8;
+        const others = Array.from({ length: count - 1 }, (_, i) => i + 1);
+        const { cap, resolutions } = resolutionsReading(
+          definitions(count, others),
+        );
+
+        expect(cap).toBeUndefined();
+        expect(resolutions).toBeLessThanOrEqual(count * (count - 1) + 1);
+      });
+
+      for (const stored of [false, true]) {
+        it(
+          `returns the cap of a handle reached only through the others, ${
+            stored ? "stored" : "inline"
+          }`,
+          () => {
+            // Only the last definition's handle back to the first declares a
+            // cap, so the walk reaches it through every definition between.
+
+            const count = 6;
+            const others = Array.from({ length: count - 1 }, (_, i) => i + 1);
+            const schema = definitions(
+              count,
+              others,
+              (i, step) =>
+                i === count - 1 && (i + step) % count === 0
+                  ? { kind: "cell", scope: "user" }
+                  : "cell",
+            );
+
+            expect(ContextualFlowControl.getAsCellFollowScopeCap(
+              stored ? storedForm(schema) : schema,
+            )).toBe("user");
+          },
+        );
+      }
     });
   });
 });
