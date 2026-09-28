@@ -11,8 +11,9 @@ This document covers one such class: the reads the write machinery makes of
 the region it is about to write. It says what the class is, where the runtime
 marks it, why excluding it does not let a label escape, and what it costs.
 
-The spec-side amendment this class needs is SC-41 in
-[`cfc-spec-changes.md`](./cfc-spec-changes.md).
+The spec carries the class in §18.6.2, "Conditional exclusions", as the
+write-destination read; SC-41 in
+[`cfc-spec-changes.md`](./cfc-spec-changes.md) records the entry it came from.
 
 What this unblocks is a whole-object write whose value the program did not
 read out of the destination. A read-modify-write spelled
@@ -167,8 +168,8 @@ compensation above.
 four exclusions public infrastructure, and says its read exclusion mirrors a
 write-side rule that the same addresses are not value-write targets. Here the
 addresses are the transaction's own write targets, so that sentence says the
-opposite of what this class needs, and SC-41 proposes the reason the class
-does rest on rather than borrowing that one.
+opposite of what this class needs, and §18.6.2 gives the class conditions of
+its own rather than borrowing that one.
 
 ## Flow relevance is unaffected
 
