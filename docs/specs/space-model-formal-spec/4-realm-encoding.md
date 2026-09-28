@@ -427,6 +427,12 @@ around retention would then oblige it to freeze nothing and let it hand back
 mutable values. Which containers a caller sees returned by identity therefore
 varies with what needed decoding; whether any of them is mutable does not.
 
+An engine constructed with `mutable` as `true` (`1-fabric-values.md` Section
+2.9) freezes none of them instead, and copies a container that needed no
+decoding when it arrived frozen, that being the one way to hand it back
+mutable. A frozen container can arrive only from a decode in the realm that
+built the tree, since cloning produces none.
+
 An `ArrayBuffer` cannot be frozen, which is what makes ceding it a requirement
 rather than a courtesy: sole ownership is the only available defense for a
 value that promises its bytes are immutable.

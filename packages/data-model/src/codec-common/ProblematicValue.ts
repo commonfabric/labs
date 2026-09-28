@@ -166,11 +166,11 @@ export class ProblematicValue extends BaseFabricInstance {
         value: ProblematicValue,
         _env: LiveEnvironment,
       ): ProblematicValueState {
-        return {
+        return Object.freeze({
           tag: value.wireTypeTag,
           state: value.state,
           error: value.error,
-        };
+        });
       }
 
       /**
@@ -200,13 +200,14 @@ export class ProblematicValue extends BaseFabricInstance {
         _env: LiveEnvironment,
         mutable = false,
       ): FabricValue {
-        const result = new ProblematicValue(
+        // The preserved state is an external reference, so it is kept as it
+        // is; the record around it is not kept at all.
+        return ProblematicValue.make(
           state.tag,
           state.state,
           state.error,
+          mutable,
         );
-
-        return mutable ? result : Object.freeze(result);
       }
     })(),
   );
@@ -214,5 +215,25 @@ export class ProblematicValue extends BaseFabricInstance {
   /** The codec for instances of this class. */
   static get [CODEC](): NonterminalCodec {
     return this.#codec;
+  }
+
+  /**
+   * Constructs an instance as the constructor does, and freezes it unless
+   * `mutable`. Only the instance is frozen, never what it preserves, which is
+   * what a codec's `decode()` owes when it falls back on one of these.
+   */
+  static make(
+    wireTypeTag: any,
+    state: any,
+    error: string,
+    mutable = false,
+  ): ProblematicValue {
+    const result = new ProblematicValue(wireTypeTag, state, error);
+
+    if (!mutable) {
+      Object.freeze(result);
+    }
+
+    return result;
   }
 }
