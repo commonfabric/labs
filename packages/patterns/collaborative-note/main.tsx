@@ -61,8 +61,9 @@ export interface CollaborativeNoteOutput {
 
 /**
  * A minimal shared note that pairs Memory-backed text with ephemeral cursors.
- * The editor derives its room from the shared field, the host supplies the
- * service URL, and the pattern derives each viewer's label from their profile.
+ * The runtime derives the editor's room from the shared field and relays it
+ * over the memory connection, and the pattern derives each viewer's label
+ * from their profile.
  */
 export default pattern<CollaborativeNoteInput, CollaborativeNoteOutput>(
   ({ note }) => {

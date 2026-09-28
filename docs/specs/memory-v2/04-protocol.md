@@ -1379,6 +1379,7 @@ session included.
 ```typescript
 // Shown at module scope.
 
+import type { FabricValue } from "@commonfabric/api";
 /** Latest published state of one room participant. */
 interface PresenceRecord {
   /** Server-assigned id for this membership; unpredictable and never reused. */
@@ -1397,11 +1398,11 @@ interface PresenceRecord {
   name: string;
 
   /**
-   * Per-kind state keyed by facet name. The server bounds the map and reads
-   * nothing inside a facet; a consumer decodes the facets it knows and
-   * ignores the rest.
+   * Per-kind state keyed by facet name: each facet a record of fabric values.
+   * The server bounds the map and reads nothing inside a facet; a consumer
+   * decodes the facets it knows and ignores the rest.
    */
-  facets: Record<string, Record<string, unknown>>;
+  facets: Record<string, Record<string, FabricValue>>;
 }
 ```
 
@@ -1425,6 +1426,7 @@ Client to server, each a request envelope that receives a `response`:
 ```typescript
 // Shown at module scope.
 
+import type { FabricValue } from "@commonfabric/api";
 type SpaceId = string;
 type SessionId = string;
 
@@ -1451,7 +1453,7 @@ interface PresencePublishRequest {
   room: string;
   revision: number;
   name: string;
-  facets: Record<string, Record<string, unknown>>;
+  facets: Record<string, Record<string, FabricValue>>;
 }
 
 interface PresenceLeaveRequest {
@@ -1467,7 +1469,7 @@ interface PresenceRecord {
   principal?: string;
   revision: number;
   name: string;
-  facets: Record<string, Record<string, unknown>>;
+  facets: Record<string, Record<string, FabricValue>>;
 }
 ```
 
@@ -1484,6 +1486,7 @@ receiving membership joined through:
 ```typescript
 // Shown at module scope.
 
+import type { FabricValue } from "@commonfabric/api";
 type SpaceId = string;
 type SessionId = string;
 
@@ -1508,7 +1511,7 @@ interface PresenceRecord {
   principal?: string;
   revision: number;
   name: string;
-  facets: Record<string, Record<string, unknown>>;
+  facets: Record<string, Record<string, FabricValue>>;
 }
 ```
 
