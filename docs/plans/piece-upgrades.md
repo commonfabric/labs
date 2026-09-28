@@ -253,19 +253,22 @@ situations do not fit that bound, and each has a form:
   coherent rather than partial. This is the ordering rule with the wait made
   explicit.
 - **A migration that belongs to the collection and reaches every member.**
-  `backfillNames` in the naming arc was one. Over a large collection such a
-  step is **resumable**: it returns "more" with a cursor, the transaction
-  commits the slice, and the sweep fires it again. This is the one place the
-  unit above is not one transaction, and it needs its own rules, which are
-  these. The first slice's transaction writes an in-progress marker beside the
-  version, holding the step's identifier and the cursor; the last slice's
+  `backfillNames` in the naming library is one: it numbers the members the
+  board's namespace does not hold, asks each member to record its own number
+  through the member's verb, and returns a `pending` list that a second run
+  completes, which is the resumable shape written in pattern code. Over a large
+  collection such a step is **resumable**: it returns "more" with a cursor, the
+  transaction commits the slice, and the sweep fires it again. This is the one
+  place the unit above is not one transaction, and it needs its own rules, which
+  are these. The first slice's transaction writes an in-progress marker beside
+  the version, holding the step's identifier and the cursor; the last slice's
   transaction clears it, stamps the new version, and switches the code. While
   the marker is set the document is at the old version, and the writer guard
   (D2) refuses writes from every version, old and new alike, so no writer of
   either shape lands on a half-migrated document. The piece is unavailable for
   writes for the span of its slices, which is the cost of not fitting one
-  transaction, and the marker is what makes the span visible and resumable
-  after a crash. Rare, and the one place the step contract grows.
+  transaction, and the marker is what makes the span visible and resumable after
+  a crash. Rare, and the one place the step contract grows.
 
 **Proposal for Mike (M1).** The three triggers, with the sweep's budget an
 operator setting. The alternative at either end — every piece at deploy, or
@@ -291,9 +294,12 @@ is proposal T3 below.
 `packages/memory/v2`.**
 
 - **T1.** Where the writer's version rides. The candidates are transaction
-  metadata alongside the CFC write-policy inputs, or the setup identity the
-  runner already stamps. The rule needs the version at commit time for the
-  root document and for every entry document the write reaches.
+  metadata alongside the CFC write-policy inputs; the setup identity the
+  runner already stamps; or the write-side requirements a document stores
+  from its declaring schema, which the commit boundary now verifies every
+  writer against, so a version stored there would bind every writer the way
+  a `writeAuthorizedBy` claim does. The rule needs the version at commit time
+  for the root document and for every entry document the write reaches.
 - **T2.** What the refusal is. A conflict, so that existing retry and reload
   paths handle it, or a distinct error a client can name.
 - **T3.** How an unversioned raw write (`cf cell set`, `setRawUntyped`) is
@@ -397,9 +403,11 @@ directional without loosening the other semantic-extension keys (`ifc`,
 reports and carrying a reason. The update proceeds only if every finding is
 acknowledged by name; an unacknowledged finding refuses as today. The
 acknowledgments are written into the piece's source-transition record beside
-the revision, so the record survives with the piece. The global flag remains
-for one case only: a piece whose current pattern cannot load, where there is
-no contract to report findings against.
+the revision, so the record survives with the piece. A piece whose current
+pattern cannot load has no contract to compare against, and the review already
+reports that lost comparison as a finding of its own, taken under the same
+explicit confirmation as any other. That finding becomes one more named
+acknowledgment, and the global flag has no remaining case.
 
 This is the `setsrc` half of the "break is acknowledged one at a time"
 mechanism verb-evolution designs for CI, and it is the driver the Topics
@@ -419,11 +427,11 @@ Topics rollout is this operation, done by hand.
 #### Cycles
 
 Two pieces can depend on each other, and the main case does: a Topic demands
-`boardCrossrefs`, `boardNames`, and `mentionable` of its board, and the board
-demands `title`, `shortName`, and `createdAt` of each Topic. When both sides
-raise a demand in one change, no order satisfies the check: whichever moves
-first is proved against the other's old contract. The Topics rollout met no
-cycle only because its new demands were optional, which is the phasing below,
+`boardCrossrefs` and `mentionable` of its board, and the board demands
+`createdAt`, `shortName`, and the rest of its index row of each Topic. When both
+sides raise a demand in one change, no order satisfies the check: whichever
+moves first is proved against the other's old contract. The Topics rollout met
+no cycle only because its new demands were optional, which is the phasing below,
 done by hand.
 
 The runtime cannot phase the code on the author's behalf. A pattern is one
@@ -448,7 +456,9 @@ answers, offered in this order:
    to loosen.
 
 **Proposal for Mike (M2).** Whether (2) is worth building, given (1) and (3)
-cover every case at the cost of a second deploy. **Proposal for Bernhard
+cover every case at the cost of a second deploy. Gideon's input (2026-09-19):
+detection and phasing are foundational; the atomic set is useful and can be
+deferred if it complicates getting the core model right. **Proposal for Bernhard
 (T6).** Whether two pieces' setups can share one transaction, so that (2) is
 possible at all.
 
@@ -467,7 +477,7 @@ Each row is a kind of change an author or operator wants to make. "Today"
 is the outcome on current main; "cost" is the tier under this design:
 **automatic** (write nothing), **declared** (bump the version and write a
 step), **coordinated** (a D7 manifest), or **acknowledged** (a D6
-acknowledgment on a reviewed break). Every row has a path; none needs the
+acknowledgment on a reviewed break). Every row has a path, and none needs a
 global flag.
 
 ### Own state
@@ -523,7 +533,7 @@ absent value. If it cannot, every default change is declared.
 | Situation                                                  | Today                                              | Design                                                                                   | Cost         |
 | ---------------------------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------ |
 | X1. Two sides change together (board and its Topics)       | By hand, board first, each with the global flag    | D7 manifest, each step with its own acknowledgment, receipts per piece                   | coordinated  |
-| X2. The piece's current pattern cannot load                | Global flag                                        | Global flag, the one case it keeps                                                       | acknowledged |
+| X2. The piece's current pattern cannot load                | The lost comparison is reported as an incompatibility, confirmed like any other | The same, as a named acknowledgment                                             | acknowledged |
 | X3. The same update over many pieces                       | Bulk retarget with `allowIncompatible` per row     | Bulk retarget with per-row acknowledgments                                               | as the row   |
 | X4. A reviewed break with a record                         | A `docs/history` record written by hand            | The acknowledgment is the record, on the piece; a history document where the reasoning needs prose | acknowledged |
 | X5. A pattern's first migration on a piece with no stamp   | n/a                                                | Absent means version 0; the first step runs                                              | automatic    |
@@ -554,7 +564,11 @@ storage key.
 
 **Proposal for Gideon (G1).** That adoption, and whether the handler-side
 upgrade bindings are removed in the same change or after the runtime guard
-lands.
+lands. Gideon's answer (2026-09-19): the migration and the writer guard are one
+guarantee, since once a piece has moved to a version older code must not write
+the old shape back, and Topics keeps its handler-side protections until that
+guard is in place. So the bindings come out after D2 lands, not with the
+adoption.
 
 In order, with what each unblocks:
 
@@ -563,8 +577,7 @@ In order, with what each unblocks:
    unnecessary, and `shortName` was a coordination, not a break.
 2. **D8**, CI runs the retained-link check inside `pattern-vintage`. Days.
    Makes the production refusal a CI refusal.
-3. **D6**, scoped acknowledgment on `setsrc`. Retires the global flag for
-   loadable pieces.
+3. **D6**, scoped acknowledgment on `setsrc`. Retires the global flag.
 4. **D1 and D3**, runtime-owned version and steps, and the CI version rule.
    The design work, with T4 settled first.
 5. **D2**, the writer guard, on T1 to T3. The transaction change.
