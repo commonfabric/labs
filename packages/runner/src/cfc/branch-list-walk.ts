@@ -39,6 +39,10 @@ export const REACHED_AGAIN: unique symbol = Symbol("reached again");
  *   into the list that first reached it. When that list settles, such results
  *   are dropped, and a later route reaches their lists afresh.
  *
+ * Each list keeps the shallowest open list its result depends on, its lowlink
+ * as Tarjan's algorithm has it, so a cycle settles when its own outermost list
+ * does, whatever cycle further up is still open.
+ *
  * The outermost result therefore joins what a fresh expansion along every
  * route would join, though inside a cycle it can nest the same results
  * differently. A list is expanded once, and again only when a route reaches
@@ -51,7 +55,7 @@ export class BranchListWalk<V> {
   /** Results that hold wherever their lists are reached. */
   #settled = new ResultsByKey<V>();
 
-  /** Results that hold only while the cycle they came back to is open. */
+  /** Results that hold only while the list they came back to is open. */
   #provisional = new ResultsByKey<V>();
 
   /**
@@ -59,12 +63,6 @@ export class BranchListWalk<V> {
    * settling can drop those recorded since it began.
    */
   #provisionalLog: KeyedResult<V>[] = [];
-
-  /**
-   * The shallowest position in `#open` that a cycle came back to while it is
-   * still open, `Infinity` when none is.
-   */
-  #cycleDepth = Infinity;
 
   /**
    * What the list `key` identifies comes to: a result the walk can reuse, or
@@ -76,32 +74,30 @@ export class BranchListWalk<V> {
     expandList: () => V,
   ): V | typeof REACHED_AGAIN {
     const open = this.#open;
+    const expanding = open.at(-1);
     for (let depth = open.length - 1; depth >= 0; depth--) {
       if (!sameKey(open[depth].key, key)) continue;
-      // Every list expanded between that one and this point now depends on it.
-      for (let between = depth + 1; between < open.length; between++) {
-        open[between].final = false;
-      }
-      this.#cycleDepth = Math.min(this.#cycleDepth, depth);
+      // The list being expanded now depends on that one.
+      expanding!.lowlink = Math.min(expanding!.lowlink, depth);
       return REACHED_AGAIN;
     }
     const settled = this.#settled.get(key);
     if (settled !== undefined) return settled.value;
     const provisional = this.#provisional.get(key);
     if (provisional !== undefined) {
-      // It holds only while the open cycle does, and so does whatever takes
-      // it in.
-      for (let depth = this.#cycleDepth + 1; depth < open.length; depth++) {
-        open[depth].final = false;
-      }
+      // A provisional result exists only while the list it depends on is
+      // open, and the list taking it in depends on that list too.
+      const holder = openHolder(provisional.dependsOn!);
+      expanding!.lowlink = Math.min(expanding!.lowlink, holder.depth);
       return provisional.value;
     }
 
+    const depth = open.length;
     const list: OpenList = {
       key,
-      final: true,
+      depth,
+      lowlink: depth,
       provisionalBefore: this.#provisionalLog.length,
-      cycleDepthBefore: this.#cycleDepth,
     };
     open.push(list);
     let value: V;
@@ -110,8 +106,7 @@ export class BranchListWalk<V> {
     } finally {
       open.pop();
     }
-    const result = { key, value };
-    if (list.final) {
+    if (list.lowlink === depth) {
       // Every provisional result recorded since this list began came back to
       // this list or below it, and this list is now settled.
       for (
@@ -119,9 +114,14 @@ export class BranchListWalk<V> {
       ) {
         this.#provisional.delete(dropped);
       }
-      this.#cycleDepth = list.cycleDepthBefore;
-      this.#settled.add(result);
+      this.#settled.add({ key, value });
     } else {
+      // The result depends on a list further up, and so does the list that
+      // reached this one.
+      list.dependsOn = open[list.lowlink];
+      const parent = open[depth - 1];
+      parent.lowlink = Math.min(parent.lowlink, list.lowlink);
+      const result = { key, value, dependsOn: list };
       this.#provisional.add(result);
       this.#provisionalLog.push(result);
     }
@@ -129,19 +129,38 @@ export class BranchListWalk<V> {
   }
 }
 
+/**
+ * The open list `list` depends on: `list` itself while it is open, else the
+ * one its result came to depend on when it finished without settling.
+ */
+function openHolder(list: OpenList): OpenList {
+  let holder = list;
+  while (holder.dependsOn !== undefined) holder = holder.dependsOn;
+  return holder;
+}
+
 /** A branch list being expanded by a `BranchListWalk`. */
 interface OpenList {
   /** What identifies the list and its result. */
   readonly key: readonly unknown[];
 
-  /** Whether its result holds wherever the list is reached. */
-  final: boolean;
+  /** The list's position among the open lists, counting from the outermost. */
+  readonly depth: number;
+
+  /**
+   * The depth of the shallowest open list the result depends on, the list's
+   * own depth while it depends on none further up.
+   */
+  lowlink: number;
 
   /** How many provisional results the walk held when this list began. */
   readonly provisionalBefore: number;
 
-  /** The walk's cycle depth when this list began. */
-  readonly cycleDepthBefore: number;
+  /**
+   * Once the list has finished without settling, the list further up its
+   * result depends on.
+   */
+  dependsOn?: OpenList;
 }
 
 /** A branch list's result, with the key that identifies it. */
@@ -151,6 +170,9 @@ interface KeyedResult<V> {
 
   /** What the list comes to. */
   readonly value: V;
+
+  /** For a provisional result, the finished list it came from. */
+  readonly dependsOn?: OpenList;
 }
 
 /**

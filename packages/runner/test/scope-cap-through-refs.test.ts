@@ -559,6 +559,32 @@ describe("scope-cap-through-refs", () => {
         expect(many.resolutions).toBeLessThanOrEqual(2 * few.resolutions);
       });
 
+      it("resolves each reference at most once, each definition naming the next two and none before it", () => {
+        // Without a cycle, a definition is reached along as many routes as a
+        // Fibonacci number counts. The schema holds 2n - 2 references: two in
+        // each definition but the last two, one in the next-to-last, and the
+        // root's.
+
+        const chain = (count: number): JSONSchemaObj => ({
+          $ref: "#/$defs/R0",
+          $defs: Object.fromEntries(
+            Array.from({ length: count }, (_, i) => [`R${i}`, {
+              anyOf: [
+                { type: "null" as const },
+                ...[i + 1, i + 2].filter((next) => next < count).map((
+                  next,
+                ) => ({ $ref: `#/$defs/R${next}`, asCell: ["cell" as const] })),
+              ],
+            }]),
+          ),
+        });
+        const count = 16;
+        const { cap, resolutions } = resolutionsReading(chain(count));
+
+        expect(cap).toBeUndefined();
+        expect(resolutions).toBeLessThanOrEqual(2 * count - 2);
+      });
+
       it("resolves each reference at most once, each definition naming every other", () => {
         const count = 8;
         const others = Array.from({ length: count - 1 }, (_, i) => i + 1);

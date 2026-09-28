@@ -283,6 +283,36 @@ describe("recursive schema narrowing", () => {
       expect(many.resolutions).toBeLessThanOrEqual(2 * few.resolutions);
     });
 
+    it("resolves each reference at most once, each definition naming the next two and none before it", () => {
+      // Without a cycle, a definition is reached along as many routes as a
+      // Fibonacci number counts, so narrowing it afresh along each route
+      // resolves exponentially often. The schema holds 2n - 2 references:
+      // two in each definition but the last two, one in the next-to-last,
+      // and the root's.
+
+      const chain = (count: number): JSONSchemaObj => ({
+        $ref: "#/$defs/R0",
+        $defs: Object.fromEntries(
+          Array.from({ length: count }, (_, i) => [`R${i}`, {
+            anyOf: [
+              { type: "null" as const },
+              ...[i + 1, i + 2].filter((next) => next < count).map((next) => ({
+                $ref: `#/$defs/R${next}`,
+                asCell: ["cell" as const],
+              })),
+            ],
+          }]),
+        ),
+      });
+      const count = 16;
+      const { result, resolutions } = resolutionsNarrowing(chain(count), [
+        "foo",
+      ]);
+
+      expect(result).toBe(false);
+      expect(resolutions).toBeLessThanOrEqual(2 * count - 2);
+    });
+
     it("resolves each reference at most once, each definition naming every other", () => {
       const count = 8;
       const others = Array.from({ length: count - 1 }, (_, i) => i + 1);
@@ -367,6 +397,100 @@ describe("recursive schema narrowing", () => {
         // own, where each holds `V`'s child.
 
         expect(C.schemaAtPath(twoRoutes(second), ["p", "v"])).toEqual({
+          anyOf: [
+            { type: "number" },
+            { type: "number", ifc: { confidentiality: ["secret"] } },
+          ],
+        });
+      });
+    }
+
+    it("labels `V`'s child along a second route to a union that took in a result two cycles deep within `V`", () => {
+      // Within `V`, `W` comes back to `U` and `U` to `V`, so what `W` came to
+      // there lacks both. `X` takes it in while `V` is still open. The
+      // labeled route reaches `X` on its own, where it holds `V`'s child.
+
+      const leaf = (name: string): JSONSchemaObj => ({
+        type: "object",
+        properties: { [name]: { type: name === "v" ? "number" : "string" } },
+        additionalProperties: false,
+      });
+      const handle = (name: string) => ({
+        $ref: `#/$defs/${name}`,
+        asCell: ["cell" as const],
+      });
+      const schema: JSONSchemaObj = {
+        anyOf: [
+          {
+            type: "object",
+            properties: { p: handle("V") },
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: {
+              p: { ...handle("X"), ifc: { confidentiality: ["secret"] } },
+            },
+            additionalProperties: false,
+          },
+        ],
+        $defs: {
+          V: { anyOf: [leaf("v"), handle("U"), handle("X")] },
+          U: { anyOf: [leaf("u"), handle("W"), handle("V")] },
+          W: { anyOf: [leaf("w"), handle("U")] },
+          X: { anyOf: [leaf("x"), handle("W")] },
+        },
+      };
+
+      expect(C.schemaAtPath(schema, ["p", "v"])).toEqual({
+        anyOf: [
+          { type: "number" },
+          { type: "number", ifc: { confidentiality: ["secret"] } },
+        ],
+      });
+    });
+
+    for (const form of ["inline", "interned", "stored"] as const) {
+      it(`labels a child along a second route into a cycle that finished within another, ${form}`, () => {
+        // `R`, `B` and `A` reach one another before `p` is consumed, and again
+        // once `A` consumes it, so a cycle opens and finishes past `p` while
+        // the one before `p` is still open. The labeled route through `B`
+        // then reaches `R` past `p`, and narrows it afresh rather than take
+        // what the finished cycle left of it.
+
+        const ref = (name: string) => ({
+          $ref: `#/$defs/${name}`,
+          asCell: ["cell" as const],
+        });
+        const schema: JSONSchemaObj = {
+          ...ref("R"),
+          $defs: {
+            R: { anyOf: [ref("B")] },
+            B: {
+              anyOf: [ref("A"), {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  p: { ...ref("R"), ifc: { confidentiality: ["secret"] } },
+                },
+              }],
+            },
+            A: {
+              anyOf: [ref("R"), ref("B"), {
+                type: "object",
+                additionalProperties: false,
+                properties: { p: ref("A"), x: { type: "number" } },
+              }],
+            },
+          },
+        };
+        const input = form === "inline"
+          ? schema
+          : form === "interned"
+          ? internSchema(schema)
+          : externalizeSchema(schema);
+
+        expect(C.schemaAtPath(input, ["p", "x"])).toEqual({
           anyOf: [
             { type: "number" },
             { type: "number", ifc: { confidentiality: ["secret"] } },
