@@ -1,0 +1,2 @@
+{"date":"2026-09-28","from":{"k":"unit","s":"runner","n":"resultRowKeys() > keys a column-labeled row on its position"},"to":{"k":"unit","s":"runner","n":"resultRowKeys() > keys a column-labeled row on its content and what decides its label"}}
+{"date":"2026-09-28","from":{"k":"unit","s":"runner","n":"resultRowKeys() > keys a row under a row label on its position and its label"},"to":{"k":"unit","s":"runner","n":"resultRowKeys() > keys a row under a row label on its content and its label"}}

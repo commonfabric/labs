@@ -403,20 +403,21 @@ with the pure half in
    author-declared `derived:` fallback label for the refuse case remains a
    possible follow-up.)
 3. **Evaluate per row, attach per row.** Each result row is stored as an
-   entity doc of its own, keyed for a row-labeled row on its position and its
-   label under the result cell — never on its content, since the doc id is
-   visible to a reader the row label excludes, and on the label because a
-   doc's confidentiality can never weaken (Section
-   [05](./05-reactivity.md)); the
-   flush writes each labeled row doc
-   **directly** (its own id, root path) under a root-`ifc` schema, and then
-   reads each row's stored link back to confirm the row has a doc to carry
-   the label, refusing the query if one does not. Keyed by the row doc's id,
-   the per-row root label coexists with Phase 2's per-column field labels on
-   the same doc and dominates its fields by prefix-match (a field of a row is
-   at least as confidential as the row — inheriting down can only raise).
-   Downstream consumers inherit it through dereference traces
-   (`cfcLabelViewForDereferenceTraces`), exactly like per-column labels.
+   immutable entity doc of its own under the result cell, keyed on its
+   content and its label (Section [05](./05-reactivity.md)). The doc id is a
+   value derived from the row, so the reference at each result slot carries
+   the row's label ("Where a query's selection inputs are labeled" below):
+   a reader the row label excludes cannot observe the id, and so cannot
+   confirm a guess at the row's content by recomputing it. The flush writes
+   each labeled row doc **directly** (its own id, root path) under a
+   root-`ifc` schema, and then reads each row's stored link back to confirm
+   the row has a doc to carry the label, refusing the query if one does not.
+   Keyed by the row doc's id, the per-row root label coexists with Phase 2's
+   per-column field labels on the same doc and dominates its fields by
+   prefix-match (a field of a row is at least as confidential as the row —
+   inheriting down can only raise). Downstream consumers inherit it through
+   dereference traces (`cfcLabelViewForDereferenceTraces`), exactly like
+   per-column labels.
 
 **Declared output ceiling.** A query may declare the maximum confidentiality
 its result may carry — a consumer contract checked per row against the
@@ -775,13 +776,66 @@ whose policy an author wrote.
 
 `/result`'s per-column entries are untouched — the route declines at a path a
 schema declares — and so are the row documents, because that settle
-transaction carries no clause of its own. What the settle DOES declare, for a
-shared result, is the membership: `/result`'s shape `ifc` is the join of the
-rows' own labels AND the label the request carried. How many rows there are
-and which they are is a function of the parameters as much as of the rows,
-and both are readable without opening a row. A session-scoped result is
-materialized per reader, so its membership tells its own reader only what
-they asked for, and it declares nothing.
+transaction carries no clause of its own.
+
+### Where a query's selection inputs are labeled
+
+CFC spec §8.17.6. `S` is the confidentiality of the query's selection inputs,
+its statement and parameters: the flow join of the transaction that issued
+the request, recorded at issue and supplied by the settle.
+
+| Observation | Label | Carried by |
+| --- | --- | --- |
+| `/result` membership, order, length | `S` joined with every row's label, withheld rows included | declared `observes: "enumerate"` entry at `/result` |
+| `/withheld` | the same | declared entry at `/withheld` |
+| which reference sits at a `/result` slot | `S` joined with the labels of the rows the result holds | declared `observes: "followRef"` entry at `/result/*` |
+| a row's content | the row's column and row labels | the row document's own entries |
+| a row document's existence | the row's label | the row document's root entry |
+| `/requestHash` | `S`, accumulated over issues | route-2 declaration by the issuing transaction |
+| `/pending`, on the success path | nothing | recorded residual |
+
+All of it holds at every scope. A session-scoped result is materialized per
+reader, which limits who can read it and does not label what that reader's
+code derives from it and writes elsewhere.
+
+The slot entry is a declared `followRef` entry because that is the class
+every reader of a reference consumes: a standalone probe of a slot,
+`equals()` on a slot, the list's references taken as handles or read raw, and
+a dereference, which consumes the entry through the probe of the slot it
+follows ([`cfc-observation-classes.md`](../cfc-observation-classes.md) §6.1,
+[`cfc-template-population.md`](../cfc-template-population.md) §6). One entry
+covers every slot, so its label is the join over the rows the result holds:
+at least each slot's own label, and more than it where rows of one result
+carry different row labels. Each declaration grows by clause and never
+shrinks, as the control paths' do.
+
+`S` is not joined into a row. A reader who reaches a row through the result
+consumes `S` at the slot and the row's label at the row. A reader holding a
+reference to the row from elsewhere consumes the row's label alone, and what
+that reference reads never changes, because a row document is immutable.
+
+A row carrying per-column labels and no row label declares the join of its
+column labels on its root as an `observes: "shape"` entry, so its existence
+carries them. A row under a row label carries the row label at its root for
+every class; where such a row also carries per-column labels, its existence
+carries the row label and its columns carry theirs.
+
+Two residuals are recorded against §8.17.6:
+
+- **A row reference can be built from a guessed id.** §8.17.6 requires that
+  untrusted code obtain a row reference only through a result. No cell a
+  pattern creates can land on a row document's id: the id's preimage holds
+  the row key beside the cause, and every cell-creation route fixes its own
+  keys there. A pattern can still write a link naming any id as plain data
+  and read through it. Reading a row that way consumes the row's label, so
+  content stays protected. What it discloses without `S` is whether a guessed
+  row has been in any result of the query. Closing it takes references that
+  code cannot construct from an id, which is a property of the link
+  representation and not of this builtin.
+- **A row document is immutable by construction of its writer, and nothing
+  refuses another writer.** The builtin never writes a document twice. A
+  pattern holding a row reference can write to it. A writer claim naming the
+  builtin (`ifc.writeAuthorizedBy`) on each row document is the direction.
 
 What the store's undeclared bookkeeping was refusing by accident, before the
 route reached it, includes one case the sink seam cannot express: a query

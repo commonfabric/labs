@@ -460,9 +460,8 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
 
   describe("a shared result", () => {
     // Space scope, where one materialization serves every reader of the
-    // space. A session-scoped result is per-reader, so its membership tells
-    // its own reader nothing they did not ask for, and the builtin declares
-    // nothing on it.
+    // space. `sqlite-query-row-set-members.test.ts` covers the same
+    // declaration on a session-scoped result.
 
     const runSharedPattern = async (
       db: SqliteDbRef,

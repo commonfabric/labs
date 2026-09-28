@@ -1,43 +1,40 @@
 /**
  * What a `sqliteQuery` result row's entity document is keyed on. Each row is
  * stored as a document of its own under the query's result cell, and the key
- * chosen here, hashed with that cell's coordinates, is the document's id. A
- * key stands still across runs for a row that did not change, so a re-run
- * writes no document for it, and a key is drawn only from what a reader of the
- * result's row links may already see: the id is deterministic and the links
- * are unlabeled, so a key built from a confidential value would let such a
- * reader confirm a guess at that value by recomputing the id.
+ * chosen here, hashed with that cell's coordinates, is the document's id.
+ *
+ * A row document is immutable (CFC spec §8.17.6, rule 4): its key is its
+ * content and the label that content is written under, so a document holds one
+ * content under one label for as long as it exists, and a row whose data or
+ * label changed is another document. A result changes only in which row
+ * references sit at which of its slots.
+ *
+ * The id is therefore a value derived from the row. The reference at a result
+ * slot is labeled with the row's label for that reason, so a reader who cannot
+ * read a row cannot recompute its id from a guess at its content either.
  */
 
 import type { SqliteResultColumn } from "@commonfabric/memory/v2";
 
 /**
- * A row's key. A row carrying no confidentiality is keyed on its content, so
- * equal rows share a document and a row keeps its document wherever it lands
- * in the result. A row carrying a per-column label is keyed on its position,
- * and a row under a row label on its position and its label: a document's
- * confidentiality can never weaken, so a document may only ever hold rows of
- * one label, and the label is metadata every document carries in the open,
- * so the id gives away nothing the document does not. Position rather than a
- * declared primary key, because the declaration is the handle's claim and
- * not a verified constraint of the table: a table created before the key was
- * declared keeps whatever rows it holds, and two rows sharing a declared key
- * would share a document, so a link retained to one would come to resolve to
- * the other. The positional keys carry the selected database, its space and
- * id, since a query's `db` input can move to another database whose rows
- * would otherwise land on the same documents; the projection, each output
- * column and its origin, since a query's `sql` input can move to a
- * projection whose columns carry other labels; and the handle's `tables`
- * declaration, so a stricter re-declaration of a label moves the row to a new
- * document that the commit writes and labels.
+ * A row's key. A row carrying no confidentiality is keyed on its content
+ * alone, so equal rows share a document wherever they land in a result. A row
+ * carrying a per-column label or a row label is keyed on its content and on
+ * what decides its label: the row label itself, and for the per-column labels
+ * the projection, each output column and its origin, together with the
+ * handle's `tables` declaration, which maps an origin to a label. A commit
+ * attaches label metadata only to the documents it writes, so a row whose
+ * label changed under unchanged content has to land on a document of its own
+ * for the new label to reach it. The selected database, its space and id, is
+ * part of the key as well, so rows of two databases never share a document.
  */
 export type ResultRowKey =
   | { readonly row: unknown }
   | {
     readonly database: ResultRowDatabase;
     readonly projection: readonly SqliteResultColumn[] | undefined;
-    readonly index: number;
     readonly tables: unknown;
+    readonly row: unknown;
     readonly label?: unknown;
   };
 
@@ -67,9 +64,9 @@ export function resultRowKeys(options: {
   return rows.map((row, index) => {
     const label = rowLabel(index);
     if (label !== undefined) {
-      return { database, projection: columns, index, tables, label };
+      return { database, projection: columns, tables, row, label };
     }
     if (!columnLabeled) return { row };
-    return { database, projection: columns, index, tables };
+    return { database, projection: columns, tables, row };
   });
 }

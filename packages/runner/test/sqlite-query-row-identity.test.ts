@@ -313,15 +313,15 @@ describe("sqlite-query-row-identity", () => {
 
   it({
     name:
-      "rewrites a column-labeled result in place when a row moves to another position",
+      "writes no document of a column-labeled result whose rows move to other positions",
     sanitizeResources: false,
   }, async () => {
     // A labeled handle has the server load the column-metadata library, which
     // stays loaded for the life of the process, so this case is exempt from
     // the dynamic-library leak check. The rows are ordered by `body`, so
-    // rewriting one row's body moves it to the front: every row now sits at
-    // another position, so every position's document is rewritten, and no
-    // document is minted.
+    // rewriting one row's body moves it to the front and every other row to
+    // another position. The rewritten row is new content and gets a document
+    // of its own; the two rows that only moved keep theirs.
 
     const db = await seededDb(labeledTables);
     const { result, tick } = await runQuery(
@@ -350,16 +350,46 @@ describe("sqlite-query-row-identity", () => {
       { id: 2, body: "b" },
     ]);
 
-    expect(rowDocIds(result)).toEqual(rowsBefore);
+    const rowsAfter = rowDocIds(result);
+    expect(rowsAfter.slice(1)).toEqual(rowsBefore.slice(0, 2));
+    expect(rowsBefore).not.toContain(rowsAfter[0]);
     const secondRun = written.slice(mark);
-    expect(
-      [
-        ...new Set(
-          secondRun.filter((w) => rowsBefore.includes(w.id)).map((w) => w.id),
-        ),
-      ].sort(),
-    ).toEqual([...rowsBefore].sort());
-    expect(secondRun.filter((w) => !known.has(w.id))).toEqual([]);
+    expect(secondRun.filter((w) => rowsBefore.includes(w.id))).toEqual([]);
+    expect(secondRun.filter((w) => !known.has(w.id)).map((w) => w.id))
+      .toEqual([rowsAfter[0]]);
+  });
+
+  it({
+    name:
+      "leaves the document of a column-labeled row standing once no result holds it",
+    sanitizeResources: false,
+  }, async () => {
+    // Exempt from the dynamic-library leak check for the reason above. A row
+    // document is written once: a row whose data changed is another document,
+    // and the one it had stays as it was, for a reader who retained a
+    // reference to it. Nothing collects it, so the count of row documents a
+    // result cell has written grows by one per distinct row it ever held.
+
+    const db = await seededDb(labeledTables);
+    const { result, tick } = await runQuery(db, "labeled-growth");
+    let state = await settledPast(result, undefined);
+    await runtime.settled();
+    expect(state.error).toBeUndefined();
+    const rowDocuments = new Set(rowDocIds(result));
+    expect(rowDocuments.size).toBe(3);
+
+    for (const body of ["B1", "B2", "B3"]) {
+      await execSqlite(db, "UPDATE notes SET body = ? WHERE id = 2", [body]);
+      state = await rerun(result, tick, state);
+      expect(state.error).toBeUndefined();
+      for (const id of rowDocIds(result)) rowDocuments.add(id);
+    }
+
+    expect(rowDocIds(result)).toHaveLength(3);
+    expect(rowDocuments.size).toBe(6);
+    for (const id of rowDocuments) {
+      expect(written.filter((w) => w.id === id)).toHaveLength(1);
+    }
   });
 
   it({

@@ -31,16 +31,16 @@ const never = () => undefined;
 
 const database = { space: "did:key:zTestSpace", id: "of:notes-db" };
 
-/** The key of a row keyed on its position under `projection`. */
-const positional = (
+/** The key of a labeled `row` under `projection`. */
+const labeled = (
   projection: readonly SqliteResultColumn[],
-  index: number,
+  row: unknown,
   label?: unknown,
 ) => ({
   database,
   projection,
-  index,
   tables,
+  row,
   ...(label !== undefined && { label }),
 });
 
@@ -58,7 +58,7 @@ describe("resultRowKeys()", () => {
     ).toEqual([{ row: rows[0] }, { row: rows[1] }]);
   });
 
-  it("keys a column-labeled row on its position", () => {
+  it("keys a column-labeled row on its content and what decides its label", () => {
     expect(
       resultRowKeys({
         rows,
@@ -68,10 +68,39 @@ describe("resultRowKeys()", () => {
         columnLabeled: true,
         rowLabel: never,
       }),
-    ).toEqual([positional(notesColumns, 0), positional(notesColumns, 1)]);
+    ).toEqual([labeled(notesColumns, rows[0]), labeled(notesColumns, rows[1])]);
   });
 
-  it("keys a row under a row label on its position and its label", () => {
+  it("keys a column-labeled row on the same key at another position", () => {
+    const keysOf = (ordered: readonly unknown[]) =>
+      resultRowKeys({
+        rows: ordered,
+        columns: notesColumns,
+        tables,
+        database,
+        columnLabeled: true,
+        rowLabel: never,
+      });
+    const [first, second] = keysOf(rows);
+    expect(keysOf([rows[1], rows[0]])).toEqual([second, first]);
+  });
+
+  it("keys rows of equal content under different row labels on different keys", () => {
+    const bob = { confidentiality: ["did:mailto:bob@b.example"] };
+    const eve = { confidentiality: ["did:mailto:eve@e.example"] };
+    const [first, second] = resultRowKeys({
+      rows: [rows[0], rows[0]],
+      columns: notesColumns,
+      tables,
+      database,
+      columnLabeled: false,
+      rowLabel: (index) => index === 0 ? bob : eve,
+    });
+    expect(first).toEqual(labeled(notesColumns, rows[0], bob));
+    expect(second).toEqual(labeled(notesColumns, rows[0], eve));
+  });
+
+  it("keys a row under a row label on its content and its label", () => {
     const label = { confidentiality: ["did:mailto:bob@b.example"] };
     expect(
       resultRowKeys({
@@ -82,7 +111,7 @@ describe("resultRowKeys()", () => {
         columnLabeled: false,
         rowLabel: (index) => index === 1 ? label : undefined,
       }),
-    ).toEqual([{ row: rows[0] }, positional(notesColumns, 1, label)]);
+    ).toEqual([{ row: rows[0] }, labeled(notesColumns, rows[1], label)]);
   });
 
   it("keys the same row of another database on a different key", () => {
@@ -103,7 +132,7 @@ describe("resultRowKeys()", () => {
       columnLabeled: true,
       rowLabel: never,
     });
-    expect(first).toEqual(positional(notesColumns, 0));
+    expect(first).toEqual(labeled(notesColumns, rows[0]));
     expect(second).not.toEqual(first);
   });
 
@@ -128,7 +157,7 @@ describe("resultRowKeys()", () => {
       columnLabeled: true,
       rowLabel: never,
     });
-    expect(second).toEqual(positional(aliased, 0));
+    expect(second).toEqual(labeled(aliased, { id: 1, value: "a" }));
     expect(second).not.toEqual(first);
   });
 });

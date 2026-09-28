@@ -1,0 +1,614 @@
+/**
+ * Where `sqliteQuery` labels its selection inputs (CFC spec §8.17.6).
+ *
+ * `S` below is the confidentiality of a query's selection inputs: its
+ * statement and its parameters. A result's structure carries `S`, whatever
+ * the result's scope: its membership, its count, and the reference identity at
+ * each slot. A row document carries the label its columns and its row rule
+ * assign and nothing of `S`, and holds one content for its whole life, so a
+ * reader who retained a reference to one learns nothing about a later
+ * selection through it.
+ *
+ * The fixture labels the column a parameter is read from differently from the
+ * column a query projects, so a label that reached a path from the parameter
+ * is distinguishable from one the projected rows brought.
+ */
+
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { Identity } from "@commonfabric/identity";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import type { URI } from "@commonfabric/memory/interface";
+import type { SqliteDbRef, SqliteParamsWire } from "@commonfabric/memory/v2";
+
+import type { Cell } from "../src/cell.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { deriveFlowJoin } from "../src/cfc/prepare.ts";
+import { parseLink } from "../src/link-utils.ts";
+import { Runtime } from "../src/runtime.ts";
+import { StorageManager } from "../src/storage/cache.deno.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { linkResolutionProbe } from "../src/storage/reactivity-log.ts";
+import { createTrustedBuilder } from "./support/trusted-builder.ts";
+
+const signer = await Identity.fromPassphrase("runner-sqlite-row-set-members");
+const space = signer.did();
+
+const clauseFor = (cls: string) => [
+  space,
+  { type: CFC_ATOM_TYPE.Resource, class: cls, subject: space },
+];
+
+/** The label of the cell a parameter is read from: `S`. */
+const PICKED_CLAUSE = clauseFor("message");
+/** The label of the `body` column. */
+const BODY_CLAUSE = clauseFor("attachment");
+
+/** Projects the labeled column. */
+const BODIES_SQL =
+  "SELECT body FROM messages WHERE container_id = ?1 ORDER BY id";
+/** Projects a column that declares nothing. */
+const NOTES_SQL =
+  "SELECT note FROM messages WHERE container_id = ?1 ORDER BY id";
+
+type QueryScope = "session" | "space";
+type FlowLabels = "persist" | "off";
+
+interface QueryState {
+  pending?: boolean;
+  result?: Record<string, unknown>[];
+  error?: unknown;
+  requestHash?: string;
+}
+
+const HANDLES_SCHEMA = {
+  type: "object",
+  properties: {
+    result: { type: "array", items: { asCell: ["cell"] } },
+  },
+} as const;
+
+describe("sqlite-query-row-set-members", () => {
+  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let runtime: Runtime;
+
+  /**
+   * `persist` is the strict rung with the dials every preset deployment pins.
+   * `off` is enforcement without flow labels, where no write of the result
+   * store stamps the issuing transaction's join on it, so what the builtin
+   * declares is the only place `S` can come from.
+   */
+  const makeRuntime = (flowLabels: FlowLabels) => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      ...(flowLabels === "persist"
+        ? {
+          cfcEnforcementMode: "enforce-strict",
+          cfcFlowLabels: "persist",
+          cfcWriteFloor: "enforce",
+          cfcPolicyEvaluation: "enforce",
+          cfcLabelMetadataProtection: "enforce",
+          cfcDeclaredMonotonicity: "enforce",
+        } as const
+        : {
+          cfcEnforcementMode: "enforce-explicit",
+          cfcFlowLabels: "off",
+        } as const),
+    });
+  };
+
+  beforeEach(() => makeRuntime("persist"));
+
+  afterEach(async () => {
+    await runtime.dispose({ closeStorage: false });
+    await storageManager.close();
+  });
+
+  const labeledDb = (): SqliteDbRef =>
+    ({
+      id: `of:row-set-members-${crypto.randomUUID()}`,
+      tables: {
+        messages: {
+          type: "object",
+          properties: {
+            id: { type: "integer", sqlType: "integer primary key" },
+            container_id: { type: "string", sqlType: "text" },
+            body: {
+              type: "string",
+              sqlType: "text",
+              ifc: { confidentiality: BODY_CLAUSE },
+            },
+            note: { type: "string", sqlType: "text" },
+          },
+          required: [],
+        },
+      },
+    }) as unknown as SqliteDbRef;
+
+  const seed = async (
+    db: SqliteDbRef,
+    sql: string,
+    params?: SqliteParamsWire,
+  ): Promise<void> => {
+    const tx = runtime.edit();
+    tx.recordSqliteWrite!(space, { op: "sqlite", db, sql, params });
+    expect((await tx.commit()).error).toBeUndefined();
+  };
+
+  /** Two rows in `c-alpha` and one in `c-beta`. */
+  const seededDb = async (): Promise<SqliteDbRef> => {
+    const db = labeledDb();
+    await seed(
+      db,
+      "INSERT INTO messages (container_id, body, note) VALUES " +
+        "(?, ?, ?), (?, ?, ?), (?, ?, ?)",
+      [
+        "c-alpha",
+        "first",
+        "n1",
+        "c-alpha",
+        "second",
+        "n2",
+        "c-beta",
+        "only",
+        "n3",
+      ],
+    );
+    return db;
+  };
+
+  /**
+   * The cells a query's parameter is read from: an unlabeled one holding
+   * `c-beta`, a labeled one holding `c-alpha`, and the flag choosing between
+   * them, which starts at the unlabeled one.
+   */
+  const parameterSource = async (cause: string) => {
+    const tx = runtime.edit();
+    const plain = runtime.getCell<string>(space, `${cause}-plain`, {
+      type: "string",
+    }, tx);
+    plain.set("c-beta");
+    const labeled = runtime.getCell<string>(space, `${cause}-labeled`, {
+      type: "string",
+      ifc: { confidentiality: PICKED_CLAUSE },
+      // deno-lint-ignore no-explicit-any -- `ifc` is not on the schema type
+    } as any, tx);
+    labeled.set("c-alpha");
+    const useLabeled = runtime.getCell<boolean>(space, `${cause}-flag`, {
+      type: "boolean",
+    }, tx);
+    useLabeled.set(false);
+    expect((await tx.commit()).error).toBeUndefined();
+    return { plain, labeled, useLabeled };
+  };
+
+  type ParameterSource = Awaited<ReturnType<typeof parameterSource>>;
+
+  /**
+   * Runs one query whose only parameter is read from `source`, and returns the
+   * result store the builtin writes.
+   */
+  const runQuery = async (options: {
+    cause: string;
+    db: SqliteDbRef;
+    sql: string;
+    source: ParameterSource;
+    scope: QueryScope;
+    /** Binds the labeled cell as the parameter, with no lift between. */
+    direct?: boolean;
+  }) => {
+    const { cause, db, sql, source, scope, direct } = options;
+    const { commonfabric: cf } = createTrustedBuilder(runtime);
+    const { lift } = cf as unknown as {
+      lift: (
+        fn: (value: unknown) => unknown,
+        argumentSchema?: unknown,
+        resultSchema?: unknown,
+      ) => (value: unknown) => unknown;
+    };
+    // Reads one of the two cells, chosen by the flag: the branch it does not
+    // take is a cell it does not read, so an issue made from the unlabeled
+    // cell carries nothing.
+    const parameterOf = lift(
+      (input: unknown) => {
+        const { plain, labeled, useLabeled } = input as {
+          plain?: string;
+          labeled?: string;
+          useLabeled?: boolean;
+        };
+        return [String((useLabeled ? labeled : plain) ?? "")];
+      },
+      undefined,
+      { type: "array", items: { type: "string" } },
+    );
+    const testPattern = cf.pattern<
+      { plain: string; labeled: string; useLabeled: boolean }
+    >((input) => {
+      const query = scope === "session"
+        ? cf.sqliteQuery.asScope("session")
+        : cf.sqliteQuery;
+      const rows = query(
+        // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
+        {
+          db,
+          reactOn: db,
+          sql,
+          params: direct ? [input.labeled] : parameterOf(input),
+        } as any,
+      );
+      return { rows };
+    });
+    const tx = runtime.edit();
+    const resultCell = runtime.getCell(
+      space,
+      cause,
+      testPattern.resultSchema,
+      tx,
+    );
+    const result = runtime.run(
+      tx,
+      testPattern,
+      // deno-lint-ignore no-explicit-any -- cells stand in for the arguments
+      source as any,
+      resultCell,
+    );
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit()).error).toBeUndefined();
+    // deno-lint-ignore no-explicit-any -- the builtin's state, as it writes it
+    return result.key("rows") as Cell<any>;
+  };
+
+  const settled = async (
+    // deno-lint-ignore no-explicit-any -- the builtin's state
+    rows: Cell<any>,
+    count: number,
+  ): Promise<QueryState> => {
+    const state = await waitForCellValue<QueryState>(
+      runtime,
+      rows,
+      (value) =>
+        (value?.pending === false && (value?.result ?? []).length === count) ||
+        value?.error !== undefined,
+    );
+    expect(state.error).toBeUndefined();
+    return state;
+  };
+
+  /** Moves the parameter to the labeled cell, which selects `c-alpha`. */
+  const selectLabeled = async (source: ParameterSource) => {
+    const tx = runtime.edit();
+    source.useLabeled.withTx(tx).set(true);
+    expect((await tx.commit()).error).toBeUndefined();
+  };
+
+  /** Moves the unlabeled parameter to another container. */
+  const selectPlain = async (source: ParameterSource, value: string) => {
+    const tx = runtime.edit();
+    source.plain.withTx(tx).set(value);
+    expect((await tx.commit()).error).toBeUndefined();
+  };
+
+  /** What the row document behind `link` holds. */
+  const rowContent = (link: ReturnType<typeof rowLinks>[number]): unknown => {
+    const tx = runtime.edit();
+    try {
+      return runtime.getCellFromLink(link, undefined, tx).getRaw();
+    } finally {
+      tx.abort("content read");
+    }
+  };
+
+  /** The document each stored result row links to, in row order. */
+  // deno-lint-ignore no-explicit-any -- the builtin's state
+  const rowLinks = (rows: Cell<any>) => {
+    const store = rows.resolveAsCell();
+    const raw = store.key("result").getRaw() as unknown[];
+    return raw.map((entry) => {
+      const link = parseLink(entry as Parameters<typeof parseLink>[0], store);
+      if (!link?.id) throw new Error("a result row is stored inline");
+      return {
+        space,
+        id: link.id as URI,
+        scope: link.scope,
+        type: "application/json" as const,
+        path: [] as string[],
+      };
+    });
+  };
+
+  /** The join of what `observe` reads, off a transaction then abandoned. */
+  const joinOf = (
+    observe: (tx: IExtendedStorageTransaction) => void,
+  ): unknown[] => {
+    const tx = runtime.edit();
+    try {
+      observe(tx);
+      return deriveFlowJoin(tx).confidentiality;
+    } finally {
+      tx.abort("observation only");
+    }
+  };
+
+  const canonical = (value: unknown): string =>
+    JSON.stringify(
+      value,
+      (_key, held) =>
+        held !== null && typeof held === "object" && !Array.isArray(held)
+          ? Object.fromEntries(
+            Object.entries(held as Record<string, unknown>).sort(([a], [b]) =>
+              a < b ? -1 : a > b ? 1 : 0
+            ),
+          )
+          : held,
+    );
+
+  /** Whether every alternative of `clause` is among `atoms`. */
+  const hasClause = (
+    atoms: readonly unknown[],
+    clause: readonly unknown[],
+  ): boolean =>
+    clause.every((atom) =>
+      atoms.some((held) => canonical(held) === canonical(atom))
+    );
+
+  /**
+   * The confidentiality the result store declares at `path` for the
+   * observation class `observes`.
+   */
+  const declaredAt = (
+    // deno-lint-ignore no-explicit-any -- the builtin's state
+    rows: Cell<any>,
+    path: string[],
+    observes: string,
+  ): unknown[] => {
+    const tx = runtime.edit();
+    try {
+      const link = rows.resolveAsCell().getAsNormalizedFullLink();
+      const entries = (readStoredCfcMetadata(tx, link)?.labelMap.entries ??
+        []) as {
+          path: string[];
+          origin?: string;
+          observes?: string;
+          label: { confidentiality?: unknown[] };
+        }[];
+      return entries.filter((entry) =>
+        entry.origin === "declared" && entry.observes === observes &&
+        entry.path.length === path.length &&
+        entry.path.every((segment, i) => segment === path[i])
+      ).flatMap((entry) => entry.label.confidentiality ?? []);
+    } finally {
+      tx.abort("label read");
+    }
+  };
+
+  /** A standalone probe of which reference sits at `/result/<index>`. */
+  // deno-lint-ignore no-explicit-any -- the builtin's state
+  const probeSlot = (rows: Cell<any>, index: number) => {
+    const link = rows.resolveAsCell().getAsNormalizedFullLink();
+    return joinOf((tx) => {
+      tx.read({
+        space,
+        scope: link.scope,
+        id: link.id,
+        type: "application/json",
+        path: ["value", ...link.path, "result", String(index)],
+      }, { meta: linkResolutionProbe });
+    });
+  };
+
+  describe("a retained row reference", () => {
+    for (
+      const [name, sql, before] of [
+        ["a column-labeled row", BODIES_SQL, { body: "only" }],
+        ["an unlabeled row", NOTES_SQL, { note: "n3" }],
+      ] as const
+    ) {
+      it(`reads the same content of ${name} after the parameter changes`, async () => {
+        const db = await seededDb();
+        const source = await parameterSource(`retained-${name}`);
+        const rows = await runQuery({
+          cause: `retained-${name}`,
+          db,
+          sql,
+          source,
+          scope: "session",
+        });
+        await settled(rows, 1);
+        const [retained] = rowLinks(rows);
+        expect(rowContent(retained)).toEqual(before);
+
+        await selectPlain(source, "c-alpha");
+        await settled(rows, 2);
+        await runtime.settled();
+
+        expect(rowContent(retained)).toEqual(before);
+        expect(rowLinks(rows).map((link) => link.id)).not.toContain(
+          retained.id,
+        );
+      });
+    }
+  });
+
+  for (
+    const [scope, flowLabels] of [
+      ["session", "persist"],
+      ["space", "persist"],
+      ["session", "off"],
+      ["space", "off"],
+    ] as const
+  ) {
+    describe(`a ${scope}-scoped result of unlabeled columns under a labeled parameter, flow labels ${flowLabels}`, () => {
+      // The projected column declares nothing, so `S` is the only label that
+      // can reach any of these observations.
+
+      beforeEach(async () => {
+        await runtime.dispose({ closeStorage: false });
+        await storageManager.close();
+        makeRuntime(flowLabels);
+      });
+
+      const labeledSelection = async (cause: string) => {
+        const db = await seededDb();
+        const source = await parameterSource(`${scope}-${flowLabels}-${cause}`);
+        const rows = await runQuery({
+          cause: `${scope}-${flowLabels}-${cause}`,
+          db,
+          sql: NOTES_SQL,
+          source,
+          scope,
+          direct: flowLabels === "off",
+        });
+        if (flowLabels === "persist") {
+          // The store is created by an issue that carries nothing, so no
+          // label of its creation stands in for the one the later issue
+          // brings. With flow labels off a lift's output carries no label, so
+          // there the labeled cell is the parameter from the first issue.
+          await settled(rows, 1);
+          await selectLabeled(source);
+        }
+        const state = await settled(rows, 2);
+        expect(state.result).toEqual([{ note: "n1" }, { note: "n2" }]);
+        return rows;
+      };
+
+      it("declares `S` on its membership and on the reference at each slot", async () => {
+        const rows = await labeledSelection("declared");
+
+        expect(
+          hasClause(declaredAt(rows, ["result"], "enumerate"), PICKED_CLAUSE),
+        )
+          .toBe(true);
+        expect(
+          hasClause(
+            declaredAt(rows, ["result", "*"], "followRef"),
+            PICKED_CLAUSE,
+          ),
+        ).toBe(true);
+      });
+
+      it("carries `S` on a probe of a slot", async () => {
+        const rows = await labeledSelection("probe");
+
+        expect(hasClause(probeSlot(rows, 0), PICKED_CLAUSE)).toBe(true);
+      });
+
+      it("carries `S` on `equals()` of a slot against a known row", async () => {
+        const rows = await labeledSelection("equals");
+        const known = runtime.getCellFromLink(rowLinks(rows)[0]);
+
+        const join = joinOf((tx) => {
+          rows.resolveAsCell().withTx(tx).key("result").key(0).equals(known);
+        });
+        expect(hasClause(join, PICKED_CLAUSE)).toBe(true);
+      });
+
+      it("carries `S` on the row references taken as handles", async () => {
+        const rows = await labeledSelection("handles");
+
+        const join = joinOf((tx) => {
+          const handles = rows.resolveAsCell().asSchema(HANDLES_SCHEMA)
+            .withTx(tx).key("result").get() as unknown as Cell<unknown>[];
+          handles.map((cell) => cell.getAsNormalizedFullLink().id);
+        });
+        expect(hasClause(join, PICKED_CLAUSE)).toBe(true);
+      });
+
+      it("carries `S` on the result's length", async () => {
+        const rows = await labeledSelection("length");
+
+        const join = joinOf((tx) => {
+          rows.resolveAsCell().withTx(tx).key("result").key("length").get();
+        });
+        expect(hasClause(join, PICKED_CLAUSE)).toBe(true);
+      });
+
+      it("carries `S` on an enumeration of the result", async () => {
+        const rows = await labeledSelection("enumerate");
+
+        const join = joinOf((tx) => {
+          rows.resolveAsCell().withTx(tx).key("result").get();
+        });
+        expect(hasClause(join, PICKED_CLAUSE)).toBe(true);
+      });
+
+      it("carries nothing of `S` on a row read through a retained reference", async () => {
+        const rows = await labeledSelection("independent");
+        const [first] = rowLinks(rows);
+
+        const join = joinOf((tx) => {
+          runtime.getCellFromLink(first, undefined, tx).get();
+        });
+        expect(hasClause(join, PICKED_CLAUSE)).toBe(false);
+      });
+    });
+  }
+
+  describe("a result of column-labeled rows under an unlabeled parameter", () => {
+    // A row document's id is derived from its content, so which reference
+    // sits at a slot is a function of the row: a reader learns it only under
+    // the row's own label.
+
+    const labeledRows = async (cause: string) => {
+      const db = await seededDb();
+      const source = await parameterSource(cause);
+      const rows = await runQuery({
+        cause,
+        db,
+        sql: BODIES_SQL,
+        source,
+        scope: "space",
+      });
+      await settled(rows, 1);
+      return rows;
+    };
+
+    it("declares the row's label on the reference at each slot", async () => {
+      const rows = await labeledRows("labeled-declared");
+
+      expect(
+        hasClause(declaredAt(rows, ["result", "*"], "followRef"), BODY_CLAUSE),
+      ).toBe(true);
+    });
+
+    it("carries the row's label on a probe of a slot", async () => {
+      const rows = await labeledRows("labeled-probe");
+
+      expect(hasClause(probeSlot(rows, 0), BODY_CLAUSE)).toBe(true);
+    });
+
+    it("carries the row's label on the stored row references", async () => {
+      const rows = await labeledRows("labeled-raw");
+
+      const join = joinOf((tx) => {
+        rows.resolveAsCell().withTx(tx).key("result").getRaw();
+      });
+      expect(hasClause(join, BODY_CLAUSE)).toBe(true);
+    });
+
+    it("carries the row's label and nothing of `S` on the row's existence", async () => {
+      const db = await seededDb();
+      const source = await parameterSource("labeled-existence");
+      const rows = await runQuery({
+        cause: "labeled-existence",
+        db,
+        sql: BODIES_SQL,
+        source,
+        scope: "space",
+      });
+      await settled(rows, 1);
+      await selectLabeled(source);
+      await settled(rows, 2);
+      const [first] = rowLinks(rows);
+
+      const join = joinOf((tx) => {
+        tx.read({ ...first, path: ["value"] }, { nonRecursive: true });
+      });
+      expect(hasClause(join, BODY_CLAUSE)).toBe(true);
+      expect(hasClause(join, PICKED_CLAUSE)).toBe(false);
+    });
+  });
+});

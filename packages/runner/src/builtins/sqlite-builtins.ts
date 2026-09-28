@@ -20,6 +20,7 @@
 // this read path.
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import { settleAbandonedRequest } from "./abandoned-request.ts";
 import {
   enrollRuntimeOwnedStore,
@@ -310,6 +311,72 @@ function staticConfidentialityOf(
     if (Array.isArray(conf)) out.push(...conf);
   }
   return out;
+}
+
+/**
+ * The confidentiality a result store already declares on the reference
+ * identity of its slots: the declared `followRef` entries at the children of
+ * `resultPath`, whether one entry covers every slot or each slot has its own.
+ * A declaration only grows, so a settle joins what stands with what it
+ * brings.
+ */
+function declaredSlotConfidentiality(
+  metadata: ReturnType<typeof readStoredCfcMetadata>,
+  resultPath: readonly string[],
+): CfcConfClause[] {
+  const out: CfcConfClause[] = [];
+  for (const entry of metadata?.labelMap.entries ?? []) {
+    if (
+      entry.origin === "declared" && entry.observes === "followRef" &&
+      entry.path.length === resultPath.length + 1 &&
+      resultPath.every((segment, i) => segment === entry.path[i])
+    ) {
+      out.push(...(entry.label.confidentiality ?? []) as CfcConfClause[]);
+    }
+  }
+  return out;
+}
+
+/**
+ * `writeSchema` with `slotIfc` declared on every slot of `result`, as a label
+ * on which reference sits at the slot and not on what the reference leads to.
+ * A slot's node keeps the row schema it has, per-column labels included: those
+ * sit beneath the slot, at the columns.
+ */
+function withSlotIdentityLabel(
+  writeSchema: Record<string, unknown> | undefined,
+  slotIfc: {
+    confidentiality: readonly CfcConfClause[];
+    observes: "followRef";
+  },
+): Record<string, unknown> {
+  const labeled = (node: unknown): Record<string, unknown> => {
+    if (!isObjectNotArray(node)) return { ifc: slotIfc };
+    return node.ifc === undefined
+      ? { ...node, ifc: slotIfc }
+      : { allOf: [node, { ifc: slotIfc }] };
+  };
+  const properties = (writeSchema?.properties ?? {}) as Record<
+    string,
+    Record<string, unknown> | undefined
+  >;
+  const result = properties.result ?? {};
+  const prefixItems = result.prefixItems;
+  return {
+    ...writeSchema,
+    type: "object",
+    additionalProperties: true,
+    properties: {
+      ...properties,
+      result: {
+        ...result,
+        type: "array",
+        ...(Array.isArray(prefixItems)
+          ? { prefixItems: prefixItems.map(labeled) }
+          : { items: labeled(result.items) }),
+      },
+    },
+  };
 }
 
 /**
@@ -1274,8 +1341,9 @@ export function sqliteQuery(
     if (decision === "dedupe") return;
     // Forced here, where the request is going out: the flush settles on a
     // transaction of its own, so a label read then would be read from a
-    // transaction that has already committed.
-    const requestLabel = scope === "session" ? [] : requestConfidentiality();
+    // transaction that has already committed. The settle supplies it to the
+    // result's structure from this record (CFC spec §8.17.6).
+    const requestLabel = requestConfidentiality();
     // Diffing the pending publication likewise observes only its destination.
     // The query's inputs, read above, are what schedule another request.
     result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set({
@@ -1672,19 +1740,27 @@ export function sqliteQuery(
             // row: how many rows there are, and which. That is a function
             // of the query's PARAMETERS as much as of the rows it returned,
             // so the label this request carried joins the rows' own — a
-            // shared result whose parameter came out of a labeled read
-            // would otherwise let anyone in the space enumerate which
-            // labeled thing the parameter named, even when every projected
-            // column declares nothing. A session-scoped result is
-            // materialized per reader, so its membership tells its own
-            // reader only what they asked for, and `[]` stands.
-            const shapeConfidentiality = scope === "session"
-              ? []
-              : joinCfcObservedConfidentiality([
-                staticConfidentialityOf(labelSchema),
-                ...rowLabels.labels.map((label) => label?.confidentiality),
-                requestLabel,
-              ]);
+            // result whose parameter came out of a labeled read would
+            // otherwise let a reader enumerate which labeled thing the
+            // parameter named, even when every projected column declares
+            // nothing. It holds at every scope (CFC spec §8.17.6, rule 1):
+            // a scope limits who can read a result, and says nothing about
+            // what that reader's code derives from it and writes elsewhere.
+            const shapeConfidentiality = joinCfcObservedConfidentiality([
+              staticConfidentialityOf(labelSchema),
+              ...rowLabels.labels.map((label) => label?.confidentiality),
+              requestLabel,
+            ]);
+            // Which reference sits at a slot is a function of the parameters
+            // too, and of the row: a row document's id is derived from its
+            // content, so a reader of the id learns what a reader of the row
+            // learns. One label covers every slot, the join over the rows
+            // the result holds, which is at least each slot's own.
+            const slotConfidentiality = joinCfcObservedConfidentiality([
+              staticConfidentialityOf(labelSchema),
+              ...perRow.map((label) => label?.confidentiality),
+              requestLabel,
+            ]);
             const rowWriteSchema = needsEntryRowSchema
               ? {
                 type: "object",
@@ -1699,16 +1775,19 @@ export function sqliteQuery(
               }
               : labelSchema;
             // Every row is an entity document of its own under the result
-            // cell, keyed as `resultRowKeys()` decides: a key stands still
-            // across runs for a row that did not change, so the diff finds
-            // nothing to write for it, and a key is drawn only from what a
-            // reader of the unlabeled row links may already see. The
-            // selected database and the handle's `tables` declaration are
-            // namespaces the keys carry on purpose, so a query whose `db`
-            // input moves to another database, or whose handle is
-            // re-declared, lands its rows on documents of their own. Nothing
-            // else that varies between runs may reach a key, or an
-            // unchanged result would mint a document per row per run.
+            // cell, keyed as `resultRowKeys()` decides: on its content and
+            // the label it is written under, so a document is written once
+            // and a row that did not change finds its document standing.
+            // The selected database and the handle's `tables` declaration
+            // are namespaces the keys of labeled rows carry on purpose, so a
+            // query whose `db` input moves to another database, or whose
+            // handle is re-declared, lands its rows on documents of their
+            // own. Nothing that varies between runs over unchanged data may
+            // reach a key, or an unchanged result would mint a document per
+            // row per run.
+            const columnConfidentiality = staticConfidentialityOf(
+              labelSchema,
+            ) ?? [];
             const rowKeys = resultRowKeys({
               rows: resultRows,
               columns: res.columns,
@@ -1734,15 +1813,23 @@ export function sqliteQuery(
                 // rows lost their labels, or whose parameter did, would
                 // otherwise re-mint the path empty and take the declaration
                 // back. A parameter's label is the one that moves.
+                const storedMetadata = readStoredCfcMetadata(wtx, base);
                 const priorShape = cfcConfidentialityForObservationNode({
                   labelView: cfcLabelViewFromMetadata(
-                    readStoredCfcMetadata(wtx, base),
+                    storedMetadata,
                     [...base.path, "result"],
                   ),
                 });
                 const shapeIfcAtoms = joinCfcObservedConfidentiality([
                   priorShape,
                   shapeConfidentiality,
+                ]);
+                const slotIfcAtoms = joinCfcObservedConfidentiality([
+                  declaredSlotConfidentiality(storedMetadata, [
+                    ...base.path,
+                    "result",
+                  ]),
+                  slotConfidentiality,
                 ]);
                 if (shapeIfcAtoms.length > 0) {
                   // A shared array's length and membership reveal its rows even
@@ -1771,6 +1858,12 @@ export function sqliteQuery(
                     },
                   };
                 }
+                if (slotIfcAtoms.length > 0) {
+                  writeSchema = withSlotIdentityLabel(writeSchema, {
+                    confidentiality: slotIfcAtoms,
+                    observes: "followRef",
+                  });
+                }
                 // The stored link is bare. The row's schema, per-column labels
                 // and row label included, goes on the write alone, whose policy
                 // input is what carries the labels to the row document. A link
@@ -1778,10 +1871,22 @@ export function sqliteQuery(
                 // content-addressed document, and two scoped instances of one
                 // result settling in separate waves would both write it, which
                 // the second wave refuses.
+                //
+                // A row's existence carries the label of the row and nothing
+                // of the request: a row is reached through a result slot,
+                // and the slot is where the request's label sits.
                 const storedRows = resultRows.map((row, i) => {
                   const schema = {
                     ...rowSchemas[i],
-                    ...(perRow[i] !== undefined && { ifc: perRow[i] }),
+                    ...(perRow[i] !== undefined
+                      ? { ifc: perRow[i] }
+                      : columnConfidentiality.length > 0 &&
+                        {
+                          ifc: {
+                            confidentiality: columnConfidentiality,
+                            observes: "shape",
+                          },
+                        }),
                   };
                   const rowCell = createCell(
                     runtime,
