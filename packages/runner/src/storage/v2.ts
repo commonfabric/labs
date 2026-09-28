@@ -3209,9 +3209,6 @@ type ProviderPresenceMembership = {
   /** The membership on the current replica, until a replacement retires it. */
   inner?: MemoryV2Client.PresenceMembership;
 
-  /** The replica `inner` was joined through. */
-  replica?: SpaceReplica;
-
   install?: Promise<void>;
   closed: boolean;
 };
@@ -3481,7 +3478,6 @@ class Provider
         continue;
       }
       membership.inner = inner;
-      membership.replica = replica;
       const latest = this.#presencePublications.get(membership.room);
       if (latest !== undefined) inner.publish(latest);
       return;
@@ -3599,7 +3595,6 @@ class Provider
     // the replacement, which hands the consumer a fresh snapshot.
     for (const membership of this.#presenceMemberships) {
       membership.inner = undefined;
-      membership.replica = undefined;
     }
     previous.redirectOverlappingReadsTo((uri, selector, scope, instance) =>
       this.#replaySync(replacement, uri, selector, scope, instance)

@@ -242,10 +242,8 @@ export interface PresenceRoomHandle {
 
 /** One handle's share of a room: its facets and its listeners. */
 type PresenceHandleState = {
-  facets: Map<string, FabricPlainObject>;
-
-  /** When each facet was last set, on the client's single counter. */
-  writes: Map<string, number>;
+  /** Each facet with when it was last set, on the client's single counter. */
+  facets: Map<string, { value: FabricPlainObject; revision: number }>;
   focused: boolean;
   listeners: Set<(event: PresenceEvent) => void>;
   left: boolean;
@@ -258,9 +256,6 @@ type PresenceRoomState = {
    * derived room's join is in flight, since the worker names the room.
    */
   key: string;
-
-  /** The cell the join was made through, which shares an in-flight derivation. */
-  cellKey: string;
   subscriptionId: string;
   room: string;
   participantId: string;
@@ -572,7 +567,6 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
         key: requested === undefined
           ? ""
           : presenceRoomKey(ref.space, requested),
-        cellKey,
         subscriptionId: crypto.randomUUID(),
         room: requested ?? "",
         participantId: "",
@@ -604,7 +598,6 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     }
     const handle: PresenceHandleState = {
       facets: new Map(),
-      writes: new Map(),
       focused: false,
       listeners: new Set(),
       left: false,
@@ -627,13 +620,11 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       },
       setFacet: (facet, value) => {
         if (handle.left) return;
-        handle.facets.set(facet, value);
-        handle.writes.set(facet, ++this.#presenceWrites);
+        handle.facets.set(facet, { value, revision: ++this.#presenceWrites });
         this.#schedulePresencePublish(room);
       },
       clearFacet: (facet) => {
         if (handle.left || !handle.facets.delete(facet)) return;
-        handle.writes.delete(facet);
         this.#schedulePresencePublish(room);
       },
       setFocused: (focused) => {
@@ -1726,11 +1717,8 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     const facets: Record<string, FabricPlainObject> = {};
     const ranks = new Map<string, [number, number]>();
     for (const handle of room.handles) {
-      for (const [facet, value] of handle.facets) {
-        const rank: [number, number] = [
-          handle.focused ? 1 : 0,
-          handle.writes.get(facet) ?? 0,
-        ];
+      for (const [facet, { value, revision }] of handle.facets) {
+        const rank: [number, number] = [handle.focused ? 1 : 0, revision];
         const held = ranks.get(facet);
         if (
           held !== undefined &&
