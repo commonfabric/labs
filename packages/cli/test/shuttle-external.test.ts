@@ -140,6 +140,19 @@ describe("external", () => {
       expect(location.render()).toBe("file:///tmp/work/");
     });
 
+    it("holds a location of its own, not the one it was handed", () => {
+      // A URL is mutable, so a location holding the one it was given is one
+      // the giver can still change — and every check it passed was made of
+      // the value it had then. Without the copy this acquires the host the
+      // constructor had just refused.
+
+      const handed = new URL("file:///work/");
+      const location = new ExternalLocation(handed, HOME);
+      handed.protocol = "https:";
+      handed.host = "elsewhere.test";
+      expect(location.render()).toBe("file:///work/");
+    });
+
     it("refuses a location naming a host, whose host a move would drop", () => {
       // `fromFileUrl` drops a host rather than refusing it, so a location on
       // `server` would quietly become the local path of the same name on the

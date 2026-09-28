@@ -195,14 +195,21 @@ const NAMES_NO_HOME =
   "at all where this run was given no home.";
 
 /**
- * Returns `path` ending in a separator, which is what makes a location read
- * as the container a relative path is resolved against rather than as a file
+ * Returns `at` ending in a separator, which is what makes a location read as
+ * the container a relative path is resolved against rather than as a file
  * beside it.
+ *
+ * Always a copy, never the argument. A {@link URL} is mutable, so a location
+ * holding the one it was handed is a location whoever handed it over can
+ * still change — and the checks it passed on the way in were made once, of
+ * the value it had then. Copying is what turns those checks into something
+ * that holds.
  */
 function asContainer(at: URL): URL {
-  if (at.pathname.endsWith("/")) return at;
   const container = new URL(at.href);
-  container.pathname = `${at.pathname}/`;
+  if (!container.pathname.endsWith("/")) {
+    container.pathname = `${container.pathname}/`;
+  }
   return container;
 }
 
