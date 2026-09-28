@@ -954,6 +954,46 @@ export default pattern<{ a: Nest<string> }>(({ a }) => ({ a }));`,
         ).toBeGreaterThan(0);
       });
 
+      for (
+        const [position, declaration, holder] of [
+          [
+            "an index signature",
+            "interface Dict<U> { [key: string]: U }",
+            "Dict",
+          ],
+          ["a tuple", "interface Twice<U> { items: [U, U] }", "Twice"],
+        ] as const
+      ) {
+        it(`reports a recursion reached through ${position} of a generic declaration, with no written reference, on both sides`, async () => {
+          // Each `Sec<Readonly<…>>` is a new type, and a chain reached by type
+          // has no written reference to settle by, so its alias bounds it.
+          const diagnostics: TransformationDiagnostic[] = [];
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+${declaration}
+type Sec<T> = Confidential<{ value: T; next?: ${holder}<Sec<Readonly<T>>> }, ["secret"]>;
+export default pattern<{ a: Sec<{ a: string }> }>(({ a }) => ({ a }));`,
+          }, {
+            types: COMMONFABRIC_TYPES,
+            typeCheck: true,
+            pipelineDiagnostics: diagnostics,
+          });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          for (const root of [input, output]) {
+            expect((root.properties as Record<string, Schema>).a)
+              .toBeDefined();
+          }
+          expect(
+            diagnostics.filter((diagnostic) =>
+              diagnostic.type === "schema-type:unread"
+            ).length,
+          ).toBe(2);
+        });
+      }
+
       it("reads a recursion through the alias's optional member as its definition", async () => {
         // The result's member is `Sec<string> | undefined`, the `?` adding
         // `undefined` to the type the chain instantiates.

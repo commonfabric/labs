@@ -1739,7 +1739,9 @@ export class CommonFabricFormatter implements TypeFormatter {
    * bindings, whose type is concrete; a declaration read under bindings with
    * none carried has only its own unbound parameters. A scope around a cell
    * settles none: its cycle is found at the cell's value, which keeps the
-   * handle it caps at each reference (`scopesCellHandle()`).
+   * handle it caps at each reference (`scopesCellHandle()`). A chain reached
+   * with no written reference is tracked by the alias it is reached by, which
+   * bounds its nesting and settles nothing.
    */
   #readChain(
     type: ts.Type,
@@ -1750,7 +1752,18 @@ export class CommonFabricFormatter implements TypeFormatter {
     const checker = context.typeChecker;
     const reference = context.typeNode &&
       readThroughIdentityAliases(context.typeNode, checker);
-    if (!reference || !ts.isTypeReferenceNode(reference)) return read();
+    if (!reference || !ts.isTypeReferenceNode(reference)) {
+      const alias = (type as TypeWithInternals).aliasSymbol;
+      return alias
+        ? this.#schemaGenerator.readAliasChain(
+          type,
+          context,
+          alias,
+          undefined,
+          read,
+        )
+        : read();
+    }
     const instantiated = scopesCellHandle(type, checker)
       ? undefined
       : context.instantiatedAs ??

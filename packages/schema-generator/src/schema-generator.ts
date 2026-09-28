@@ -86,7 +86,7 @@ const MAX_BOUND_NESTING = 3;
  * and the type and context its schema is being formatted with.
  */
 type ChainReading = {
-  readonly reference: ts.TypeNode;
+  readonly entry: ts.TypeNode | ts.Symbol;
   readonly instantiated: ts.Type | undefined;
   readonly type: ts.Type;
   readonly context: GenerationContext;
@@ -1392,31 +1392,37 @@ export class SchemaGenerator {
 
   /**
    * Formats `type` with `read`, the reading of a CFC alias chain entered from
-   * `reference`, a written reference to the chain, where the checker
-   * instantiates `instantiated`. A reading entered again from the same
-   * reference inside itself is a recursion through it. One whose
-   * instantiation is identical to a reading's in progress there is a cycle of
-   * that type, which `#formatType` finds as it finds any other. One the
-   * checker settles only up to assignability, its instantiation a different
-   * type assignable both ways with that reading's (`Sec<Readonly<Readonly<X>>>`
-   * and `Sec<Readonly<X>>`), refers to that reading's definition here. A
-   * reference entered `MAX_BOUND_NESTING` deep without settling instantiates
-   * the chain without end, as `Nest<T[]>` inside `Nest<T>` does, or has no
-   * known instantiation to settle by; the innermost accepts any value and is
-   * reported as not fully read.
+   * `entry`, where the checker instantiates `instantiated`: a written
+   * reference to the chain, or, for a chain reached with none, as through an
+   * index signature or a tuple element read by type, the alias it is reached
+   * by. A reading entered again from the same reference inside itself is a
+   * recursion through it. One whose instantiation is identical to a reading's
+   * in progress there is a cycle of that type, which `#formatType` finds as it
+   * finds any other. One the checker settles only up to assignability, its
+   * instantiation a different type assignable both ways with that reading's
+   * (`Sec<Readonly<Readonly<X>>>` and `Sec<Readonly<X>>`), refers to that
+   * reading's definition here. A chain reached by its alias settles none: two
+   * readings of one alias through no written reference may be a nesting its
+   * author wrote out, whose instantiations the checker can find assignable
+   * both ways though they read differently. An entry nested in itself
+   * `MAX_BOUND_NESTING` deep without settling instantiates the chain without
+   * end, as `Nest<T[]>` inside `Nest<T>` does, or has no known instantiation
+   * to settle by; the innermost accepts any value and is reported as not
+   * fully read.
    */
   public readAliasChain(
     type: ts.Type,
     context: GenerationContext,
-    reference: ts.TypeNode,
+    entry: ts.TypeNode | ts.Symbol,
     instantiated: ts.Type | undefined,
     read: () => MutableJSONSchema,
   ): MutableJSONSchema {
     const readings = this.#chainReadings.get(context.definitionStack) ?? [];
     this.#chainReadings.set(context.definitionStack, readings);
     const checker = context.typeChecker;
-    const again = readings.filter((reading) => reading.reference === reference);
-    const settled = instantiated &&
+    const written = "kind" in entry;
+    const again = readings.filter((reading) => reading.entry === entry);
+    const settled = written && instantiated &&
       again.find((reading) =>
         reading.instantiated !== undefined &&
         reading.instantiated !== instantiated &&
@@ -1425,11 +1431,15 @@ export class SchemaGenerator {
       );
     if (settled) return this.#referToReading(settled.type, settled.context);
     if (again.length >= MAX_BOUND_NESTING) {
+      // One reached with no written reference is reported as the checker
+      // prints its type.
+      const node = written ? entry : context.typeNode ??
+        checker.typeToTypeNode(type, undefined, undefined);
       const unread = context.uninterpretedTypeNodes;
-      if (unread && !unread.includes(reference)) unread.push(reference);
+      if (unread && node && !unread.includes(node)) unread.push(node);
       return {};
     }
-    readings.push({ reference, instantiated, type, context });
+    readings.push({ entry, instantiated, type, context });
     try {
       return read();
     } finally {

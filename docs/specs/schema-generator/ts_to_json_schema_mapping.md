@@ -1072,12 +1072,18 @@ Mechanics:
   cell (`scopesCellHandle`): its cycle is found at the cell's value, which
   keeps the handle the scope caps at each reference, so it settles none, and
   under bindings, where that value is read from its syntax, a recursion
-  through one is found only at the nesting bound. A reference entered
-  `MAX_BOUND_NESTING` deep without settling, like the same type read inside
-  itself with the same arguments written for it, each under deeper bindings,
-  is taken for a recursion that instantiates the chain without end
-  (`Nest<T[]>` inside `Nest<T>`) rather than a nesting its author wrote out
-  (`Pair<Pair<string>>`); the innermost accepts any value and is reported.
+  through one is found only at the nesting bound. A chain reached with no
+  written reference, as through a generic declaration's index signature or
+  a tuple element read by type, is tracked by the alias it is reached by,
+  and settles none: two readings of one alias through no written reference
+  may be a nesting its author wrote out, whose instantiations the checker
+  finds assignable both ways though they read differently. A reference, or
+  such an alias, entered `MAX_BOUND_NESTING` deep without settling, like the
+  same type read inside itself with the same arguments written for it, each
+  under deeper bindings, is taken for a recursion that instantiates the chain
+  without end (`Nest<T[]>` inside `Nest<T>`) rather than a nesting its author
+  wrote out (`Pair<Pair<string>>`); the innermost accepts any value and is
+  reported, a chain reached by its alias as the checker prints its type.
   A label reads a parameter it holds as its type wherever the label reader
   pairs that position. A `typeof` binding that a chain entered from a type
   receives only as a type argument cannot be read from a type, so a
