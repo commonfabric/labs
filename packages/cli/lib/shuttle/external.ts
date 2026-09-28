@@ -228,23 +228,33 @@ export class ExternalLocation {
    * `undefined`, and every `~` it is handed is refused rather than expanded
    * against a guess.
    *
-   * @throws Error if `at` is not on {@link FILE_SCHEME}, or holds an escape
-   * no path can be made of. Every move below reads the location as a path,
+   * @throws Error if `at` is not on {@link FILE_SCHEME}, names a host, or
+   * holds an escape no path can be made of. Every move below reads the location as a path,
    * so one that cannot be read that way would fail on a later line naming a
    * token the person did not type. `xcd` turns both down at the door, which
    * leaves only a caller building one directly, and that is a mistake in
    * this process rather than in a line somebody typed.
    */
   constructor(at: URL, home: string | undefined) {
+    // One invariant asked three ways, because every move below converts the
+    // location back to a path and each of these is a way that conversion
+    // stops meaning what it says. A foreign plane has no path to convert
+    // to; a host has one, and it is the wrong machine's — `fromFileUrl`
+    // drops the host rather than refusing it, so a location on `server`
+    // would quietly become the local path of the same name; and an escape
+    // no character can be made of converts to nothing at all.
     if (at.protocol !== `${FILE_SCHEME}:`) {
       throw new Error(
         `An external location stands on \`${FILE_SCHEME}:\`, and ` +
           `\`${at.protocol}\` is not one.`,
       );
     }
-    // Throws where `at` holds an escape no path can be made of, which is the
-    // same invariant read the same way: every move below converts the
-    // location back to a path.
+    if (at.host !== "") {
+      throw new Error(
+        `An external location is on this machine, and ` +
+          `\`${at.href}\` names the host \`${at.host}\`.`,
+      );
+    }
     fromFileUrl(at);
     this.#at = asContainer(at);
     this.#home = home;

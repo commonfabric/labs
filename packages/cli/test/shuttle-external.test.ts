@@ -140,6 +140,16 @@ describe("external", () => {
       expect(location.render()).toBe("file:///tmp/work/");
     });
 
+    it("refuses a location naming a host, whose host a move would drop", () => {
+      // `fromFileUrl` drops a host rather than refusing it, so a location on
+      // `server` would quietly become the local path of the same name on the
+      // first relative move — the failure `xcd` refuses a host to prevent,
+      // reaching in through the other door.
+
+      expect(() => new ExternalLocation(new URL("file://server/share/"), HOME))
+        .toThrow("on this machine");
+    });
+
     it("refuses a location built on another plane, which no line can reach", () => {
       // The door turns the scheme down, so only a caller inside this process
       // could stand one up — and every move below reads the location as a
