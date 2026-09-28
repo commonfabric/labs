@@ -53,7 +53,8 @@ const preserveUnsentText = handler<
 
 // A presence failure removes live cursors and leaves editing alone. The editor
 // tries a `configuration` failure again only when the room or name changes,
-// and any other failure on the next focus.
+// and any other failure when it next gains focus. A failure while it has focus
+// keeps focus, so the viewer has to leave the note and come back.
 const reportPresenceError = handler<
   { detail: { category?: string } },
   { presenceNotice: Writable<string> }
@@ -61,7 +62,7 @@ const reportPresenceError = handler<
   presenceNotice.set(
     event.detail.category === "configuration"
       ? "Live cursors are unavailable on this server. Editing still works."
-      : "Live cursors are unavailable. Editing still works; click into the note to try again.",
+      : "Live cursors are unavailable. Editing still works; click outside the note, then back into it to try again.",
   );
 });
 

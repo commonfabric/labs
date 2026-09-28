@@ -58,7 +58,8 @@ Live cursors can fail on their own while editing carries on. The note then shows
 a status line saying cursors are unavailable, and removes it when the editor
 joins its presence room again. A server without presence stays that way until
 the viewer's profile name changes; any other failure is tried again the next
-time the viewer clicks into the note.
+time the editor gains focus, so the status line asks the viewer to click outside
+the note and back into it.
 
 ## Tests
 

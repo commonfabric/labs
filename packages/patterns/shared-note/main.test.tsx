@@ -83,7 +83,10 @@ export default pattern(() => {
   );
   const assert_presence_notice_visible = assert(() =>
     hasText(subject[UI], "Live cursors are unavailable") &&
-    hasText(subject[UI], "click into the note to try again") &&
+    hasText(
+      subject[UI],
+      "click outside the note, then back into it to try again",
+    ) &&
     subject.content === MARKDOWN
   );
   const action_presence_join = action(() =>
@@ -105,7 +108,10 @@ export default pattern(() => {
   );
   const assert_presence_unsupported_notice = assert(() =>
     hasText(subject[UI], "Live cursors are unavailable on this server") &&
-    !hasText(subject[UI], "click into the note to try again")
+    !hasText(
+      subject[UI],
+      "click outside the note, then back into it to try again",
+    )
   );
   return {
     [TESTS]: [
