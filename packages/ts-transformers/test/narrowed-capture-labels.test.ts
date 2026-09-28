@@ -231,6 +231,15 @@ export default pattern<{ ${declaration} }>(
       ).toMatchObject(POLICY_LABEL);
     });
 
+    it("reads the policy a CFC alias over a union spells beside `null`", async () => {
+      expect(
+        await policyCapture(
+          "secret: Confidential<Secret | Other, [PolicyOf<typeof rules>]> | null",
+          "interface Other { a: string; c: number; }",
+        ),
+      ).toMatchObject(POLICY_LABEL);
+    });
+
     it("reads the policy of a value an alias of a nullable union names", async () => {
       expect(
         await policyCapture(

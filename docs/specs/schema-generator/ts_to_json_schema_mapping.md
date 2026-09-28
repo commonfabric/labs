@@ -786,6 +786,24 @@ Default paths of §7:
   union order. Union alias nodes resolve through non-generic alias
   declarations to recover member nodes (`getUnionTypeNode`).
   Empty unions **throw**.
+- The checker folds a member that is itself a union into the union it is a
+  member of, so one member node can stand for several members
+  (`pairUnionMemberNodes`, which `#labelsOf` in `schema-generator.ts` reads
+  members through as well):
+  - A member node that writes a union, through parentheses and aliases
+    without type parameters, pairs through the members it writes, each read
+    at its own node. `Shape | null`, with `type Shape = A | B`, stays
+    `{ anyOf: [{ type: "null" }, A, B] }`.
+  - A member node whose type is a union it does not write, such as
+    `Confidential<A | B, …>`, which the checker distributes into `A & …` and
+    `B & …`, pairs with none of them. In the general case it is read once,
+    as one alternative for all of them, where it is a CFC alias that
+    `CommonFabricFormatter` reads: `Confidential<A | B, […]> | null` emits
+    `{ anyOf: [{ type: "null" }, { anyOf: [A, B], ifc: … }] }`, with labels
+    only the node can spell, as a `PolicyOf<typeof rules>` binding. Its
+    members are otherwise read by their types: `boolean` stands for `true`
+    and `false`, `Default<T, V>`'s place in a union is §7's, and a scope
+    wrapper's is §10's.
 
 ## 9. Intersections
 
@@ -1328,10 +1346,11 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
   union's labels, every member's confidentiality, and each other label every
   member declares alike (`joinMemberIfcLabels`). A member is spelled by the
   node its type is written as: the declaration's own node where that denotes
-  the member alone, as an optional property's does, and otherwise the member
-  of the union the declaration writes, read through parentheses and through
-  aliases without type parameters (`readAuthoredTypeNode`). A member with no
-  such node is read by its type. A schema whose own reference
+  the member alone, as an optional property's does, and otherwise the node
+  of the union the declaration writes that it is read at (§8,
+  `pairUnionMemberNodes`). A node that stands for several members is read
+  once for all of them. A member with no such node is read by its type. A
+  schema whose own reference
   chain already holds every label is left as it is (`holdsIfcLabels`).
 - **`spelledBy`** is the annotation of the member a printed node holds the
   value of, where that annotation names a value binding, as

@@ -187,6 +187,17 @@ describe("cfc-narrowed-capture-floor", () => {
     }]);
   });
 
+  it("labels the result of a lift reading a value a CFC alias over a union labels beside `null` with its declared policy", async () => {
+    expect(
+      await declaredLabelsOfOut(
+        "secret: Confidential<Secret | Other, [PolicyOf<typeof rules>]> | null",
+        'secret?.a ?? ""',
+      ),
+    ).toMatchObject([{
+      confidentiality: [{ policyRefKind: "module", symbol: "rules" }],
+    }]);
+  });
+
   describe("a lift reading whole an optional value whose annotation writes a union", () => {
     const WHOLE = 'JSON.stringify(secret) ? secret?.a ?? "" : ""';
     const POLICY = [{

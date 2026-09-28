@@ -4132,6 +4132,8 @@ interface HasImage {
         Cfc<T, { confidentiality: X }>;
       type Integrity<T, X extends readonly unknown[]> =
         Cfc<T, { integrity: X }>;
+      type PolicyOf<Binding> = { readonly __ct_cfc_policy_of__?: Binding };
+      declare const rules: unknown;
       interface Secret { a: string; b: string }
       interface Other { a: string; c: number }
       declare const DEFAULT_MARKER: unique symbol;
@@ -4239,6 +4241,26 @@ interface HasImage {
       expect(narrowed).toEqual({
         ...A_ONLY,
         ifc: { confidentiality: ["x", "y"], integrity: ["i"] },
+      });
+    });
+
+    it("gives a node narrowed from a union the labels a member standing for several members spells", async () => {
+      // The checker distributes `Confidential<Secret | Other, …>` into two
+      // members of the union, which only the one node that spells them reads
+      // the policy of.
+      const { narrowed } = await narrowedSchema(
+        "{ narrowed: { a: string } }",
+        "value: Confidential<Secret | Other, readonly [PolicyOf<typeof rules>]> | null",
+      );
+
+      expect(narrowed).toMatchObject({
+        ...A_ONLY,
+        ifc: {
+          confidentiality: [{
+            policyRefKind: "module",
+            __ctPolicyIdentityOf: { path: ["rules"] },
+          }],
+        },
       });
     });
 
