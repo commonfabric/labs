@@ -23,6 +23,7 @@ import { readDockerRuntimes } from "./docker-runtimes.ts";
 import {
   cfcResultFromRunscSidecar,
   deniedCfcResult,
+  DOCKER_RUNSC_CFC_RESULT_READER,
   type RunscCfcResultSidecar,
 } from "./runsc-cfc-result.ts";
 import { SandboxPathEscapeError } from "./errors.ts";
@@ -954,7 +955,12 @@ export class DockerRunscSandboxRuntime implements SandboxRuntime {
     }
     try {
       const parsed = JSON.parse(text) as RunscCfcResultSidecar;
-      return cfcResultFromRunscSidecar(parsed, containerID, commandResult);
+      return cfcResultFromRunscSidecar(
+        parsed,
+        containerID,
+        commandResult,
+        DOCKER_RUNSC_CFC_RESULT_READER,
+      );
     } catch (error) {
       return deniedCfcResult(
         "runsc_cfc_sidecar_parse_error",
