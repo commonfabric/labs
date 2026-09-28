@@ -3197,9 +3197,10 @@ type ProviderOperationSubscription = {
 
 /**
  * One presence membership the provider holds across replica replacements:
- * the room and observer the consumer gave it, the membership on the current
- * replica's session, and the last publication, which the replacement's
- * session is given again.
+ * the room and observer the consumer gave it, and the membership on the
+ * current replica's session. The record the replacement's session is given
+ * again is the room's, held by the provider, since every membership of a
+ * room shares one.
  */
 type ProviderPresenceMembership = {
   room: string;
@@ -3402,8 +3403,7 @@ class Provider
     try {
       await this.#ensurePresenceMembership(membership);
     } catch (error) {
-      membership.closed = true;
-      this.#presenceMemberships.delete(membership);
+      this.#forgetPresenceMembership(membership);
       throw error;
     }
     if (membership.closed || this.#destroyed) {
@@ -3421,16 +3421,27 @@ class Provider
       },
       leave: async () => {
         if (membership.closed) return;
-        membership.closed = true;
-        this.#presenceMemberships.delete(membership);
-        if (
-          ![...this.#presenceMemberships].some((other) => other.room === room)
-        ) {
-          this.#presencePublications.delete(room);
-        }
+        this.#forgetPresenceMembership(membership);
         await membership.inner?.leave();
       },
     };
+  }
+
+  /**
+   * Closes the membership and drops it, and with the room's last membership
+   * the room's record, so that a later join does not republish a record no
+   * member of the room made.
+   */
+  #forgetPresenceMembership(membership: ProviderPresenceMembership): void {
+    membership.closed = true;
+    this.#presenceMemberships.delete(membership);
+    if (
+      ![...this.#presenceMemberships].some((other) =>
+        other.room === membership.room
+      )
+    ) {
+      this.#presencePublications.delete(membership.room);
+    }
   }
 
   #ensurePresenceMembership(

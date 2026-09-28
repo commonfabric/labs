@@ -195,4 +195,69 @@ describe("presence storage capability", () => {
     await second.leave();
     await storage.closeNow();
   });
+
+  it("drops a room's record with the join that failed after its last member left", async () => {
+    const joining = Promise.withResolvers<MemoryV2Client.PresenceMembership>();
+    const published: PresencePublication[][] = [];
+    const storage = new (class extends V2StorageManager {
+      constructor() {
+        super(
+          {
+            as: signer,
+            memoryHost: new URL("https://default-toolshed.test"),
+          },
+          {
+            create: () => {
+              const client = {
+                serverFlags: { presenceV1: true },
+                close: () => Promise.resolve(),
+              } as unknown as MemoryV2Client.Client;
+              const session = {
+                subscribeAccessLoss: () => () => {},
+                close: () => Promise.resolve(),
+                joinPresenceRoom: (
+                  _room: string,
+                  observer: (event: MemoryV2Client.PresenceEvent) => void,
+                ) => {
+                  const record: PresencePublication[] = [];
+                  published.push(record);
+                  const number = published.length;
+                  observer({
+                    kind: "snapshot",
+                    participantId: `participant:${number}`,
+                    participants: [],
+                  });
+                  // The second join waits, to be refused after the first
+                  // member has left; the others settle at once.
+                  if (number === 2) return joining.promise;
+                  return Promise.resolve({
+                    participantId: `participant:${number}`,
+                    publish: (publication: PresencePublication) =>
+                      record.push(publication),
+                    leave: () => Promise.resolve(),
+                  });
+                },
+              } as unknown as MemoryV2Client.SpaceSession;
+              return Promise.resolve({ client, session });
+            },
+          },
+        );
+      }
+    })();
+    const provider = storage.open(signer.did());
+    if (!hasPresenceStorageCapability(provider)) return;
+    const first = await provider.joinPresenceRoom(ROOM, () => {});
+    first.publish({ name: "Ada", facets: { caret: {} } });
+    const pending = provider.joinPresenceRoom(ROOM, () => {});
+    await first.leave();
+    joining.reject(new Error("join refused"));
+    await expect(pending).rejects.toThrow("join refused");
+
+    // A fresh join finds no record of the room to republish.
+    const fresh = await provider.joinPresenceRoom(ROOM, () => {});
+    expect(published).toHaveLength(3);
+    expect(published[2]).toEqual([]);
+    await fresh.leave();
+    await storage.closeNow();
+  });
 });
