@@ -180,12 +180,12 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
         try {
           return new FabricHash(fromBase64url(hash), tag, true);
         } catch (e) {
-          const problem = new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `Hash: ${e instanceof Error ? e.message : String(e)}`,
+            mutable,
           );
-          return mutable ? problem : Object.freeze(problem);
         }
       }
     })(),

@@ -91,12 +91,12 @@ export class FabricEpochDay extends BaseFabricPrimitive
         try {
           return new FabricEpochDay(bigintFromUnpaddedBase64url(state));
         } catch {
-          const problem = new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `EpochDay: invalid base64: ${state}`,
+            mutable,
           );
-          return mutable ? problem : Object.freeze(problem);
         }
       }
     })(),

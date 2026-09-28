@@ -298,12 +298,12 @@ export class FabricKeyPair extends BaseFabricPrimitive {
             new FabricBytes(fromBase64url(privateKey), true),
           );
         } catch (e) {
-          const problem = new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `KeyPair: ${e instanceof Error ? e.message : String(e)}`,
+            mutable,
           );
-          return mutable ? problem : Object.freeze(problem);
         }
       }
     })(),

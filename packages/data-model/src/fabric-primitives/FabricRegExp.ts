@@ -235,12 +235,12 @@ export class FabricRegExp extends BaseFabricPrimitive
         try {
           return new FabricRegExp(flavor, source, flags);
         } catch (e) {
-          const problem = new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `RegExp: ${e instanceof Error ? e.message : String(e)}`,
+            mutable,
           );
-          return mutable ? problem : Object.freeze(problem);
         }
       }
     })(),
@@ -304,12 +304,12 @@ export class FabricRegExp extends BaseFabricPrimitive
         try {
           return new FabricRegExp(flavor, source, flags);
         } catch (e) {
-          const problem = new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             (e instanceof Error) ? e.message : String(e),
+            mutable,
           );
-          return mutable ? problem : Object.freeze(problem);
         }
       }
     })(),

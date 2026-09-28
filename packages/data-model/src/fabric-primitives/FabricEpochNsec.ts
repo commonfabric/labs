@@ -98,12 +98,12 @@ export class FabricEpochNsec extends BaseFabricPrimitive
         try {
           return new FabricEpochNsec(bigintFromUnpaddedBase64url(state));
         } catch {
-          const problem = new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `EpochNsec: invalid base64: ${state}`,
+            mutable,
           );
-          return mutable ? problem : Object.freeze(problem);
         }
       }
     })(),

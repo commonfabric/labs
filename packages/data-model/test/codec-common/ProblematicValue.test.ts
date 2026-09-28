@@ -175,6 +175,32 @@ describe("ProblematicValue", () => {
   });
 
   describe("static members", () => {
+    describe("make()", () => {
+      it("returns an instance equal to one the constructor builds", () => {
+        const state = { x: 1 };
+        const made = ProblematicValue.make("Weird@7", state, "oops");
+
+        expect(made).toBeInstanceOf(ProblematicValue);
+        expect(made.equals(new ProblematicValue("Weird@7", state, "oops")))
+          .toBe(true);
+      });
+
+      it("returns a frozen instance by default, and a mutable one when `mutable` is `true`", () => {
+        expect(Object.isFrozen(ProblematicValue.make("Weird@7", 1, "oops")))
+          .toBe(true);
+        expect(
+          Object.isFrozen(ProblematicValue.make("Weird@7", 1, "oops", true)),
+        ).toBe(false);
+      });
+
+      it("leaves the state it preserves unfrozen", () => {
+        const state = { x: 1 };
+        ProblematicValue.make("Weird@7", state, "oops");
+
+        expect(Object.isFrozen(state)).toBe(false);
+      });
+    });
+
     describe("[CODEC]", () => {
       describe("tagForValue()", () => {
         it("returns `Problematic@1` whatever tag the value preserved", () => {

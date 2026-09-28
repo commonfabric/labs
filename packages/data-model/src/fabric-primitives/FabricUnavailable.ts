@@ -337,12 +337,12 @@ export class FabricUnavailable extends BaseFabricPrimitive
         try {
           return FabricUnavailable.#instanceForState(state);
         } catch (e) {
-          const problem = new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `Unavailable: ${(e instanceof Error) ? e.message : String(e)}`,
+            mutable,
           );
-          return mutable ? problem : Object.freeze(problem);
         }
       }
     })(),
@@ -380,12 +380,12 @@ export class FabricUnavailable extends BaseFabricPrimitive
         try {
           return FabricUnavailable.#instanceForState(state);
         } catch (e) {
-          const problem = new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             (e instanceof Error) ? e.message : String(e),
+            mutable,
           );
-          return mutable ? problem : Object.freeze(problem);
         }
       }
     })(),

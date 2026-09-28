@@ -55,12 +55,12 @@ export class BigIntCodec extends BaseTerminalCodec<JsonCodecValue, string> {
     try {
       return bigintFromUnpaddedBase64url(state);
     } catch {
-      const problem = new ProblematicValue(
+      return ProblematicValue.make(
         typeTag,
         state,
         `bigint: invalid base64: ${state}`,
+        mutable,
       );
-      return mutable ? problem : Object.freeze(problem);
     }
   }
 }
