@@ -46,11 +46,20 @@ thing to pass in a reference position; the member name is for a person to read
 and type.
 
 **What the Estuary deployment carries.** The verbs in `references/verbs.md` and
-the naming above are what the pattern in this checkout declares. The deployed
-board runs whatever commit `/api/meta` reports, and until a pattern update lands
-there it has no `names` map, no `top` slug, and no numbered Topic — a Topic
-publishes no `shortName` and `/top/42` resolves to nothing. Ask the deployment
-before citing a number, and treat `top/42` as unavailable there until the plan's
-remaining step is done (`docs/plans/collection-naming-topics.md`). Deploying it
-and numbering the Topics already on the board are the team's steps, not an
-agent's; `references/namespace-backfill.md` is that procedure.
+the naming above are what the pattern in this checkout declares; the deployed
+board runs whatever commit `/api/meta` reports. Ask the deployment before citing
+a number.
+
+It carries the namespace. The `names` map is complete and dense with no
+duplicates and no gaps, the `top` slug is bound, and every Topic on the board
+stores the number the namespace holds for it, so `top/<n>` resolves there and
+`namesTable` names every Topic.
+
+It does not yet carry the publication. A deployed Topic stores its number and
+publishes no `shortName`, so no header or board card badge, no number on a
+mention pill, and nothing offered for `#42` in a Topic's body editor. Read a
+number from `namesTable`, or one Topic's from its own input with
+`cf cell get --cell "$TOPIC" shortName --input`. The pattern update that makes
+those Topics publish what they store is the team's step, not an agent's, and
+`references/pattern-updates.md` governs it; `references/namespace-backfill.md`
+is the numbering procedure.

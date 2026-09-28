@@ -595,15 +595,21 @@ export default pattern(() => {
     preInputTopics.key(0).resolveAsCell().key("recordName").send({ name: "9" });
   });
 
-  // A second run stores nothing new, seen rather than assumed. A re-write of
-  // the same string leaves every value it could be compared against unchanged,
-  // so comparing values cannot detect one. The verb can: `recordName` returns
-  // BEFORE `upgradeTopicState` when the number asked for is the number stored,
-  // and `upgradeTopicState` refuses a state version no source supports. So a
-  // topic parked at such a version after its number is stored is refused if
-  // and only if the verb goes on to write, and the second run's silence
-  // becomes observable — no error means no write. Drop the early return and
-  // this run rejects, whichever guard it reaches first.
+  // Two silences, and they belong to different pieces of code. The STEP's is
+  // that `recordNames` sends nothing to a member already publishing the name
+  // it would ask for. The VERB's is that `recordName` returns before it writes
+  // when the number asked for is the number stored. The step's silence is what
+  // stops the verb being reached at all, so a case that only re-runs the step
+  // cannot see the verb's guard; each is driven here on its own.
+  //
+  // Both are seen rather than assumed. A re-write of the same string leaves
+  // every value it could be compared against unchanged, so comparing values
+  // cannot detect one. Parking the topic at a state version no source supports
+  // is what makes a write observable: `upgradeTopicState` refuses such a
+  // version, and `recordName` reaches it only by going on to write. So no
+  // error means no write. Drop the verb's early return and the direct call
+  // below rejects, whichever guard it reaches first; drop the step's skip and
+  // `assert_later_run_reports_them_named` above reds instead.
   const settledNumber = new Writable<string | undefined>(undefined);
   const settledVersion = new Writable<number | Default<0>>(
     TOPIC_STATE_VERSION,
@@ -633,6 +639,13 @@ export default pattern(() => {
   );
   const action_park_the_settled_version = action(() => {
     settledVersion.set(99);
+  });
+  // The verb asked directly for the number the topic already stores, which is
+  // the call the step no longer makes now that it can see that number. Nothing
+  // else reaches `recordName`'s same-number return: every other `recordName`
+  // in this file names a number its topic does not store.
+  const action_offer_the_settled_topic_its_own_number = action(() => {
+    settledTopics.key(0).resolveAsCell().key("recordName").send({ name: "1" });
   });
   const assert_second_run_wrote_nothing = assert(() =>
     Object.keys(settledNames.get() ?? {}).join(",") === "1" &&
@@ -734,6 +747,7 @@ export default pattern(() => {
       { assertion: assert_settled_topic_stored_its_number },
       { action: action_park_the_settled_version },
       { action: action_number_the_settled_topic },
+      { action: action_offer_the_settled_topic_its_own_number },
       { assertion: assert_second_run_wrote_nothing },
       { action: action_file_a_mislabeled_topic },
       { action: action_record_mislabeled },

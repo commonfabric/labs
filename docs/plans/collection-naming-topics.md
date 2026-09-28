@@ -19,7 +19,7 @@ This block is LIVE: the change that moves a stage updates it here.
 | S2b — assignment refuses by default | on main (#6898) |
 | S3 — the shell opens `/<space>/top/42` | on main (#6896) |
 | S4 — `#42` in text | on main (#6887) |
-| S6 — graft onto Topics | items 1, 2, 3, 5 on main (#6937); item 4 rehearsed twice and held, awaiting a demand for named Topics rather than a technical answer |
+| S6 — graft onto Topics | items 1, 2, 3, 5 on main (#6937); item 4's numbering is done on the deployed board, and what remains of it is the operator source push that makes those topics publish the numbers they store |
 | S6b — a Topic stores its own number | on main (#7774) |
 | S6c — a Topic publishes the number it stores | built; awaiting review and merge |
 | S5 — deferred, not scheduled | — |
@@ -45,10 +45,11 @@ numbered stores nothing, reports nothing, and renders without failing.
 A topic's published `shortName` is the only signal the board's numbering step
 can read, and a topic publishes the number it stores, so the step reports what
 it allocated, what it found already stored under `named`, and what it asked
-under `pending`. An empty `pending` is the finished state. Repeating the step
-is safe and not idle — a topic that already stores the number writes nothing
-further, one whose number never landed stores it now, and the asking is itself
-a write either way.
+under `pending`. An empty `pending` is the finished state, and a repeat over a
+board in it writes nothing at all — no namespace key and no event. A repeat
+costs something only where a topic is outstanding: one the step cannot see
+storing its number is asked again, that asking is itself a write, and the topic
+stores the number if it has not already.
 
 A number reaches every surface through that one publication rather than through
 each display, and
@@ -83,7 +84,7 @@ has no pattern reading it: it is the lift a member would use to read its name
 out of a board table, and no member does — the exemplar stores its name, and
 Topics now does too.
 
-### What remains, and none of it is built
+### What remains
 
 The stages the table marks on main give a collection that adopts `naming.ts`
 member names end to end: allocation, resolution at the CLI, the shell opening
@@ -125,10 +126,10 @@ board's table, and what it took to bind the board onto members filed before the
 namespace.
 
 **Decided 2026-09-28: a Topic publishes the number it stores.** Mike ruled it,
-and ruled the mechanism too. The condition the 2026-09-17 ruling set is met:
-every topic on the deployed board stores its number, 555 of 555 audited that
-day, the namespace holds 1 through 555 with no duplicates and no gaps, and
-`//topics-dev-476ea34f/top/42` resolves to the topic storing `42`.
+and ruled the mechanism too. Every topic on the deployed board stores its
+number — 555 of 555, audited 2026-09-28 — the namespace holds 1 through 555
+with no duplicates and no gaps, and `//topics-dev-476ea34f/top/42` resolves to
+the topic storing `42`.
 
 The publication is where a number reaches every surface, and one property is
 what each of them reads: a topic's header, the board's cards, the `index` rows,
@@ -171,14 +172,18 @@ change that lands this in the repository.
    so the two belong in one pass. `boardNames` is no longer among them on a
    Topic; `boardCrossrefs` and `mentionable` are.
 
-3. **S6 item 4 — the production backfill.** Held for want of a demand rather
-   than a technical answer. Its sequence, and the contract breaks it still
-   needs, are recorded under S6 below. Finishing it is what gives every topic on
-   the deployed board a number to publish; one the step has not reached stores
-   none, so it publishes none and shows none. Two things that gated it have
-   since moved. #6969 was closed by #7178, and the patched check accepted the
-   board source retrieved from a local snapshot of the Topics board taken August
-   31; and an optional `unknown` member demand no longer refuses. The
+3. **S6 item 4 — the operator source push.** The numbering half is done: the
+   deployed board holds a complete namespace over 1 through 555, the `top` slug
+   is bound, and every topic stores the number the namespace holds for it. What
+   remains is pushing the pattern source that makes those topics publish what
+   they store — a source update for the board and one per topic, and the step
+   this stage enables rather than performs. Until it runs, a deployed topic
+   stores its number and publishes none, so that board shows no badge, no pill
+   number and nothing for `#42`. The sequence, and the contract breaks it
+   needs, are recorded under S6 below; #6969 was closed by #7178, and the
+   patched check accepted the board source retrieved from a local snapshot of
+   the Topics board taken August 31; an optional `unknown` member demand no
+   longer refuses. The
    [issue 6969 gates record](../history/development/issue-6969-upgrade-gates-2026-09-09.md)
    records both.
 
@@ -489,7 +494,14 @@ Mike's call, after S4.
    would ship the exemplar. It is not in `naming.ts` either, because that
    module never reads through a member and this derivation reads three display
    strings off each one.
-4. The production backfill is rehearsed on a clone per
+4. The production backfill has run on the deployed board: the namespace is
+   complete over 1 through 555 with no duplicates and no gaps, the `top` slug
+   is bound, and every topic stores the number the namespace holds for it
+   (audited 2026-09-28). What that board does not yet do is publish those
+   numbers, which is a source push per topic and one for the board, held to the
+   same rehearsal and authorization rules as the sequence below.
+
+   The backfill is rehearsed on a clone per
    `../development/space-clone-rehearsal.md`; the deployed vintage includes
    #6827 before the backfill runs. The decision items 1-3 could not make for it
    is made by the 2026-09-17 entry above: a topic stores its own number, and
@@ -504,7 +516,7 @@ Mike's call, after S4.
    operator procedure is `skills/topics/references/namespace-backfill.md`, which
    states which of its steps have a clone run behind them.
 
-   **Held 2026-09-06, and not for a technical reason.** The step is rehearsed
+   **What the rehearsals measured.** The step is rehearsed
    twice; the second run, after the positional-link fix, is recorded at
    `../history/plans/collection-naming-s6-backfill-rehearsal-rerun-2026-09-06.md`
    and measured what the first could not. On a clone holding three topics, the
@@ -512,11 +524,9 @@ Mike's call, after S4.
    document by one key (`names: {}`), and left those topics' titles and bodies
    intact; the mention-index transition cost eleven commits and one written key
    per topic. Three topics is not 125, and the record says which of its figures
-   scale and which are counts of that run. What is missing is not a measurement
-   but a demand — nobody has asked for named Topics on the deployed board.
+   scale and which are counts of that run.
 
-   The sequence that makes running it routine rather than a one-way door,
-   whenever consensus appears:
+   The sequence that makes running it routine rather than a one-way door:
 
    1. Check the deployed board with `setsrc --check` before writing to it.
       #6969, that check exhausting the heap against the deployed board, was

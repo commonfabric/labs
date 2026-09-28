@@ -249,8 +249,10 @@ count to trust.
 
 ### What a re-run writes
 
-A re-run is safe. It is not idle, and on a board the size of the deployed one
-the difference is worth knowing per case:
+A re-run is safe, and over a board where every Topic publishes its number it
+writes nothing at all — no key and no event. Where Topics are outstanding it
+costs, and on a board the size of the deployed one the cost is worth knowing per
+case:
 
 - **The asking itself is a write.** A send is an ordinary write to the target's
   stream — `Cell.send` in `packages/runner/src/cell.ts` delegates to `set` — and
@@ -282,12 +284,13 @@ the difference is worth knowing per case:
   written again on every run until that Topic's source moves. This is why step 2
   comes before step 3.
 
-So: re-run when the audit finds something outstanding, not as a matter of
-course. Each run costs one board transaction and one write per Topic; a handling
-for each Topic whose source declares the verb, and none for one that does not;
-and one logged failure per Topic in a state the verb refuses. After step 2 that
-is a handling for every Topic, which is the shape to plan for. None of it
-corrupts anything, and none of it is free.
+So: re-run when the report leaves something under `pending`, not as a matter of
+course. Each run costs one board transaction and one write per OUTSTANDING
+Topic; a handling for each of those whose source declares the verb, and none for
+one that does not; and one logged failure per Topic in a state the verb refuses.
+The first run after step 2 is the shape to plan for, because no Topic publishes
+a number yet and every one of them is outstanding; the cost falls as they store
+and publish theirs. None of it corrupts anything, and none of it is free.
 
 Two reads stand beside the step's own report, and neither is board-wide:
 

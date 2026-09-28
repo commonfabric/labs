@@ -124,9 +124,10 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   step reports what it allocated, what it found already stored, and what it
   asked, and running it again completes whichever asking did not land. An empty
   `pending` is the finished state, and a topic's published number is the signal
-  the step reads to reach it. A repeat is safe and not idle: a topic already
-  storing the number writes nothing further and one whose number never landed
-  stores it now, and the asking is itself a write either way. `naming` is what
+  the step reads to reach it. A repeat over a board in that state writes nothing
+  at all — no namespace key and no event. Where a topic is still outstanding the
+  repeat is safe but not free: the step asks it again, that asking is itself a
+  write, and the topic stores the number if it has not already. `naming` is what
   the board declares about those numbers, so a consumer reads the promise rather
   than assuming one, and `namesTable` is the reverse lookup a caller uses to
   find the board's number for a topic by identity, including one that publishes
