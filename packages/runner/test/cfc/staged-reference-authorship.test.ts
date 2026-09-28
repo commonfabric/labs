@@ -14,6 +14,11 @@ import {
   setCfcTrustSnapshot,
 } from "../../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../cfc-seed-envelope.ts";
 
 const alice = await Identity.fromPassphrase("staged-reference-author-alice");
 const bob = await Identity.fromPassphrase("staged-reference-author-bob");
@@ -92,6 +97,66 @@ describe("staged-reference-authorship", () => {
   });
 
   for (const kind of ["authored-by", "represents-principal"] as const) {
+    for (const rootPath of [[], ["value"]]) {
+      it(`keeps ${kind} on a projected prefixed metadata path with ${rootPath.length ? "a prefixed" : "an unprefixed"} root`, async () => {
+        const seed = runtime.edit();
+        writeSeedEnvelopeDoc(seed, space);
+        const source = runtime.getCell(space, "legacy-source", undefined, seed);
+        seedStoredEnvelope(seed, source.getAsNormalizedFullLink(), {
+          value: { field: text },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [
+                {
+                  path: rootPath,
+                  label: { integrity: [{ kind, subject: alice.did() }] },
+                },
+                {
+                  path: ["value", "field"],
+                  label: { integrity: [{ kind, subject: bob.did() }] },
+                },
+              ],
+            },
+          },
+        });
+        expect((await seed.commit()).error).toBeUndefined();
+        expect(
+          readStoredCfcMetadata(
+            runtime.readTx(),
+            source.getAsNormalizedFullLink(),
+          )?.labelMap.entries.map(({ path }) => path),
+        ).toContainEqual(["value", "field"]);
+        for (const principal of [alice.did(), bob.did()]) {
+          const tx = runtime.edit();
+          const sink = runtime.getCell(space, `legacy-sink-${principal}`, {
+            type: "object",
+            properties: {
+              copied: {
+                type: "string",
+                ifc: { requiredIntegrity: [{ kind, subject: principal }] },
+              },
+            },
+          }, tx);
+          sink.set({ copied: source.withTx(tx).key("field") });
+          recordReferencedArgumentFields(tx, sink.getAsNormalizedFullLink(), [
+            "copied",
+          ]);
+          const result = await tx.commit();
+          if (principal === alice.did()) {
+            expect(result.error?.message).toContain("write floor failed");
+          } else {
+            expect(result.error).toBeUndefined();
+            expect(sink.withTx(runtime.readTx()).key("copied").get()).toBe(
+              text,
+            );
+          }
+        }
+      });
+    }
+
     for (const confidentialSlot of [false, true]) {
       for (const order of ["bottom-up", "top-down", "stored"] as const) {
         it(`keeps ${kind} on the referenced value with ${confidentialSlot ? "a confidential" : "an undeclared"} slot in ${order} order`, async () => {
@@ -168,11 +233,15 @@ describe("staged-reference-authorship", () => {
               );
             },
             () => {
-              holder.set({ argument: node });
+              holder.set({
+                argument: node,
+                projected: node.key("whole").key("next"),
+                content: node.key("whole").key("next").key("content"),
+              });
               recordReferencedArgumentFields(
                 tx,
                 holder.getAsNormalizedFullLink(),
-                ["argument"],
+                ["argument", "projected", "content"],
               );
             },
           ];

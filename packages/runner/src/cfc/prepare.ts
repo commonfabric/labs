@@ -1839,6 +1839,12 @@ const storedMetadataFor = (
     meta: INTERNAL_VERIFIER_META,
   });
 
+/** A source's projected view and the principal claims its root owns. */
+type LinkSourceProjection = {
+  view?: CfcLabelView;
+  principalClaims: CfcAtom[];
+};
+
 /**
  * Resolves input envelopes during one synchronous boundary preparation.
  *
@@ -1859,7 +1865,7 @@ class VerifierMetadataResolver {
   >();
   #seenWrites = 0;
   #viewIndexes = new WeakMap<CfcMetadata, ConsumedLabelIndex>();
-  #views = new WeakMap<CfcMetadata, Map<string, CfcLabelView | undefined>>();
+  #views = new WeakMap<CfcMetadata, Map<string, LinkSourceProjection>>();
   #labelIndexes = new WeakMap<CfcMetadata, ConsumedLabelIndex>();
   #labels = new WeakMap<CfcMetadata, Map<string, IFCLabel | undefined>>();
   #coverIndexes = new WeakMap<CfcLabelView, ConsumedLabelIndex>();
@@ -1922,21 +1928,18 @@ class VerifierMetadataResolver {
       this.#labelIndexes.set(metadata, index);
     }
     const label = labelForEntriesAtPath(
-      withoutShadowedPrincipalClaims(
-        index.overlapping(path, false).map(({ entry }) => entry),
-        path,
-      ),
+      index.overlapping(path, false).map(({ entry }) => entry),
       path,
     );
     labels.set(key, label);
     return label;
   }
 
-  /** Reuses rebased views while their validated source envelope is unchanged. */
-  view(
+  /** Reuses projections while their validated source envelope is unchanged. */
+  projection(
     metadata: CfcMetadata | undefined,
     path: readonly string[],
-  ): CfcLabelView | undefined {
+  ): LinkSourceProjection | undefined {
     if (metadata === undefined) return undefined;
     let views = this.#views.get(metadata);
     if (views === undefined) {
@@ -1955,18 +1958,29 @@ class VerifierMetadataResolver {
         });
         this.#viewIndexes.set(metadata, index);
       }
-      const entries = withoutShadowedPrincipalClaims(
-        index.overlapping(canonicalizeLogicalPath(path))
-          .map(({ entry }) => entry),
-        canonicalizeLogicalPath(path),
+      const logicalPath = canonicalizeLogicalPath(path);
+      const matching = index.overlapping(logicalPath);
+      // Match claims in the view's logical coordinates, including stored
+      // paths spelled with a leading `value`. Preserve the stored spelling
+      // below: the view builder owns its own path normalization.
+      const projected = withoutShadowedPrincipalClaims(
+        matching.map(({ entry, path }) => ({ ...entry, path })),
+        logicalPath,
       );
-      views.set(
-        key,
-        cfcLabelViewFromMetadata({
+      const entries = projected.map((entry, index) => ({
+        ...entry,
+        path: matching[index].entry.path,
+      }));
+      views.set(key, {
+        view: cfcLabelViewFromMetadata({
           ...metadata,
           labelMap: { ...metadata.labelMap, entries },
         }, path),
-      );
+        principalClaims: (labelForEntriesAtPath(projected, logicalPath)
+          ?.integrity ?? []).filter((atom) =>
+            principalClaimSpelling(atom) !== undefined
+          ),
+      });
     }
     return views.get(key);
   }
@@ -2053,7 +2067,7 @@ class VerifierMetadataResolver {
       const types = documents?.get(write.id);
       for (const metadata of types?.values() ?? []) {
         if (metadata === undefined) continue;
-        for (const view of this.#views.get(metadata)?.values() ?? []) {
+        for (const { view } of this.#views.get(metadata)?.values() ?? []) {
           if (view === undefined) continue;
           this.#coverIndexes.delete(view);
           this.#covers.delete(view);
@@ -7224,18 +7238,22 @@ const derivePersistedLinkLabel = (
   ) {
     return {};
   }
-  const storedSourceView = metadataResolver.view(
+  const storedSource = metadataResolver.projection(
     sourceMetadata,
     input.source.path,
   );
+  const storedSourceView = storedSource?.view;
   const sourceView = pendingSourceView === undefined
     ? storedSourceView
     : mergeCfcLabelViews([storedSourceView, pendingSourceView]);
   const sourceLabel = joinLabels([
-    sourceMetadata === undefined ? undefined : metadataResolver.label(
-      sourceMetadata,
-      canonicalizeLogicalPath(input.source.path),
-    ) ?? {},
+    sourceMetadata === undefined ? undefined : withoutPrincipalClaims(
+      metadataResolver.label(
+        sourceMetadata,
+        canonicalizeLogicalPath(input.source.path),
+      ) ?? {},
+    ),
+    { integrity: storedSource?.principalClaims },
     pendingSourceLabel,
     metadataResolver.cover(pendingSourceView, [], undefined),
   ]);
