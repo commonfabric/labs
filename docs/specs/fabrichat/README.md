@@ -1,0 +1,219 @@
+# FabriChat
+
+Status: proposed design. Nothing here is implemented yet. Today's FabriChat is
+the single pattern in `packages/patterns/fabrichat/`, one conversation per
+piece. This directory describes what it splits into, and what that split
+requires of the runtime and of the programs that use it.
+
+## Purpose
+
+FabriChat is a chat among people, each identified by their own profile, where
+every message and reaction is attested: the runtime labels it with the
+principal who wrote it, and the write is admitted only from a reviewed surface.
+
+As a single piece, a conversation lives wherever that piece lives. That is the
+wrong shape once a conversation can appear in more than one place. A one-to-one
+conversation with a particular person should be _one_ conversation, whichever
+container space it is shown in. Showing it in three places must not create
+three conversations. So the conversation, the index that finds it, and the
+places that show it become three patterns:
+
+- **The room** ([`room.md`](room.md)) is the conversation. It lives in a
+  shared space whose members are the conversation's members: usually a space
+  of its own, or, for the chat of everyone in a shared space, that space. It
+  holds the attested history: messages and reactions.
+- **The manager** ([`manager.md`](manager.md)) is a singleton in each user's
+  home space. It finds the rooms that user belongs to, in particular the one
+  direct room they share with a given person, and it creates new rooms.
+- **The adapter** ([`adapter.md`](adapter.md)) lives in some other space, a
+  container that displays chats. It holds a link to one room and presents it:
+  a web rendering for hosts that render VDOM, and a `[VIEWS]` group for hosts
+  that draw natively.
+
+[`clients.md`](clients.md) states what a separate program that uses these
+patterns must do, and must not do. That applies especially to a program that
+draws chats with its own toolkit instead of rendering the patterns' `[UI]`.
+
+```text
+  home space (per user)        room space (per conversation)
+  ┌───────────────────┐        ┌───────────────────────────┐
+  │ FabriChatManager  │ links  │ FabriChatRoom             │
+  │  index of rooms   ├───────►│  messages, reactions      │
+  │  direct: by person│        │  members (access list)    │
+  └───────────────────┘        └───────────────────────────┘
+                                   ▲                ▲
+                           link    │                │  link
+  container space A ───────────────┘                └─────── container space B
+  ┌───────────────────┐                             ┌───────────────────┐
+  │ FabriChatAdapter  │                             │ FabriChatAdapter  │
+  └───────────────────┘                             └───────────────────┘
+```
+
+## Status and interpretation
+
+The key words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY**
+are normative. Where this design depends on something the runtime does not yet
+provide, the document says so, under the heading "Prerequisites".
+
+## Reading order
+
+1. [`room.md`](room.md): the conversation, its record, its writers, and its
+   membership.
+2. [`manager.md`](manager.md): the per-user index, direct-room lookup, and room
+   creation.
+3. [`adapter.md`](adapter.md): showing a room inside another space.
+4. [`clients.md`](clients.md): the requirements on a separate program that uses
+   FabriChat, including one that renders natively.
+
+## Terms
+
+- **Room.** One conversation: a `FabriChatRoom` piece, in a space created for
+  it or in the shared space whose own chat it is.
+- **Member.** A principal the room space's access list grants WRITE or OWNER.
+  Membership is the access list, and nothing kept beside it.
+- **Direct room.** A room created for exactly two members, found by the
+  manager from either member's side by the other member's principal.
+- **Group room.** Any other room. Two group rooms can have the same members.
+- **Container.** A space that shows chats among other things, such as a space
+  whose root is the `loom` pattern (`packages/patterns/loom/`).
+- **Shared space.** A space whose access list admits more than one principal,
+  and whose **member set** is reified: for each principal the access list
+  admits, its access and the profile it contributed, readable by the space's
+  members. A room's space is a shared space, and so is a container that more
+  than one person uses. See [Shared spaces](#shared-spaces).
+- **Client.** A program that reads and writes FabriChat on a person's behalf:
+  the shell, or a separate application embedding the runtime.
+- **Reviewed surface.** The part of a rendering whose gestures the runtime
+  admits as the person's own act (`TrustedActionWrite`,
+  `docs/specs/ts-transformer/cfc_ui_helper_contract.md`).
+
+## Decisions
+
+1. **A conversation lives in its own shared space**, or, for the chat of
+   everyone in a shared space, in that space (decision 7). A container shows a
+   room by linking to it, never by copying it. A link carries its target's label
+   across the space boundary, and copied bytes do not
+   ([cross-space integrity](../cfc-cross-space-integrity.md), §1).
+2. **Membership is the room space's access list**, read through the space's
+   member set. A profile shown for a member is one that member contributed.
+   The access list, not a list kept beside it, decides who can read and
+   write.
+3. **History is attested and append-only.** Messages and reactions are
+   `AuthoredByCurrentUser` and `TrustedActionWrite`, as in today's FabriChat.
+   A room has no edit or delete.
+4. **Each user has one manager, in their home space**, found with a well-known
+   `wish` target. A user's index of conversations is private to that user.
+5. **A direct room is keyed by the other member's principal**, not by a
+   profile. A person can have several profiles, and one conversation with a
+   person must not split along them.
+6. **Creating rooms and granting access are outward acts.** They are admitted
+   from reviewed surfaces, like sends.
+7. **A shared space's own chat lives in that space.** The chat of everyone in
+   a shared space is a room in that space itself, so its membership is the
+   space's membership by construction, with nothing to keep in step. Direct
+   rooms and other group rooms get spaces of their own.
+8. **Clients send to the room directly.** An adapter never relays a send. A
+   reviewed gesture reaches the room's own writer, so the room's write policy
+   names only the room's own surfaces.
+
+## Shared spaces
+
+Several parts of this design need to know who a space's members are. They
+need to know it for the room's own space, which decides who is in a
+conversation, and for a container, which decides who could see an adapter
+placed there. A shared space answers that with a member set: one entry per
+principal its access list admits, carrying that principal's access and the
+profile it contributed.
+
+Two things exist today that a member set would be built from:
+
+- **A space's access list** (`docs/specs/memory-v2/04-protocol.md`, §4.5.1)
+  says who can read and write. Only a host can read it (the runtime client's
+  `space:getAcl`), and it names principals, not people.
+- **A roster of contributed profiles**, as the `loom` pattern keeps in
+  `participants` ([shared-profile rosters](../shared-profile-rosters.md)). It
+  names people, but every entry is a claim: any participant can add any
+  profile. That pattern's own README says only a consumer that can read the
+  access list can say which entries are participants.
+
+A member set is the two combined: the roster's entries whose profile
+represents a principal the access list admits, plus any admitted principal
+with no entry. This design treats a member set as a property of the space,
+the same for every pattern in it, rather than something each pattern keeps.
+Until the runtime provides one, a room keeps its own roster, as `loom` does
+(see [`room.md`](room.md#membership)).
+
+With a member set:
+
+- A room's membership, and who to show as its members, come from its space.
+- A space's own chat (decision 7) needs no membership of its own.
+- Starting a conversation from a shared space's members yields principals
+  directly (see [`manager.md`](manager.md#prerequisites)).
+- A client can tell whether a container admits anyone besides a direct room's
+  two members, which it must know before placing that room there (see
+  [`adapter.md`](adapter.md#viewers-who-arent-members)).
+
+## Known quirks, accepted for now
+
+- **Crossing creations.** Two managers each keep their own index. If two people
+  each start a direct room with the other at the same moment, there are two
+  rooms. Each manager records the one it saw first. A tie-break rule is future
+  work.
+- **Group rooms shown in wider containers.** A container's members who aren't
+  in the room see an adapter whose room they can't read. That's safe, but it
+  can be surprising. A direct room is never placed that way (see
+  [`adapter.md`](adapter.md#viewers-who-arent-members)).
+
+## Prerequisites
+
+The design depends on runtime capabilities that don't exist yet. Each
+document names the ones it needs, and they are gathered here:
+
+- **A member set for a shared space**, readable by the space's members and by
+  patterns running there (see [Shared spaces](#shared-spaces)).
+- **Creating a private space from a pattern.** `Factory.inSpace()` creates a
+  space today, but with the default genesis grants
+  (`{ [creator]: "OWNER", "*": "WRITE" }`), which open it to any authenticated
+  principal. A room needs a space whose genesis grants only its creator: the
+  target of [random space identities](../random-space-identities.md).
+- **Granting access from a pattern.** Only a host can change an access list or
+  issue a space invitation today (`ACLManager`, `SpaceInviteClient`, the
+  runtime client's `space:setAclEntry`). A room's creator needs a
+  pattern-facing way to grant and revoke members, gated as an outward act and
+  implemented by the host.
+- **Delivering an invitation.** Nothing reachable from a pattern delivers a
+  message to a principal who shares no space with the sender (see
+  [`manager.md`](manager.md#first-contact)).
+- **Host-issued trusted gestures.** A client that draws natively needs a
+  sanctioned way to issue a reviewed gesture without a DOM. That is the
+  "sanctioned headless issuance path" in the
+  [host embedding policy record](../../features/host-embedding.md#6-policy-record-trusted-mark-threat-model)
+  (see [`clients.md`](clients.md)).
+
+## Identity and presentation
+
+The five questions from
+[multi-user patterns](../../common/patterns/multi-user-patterns.md#what-a-spec-should-capture-about-identity):
+
+1. **The current viewer** is resolved with `wish({ query: "#profile" })`, never
+   typed in.
+2. **Each person is displayed** with `cf-profile-badge`, bound to the profile
+   link on their messages and roster entries. The name and avatar snapshots
+   are only a fallback for when the profile can't be read.
+3. **Shared and per-user state.** A room's history is `PerSpace` in the
+   room's space, and its members are that space's member set. The manager's index is in the user's home space.
+   Drafts and scroll position are `PerSession` in the adapter.
+4. **A person is identified** by cell reference with `equals()` for display,
+   and by principal for direct-room lookup. Never by display name.
+5. **Authorship is attested.** Every message and reaction carries an
+   `authored-by` label for its writer. A message counts as verified when that
+   principal is the one its linked profile represents, which is the check
+   `cf-cfc-authorship` makes.
+
+## Non-goals
+
+- Bridges to outside messaging networks.
+- Editing, retracting, or deleting messages.
+- Typing indicators, presence, and read receipts.
+- Notifications and push delivery.
+- Encryption beyond what a space's access list provides.
